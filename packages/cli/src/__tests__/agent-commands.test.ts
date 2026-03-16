@@ -6,7 +6,11 @@ const mockPost = vi.hoisted(() => vi.fn());
 const mockWsInstances = vi.hoisted(() => [] as any[]);
 
 vi.mock('../config.js', () => ({
-  loadConfig: vi.fn(() => ({ apiKey: 'cr_testkey', platformUrl: 'https://test.api.dev' })),
+  loadConfig: vi.fn(() => ({
+    apiKey: 'cr_testkey',
+    platformUrl: 'https://test.api.dev',
+    limits: null,
+  })),
   requireApiKey: vi.fn((config: { apiKey: string }) => config.apiKey),
 }));
 

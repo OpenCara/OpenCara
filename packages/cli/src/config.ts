@@ -3,12 +3,19 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { parse, stringify } from 'yaml';
 
+export interface ConsumptionLimits {
+  tokens_per_day?: number;
+  tokens_per_month?: number;
+  reviews_per_day?: number;
+}
+
 export interface CliConfig {
   apiKey: string | null;
   platformUrl: string;
   anthropicApiKey: string | null;
   reviewModel: string;
   maxDiffSizeKb: number;
+  limits: ConsumptionLimits | null;
 }
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencrust.dev';
@@ -22,6 +29,18 @@ export function ensureConfigDir(): void {
 export const DEFAULT_REVIEW_MODEL = 'claude-sonnet-4-6';
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 
+function parseLimits(data: Record<string, unknown>): ConsumptionLimits | null {
+  const raw = data.limits;
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const limits: ConsumptionLimits = {};
+  if (typeof obj.tokens_per_day === 'number') limits.tokens_per_day = obj.tokens_per_day;
+  if (typeof obj.tokens_per_month === 'number') limits.tokens_per_month = obj.tokens_per_month;
+  if (typeof obj.reviews_per_day === 'number') limits.reviews_per_day = obj.reviews_per_day;
+  if (Object.keys(limits).length === 0) return null;
+  return limits;
+}
+
 export function loadConfig(): CliConfig {
   const defaults: CliConfig = {
     apiKey: null,
@@ -29,6 +48,7 @@ export function loadConfig(): CliConfig {
     anthropicApiKey: null,
     reviewModel: DEFAULT_REVIEW_MODEL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+    limits: null,
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -49,12 +69,13 @@ export function loadConfig(): CliConfig {
     reviewModel: typeof data.review_model === 'string' ? data.review_model : DEFAULT_REVIEW_MODEL,
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
+    limits: parseLimits(data),
   };
 }
 
 export function saveConfig(config: CliConfig): void {
   ensureConfigDir();
-  const data: Record<string, string | number> = {
+  const data: Record<string, unknown> = {
     platform_url: config.platformUrl,
   };
   if (config.apiKey) {
@@ -68,6 +89,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
+  }
+  if (config.limits) {
+    data.limits = config.limits;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }
