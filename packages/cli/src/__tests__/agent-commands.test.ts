@@ -81,10 +81,9 @@ describe('agent commands', () => {
         tool: 'claude-code',
       });
 
-      await agentCommand.parseAsync(
-        ['create', '--model', 'gpt-4', '--tool', 'claude-code'],
-        { from: 'user' },
-      );
+      await agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
+        from: 'user',
+      });
 
       expect(logSpy).toHaveBeenCalledWith('Agent created:');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('agent-new'));
@@ -96,32 +95,24 @@ describe('agent commands', () => {
       mockPost.mockRejectedValueOnce(new Error('Server error'));
 
       await expect(
-        agentCommand.parseAsync(
-          ['create', '--model', 'gpt-4', '--tool', 'claude-code'],
-          { from: 'user' },
-        ),
+        agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
+          from: 'user',
+        }),
       ).rejects.toThrow('process.exit');
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Failed to create agent:',
-        'Server error',
-      );
+      expect(errorSpy).toHaveBeenCalledWith('Failed to create agent:', 'Server error');
     });
 
     it('handles create failure with non-Error', async () => {
       mockPost.mockRejectedValueOnce('raw error');
 
       await expect(
-        agentCommand.parseAsync(
-          ['create', '--model', 'gpt-4', '--tool', 'claude-code'],
-          { from: 'user' },
-        ),
+        agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
+          from: 'user',
+        }),
       ).rejects.toThrow('process.exit');
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Failed to create agent:',
-        'raw error',
-      );
+      expect(errorSpy).toHaveBeenCalledWith('Failed to create agent:', 'raw error');
     });
   });
 
@@ -155,35 +146,27 @@ describe('agent commands', () => {
 
       await agentCommand.parseAsync(['list'], { from: 'user' });
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('No agents registered'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No agents registered'));
     });
 
     it('handles list failure with Error', async () => {
       mockGet.mockRejectedValueOnce(new Error('Network error'));
 
-      await expect(
-        agentCommand.parseAsync(['list'], { from: 'user' }),
-      ).rejects.toThrow('process.exit');
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Failed to list agents:',
-        'Network error',
+      await expect(agentCommand.parseAsync(['list'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
       );
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to list agents:', 'Network error');
     });
 
     it('handles list failure with non-Error', async () => {
       mockGet.mockRejectedValueOnce('raw error');
 
-      await expect(
-        agentCommand.parseAsync(['list'], { from: 'user' }),
-      ).rejects.toThrow('process.exit');
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Failed to list agents:',
-        'raw error',
+      await expect(agentCommand.parseAsync(['list'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
       );
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to list agents:', 'raw error');
     });
   });
 
@@ -209,13 +192,11 @@ describe('agent commands', () => {
     it('exits when no agents and no ID', async () => {
       mockGet.mockResolvedValueOnce({ agents: [] });
 
-      await expect(
-        agentCommand.parseAsync(['start'], { from: 'user' }),
-      ).rejects.toThrow('process.exit');
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('No agents registered'),
+      await expect(agentCommand.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
       );
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('No agents registered'));
     });
 
     it('exits when multiple agents and no ID', async () => {
@@ -226,13 +207,11 @@ describe('agent commands', () => {
         ],
       });
 
-      await expect(
-        agentCommand.parseAsync(['start'], { from: 'user' }),
-      ).rejects.toThrow('process.exit');
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Multiple agents found'),
+      await expect(agentCommand.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
       );
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Multiple agents found'));
     });
 
     it('prints agent details when multiple agents', async () => {
@@ -243,9 +222,9 @@ describe('agent commands', () => {
         ],
       });
 
-      await expect(
-        agentCommand.parseAsync(['start'], { from: 'user' }),
-      ).rejects.toThrow('process.exit');
+      await expect(agentCommand.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('a1'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('a2'));
@@ -254,14 +233,11 @@ describe('agent commands', () => {
     it('exits when list fails during auto-select', async () => {
       mockGet.mockRejectedValueOnce(new Error('API error'));
 
-      await expect(
-        agentCommand.parseAsync(['start'], { from: 'user' }),
-      ).rejects.toThrow('process.exit');
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Failed to list agents:',
-        'API error',
+      await expect(agentCommand.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
       );
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to list agents:', 'API error');
     });
 
     it('handles WebSocket open event', async () => {
@@ -278,10 +254,7 @@ describe('agent commands', () => {
 
       const ws = mockWsInstances[0];
       ws.emit('open');
-      ws.emit(
-        'message',
-        Buffer.from(JSON.stringify({ type: 'connected', version: '1' })),
-      );
+      ws.emit('message', Buffer.from(JSON.stringify({ type: 'connected', version: '1' })));
 
       expect(logSpy).toHaveBeenCalledWith('Authenticated. Protocol v1');
     });
@@ -300,9 +273,7 @@ describe('agent commands', () => {
       const ws = mockWsInstances[0];
       ws.emit('error', new Error('Connection refused'));
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        'WebSocket error: Connection refused',
-      );
+      expect(errorSpy).toHaveBeenCalledWith('WebSocket error: Connection refused');
     });
 
     it('reconnects on unintentional close', async () => {
@@ -311,16 +282,12 @@ describe('agent commands', () => {
       const ws = mockWsInstances[0];
       ws.emit('close', 1006, Buffer.from('Abnormal'));
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Disconnected'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Disconnected'));
 
       // Wait for async reconnect
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Reconnecting'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Reconnecting'));
       // A new WebSocket should be created after reconnect
       expect(mockWsInstances.length).toBeGreaterThanOrEqual(2);
     });
@@ -333,9 +300,7 @@ describe('agent commands', () => {
       ws.emit('close', 1000, Buffer.from('Normal')); // Clears heartbeat timer
 
       expect(logSpy).toHaveBeenCalledWith('Connected to platform.');
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Disconnected'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Disconnected'));
     });
 
     it('terminates connection on heartbeat timeout', async () => {
@@ -348,9 +313,7 @@ describe('agent commands', () => {
 
       vi.advanceTimersByTime(90_000); // Trigger heartbeat timeout
 
-      expect(logSpy).toHaveBeenCalledWith(
-        'No heartbeat received in 90s. Reconnecting...',
-      );
+      expect(logSpy).toHaveBeenCalledWith('No heartbeat received in 90s. Reconnecting...');
       expect(ws.terminate).toHaveBeenCalled();
 
       vi.useRealTimers();
@@ -364,9 +327,7 @@ describe('agent commands', () => {
       const ws = mockWsInstances[0];
 
       // Find the SIGINT handler registered via process.once
-      const sigintCall = onceSpy.mock.calls.find(
-        ([event]) => event === 'SIGINT',
-      );
+      const sigintCall = onceSpy.mock.calls.find(([event]) => event === 'SIGINT');
       expect(sigintCall).toBeDefined();
 
       const shutdown = sigintCall![1] as () => void;

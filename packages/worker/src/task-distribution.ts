@@ -21,6 +21,7 @@ export interface DistributeTaskParams {
   baseRef: string;
   headRef: string;
   config: ReviewConfig;
+  diffContent?: string;
 }
 
 /** Parse timeout string (e.g., "10m") to milliseconds. */
@@ -164,16 +165,12 @@ export async function distributeTask(
     diffUrl,
     baseRef,
     headRef,
+    diffContent = '',
   } = params;
   const timeoutMs = parseTimeoutMs(config.timeout);
 
   // 1. Find or create project
-  const projectId = await findOrCreateProject(
-    supabase,
-    installationId,
-    owner,
-    repo,
-  );
+  const projectId = await findOrCreateProject(supabase, installationId, owner, repo);
   if (!projectId) return null;
 
   // 2. Create review_task
@@ -197,35 +194,22 @@ export async function distributeTask(
   const taskId = task.id as string;
 
   // 3. Find eligible agents
-  const allAgents = await findEligibleAgents(
-    supabase,
-    config.agents.minReputation,
-  );
+  const allAgents = await findEligibleAgents(supabase, config.agents.minReputation);
   const filtered = filterByAccessList(
     allAgents,
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
-  const selected = selectAgents(
-    filtered,
-    config.agents.minCount,
-    config.agents.preferredTools,
-  );
+  const selected = selectAgents(filtered, config.agents.minCount, config.agents.preferredTools);
 
   if (selected.length === 0) {
     console.log(`No eligible agents found for task ${taskId}`);
-    await supabase
-      .from('review_tasks')
-      .update({ status: 'failed' })
-      .eq('id', taskId);
+    await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
     return taskId;
   }
 
   // 4. Update task status to reviewing before distributing (avoid race with timeout alarm)
-  await supabase
-    .from('review_tasks')
-    .update({ status: 'reviewing' })
-    .eq('id', taskId);
+  await supabase.from('review_tasks').update({ status: 'reviewing' }).eq('id', taskId);
 
   // 5. Push task to each selected agent's DO
   const remainingSeconds = Math.floor(timeoutMs / 1000);
@@ -247,6 +231,7 @@ export async function distributeTask(
             },
             project: { owner, repo, prompt: config.prompt },
             timeout: remainingSeconds,
+            diffContent,
           }),
         }),
       );
@@ -273,8 +258,6 @@ export async function distributeTask(
     console.error(`Failed to set task timeout for ${taskId}:`, err);
   }
 
-  console.log(
-    `Task ${taskId} distributed to ${selected.length} agent(s)`,
-  );
+  console.log(`Task ${taskId} distributed to ${selected.length} agent(s)`);
   return taskId;
 }

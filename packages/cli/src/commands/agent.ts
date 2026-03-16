@@ -1,19 +1,23 @@
 import { Command } from 'commander';
 import WebSocket from 'ws';
+import crypto from 'node:crypto';
 import type {
   CreateAgentRequest,
   CreateAgentResponse,
   ListAgentsResponse,
   AgentResponse,
   PlatformMessage,
+  ReviewRequestMessage,
 } from '@opencrust/shared';
 import { loadConfig, requireApiKey } from '../config.js';
 import { ApiClient } from '../http.js';
+import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import {
-  calculateDelay,
-  sleep,
-  DEFAULT_RECONNECT_OPTIONS,
-} from '../reconnect.js';
+  executeReview,
+  getAnthropicApiKey,
+  DiffTooLargeError,
+  type ReviewExecutorDeps,
+} from '../review.js';
 
 function formatTable(agents: AgentResponse[]): void {
   if (agents.length === 0) {
@@ -54,7 +58,12 @@ export { buildWsUrl };
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 
-function startAgent(agentId: string, platformUrl: string, apiKey: string): void {
+function startAgent(
+  agentId: string,
+  platformUrl: string,
+  apiKey: string,
+  reviewDeps?: ReviewExecutorDeps,
+): void {
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -105,7 +114,7 @@ function startAgent(agentId: string, platformUrl: string, apiKey: string): void 
         return;
       }
 
-      handleMessage(ws, msg, resetHeartbeatTimer);
+      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps);
     });
 
     ws.on('close', (code, reason) => {
@@ -136,6 +145,7 @@ export function handleMessage(
   ws: { send: (data: string) => void },
   msg: { type: string; version?: string; code?: string; taskId?: string; timestamp?: number },
   resetHeartbeat?: () => void,
+  reviewDeps?: ReviewExecutorDeps,
 ): void {
   switch (msg.type) {
     case 'connected':
@@ -147,22 +157,85 @@ export function handleMessage(
       if (resetHeartbeat) resetHeartbeat();
       break;
 
-    case 'review_request':
-      console.log(`Review request received: task ${msg.taskId}`);
-      ws.send(
-        JSON.stringify({
-          type: 'review_rejected',
-          taskId: msg.taskId,
-          reason: 'Review execution not yet implemented',
-        }),
+    case 'review_request': {
+      const request = msg as unknown as ReviewRequestMessage;
+      console.log(
+        `Review request: task ${request.taskId} for ${request.project.owner}/${request.project.repo}#${request.pr.number}`,
       );
+
+      if (!reviewDeps) {
+        ws.send(
+          JSON.stringify({
+            type: 'review_rejected',
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            taskId: request.taskId,
+            reason: 'Review execution not configured',
+          }),
+        );
+        break;
+      }
+
+      void executeReview(
+        {
+          taskId: request.taskId,
+          diffContent: request.diffContent,
+          prompt: request.project.prompt,
+          owner: request.project.owner,
+          repo: request.project.repo,
+          prNumber: request.pr.number,
+          timeout: request.timeout,
+        },
+        reviewDeps,
+      )
+        .then((result) => {
+          ws.send(
+            JSON.stringify({
+              type: 'review_complete',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: request.taskId,
+              review: result.review,
+              verdict: result.verdict,
+              tokensUsed: result.tokensUsed,
+            }),
+          );
+          console.log(`Review complete: ${result.verdict} (${result.tokensUsed} tokens)`);
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DiffTooLargeError) {
+            ws.send(
+              JSON.stringify({
+                type: 'review_rejected',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: request.taskId,
+                reason: err.message,
+              }),
+            );
+          } else {
+            ws.send(
+              JSON.stringify({
+                type: 'review_error',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: request.taskId,
+                error: err instanceof Error ? err.message : 'Unknown error',
+              }),
+            );
+          }
+          console.error('Review failed:', err);
+        });
       break;
+    }
 
     case 'summary_request':
       console.log(`Summary request received: task ${msg.taskId}`);
       ws.send(
         JSON.stringify({
           type: 'review_rejected',
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
           taskId: msg.taskId,
           reason: 'Summary execution not yet implemented',
         }),
@@ -179,9 +252,7 @@ export function handleMessage(
   }
 }
 
-export const agentCommand = new Command('agent').description(
-  'Manage review agents',
-);
+export const agentCommand = new Command('agent').description('Manage review agents');
 
 agentCommand
   .command('create')
@@ -198,10 +269,7 @@ agentCommand
     try {
       agent = await client.post<CreateAgentResponse>('/api/agents', body);
     } catch (err) {
-      console.error(
-        'Failed to create agent:',
-        err instanceof Error ? err.message : err,
-      );
+      console.error('Failed to create agent:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
 
@@ -223,10 +291,7 @@ agentCommand
     try {
       res = await client.get<ListAgentsResponse>('/api/agents');
     } catch (err) {
-      console.error(
-        'Failed to list agents:',
-        err instanceof Error ? err.message : err,
-      );
+      console.error('Failed to list agents:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
 
@@ -246,10 +311,7 @@ agentCommand
       try {
         res = await client.get<ListAgentsResponse>('/api/agents');
       } catch (err) {
-        console.error(
-          'Failed to list agents:',
-          err instanceof Error ? err.message : err,
-        );
+        console.error('Failed to list agents:', err instanceof Error ? err.message : err);
         process.exit(1);
       }
 
@@ -270,6 +332,18 @@ agentCommand
       }
     }
 
+    let reviewDeps: ReviewExecutorDeps | undefined;
+    try {
+      const anthropicKey = getAnthropicApiKey(config.anthropicApiKey);
+      reviewDeps = {
+        anthropicApiKey: anthropicKey,
+        reviewModel: config.reviewModel,
+        maxDiffSizeKb: config.maxDiffSizeKb,
+      };
+    } catch {
+      console.warn('Warning: Anthropic API key not configured. Reviews will be rejected.');
+    }
+
     console.log(`Starting agent ${agentId}...`);
-    startAgent(agentId, config.platformUrl, apiKey);
+    startAgent(agentId, config.platformUrl, apiKey, reviewDeps);
   });

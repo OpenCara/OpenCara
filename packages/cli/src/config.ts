@@ -6,6 +6,9 @@ import { parse, stringify } from 'yaml';
 export interface CliConfig {
   apiKey: string | null;
   platformUrl: string;
+  anthropicApiKey: string | null;
+  reviewModel: string;
+  maxDiffSizeKb: number;
 }
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencrust.dev';
@@ -16,10 +19,16 @@ export function ensureConfigDir(): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
 }
 
+export const DEFAULT_REVIEW_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
+
 export function loadConfig(): CliConfig {
   const defaults: CliConfig = {
     apiKey: null,
     platformUrl: DEFAULT_PLATFORM_URL,
+    anthropicApiKey: null,
+    reviewModel: DEFAULT_REVIEW_MODEL,
+    maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -35,20 +44,30 @@ export function loadConfig(): CliConfig {
 
   return {
     apiKey: typeof data.api_key === 'string' ? data.api_key : null,
-    platformUrl:
-      typeof data.platform_url === 'string'
-        ? data.platform_url
-        : DEFAULT_PLATFORM_URL,
+    platformUrl: typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL,
+    anthropicApiKey: typeof data.anthropic_api_key === 'string' ? data.anthropic_api_key : null,
+    reviewModel: typeof data.review_model === 'string' ? data.review_model : DEFAULT_REVIEW_MODEL,
+    maxDiffSizeKb:
+      typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
   };
 }
 
 export function saveConfig(config: CliConfig): void {
   ensureConfigDir();
-  const data: Record<string, string> = {
+  const data: Record<string, string | number> = {
     platform_url: config.platformUrl,
   };
   if (config.apiKey) {
     data.api_key = config.apiKey;
+  }
+  if (config.anthropicApiKey) {
+    data.anthropic_api_key = config.anthropicApiKey;
+  }
+  if (config.reviewModel !== DEFAULT_REVIEW_MODEL) {
+    data.review_model = config.reviewModel;
+  }
+  if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
+    data.max_diff_size_kb = config.maxDiffSizeKb;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }

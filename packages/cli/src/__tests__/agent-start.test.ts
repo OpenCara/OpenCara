@@ -1,19 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildWsUrl, handleMessage } from '../commands/agent.js';
+import type { ReviewExecutorDeps } from '../review.js';
 
 describe('buildWsUrl', () => {
   it('converts https to wss', () => {
     const url = buildWsUrl('https://api.opencrust.dev', 'agent-123', 'cr_key');
-    expect(url).toBe(
-      'wss://api.opencrust.dev/ws/agent/agent-123?token=cr_key',
-    );
+    expect(url).toBe('wss://api.opencrust.dev/ws/agent/agent-123?token=cr_key');
   });
 
   it('converts http to ws', () => {
     const url = buildWsUrl('http://localhost:8787', 'agent-456', 'cr_test');
-    expect(url).toBe(
-      'ws://localhost:8787/ws/agent/agent-456?token=cr_test',
-    );
+    expect(url).toBe('ws://localhost:8787/ws/agent/agent-456?token=cr_test');
   });
 
   it('encodes special characters in apiKey', () => {
@@ -43,16 +40,166 @@ describe('handleMessage', () => {
     expect(resetHeartbeat).toHaveBeenCalledOnce();
   });
 
-  it('rejects review_request with not-implemented', () => {
+  it('rejects review_request when no reviewDeps', () => {
     const send = vi.fn();
     const ws = { send };
 
-    handleMessage(ws, { type: 'review_request', taskId: 'task-1' });
+    handleMessage(ws, {
+      type: 'review_request',
+      taskId: 'task-1',
+      diffContent: 'diff',
+      project: { owner: 'a', repo: 'b', prompt: 'p' },
+      pr: { url: '', number: 1, diffUrl: '', base: '', head: '' },
+      timeout: 300,
+    } as never);
 
     const sent = JSON.parse(send.mock.calls[0][0]);
     expect(sent.type).toBe('review_rejected');
     expect(sent.taskId).toBe('task-1');
-    expect(sent.reason).toContain('not yet implemented');
+    expect(sent.reason).toContain('not configured');
+  });
+
+  it('sends review_complete on successful review', async () => {
+    const send = vi.fn();
+    const ws = { send };
+
+    // Mock the review module
+    const mockReviewDeps: ReviewExecutorDeps = {
+      anthropicApiKey: 'sk-ant-test',
+      reviewModel: 'claude-sonnet-4-6',
+      maxDiffSizeKb: 100,
+    };
+
+    // We need to mock executeReview at the module level
+    const reviewModule = await import('../review.js');
+    const executeSpy = vi.spyOn(reviewModule, 'executeReview').mockResolvedValue({
+      review: 'Looks good!',
+      verdict: 'approve',
+      tokensUsed: 150,
+    });
+
+    // Re-import agent to pick up the mock
+    // Since handleMessage calls executeReview directly, we can test via the function
+    const { handleMessage: hm } = await import('../commands/agent.js');
+
+    hm(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'some diff',
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review this' },
+        pr: { url: '', number: 42, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+      } as never,
+      undefined,
+      mockReviewDeps,
+    );
+
+    // Wait for the async review to complete
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_complete');
+    expect(sent.taskId).toBe('task-1');
+    expect(sent.review).toBe('Looks good!');
+    expect(sent.verdict).toBe('approve');
+    expect(sent.tokensUsed).toBe(150);
+
+    executeSpy.mockRestore();
+  });
+
+  it('sends review_error on review failure', async () => {
+    const send = vi.fn();
+    const ws = { send };
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const mockReviewDeps: ReviewExecutorDeps = {
+      anthropicApiKey: 'sk-ant-test',
+      reviewModel: 'claude-sonnet-4-6',
+      maxDiffSizeKb: 100,
+    };
+
+    const reviewModule = await import('../review.js');
+    const executeSpy = vi
+      .spyOn(reviewModule, 'executeReview')
+      .mockRejectedValue(new Error('API timeout'));
+
+    const { handleMessage: hm } = await import('../commands/agent.js');
+
+    hm(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'some diff',
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review this' },
+        pr: { url: '', number: 42, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+      } as never,
+      undefined,
+      mockReviewDeps,
+    );
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_error');
+    expect(sent.taskId).toBe('task-1');
+    expect(sent.error).toBe('API timeout');
+
+    executeSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it('sends review_rejected on DiffTooLargeError', async () => {
+    const send = vi.fn();
+    const ws = { send };
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const mockReviewDeps: ReviewExecutorDeps = {
+      anthropicApiKey: 'sk-ant-test',
+      reviewModel: 'claude-sonnet-4-6',
+      maxDiffSizeKb: 100,
+    };
+
+    const reviewModule = await import('../review.js');
+    const { DiffTooLargeError } = reviewModule;
+    const executeSpy = vi
+      .spyOn(reviewModule, 'executeReview')
+      .mockRejectedValue(new DiffTooLargeError('Diff too large (200KB > 100KB limit)'));
+
+    const { handleMessage: hm } = await import('../commands/agent.js');
+
+    hm(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'some diff',
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review this' },
+        pr: { url: '', number: 42, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+      } as never,
+      undefined,
+      mockReviewDeps,
+    );
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_rejected');
+    expect(sent.taskId).toBe('task-1');
+    expect(sent.reason).toContain('Diff too large');
+
+    executeSpy.mockRestore();
+    consoleSpy.mockRestore();
   });
 
   it('rejects summary_request with not-implemented', () => {

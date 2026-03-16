@@ -81,10 +81,7 @@ export class AgentConnection implements DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async webSocketMessage(
-    _ws: WebSocket,
-    message: string | ArrayBuffer,
-  ): Promise<void> {
+  async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') return;
 
     let msg: { type: string; [key: string]: unknown };
@@ -96,10 +93,7 @@ export class AgentConnection implements DurableObject {
 
     switch (msg.type) {
       case 'heartbeat_pong':
-        await this.state.storage.put(
-          'lastHeartbeatAt',
-          new Date().toISOString(),
-        );
+        await this.state.storage.put('lastHeartbeatAt', new Date().toISOString());
         break;
       case 'review_complete':
         await this.handleReviewComplete(msg as unknown as ReviewCompleteMessage);
@@ -116,10 +110,7 @@ export class AgentConnection implements DurableObject {
     }
   }
 
-  async webSocketError(
-    ws: WebSocket,
-    _error: unknown,
-  ): Promise<void> {
+  async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
     ws.close(4004, 'websocket_error');
   }
 
@@ -136,14 +127,10 @@ export class AgentConnection implements DurableObject {
 
     if (agentId) {
       const supabase = createSupabaseClient(this.env);
-      await supabase
-        .from('agents')
-        .update({ status: 'offline' })
-        .eq('id', agentId);
+      await supabase.from('agents').update({ status: 'offline' }).eq('id', agentId);
 
       // Mark in-flight tasks as error
-      const inFlightTaskIds =
-        (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
+      const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
       for (const taskId of inFlightTaskIds) {
         await supabase.from('review_results').insert({
           review_task_id: taskId,
@@ -164,8 +151,7 @@ export class AgentConnection implements DurableObject {
     const ws = websockets[0];
 
     // Check if last pong was received within timeout
-    const lastPongStr =
-      await this.state.storage.get<string>('lastHeartbeatAt');
+    const lastPongStr = await this.state.storage.get<string>('lastHeartbeatAt');
     if (lastPongStr) {
       const elapsed = Date.now() - new Date(lastPongStr).getTime();
       if (elapsed > HEARTBEAT_TIMEOUT_MS) {
@@ -196,6 +182,7 @@ export class AgentConnection implements DurableObject {
       pr: { url: string; number: number; diffUrl: string; base: string; head: string };
       project: { owner: string; repo: string; prompt: string };
       timeout: number;
+      diffContent: string;
     };
 
     const message: ReviewRequestMessage = {
@@ -206,12 +193,12 @@ export class AgentConnection implements DurableObject {
       pr: payload.pr,
       project: payload.project,
       timeout: payload.timeout,
+      diffContent: payload.diffContent,
     };
 
     websockets[0].send(JSON.stringify(message));
 
-    const inFlightTaskIds =
-      (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
+    const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
     inFlightTaskIds.push(payload.taskId);
     await this.state.storage.put('inFlightTaskIds', inFlightTaskIds);
 
@@ -219,24 +206,18 @@ export class AgentConnection implements DurableObject {
   }
 
   private async handleStatus(): Promise<Response> {
-    const status =
-      (await this.state.storage.get<string>('status')) ?? 'offline';
-    const connectedAt =
-      await this.state.storage.get<string | null>('connectedAt');
-    const lastHeartbeatAt =
-      await this.state.storage.get<string | null>('lastHeartbeatAt');
-    const inFlightTaskIds =
-      (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
+    const status = (await this.state.storage.get<string>('status')) ?? 'offline';
+    const connectedAt = await this.state.storage.get<string | null>('connectedAt');
+    const lastHeartbeatAt = await this.state.storage.get<string | null>('lastHeartbeatAt');
+    const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
 
-    return new Response(
-      JSON.stringify({ status, connectedAt, lastHeartbeatAt, inFlightTaskIds }),
-      { headers: { 'Content-Type': 'application/json' } },
-    );
+    return new Response(JSON.stringify({ status, connectedAt, lastHeartbeatAt, inFlightTaskIds }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   private async removeInFlightTask(taskId: string): Promise<void> {
-    const inFlightTaskIds =
-      (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
+    const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
     const idx = inFlightTaskIds.indexOf(taskId);
     if (idx !== -1) {
       inFlightTaskIds.splice(idx, 1);
@@ -244,11 +225,8 @@ export class AgentConnection implements DurableObject {
     }
   }
 
-  private async handleReviewComplete(
-    msg: ReviewCompleteMessage,
-  ): Promise<void> {
-    const agentId =
-      (await this.state.storage.get<string>('agentId')) ?? '';
+  private async handleReviewComplete(msg: ReviewCompleteMessage): Promise<void> {
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
     // Insert result before removing from in-flight for crash safety
@@ -275,11 +253,8 @@ export class AgentConnection implements DurableObject {
     }
   }
 
-  private async handleReviewRejected(
-    msg: ReviewRejectedMessage,
-  ): Promise<void> {
-    const agentId =
-      (await this.state.storage.get<string>('agentId')) ?? '';
+  private async handleReviewRejected(msg: ReviewRejectedMessage): Promise<void> {
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
     // Insert result before removing from in-flight for crash safety
@@ -295,11 +270,8 @@ export class AgentConnection implements DurableObject {
     await this.removeInFlightTask(msg.taskId);
   }
 
-  private async handleReviewError(
-    msg: ReviewErrorMessage,
-  ): Promise<void> {
-    const agentId =
-      (await this.state.storage.get<string>('agentId')) ?? '';
+  private async handleReviewError(msg: ReviewErrorMessage): Promise<void> {
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
     // Insert result before removing from in-flight for crash safety
@@ -315,9 +287,7 @@ export class AgentConnection implements DurableObject {
     await this.removeInFlightTask(msg.taskId);
   }
 
-  private async handleSummaryComplete(
-    msg: SummaryCompleteMessage,
-  ): Promise<void> {
+  private async handleSummaryComplete(msg: SummaryCompleteMessage): Promise<void> {
     // Summary handling will be implemented in M6
     console.log(`Summary complete for task ${msg.taskId}`);
   }
