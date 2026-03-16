@@ -155,7 +155,7 @@ describe('TaskTimeout', () => {
       expect(mockSupabase.from).not.toHaveBeenCalled();
     });
 
-    it('does nothing when task is not in reviewing status', async () => {
+    it('does nothing when task is not in reviewing or pending status', async () => {
       (mockSupabase.single as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         data: { status: 'completed' },
         error: null,
@@ -165,6 +165,19 @@ describe('TaskTimeout', () => {
 
       expect(mockSupabase.from).toHaveBeenCalledWith('review_tasks');
       expect(mockSupabase.update).not.toHaveBeenCalled();
+    });
+
+    it('transitions pending task to timeout when no agent picked it up', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      (mockSupabase.single as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: { status: 'pending' },
+        error: null,
+      });
+
+      await timeout.alarm();
+
+      expect(mockSupabase.update).toHaveBeenCalledWith({ status: 'timeout' });
+      expect(mockedTriggerSummarization).not.toHaveBeenCalled();
     });
 
     it('transitions to timeout when no results exist', async () => {

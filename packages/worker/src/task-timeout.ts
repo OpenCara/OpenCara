@@ -70,7 +70,14 @@ export class TaskTimeout implements DurableObject {
       .eq('id', taskId)
       .single();
 
-    if (!task || task.status !== 'reviewing') return;
+    if (!task || (task.status !== 'reviewing' && task.status !== 'pending')) return;
+
+    if (task.status === 'pending') {
+      // No agent ever picked it up — timeout
+      await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
+      console.log(`Task ${taskId} timed out while pending (no agents available)`);
+      return;
+    }
 
     // Count completed results
     const { count } = await supabase
