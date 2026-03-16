@@ -2,6 +2,7 @@ import { authenticateRequest, hashApiKey } from './auth.js';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
+import { handleGetConsumption } from './handlers/consumption.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from './handlers/device-flow.js';
 import { handleGitHubWebhook } from './webhook.js';
 
@@ -62,6 +63,16 @@ export default {
       if (method === 'POST') {
         return handleCreateAgent(request, user, supabase);
       }
+    }
+
+    // Consumption stats endpoint (authenticated)
+    const consumptionMatch = pathname.match(/^\/api\/consumption\/([a-f0-9-]+)$/);
+    if (method === 'GET' && consumptionMatch) {
+      const user = await authenticateRequest(request, supabase);
+      if (!user) {
+        return json({ error: 'Unauthorized' }, 401);
+      }
+      return handleGetConsumption(consumptionMatch[1], user, supabase);
     }
 
     return json({ error: 'Not found' }, 404);
