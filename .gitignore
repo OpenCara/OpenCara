@@ -6,3 +6,7 @@ dist/
 .env
 .env.local
 .env*.local
+coverage/
+pr-reviews/
+assets/
+.claude/worktrees/

@@ -9,13 +9,13 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 ## Milestone Coverage
 
 | Milestone | Status | Scenarios |
-|-----------|--------|-----------|
-| M0 | DONE | S01-S02 |
-| M1 | DONE | S03-S06 |
-| M2 | DONE | S07-S10 |
-| M3 | DONE | S11-S13 |
-| M4 | DONE | S14-S18 |
-| M5 | DONE | S19-S23 |
+| --------- | ------ | --------- |
+| M0        | DONE   | S01-S02   |
+| M1        | DONE   | S03-S06   |
+| M2        | DONE   | S07-S10   |
+| M3        | DONE   | S11-S13   |
+| M4        | DONE   | S14-S18   |
+| M5        | DONE   | S19-S23   |
 
 ---
 
@@ -24,6 +24,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Monorepo builds end-to-end with shared types consumed correctly.
 
 **Steps**:
+
 1. `npm ci` — install all dependencies
 2. `npm run build` — build all packages
 3. `npm run typecheck` — verify TypeScript across all packages
@@ -39,6 +40,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: `packages/shared` exports are importable and usable by worker, cli, and web.
 
 **Steps**:
+
 1. Build shared: `cd packages/shared && npm run build`
 2. Build worker: `cd packages/worker && npm run build` (imports from @opencrust/shared)
 3. Build cli: `cd packages/cli && npm run build` (imports from @opencrust/shared)
@@ -53,6 +55,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: `POST /webhook/github` validates HMAC-SHA256 signatures correctly.
 
 **Steps**:
+
 1. Start Worker locally: `cd packages/worker && npx wrangler dev --port $PORT`
 2. Send POST with valid signature → expect 200
 3. Send POST with invalid signature → expect 401
@@ -68,6 +71,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Worker correctly routes `pull_request` events and ignores unknown events.
 
 **Steps**:
+
 1. Start Worker locally
 2. Send `pull_request.opened` event with valid signature → expect 200, handler invoked
 3. Send `pull_request.synchronize` event → expect 200, handler invoked
@@ -84,6 +88,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: `.review.yml` parser handles all validation scenarios.
 
 **Steps**:
+
 1. Parse valid config with all fields → expect `ReviewConfig` with correct values
 2. Parse config with only required fields (`version`, `prompt`) → expect defaults applied:
    - `agents.minCount: 1`, `agents.minReputation: 0.0`, `timeout: "10m"`
@@ -101,6 +106,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: GitHub App installation create/delete events are handled.
 
 **Steps**:
+
 1. Start Worker locally
 2. Send `installation.created` event with valid signature → expect 200
 3. Send `installation.deleted` event with valid signature → expect 200
@@ -114,6 +120,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: OAuth device flow endpoints work together.
 
 **Steps**:
+
 1. Start Worker locally with mock GitHub OAuth (or test against real GitHub staging)
 2. `POST /auth/device` → expect response with `userCode`, `verificationUri`, `deviceCode`, `interval`, `expiresIn`
 3. `POST /auth/device/token` with `{ deviceCode }` before authorization → expect `{ status: "pending" }`
@@ -129,6 +136,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Authenticated endpoints reject invalid keys and accept valid ones.
 
 **Steps**:
+
 1. Start Worker locally
 2. `GET /api/agents` without Authorization header → expect 401
 3. `GET /api/agents` with `Authorization: Bearer invalid_key` → expect 401
@@ -144,6 +152,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Agent create and list endpoints work correctly with auth.
 
 **Steps**:
+
 1. Authenticate (obtain valid API key)
 2. `POST /api/agents` with `{ "model": "claude-sonnet-4-6", "tool": "claude-code" }` → expect 200 with agent object
 3. `GET /api/agents` → expect array containing the created agent
@@ -160,6 +169,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Revoking an API key invalidates the old one and returns a new one.
 
 **Steps**:
+
 1. Authenticate with valid API key A
 2. `POST /auth/revoke` with key A → expect 200 with new `apiKey` B
 3. `GET /api/agents` with old key A → expect 401
@@ -174,6 +184,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: `opencrust login` calls the correct Worker endpoints and saves config.
 
 **Steps**:
+
 1. Start Worker locally
 2. Run `opencrust login` (with mocked user interaction or `--platform-url` flag)
 3. Verify it calls `POST /auth/device`
@@ -190,6 +201,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: `opencrust agent create/list` calls correct Worker endpoints.
 
 **Steps**:
+
 1. Ensure valid config exists (from S11 or manual setup)
 2. `opencrust agent create --model claude-sonnet-4-6 --tool claude-code` → expect success output with agent ID
 3. `opencrust agent list` → expect table output with created agent
@@ -204,6 +216,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: `opencrust agent start` establishes WebSocket and handles messages.
 
 **Steps**:
+
 1. Ensure valid config and registered agent exist
 2. `opencrust agent start <agentId>` → verify WebSocket connection attempt
 3. On connection: verify `connected` message is received
@@ -220,6 +233,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Agent connects via WebSocket, DO manages connection state and sends `connected` message.
 
 **Steps**:
+
 1. Authenticate and register an agent
 2. Open WebSocket to `/ws/agent/{agentId}?token=cr_xxx`
 3. Verify DO accepts the connection and sends `{ type: "connected", version: 1, agentId: "..." }`
@@ -236,6 +250,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: DO detects missing heartbeat pongs and disconnects the agent.
 
 **Steps**:
+
 1. Connect agent via WebSocket (from S14)
 2. Verify DO sends `heartbeat_ping` after 30s
 3. Respond with `heartbeat_pong` — verify connection stays alive
@@ -252,6 +267,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: When same agent reconnects, old connection is closed with code 4002.
 
 **Steps**:
+
 1. Connect agent via WebSocket (WS1)
 2. Open second WebSocket for same agent (WS2)
 3. Verify WS1 receives close event with code `4002` ("replaced")
@@ -267,6 +283,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Full flow from PR webhook to task pushed to connected agent's DO.
 
 **Steps**:
+
 1. Set up: register agent, connect via WebSocket, create project with `.review.yml`
 2. Send `pull_request.opened` webhook with valid signature
 3. Verify `review_tasks` row created in Supabase (status: `reviewing`)
@@ -284,6 +301,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: TaskTimeout DO alarm fires and updates task status after timeout.
 
 **Steps**:
+
 1. Create a review task with short timeout (e.g., 1 minute)
 2. Set up TaskTimeout DO via `/set-timeout` endpoint
 3. Wait for alarm to fire
@@ -299,6 +317,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: End-to-end: PR webhook arrives, task created, agent receives review_request with diff content, executes AI review, sends review_complete, platform posts GitHub PR comment.
 
 **Steps**:
+
 1. Set up: register agent, connect via WebSocket, create project with `.review.yml`
 2. Send `pull_request.opened` webhook with valid signature
 3. Verify agent receives `review_request` message containing `diffContent` field (non-empty unified diff)
@@ -317,6 +336,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: When an agent rejects a review, platform redistributes to another eligible agent (up to 3 attempts).
 
 **Steps**:
+
 1. Set up: register 3 agents (A, B, C), all connected via WebSocket, create project
 2. Send `pull_request.opened` webhook → task distributed to Agent A
 3. Agent A sends `review_rejected` with reason
@@ -336,6 +356,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: CLI receives review_request, calls Anthropic Claude API, extracts verdict, sends review_complete.
 
 **Steps**:
+
 1. Set `ANTHROPIC_API_KEY` environment variable (or configure in `~/.opencrust/config.yml`)
 2. Simulate receiving a `review_request` message with `diffContent` containing a small PR diff
 3. Verify CLI calls Anthropic API with system prompt + custom prompt + diff
@@ -354,6 +375,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: CLI rejects oversized diffs before calling the AI model.
 
 **Steps**:
+
 1. Configure `max_diff_size_kb: 100` (default)
 2. Send `review_request` with `diffContent` of 50KB → review executes normally
 3. Send `review_request` with `diffContent` of 150KB → expect `review_rejected` with reason mentioning size limit
@@ -368,6 +390,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Tests**: Worker fetches PR diff from GitHub API and includes it in the review_request message.
 
 **Steps**:
+
 1. Set up: register agent, connect via WebSocket, create project
 2. Send `pull_request.opened` webhook (mock GitHub API to return a known diff)
 3. Verify agent receives `review_request` with `diffContent` matching the mocked diff
@@ -381,4 +404,5 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 ## Future Scenarios (pending milestones)
 
 ### M6-M9: Later milestones
+
 - Scenarios added when milestones are designed

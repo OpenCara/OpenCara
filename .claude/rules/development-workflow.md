@@ -87,11 +87,11 @@ If any check fails, fix the issue before merging. Do NOT merge with failing test
 
 After all checks pass, run coverage and post the report to the PR:
 
-```bash
+````bash
 npx vitest run --coverage 2>&1 | tail -40 > /tmp/coverage-report.txt
 gh pr comment <PR_NUMBER> --body "$(printf '## Coverage Report\n\n```\n'; cat /tmp/coverage-report.txt; printf '```\n')"
 rm -f /tmp/coverage-report.txt
-```
+````
 
 ### Step 4: Merge
 
