@@ -1,8 +1,27 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { isAuthenticated, getLoginUrl } from '../../lib/auth';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div className="mx-auto max-w-4xl px-4 py-24 text-center">
+        <div className="animate-pulse">
+          <div className="mx-auto mb-4 h-8 w-64 rounded bg-surface-800" />
+          <div className="mx-auto mb-8 h-4 w-96 rounded bg-surface-800" />
+          <div className="mx-auto h-12 w-48 rounded bg-surface-800" />
+        </div>
+      </div>
+    );
+  }
+
   if (!isAuthenticated()) {
     return (
       <div className="mx-auto max-w-4xl px-4 py-24 text-center">

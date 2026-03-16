@@ -58,10 +58,13 @@ describe('RootLayout', () => {
     expect(html).toContain('Leaderboard');
   });
 
-  it('renders Login link', async () => {
+  it('hides auth links during SSR (mounted guard)', async () => {
     const child = createElement('span', null, 'test');
     const html = await renderLayout(child);
-    expect(html).toContain('Login');
+    // Auth links are hidden until client-side mount to avoid hydration flash
+    expect(html).not.toContain('Login');
+    expect(html).not.toContain('Logout');
+    expect(html).not.toContain('Dashboard');
   });
 
   it('renders footer with GitHub link', async () => {

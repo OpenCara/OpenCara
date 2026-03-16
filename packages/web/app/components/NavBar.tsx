@@ -27,21 +27,22 @@ export default function NavBar() {
               Dashboard
             </a>
           )}
-          {mounted && authed ? (
-            <a
-              href={getLogoutUrl()}
-              className="rounded-md border border-surface-800 px-4 py-2 text-sm font-medium text-surface-100 hover:border-crust-600 hover:text-crust-400"
-            >
-              Logout
-            </a>
-          ) : (
-            <a
-              href={mounted ? getLoginUrl() : '#'}
-              className="rounded-md bg-crust-600 px-4 py-2 text-sm font-medium text-white hover:bg-crust-500"
-            >
-              Login
-            </a>
-          )}
+          {mounted &&
+            (authed ? (
+              <a
+                href={getLogoutUrl()}
+                className="rounded-md border border-surface-800 px-4 py-2 text-sm font-medium text-surface-100 hover:border-crust-600 hover:text-crust-400"
+              >
+                Logout
+              </a>
+            ) : (
+              <a
+                href={getLoginUrl()}
+                className="rounded-md bg-crust-600 px-4 py-2 text-sm font-medium text-white hover:bg-crust-500"
+              >
+                Login
+              </a>
+            ))}
         </div>
       </nav>
     </header>
