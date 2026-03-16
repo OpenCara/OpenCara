@@ -33,12 +33,15 @@ function parseEntityList(
   value: unknown,
 ): Array<{ user?: string; agent?: string }> {
   if (!Array.isArray(value)) return [];
-  return value.filter(isObject).map((item) => {
-    const entry: { user?: string; agent?: string } = {};
-    if (typeof item.user === 'string') entry.user = item.user;
-    if (typeof item.agent === 'string') entry.agent = item.agent;
-    return entry;
-  });
+  return value
+    .filter(isObject)
+    .map((item) => {
+      const entry: { user?: string; agent?: string } = {};
+      if (typeof item.user === 'string') entry.user = item.user;
+      if (typeof item.agent === 'string') entry.agent = item.agent;
+      return entry;
+    })
+    .filter((entry) => entry.user || entry.agent);
 }
 
 function parseTimeout(value: unknown): string {

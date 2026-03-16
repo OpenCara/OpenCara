@@ -29,6 +29,9 @@ export async function verifySignature(
   const mac = await crypto.subtle.sign('HMAC', key, enc.encode(body));
   const expected = new Uint8Array(mac);
   const received = hexToBytes(signature.slice(7));
+  if (!received) {
+    return false;
+  }
 
   if (expected.length !== received.length) {
     return false;
@@ -42,7 +45,10 @@ export async function verifySignature(
   return result === 0;
 }
 
-function hexToBytes(hex: string): Uint8Array {
+function hexToBytes(hex: string): Uint8Array | null {
+  if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+    return null;
+  }
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
