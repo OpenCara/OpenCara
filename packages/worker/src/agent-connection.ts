@@ -89,7 +89,7 @@ export class AgentConnection implements DurableObject {
     const lastConnectedAt = await this.state.storage.get<string>('connectedAt');
     if (lastConnectedAt && existingWebSockets.length > 0) {
       const elapsed = Date.now() - new Date(lastConnectedAt).getTime();
-      if (elapsed < CONNECT_DEBOUNCE_MS) {
+      if (isNaN(elapsed) || elapsed < CONNECT_DEBOUNCE_MS) {
         return new Response('Already connected', { status: 409 });
       }
     }
@@ -191,10 +191,14 @@ export class AgentConnection implements DurableObject {
 
   async webSocketClose(
     _ws: WebSocket,
-    _code: number,
+    code: number,
     _reason: string,
     _wasClean: boolean,
   ): Promise<void> {
+    // Skip cleanup for replaced connections (code 4002) — the new connection
+    // already set the correct state (connectedAt, status, alarm).
+    if (code === 4002) return;
+
     const agentId = await this.state.storage.get<string>('agentId');
 
     await this.state.storage.put('status', 'offline');

@@ -973,6 +973,26 @@ describe('AgentConnection', () => {
       expect(mockSupa.from).not.toHaveBeenCalled();
       expect(storage.deleteAlarm).toHaveBeenCalled();
     });
+
+    it('skips cleanup when close code is 4002 (replaced)', async () => {
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('status', 'online');
+      storage.store.set('connectedAt', new Date().toISOString());
+      storage.store.set('inFlightTaskIds', ['task-1']);
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketClose(mockWs as unknown as WebSocket, 4002, 'replaced', false);
+
+      // Status and connectedAt should NOT be modified
+      expect(storage.store.get('status')).toBe('online');
+      expect(storage.store.get('connectedAt')).toBeDefined();
+      // In-flight tasks should NOT be marked as error
+      expect(storage.store.get('inFlightTaskIds')).toEqual(['task-1']);
+      // Supabase should NOT have been called
+      expect(mockSupa.from).not.toHaveBeenCalled();
+      // Alarm should NOT be deleted
+      expect(storage.deleteAlarm).not.toHaveBeenCalled();
+    });
   });
 
   describe('alarm', () => {
