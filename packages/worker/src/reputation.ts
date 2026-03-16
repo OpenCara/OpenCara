@@ -100,7 +100,7 @@ export async function collectTaskRatings(
           rater_github_id: reaction.user.id,
           emoji,
         },
-        { onConflict: 'review_result_id,rater_github_id,emoji' },
+        { onConflict: 'review_result_id,rater_github_id' },
       );
 
       if (!error) {

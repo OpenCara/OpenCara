@@ -71,7 +71,8 @@ CREATE TABLE ratings (
   review_result_id UUID NOT NULL REFERENCES review_results(id) ON DELETE CASCADE,
   rater_github_id BIGINT NOT NULL,
   emoji TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (review_result_id, rater_github_id)
 );
 
 -- reputation_history
