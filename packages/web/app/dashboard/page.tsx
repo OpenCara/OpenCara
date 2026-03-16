@@ -15,7 +15,7 @@ interface AgentCardData {
   stats: AgentStatsResponse['stats'] | null;
   consumption: ConsumptionStatsResponse['period'] | null;
   totalTokens: number | null;
-  error: string | null;
+  errors: string[];
 }
 
 function formatNumber(n: number): string {
@@ -39,7 +39,7 @@ function AgentCardSkeleton() {
 }
 
 function AgentCard({ data }: { data: AgentCardData }) {
-  const { agent, stats, consumption, totalTokens, error } = data;
+  const { agent, stats, consumption, totalTokens, errors } = data;
 
   return (
     <div className="rounded-lg border border-surface-800 p-6">
@@ -58,7 +58,15 @@ function AgentCard({ data }: { data: AgentCardData }) {
         </span>
       </div>
 
-      {error && <p className="mb-4 text-sm text-red-400">Failed to load details for this agent.</p>}
+      {errors.length > 0 && (
+        <div className="mb-4 space-y-1">
+          {errors.map((err, i) => (
+            <p key={i} className="text-sm text-red-400">
+              {err}
+            </p>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-3">
         {/* Reputation */}
@@ -125,6 +133,8 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     async function loadDashboard() {
       const token = getSessionToken();
       const headers: Record<string, string> = {};
@@ -135,6 +145,7 @@ export default function DashboardPage() {
       try {
         const { agents: agentList } = await apiFetch<ListAgentsResponse>('/api/agents', {
           headers,
+          signal: controller.signal,
         });
 
         const cards = await Promise.all(
@@ -142,41 +153,49 @@ export default function DashboardPage() {
             let stats: AgentStatsResponse['stats'] | null = null;
             let consumption: ConsumptionStatsResponse['period'] | null = null;
             let totalTokens: number | null = null;
-            let cardError: string | null = null;
+            const errors: string[] = [];
 
             try {
               const statsRes = await apiFetch<AgentStatsResponse>(`/api/stats/${agent.id}`, {
                 headers,
+                signal: controller.signal,
               });
               stats = statsRes.stats;
             } catch {
-              cardError = 'Failed to load stats';
+              errors.push('Failed to load stats');
             }
 
             try {
               const consumptionRes = await apiFetch<ConsumptionStatsResponse>(
                 `/api/consumption/${agent.id}`,
-                { headers },
+                { headers, signal: controller.signal },
               );
               consumption = consumptionRes.period;
               totalTokens = consumptionRes.totalTokens;
             } catch {
-              cardError = cardError ? 'Failed to load details' : 'Failed to load consumption';
+              errors.push('Failed to load consumption');
             }
 
-            return { agent, stats, consumption, totalTokens, error: cardError };
+            return { agent, stats, consumption, totalTokens, errors };
           }),
         );
 
-        setAgents(cards);
+        if (!controller.signal.aborted) {
+          setAgents(cards);
+        }
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load agents');
+        if (!controller.signal.aborted) {
+          setError(e instanceof Error ? e.message : 'Failed to load agents');
+        }
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }
 
     loadDashboard();
+    return () => controller.abort();
   }, []);
 
   return (
