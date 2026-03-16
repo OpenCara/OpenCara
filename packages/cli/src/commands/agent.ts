@@ -8,6 +8,7 @@ import type {
   AgentResponse,
   PlatformMessage,
   ReviewRequestMessage,
+  SummaryRequestMessage,
 } from '@opencrust/shared';
 import { loadConfig, requireApiKey } from '../config.js';
 import { ApiClient } from '../http.js';
@@ -18,6 +19,7 @@ import {
   DiffTooLargeError,
   type ReviewExecutorDeps,
 } from '../review.js';
+import { executeSummary, InputTooLargeError } from '../summary.js';
 
 function formatTable(agents: AgentResponse[]): void {
   if (agents.length === 0) {
@@ -231,18 +233,68 @@ export function handleMessage(
       break;
     }
 
-    case 'summary_request':
-      console.log(`Summary request received: task ${msg.taskId}`);
-      ws.send(
-        JSON.stringify({
+    case 'summary_request': {
+      const summaryRequest = msg as unknown as SummaryRequestMessage;
+      console.log(
+        `Summary request: task ${summaryRequest.taskId} for ${summaryRequest.project.owner}/${summaryRequest.project.repo}#${summaryRequest.pr.number} (${summaryRequest.reviews.length} reviews)`,
+      );
+
+      if (!reviewDeps) {
+        trySend(ws, {
           type: 'review_rejected',
           id: crypto.randomUUID(),
           timestamp: Date.now(),
-          taskId: msg.taskId,
-          reason: 'Summary execution not yet implemented',
-        }),
-      );
+          taskId: summaryRequest.taskId,
+          reason: 'Summary execution not configured (no API key)',
+        });
+        break;
+      }
+
+      void executeSummary(
+        {
+          taskId: summaryRequest.taskId,
+          reviews: summaryRequest.reviews,
+          prompt: summaryRequest.project.prompt,
+          owner: summaryRequest.project.owner,
+          repo: summaryRequest.project.repo,
+          prNumber: summaryRequest.pr.number,
+          timeout: summaryRequest.timeout,
+        },
+        reviewDeps,
+      )
+        .then((result) => {
+          trySend(ws, {
+            type: 'summary_complete',
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            taskId: summaryRequest.taskId,
+            summary: result.summary,
+            tokensUsed: result.tokensUsed,
+          });
+          console.log(`Summary complete (${result.tokensUsed} tokens)`);
+        })
+        .catch((err: unknown) => {
+          if (err instanceof InputTooLargeError) {
+            trySend(ws, {
+              type: 'review_rejected',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: summaryRequest.taskId,
+              reason: err.message,
+            });
+          } else {
+            trySend(ws, {
+              type: 'review_error',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: summaryRequest.taskId,
+              error: err instanceof Error ? err.message : 'Summary failed',
+            });
+          }
+          console.error('Summary failed:', err);
+        });
       break;
+    }
 
     case 'error':
       console.error(`Platform error: ${msg.code ?? 'unknown'}`);
