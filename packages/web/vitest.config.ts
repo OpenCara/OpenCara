@@ -5,6 +5,9 @@ import { defineConfig } from 'vitest/config';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  esbuild: {
+    jsx: 'automatic',
+  },
   test: {
     include: ['**/*.test.ts', '**/*.test.tsx'],
   },

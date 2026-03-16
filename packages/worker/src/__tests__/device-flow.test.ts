@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   handleDeviceFlow,
@@ -255,6 +256,84 @@ describe('handleDeviceToken', () => {
       createMockSupabase(),
     );
     expect(response.status).toBe(502);
+  });
+
+  it('returns 502 for generic OAuth error', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'access_denied' }), {
+        status: 200,
+      }),
+    );
+
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ deviceCode: 'abc123' }),
+    });
+
+    const response = await handleDeviceToken(
+      request,
+      mockEnv,
+      createMockSupabase(),
+    );
+    expect(response.status).toBe(502);
+    const data = await response.json();
+    expect(data.error).toBe('Authorization failed');
+  });
+
+  it('returns 502 when access_token is missing and no error', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({}), { status: 200 }),
+    );
+
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ deviceCode: 'abc123' }),
+    });
+
+    const response = await handleDeviceToken(
+      request,
+      mockEnv,
+      createMockSupabase(),
+    );
+    expect(response.status).toBe(502);
+  });
+
+  it('returns 500 when Supabase upsert fails', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'ghu_abc' }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ id: 1, login: 'user', avatar_url: 'url' }),
+          { status: 200 },
+        ),
+      );
+
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({
+        upsert: vi
+          .fn()
+          .mockResolvedValue({ error: { message: 'DB error' } }),
+      }),
+    } as any;
+
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ deviceCode: 'abc123' }),
+    });
+
+    const response = await handleDeviceToken(
+      request,
+      mockEnv,
+      mockSupabase,
+    );
+    expect(response.status).toBe(500);
+    const data = await response.json();
+    expect(data.error).toBe('Failed to save user');
   });
 });
 

@@ -311,4 +311,113 @@ describe('handleGitHubWebhook', () => {
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
   });
+
+  it('returns 400 for invalid JSON body with valid signature', async () => {
+    const body = 'not json at all';
+    const sig = await computeSignature(body, TEST_SECRET);
+    const req = new Request('https://worker.example.com/webhook/github', {
+      method: 'POST',
+      headers: {
+        'X-GitHub-Event': 'push',
+        'X-Hub-Signature-256': sig,
+      },
+      body,
+    });
+    const res = await handleGitHubWebhook(req, TEST_ENV);
+    expect(res.status).toBe(400);
+  });
+
+  it('handles postPrComment failure when posting parse error comment', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockedGetInstallationToken.mockResolvedValue('test-token');
+    mockedFetchReviewConfig.mockResolvedValue('{ invalid yaml: [');
+    mockedPostPrComment.mockRejectedValue(new Error('Post failed'));
+
+    const req = await makeSignedRequest('pull_request', {
+      action: 'opened',
+      installation: { id: 99 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: {
+        number: 1,
+        html_url: 'url',
+        diff_url: 'diff',
+        base: { ref: 'main' },
+        head: { ref: 'br' },
+      },
+    });
+    const res = await handleGitHubWebhook(req, TEST_ENV);
+    expect(res.status).toBe(200);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Failed to post error comment:',
+      expect.any(Error),
+    );
+  });
+
+  it('returns 200 for installation event with unhandled action', async () => {
+    const req = await makeSignedRequest('installation', {
+      action: 'suspend',
+      installation: { id: 123, account: { login: 'test' } },
+    });
+    const res = await handleGitHubWebhook(req, TEST_ENV);
+    expect(res.status).toBe(200);
+  });
+
+  it('returns 200 for fetchReviewConfig failure', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockedGetInstallationToken.mockResolvedValue('test-token');
+    mockedFetchReviewConfig.mockRejectedValue(new Error('Fetch failed'));
+
+    const req = await makeSignedRequest('pull_request', {
+      action: 'opened',
+      installation: { id: 99 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: {
+        number: 2,
+        html_url: 'url',
+        diff_url: 'diff',
+        base: { ref: 'main' },
+        head: { ref: 'br' },
+      },
+    });
+    const res = await handleGitHubWebhook(req, TEST_ENV);
+    expect(res.status).toBe(200);
+  });
+
+  it('handles pull_request without installation', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const req = await makeSignedRequest('pull_request', {
+      action: 'opened',
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: {
+        number: 3,
+        html_url: 'url',
+        diff_url: 'diff',
+        base: { ref: 'main' },
+        head: { ref: 'br' },
+      },
+    });
+    const res = await handleGitHubWebhook(req, TEST_ENV);
+    expect(res.status).toBe(200);
+  });
+
+  it('returns false for signature with invalid hex chars', async () => {
+    expect(
+      await verifySignature('body', 'sha256=gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg', TEST_SECRET),
+    ).toBe(false);
+  });
+
+  it('returns false for wrong-length hex signature', async () => {
+    // 32 hex chars = 16 bytes, but HMAC-SHA256 produces 32 bytes
+    expect(
+      await verifySignature('body', 'sha256=' + '00'.repeat(16), TEST_SECRET),
+    ).toBe(false);
+  });
+
+  it('returns false for odd-length hex signature', async () => {
+    expect(
+      await verifySignature('body', 'sha256=abc', TEST_SECRET),
+    ).toBe(false);
+  });
 });
