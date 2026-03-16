@@ -10,7 +10,7 @@ import type {
   ReviewRequestMessage,
   SummaryRequestMessage,
 } from '@opencrust/shared';
-import { loadConfig, requireApiKey } from '../config.js';
+import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
 import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import {
@@ -20,6 +20,21 @@ import {
   type ReviewExecutorDeps,
 } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
+import {
+  checkConsumptionLimits,
+  fetchConsumptionStats,
+  createSessionTracker,
+  recordSessionUsage,
+  formatPostReviewStats,
+  type SessionStats,
+} from '../consumption.js';
+
+export interface ConsumptionDeps {
+  client: ApiClient;
+  agentId: string;
+  limits: ConsumptionLimits | null;
+  session: SessionStats;
+}
 
 function formatTable(agents: AgentResponse[]): void {
   if (agents.length === 0) {
@@ -65,6 +80,7 @@ function startAgent(
   platformUrl: string,
   apiKey: string,
   reviewDeps?: ReviewExecutorDeps,
+  consumptionDeps?: ConsumptionDeps,
 ): void {
   let attempt = 0;
   let intentionalClose = false;
@@ -116,7 +132,7 @@ function startAgent(
         return;
       }
 
-      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps);
+      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps, consumptionDeps);
     });
 
     ws.on('close', (code, reason) => {
@@ -151,11 +167,47 @@ function trySend(ws: { send: (data: string) => void }, data: Record<string, unkn
   }
 }
 
+async function logPostReviewStats(
+  type: 'Review' | 'Summary',
+  verdict: string | undefined,
+  tokensUsed: number,
+  consumptionDeps?: ConsumptionDeps,
+): Promise<void> {
+  if (!consumptionDeps) {
+    if (verdict) {
+      console.log(`${type} complete: ${verdict} (${tokensUsed} tokens)`);
+    } else {
+      console.log(`${type} complete (${tokensUsed} tokens)`);
+    }
+    return;
+  }
+
+  recordSessionUsage(consumptionDeps.session, tokensUsed);
+
+  let dailyStats: { tokens: number; reviews: number } | undefined;
+  try {
+    const stats = await fetchConsumptionStats(consumptionDeps.client, consumptionDeps.agentId);
+    dailyStats = stats.period.last24h;
+  } catch {
+    // Graceful degradation — skip daily stats display
+  }
+
+  if (verdict) {
+    console.log(`${type} complete: ${verdict} (${tokensUsed.toLocaleString()} tokens)`);
+  } else {
+    console.log(`${type} complete (${tokensUsed.toLocaleString()} tokens)`);
+  }
+  console.log(
+    formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits, dailyStats),
+  );
+}
+
 export function handleMessage(
   ws: { send: (data: string) => void },
   msg: { type: string; version?: string; code?: string; taskId?: string; timestamp?: number },
   resetHeartbeat?: () => void,
   reviewDeps?: ReviewExecutorDeps,
+  consumptionDeps?: ConsumptionDeps,
 ): void {
   switch (msg.type) {
     case 'connected':
@@ -186,19 +238,40 @@ export function handleMessage(
         break;
       }
 
-      void executeReview(
-        {
-          taskId: request.taskId,
-          diffContent: request.diffContent,
-          prompt: request.project.prompt,
-          owner: request.project.owner,
-          repo: request.project.repo,
-          prNumber: request.pr.number,
-          timeout: request.timeout,
-        },
-        reviewDeps,
-      )
-        .then((result) => {
+      void (async () => {
+        // Check consumption limits before executing
+        if (consumptionDeps) {
+          const limitResult = await checkConsumptionLimits(
+            consumptionDeps.client,
+            consumptionDeps.agentId,
+            consumptionDeps.limits,
+          );
+          if (!limitResult.allowed) {
+            trySend(ws, {
+              type: 'review_rejected',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: request.taskId,
+              reason: limitResult.reason ?? 'consumption_limit_exceeded',
+            });
+            console.log(`Review rejected: ${limitResult.reason}`);
+            return;
+          }
+        }
+
+        try {
+          const result = await executeReview(
+            {
+              taskId: request.taskId,
+              diffContent: request.diffContent,
+              prompt: request.project.prompt,
+              owner: request.project.owner,
+              repo: request.project.repo,
+              prNumber: request.pr.number,
+              timeout: request.timeout,
+            },
+            reviewDeps,
+          );
           trySend(ws, {
             type: 'review_complete',
             id: crypto.randomUUID(),
@@ -208,9 +281,8 @@ export function handleMessage(
             verdict: result.verdict,
             tokensUsed: result.tokensUsed,
           });
-          console.log(`Review complete: ${result.verdict} (${result.tokensUsed} tokens)`);
-        })
-        .catch((err: unknown) => {
+          await logPostReviewStats('Review', result.verdict, result.tokensUsed, consumptionDeps);
+        } catch (err: unknown) {
           if (err instanceof DiffTooLargeError) {
             trySend(ws, {
               type: 'review_rejected',
@@ -229,7 +301,8 @@ export function handleMessage(
             });
           }
           console.error('Review failed:', err);
-        });
+        }
+      })();
       break;
     }
 
@@ -250,19 +323,40 @@ export function handleMessage(
         break;
       }
 
-      void executeSummary(
-        {
-          taskId: summaryRequest.taskId,
-          reviews: summaryRequest.reviews,
-          prompt: summaryRequest.project.prompt,
-          owner: summaryRequest.project.owner,
-          repo: summaryRequest.project.repo,
-          prNumber: summaryRequest.pr.number,
-          timeout: summaryRequest.timeout,
-        },
-        reviewDeps,
-      )
-        .then((result) => {
+      void (async () => {
+        // Check consumption limits before executing
+        if (consumptionDeps) {
+          const limitResult = await checkConsumptionLimits(
+            consumptionDeps.client,
+            consumptionDeps.agentId,
+            consumptionDeps.limits,
+          );
+          if (!limitResult.allowed) {
+            trySend(ws, {
+              type: 'review_rejected',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: summaryRequest.taskId,
+              reason: limitResult.reason ?? 'consumption_limit_exceeded',
+            });
+            console.log(`Summary rejected: ${limitResult.reason}`);
+            return;
+          }
+        }
+
+        try {
+          const result = await executeSummary(
+            {
+              taskId: summaryRequest.taskId,
+              reviews: summaryRequest.reviews,
+              prompt: summaryRequest.project.prompt,
+              owner: summaryRequest.project.owner,
+              repo: summaryRequest.project.repo,
+              prNumber: summaryRequest.pr.number,
+              timeout: summaryRequest.timeout,
+            },
+            reviewDeps,
+          );
           trySend(ws, {
             type: 'summary_complete',
             id: crypto.randomUUID(),
@@ -271,9 +365,8 @@ export function handleMessage(
             summary: result.summary,
             tokensUsed: result.tokensUsed,
           });
-          console.log(`Summary complete (${result.tokensUsed} tokens)`);
-        })
-        .catch((err: unknown) => {
+          await logPostReviewStats('Summary', undefined, result.tokensUsed, consumptionDeps);
+        } catch (err: unknown) {
           if (err instanceof InputTooLargeError) {
             trySend(ws, {
               type: 'review_rejected',
@@ -292,7 +385,8 @@ export function handleMessage(
             });
           }
           console.error('Summary failed:', err);
-        });
+        }
+      })();
       break;
     }
 
@@ -398,6 +492,13 @@ agentCommand
       console.warn('Warning: Anthropic API key not configured. Reviews will be rejected.');
     }
 
+    const consumptionDeps: ConsumptionDeps = {
+      client: new ApiClient(config.platformUrl, apiKey),
+      agentId,
+      limits: config.limits,
+      session: createSessionTracker(),
+    };
+
     console.log(`Starting agent ${agentId}...`);
-    startAgent(agentId, config.platformUrl, apiKey, reviewDeps);
+    startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps);
   });

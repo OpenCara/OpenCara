@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildWsUrl, handleMessage } from '../commands/agent.js';
+import { buildWsUrl, handleMessage, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
+import { createSessionTracker } from '../consumption.js';
+import { ApiClient } from '../http.js';
 
 describe('buildWsUrl', () => {
   it('converts https to wss', () => {
@@ -389,5 +391,181 @@ describe('handleMessage', () => {
     const ws = { send: vi.fn() };
     handleMessage(ws, { type: 'unknown_type' });
     expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('rejects review_request when consumption limit exceeded', async () => {
+    const send = vi.fn();
+    const ws = { send };
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const mockReviewDeps: ReviewExecutorDeps = {
+      anthropicApiKey: 'sk-ant-test',
+      reviewModel: 'claude-sonnet-4-6',
+      maxDiffSizeKb: 100,
+    };
+
+    const consumptionModule = await import('../consumption.js');
+    const checkSpy = vi.spyOn(consumptionModule, 'checkConsumptionLimits').mockResolvedValue({
+      allowed: false,
+      reason: 'Daily token limit reached (50,000/50,000)',
+    });
+
+    const { handleMessage: hm } = await import('../commands/agent.js');
+
+    const consumptionDeps: ConsumptionDeps = {
+      client: { get: vi.fn() } as unknown as ApiClient,
+      agentId: 'agent-1',
+      limits: { tokens_per_day: 50_000 },
+      session: createSessionTracker(),
+    };
+
+    hm(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'some diff',
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review this' },
+        pr: { url: '', number: 42, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+      } as never,
+      undefined,
+      mockReviewDeps,
+      consumptionDeps,
+    );
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_rejected');
+    expect(sent.taskId).toBe('task-1');
+    expect(sent.reason).toContain('Daily token limit reached');
+
+    checkSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('rejects summary_request when consumption limit exceeded', async () => {
+    const send = vi.fn();
+    const ws = { send };
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const mockReviewDeps: ReviewExecutorDeps = {
+      anthropicApiKey: 'sk-ant-test',
+      reviewModel: 'claude-sonnet-4-6',
+      maxDiffSizeKb: 100,
+    };
+
+    const consumptionModule = await import('../consumption.js');
+    const checkSpy = vi.spyOn(consumptionModule, 'checkConsumptionLimits').mockResolvedValue({
+      allowed: false,
+      reason: 'Daily review limit reached (20/20)',
+    });
+
+    const { handleMessage: hm } = await import('../commands/agent.js');
+
+    const consumptionDeps: ConsumptionDeps = {
+      client: { get: vi.fn() } as unknown as ApiClient,
+      agentId: 'agent-1',
+      limits: { reviews_per_day: 20 },
+      session: createSessionTracker(),
+    };
+
+    hm(
+      ws,
+      {
+        type: 'summary_request',
+        taskId: 'task-2',
+        pr: { url: '', number: 5 },
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review' },
+        reviews: [
+          { agentId: 'a1', model: 'claude', tool: 'code', review: 'LGTM', verdict: 'approve' },
+        ],
+        timeout: 300,
+      } as never,
+      undefined,
+      mockReviewDeps,
+      consumptionDeps,
+    );
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_rejected');
+    expect(sent.taskId).toBe('task-2');
+    expect(sent.reason).toContain('Daily review limit reached');
+
+    checkSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('proceeds with review when consumption check passes', async () => {
+    const send = vi.fn();
+    const ws = { send };
+
+    const mockReviewDeps: ReviewExecutorDeps = {
+      anthropicApiKey: 'sk-ant-test',
+      reviewModel: 'claude-sonnet-4-6',
+      maxDiffSizeKb: 100,
+    };
+
+    const consumptionModule = await import('../consumption.js');
+    const checkSpy = vi.spyOn(consumptionModule, 'checkConsumptionLimits').mockResolvedValue({
+      allowed: true,
+    });
+    const fetchSpy = vi
+      .spyOn(consumptionModule, 'fetchConsumptionStats')
+      .mockRejectedValue(new Error('API unavailable'));
+
+    const reviewModule = await import('../review.js');
+    const executeSpy = vi.spyOn(reviewModule, 'executeReview').mockResolvedValue({
+      review: 'Looks good!',
+      verdict: 'approve',
+      tokensUsed: 150,
+    });
+
+    const { handleMessage: hm } = await import('../commands/agent.js');
+
+    const consumptionDeps: ConsumptionDeps = {
+      client: { get: vi.fn() } as unknown as ApiClient,
+      agentId: 'agent-1',
+      limits: { tokens_per_day: 50_000 },
+      session: createSessionTracker(),
+    };
+
+    hm(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'some diff',
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review this' },
+        pr: { url: '', number: 42, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+      } as never,
+      undefined,
+      mockReviewDeps,
+      consumptionDeps,
+    );
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_complete');
+    expect(sent.verdict).toBe('approve');
+
+    // Session stats should be updated
+    expect(consumptionDeps.session.tokens).toBe(150);
+    expect(consumptionDeps.session.reviews).toBe(1);
+
+    checkSpy.mockRestore();
+    fetchSpy.mockRestore();
+    executeSpy.mockRestore();
   });
 });

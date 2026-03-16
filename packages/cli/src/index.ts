@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { getVersion } from '@opencrust/shared';
 import { loginCommand } from './commands/login.js';
 import { agentCommand } from './commands/agent.js';
+import { statsCommand } from './commands/stats.js';
 
 const program = new Command()
   .name('opencrust')
@@ -12,5 +13,6 @@ const program = new Command()
 
 program.addCommand(loginCommand);
 program.addCommand(agentCommand);
+program.addCommand(statsCommand);
 
 program.parse();

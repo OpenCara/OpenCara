@@ -59,6 +59,7 @@ describe('config', () => {
       expect(config.anthropicApiKey).toBeNull();
       expect(config.reviewModel).toBe(DEFAULT_REVIEW_MODEL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
+      expect(config.limits).toBeNull();
     });
 
     it('parses valid config file', () => {
@@ -157,6 +158,70 @@ describe('config', () => {
 
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
     });
+
+    it('parses consumption limits', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'limits:\n  tokens_per_day: 50000\n  tokens_per_month: 500000\n  reviews_per_day: 20\n',
+      );
+
+      const config = loadConfig();
+
+      expect(config.limits).toEqual({
+        tokens_per_day: 50000,
+        tokens_per_month: 500000,
+        reviews_per_day: 20,
+      });
+    });
+
+    it('parses partial limits (only tokens_per_day)', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('limits:\n  tokens_per_day: 50000\n');
+
+      const config = loadConfig();
+
+      expect(config.limits).toEqual({ tokens_per_day: 50000 });
+    });
+
+    it('returns null limits when limits section is not an object', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('limits: not_an_object\n');
+
+      const config = loadConfig();
+
+      expect(config.limits).toBeNull();
+    });
+
+    it('returns null limits when limits section has no valid numeric fields', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'limits:\n  tokens_per_day: not_a_number\n  unknown_field: 123\n',
+      );
+
+      const config = loadConfig();
+
+      expect(config.limits).toBeNull();
+    });
+
+    it('ignores non-numeric limit values', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'limits:\n  tokens_per_day: 50000\n  reviews_per_day: bad\n',
+      );
+
+      const config = loadConfig();
+
+      expect(config.limits).toEqual({ tokens_per_day: 50000 });
+    });
+
+    it('returns null limits when limits section is missing', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+
+      const config = loadConfig();
+
+      expect(config.limits).toBeNull();
+    });
   });
 
   describe('saveConfig', () => {
@@ -166,6 +231,7 @@ describe('config', () => {
       anthropicApiKey: null as string | null,
       reviewModel: DEFAULT_REVIEW_MODEL,
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+      limits: null as import('../config.js').ConsumptionLimits | null,
     };
 
     it('saves config with API key', () => {
@@ -227,6 +293,25 @@ describe('config', () => {
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('max_diff_size_kb');
     });
+
+    it('saves limits when present', () => {
+      saveConfig({
+        ...baseConfig,
+        limits: { tokens_per_day: 50000, reviews_per_day: 20 },
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('limits');
+      expect(content).toContain('tokens_per_day: 50000');
+      expect(content).toContain('reviews_per_day: 20');
+    });
+
+    it('does not save limits when null', () => {
+      saveConfig(baseConfig);
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('limits');
+    });
   });
 
   describe('requireApiKey', () => {
@@ -237,6 +322,7 @@ describe('config', () => {
         anthropicApiKey: null,
         reviewModel: DEFAULT_REVIEW_MODEL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
       });
       expect(key).toBe('cr_test');
     });
@@ -254,6 +340,7 @@ describe('config', () => {
           anthropicApiKey: null,
           reviewModel: DEFAULT_REVIEW_MODEL,
           maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+          limits: null,
         }),
       ).toThrow('process.exit');
 

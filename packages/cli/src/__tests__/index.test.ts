@@ -23,6 +23,10 @@ vi.mock('../commands/agent.js', () => ({
   agentCommand: { _name: 'agent' },
 }));
 
+vi.mock('../commands/stats.js', () => ({
+  statsCommand: { _name: 'stats' },
+}));
+
 // Import triggers module-level side effects (Commander setup + parse)
 import '../index.js';
 
@@ -39,10 +43,11 @@ describe('CLI entry point', () => {
     expect(mockProgram.version).toHaveBeenCalledWith('0.0.1');
   });
 
-  it('registers login and agent commands', () => {
-    expect(mockProgram.addCommand).toHaveBeenCalledTimes(2);
+  it('registers login, agent, and stats commands', () => {
+    expect(mockProgram.addCommand).toHaveBeenCalledTimes(3);
     expect(mockProgram.addCommand).toHaveBeenCalledWith({ _name: 'login' });
     expect(mockProgram.addCommand).toHaveBeenCalledWith({ _name: 'agent' });
+    expect(mockProgram.addCommand).toHaveBeenCalledWith({ _name: 'stats' });
   });
 
   it('calls parse', () => {
