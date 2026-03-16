@@ -1409,8 +1409,7 @@ describe('AgentConnection', () => {
       expect(reviewRequest.project.prompt).toBe('');
     });
 
-    it('stops picking up tasks when WebSocket disconnects mid-pickup', async () => {
-      vi.spyOn(console, 'log').mockImplementation(() => {});
+    it('stops picking up tasks when WebSocket is not connected', async () => {
       const futureTimeout = new Date(Date.now() + 300_000).toISOString();
 
       // No WebSocket connected
@@ -1443,8 +1442,63 @@ describe('AgentConnection', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (connection as any).pickUpPendingTasks('agent-1', supabase);
 
-      // The CAS update may happen but no message should be sent since there's no WebSocket
-      // The task update to reviewing would happen, but the break would stop further processing
+      // WebSocket check happens BEFORE CAS update, so no task status changes at all
+      const reviewingUpdates = mockSupa._calls.update.filter(
+        (u) =>
+          u.table === 'review_tasks' && (u.data as Record<string, string>).status === 'reviewing',
+      );
+      expect(reviewingUpdates).toHaveLength(0);
+      expect(storage.store.get('inFlightTaskIds')).toEqual([]);
+    });
+
+    it('rolls back task to pending when WebSocket send fails', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const futureTimeout = new Date(Date.now() + 300_000).toISOString();
+
+      const mockWs = createMockWebSocket();
+      mockWs.send.mockImplementation(() => {
+        throw new Error('WebSocket closed');
+      });
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'send-fail-task',
+                pr_number: 10,
+                pr_url: 'url',
+                timeout_at: futureTimeout,
+                diff_content: 'diff',
+                config_json: {},
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // Should have rolled back: first update to reviewing, then rollback to pending
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_tasks',
+        data: { status: 'reviewing' },
+      });
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_tasks',
+        data: { status: 'pending' },
+      });
+      // Task should NOT be in inFlight
       expect(storage.store.get('inFlightTaskIds')).toEqual([]);
     });
   });
