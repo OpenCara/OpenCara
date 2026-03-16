@@ -65,14 +65,11 @@ describe('handleMessage', () => {
     const send = vi.fn();
     const ws = { send };
 
-    // Mock the review module
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
-    // We need to mock executeReview at the module level
     const reviewModule = await import('../review.js');
     const executeSpy = vi.spyOn(reviewModule, 'executeReview').mockResolvedValue({
       review: 'Looks good!',
@@ -80,8 +77,6 @@ describe('handleMessage', () => {
       tokensUsed: 150,
     });
 
-    // Re-import agent to pick up the mock
-    // Since handleMessage calls executeReview directly, we can test via the function
     const { handleMessage: hm } = await import('../commands/agent.js');
 
     hm(
@@ -98,7 +93,6 @@ describe('handleMessage', () => {
       mockReviewDeps,
     );
 
-    // Wait for the async review to complete
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalled();
     });
@@ -119,15 +113,14 @@ describe('handleMessage', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
     const reviewModule = await import('../review.js');
     const executeSpy = vi
       .spyOn(reviewModule, 'executeReview')
-      .mockRejectedValue(new Error('API timeout'));
+      .mockRejectedValue(new Error('Tool not found'));
 
     const { handleMessage: hm } = await import('../commands/agent.js');
 
@@ -152,7 +145,7 @@ describe('handleMessage', () => {
     const sent = JSON.parse(send.mock.calls[0][0]);
     expect(sent.type).toBe('review_error');
     expect(sent.taskId).toBe('task-1');
-    expect(sent.error).toBe('API timeout');
+    expect(sent.error).toBe('Tool not found');
 
     executeSpy.mockRestore();
     consoleSpy.mockRestore();
@@ -164,8 +157,7 @@ describe('handleMessage', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
@@ -230,8 +222,7 @@ describe('handleMessage', () => {
     const ws = { send };
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
@@ -278,15 +269,14 @@ describe('handleMessage', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
     const summaryModule = await import('../summary.js');
     const executeSpy = vi
       .spyOn(summaryModule, 'executeSummary')
-      .mockRejectedValue(new Error('API timeout'));
+      .mockRejectedValue(new Error('Tool crashed'));
 
     const { handleMessage: hm } = await import('../commands/agent.js');
 
@@ -313,7 +303,7 @@ describe('handleMessage', () => {
     const sent = JSON.parse(send.mock.calls[0][0]);
     expect(sent.type).toBe('review_error');
     expect(sent.taskId).toBe('task-2');
-    expect(sent.error).toBe('API timeout');
+    expect(sent.error).toBe('Tool crashed');
 
     executeSpy.mockRestore();
     consoleSpy.mockRestore();
@@ -325,8 +315,7 @@ describe('handleMessage', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
@@ -399,8 +388,7 @@ describe('handleMessage', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
@@ -453,8 +441,7 @@ describe('handleMessage', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 
@@ -508,8 +495,7 @@ describe('handleMessage', () => {
     const ws = { send };
 
     const mockReviewDeps: ReviewExecutorDeps = {
-      anthropicApiKey: 'sk-ant-test',
-      reviewModel: 'claude-sonnet-4-6',
+      tool: 'claude-code',
       maxDiffSizeKb: 100,
     };
 

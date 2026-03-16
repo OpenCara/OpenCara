@@ -184,13 +184,39 @@ describe('agent commands', () => {
 
     it('auto-selects single agent when no ID', async () => {
       mockGet.mockResolvedValueOnce({
-        agents: [{ id: 'agent-solo', model: 'gpt-4', tool: 'cc' }],
+        agents: [{ id: 'agent-solo', model: 'gpt-4', tool: 'claude-code' }],
       });
 
       await agentCommand.parseAsync(['start'], { from: 'user' });
 
       expect(logSpy).toHaveBeenCalledWith('Using agent agent-solo');
       expect(logSpy).toHaveBeenCalledWith('Starting agent agent-solo...');
+    });
+
+    it('exits when agent tool is unsupported', async () => {
+      mockGet.mockResolvedValueOnce({
+        agents: [{ id: 'agent-bad', model: 'gpt-4', tool: 'unknown-tool' }],
+      });
+
+      await expect(agentCommand.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
+        'process.exit',
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Unsupported tool'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unknown-tool'));
+    });
+
+    it('warns when agent fetch fails with explicit ID', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      mockGet.mockRejectedValueOnce(new Error('API down'));
+
+      await agentCommand.parseAsync(['start', 'agent-123'], { from: 'user' });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to fetch agent info: API down'),
+      );
+      warnSpy.mockRestore();
     });
 
     it('exits when no agents and no ID', async () => {

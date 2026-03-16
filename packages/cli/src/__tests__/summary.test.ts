@@ -10,6 +10,7 @@ import {
   type SummaryReviewInput,
 } from '../summary.js';
 import type { ReviewExecutorDeps } from '../review.js';
+import type { ToolExecutorResult } from '../tool-executor.js';
 
 const sampleReviews: SummaryReviewInput[] = [
   {
@@ -107,8 +108,7 @@ describe('InputTooLargeError', () => {
 
 describe('executeSummary', () => {
   const defaultDeps: ReviewExecutorDeps = {
-    anthropicApiKey: 'sk-ant-test',
-    reviewModel: 'claude-sonnet-4-6',
+    tool: 'claude-code',
     maxDiffSizeKb: 100,
   };
 
@@ -122,59 +122,53 @@ describe('executeSummary', () => {
     timeout: 300,
   };
 
-  function createMockClient(text: string, inputTokens = 100, outputTokens = 50) {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text }],
-      usage: { input_tokens: inputTokens, output_tokens: outputTokens },
-    });
-    const mockClient = { messages: { create: mockCreate } };
-    const createClient = vi.fn().mockReturnValue(mockClient);
-    return { mockCreate, createClient };
+  function createMockRunTool(stdout: string, tokensUsed = 0) {
+    return vi
+      .fn<
+        (
+          toolName: string,
+          prompt: string,
+          timeoutMs: number,
+          signal?: AbortSignal,
+        ) => Promise<ToolExecutorResult>
+      >()
+      .mockResolvedValue({ stdout, tokensUsed });
   }
 
-  it('calls Anthropic API and returns summary', async () => {
-    const { mockCreate, createClient } = createMockClient('## Summary\nAll good.');
+  it('invokes tool subprocess and returns summary', async () => {
+    const mockRunTool = createMockRunTool('## Summary\nAll good.');
 
-    const result = await executeSummary(defaultRequest, defaultDeps, createClient as never);
+    const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.summary).toBe('## Summary\nAll good.');
-    expect(result.tokensUsed).toBe(150);
-    expect(createClient).toHaveBeenCalledWith('sk-ant-test');
-    expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        system: expect.stringContaining('acme/widgets'),
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: 'user',
-            content: expect.stringContaining('Review this PR carefully'),
-          }),
-        ]),
-      }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    expect(result.tokensUsed).toBe(0);
+    expect(mockRunTool).toHaveBeenCalledWith(
+      'claude-code',
+      expect.stringContaining('acme/widgets'),
+      expect.any(Number),
+      expect.any(AbortSignal),
     );
   });
 
-  it('includes all reviews in the user message', async () => {
-    const { mockCreate, createClient } = createMockClient('Summary text');
+  it('includes all reviews in the prompt', async () => {
+    const mockRunTool = createMockRunTool('Summary text');
 
-    await executeSummary(defaultRequest, defaultDeps, createClient as never);
+    await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
-    expect(userContent).toContain('claude-sonnet/claude-code');
-    expect(userContent).toContain('gpt-4/copilot');
-    expect(userContent).toContain('Verdict: approve');
-    expect(userContent).toContain('Verdict: request_changes');
+    const prompt = mockRunTool.mock.calls[0][1];
+    expect(prompt).toContain('claude-sonnet/claude-code');
+    expect(prompt).toContain('gpt-4/copilot');
+    expect(prompt).toContain('Verdict: approve');
+    expect(prompt).toContain('Verdict: request_changes');
   });
 
-  it('includes review count in system prompt', async () => {
-    const { mockCreate, createClient } = createMockClient('Summary');
+  it('includes review count in system prompt portion', async () => {
+    const mockRunTool = createMockRunTool('Summary');
 
-    await executeSummary(defaultRequest, defaultDeps, createClient as never);
+    await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    const systemPrompt = mockCreate.mock.calls[0][0].system as string;
-    expect(systemPrompt).toContain('2 individual code reviews');
+    const prompt = mockRunTool.mock.calls[0][1];
+    expect(prompt).toContain('2 individual code reviews');
   });
 
   it('rejects when input is too large', async () => {
@@ -184,15 +178,13 @@ describe('executeSummary', () => {
       reviews: [{ agentId: 'a1', model: 'm', tool: 't', review: largeReview, verdict: 'approve' }],
     };
 
-    await expect(executeSummary(request, defaultDeps, vi.fn() as never)).rejects.toThrow(
-      InputTooLargeError,
-    );
+    await expect(executeSummary(request, defaultDeps, vi.fn())).rejects.toThrow(InputTooLargeError);
   });
 
   it('rejects when not enough time remaining', async () => {
     const request: SummaryRequest = { ...defaultRequest, timeout: 0 };
 
-    await expect(executeSummary(request, defaultDeps, vi.fn() as never)).rejects.toThrow(
+    await expect(executeSummary(request, defaultDeps, vi.fn())).rejects.toThrow(
       'Not enough time remaining',
     );
   });
@@ -200,73 +192,44 @@ describe('executeSummary', () => {
   it('rejects when timeout is exactly at safety margin', async () => {
     const request: SummaryRequest = { ...defaultRequest, timeout: 30 };
 
-    await expect(executeSummary(request, defaultDeps, vi.fn() as never)).rejects.toThrow(
+    await expect(executeSummary(request, defaultDeps, vi.fn())).rejects.toThrow(
       'Not enough time remaining',
     );
   });
 
-  it('handles missing usage in response', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'Summary' }],
-      usage: undefined,
-    });
-    const mockClient = { messages: { create: mockCreate } };
-    const createClient = vi.fn().mockReturnValue(mockClient);
+  it('returns tokensUsed from tool when reported', async () => {
+    const mockRunTool = createMockRunTool('Summary', 200);
 
-    const result = await executeSummary(defaultRequest, defaultDeps, createClient as never);
+    const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.tokensUsed).toBe(0);
+    expect(result.tokensUsed).toBe(200);
   });
 
-  it('propagates API errors', async () => {
-    const mockCreate = vi.fn().mockRejectedValue(new Error('API rate limited'));
-    const mockClient = { messages: { create: mockCreate } };
-    const createClient = vi.fn().mockReturnValue(mockClient);
+  it('propagates tool errors', async () => {
+    const mockRunTool = vi.fn().mockRejectedValue(new Error('Tool crashed'));
 
-    await expect(
-      executeSummary(defaultRequest, defaultDeps, createClient as never),
-    ).rejects.toThrow('API rate limited');
+    await expect(executeSummary(defaultRequest, defaultDeps, mockRunTool)).rejects.toThrow(
+      'Tool crashed',
+    );
   });
 
-  it('joins multiple text blocks in response', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [
-        { type: 'text', text: 'Part 1' },
-        { type: 'text', text: 'Part 2' },
-      ],
-      usage: { input_tokens: 10, output_tokens: 10 },
-    });
-    const mockClient = { messages: { create: mockCreate } };
-    const createClient = vi.fn().mockReturnValue(mockClient);
+  it('passes correct timeout to tool', async () => {
+    const mockRunTool = createMockRunTool('Summary');
 
-    const result = await executeSummary(defaultRequest, defaultDeps, createClient as never);
+    await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.summary).toBe('Part 1\nPart 2');
+    // timeout is 300s, safety margin is 30s, effective = 270s = 270000ms
+    const timeoutMs = mockRunTool.mock.calls[0][2];
+    expect(timeoutMs).toBe(270_000);
   });
 
-  it('filters out non-text blocks', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [
-        { type: 'tool_use', text: 'ignored' },
-        { type: 'text', text: 'Actual summary' },
-      ],
-      usage: { input_tokens: 10, output_tokens: 10 },
-    });
-    const mockClient = { messages: { create: mockCreate } };
-    const createClient = vi.fn().mockReturnValue(mockClient);
+  it('passes abort signal to tool', async () => {
+    const mockRunTool = createMockRunTool('Summary');
 
-    const result = await executeSummary(defaultRequest, defaultDeps, createClient as never);
+    await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.summary).toBe('Actual summary');
-  });
-
-  it('passes abort signal to Anthropic client', async () => {
-    const { mockCreate, createClient } = createMockClient('Summary');
-
-    await executeSummary(defaultRequest, defaultDeps, createClient as never);
-
-    const options = mockCreate.mock.calls[0][1] as { signal: AbortSignal };
-    expect(options.signal).toBeInstanceOf(AbortSignal);
-    expect(options.signal.aborted).toBe(false);
+    const signal = mockRunTool.mock.calls[0][3] as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
   });
 });
