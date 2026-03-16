@@ -125,7 +125,23 @@ function createSupabaseMock(config: SupabaseMockConfig = {}) {
       return Promise.resolve(result);
     });
 
-    chain.order = vi.fn().mockReturnValue(chain);
+    chain.gt = vi.fn((_col?: string, _val?: unknown) => {
+      const result = selectResults[table] ?? { data: null, error: null };
+      const proxy = {
+        ...chain,
+        then: (resolve: (v: unknown) => void) => Promise.resolve(result).then(resolve),
+      };
+      return proxy;
+    });
+
+    chain.order = vi.fn((_col?: string, _opts?: unknown) => {
+      const result = selectResults[table] ?? { data: null, error: null };
+      const proxy = {
+        ...chain,
+        then: (resolve: (v: unknown) => void) => Promise.resolve(result).then(resolve),
+      };
+      return proxy;
+    });
 
     chain.single = vi.fn(() => {
       return Promise.resolve(singleResults[table] ?? { data: null, error: null });
@@ -1136,6 +1152,420 @@ describe('AgentConnection', () => {
         lastHeartbeatAt: undefined,
         inFlightTaskIds: [],
       });
+    });
+  });
+
+  describe('pending task pickup on connect', () => {
+    it('picks up pending tasks when called after agent connects', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const futureTimeout = new Date(Date.now() + 300_000).toISOString();
+
+      // Simulate a connected WebSocket
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'pending-task-1',
+                pr_number: 10,
+                pr_url: 'https://github.com/org/repo/pull/10',
+                timeout_at: futureTimeout,
+                diff_content: 'diff --git a/file.ts\n+hello',
+                config_json: {
+                  prompt: 'Review',
+                  minCount: 1,
+                  timeout: '10m',
+                  diffUrl: 'https://github.com/org/repo/pull/10.diff',
+                  baseRef: 'main',
+                  headRef: 'feature',
+                  installationId: 99,
+                },
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // Verify the pending task was picked up: status updated to reviewing
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_tasks',
+        data: { status: 'reviewing' },
+      });
+
+      // Verify a review_request was sent on the WebSocket
+      const sentMessages = mockWs.send.mock.calls.map((c: unknown[]) => JSON.parse(c[0] as string));
+      const reviewRequest = sentMessages.find((m: { type: string }) => m.type === 'review_request');
+      expect(reviewRequest).toBeDefined();
+      expect(reviewRequest.taskId).toBe('pending-task-1');
+      expect(reviewRequest.diffContent).toBe('diff --git a/file.ts\n+hello');
+
+      // Verify in-flight tracking
+      expect(storage.store.get('inFlightTaskIds')).toContain('pending-task-1');
+
+      // Verify taskMeta stored
+      expect(storage.store.get('taskMeta:pending-task-1')).toEqual({
+        minCount: 1,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 10,
+        prompt: 'Review',
+      });
+    });
+
+    it('skips pending tasks with too little time remaining', async () => {
+      // Task expires in 20 seconds (below 30s threshold)
+      const nearTimeout = new Date(Date.now() + 20_000).toISOString();
+
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'expiring-task',
+                pr_number: 5,
+                pr_url: 'https://github.com/org/repo/pull/5',
+                timeout_at: nearTimeout,
+                diff_content: 'diff',
+                config_json: {},
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // Should NOT have updated task status to reviewing
+      const reviewingUpdates = mockSupa._calls.update.filter(
+        (u) =>
+          u.table === 'review_tasks' && (u.data as Record<string, string>).status === 'reviewing',
+      );
+      expect(reviewingUpdates).toHaveLength(0);
+
+      // Should NOT have sent a review request
+      expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when no pending tasks exist', async () => {
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: { data: [] },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // No task status updates
+      const taskUpdates = mockSupa._calls.update.filter((u) => u.table === 'review_tasks');
+      expect(taskUpdates).toHaveLength(0);
+      expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when pending tasks query returns null', async () => {
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: { data: null },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
+    it('handles CAS failure gracefully (another agent got it first)', async () => {
+      const futureTimeout = new Date(Date.now() + 300_000).toISOString();
+
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      // Create a mock where the update returns an error (CAS failure)
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'contested-task',
+                pr_number: 10,
+                pr_url: 'url',
+                timeout_at: futureTimeout,
+                diff_content: 'diff',
+                config_json: {},
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+            error: { message: 'CAS conflict' },
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // Should not send a review request on the WebSocket
+      const sentMessages = mockWs.send.mock.calls.map((c: unknown[]) => JSON.parse(c[0] as string));
+      const reviewRequests = sentMessages.filter(
+        (m: { type: string }) => m.type === 'review_request',
+      );
+      expect(reviewRequests).toHaveLength(0);
+    });
+
+    it('uses default values when config_json fields are missing', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const futureTimeout = new Date(Date.now() + 300_000).toISOString();
+
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'task-no-config',
+                pr_number: 5,
+                pr_url: 'https://github.com/org/repo/pull/5',
+                timeout_at: futureTimeout,
+                diff_content: null,
+                config_json: null,
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // Should still pick up the task with defaults
+      const sentMessages = mockWs.send.mock.calls.map((c: unknown[]) => JSON.parse(c[0] as string));
+      const reviewRequest = sentMessages.find((m: { type: string }) => m.type === 'review_request');
+      expect(reviewRequest).toBeDefined();
+      expect(reviewRequest.diffContent).toBe('');
+      expect(reviewRequest.pr.base).toBe('main');
+      expect(reviewRequest.pr.head).toBe('unknown');
+      expect(reviewRequest.project.prompt).toBe('');
+    });
+
+    it('stops picking up tasks when WebSocket is not connected', async () => {
+      const futureTimeout = new Date(Date.now() + 300_000).toISOString();
+
+      // No WebSocket connected
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'task-1',
+                pr_number: 10,
+                pr_url: 'url',
+                timeout_at: futureTimeout,
+                diff_content: 'diff',
+                config_json: {},
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // WebSocket check happens BEFORE CAS update, so no task status changes at all
+      const reviewingUpdates = mockSupa._calls.update.filter(
+        (u) =>
+          u.table === 'review_tasks' && (u.data as Record<string, string>).status === 'reviewing',
+      );
+      expect(reviewingUpdates).toHaveLength(0);
+      expect(storage.store.get('inFlightTaskIds')).toEqual([]);
+    });
+
+    it('rolls back task to pending when WebSocket send fails', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const futureTimeout = new Date(Date.now() + 300_000).toISOString();
+
+      const mockWs = createMockWebSocket();
+      mockWs.send.mockImplementation(() => {
+        throw new Error('WebSocket closed');
+      });
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', []);
+
+      mockSupa = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'send-fail-task',
+                pr_number: 10,
+                pr_url: 'url',
+                timeout_at: futureTimeout,
+                diff_content: 'diff',
+                config_json: {},
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const supabase = createSupabaseClient(mockEnv as unknown as Record<string, unknown>);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (connection as any).pickUpPendingTasks('agent-1', supabase);
+
+      // Should have rolled back: first update to reviewing, then rollback to pending
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_tasks',
+        data: { status: 'reviewing' },
+      });
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_tasks',
+        data: { status: 'pending' },
+      });
+      // Task should NOT be in inFlight
+      expect(storage.store.get('inFlightTaskIds')).toEqual([]);
+    });
+  });
+
+  describe('redistribution uses stored diff_content and config_json', () => {
+    beforeEach(() => {
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('inFlightTaskIds', ['task-1']);
+    });
+
+    it('redistributes with stored diff_content and config_json from task', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockSupa = createSupabaseMock({
+        countResults: {
+          review_results: { count: 1 },
+        },
+        selectResults: {
+          review_results: { data: [{ agent_id: 'agent-1' }] },
+          agents: { data: [{ id: 'agent-2' }] },
+        },
+        singleResults: {
+          review_tasks: {
+            data: {
+              pr_number: 10,
+              pr_url: 'https://github.com/org/repo/pull/10',
+              timeout_at: new Date(Date.now() + 300_000).toISOString(),
+              diff_content: 'stored diff content',
+              config_json: {
+                prompt: 'Review carefully',
+                diffUrl: 'https://github.com/org/repo/pull/10.diff',
+                baseRef: 'main',
+                headRef: 'feature-branch',
+              },
+              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+            },
+            error: null,
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_rejected',
+          taskId: 'task-1',
+          reason: 'Not relevant',
+        }),
+      );
+
+      // Verify the DO push used stored data
+      expect(mockDoFetch).toHaveBeenCalled();
+      const pushBody = JSON.parse(
+        (mockDoFetch.mock.calls[0][0] as Request).clone().text
+          ? await (mockDoFetch.mock.calls[0][0] as Request).text()
+          : '{}',
+      );
+      expect(pushBody.diffContent).toBe('stored diff content');
+      expect(pushBody.project.prompt).toBe('Review carefully');
+      expect(pushBody.pr.diffUrl).toBe('https://github.com/org/repo/pull/10.diff');
+      expect(pushBody.pr.base).toBe('main');
+      expect(pushBody.pr.head).toBe('feature-branch');
     });
   });
 

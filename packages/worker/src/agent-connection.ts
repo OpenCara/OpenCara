@@ -22,6 +22,7 @@ import {
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 const MAX_REVIEW_ATTEMPTS = 3;
+const MIN_REMAINING_SECONDS_FOR_PICKUP = 30;
 
 const VERDICT_LABELS: Record<ReviewVerdict, string> = {
   approve: '\u2705 Approve',
@@ -120,6 +121,9 @@ export class AgentConnection implements DurableObject {
 
     await this.state.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
 
+    // Pick up any pending tasks that need agents
+    await this.pickUpPendingTasks(agentId, supabase);
+
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -211,6 +215,110 @@ export class AgentConnection implements DurableObject {
     );
 
     await this.state.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
+  }
+
+  private async pickUpPendingTasks(
+    agentId: string,
+    supabase: ReturnType<typeof createSupabaseClient>,
+  ): Promise<void> {
+    // Query review_tasks with status='pending' that haven't expired
+    const { data: pendingTasks } = await supabase
+      .from('review_tasks')
+      .select(
+        'id, pr_number, pr_url, timeout_at, diff_content, config_json, project_id, projects!inner(owner, repo, github_installation_id)',
+      )
+      .eq('status', 'pending')
+      .gt('timeout_at', new Date().toISOString())
+      .order('created_at', { ascending: true });
+
+    if (!pendingTasks || pendingTasks.length === 0) return;
+
+    for (const task of pendingTasks) {
+      // Check WebSocket availability BEFORE CAS update to avoid orphaning tasks
+      const websockets = this.state.getWebSockets();
+      if (websockets.length === 0) break;
+
+      const timeoutAt = new Date(task.timeout_at as string).getTime();
+      const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
+
+      if (remainingSeconds <= MIN_REMAINING_SECONDS_FOR_PICKUP) continue;
+
+      // CAS transition: pending -> reviewing (prevents race with other agents)
+      const { error } = await supabase
+        .from('review_tasks')
+        .update({ status: 'reviewing' })
+        .eq('id', task.id)
+        .eq('status', 'pending');
+
+      if (error) continue; // Another agent got it first
+
+      const project = task.projects as unknown as {
+        owner: string;
+        repo: string;
+        github_installation_id: number;
+      };
+      const config = (task.config_json as Record<string, unknown>) ?? {};
+      const diffContent = (task.diff_content as string) ?? '';
+
+      try {
+        const message: ReviewRequestMessage = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          type: 'review_request',
+          taskId: task.id as string,
+          pr: {
+            url: task.pr_url as string,
+            number: task.pr_number as number,
+            diffUrl:
+              (config.diffUrl as string) ??
+              `https://github.com/${project.owner}/${project.repo}/pull/${task.pr_number}.diff`,
+            base: (config.baseRef as string) ?? 'main',
+            head: (config.headRef as string) ?? 'unknown',
+          },
+          project: {
+            owner: project.owner,
+            repo: project.repo,
+            prompt: (config.prompt as string) ?? '',
+          },
+          timeout: remainingSeconds,
+          diffContent,
+        };
+
+        websockets[0].send(JSON.stringify(message));
+
+        const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
+        inFlightTaskIds.push(task.id as string);
+        await this.state.storage.put('inFlightTaskIds', inFlightTaskIds);
+
+        // Store per-task metadata for multi-agent review collection
+        const minCount = (config.minCount as number) ?? 1;
+        const taskMeta: InFlightTaskMeta = {
+          minCount,
+          installationId: (config.installationId as number) ?? project.github_installation_id,
+          owner: project.owner,
+          repo: project.repo,
+          prNumber: task.pr_number as number,
+          prompt: (config.prompt as string) ?? '',
+        };
+        await this.state.storage.put(`taskMeta:${task.id}`, taskMeta);
+
+        console.log(
+          `Pending task ${task.id} picked up by agent ${agentId} (${remainingSeconds}s remaining)`,
+        );
+      } catch (err) {
+        // Rollback: revert task to pending so another agent or timeout can handle it
+        await supabase
+          .from('review_tasks')
+          .update({ status: 'pending' })
+          .eq('id', task.id)
+          .eq('status', 'reviewing');
+        console.error(
+          `Failed to send task ${task.id} to agent ${agentId}, reverted to pending:`,
+          err,
+        );
+        break; // WebSocket likely broken, stop processing
+      }
+    }
   }
 
   private async handlePushTask(request: Request): Promise<Response> {
@@ -530,10 +638,12 @@ export class AgentConnection implements DurableObject {
       return;
     }
 
-    // Look up task info for redistribution
+    // Look up task info for redistribution (including stored diff and config)
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select('pr_number, pr_url, timeout_at, projects!inner(owner, repo, github_installation_id)')
+      .select(
+        'pr_number, pr_url, timeout_at, diff_content, config_json, projects!inner(owner, repo, github_installation_id)',
+      )
       .eq('id', taskId)
       .single();
 
@@ -548,6 +658,7 @@ export class AgentConnection implements DurableObject {
       github_installation_id: number;
     };
 
+    const config = (taskData.config_json as Record<string, unknown>) ?? {};
     const timeoutAt = new Date(taskData.timeout_at as string).getTime();
     const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
 
@@ -564,13 +675,19 @@ export class AgentConnection implements DurableObject {
             pr: {
               url: taskData.pr_url,
               number: taskData.pr_number,
-              diffUrl: `https://github.com/${project.owner}/${project.repo}/pull/${taskData.pr_number}.diff`,
-              base: 'main',
-              head: 'unknown',
+              diffUrl:
+                (config.diffUrl as string) ??
+                `https://github.com/${project.owner}/${project.repo}/pull/${taskData.pr_number}.diff`,
+              base: (config.baseRef as string) ?? 'main',
+              head: (config.headRef as string) ?? 'unknown',
             },
-            project: { owner: project.owner, repo: project.repo, prompt: '' },
+            project: {
+              owner: project.owner,
+              repo: project.repo,
+              prompt: (config.prompt as string) ?? '',
+            },
             timeout: remainingSeconds,
-            diffContent: '',
+            diffContent: (taskData.diff_content as string) ?? '',
           }),
         }),
       );

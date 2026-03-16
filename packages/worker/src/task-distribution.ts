@@ -175,7 +175,17 @@ export async function distributeTask(
   const projectId = await findOrCreateProject(supabase, installationId, owner, repo);
   if (!projectId) return null;
 
-  // 2. Create review_task
+  // 2. Create review_task with diff_content and config_json for pending pickup
+  const configJson = {
+    prompt: config.prompt,
+    minCount: config.agents.minCount,
+    timeout: config.timeout,
+    diffUrl,
+    baseRef,
+    headRef,
+    installationId,
+  };
+
   const { data: task, error: taskError } = await supabase
     .from('review_tasks')
     .insert({
@@ -184,6 +194,8 @@ export async function distributeTask(
       pr_url: prUrl,
       status: 'pending',
       timeout_at: new Date(Date.now() + timeoutMs).toISOString(),
+      diff_content: diffContent,
+      config_json: configJson,
     })
     .select('id')
     .single();
@@ -195,7 +207,30 @@ export async function distributeTask(
 
   const taskId = task.id as string;
 
-  // 3. Find eligible agents
+  // 3. Set up task timeout BEFORE agent selection (pending tasks also need expiry)
+  try {
+    const timeoutDoId = env.TASK_TIMEOUT.idFromName(taskId);
+    const timeoutStub = env.TASK_TIMEOUT.get(timeoutDoId);
+    await timeoutStub.fetch(
+      new Request('https://internal/set-timeout', {
+        method: 'POST',
+        body: JSON.stringify({
+          taskId,
+          timeoutMs,
+          minCount: config.agents.minCount,
+          installationId,
+          owner,
+          repo,
+          prNumber,
+          prompt: config.prompt,
+        }),
+      }),
+    );
+  } catch (err) {
+    console.error(`Failed to set task timeout for ${taskId}:`, err);
+  }
+
+  // 4. Find eligible agents
   const allAgents = await findEligibleAgents(supabase, config.agents.minReputation);
   const filtered = filterByAccessList(
     allAgents,
@@ -205,15 +240,15 @@ export async function distributeTask(
   const selected = selectAgents(filtered, config.agents.minCount, config.agents.preferredTools);
 
   if (selected.length === 0) {
-    console.log(`No eligible agents found for task ${taskId}`);
-    await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
+    console.log(`No eligible agents found for task ${taskId} — stays pending for pickup`);
+    // Task stays in "pending" status. The timeout alarm will handle expiry.
     return taskId;
   }
 
-  // 4. Update task status to reviewing before distributing (avoid race with timeout alarm)
+  // 5. Update task status to reviewing before distributing (avoid race with timeout alarm)
   await supabase.from('review_tasks').update({ status: 'reviewing' }).eq('id', taskId);
 
-  // 5. Push task to each selected agent's DO
+  // 6. Push task to each selected agent's DO
   const remainingSeconds = Math.floor(timeoutMs / 1000);
   for (const agent of selected) {
     try {
@@ -242,29 +277,6 @@ export async function distributeTask(
     } catch (err) {
       console.error(`Failed to push task to agent ${agent.id}:`, err);
     }
-  }
-
-  // 6. Set up task timeout with task meta for summarization dispatch
-  try {
-    const timeoutDoId = env.TASK_TIMEOUT.idFromName(taskId);
-    const timeoutStub = env.TASK_TIMEOUT.get(timeoutDoId);
-    await timeoutStub.fetch(
-      new Request('https://internal/set-timeout', {
-        method: 'POST',
-        body: JSON.stringify({
-          taskId,
-          timeoutMs,
-          minCount: config.agents.minCount,
-          installationId,
-          owner,
-          repo,
-          prNumber,
-          prompt: config.prompt,
-        }),
-      }),
-    );
-  } catch (err) {
-    console.error(`Failed to set task timeout for ${taskId}:`, err);
   }
 
   console.log(`Task ${taskId} distributed to ${selected.length} agent(s)`);
