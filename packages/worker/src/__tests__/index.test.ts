@@ -109,7 +109,11 @@ import { handleCollectRatings } from '../handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
 import { handleGetStats, handleGetLeaderboard } from '../handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from '../handlers/web-auth.js';
-import { addCorsHeaders, addSecurityHeaders, handleCorsPreflightRequest } from '../handlers/cors.js';
+import {
+  addCorsHeaders,
+  addSecurityHeaders,
+  handleCorsPreflightRequest,
+} from '../handlers/cors.js';
 
 const mockEnv: Env = {
   GITHUB_WEBHOOK_SECRET: 'test',
@@ -444,10 +448,7 @@ describe('worker router', () => {
   });
 
   it('adds security headers to preflight responses', async () => {
-    await worker.fetch(
-      new Request('http://localhost/api/agents', { method: 'OPTIONS' }),
-      mockEnv,
-    );
+    await worker.fetch(new Request('http://localhost/api/agents', { method: 'OPTIONS' }), mockEnv);
     expect(addSecurityHeaders).toHaveBeenCalled();
   });
 

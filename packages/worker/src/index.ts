@@ -4,11 +4,7 @@ import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
 import { handleCollectRatings } from './handlers/collect-ratings.js';
 import { handleGetConsumption } from './handlers/consumption.js';
-import {
-  addCorsHeaders,
-  addSecurityHeaders,
-  handleCorsPreflightRequest,
-} from './handlers/cors.js';
+import { addCorsHeaders, addSecurityHeaders, handleCorsPreflightRequest } from './handlers/cors.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from './handlers/device-flow.js';
 import { handleGetStats, handleGetLeaderboard } from './handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from './handlers/web-auth.js';

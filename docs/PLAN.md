@@ -174,19 +174,19 @@ M0 → M2 → M4       M5 → M9
 | #12 | #9     | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
 | #15 | #11    | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
 | #16 | #14    | cli-dev    | 2026-03-16 | M5-C CLI AI-powered review execution engine                     |
-| #17 | #13    | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution      |
-| #21 | #18    | architect  | 2026-03-16 | Fix pre-existing typecheck and formatting issues                 |
-| #22 | #20    | cli-dev    | 2026-03-16 | M6-C CLI Summary Execution Engine                                |
-| #23 | #19    | worker-dev | 2026-03-16 | M6-W Multi-Agent Dispatch + Summarization Trigger                |
-| #28 | #26    | worker-dev | 2026-03-16 | M9-W Consumption Stats API Endpoint                              |
-| #29 | #25    | worker-dev | 2026-03-16 | M7 Reputation System — Wilson Scoring + Leaderboard              |
-| #30 | #27    | cli-dev    | 2026-03-16 | M9-C CLI Stats Command + Local Consumption Limits                |
-| #36 | #33    | worker-dev | 2026-03-16 | M8-WK Web OAuth Callback Endpoint                                |
-| #37 | #31,32 | web-dev    | 2026-03-16 | M8 Landing Page, Layout, Leaderboard                             |
-| #39 | #34    | web-dev    | 2026-03-16 | M8 Dashboard — Personal Stats + Consumption                      |
-| #42 | #40    | architect  | 2026-03-16 | Deployment guide + rating uniqueness constraint                   |
-| #44 | #41    | web-dev    | 2026-03-16 | Fix dashboard quality — hydration, errors, AbortController        |
-| #45 | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                     |
-| #49 | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API        |
-| #50 | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                   |
-| #52 | #51    | worker-dev | 2026-03-16 | Fix WebSocket disconnect on authentication                         |
+| #17 | #13    | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution     |
+| #21 | #18    | architect  | 2026-03-16 | Fix pre-existing typecheck and formatting issues                |
+| #22 | #20    | cli-dev    | 2026-03-16 | M6-C CLI Summary Execution Engine                               |
+| #23 | #19    | worker-dev | 2026-03-16 | M6-W Multi-Agent Dispatch + Summarization Trigger               |
+| #28 | #26    | worker-dev | 2026-03-16 | M9-W Consumption Stats API Endpoint                             |
+| #29 | #25    | worker-dev | 2026-03-16 | M7 Reputation System — Wilson Scoring + Leaderboard             |
+| #30 | #27    | cli-dev    | 2026-03-16 | M9-C CLI Stats Command + Local Consumption Limits               |
+| #36 | #33    | worker-dev | 2026-03-16 | M8-WK Web OAuth Callback Endpoint                               |
+| #37 | #31,32 | web-dev    | 2026-03-16 | M8 Landing Page, Layout, Leaderboard                            |
+| #39 | #34    | web-dev    | 2026-03-16 | M8 Dashboard — Personal Stats + Consumption                     |
+| #42 | #40    | architect  | 2026-03-16 | Deployment guide + rating uniqueness constraint                 |
+| #44 | #41    | web-dev    | 2026-03-16 | Fix dashboard quality — hydration, errors, AbortController      |
+| #45 | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                   |
+| #49 | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API     |
+| #50 | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                |
+| #52 | #51    | worker-dev | 2026-03-16 | Fix WebSocket disconnect on authentication                      |

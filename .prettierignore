@@ -1,5 +1,4 @@
-dist/
-.next/
-node_modules/
-*.tsbuildinfo
-package-lock.json
+.vercel
+coverage
+.claude/worktrees
+pr-reviews

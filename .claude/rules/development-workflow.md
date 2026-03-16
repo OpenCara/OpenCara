@@ -111,6 +111,18 @@ SendMessage to PM: "Completed issue #<NUMBER>. PR #<PR_NUMBER> merged (squash). 
 
 This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
 
+## Push to Main Rule
+
+**ALL pushes to main must pass local checks first** — no exceptions. This applies to dev agents merging PRs, PM direct-committing docs, and team lead pushing config changes.
+
+Before any `git push origin main`:
+
+```bash
+npm run build && npm run test && npm run lint && npm run format:check && npm run typecheck
+```
+
+If any check fails, fix it before pushing. Never push broken code to main.
+
 ## Architecture Principles
 
 - **TypeScript strict mode** — all packages use `"strict": true`
