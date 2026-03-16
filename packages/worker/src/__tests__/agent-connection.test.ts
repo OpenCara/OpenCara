@@ -1674,9 +1674,7 @@ describe('AgentConnection', () => {
       await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
 
       // review_tasks should NOT have been queried (pickUpPendingTasks was skipped)
-      const reviewTasksFromCalls = pendingTaskMock._calls.from.filter(
-        (t) => t === 'review_tasks',
-      );
+      const reviewTasksFromCalls = pendingTaskMock._calls.from.filter((t) => t === 'review_tasks');
       expect(reviewTasksFromCalls).toHaveLength(0);
     });
 
