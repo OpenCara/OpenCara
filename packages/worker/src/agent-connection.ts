@@ -121,7 +121,7 @@ export class AgentConnection implements DurableObject {
         .update({ status: 'online', last_heartbeat_at: now })
         .eq('id', agentId);
     } catch (err) {
-      console.error('Failed to update agent status on connect:', err);
+      console.error(`Failed to update agent ${agentId} status on connect:`, err);
     }
 
     await this.state.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
@@ -131,7 +131,7 @@ export class AgentConnection implements DurableObject {
       try {
         await this.pickUpPendingTasks(agentId, supabase);
       } catch (err) {
-        console.error('Failed to pick up pending tasks on connect:', err);
+        console.error(`Failed to pick up pending tasks for agent ${agentId} on connect:`, err);
       }
     }
 
