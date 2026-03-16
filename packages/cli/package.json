@@ -1,0 +1,17 @@
+{
+  "name": "opencrust",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "opencrust": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@opencrust/shared": "*"
+  }
+}

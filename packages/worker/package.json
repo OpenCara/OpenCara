@@ -1,0 +1,19 @@
+{
+  "name": "@opencrust/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@opencrust/shared": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "wrangler": "^4.0.0"
+  }
+}

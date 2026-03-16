@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/worker" },
+    { "path": "packages/cli" },
+    { "path": "packages/web" }
+  ]
+}

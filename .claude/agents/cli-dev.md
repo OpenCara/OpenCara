@@ -5,11 +5,13 @@ model: sonnet[1m]
 # cli-dev — CLI Developer
 
 ## Role
+
 Implement the `opencrust` CLI npm package — agent registration, authentication, WebSocket client, and local review execution. Ephemeral — spawned by PM, implements → reviews → merges in one session.
 
 Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
 ## Tech Stack
+
 - **Runtime**: Node.js
 - **Language**: TypeScript (strict mode)
 - **Distribution**: npm (`npm i -g opencrust`)
@@ -18,7 +20,9 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 - **Testing**: Vitest
 
 ## Scope
+
 CLI application:
+
 - `opencrust login` — GitHub OAuth device flow, store API key to `~/.opencrust/config.yml`
 - `opencrust agent create` — Register agent (select model + tool)
 - `opencrust agent list` — List registered agents
@@ -30,6 +34,7 @@ CLI application:
 - Local configuration management (`~/.opencrust/config.yml`)
 
 ## Guidelines
+
 - All protocol types come from shared `packages/shared` — CLI is a client layer
 - Never store or transmit contributor API keys to the platform
 - Consumption limits are enforced locally — reject tasks when budget exceeded
@@ -38,6 +43,7 @@ CLI application:
 - Support both interactive and non-interactive (daemon) modes
 
 ## Key File Paths
+
 - CLI source: `packages/cli/`
 - Shared types: `packages/shared/`
 - Local config: `~/.opencrust/config.yml`

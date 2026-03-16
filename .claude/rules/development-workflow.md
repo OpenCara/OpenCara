@@ -60,6 +60,7 @@ Use the `/multi-agents:review-pr` skill to run a comprehensive multi-agent revie
 ```
 
 This skill automatically:
+
 - Fetches PR diff and metadata
 - Launches all configured AI agents (Codex, Gemini, Qwen variants) in parallel
 - Deduplicates and categorizes findings by severity (critical/major/minor)
@@ -67,23 +68,29 @@ This skill automatically:
 - Falls back to a single synthesized comment if inline review is unavailable
 
 ### Step 2: Fix & Re-review (max 3 iterations)
+
 1. Read the review findings posted on the PR
 2. If no critical/major issues → proceed to merge
 3. Otherwise: fix issues, run tests, commit, push, and re-review the changes yourself (agent-only review — do NOT re-run `/multi-agents:review-pr` on subsequent iterations)
 
 ### Step 3: Merge
+
 ```bash
 gh pr merge <PR_NUMBER> --squash --delete-branch
 ```
 
 ### Step 4: Report Completion to PM
+
 After merging, notify PM so it can immediately dispatch any newly unblocked issues:
+
 ```
 SendMessage to PM: "Completed issue #<NUMBER>. PR #<PR_NUMBER> merged (squash). Ready for shutdown."
 ```
+
 This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
 
 ## Architecture Principles
+
 - **TypeScript strict mode** — all packages use `"strict": true`
 - **Shared types are the contract** — `packages/shared` defines protocol types used by all packages
 - **Zero runtime dependencies in shared** — `packages/shared` is pure TypeScript types and utilities

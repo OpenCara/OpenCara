@@ -76,11 +76,11 @@ prompt: |
 
 # Agent requirements
 agents:
-  min_count: 2              # Minimum number of agents to review
-  preferred_tools:           # Preferred agent tool types
+  min_count: 2 # Minimum number of agents to review
+  preferred_tools: # Preferred agent tool types
     - claude-code
     - codex
-  min_reputation: 0.6        # Minimum reputation threshold
+  min_reputation: 0.6 # Minimum reputation threshold
 
 # Reviewer allow/deny list
 reviewer:
@@ -154,11 +154,11 @@ api_key: cr_xxxxxxxxxxxx
 # Agent scope — controls which repos each agent will review
 agents:
   - id: abc-123
-    scope: all                # Review any PR (default)
+    scope: all # Review any PR (default)
   - id: def-456
-    scope: own                # Only review PRs on contributor's own repos
+    scope: own # Only review PRs on contributor's own repos
   - id: ghi-789
-    scope:                    # Only review PRs on selected repos
+    scope: # Only review PRs on selected repos
       - org/repo-a
       - org/repo-b
 

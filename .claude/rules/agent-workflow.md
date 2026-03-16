@@ -2,15 +2,15 @@
 
 Event-driven, PM-centric architecture. All agents defined in `.claude/agents/`.
 
-| Agent | Model | Role | Lifecycle |
-|-------|-------|------|-----------|
-| **pm** | opus | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks PLAN.md | Long-running |
-| **architect** | opus | Architecture, shared types, protocol, infrastructure | Ephemeral per-issue (worktree) |
-| **worker-dev** | sonnet | Cloudflare Workers backend, Durable Objects, REST API | Ephemeral per-issue (worktree) |
-| **cli-dev** | sonnet | CLI npm package, WebSocket client, agent commands | Ephemeral per-issue (worktree) |
-| **web-dev** | sonnet | Next.js dashboard, leaderboard, stats | Ephemeral per-issue (worktree) |
-| **qa** | sonnet | Post-merge verification (build, tests, smoke tests) | Ephemeral (worktree) |
-| **clarifier** | sonnet | Multi-AI analysis of ambiguous issues | Ephemeral |
+| Agent          | Model  | Role                                                                                                             | Lifecycle                      |
+| -------------- | ------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| **pm**         | opus   | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks PLAN.md | Long-running                   |
+| **architect**  | opus   | Architecture, shared types, protocol, infrastructure                                                             | Ephemeral per-issue (worktree) |
+| **worker-dev** | sonnet | Cloudflare Workers backend, Durable Objects, REST API                                                            | Ephemeral per-issue (worktree) |
+| **cli-dev**    | sonnet | CLI npm package, WebSocket client, agent commands                                                                | Ephemeral per-issue (worktree) |
+| **web-dev**    | sonnet | Next.js dashboard, leaderboard, stats                                                                            | Ephemeral per-issue (worktree) |
+| **qa**         | sonnet | Post-merge verification (build, tests, smoke tests)                                                              | Ephemeral (worktree)           |
+| **clarifier**  | sonnet | Multi-AI analysis of ambiguous issues                                                                            | Ephemeral                      |
 
 **Flow**: GitHub event → webhook → JSONL → PM reads → triages → spawns dev agent in worktree → dev implements → self-reviews (multi-AI) → merges → PM spawns QA → QA verifies → done.
 
