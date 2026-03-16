@@ -1,6 +1,8 @@
 import type { LeaderboardResponse } from '@opencrust/shared';
 import { apiFetch } from '../../lib/api';
 
+export const dynamic = 'force-dynamic';
+
 async function getLeaderboard(): Promise<{ data?: LeaderboardResponse; error?: string }> {
   try {
     const data = await apiFetch<LeaderboardResponse>('/api/leaderboard');
