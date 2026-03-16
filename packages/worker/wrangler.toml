@@ -10,8 +10,8 @@ compatibility_date = "2024-12-01"
 # - GITHUB_CLIENT_SECRET: GitHub App client secret
 
 [vars]
-WEB_URL = "http://localhost:3000"
-WORKER_URL = "http://localhost:8787"
+WEB_URL = "https://opencrust.vercel.app"
+WORKER_URL = "https://opencrust-worker.opencrust.workers.dev"
 
 [durable_objects]
 bindings = [
@@ -21,4 +21,4 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["AgentConnection", "TaskTimeout"]
+new_sqlite_classes = ["AgentConnection", "TaskTimeout"]
