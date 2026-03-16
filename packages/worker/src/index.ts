@@ -7,6 +7,7 @@ import {
   handleDeviceToken,
   handleRevokeKey,
 } from './handlers/device-flow.js';
+import { handleGitHubWebhook } from './webhook.js';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -20,6 +21,11 @@ export default {
     const url = new URL(request.url);
     const { pathname } = url;
     const method = request.method;
+
+    // Webhook endpoint (public, validated by signature)
+    if (method === 'POST' && pathname === '/webhook/github') {
+      return handleGitHubWebhook(request, env);
+    }
 
     const supabase = createSupabaseClient(env);
 

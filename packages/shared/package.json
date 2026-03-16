@@ -19,5 +19,8 @@
   "scripts": {
     "build": "tsc --build",
     "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
   }
 }
