@@ -71,7 +71,7 @@ export { buildWsUrl };
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 
-function startAgent(
+export function startAgent(
   agentId: string,
   platformUrl: string,
   apiKey: string,
@@ -134,6 +134,11 @@ function startAgent(
     ws.on('close', (code, reason) => {
       clearHeartbeatTimer();
       if (intentionalClose) return;
+      if (ws !== currentWs) return; // Stale WS — don't reconnect
+      if (code === 4002) {
+        console.log('Connection replaced by server — not reconnecting.');
+        return;
+      }
       console.log(`Disconnected (code=${code}, reason=${reason.toString()}).`);
       reconnect();
     });

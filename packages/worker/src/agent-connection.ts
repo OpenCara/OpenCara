@@ -83,8 +83,12 @@ export class AgentConnection implements DurableObject {
       return new Response('Expected WebSocket', { status: 426 });
     }
 
+    // Check if this is a reconnect (existing WebSocket being replaced)
+    const existingWebSockets = this.state.getWebSockets();
+    const isReconnect = existingWebSockets.length > 0;
+
     // Close existing connection if any
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of existingWebSockets) {
       ws.close(4002, 'replaced');
     }
 
@@ -101,7 +105,11 @@ export class AgentConnection implements DurableObject {
     await this.state.storage.put('status', 'online');
     await this.state.storage.put('connectedAt', now);
     await this.state.storage.put('lastHeartbeatAt', now);
-    await this.state.storage.put('inFlightTaskIds', [] as string[]);
+
+    // Only clear in-flight tasks on fresh connections, not reconnects
+    if (!isReconnect) {
+      await this.state.storage.put('inFlightTaskIds', [] as string[]);
+    }
 
     server.send(
       JSON.stringify({

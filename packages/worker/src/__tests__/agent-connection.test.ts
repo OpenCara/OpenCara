@@ -1503,6 +1503,47 @@ describe('AgentConnection', () => {
     });
   });
 
+  describe('handleWebSocket preserves inFlightTaskIds on reconnect', () => {
+    it('clears inFlightTaskIds on fresh connection (no existing WebSocket)', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // No existing WebSockets — fresh connection
+      storage.store.set('inFlightTaskIds', ['task-old']);
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — RangeError in Node, success in Workers
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // Fresh connection: inFlightTaskIds should be cleared
+      expect(storage.store.get('inFlightTaskIds')).toEqual([]);
+    });
+
+    it('preserves inFlightTaskIds on reconnect (existing WebSocket replaced)', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Simulate existing WebSocket
+      const existingWs = createMockWebSocket();
+      mockCtx._websockets.push(existingWs);
+      storage.store.set('inFlightTaskIds', ['task-in-progress']);
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — RangeError in Node, success in Workers
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // Reconnect: inFlightTaskIds should be preserved
+      expect(storage.store.get('inFlightTaskIds')).toEqual(['task-in-progress']);
+
+      // Existing WebSocket should have been closed with 4002
+      expect(existingWs.close).toHaveBeenCalledWith(4002, 'replaced');
+    });
+  });
+
   describe('handleWebSocket resilience', () => {
     // Note: In Node.js test environment, `new Response(null, { status: 101 })` throws
     // RangeError because Node's Response only accepts 200-599 status codes.
