@@ -1,0 +1,62 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { parse, stringify } from 'yaml';
+
+export interface CliConfig {
+  apiKey: string | null;
+  platformUrl: string;
+}
+
+export const DEFAULT_PLATFORM_URL = 'https://api.opencrust.dev';
+export const CONFIG_DIR = path.join(os.homedir(), '.opencrust');
+export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yml');
+
+export function ensureConfigDir(): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+}
+
+export function loadConfig(): CliConfig {
+  const defaults: CliConfig = {
+    apiKey: null,
+    platformUrl: DEFAULT_PLATFORM_URL,
+  };
+
+  if (!fs.existsSync(CONFIG_FILE)) {
+    return defaults;
+  }
+
+  const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+  const data = parse(raw) as Record<string, unknown> | null;
+
+  if (!data || typeof data !== 'object') {
+    return defaults;
+  }
+
+  return {
+    apiKey: typeof data.api_key === 'string' ? data.api_key : null,
+    platformUrl:
+      typeof data.platform_url === 'string'
+        ? data.platform_url
+        : DEFAULT_PLATFORM_URL,
+  };
+}
+
+export function saveConfig(config: CliConfig): void {
+  ensureConfigDir();
+  const data: Record<string, string> = {
+    platform_url: config.platformUrl,
+  };
+  if (config.apiKey) {
+    data.api_key = config.apiKey;
+  }
+  fs.writeFileSync(CONFIG_FILE, stringify(data), 'utf-8');
+}
+
+export function requireApiKey(config: CliConfig): string {
+  if (!config.apiKey) {
+    console.error('Not authenticated. Run `opencrust login` first.');
+    process.exit(1);
+  }
+  return config.apiKey;
+}

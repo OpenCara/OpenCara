@@ -12,9 +12,13 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@opencrust/shared": "*"
+    "@opencrust/shared": "*",
+    "commander": "^13.0.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
+    "@types/ws": "^8.5.0",
     "tsx": "^4.0.0"
   }
 }
