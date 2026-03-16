@@ -39,6 +39,7 @@ export interface ReviewRequestMessage extends MessageBase {
   pr: ReviewRequestPR;
   project: ReviewRequestProject;
   timeout: number;
+  diffContent: string;
 }
 
 export interface SummaryRequestMessage extends MessageBase {

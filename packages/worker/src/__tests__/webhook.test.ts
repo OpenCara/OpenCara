@@ -5,6 +5,7 @@ import type { Env } from '../env.js';
 vi.mock('../github.js', () => ({
   getInstallationToken: vi.fn(),
   fetchReviewConfig: vi.fn(),
+  fetchPrDiff: vi.fn(),
   postPrComment: vi.fn(),
 }));
 
@@ -16,14 +17,11 @@ vi.mock('../task-distribution.js', () => ({
   distributeTask: vi.fn().mockResolvedValue('mock-task-id'),
 }));
 
-import {
-  getInstallationToken,
-  fetchReviewConfig,
-  postPrComment,
-} from '../github.js';
+import { getInstallationToken, fetchReviewConfig, fetchPrDiff, postPrComment } from '../github.js';
 
 const mockedGetInstallationToken = vi.mocked(getInstallationToken);
 const mockedFetchReviewConfig = vi.mocked(fetchReviewConfig);
+const mockedFetchPrDiff = vi.mocked(fetchPrDiff);
 const mockedPostPrComment = vi.mocked(postPrComment);
 
 const TEST_SECRET = 'test-webhook-secret';
@@ -38,9 +36,7 @@ async function computeSignature(body: string, secret: string): Promise<string> {
     ['sign'],
   );
   const mac = await crypto.subtle.sign('HMAC', key, enc.encode(body));
-  const hex = [...new Uint8Array(mac)]
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
   return `sha256=${hex}`;
 }
 
@@ -67,9 +63,7 @@ describe('verifySignature', () => {
   });
 
   it('returns false for signature without sha256= prefix', async () => {
-    expect(await verifySignature('body', 'invalid-format', TEST_SECRET)).toBe(
-      false,
-    );
+    expect(await verifySignature('body', 'invalid-format', TEST_SECRET)).toBe(false);
   });
 });
 
@@ -155,9 +149,7 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('installed by test-org'),
-    );
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('installed by test-org'));
   });
 
   it('handles installation.deleted event', async () => {
@@ -168,17 +160,14 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('uninstalled by test-org'),
-    );
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('uninstalled by test-org'));
   });
 
   it('handles pull_request.opened with valid .review.yml', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     mockedGetInstallationToken.mockResolvedValue('test-token');
-    mockedFetchReviewConfig.mockResolvedValue(
-      'version: 1\nprompt: Review this code.\n',
-    );
+    mockedFetchReviewConfig.mockResolvedValue('version: 1\nprompt: Review this code.\n');
+    mockedFetchPrDiff.mockResolvedValue('diff --git a/file.ts b/file.ts\n');
 
     const req = await makeSignedRequest('pull_request', {
       action: 'opened',
@@ -194,9 +183,7 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Processing PR #42'),
-    );
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Processing PR #42'));
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('Valid .review.yml parsed'),
       expect.objectContaining({ version: 1 }),
@@ -228,16 +215,14 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('No .review.yml found'),
-    );
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('No .review.yml found'));
   });
 
   it('posts error comment when .review.yml is malformed', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     mockedGetInstallationToken.mockResolvedValue('test-token');
     mockedFetchReviewConfig.mockResolvedValue('{ invalid yaml: [');
-    mockedPostPrComment.mockResolvedValue(undefined);
+    mockedPostPrComment.mockResolvedValue('');
 
     const req = await makeSignedRequest('pull_request', {
       action: 'opened',
@@ -266,7 +251,7 @@ describe('handleGitHubWebhook', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     mockedGetInstallationToken.mockResolvedValue('test-token');
     mockedFetchReviewConfig.mockResolvedValue('version: 1\n');
-    mockedPostPrComment.mockResolvedValue(undefined);
+    mockedPostPrComment.mockResolvedValue('');
 
     const req = await makeSignedRequest('pull_request', {
       action: 'opened',
@@ -348,10 +333,7 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(errorSpy).toHaveBeenCalledWith(
-      'Failed to post error comment:',
-      expect.any(Error),
-    );
+    expect(errorSpy).toHaveBeenCalledWith('Failed to post error comment:', expect.any(Error));
   });
 
   it('returns 200 for installation event with unhandled action', async () => {
@@ -385,6 +367,29 @@ describe('handleGitHubWebhook', () => {
     expect(res.status).toBe(200);
   });
 
+  it('returns 200 when fetchPrDiff fails', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockedGetInstallationToken.mockResolvedValue('test-token');
+    mockedFetchReviewConfig.mockResolvedValue('version: 1\nprompt: Review this code.\n');
+    mockedFetchPrDiff.mockRejectedValue(new Error('Diff fetch failed'));
+
+    const req = await makeSignedRequest('pull_request', {
+      action: 'opened',
+      installation: { id: 99 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: {
+        number: 5,
+        html_url: 'url',
+        diff_url: 'diff',
+        base: { ref: 'main' },
+        head: { ref: 'br' },
+      },
+    });
+    const res = await handleGitHubWebhook(req, TEST_ENV);
+    expect(res.status).toBe(200);
+  });
+
   it('handles pull_request without installation', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const req = await makeSignedRequest('pull_request', {
@@ -404,20 +409,20 @@ describe('handleGitHubWebhook', () => {
 
   it('returns false for signature with invalid hex chars', async () => {
     expect(
-      await verifySignature('body', 'sha256=gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg', TEST_SECRET),
+      await verifySignature(
+        'body',
+        'sha256=gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg',
+        TEST_SECRET,
+      ),
     ).toBe(false);
   });
 
   it('returns false for wrong-length hex signature', async () => {
     // 32 hex chars = 16 bytes, but HMAC-SHA256 produces 32 bytes
-    expect(
-      await verifySignature('body', 'sha256=' + '00'.repeat(16), TEST_SECRET),
-    ).toBe(false);
+    expect(await verifySignature('body', 'sha256=' + '00'.repeat(16), TEST_SECRET)).toBe(false);
   });
 
   it('returns false for odd-length hex signature', async () => {
-    expect(
-      await verifySignature('body', 'sha256=abc', TEST_SECRET),
-    ).toBe(false);
+    expect(await verifySignature('body', 'sha256=abc', TEST_SECRET)).toBe(false);
   });
 });

@@ -51,11 +51,13 @@ describe('protocol', () => {
         prompt: 'Review this code for bugs',
       },
       timeout: 600,
+      diffContent: 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts',
     };
     expect(msg.type).toBe('review_request');
     expect(msg.pr.number).toBe(1);
     expect(msg.project.owner).toBe('org');
     expect(msg.timeout).toBe(600);
+    expect(msg.diffContent).toContain('diff --git');
   });
 
   it('constructs a valid ReviewCompleteMessage with verdict and tokensUsed', () => {
@@ -88,9 +90,14 @@ describe('protocol', () => {
     const messages: PlatformMessage[] = [
       { id: '1', timestamp: 1, type: 'connected', version: 1, agentId: 'a' },
       {
-        id: '2', timestamp: 2, type: 'review_request', taskId: 't',
+        id: '2',
+        timestamp: 2,
+        type: 'review_request',
+        taskId: 't',
         pr: { url: '', number: 1, diffUrl: '', base: '', head: '' },
-        project: { owner: '', repo: '', prompt: '' }, timeout: 60,
+        project: { owner: '', repo: '', prompt: '' },
+        timeout: 60,
+        diffContent: '',
       },
       { id: '3', timestamp: 3, type: 'summary_request', taskId: 't', reviewIds: [] },
       { id: '4', timestamp: 4, type: 'heartbeat_ping' },
@@ -104,7 +111,15 @@ describe('protocol', () => {
 
   it('all agent messages have id and timestamp (envelope)', () => {
     const messages: AgentMessage[] = [
-      { id: '1', timestamp: 1, type: 'review_complete', taskId: 't', review: '', verdict: 'approve', tokensUsed: 0 },
+      {
+        id: '1',
+        timestamp: 1,
+        type: 'review_complete',
+        taskId: 't',
+        review: '',
+        verdict: 'approve',
+        tokensUsed: 0,
+      },
       { id: '2', timestamp: 2, type: 'summary_complete', taskId: 't', summary: '' },
       { id: '3', timestamp: 3, type: 'review_rejected', taskId: 't', reason: '' },
       { id: '4', timestamp: 4, type: 'review_error', taskId: 't', error: '' },
@@ -180,11 +195,7 @@ describe('protocol', () => {
   });
 
   it('ReviewVerdict covers all valid values', () => {
-    const verdicts: ReviewCompleteMessage['verdict'][] = [
-      'approve',
-      'request_changes',
-      'comment',
-    ];
+    const verdicts: ReviewCompleteMessage['verdict'][] = ['approve', 'request_changes', 'comment'];
     expect(verdicts).toHaveLength(3);
   });
 });

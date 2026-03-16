@@ -26,11 +26,7 @@ async function generateAppJwt(env: Env): Promise<string> {
     false,
     ['sign'],
   );
-  const signature = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    enc.encode(signingInput),
-  );
+  const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, enc.encode(signingInput));
   const signatureB64 = base64url(new Uint8Array(signature));
 
   return `${signingInput}.${signatureB64}`;
@@ -60,10 +56,7 @@ function base64url(data: Uint8Array): string {
 /**
  * Get an installation access token for the GitHub App.
  */
-export async function getInstallationToken(
-  installationId: number,
-  env: Env,
-): Promise<string> {
+export async function getInstallationToken(installationId: number, env: Env): Promise<string> {
   const jwt = await generateAppJwt(env);
   const response = await fetch(
     `https://api.github.com/app/installations/${installationId}/access_tokens`,
@@ -79,9 +72,7 @@ export async function getInstallationToken(
   );
 
   if (!response.ok) {
-    throw new Error(
-      `Failed to get installation token: ${response.status} ${response.statusText}`,
-    );
+    throw new Error(`Failed to get installation token: ${response.status} ${response.statusText}`);
   }
 
   const data = (await response.json()) as { token: string };
@@ -115,9 +106,32 @@ export async function fetchReviewConfig(
   }
 
   if (!response.ok) {
-    throw new Error(
-      `Failed to fetch .review.yml: ${response.status} ${response.statusText}`,
-    );
+    throw new Error(`Failed to fetch .review.yml: ${response.status} ${response.statusText}`);
+  }
+
+  return response.text();
+}
+
+/**
+ * Fetch the unified diff for a pull request.
+ */
+export async function fetchPrDiff(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string,
+): Promise<string> {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.diff',
+      'User-Agent': 'OpenCrust-Worker',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch PR diff: ${response.status} ${response.statusText}`);
   }
 
   return response.text();
@@ -125,6 +139,7 @@ export async function fetchReviewConfig(
 
 /**
  * Post a comment on a GitHub pull request.
+ * Returns the html_url of the created comment.
  */
 export async function postPrComment(
   owner: string,
@@ -132,7 +147,7 @@ export async function postPrComment(
   prNumber: number,
   body: string,
   token: string,
-): Promise<void> {
+): Promise<string> {
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
     {
@@ -149,8 +164,9 @@ export async function postPrComment(
   );
 
   if (!response.ok) {
-    throw new Error(
-      `Failed to post PR comment: ${response.status} ${response.statusText}`,
-    );
+    throw new Error(`Failed to post PR comment: ${response.status} ${response.statusText}`);
   }
+
+  const data = (await response.json()) as { html_url: string };
+  return data.html_url;
 }
