@@ -15,6 +15,14 @@ vi.mock('../db.js', () => ({
   createSupabaseClient: vi.fn(() => 'mock-supabase'),
 }));
 
+vi.mock('../handlers/consumption.js', () => ({
+  handleGetConsumption: vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ agentId: 'agent-1', totalTokens: 0, totalReviews: 0 }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  ),
+}));
+
 vi.mock('../handlers/agents.js', () => ({
   handleListAgents: vi.fn().mockResolvedValue(
     new Response(JSON.stringify({ agents: [] }), {
@@ -49,6 +57,7 @@ vi.mock('../handlers/device-flow.js', () => ({
 
 import { handleGitHubWebhook } from '../webhook.js';
 import { authenticateRequest } from '../auth.js';
+import { handleGetConsumption } from '../handlers/consumption.js';
 import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
 
@@ -192,6 +201,59 @@ describe('worker router', () => {
       new Request('http://localhost/api/agents', { method: 'DELETE' }),
       mockEnv,
     );
+    expect(response.status).toBe(404);
+  });
+
+  // --- Consumption routes ---
+
+  it('routes GET /api/consumption/:agentId with valid auth', async () => {
+    const mockUser = { id: 'user-1', name: 'test' };
+    vi.mocked(authenticateRequest).mockResolvedValue(mockUser as any);
+
+    const response = await worker.fetch(
+      new Request('http://localhost/api/consumption/a1b2c3d4-e5f6-7890-abcd-ef1234567890', {
+        headers: { Authorization: 'Bearer cr_test' },
+      }),
+      mockEnv,
+    );
+    expect(response.status).toBe(200);
+    expect(handleGetConsumption).toHaveBeenCalledWith(
+      'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+      mockUser,
+      'mock-supabase',
+    );
+  });
+
+  it('returns 401 for GET /api/consumption/:agentId without auth', async () => {
+    vi.mocked(authenticateRequest).mockResolvedValue(null);
+
+    const response = await worker.fetch(
+      new Request('http://localhost/api/consumption/a1b2c3d4-e5f6-7890-abcd-ef1234567890'),
+      mockEnv,
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('returns 404 for POST /api/consumption/:agentId (only GET allowed)', async () => {
+    const response = await worker.fetch(
+      new Request('http://localhost/api/consumption/a1b2c3d4-e5f6-7890-abcd-ef1234567890', {
+        method: 'POST',
+      }),
+      mockEnv,
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 404 for /api/consumption with invalid UUID format', async () => {
+    const response = await worker.fetch(
+      new Request('http://localhost/api/consumption/not-a-uuid!'),
+      mockEnv,
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 404 for /api/consumption without agentId', async () => {
+    const response = await worker.fetch(new Request('http://localhost/api/consumption/'), mockEnv);
     expect(response.status).toBe(404);
   });
 });

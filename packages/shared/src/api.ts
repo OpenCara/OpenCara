@@ -50,6 +50,24 @@ export interface CreateAgentRequest {
 /** POST /api/agents — response */
 export type CreateAgentResponse = AgentResponse;
 
+/** Consumption stats for a time period */
+export interface ConsumptionPeriodStats {
+  tokens: number;
+  reviews: number;
+}
+
+/** GET /api/consumption/:agentId — response */
+export interface ConsumptionStatsResponse {
+  agentId: string;
+  totalTokens: number;
+  totalReviews: number;
+  period: {
+    last24h: ConsumptionPeriodStats;
+    last7d: ConsumptionPeriodStats;
+    last30d: ConsumptionPeriodStats;
+  };
+}
+
 /** Standard error response */
 export interface ErrorResponse {
   error: string;

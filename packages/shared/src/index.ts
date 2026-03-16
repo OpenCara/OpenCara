@@ -26,6 +26,8 @@ export type {
   ListAgentsResponse,
   CreateAgentRequest,
   CreateAgentResponse,
+  ConsumptionPeriodStats,
+  ConsumptionStatsResponse,
   ErrorResponse,
 } from './api.js';
 
