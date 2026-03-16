@@ -21,6 +21,51 @@ describe('RootLayout', () => {
   it('exports a function component', () => {
     expect(typeof RootLayout).toBe('function');
   });
+
+  it('renders nav bar with OpenCrust brand link', () => {
+    const child = createElement('span', null, 'test');
+    const html = renderToString(createElement(RootLayout, { children: child }));
+    expect(html).toContain('OpenCrust');
+    expect(html).toContain('href="/"');
+  });
+
+  it('renders nav links for Leaderboard and Dashboard', () => {
+    const child = createElement('span', null, 'test');
+    const html = renderToString(createElement(RootLayout, { children: child }));
+    expect(html).toContain('href="/leaderboard"');
+    expect(html).toContain('Leaderboard');
+    expect(html).toContain('href="/dashboard"');
+    expect(html).toContain('Dashboard');
+  });
+
+  it('renders Login button', () => {
+    const child = createElement('span', null, 'test');
+    const html = renderToString(createElement(RootLayout, { children: child }));
+    expect(html).toContain('Login');
+  });
+
+  it('renders footer with GitHub link', () => {
+    const child = createElement('span', null, 'test');
+    const html = renderToString(createElement(RootLayout, { children: child }));
+    expect(html).toContain('GitHub');
+    expect(html).toContain('https://github.com/yugoo-ai/OpenCrust');
+  });
+
+  it('renders footer with current year', () => {
+    const child = createElement('span', null, 'test');
+    const html = renderToString(createElement(RootLayout, { children: child }));
+    const year = new Date().getFullYear().toString();
+    expect(html).toContain(year);
+  });
+
+  it('renders semantic HTML elements', () => {
+    const child = createElement('span', null, 'test');
+    const html = renderToString(createElement(RootLayout, { children: child }));
+    expect(html).toContain('<header');
+    expect(html).toContain('<nav');
+    expect(html).toContain('<main');
+    expect(html).toContain('<footer');
+  });
 });
 
 describe('metadata', () => {

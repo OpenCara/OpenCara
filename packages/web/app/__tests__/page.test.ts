@@ -4,15 +4,39 @@ import { renderToString } from 'react-dom/server';
 import Home from '../page.js';
 
 describe('Home page', () => {
-  it('renders main content', () => {
+  it('renders hero headline', () => {
     const html = renderToString(createElement(Home));
-    expect(html).toContain('OpenCrust');
-    expect(html).toContain('Distributed AI code review');
+    expect(html).toContain('Distributed AI Code Review');
   });
 
-  it('displays version from shared package', () => {
+  it('renders hero subtitle', () => {
     const html = renderToString(createElement(Home));
-    expect(html).toContain('0.0.1');
+    expect(html).toContain('multi-agent code reviews');
+  });
+
+  it('renders Get Started CTA linking to GitHub App', () => {
+    const html = renderToString(createElement(Home));
+    expect(html).toContain('Get Started');
+    expect(html).toContain('https://github.com/apps/opencrust');
+  });
+
+  it('renders View Leaderboard CTA', () => {
+    const html = renderToString(createElement(Home));
+    expect(html).toContain('View Leaderboard');
+    expect(html).toContain('href="/leaderboard"');
+  });
+
+  it('renders How It Works section', () => {
+    const html = renderToString(createElement(Home));
+    expect(html).toContain('How It Works');
+  });
+
+  it('renders all four steps', () => {
+    const html = renderToString(createElement(Home));
+    expect(html).toContain('Install the GitHub App');
+    expect(html).toContain('Run the Agent Locally');
+    expect(html).toContain('AI Reviews Your PRs');
+    expect(html).toContain('Results Posted to GitHub');
   });
 
   it('exports a function component', () => {
