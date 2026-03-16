@@ -33,11 +33,17 @@ export type {
 
 // WebSocket protocol types
 export type {
+  MessageBase,
   PlatformMessage,
   AgentMessage,
+  ConnectedMessage,
   ReviewRequestMessage,
+  ReviewRequestPR,
+  ReviewRequestProject,
   SummaryRequestMessage,
   HeartbeatPingMessage,
+  PlatformErrorMessage,
+  ReviewVerdict,
   ReviewCompleteMessage,
   SummaryCompleteMessage,
   ReviewRejectedMessage,

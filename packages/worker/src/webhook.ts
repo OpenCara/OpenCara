@@ -1,10 +1,12 @@
 import { parseReviewConfig } from '@opencrust/shared';
+import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import {
   fetchReviewConfig,
   getInstallationToken,
   postPrComment,
 } from './github.js';
+import { distributeTask } from './task-distribution.js';
 
 /**
  * Validate the GitHub webhook signature using HMAC-SHA256.
@@ -134,7 +136,6 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  // Valid config — log details for now (task creation comes in M4)
   console.log(`Valid .review.yml parsed for ${owner}/${repo}:`, {
     version: result.version,
     agentMinCount: result.agents.minCount,
@@ -145,7 +146,23 @@ async function handlePullRequest(
     headRef,
   });
 
-  // TODO (M4): Create review_task in Supabase and dispatch to agents via Durable Objects
+  // Create review task and distribute to eligible agents
+  const supabase = createSupabaseClient(env);
+  try {
+    await distributeTask(env, supabase, {
+      installationId: installation.id,
+      owner,
+      repo,
+      prNumber,
+      prUrl: pull_request.html_url,
+      diffUrl: pull_request.diff_url,
+      baseRef: pull_request.base.ref,
+      headRef,
+      config: result,
+    });
+  } catch (err) {
+    console.error('Failed to distribute task:', err);
+  }
 
   return new Response('OK', { status: 200 });
 }

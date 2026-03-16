@@ -1,7 +1,64 @@
-/** WebSocket message types sent from platform to agent */
-export type PlatformMessage = ReviewRequestMessage | SummaryRequestMessage | HeartbeatPingMessage;
+/** Base fields present on all WebSocket messages (the "envelope") */
+export interface MessageBase {
+  id: string;
+  timestamp: number;
+}
 
-/** WebSocket message types sent from agent to platform */
+// --- Platform → Agent messages ---
+
+export type PlatformMessage =
+  | ConnectedMessage
+  | ReviewRequestMessage
+  | SummaryRequestMessage
+  | HeartbeatPingMessage
+  | PlatformErrorMessage;
+
+export interface ConnectedMessage extends MessageBase {
+  type: 'connected';
+  version: number;
+  agentId: string;
+}
+
+export interface ReviewRequestPR {
+  url: string;
+  number: number;
+  diffUrl: string;
+  base: string;
+  head: string;
+}
+
+export interface ReviewRequestProject {
+  owner: string;
+  repo: string;
+  prompt: string;
+}
+
+export interface ReviewRequestMessage extends MessageBase {
+  type: 'review_request';
+  taskId: string;
+  pr: ReviewRequestPR;
+  project: ReviewRequestProject;
+  timeout: number;
+}
+
+export interface SummaryRequestMessage extends MessageBase {
+  type: 'summary_request';
+  taskId: string;
+  reviewIds: string[];
+}
+
+export interface HeartbeatPingMessage extends MessageBase {
+  type: 'heartbeat_ping';
+}
+
+export interface PlatformErrorMessage extends MessageBase {
+  type: 'error';
+  code: number;
+  message: string;
+}
+
+// --- Agent → Platform messages ---
+
 export type AgentMessage =
   | ReviewCompleteMessage
   | SummaryCompleteMessage
@@ -9,50 +66,36 @@ export type AgentMessage =
   | ReviewErrorMessage
   | HeartbeatPongMessage;
 
-export interface ReviewRequestMessage {
-  type: 'review_request';
-  taskId: string;
-  prUrl: string;
-}
+export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
-export interface SummaryRequestMessage {
-  type: 'summary_request';
-  taskId: string;
-  reviewIds: string[];
-}
-
-export interface HeartbeatPingMessage {
-  type: 'heartbeat_ping';
-  timestamp: number;
-}
-
-export interface ReviewCompleteMessage {
+export interface ReviewCompleteMessage extends MessageBase {
   type: 'review_complete';
   taskId: string;
   review: string;
+  verdict: ReviewVerdict;
+  tokensUsed: number;
 }
 
-export interface SummaryCompleteMessage {
+export interface SummaryCompleteMessage extends MessageBase {
   type: 'summary_complete';
   taskId: string;
   summary: string;
 }
 
-export interface ReviewRejectedMessage {
+export interface ReviewRejectedMessage extends MessageBase {
   type: 'review_rejected';
   taskId: string;
   reason: string;
 }
 
-export interface ReviewErrorMessage {
+export interface ReviewErrorMessage extends MessageBase {
   type: 'review_error';
   taskId: string;
   error: string;
 }
 
-export interface HeartbeatPongMessage {
+export interface HeartbeatPongMessage extends MessageBase {
   type: 'heartbeat_pong';
-  timestamp: number;
 }
 
 /** Package version */

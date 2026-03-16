@@ -1,4 +1,4 @@
-import { authenticateRequest } from './auth.js';
+import { authenticateRequest, hashApiKey } from './auth.js';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
@@ -8,6 +8,9 @@ import {
   handleRevokeKey,
 } from './handlers/device-flow.js';
 import { handleGitHubWebhook } from './webhook.js';
+
+export { AgentConnection } from './agent-connection.js';
+export { TaskTimeout } from './task-timeout.js';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -25,6 +28,11 @@ export default {
     // Webhook endpoint (public, validated by signature)
     if (method === 'POST' && pathname === '/webhook/github') {
       return handleGitHubWebhook(request, env);
+    }
+
+    // WebSocket connection for agents
+    if (pathname.startsWith('/ws/agent/')) {
+      return handleAgentWebSocket(request, url, env);
     }
 
     const supabase = createSupabaseClient(env);
@@ -63,3 +71,59 @@ export default {
     return json({ error: 'Not found' }, 404);
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * Authenticate and forward agent WebSocket connection to the DO.
+ * URL format: /ws/agent/{agentId}?token={apiKey}
+ */
+async function handleAgentWebSocket(
+  request: Request,
+  url: URL,
+  env: Env,
+): Promise<Response> {
+  const upgradeHeader = request.headers.get('Upgrade');
+  if (!upgradeHeader || upgradeHeader !== 'websocket') {
+    return json({ error: 'Expected WebSocket' }, 426);
+  }
+
+  const agentId = url.pathname.split('/')[3];
+  const token = url.searchParams.get('token');
+
+  if (!agentId || !token) {
+    return json({ error: 'Missing agentId or token' }, 400);
+  }
+
+  // Authenticate the token
+  const supabase = createSupabaseClient(env);
+  const keyHash = await hashApiKey(token);
+  const { data: user } = await supabase
+    .from('users')
+    .select('id')
+    .eq('api_key_hash', keyHash)
+    .single();
+
+  if (!user) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  // Verify agent belongs to this user
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id')
+    .eq('id', agentId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (!agent) {
+    return json({ error: 'Agent not found' }, 404);
+  }
+
+  // Forward to Durable Object
+  const doId = env.AGENT_CONNECTION.idFromName(agentId);
+  const stub = env.AGENT_CONNECTION.get(doId);
+  return stub.fetch(
+    new Request(`https://internal/websocket?agentId=${agentId}`, {
+      headers: request.headers,
+    }),
+  );
+}
