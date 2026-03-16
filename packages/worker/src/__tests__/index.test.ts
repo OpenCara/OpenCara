@@ -29,6 +29,14 @@ vi.mock('../handlers/agents.js', () => ({
   ),
 }));
 
+vi.mock('../handlers/collect-ratings.js', () => ({
+  handleCollectRatings: vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ collected: 0, ratings: [] }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  ),
+}));
+
 vi.mock('../handlers/device-flow.js', () => ({
   handleDeviceFlow: vi.fn().mockResolvedValue(
     new Response(JSON.stringify({ userCode: 'TEST' }), {
@@ -47,10 +55,25 @@ vi.mock('../handlers/device-flow.js', () => ({
   ),
 }));
 
+vi.mock('../handlers/stats.js', () => ({
+  handleGetStats: vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ agent: {}, stats: {} }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  ),
+  handleGetLeaderboard: vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ agents: [] }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  ),
+}));
+
 import { handleGitHubWebhook } from '../webhook.js';
 import { authenticateRequest } from '../auth.js';
 import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
+import { handleCollectRatings } from '../handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
+import { handleGetStats, handleGetLeaderboard } from '../handlers/stats.js';
 
 const mockEnv: Env = {
   GITHUB_WEBHOOK_SECRET: 'test',
@@ -193,5 +216,71 @@ describe('worker router', () => {
       mockEnv,
     );
     expect(response.status).toBe(404);
+  });
+
+  // --- Stats routes ---
+
+  it('routes GET /api/stats/:agentId with valid auth', async () => {
+    const mockUser = { id: 'user-1', name: 'test' };
+    vi.mocked(authenticateRequest).mockResolvedValue(mockUser as any);
+
+    const response = await worker.fetch(
+      new Request('http://localhost/api/stats/agent-123', {
+        headers: { Authorization: 'Bearer cr_test' },
+      }),
+      mockEnv,
+    );
+    expect(response.status).toBe(200);
+    expect(handleGetStats).toHaveBeenCalledWith('agent-123', mockUser, 'mock-supabase');
+  });
+
+  it('returns 401 for GET /api/stats/:agentId without auth', async () => {
+    vi.mocked(authenticateRequest).mockResolvedValue(null);
+
+    const response = await worker.fetch(
+      new Request('http://localhost/api/stats/agent-123'),
+      mockEnv,
+    );
+    expect(response.status).toBe(401);
+  });
+
+  // --- Leaderboard routes ---
+
+  it('routes GET /api/leaderboard (public)', async () => {
+    const response = await worker.fetch(new Request('http://localhost/api/leaderboard'), mockEnv);
+    expect(response.status).toBe(200);
+    expect(handleGetLeaderboard).toHaveBeenCalledWith('mock-supabase');
+  });
+
+  // --- Collect ratings routes ---
+
+  it('routes POST /api/tasks/:taskId/collect-ratings with valid auth', async () => {
+    const mockUser = { id: 'user-1', name: 'test' };
+    vi.mocked(authenticateRequest).mockResolvedValue(mockUser as any);
+
+    const response = await worker.fetch(
+      new Request('http://localhost/api/tasks/task-456/collect-ratings', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer cr_test' },
+      }),
+      mockEnv,
+    );
+    expect(response.status).toBe(200);
+    expect(handleCollectRatings).toHaveBeenCalledWith(
+      'task-456',
+      mockUser,
+      mockEnv,
+      'mock-supabase',
+    );
+  });
+
+  it('returns 401 for POST /api/tasks/:taskId/collect-ratings without auth', async () => {
+    vi.mocked(authenticateRequest).mockResolvedValue(null);
+
+    const response = await worker.fetch(
+      new Request('http://localhost/api/tasks/task-456/collect-ratings', { method: 'POST' }),
+      mockEnv,
+    );
+    expect(response.status).toBe(401);
   });
 });

@@ -2,7 +2,9 @@ import { authenticateRequest, hashApiKey } from './auth.js';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
+import { handleCollectRatings } from './handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from './handlers/device-flow.js';
+import { handleGetStats, handleGetLeaderboard } from './handlers/stats.js';
 import { handleGitHubWebhook } from './webhook.js';
 
 export { AgentConnection } from './agent-connection.js';
@@ -62,6 +64,31 @@ export default {
       if (method === 'POST') {
         return handleCreateAgent(request, user, supabase);
       }
+    }
+
+    // Stats endpoint (authenticated)
+    const statsMatch = pathname.match(/^\/api\/stats\/([^/]+)$/);
+    if (method === 'GET' && statsMatch) {
+      const user = await authenticateRequest(request, supabase);
+      if (!user) {
+        return json({ error: 'Unauthorized' }, 401);
+      }
+      return handleGetStats(statsMatch[1], user, supabase);
+    }
+
+    // Leaderboard endpoint (public)
+    if (method === 'GET' && pathname === '/api/leaderboard') {
+      return handleGetLeaderboard(supabase);
+    }
+
+    // Collect ratings endpoint (authenticated)
+    const collectRatingsMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/collect-ratings$/);
+    if (method === 'POST' && collectRatingsMatch) {
+      const user = await authenticateRequest(request, supabase);
+      if (!user) {
+        return json({ error: 'Unauthorized' }, 401);
+      }
+      return handleCollectRatings(collectRatingsMatch[1], user, env, supabase);
     }
 
     return json({ error: 'Not found' }, 404);

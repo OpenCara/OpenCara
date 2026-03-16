@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
-import { getInstallationToken, fetchReviewConfig, fetchPrDiff, postPrComment } from '../github.js';
+import {
+  getInstallationToken,
+  fetchReviewConfig,
+  fetchPrDiff,
+  postPrComment,
+  extractCommentId,
+  fetchCommentReactions,
+} from '../github.js';
 import type { Env } from '../env.js';
 
 const originalFetch = globalThis.fetch;
@@ -228,6 +235,80 @@ describe('github', () => {
 
       await expect(postPrComment('o', 'r', 42, 'Test', 'tok')).rejects.toThrow(
         'Failed to post PR comment: 403 Forbidden',
+      );
+    });
+  });
+
+  describe('extractCommentId', () => {
+    it('extracts ID from HTML URL with issuecomment fragment', () => {
+      const url = 'https://github.com/owner/repo/pull/42#issuecomment-123456';
+      expect(extractCommentId(url)).toBe(123456);
+    });
+
+    it('extracts ID from API URL', () => {
+      const url = 'https://api.github.com/repos/owner/repo/issues/comments/789';
+      expect(extractCommentId(url)).toBe(789);
+    });
+
+    it('returns null for unrecognized URL format', () => {
+      expect(extractCommentId('https://example.com/random')).toBeNull();
+    });
+
+    it('returns null for empty string', () => {
+      expect(extractCommentId('')).toBeNull();
+    });
+
+    it('handles large comment IDs', () => {
+      const url = 'https://github.com/o/r/pull/1#issuecomment-9999999999';
+      expect(extractCommentId(url)).toBe(9999999999);
+    });
+  });
+
+  describe('fetchCommentReactions', () => {
+    it('returns reactions on success', async () => {
+      const mockReactions = [
+        { id: 1, user: { id: 100, login: 'user1' }, content: '+1' },
+        { id: 2, user: { id: 101, login: 'user2' }, content: '-1' },
+      ];
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockReactions),
+      });
+
+      const reactions = await fetchCommentReactions('owner', 'repo', 123, 'tok');
+      expect(reactions).toEqual(mockReactions);
+    });
+
+    it('calls correct GitHub API endpoint', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+
+      await fetchCommentReactions('myorg', 'myrepo', 456, 'mytoken');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/myorg/myrepo/issues/comments/456/reactions',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer mytoken',
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'OpenCrust-Worker',
+            'X-GitHub-Api-Version': '2022-11-28',
+          }),
+        }),
+      );
+    });
+
+    it('throws on non-ok response', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+      });
+
+      await expect(fetchCommentReactions('o', 'r', 1, 'tok')).rejects.toThrow(
+        'Failed to fetch comment reactions: 404 Not Found',
       );
     });
   });

@@ -87,14 +87,6 @@ export type AgentMessage =
 
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
-export interface SummaryReview {
-  agentId: string;
-  model: string;
-  tool: string;
-  review: string;
-  verdict: ReviewVerdict;
-}
-
 export interface ReviewCompleteMessage extends MessageBase {
   type: 'review_complete';
   taskId: string;
