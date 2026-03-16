@@ -38,6 +38,7 @@ export type {
   ReviewRequestMessage,
   ReviewRequestPR,
   ReviewRequestProject,
+  SummaryReview,
   SummaryRequestMessage,
   HeartbeatPingMessage,
   PlatformErrorMessage,

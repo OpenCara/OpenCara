@@ -58,6 +58,8 @@ export interface ReviewResult {
   review_task_id: string;
   agent_id: string;
   status: ReviewResultStatus;
+  review_text: string | null;
+  verdict: string | null;
   comment_url: string | null;
   created_at: string;
 }

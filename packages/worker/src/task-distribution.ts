@@ -90,27 +90,29 @@ export function filterByAccessList(
   return filtered;
 }
 
-/** Select agents for a review, preferring those with matching tools. */
+export const MAX_AGENTS_PER_TASK = 10;
+
+/**
+ * Select agents for a review.
+ * Returns ALL eligible agents (up to MAX_AGENTS_PER_TASK), ordered with preferred tools first.
+ * minCount is the threshold for triggering summarization, not a cap on reviewers.
+ * Returns empty if fewer than minCount agents are available.
+ */
 export function selectAgents(
   agents: EligibleAgent[],
   minCount: number,
   preferredTools: string[],
 ): EligibleAgent[] {
-  if (agents.length === 0) return [];
+  if (agents.length < minCount) return [];
 
   if (preferredTools.length === 0) {
-    return agents.slice(0, minCount);
+    return agents.slice(0, MAX_AGENTS_PER_TASK);
   }
 
   const preferred = agents.filter((a) => preferredTools.includes(a.tool));
   const others = agents.filter((a) => !preferredTools.includes(a.tool));
 
-  const selected = [...preferred.slice(0, minCount)];
-  if (selected.length < minCount) {
-    selected.push(...others.slice(0, minCount - selected.length));
-  }
-
-  return selected;
+  return [...preferred, ...others].slice(0, MAX_AGENTS_PER_TASK);
 }
 
 /**
@@ -232,6 +234,8 @@ export async function distributeTask(
             project: { owner, repo, prompt: config.prompt },
             timeout: remainingSeconds,
             diffContent,
+            minCount: config.agents.minCount,
+            installationId,
           }),
         }),
       );
@@ -240,7 +244,7 @@ export async function distributeTask(
     }
   }
 
-  // 6. Set up task timeout
+  // 6. Set up task timeout with task meta for summarization dispatch
   try {
     const timeoutDoId = env.TASK_TIMEOUT.idFromName(taskId);
     const timeoutStub = env.TASK_TIMEOUT.get(timeoutDoId);
@@ -251,6 +255,11 @@ export async function distributeTask(
           taskId,
           timeoutMs,
           minCount: config.agents.minCount,
+          installationId,
+          owner,
+          repo,
+          prNumber,
+          prompt: config.prompt,
         }),
       }),
     );

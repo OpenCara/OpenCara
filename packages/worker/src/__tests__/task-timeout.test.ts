@@ -5,9 +5,15 @@ vi.mock('../db.js', () => ({
   createSupabaseClient: vi.fn(),
 }));
 
+vi.mock('../summarization.js', () => ({
+  triggerSummarization: vi.fn().mockResolvedValue(true),
+}));
+
 import { createSupabaseClient } from '../db.js';
+import { triggerSummarization } from '../summarization.js';
 
 const mockedCreateSupabase = vi.mocked(createSupabaseClient);
+const mockedTriggerSummarization = vi.mocked(triggerSummarization);
 
 function createMockStorage() {
   const store = new Map<string, unknown>();
@@ -57,6 +63,8 @@ function createChainableSupabase() {
 const mockEnv = {
   SUPABASE_URL: 'https://test.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+  AGENT_CONNECTION: {},
+  TASK_TIMEOUT: {},
 };
 
 describe('TaskTimeout', () => {
@@ -66,6 +74,7 @@ describe('TaskTimeout', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockedTriggerSummarization.mockResolvedValue(true);
     storage = createMockStorage();
     mockSupabase = createChainableSupabase();
     mockedCreateSupabase.mockReturnValue(
@@ -95,6 +104,34 @@ describe('TaskTimeout', () => {
       expect(storage.store.get('taskId')).toBe('task-1');
       expect(storage.store.get('minCount')).toBe(2);
       expect(storage.setAlarm).toHaveBeenCalled();
+    });
+
+    it('stores taskMeta when installationId is provided', async () => {
+      const request = new Request('https://internal/set-timeout', {
+        method: 'POST',
+        body: JSON.stringify({
+          taskId: 'task-1',
+          timeoutMs: 60000,
+          minCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        }),
+      });
+
+      const response = await timeout.fetch(request);
+
+      expect(response.status).toBe(200);
+      expect(storage.store.get('taskMeta')).toEqual({
+        minCount: 2,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
     });
   });
 
@@ -144,9 +181,20 @@ describe('TaskTimeout', () => {
       await timeout.alarm();
 
       expect(mockSupabase.update).toHaveBeenCalledWith({ status: 'timeout' });
+      expect(mockedTriggerSummarization).not.toHaveBeenCalled();
     });
 
-    it('transitions to summarizing when enough results exist', async () => {
+    it('transitions to summarizing and dispatches summary when enough results exist', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      storage.store.set('taskMeta', {
+        minCount: 2,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
       (mockSupabase.single as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         data: { status: 'reviewing' },
         error: null,
@@ -160,9 +208,25 @@ describe('TaskTimeout', () => {
       await timeout.alarm();
 
       expect(mockSupabase.update).toHaveBeenCalledWith({ status: 'summarizing' });
+      expect(mockedTriggerSummarization).toHaveBeenCalledWith(
+        mockEnv,
+        expect.anything(),
+        'task-1',
+        expect.objectContaining({ minCount: 2, installationId: 99 }),
+      );
     });
 
-    it('transitions to summarizing with partial results', async () => {
+    it('transitions to summarizing with partial results and dispatches', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      storage.store.set('taskMeta', {
+        minCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
       (mockSupabase.single as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         data: { status: 'reviewing' },
         error: null,
@@ -176,6 +240,25 @@ describe('TaskTimeout', () => {
       await timeout.alarm();
 
       expect(mockSupabase.update).toHaveBeenCalledWith({ status: 'summarizing' });
+      expect(mockedTriggerSummarization).toHaveBeenCalled();
+    });
+
+    it('does not dispatch summary when no taskMeta stored', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      (mockSupabase.single as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: { status: 'reviewing' },
+        error: null,
+      });
+      (mockSupabase._setChainResult as (r: unknown) => void)({
+        count: 2,
+        data: null,
+        error: null,
+      });
+
+      await timeout.alarm();
+
+      expect(mockSupabase.update).toHaveBeenCalledWith({ status: 'summarizing' });
+      expect(mockedTriggerSummarization).not.toHaveBeenCalled();
     });
   });
 });

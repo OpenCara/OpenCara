@@ -88,10 +88,13 @@ function createSupabaseMock(config: SupabaseMockConfig = {}) {
 
     chain.select = vi.fn((_cols?: string, opts?: { count?: string; head?: boolean }) => {
       if (opts?.count === 'exact') {
-        // Count query pattern: .select('id', { count: 'exact', head: true }).eq(...)
-        return {
-          eq: vi.fn().mockResolvedValue(countResults[table] ?? { count: 0 }),
-        };
+        // Count query pattern: .select('id', { count: 'exact', head: true }).eq(...).eq(...)
+        const countChain: Record<string, unknown> = {};
+        const countResult = countResults[table] ?? { count: 0 };
+        countChain.eq = vi.fn().mockReturnValue(countChain);
+        countChain.then = (resolve: (v: unknown) => void) =>
+          Promise.resolve(countResult).then(resolve);
+        return countChain;
       }
       return chain;
     });
@@ -266,10 +269,15 @@ describe('AgentConnection', () => {
       // Task removed from in-flight
       expect(storage.store.get('inFlightTaskIds')).toEqual(['task-2']);
 
-      // Review result inserted
+      // Review result inserted with review_text and verdict
       expect(mockSupa._calls.insert).toContainEqual({
         table: 'review_results',
-        data: expect.objectContaining({ review_task_id: 'task-1', status: 'completed' }),
+        data: expect.objectContaining({
+          review_task_id: 'task-1',
+          status: 'completed',
+          review_text: 'LGTM',
+          verdict: 'approve',
+        }),
       });
 
       // Consumption log inserted
@@ -671,8 +679,63 @@ describe('AgentConnection', () => {
       expect(mockEnv.AGENT_CONNECTION.idFromName).toHaveBeenCalledWith('agent-2');
     });
 
-    it('handles summary_complete', async () => {
+    it('handles summary_complete with GitHub posting', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: {
+              pr_number: 42,
+              pr_url: 'https://github.com/org/repo/pull/42',
+              project_id: 'proj-1',
+              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+            },
+            error: null,
+          },
+        },
+        selectResults: {
+          review_results: {
+            data: [
+              {
+                agent_id: 'agent-2',
+                review_text: 'LGTM',
+                verdict: 'approve',
+                agents: { model: 'gpt-4', tool: 'cursor' },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+      mockedGetInstallationToken.mockResolvedValue('test-token');
+      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'summary_complete',
+          taskId: 'task-1',
+          summary: 'Great code overall',
+          tokensUsed: 200,
+        }),
+      );
+
+      // Summary comment posted
+      expect(mockedPostPrComment).toHaveBeenCalled();
+      // Task transitioned to completed
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_tasks',
+        data: { status: 'completed' },
+      });
+    });
+
+    it('handles summary_complete when task not found', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
       const mockWs = createMockWebSocket();
       await connection.webSocketMessage(
         mockWs as unknown as WebSocket,
@@ -682,9 +745,154 @@ describe('AgentConnection', () => {
           type: 'summary_complete',
           taskId: 'task-1',
           summary: 'Great code',
+          tokensUsed: 0,
         }),
       );
-      // Currently just logs, no errors expected
+      expect(mockedPostPrComment).not.toHaveBeenCalled();
+    });
+
+    it('handles summary_complete with GitHub posting failure — falls back to individual reviews', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: {
+              pr_number: 42,
+              pr_url: 'url',
+              project_id: 'proj-1',
+              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+            },
+            error: null,
+          },
+        },
+        selectResults: {
+          review_results: {
+            data: [
+              {
+                agent_id: 'agent-2',
+                review_text: 'LGTM',
+                verdict: 'approve',
+                agents: { model: 'gpt-4', tool: 'cursor' },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+      mockedGetInstallationToken.mockRejectedValue(new Error('Token error'));
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'summary_complete',
+          taskId: 'task-1',
+          summary: 'Great code',
+          tokensUsed: 0,
+        }),
+      );
+
+      // Should not throw, fallback attempted
+      expect(mockedGetInstallationToken).toHaveBeenCalled();
+    });
+
+    it('handles review_error insert failure gracefully', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockSupa = createSupabaseMock({
+        countResults: {
+          review_results: { count: 1 },
+        },
+        selectResults: {
+          review_results: { data: [{ agent_id: 'agent-1' }] },
+          agents: { data: [{ id: 'agent-2' }] },
+        },
+        singleResults: {
+          review_tasks: {
+            data: {
+              pr_number: 10,
+              pr_url: 'url',
+              timeout_at: new Date(Date.now() + 300_000).toISOString(),
+              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+            },
+            error: null,
+          },
+        },
+      });
+      // Make insert return an error
+      const origInsert = mockSupa.from('review_results').insert;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (origInsert as any).mockResolvedValueOnce({ data: null, error: { message: 'insert error' } });
+
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_error',
+          taskId: 'task-1',
+          error: 'Failed',
+        }),
+      );
+
+      // Should not throw
+      expect(storage.store.get('inFlightTaskIds')).toEqual(['task-2']);
+    });
+
+    it('handles multi-agent review_complete: waits for more reviews when below minCount', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      // Store taskMeta to enable multi-agent mode
+      storage.store.set('taskMeta:task-1', {
+        minCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
+      mockSupa = createSupabaseMock({
+        countResults: {
+          review_results: { count: 1 }, // only 1 of 3 completed
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_complete',
+          taskId: 'task-1',
+          review: 'LGTM',
+          verdict: 'approve',
+          tokensUsed: 100,
+        }),
+      );
+
+      // Should NOT post to GitHub (multi-agent mode, waiting for more)
+      expect(mockedGetInstallationToken).not.toHaveBeenCalled();
+      expect(mockedPostPrComment).not.toHaveBeenCalled();
+      // Should NOT transition to completed
+      const completedUpdates = mockSupa._calls.update.filter(
+        (u) =>
+          u.table === 'review_tasks' && (u.data as Record<string, string>).status === 'completed',
+      );
+      expect(completedUpdates).toHaveLength(0);
     });
 
     it('ignores invalid JSON', async () => {
@@ -814,6 +1022,81 @@ describe('AgentConnection', () => {
 
     it('returns 503 when no WebSocket is connected', async () => {
       const request = new Request('https://internal/push-task', {
+        method: 'POST',
+        body: JSON.stringify({ taskId: 'task-1' }),
+      });
+
+      const response = await connection.fetch(request);
+      expect(response.status).toBe(503);
+    });
+
+    it('stores taskMeta when minCount is provided', async () => {
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('inFlightTaskIds', []);
+
+      const request = new Request('https://internal/push-task', {
+        method: 'POST',
+        body: JSON.stringify({
+          taskId: 'task-99',
+          pr: { url: 'url', number: 1, diffUrl: 'diff', base: 'main', head: 'feature' },
+          project: { owner: 'org', repo: 'repo', prompt: 'Review' },
+          timeout: 600,
+          diffContent: 'diff content',
+          minCount: 3,
+          installationId: 99,
+        }),
+      });
+
+      await connection.fetch(request);
+
+      const meta = storage.store.get('taskMeta:task-99');
+      expect(meta).toEqual({
+        minCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 1,
+        prompt: 'Review',
+      });
+    });
+  });
+
+  describe('fetch /push-summary', () => {
+    it('sends summary_request to WebSocket and tracks in-flight', async () => {
+      const mockWs = createMockWebSocket();
+      mockCtx._websockets.push(mockWs);
+      storage.store.set('inFlightTaskIds', []);
+
+      const summaryMsg = {
+        id: 'msg-1',
+        timestamp: Date.now(),
+        type: 'summary_request',
+        taskId: 'task-1',
+        pr: { url: 'url', number: 1 },
+        project: { owner: 'org', repo: 'repo', prompt: 'Review' },
+        reviews: [
+          { agentId: 'a1', model: 'gpt-4', tool: 'cursor', review: 'LGTM', verdict: 'approve' },
+        ],
+        timeout: 300,
+      };
+
+      const request = new Request('https://internal/push-summary', {
+        method: 'POST',
+        body: JSON.stringify(summaryMsg),
+      });
+
+      const response = await connection.fetch(request);
+
+      expect(response.status).toBe(200);
+      const sent = JSON.parse(mockWs.send.mock.calls[0][0]);
+      expect(sent.type).toBe('summary_request');
+      expect(sent.taskId).toBe('task-1');
+      expect(storage.store.get('inFlightTaskIds')).toEqual(['task-1']);
+    });
+
+    it('returns 503 when no WebSocket is connected', async () => {
+      const request = new Request('https://internal/push-summary', {
         method: 'POST',
         body: JSON.stringify({ taskId: 'task-1' }),
       });

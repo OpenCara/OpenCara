@@ -13,6 +13,7 @@ import type {
   HeartbeatPongMessage,
   SummaryCompleteMessage,
   SummaryRequestMessage,
+  SummaryReview,
 } from '../protocol.js';
 
 describe('protocol', () => {
@@ -99,7 +100,16 @@ describe('protocol', () => {
         timeout: 60,
         diffContent: '',
       },
-      { id: '3', timestamp: 3, type: 'summary_request', taskId: 't', reviewIds: [] },
+      {
+        id: '3',
+        timestamp: 3,
+        type: 'summary_request',
+        taskId: 't',
+        pr: { url: '', number: 1 },
+        project: { owner: '', repo: '', prompt: '' },
+        reviews: [],
+        timeout: 60,
+      },
       { id: '4', timestamp: 4, type: 'heartbeat_ping' },
       { id: '5', timestamp: 5, type: 'error', code: 0, message: '' },
     ];
@@ -120,7 +130,7 @@ describe('protocol', () => {
         verdict: 'approve',
         tokensUsed: 0,
       },
-      { id: '2', timestamp: 2, type: 'summary_complete', taskId: 't', summary: '' },
+      { id: '2', timestamp: 2, type: 'summary_complete', taskId: 't', summary: '', tokensUsed: 0 },
       { id: '3', timestamp: 3, type: 'review_rejected', taskId: 't', reason: '' },
       { id: '4', timestamp: 4, type: 'review_error', taskId: 't', error: '' },
       { id: '5', timestamp: 5, type: 'heartbeat_pong' },
@@ -131,15 +141,42 @@ describe('protocol', () => {
     }
   });
 
-  it('SummaryRequestMessage has reviewIds', () => {
+  it('SummaryRequestMessage has reviews and PR info', () => {
+    const review: SummaryReview = {
+      agentId: 'agent-1',
+      model: 'gpt-4',
+      tool: 'cursor',
+      review: 'LGTM',
+      verdict: 'approve',
+    };
     const msg: SummaryRequestMessage = {
       id: 'test',
       timestamp: Date.now(),
       type: 'summary_request',
       taskId: 'task-1',
-      reviewIds: ['r1', 'r2'],
+      pr: { url: 'https://github.com/org/repo/pull/1', number: 1 },
+      project: { owner: 'org', repo: 'repo', prompt: 'Review this' },
+      reviews: [review],
+      timeout: 300,
     };
-    expect(msg.reviewIds).toHaveLength(2);
+    expect(msg.reviews).toHaveLength(1);
+    expect(msg.reviews[0].verdict).toBe('approve');
+    expect(msg.pr.number).toBe(1);
+    expect(msg.project.owner).toBe('org');
+    expect(msg.timeout).toBe(300);
+  });
+
+  it('SummaryReview has all required fields', () => {
+    const review: SummaryReview = {
+      agentId: 'agent-1',
+      model: 'claude-3.5',
+      tool: 'vscode',
+      review: 'Nice code',
+      verdict: 'comment',
+    };
+    expect(review.agentId).toBe('agent-1');
+    expect(review.model).toBe('claude-3.5');
+    expect(review.verdict).toBe('comment');
   });
 
   it('HeartbeatPingMessage uses envelope timestamp', () => {
@@ -183,15 +220,17 @@ describe('protocol', () => {
     expect(msg.error).toBe('API key expired');
   });
 
-  it('SummaryCompleteMessage has summary', () => {
+  it('SummaryCompleteMessage has summary and tokensUsed', () => {
     const msg: SummaryCompleteMessage = {
       id: 'test',
       timestamp: Date.now(),
       type: 'summary_complete',
       taskId: 'task-1',
       summary: 'Overall the code looks good',
+      tokensUsed: 500,
     };
     expect(msg.summary).toBe('Overall the code looks good');
+    expect(msg.tokensUsed).toBe(500);
   });
 
   it('ReviewVerdict covers all valid values', () => {
