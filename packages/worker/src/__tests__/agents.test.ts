@@ -151,6 +151,19 @@ describe('handleCreateAgent', () => {
     expect(response.status).toBe(400);
   });
 
+  it('returns 400 for invalid JSON body', async () => {
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: 'not json',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const response = await handleCreateAgent(request, mockUser, {} as any);
+    expect(response.status).toBe(400);
+    const data = await response.json();
+    expect(data.error).toBe('Invalid JSON body');
+  });
+
   it('returns 500 when database insert fails', async () => {
     const mockSupabase = {
       from: vi.fn().mockReturnValue({

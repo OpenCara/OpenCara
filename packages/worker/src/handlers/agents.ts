@@ -49,7 +49,12 @@ export async function handleCreateAgent(
   user: User,
   supabase: SupabaseClient,
 ): Promise<Response> {
-  const body = (await request.json()) as CreateAgentRequest;
+  let body: CreateAgentRequest;
+  try {
+    body = (await request.json()) as CreateAgentRequest;
+  } catch {
+    return json({ error: 'Invalid JSON body' }, 400);
+  }
 
   if (!body.model || !body.tool) {
     return json({ error: 'model and tool are required' }, 400);

@@ -59,7 +59,12 @@ export async function handleDeviceToken(
   env: Env,
   supabase: SupabaseClient,
 ): Promise<Response> {
-  const body = (await request.json()) as DeviceTokenRequest;
+  let body: DeviceTokenRequest;
+  try {
+    body = (await request.json()) as DeviceTokenRequest;
+  } catch {
+    return json({ error: 'Invalid JSON body' }, 400);
+  }
 
   if (!body.deviceCode) {
     return json({ error: 'deviceCode is required' }, 400);
@@ -94,8 +99,12 @@ export async function handleDeviceToken(
     return json({ status: 'expired' } satisfies DeviceTokenResponse);
   }
 
+  if (data.error === 'slow_down') {
+    return json({ status: 'pending' } satisfies DeviceTokenResponse);
+  }
+
   if (data.error || !data.access_token) {
-    return json({ error: data.error ?? 'Unknown error' }, 502);
+    return json({ error: 'Authorization failed' }, 502);
   }
 
   // Fetch GitHub user profile

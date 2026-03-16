@@ -180,6 +180,29 @@ describe('handleDeviceToken', () => {
     expect(data.apiKey).toMatch(/^cr_[0-9a-f]{40}$/);
   });
 
+  it('returns pending on slow_down error', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'slow_down' }), {
+        status: 200,
+      }),
+    );
+
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ deviceCode: 'abc123' }),
+    });
+
+    const response = await handleDeviceToken(
+      request,
+      mockEnv,
+      createMockSupabase(),
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('pending');
+  });
+
   it('returns 400 when deviceCode is missing', async () => {
     const request = new Request('http://localhost', {
       method: 'POST',
@@ -192,6 +215,23 @@ describe('handleDeviceToken', () => {
       createMockSupabase(),
     );
     expect(response.status).toBe(400);
+  });
+
+  it('returns 400 for invalid JSON body', async () => {
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: 'not json',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const response = await handleDeviceToken(
+      request,
+      mockEnv,
+      createMockSupabase(),
+    );
+    expect(response.status).toBe(400);
+    const data = await response.json();
+    expect(data.error).toBe('Invalid JSON body');
   });
 
   it('returns 502 when user profile fetch fails', async () => {
