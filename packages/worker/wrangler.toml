@@ -7,6 +7,11 @@ compatibility_date = "2024-12-01"
 # - GITHUB_APP_ID: GitHub App ID
 # - GITHUB_APP_PRIVATE_KEY: GitHub App private key (PEM)
 # - GITHUB_CLIENT_ID: GitHub App client ID
+# - GITHUB_CLIENT_SECRET: GitHub App client secret
+
+[vars]
+WEB_URL = "http://localhost:3000"
+WORKER_URL = "http://localhost:8787"
 
 [durable_objects]
 bindings = [

@@ -114,4 +114,88 @@ describe('authenticateRequest', () => {
     const result = await authenticateRequest(request, createMockSupabase(mockUser));
     expect(result).toEqual(mockUser);
   });
+
+  // --- Cookie-based auth fallback ---
+
+  it('authenticates via session cookie when no Authorization header', async () => {
+    const mockUser = {
+      id: '123',
+      github_id: 456,
+      name: 'testuser',
+      avatar: null,
+      api_key_hash: 'somehash',
+      reputation_score: 0,
+      created_at: '2024-01-01',
+      updated_at: '2024-01-01',
+    };
+    const apiKey = 'cr_' + '0'.repeat(40);
+    const request = new Request('http://localhost', {
+      headers: { Cookie: `opencrust_session=${apiKey}` },
+    });
+    const result = await authenticateRequest(request, createMockSupabase(mockUser));
+    expect(result).toEqual(mockUser);
+  });
+
+  it('prefers Authorization header over cookie', async () => {
+    const mockUser = {
+      id: '123',
+      github_id: 456,
+      name: 'testuser',
+      avatar: null,
+      api_key_hash: 'somehash',
+      reputation_score: 0,
+      created_at: '2024-01-01',
+      updated_at: '2024-01-01',
+    };
+    const apiKey = 'cr_' + '0'.repeat(40);
+    const supabase = createMockSupabase(mockUser);
+    const request = new Request('http://localhost', {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Cookie: `opencrust_session=cr_${'1'.repeat(40)}`,
+      },
+    });
+    await authenticateRequest(request, supabase);
+
+    // Should have been called with the hash of the Bearer key, not the cookie key
+    const fromCall = supabase.from.mock.results[0].value;
+    const selectCall = fromCall.select.mock.results[0].value;
+    const eqCall = selectCall.eq;
+    expect(eqCall).toHaveBeenCalledWith('api_key_hash', expect.any(String));
+  });
+
+  it('returns null for cookie with invalid key prefix', async () => {
+    const request = new Request('http://localhost', {
+      headers: { Cookie: 'opencrust_session=invalid_key' },
+    });
+    const result = await authenticateRequest(request, createMockSupabase());
+    expect(result).toBeNull();
+  });
+
+  it('returns null for cookie not named opencrust_session', async () => {
+    const request = new Request('http://localhost', {
+      headers: { Cookie: `other_cookie=cr_${'0'.repeat(40)}` },
+    });
+    const result = await authenticateRequest(request, createMockSupabase());
+    expect(result).toBeNull();
+  });
+
+  it('authenticates via cookie when other cookies are present', async () => {
+    const mockUser = {
+      id: '123',
+      github_id: 456,
+      name: 'testuser',
+      avatar: null,
+      api_key_hash: 'somehash',
+      reputation_score: 0,
+      created_at: '2024-01-01',
+      updated_at: '2024-01-01',
+    };
+    const apiKey = 'cr_' + '0'.repeat(40);
+    const request = new Request('http://localhost', {
+      headers: { Cookie: `foo=bar; opencrust_session=${apiKey}; baz=qux` },
+    });
+    const result = await authenticateRequest(request, createMockSupabase(mockUser));
+    expect(result).toEqual(mockUser);
+  });
 });

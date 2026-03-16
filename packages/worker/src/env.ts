@@ -8,4 +8,6 @@ export interface Env {
   SUPABASE_SERVICE_ROLE_KEY: string;
   AGENT_CONNECTION: DurableObjectNamespace;
   TASK_TIMEOUT: DurableObjectNamespace;
+  WEB_URL: string;
+  WORKER_URL: string;
 }

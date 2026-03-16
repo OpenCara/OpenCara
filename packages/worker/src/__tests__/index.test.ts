@@ -9,6 +9,7 @@ vi.mock('../webhook.js', () => ({
 
 vi.mock('../auth.js', () => ({
   authenticateRequest: vi.fn(),
+  hashApiKey: vi.fn().mockResolvedValue('mock-hash'),
 }));
 
 vi.mock('../db.js', () => ({
@@ -76,6 +77,29 @@ vi.mock('../handlers/stats.js', () => ({
   ),
 }));
 
+vi.mock('../handlers/web-auth.js', () => ({
+  handleWebLogin: vi
+    .fn()
+    .mockResolvedValue(
+      new Response(null, { status: 302, headers: { Location: 'https://github.com/login/oauth' } }),
+    ),
+  handleWebCallback: vi
+    .fn()
+    .mockResolvedValue(
+      new Response(null, { status: 302, headers: { Location: 'https://opencrust.dev/dashboard' } }),
+    ),
+  handleWebLogout: vi
+    .fn()
+    .mockResolvedValue(
+      new Response(null, { status: 302, headers: { Location: 'https://opencrust.dev' } }),
+    ),
+}));
+
+vi.mock('../handlers/cors.js', () => ({
+  addCorsHeaders: vi.fn((response: Response) => response),
+  handleCorsPreflightRequest: vi.fn().mockReturnValue(new Response(null, { status: 204 })),
+}));
+
 import { handleGitHubWebhook } from '../webhook.js';
 import { authenticateRequest } from '../auth.js';
 import { handleGetConsumption } from '../handlers/consumption.js';
@@ -83,6 +107,8 @@ import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
 import { handleCollectRatings } from '../handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
 import { handleGetStats, handleGetLeaderboard } from '../handlers/stats.js';
+import { handleWebLogin, handleWebCallback, handleWebLogout } from '../handlers/web-auth.js';
+import { addCorsHeaders, handleCorsPreflightRequest } from '../handlers/cors.js';
 
 const mockEnv: Env = {
   GITHUB_WEBHOOK_SECRET: 'test',
@@ -94,6 +120,8 @@ const mockEnv: Env = {
   SUPABASE_SERVICE_ROLE_KEY: 'test-key',
   AGENT_CONNECTION: {} as DurableObjectNamespace,
   TASK_TIMEOUT: {} as DurableObjectNamespace,
+  WEB_URL: 'https://opencrust.dev',
+  WORKER_URL: 'https://api.opencrust.dev',
 };
 
 describe('worker router', () => {
@@ -126,7 +154,30 @@ describe('worker router', () => {
     expect(handleGitHubWebhook).toHaveBeenCalledWith(req, mockEnv);
   });
 
-  // --- Auth routes ---
+  // --- Web OAuth routes ---
+
+  it('routes GET /auth/login to web login handler', async () => {
+    const req = new Request('http://localhost/auth/login');
+    const response = await worker.fetch(req, mockEnv);
+    expect(response.status).toBe(302);
+    expect(handleWebLogin).toHaveBeenCalledWith(req, mockEnv);
+  });
+
+  it('routes GET /auth/callback to web callback handler', async () => {
+    const req = new Request('http://localhost/auth/callback?code=abc&state=xyz');
+    const response = await worker.fetch(req, mockEnv);
+    expect(response.status).toBe(302);
+    expect(handleWebCallback).toHaveBeenCalledWith(req, mockEnv, 'mock-supabase');
+  });
+
+  it('routes GET /auth/logout to web logout handler', async () => {
+    const req = new Request('http://localhost/auth/logout');
+    const response = await worker.fetch(req, mockEnv);
+    expect(response.status).toBe(302);
+    expect(handleWebLogout).toHaveBeenCalledWith(req, mockEnv);
+  });
+
+  // --- Device flow auth routes ---
 
   it('routes POST /auth/device to device flow handler', async () => {
     const response = await worker.fetch(
@@ -344,5 +395,34 @@ describe('worker router', () => {
   it('returns 404 for /api/consumption without agentId', async () => {
     const response = await worker.fetch(new Request('http://localhost/api/consumption/'), mockEnv);
     expect(response.status).toBe(404);
+  });
+
+  // --- CORS routes ---
+
+  it('handles OPTIONS preflight for /api/* routes', async () => {
+    const response = await worker.fetch(
+      new Request('http://localhost/api/agents', { method: 'OPTIONS' }),
+      mockEnv,
+    );
+    expect(response.status).toBe(204);
+    expect(handleCorsPreflightRequest).toHaveBeenCalledWith(mockEnv);
+  });
+
+  it('adds CORS headers to /api/* responses', async () => {
+    const mockUser = { id: 'user-1', name: 'test' };
+    vi.mocked(authenticateRequest).mockResolvedValue(mockUser as any);
+
+    await worker.fetch(
+      new Request('http://localhost/api/agents', {
+        headers: { Authorization: 'Bearer cr_test' },
+      }),
+      mockEnv,
+    );
+    expect(addCorsHeaders).toHaveBeenCalled();
+  });
+
+  it('does not add CORS headers to non-api routes', async () => {
+    await worker.fetch(new Request('http://localhost/auth/device', { method: 'POST' }), mockEnv);
+    expect(addCorsHeaders).not.toHaveBeenCalled();
   });
 });

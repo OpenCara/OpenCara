@@ -11,7 +11,9 @@ const mockEnv: Env = {
   GITHUB_APP_PRIVATE_KEY: '',
   SUPABASE_URL: '',
   SUPABASE_SERVICE_ROLE_KEY: '',
-};
+  WEB_URL: '',
+  WORKER_URL: '',
+} as any;
 
 const originalFetch = globalThis.fetch;
 
