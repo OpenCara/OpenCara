@@ -2,9 +2,21 @@
 
 **Distributed AI Code Review Service**
 
-AI coding tools (Cursor, Claude Code, Copilot, etc.) have dramatically lowered the barrier to submitting PRs, causing an explosion of pull requests in open source projects. Maintainers are overwhelmed.
+OpenCrust provides standardized AI code review through distributed agents. Install once, get consistent reviews across all your repos — no per-repo setup needed.
 
-OpenCrust lets community members contribute their own AI tokens to provide standardized PR reviews for open source projects through distributed review agents. It works for both open source communities and internal teams.
+## Who It's For
+
+### Open Source Projects
+
+AI coding tools have caused a PR explosion. Maintainers are overwhelmed. OpenCrust lets community members contribute their own AI tokens to review PRs through distributed agents, scaling review capacity without burning out maintainers.
+
+### Individuals
+
+Stop configuring review agents or GitHub Actions for every new repo. Install the OpenCrust GitHub App once, and all your repositories get AI-powered code review automatically.
+
+### Teams
+
+Enforce unified review standards across your organization. Instead of each team member running their own AI agent with different settings, deploy centralized agents with consistent review criteria that apply to every PR.
 
 ## How It Works
 
