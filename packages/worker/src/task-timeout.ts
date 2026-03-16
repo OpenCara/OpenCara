@@ -1,5 +1,6 @@
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
+import { type InFlightTaskMeta, triggerSummarization } from './summarization.js';
 
 export class TaskTimeout implements DurableObject {
   private state: DurableObjectState;
@@ -21,14 +22,34 @@ export class TaskTimeout implements DurableObject {
   }
 
   private async handleSetTimeout(request: Request): Promise<Response> {
-    const { taskId, timeoutMs, minCount } = (await request.json()) as {
-      taskId: string;
-      timeoutMs: number;
-      minCount: number;
-    };
+    const { taskId, timeoutMs, minCount, installationId, owner, repo, prNumber, prompt } =
+      (await request.json()) as {
+        taskId: string;
+        timeoutMs: number;
+        minCount: number;
+        installationId?: number;
+        owner?: string;
+        repo?: string;
+        prNumber?: number;
+        prompt?: string;
+      };
 
     await this.state.storage.put('taskId', taskId);
     await this.state.storage.put('minCount', minCount);
+
+    // Store task meta for summarization dispatch
+    if (installationId !== undefined) {
+      const meta: InFlightTaskMeta = {
+        minCount,
+        installationId,
+        owner: owner ?? '',
+        repo: repo ?? '',
+        prNumber: prNumber ?? 0,
+        prompt: prompt ?? '',
+      };
+      await this.state.storage.put('taskMeta', meta);
+    }
+
     await this.state.storage.setAlarm(Date.now() + timeoutMs);
 
     return new Response('OK', { status: 200 });
@@ -64,16 +85,18 @@ export class TaskTimeout implements DurableObject {
       // No results at all — timeout
       await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
       console.log(`Task ${taskId} timed out with no results`);
-    } else if (completedCount >= minCount) {
-      // Enough results — ready for summarization
-      await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
-      console.log(`Task ${taskId} has ${completedCount} results, moving to summarizing`);
     } else {
-      // Some results but < minCount — still move to summarizing with what we have
+      // Has results — move to summarizing and dispatch
       await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
       console.log(
         `Task ${taskId} has ${completedCount}/${minCount} results at timeout, moving to summarizing`,
       );
+
+      // Dispatch summarization if we have task meta
+      const meta = await this.state.storage.get<InFlightTaskMeta>('taskMeta');
+      if (meta) {
+        await triggerSummarization(this.env, supabase, taskId, meta);
+      }
     }
   }
 }

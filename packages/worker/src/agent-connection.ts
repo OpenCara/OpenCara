@@ -3,12 +3,21 @@ import type {
   ReviewRejectedMessage,
   ReviewErrorMessage,
   SummaryCompleteMessage,
+  SummaryRequestMessage,
   ReviewRequestMessage,
   ReviewVerdict,
 } from '@opencrust/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { getInstallationToken, postPrComment } from './github.js';
+import {
+  type InFlightTaskMeta,
+  triggerSummarization,
+  formatSummaryComment,
+  formatIndividualReviewComment,
+  postIndividualReviewsFallback,
+  fetchCompletedReviews,
+} from './summarization.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
@@ -59,6 +68,8 @@ export class AgentConnection implements DurableObject {
         return this.handleWebSocket(request);
       case '/push-task':
         return this.handlePushTask(request);
+      case '/push-summary':
+        return this.handlePushSummary(request);
       case '/status':
         return this.handleStatus();
       default:
@@ -214,6 +225,8 @@ export class AgentConnection implements DurableObject {
       project: { owner: string; repo: string; prompt: string };
       timeout: number;
       diffContent: string;
+      minCount?: number;
+      installationId?: number;
     };
 
     const message: ReviewRequestMessage = {
@@ -231,6 +244,35 @@ export class AgentConnection implements DurableObject {
 
     const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
     inFlightTaskIds.push(payload.taskId);
+    await this.state.storage.put('inFlightTaskIds', inFlightTaskIds);
+
+    // Store per-task metadata for multi-agent review collection
+    if (payload.minCount !== undefined) {
+      const taskMeta: InFlightTaskMeta = {
+        minCount: payload.minCount,
+        installationId: payload.installationId ?? 0,
+        owner: payload.project.owner,
+        repo: payload.project.repo,
+        prNumber: payload.pr.number,
+        prompt: payload.project.prompt,
+      };
+      await this.state.storage.put(`taskMeta:${payload.taskId}`, taskMeta);
+    }
+
+    return new Response('OK', { status: 200 });
+  }
+
+  private async handlePushSummary(request: Request): Promise<Response> {
+    const websockets = this.state.getWebSockets();
+    if (websockets.length === 0) {
+      return new Response('Agent not connected', { status: 503 });
+    }
+
+    const message = (await request.json()) as SummaryRequestMessage;
+    websockets[0].send(JSON.stringify(message));
+
+    const inFlightTaskIds = (await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [];
+    inFlightTaskIds.push(message.taskId);
     await this.state.storage.put('inFlightTaskIds', inFlightTaskIds);
 
     return new Response('OK', { status: 200 });
@@ -260,11 +302,17 @@ export class AgentConnection implements DurableObject {
     const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    // Insert result before removing from in-flight for crash safety
+    // Look up task meta to determine single-agent vs multi-agent mode
+    const taskMeta = await this.state.storage.get<InFlightTaskMeta>(`taskMeta:${msg.taskId}`);
+    const minCount = taskMeta?.minCount ?? 1;
+
+    // Insert result with review_text and verdict
     const { error } = await supabase.from('review_results').insert({
       review_task_id: msg.taskId,
       agent_id: agentId,
       status: 'completed',
+      review_text: msg.review,
+      verdict: msg.verdict,
     });
     if (error) {
       console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
@@ -283,6 +331,23 @@ export class AgentConnection implements DurableObject {
       }
     }
 
+    if (minCount === 1) {
+      // Single-agent mode: post review immediately (M5 backward compatible)
+      await this.postReviewDirectly(msg, agentId, supabase);
+    } else {
+      // Multi-agent mode: check if we have enough results to trigger summarization
+      await this.checkAndTriggerSummarization(msg.taskId, minCount, taskMeta!, supabase);
+    }
+  }
+
+  /**
+   * M5-compatible: post review as GitHub PR comment immediately.
+   */
+  private async postReviewDirectly(
+    msg: ReviewCompleteMessage,
+    agentId: string,
+    supabase: ReturnType<typeof createSupabaseClient>,
+  ): Promise<void> {
     // Look up task + project info for posting the review
     const { data: taskData } = await supabase
       .from('review_tasks')
@@ -343,6 +408,48 @@ export class AgentConnection implements DurableObject {
     } catch (err) {
       console.error(`Failed to post review for task ${msg.taskId}:`, err);
     }
+  }
+
+  /**
+   * Multi-agent mode: check completed count and trigger summarization if threshold met.
+   */
+  private async checkAndTriggerSummarization(
+    taskId: string,
+    minCount: number,
+    meta: InFlightTaskMeta,
+    supabase: ReturnType<typeof createSupabaseClient>,
+  ): Promise<void> {
+    // Count completed results for this task
+    const { count } = await supabase
+      .from('review_results')
+      .select('id', { count: 'exact', head: true })
+      .eq('review_task_id', taskId)
+      .eq('status', 'completed');
+
+    const completedCount = count ?? 0;
+
+    if (completedCount < minCount) {
+      console.log(
+        `Task ${taskId}: ${completedCount}/${minCount} reviews completed, waiting for more`,
+      );
+      return;
+    }
+
+    // Transition task to summarizing
+    const { error } = await supabase
+      .from('review_tasks')
+      .update({ status: 'summarizing' })
+      .eq('id', taskId)
+      .eq('status', 'reviewing');
+
+    if (error) {
+      console.error(`Failed to transition task ${taskId} to summarizing:`, error);
+      return;
+    }
+
+    console.log(`Task ${taskId}: ${completedCount} reviews completed, triggering summarization`);
+
+    await triggerSummarization(this.env, supabase, taskId, meta);
   }
 
   private async handleReviewRejected(msg: ReviewRejectedMessage): Promise<void> {
@@ -474,7 +581,98 @@ export class AgentConnection implements DurableObject {
   }
 
   private async handleSummaryComplete(msg: SummaryCompleteMessage): Promise<void> {
-    // Summary handling will be implemented in M6
-    console.log(`Summary complete for task ${msg.taskId}`);
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
+    const supabase = createSupabaseClient(this.env);
+
+    await this.removeInFlightTask(msg.taskId);
+
+    // Log consumption for the summary agent
+    if (msg.tokensUsed > 0) {
+      await supabase.from('consumption_logs').insert({
+        agent_id: agentId,
+        review_task_id: msg.taskId,
+        tokens_used: msg.tokensUsed,
+      });
+    }
+
+    // Look up task + project info
+    const { data: taskData } = await supabase
+      .from('review_tasks')
+      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
+      .eq('id', msg.taskId)
+      .single();
+
+    if (!taskData) {
+      console.error(`Task ${msg.taskId} not found for summary posting`);
+      return;
+    }
+
+    const project = taskData.projects as unknown as {
+      owner: string;
+      repo: string;
+      github_installation_id: number;
+    };
+
+    // Fetch individual reviews for follow-up comments
+    const reviews = await fetchCompletedReviews(supabase, msg.taskId);
+
+    try {
+      const installationToken = await getInstallationToken(
+        project.github_installation_id,
+        this.env,
+      );
+
+      // Post summary as main comment
+      const summaryBody = formatSummaryComment(msg.summary, reviews.length);
+      const summaryUrl = await postPrComment(
+        project.owner,
+        project.repo,
+        taskData.pr_number as number,
+        summaryBody,
+        installationToken,
+      );
+
+      // Update review_summaries with comment_url
+      await supabase
+        .from('review_summaries')
+        .update({ comment_url: summaryUrl })
+        .eq('review_task_id', msg.taskId)
+        .eq('agent_id', agentId);
+
+      // Post each individual review as a follow-up comment
+      for (const review of reviews) {
+        const body = formatIndividualReviewComment(
+          review.model,
+          review.tool,
+          review.verdict,
+          review.review,
+        );
+        await postPrComment(
+          project.owner,
+          project.repo,
+          taskData.pr_number as number,
+          body,
+          installationToken,
+        );
+      }
+
+      // Transition task to completed
+      await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', msg.taskId);
+
+      console.log(`Summary posted for task ${msg.taskId}`);
+    } catch (err) {
+      console.error(`Failed to post summary for task ${msg.taskId}:`, err);
+
+      // Fallback: try posting individual reviews
+      const meta: InFlightTaskMeta = {
+        minCount: 0,
+        installationId: project.github_installation_id,
+        owner: project.owner,
+        repo: project.repo,
+        prNumber: taskData.pr_number as number,
+        prompt: '',
+      };
+      await postIndividualReviewsFallback(this.env, supabase, msg.taskId, meta, reviews);
+    }
   }
 }

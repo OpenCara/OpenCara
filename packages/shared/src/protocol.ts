@@ -45,7 +45,17 @@ export interface ReviewRequestMessage extends MessageBase {
 export interface SummaryRequestMessage extends MessageBase {
   type: 'summary_request';
   taskId: string;
-  reviewIds: string[];
+  pr: {
+    url: string;
+    number: number;
+  };
+  project: {
+    owner: string;
+    repo: string;
+    prompt: string;
+  };
+  reviews: SummaryReview[];
+  timeout: number;
 }
 
 export interface HeartbeatPingMessage extends MessageBase {
@@ -69,6 +79,14 @@ export type AgentMessage =
 
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
+export interface SummaryReview {
+  agentId: string;
+  model: string;
+  tool: string;
+  review: string;
+  verdict: ReviewVerdict;
+}
+
 export interface ReviewCompleteMessage extends MessageBase {
   type: 'review_complete';
   taskId: string;
@@ -81,6 +99,7 @@ export interface SummaryCompleteMessage extends MessageBase {
   type: 'summary_complete';
   taskId: string;
   summary: string;
+  tokensUsed: number;
 }
 
 export interface ReviewRejectedMessage extends MessageBase {
