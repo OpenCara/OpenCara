@@ -10,6 +10,8 @@ const mockEnv: Env = {
   GITHUB_CLIENT_SECRET: '',
   SUPABASE_URL: 'https://test.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+  AGENT_CONNECTION: {} as DurableObjectNamespace,
+  TASK_TIMEOUT: {} as DurableObjectNamespace,
 };
 
 describe('worker', () => {

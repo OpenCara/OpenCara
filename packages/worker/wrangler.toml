@@ -7,3 +7,13 @@ compatibility_date = "2024-12-01"
 # - GITHUB_APP_ID: GitHub App ID
 # - GITHUB_APP_PRIVATE_KEY: GitHub App private key (PEM)
 # - GITHUB_CLIENT_ID: GitHub App client ID
+
+[durable_objects]
+bindings = [
+  { name = "AGENT_CONNECTION", class_name = "AgentConnection" },
+  { name = "TASK_TIMEOUT", class_name = "TaskTimeout" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AgentConnection", "TaskTimeout"]

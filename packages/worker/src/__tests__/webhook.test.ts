@@ -8,6 +8,14 @@ vi.mock('../github.js', () => ({
   postPrComment: vi.fn(),
 }));
 
+vi.mock('../db.js', () => ({
+  createSupabaseClient: vi.fn(() => ({})),
+}));
+
+vi.mock('../task-distribution.js', () => ({
+  distributeTask: vi.fn().mockResolvedValue('mock-task-id'),
+}));
+
 import {
   getInstallationToken,
   fetchReviewConfig,
@@ -73,6 +81,8 @@ const TEST_ENV: Env = {
   GITHUB_CLIENT_SECRET: '',
   SUPABASE_URL: 'https://test.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+  AGENT_CONNECTION: {} as DurableObjectNamespace,
+  TASK_TIMEOUT: {} as DurableObjectNamespace,
 };
 
 async function makeSignedRequest(
