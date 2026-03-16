@@ -13,6 +13,7 @@ export function addCorsHeaders(response: Response, env: Env): Response {
   headers.set('Access-Control-Allow-Headers', ALLOWED_HEADERS);
   headers.set('Access-Control-Allow-Methods', ALLOWED_METHODS);
   headers.set('Access-Control-Allow-Credentials', 'true');
+  headers.append('Vary', 'Origin');
 
   return new Response(response.body, {
     status: response.status,

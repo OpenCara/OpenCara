@@ -1,7 +1,29 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
 import { API_KEY_PREFIX } from '@opencrust/shared';
-import { generateApiKey, hashApiKey, authenticateRequest } from '../auth.js';
+import { generateApiKey, hashApiKey, authenticateRequest, parseCookies } from '../auth.js';
+
+describe('parseCookies', () => {
+  it('returns empty object for null header', () => {
+    expect(parseCookies(null)).toEqual({});
+  });
+
+  it('parses single cookie', () => {
+    expect(parseCookies('name=value')).toEqual({ name: 'value' });
+  });
+
+  it('parses multiple cookies', () => {
+    expect(parseCookies('a=1; b=2; c=3')).toEqual({ a: '1', b: '2', c: '3' });
+  });
+
+  it('handles cookies with = in value', () => {
+    expect(parseCookies('token=abc=def')).toEqual({ token: 'abc=def' });
+  });
+
+  it('trims whitespace', () => {
+    expect(parseCookies(' name = value ')).toEqual({ name: 'value' });
+  });
+});
 
 describe('generateApiKey', () => {
   it('generates key with correct prefix', async () => {

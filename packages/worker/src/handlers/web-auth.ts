@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { generateApiKey, hashApiKey } from '../auth.js';
+import { generateApiKey, hashApiKey, parseCookies } from '../auth.js';
 import type { Env } from '../env.js';
 
 const SESSION_COOKIE_NAME = 'opencrust_session';
@@ -14,19 +14,6 @@ async function generateState(): Promise<string> {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-}
-
-/** Parse cookies from a request header */
-export function parseCookies(cookieHeader: string | null): Record<string, string> {
-  if (!cookieHeader) return {};
-  const cookies: Record<string, string> = {};
-  for (const pair of cookieHeader.split(';')) {
-    const [name, ...rest] = pair.trim().split('=');
-    if (name && rest.length > 0) {
-      cookies[name.trim()] = rest.join('=').trim();
-    }
-  }
-  return cookies;
 }
 
 /** Build a Set-Cookie header value */

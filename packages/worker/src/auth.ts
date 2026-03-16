@@ -3,6 +3,7 @@ import type { User } from '@opencrust/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const API_KEY_HEX_LENGTH = 40;
+const SESSION_COOKIE_NAME = 'opencrust_session';
 
 /** Generate a new API key: "cr_" + 40 random hex chars */
 export async function generateApiKey(): Promise<string> {
@@ -23,6 +24,19 @@ export async function hashApiKey(apiKey: string): Promise<string> {
     .join('');
 }
 
+/** Parse cookies from a Cookie header string */
+export function parseCookies(cookieHeader: string | null): Record<string, string> {
+  if (!cookieHeader) return {};
+  const cookies: Record<string, string> = {};
+  for (const pair of cookieHeader.split(';')) {
+    const [name, ...rest] = pair.trim().split('=');
+    if (name && rest.length > 0) {
+      cookies[name.trim()] = rest.join('=').trim();
+    }
+  }
+  return cookies;
+}
+
 /**
  * Extract API key from Authorization header or session cookie.
  * Priority: Authorization header > opencrust_session cookie.
@@ -38,17 +52,10 @@ function extractApiKey(request: Request): string | null {
   }
 
   // Fall back to session cookie
-  const cookieHeader = request.headers.get('Cookie');
-  if (cookieHeader) {
-    for (const pair of cookieHeader.split(';')) {
-      const [name, ...rest] = pair.trim().split('=');
-      if (name?.trim() === 'opencrust_session') {
-        const value = rest.join('=').trim();
-        if (value.startsWith(API_KEY_PREFIX)) {
-          return value;
-        }
-      }
-    }
+  const cookies = parseCookies(request.headers.get('Cookie'));
+  const value = cookies[SESSION_COOKIE_NAME];
+  if (value?.startsWith(API_KEY_PREFIX)) {
+    return value;
   }
 
   return null;

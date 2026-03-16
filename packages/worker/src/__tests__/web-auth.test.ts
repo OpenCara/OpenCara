@@ -1,11 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {
-  handleWebLogin,
-  handleWebCallback,
-  handleWebLogout,
-  parseCookies,
-} from '../handlers/web-auth.js';
+import { handleWebLogin, handleWebCallback, handleWebLogout } from '../handlers/web-auth.js';
 import type { Env } from '../env.js';
 
 const mockEnv: Env = {
@@ -24,28 +19,6 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-});
-
-describe('parseCookies', () => {
-  it('returns empty object for null header', () => {
-    expect(parseCookies(null)).toEqual({});
-  });
-
-  it('parses single cookie', () => {
-    expect(parseCookies('name=value')).toEqual({ name: 'value' });
-  });
-
-  it('parses multiple cookies', () => {
-    expect(parseCookies('a=1; b=2; c=3')).toEqual({ a: '1', b: '2', c: '3' });
-  });
-
-  it('handles cookies with = in value', () => {
-    expect(parseCookies('token=abc=def')).toEqual({ token: 'abc=def' });
-  });
-
-  it('trims whitespace', () => {
-    expect(parseCookies(' name = value ')).toEqual({ name: 'value' });
-  });
 });
 
 describe('handleWebLogin', () => {

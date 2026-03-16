@@ -20,6 +20,7 @@ describe('addCorsHeaders', () => {
     expect(result.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type');
     expect(result.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST, OPTIONS');
     expect(result.headers.get('Access-Control-Allow-Credentials')).toBe('true');
+    expect(result.headers.get('Vary')).toBe('Origin');
   });
 
   it('preserves original response status', () => {
