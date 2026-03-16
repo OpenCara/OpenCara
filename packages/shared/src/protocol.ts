@@ -42,6 +42,14 @@ export interface ReviewRequestMessage extends MessageBase {
   diffContent: string;
 }
 
+export interface SummaryReview {
+  agentId: string;
+  model: string;
+  tool: string;
+  review: string;
+  verdict: ReviewVerdict;
+}
+
 export interface SummaryRequestMessage extends MessageBase {
   type: 'summary_request';
   taskId: string;
