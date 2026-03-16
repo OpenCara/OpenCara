@@ -17,6 +17,9 @@ export interface ReviewResponse {
   tokensUsed: number;
 }
 
+export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
+export const MAX_RESPONSE_TOKENS = 4096;
+
 const SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and provide:
 1. A verdict: APPROVE, REQUEST_CHANGES, or COMMENT
@@ -79,26 +82,22 @@ export async function executeReview(
     );
   }
 
-  const startTime = Date.now();
   const timeoutMs = req.timeout * 1000;
-  const safetyMarginMs = 30_000;
-
-  const remainingMs = timeoutMs - (Date.now() - startTime);
-  if (remainingMs <= safetyMarginMs) {
+  if (timeoutMs <= TIMEOUT_SAFETY_MARGIN_MS) {
     throw new Error('Not enough time remaining to start review');
   }
 
   const abortController = new AbortController();
   const abortTimer = setTimeout(() => {
     abortController.abort();
-  }, remainingMs - safetyMarginMs);
+  }, timeoutMs - TIMEOUT_SAFETY_MARGIN_MS);
 
   try {
     const client = createClient(deps.anthropicApiKey);
     const response = await client.messages.create(
       {
         model: deps.reviewModel,
-        max_tokens: 4096,
+        max_tokens: MAX_RESPONSE_TOKENS,
         system: buildSystemPrompt(req.owner, req.repo),
         messages: [
           {

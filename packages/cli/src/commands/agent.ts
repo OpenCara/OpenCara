@@ -141,6 +141,14 @@ function startAgent(
   connect();
 }
 
+function trySend(ws: { send: (data: string) => void }, data: Record<string, unknown>): void {
+  try {
+    ws.send(JSON.stringify(data));
+  } catch {
+    console.error('Failed to send message — WebSocket may be closed');
+  }
+}
+
 export function handleMessage(
   ws: { send: (data: string) => void },
   msg: { type: string; version?: string; code?: string; taskId?: string; timestamp?: number },
@@ -189,40 +197,34 @@ export function handleMessage(
         reviewDeps,
       )
         .then((result) => {
-          ws.send(
-            JSON.stringify({
-              type: 'review_complete',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: request.taskId,
-              review: result.review,
-              verdict: result.verdict,
-              tokensUsed: result.tokensUsed,
-            }),
-          );
+          trySend(ws, {
+            type: 'review_complete',
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            taskId: request.taskId,
+            review: result.review,
+            verdict: result.verdict,
+            tokensUsed: result.tokensUsed,
+          });
           console.log(`Review complete: ${result.verdict} (${result.tokensUsed} tokens)`);
         })
         .catch((err: unknown) => {
           if (err instanceof DiffTooLargeError) {
-            ws.send(
-              JSON.stringify({
-                type: 'review_rejected',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: request.taskId,
-                reason: err.message,
-              }),
-            );
+            trySend(ws, {
+              type: 'review_rejected',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: request.taskId,
+              reason: err.message,
+            });
           } else {
-            ws.send(
-              JSON.stringify({
-                type: 'review_error',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: request.taskId,
-                error: err instanceof Error ? err.message : 'Unknown error',
-              }),
-            );
+            trySend(ws, {
+              type: 'review_error',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: request.taskId,
+              error: err instanceof Error ? err.message : 'Unknown error',
+            });
           }
           console.error('Review failed:', err);
         });
