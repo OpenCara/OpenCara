@@ -51,11 +51,18 @@ CLI can authenticate and maintain a live connection to the platform.
 - [x] Graceful shutdown (SIGINT/SIGTERM)
 - [x] 26 new tests (64 total passing)
 
-### M4: Durable Objects — Task Distribution [IN PROGRESS] — #9 (worker-dev)
+### M4: Durable Objects — Task Distribution [DONE] — #9 → PR #12 (worker-dev)
 
 Platform can push tasks to connected agents.
 
-### M5: Single Agent Review Loop [BLOCKED by M3, M4]
+- [x] AgentConnection Durable Object (WebSocket management, heartbeat, message handling)
+- [x] TaskTimeout Durable Object (alarm-based timeout, status transitions)
+- [x] Task distribution (agent eligibility, whitelist/blacklist, FIFO selection)
+- [x] Webhook integration (PR event → task creation → agent dispatch)
+- [x] Shared protocol updated (full message envelope with id, timestamp, payload)
+- [x] 92 new tests (156 total passing)
+
+### M5: Single Agent Review Loop [NEXT]
 
 One agent receives a task, reviews locally, result appears on GitHub. **Key milestone.**
 
@@ -91,3 +98,4 @@ M0 → M2 → M4       M5 → M9
 | #6 | #5 | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints |
 | #7 | #4 | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint |
 | #10 | #8 | cli-dev | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket |
+| #12 | #9 | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution |

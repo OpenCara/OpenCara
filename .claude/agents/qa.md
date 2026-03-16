@@ -21,7 +21,7 @@ model: sonnet[1m]
 
 ## Test Plan
 
-Read `QA-PLAN.md` at startup — it contains the integration test scenarios maintained by PM. Execute every scenario in the plan. If `QA-PLAN.md` doesn't exist yet, fall back to the default checks below.
+Read `docs/QA-PLAN.md` at startup — it contains the integration test scenarios maintained by PM. Execute every scenario in the plan. If `docs/QA-PLAN.md` doesn't exist yet, fall back to the default checks below.
 
 ## Verification Checks
 

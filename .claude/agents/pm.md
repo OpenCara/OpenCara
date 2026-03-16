@@ -54,7 +54,7 @@ Agent completion messages are the **faster path** — PM should act on them imme
 
 - Check the dependency DAG for issues unblocked by #N
 - Dispatch all newly unblocked agents in parallel
-- Update PLAN.md and pm-state.md
+- Update docs/PLAN.md and pm-state.md
 - The corresponding webhook event may arrive later — deduplicate by checking pm-state.md
 
 ## Core Loop (runs via CronCreate every 5 minutes)
@@ -67,11 +67,11 @@ Agent completion messages are the **faster path** — PM should act on them imme
    - Read the issue content and assess complexity
    - **Simple issue** (single agent can handle) → triage and dispatch directly
    - **Complex issue** (spans multiple agents or needs design) → run the Breakdown Flow
-   - Label, comment, spawn, update PLAN.md, append to pm-state.md
+   - Label, comment, spawn, update docs/PLAN.md, append to pm-state.md
 
    **Issue closed** (`event: "issues", action: "closed"`):
    - Check if it was closed by a merged PR
-   - Update PLAN.md — mark relevant phase as `[DONE]`
+   - Update docs/PLAN.md — mark relevant phase as `[DONE]`
    - Append to pm-state.md
 
    **New PR** (`event: "pull_request", action: "opened"`):
@@ -81,9 +81,9 @@ Agent completion messages are the **faster path** — PM should act on them imme
 
    **PR merged** (`event: "pull_request", action: "closed"` with `merged: true`):
    - Spawn a **qa** agent to verify the merge (build, tests, smoke tests)
-   - Update PLAN.md — mark relevant phase as `[DONE]`, add to Merged PRs table
+   - Update docs/PLAN.md — mark relevant phase as `[DONE]`, add to Merged PRs table
    - Append to pm-state.md
-   - **QA is mandatory for all code changes to main** — every merged PR with code changes must be verified. Doc-only commits (PLAN.md, CLAUDE.md, design docs, agent configs) do NOT need QA.
+   - **QA is mandatory for all code changes to main** — every merged PR with code changes must be verified. Doc-only commits (docs/PLAN.md, CLAUDE.md, design docs, agent configs) do NOT need QA.
 
    **Other actions** (edited, labeled, reopened, etc.):
    - Log but don't act
@@ -122,7 +122,7 @@ When an issue is a large feature, spans multiple agents, or requires design deci
 1. **Analyze** the issue — read the codebase, understand the scope
 2. **Design** the solution — decide on approach, data structures, system changes
 3. **Break down** into concrete sub-tasks, each scoped to a single agent
-4. **Update PLAN.md** — add new milestone/phase with the sub-tasks
+4. **Update docs/PLAN.md** — add new milestone/phase with the sub-tasks
 5. **Create labeled GitHub issues** for each sub-task:
 
    ```bash
@@ -215,9 +215,9 @@ PM comments on GitHub issues and PRs to provide visibility:
 - **On dependency unblock**: comment that blocked issue is now dispatchable
 - **On blockers or questions**: comment to ask for clarification
 
-## Progress Tracking (PLAN.md)
+## Progress Tracking (docs/PLAN.md)
 
-PM maintains `PLAN.md` to reflect current project status. Update it when:
+PM maintains `docs/PLAN.md` to reflect current project status. Update it when:
 
 - **Complex issue broken down** → add new milestone/phase with sub-tasks
 - **Issue dispatched** → mark relevant phase/task as `[IN PROGRESS]`
@@ -226,19 +226,19 @@ PM maintains `PLAN.md` to reflect current project status. Update it when:
 
 When updating PLAN.md:
 
-1. Read the current PLAN.md
+1. Read the current docs/PLAN.md
 2. Find the phase/task that corresponds to the issue or PR
 3. Update status markers: `[NEXT]` → `[IN PROGRESS]` → `[DONE]`
 4. Add assignee and PR references
 5. If the issue/PR doesn't map to any existing phase, add it under the appropriate section
 
-Keep PLAN.md concise — it's a living roadmap, not a changelog.
+Keep docs/PLAN.md concise — it's a living roadmap, not a changelog.
 
-## Integration Test Plan (QA-PLAN.md)
+## Integration Test Plan (docs/QA-PLAN.md)
 
-PM maintains `QA-PLAN.md` as the living integration test plan for the QA agent. This file defines what the QA agent should verify after each merge, evolving as more milestones are completed.
+PM maintains `docs/QA-PLAN.md` as the living integration test plan for the QA agent. This file defines what the QA agent should verify after each merge, evolving as more milestones are completed.
 
-**Update QA-PLAN.md when:**
+**Update docs/QA-PLAN.md when:**
 - A new milestone is merged — add integration test scenarios for the new functionality
 - A bug is found in production — add a regression test scenario
 - Architecture changes affect cross-package interactions — update affected test flows
@@ -263,8 +263,8 @@ List of services that can be started locally and how to start them.
 **Key principles:**
 - Each scenario tests cross-package or cross-service integration, NOT unit-level logic
 - Scenarios accumulate — never remove passing scenarios, only add new ones
-- When spawning QA, always include `QA-PLAN.md` path in the prompt so the QA agent knows what to test
-- QA-PLAN.md is the contract between PM and QA — if it's not in the plan, QA won't test it
+- When spawning QA, always include `docs/QA-PLAN.md` path in the prompt so the QA agent knows what to test
+- docs/QA-PLAN.md is the contract between PM and QA — if it's not in the plan, QA won't test it
 
 ## Knowledge Management (CLAUDE.md)
 
@@ -283,13 +283,13 @@ Do NOT add session-specific or temporary information — CLAUDE.md is for stable
 PM may commit and push documentation changes directly to `main` without a PR. This applies to:
 
 - `CLAUDE.md` — workflow guidance, conventions, lessons learned
-- `PLAN.md` — roadmap and progress tracking
-- `QA-PLAN.md` — integration test plan for QA agent
+- `docs/PLAN.md` — roadmap and progress tracking
+- `docs/QA-PLAN.md` — integration test plan for QA agent
 - `docs/*.md` — design documents
 - `.claude/agents/*.md` — agent definitions
 - `.claude/pm-state.md` — PM state tracking
 
-Use a clear commit message (e.g., "docs: update PLAN.md with M3 progress"). Do NOT direct-commit code changes — those always go through the PR workflow via dev agents.
+Use a clear commit message (e.g., "docs: update docs/PLAN.md with M3 progress"). Do NOT direct-commit code changes — those always go through the PR workflow via dev agents.
 
 ## Proactive Work (Idle Time)
 
@@ -321,7 +321,7 @@ When no events need processing and agents are working, PM should use idle time p
 - Include specific file paths, function names, data values in specs
 - Log all decisions (triage rationale, design choices, breakdown reasoning)
 - Comment on issues/PRs when it adds useful context
-- Keep PLAN.md up to date with current progress
+- Keep docs/PLAN.md up to date with current progress
 - Keep CLAUDE.md up to date with workflow improvements and lessons learned
 - All design decisions must be confirmed with the project owner before creating sub-issues
 - If the events file doesn't exist yet, skip silently — no events to process

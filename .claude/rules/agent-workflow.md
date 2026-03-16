@@ -4,7 +4,7 @@ Event-driven, PM-centric architecture. All agents defined in `.claude/agents/`.
 
 | Agent          | Model  | Role                                                                                                             | Lifecycle                      |
 | -------------- | ------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| **pm**         | opus   | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks PLAN.md | Long-running                   |
+| **pm**         | opus   | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Long-running                   |
 | **architect**  | opus   | Architecture, shared types, protocol, infrastructure                                                             | Ephemeral per-issue (worktree) |
 | **worker-dev** | sonnet | Cloudflare Workers backend, Durable Objects, REST API                                                            | Ephemeral per-issue (worktree) |
 | **cli-dev**    | sonnet | CLI npm package, WebSocket client, agent commands                                                                | Ephemeral per-issue (worktree) |
