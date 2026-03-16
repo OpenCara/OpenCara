@@ -15,9 +15,7 @@ export type {
 } from './types.js';
 
 // API request/response types
-export {
-  API_KEY_PREFIX,
-} from './api.js';
+export { API_KEY_PREFIX } from './api.js';
 
 export type {
   DeviceFlowResponse,
@@ -54,8 +52,4 @@ export type {
 export { getVersion } from './protocol.js';
 
 /** Review configuration types and parser */
-export {
-  parseReviewConfig,
-  validateReviewConfig,
-  type ReviewConfig,
-} from './review-config.js';
+export { parseReviewConfig, validateReviewConfig, type ReviewConfig } from './review-config.js';

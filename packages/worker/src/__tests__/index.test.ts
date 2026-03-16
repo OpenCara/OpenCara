@@ -50,11 +50,7 @@ vi.mock('../handlers/device-flow.js', () => ({
 import { handleGitHubWebhook } from '../webhook.js';
 import { authenticateRequest } from '../auth.js';
 import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
-import {
-  handleDeviceFlow,
-  handleDeviceToken,
-  handleRevokeKey,
-} from '../handlers/device-flow.js';
+import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
 
 const mockEnv: Env = {
   GITHUB_WEBHOOK_SECRET: 'test',
@@ -76,20 +72,14 @@ describe('worker router', () => {
   // --- 404 routes ---
 
   it('returns 404 for unknown routes', async () => {
-    const response = await worker.fetch(
-      new Request('http://localhost/unknown'),
-      mockEnv,
-    );
+    const response = await worker.fetch(new Request('http://localhost/unknown'), mockEnv);
     expect(response.status).toBe(404);
     const data = await response.json();
     expect(data).toEqual({ error: 'Not found' });
   });
 
   it('returns 404 for GET /webhook/github', async () => {
-    const response = await worker.fetch(
-      new Request('http://localhost/webhook/github'),
-      mockEnv,
-    );
+    const response = await worker.fetch(new Request('http://localhost/webhook/github'), mockEnv);
     expect(response.status).toBe(404);
   });
 
@@ -180,10 +170,7 @@ describe('worker router', () => {
   it('returns 401 for GET /api/agents without auth', async () => {
     vi.mocked(authenticateRequest).mockResolvedValue(null);
 
-    const response = await worker.fetch(
-      new Request('http://localhost/api/agents'),
-      mockEnv,
-    );
+    const response = await worker.fetch(new Request('http://localhost/api/agents'), mockEnv);
     expect(response.status).toBe(401);
   });
 

@@ -29,9 +29,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseEntityList(
-  value: unknown,
-): Array<{ user?: string; agent?: string }> {
+function parseEntityList(value: unknown): Array<{ user?: string; agent?: string }> {
   if (!Array.isArray(value)) return [];
   return value
     .filter(isObject)
@@ -99,20 +97,12 @@ export function parseReviewConfig(yaml: string): ParseResult {
     version: raw.version,
     prompt: raw.prompt,
     agents: {
-      minCount: clamp(
-        typeof agentsRaw.min_count === 'number' ? agentsRaw.min_count : 1,
-        1,
-        10,
-      ),
+      minCount: clamp(typeof agentsRaw.min_count === 'number' ? agentsRaw.min_count : 1, 1, 10),
       preferredTools: Array.isArray(agentsRaw.preferred_tools)
-        ? agentsRaw.preferred_tools.filter(
-            (t: unknown) => typeof t === 'string',
-          )
+        ? agentsRaw.preferred_tools.filter((t: unknown) => typeof t === 'string')
         : [],
       minReputation: clamp(
-        typeof agentsRaw.min_reputation === 'number'
-          ? agentsRaw.min_reputation
-          : 0.0,
+        typeof agentsRaw.min_reputation === 'number' ? agentsRaw.min_reputation : 0.0,
         0.0,
         1.0,
       ),
@@ -127,10 +117,7 @@ export function parseReviewConfig(yaml: string): ParseResult {
     },
     timeout: parseTimeout(raw.timeout),
     autoApprove: {
-      enabled:
-        typeof autoApproveRaw.enabled === 'boolean'
-          ? autoApproveRaw.enabled
-          : false,
+      enabled: typeof autoApproveRaw.enabled === 'boolean' ? autoApproveRaw.enabled : false,
       conditions: Array.isArray(autoApproveRaw.conditions)
         ? autoApproveRaw.conditions
             .filter(isObject)

@@ -36,7 +36,7 @@ export class TaskTimeout implements DurableObject {
 
   async alarm(): Promise<void> {
     const taskId = await this.state.storage.get<string>('taskId');
-    const minCount = await this.state.storage.get<number>('minCount') ?? 1;
+    const minCount = (await this.state.storage.get<number>('minCount')) ?? 1;
 
     if (!taskId) return;
 
@@ -62,24 +62,15 @@ export class TaskTimeout implements DurableObject {
 
     if (completedCount === 0) {
       // No results at all — timeout
-      await supabase
-        .from('review_tasks')
-        .update({ status: 'timeout' })
-        .eq('id', taskId);
+      await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
       console.log(`Task ${taskId} timed out with no results`);
     } else if (completedCount >= minCount) {
       // Enough results — ready for summarization
-      await supabase
-        .from('review_tasks')
-        .update({ status: 'summarizing' })
-        .eq('id', taskId);
+      await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
       console.log(`Task ${taskId} has ${completedCount} results, moving to summarizing`);
     } else {
       // Some results but < minCount — still move to summarizing with what we have
-      await supabase
-        .from('review_tasks')
-        .update({ status: 'summarizing' })
-        .eq('id', taskId);
+      await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
       console.log(
         `Task ${taskId} has ${completedCount}/${minCount} results at timeout, moving to summarizing`,
       );

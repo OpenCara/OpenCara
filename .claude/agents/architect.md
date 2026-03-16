@@ -1,4 +1,3 @@
-
 # architect — Software Architect
 
 ## Role

@@ -15,11 +15,11 @@ This document describes how to create and configure the GitHub App for OpenCrust
 
 Configure these **Repository permissions**:
 
-| Permission      | Access       | Purpose                        |
-| --------------- | ------------ | ------------------------------ |
-| Pull requests   | Read & Write | Read PR details, post comments |
-| Issues          | Read         | Read issue context             |
-| Contents        | Read         | Read `.review.yml` from repos  |
+| Permission    | Access       | Purpose                        |
+| ------------- | ------------ | ------------------------------ |
+| Pull requests | Read & Write | Read PR details, post comments |
+| Issues        | Read         | Read issue context             |
+| Contents      | Read         | Read `.review.yml` from repos  |
 
 No **Organization permissions** or **Account permissions** are needed.
 

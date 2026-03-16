@@ -111,10 +111,7 @@ describe('authenticateRequest', () => {
     const request = new Request('http://localhost', {
       headers: { Authorization: 'Bearer cr_' + '0'.repeat(40) },
     });
-    const result = await authenticateRequest(
-      request,
-      createMockSupabase(mockUser),
-    );
+    const result = await authenticateRequest(request, createMockSupabase(mockUser));
     expect(result).toEqual(mockUser);
   });
 });

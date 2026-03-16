@@ -59,9 +59,7 @@ describe('login command', () => {
     await loginCommand.parseAsync([], { from: 'user' });
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ABCD-1234'));
-    expect(saveConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: 'cr_newkey123' }),
-    );
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'cr_newkey123' }));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Logged in successfully'));
   });
 
@@ -78,13 +76,9 @@ describe('login command', () => {
   });
 
   it('exits on expired token', async () => {
-    mockPost
-      .mockResolvedValueOnce(mockDeviceFlow())
-      .mockResolvedValueOnce({ status: 'expired' });
+    mockPost.mockResolvedValueOnce(mockDeviceFlow()).mockResolvedValueOnce({ status: 'expired' });
 
-    await expect(
-      loginCommand.parseAsync([], { from: 'user' }),
-    ).rejects.toThrow('process.exit');
+    await expect(loginCommand.parseAsync([], { from: 'user' })).rejects.toThrow('process.exit');
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('expired'));
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -93,28 +87,18 @@ describe('login command', () => {
   it('exits when device flow request fails with Error', async () => {
     mockPost.mockRejectedValueOnce(new Error('Network error'));
 
-    await expect(
-      loginCommand.parseAsync([], { from: 'user' }),
-    ).rejects.toThrow('process.exit');
+    await expect(loginCommand.parseAsync([], { from: 'user' })).rejects.toThrow('process.exit');
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      'Failed to start device flow:',
-      'Network error',
-    );
+    expect(errorSpy).toHaveBeenCalledWith('Failed to start device flow:', 'Network error');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it('exits when device flow request fails with non-Error', async () => {
     mockPost.mockRejectedValueOnce('string error');
 
-    await expect(
-      loginCommand.parseAsync([], { from: 'user' }),
-    ).rejects.toThrow('process.exit');
+    await expect(loginCommand.parseAsync([], { from: 'user' })).rejects.toThrow('process.exit');
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      'Failed to start device flow:',
-      'string error',
-    );
+    expect(errorSpy).toHaveBeenCalledWith('Failed to start device flow:', 'string error');
   });
 
   it('continues polling on network error then completes', async () => {
@@ -146,9 +130,7 @@ describe('login command', () => {
       expiresIn: 0, // immediate expiry — while loop never enters
     });
 
-    await expect(
-      loginCommand.parseAsync([], { from: 'user' }),
-    ).rejects.toThrow('process.exit');
+    await expect(loginCommand.parseAsync([], { from: 'user' })).rejects.toThrow('process.exit');
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('expired'));
     expect(exitSpy).toHaveBeenCalledWith(1);

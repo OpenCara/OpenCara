@@ -1,10 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {
-  handleDeviceFlow,
-  handleDeviceToken,
-  handleRevokeKey,
-} from '../handlers/device-flow.js';
+import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
 import type { Env } from '../env.js';
 
 const mockEnv: Env = {
@@ -79,9 +75,7 @@ describe('handleDeviceFlow', () => {
   });
 
   it('returns 502 when GitHub API fails', async () => {
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValue(new Response('Error', { status: 500 }));
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Error', { status: 500 }));
 
     const response = await handleDeviceFlow(mockEnv);
     expect(response.status).toBe(502);
@@ -109,11 +103,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -132,11 +122,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -169,11 +155,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -193,11 +175,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -210,11 +188,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({}),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(400);
   });
 
@@ -225,11 +199,7 @@ describe('handleDeviceToken', () => {
       headers: { 'Content-Type': 'application/json' },
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(400);
     const data = await response.json();
     expect(data.error).toBe('Invalid JSON body');
@@ -250,11 +220,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(502);
   });
 
@@ -270,31 +236,21 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(502);
     const data = await response.json();
     expect(data.error).toBe('Authorization failed');
   });
 
   it('returns 502 when access_token is missing and no error', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({}), { status: 200 }),
-    );
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
 
     const request = new Request('http://localhost', {
       method: 'POST',
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      createMockSupabase(),
-    );
+    const response = await handleDeviceToken(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(502);
   });
 
@@ -307,17 +263,12 @@ describe('handleDeviceToken', () => {
         }),
       )
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ id: 1, login: 'user', avatar_url: 'url' }),
-          { status: 200 },
-        ),
+        new Response(JSON.stringify({ id: 1, login: 'user', avatar_url: 'url' }), { status: 200 }),
       );
 
     const mockSupabase = {
       from: vi.fn().mockReturnValue({
-        upsert: vi
-          .fn()
-          .mockResolvedValue({ error: { message: 'DB error' } }),
+        upsert: vi.fn().mockResolvedValue({ error: { message: 'DB error' } }),
       }),
     } as any;
 
@@ -326,11 +277,7 @@ describe('handleDeviceToken', () => {
       body: JSON.stringify({ deviceCode: 'abc123' }),
     });
 
-    const response = await handleDeviceToken(
-      request,
-      mockEnv,
-      mockSupabase,
-    );
+    const response = await handleDeviceToken(request, mockEnv, mockSupabase);
     expect(response.status).toBe(500);
     const data = await response.json();
     expect(data.error).toBe('Failed to save user');
@@ -378,9 +325,7 @@ describe('handleRevokeKey', () => {
     const mockSupabase = {
       from: vi.fn().mockReturnValue({
         update: vi.fn().mockReturnValue({
-          eq: vi
-            .fn()
-            .mockResolvedValue({ error: { message: 'DB error' } }),
+          eq: vi.fn().mockResolvedValue({ error: { message: 'DB error' } }),
         }),
       }),
     } as any;

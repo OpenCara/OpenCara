@@ -473,7 +473,6 @@ export class AgentConnection implements DurableObject {
     }
   }
 
-
   private async handleSummaryComplete(msg: SummaryCompleteMessage): Promise<void> {
     // Summary handling will be implemented in M6
     console.log(`Summary complete for task ${msg.taskId}`);

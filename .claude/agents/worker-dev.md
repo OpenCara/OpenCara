@@ -1,4 +1,3 @@
-
 # worker-dev — Cloudflare Workers Developer
 
 ## Role

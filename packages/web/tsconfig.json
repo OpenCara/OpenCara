@@ -19,7 +19,7 @@
     "noEmit": true,
     "incremental": true
   },
-  "include": ["app", "next-env.d.ts", ".next/types/**/*.ts"],
+  "include": ["app", "next.config.ts", "next-env.d.ts", ".next/types/**/*.ts"],
   "exclude": ["node_modules", "dist", ".next"],
   "references": [
     {

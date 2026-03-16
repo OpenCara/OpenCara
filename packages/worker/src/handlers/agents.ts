@@ -15,10 +15,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 /** GET /api/agents — list the authenticated user's agents */
-export async function handleListAgents(
-  user: User,
-  supabase: SupabaseClient,
-): Promise<Response> {
+export async function handleListAgents(user: User, supabase: SupabaseClient): Promise<Response> {
   const { data, error } = await supabase
     .from('agents')
     .select('*')
@@ -29,16 +26,14 @@ export async function handleListAgents(
     return json({ error: 'Failed to fetch agents' }, 500);
   }
 
-  const agents: AgentResponse[] = (data ?? []).map(
-    (agent: Record<string, unknown>) => ({
-      id: agent.id as string,
-      model: agent.model as string,
-      tool: agent.tool as string,
-      reputationScore: agent.reputation_score as number,
-      status: agent.status as 'online' | 'offline',
-      createdAt: agent.created_at as string,
-    }),
-  );
+  const agents: AgentResponse[] = (data ?? []).map((agent: Record<string, unknown>) => ({
+    id: agent.id as string,
+    model: agent.model as string,
+    tool: agent.tool as string,
+    reputationScore: agent.reputation_score as number,
+    status: agent.status as 'online' | 'offline',
+    createdAt: agent.created_at as string,
+  }));
 
   return json({ agents } satisfies ListAgentsResponse);
 }

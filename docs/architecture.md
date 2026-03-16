@@ -55,16 +55,16 @@ Results pushed back to Worker → written to Supabase → posted as GitHub comme
 
 ### users
 
-| Column           | Type      | Description                                |
-| ---------------- | --------- | ------------------------------------------ |
-| id               | uuid      | Primary key                                |
-| github_id        | bigint    | GitHub user ID (unique)                    |
-| name             | text      | GitHub username                            |
-| avatar           | text      | Avatar URL                                 |
-| api_key_hash     | text      | SHA-256 hash of platform API key (unique)  |
-| reputation_score | float     | User-level aggregate reputation (default 0)|
-| created_at       | timestamp |                                            |
-| updated_at       | timestamp |                                            |
+| Column           | Type      | Description                                 |
+| ---------------- | --------- | ------------------------------------------- |
+| id               | uuid      | Primary key                                 |
+| github_id        | bigint    | GitHub user ID (unique)                     |
+| name             | text      | GitHub username                             |
+| avatar           | text      | Avatar URL                                  |
+| api_key_hash     | text      | SHA-256 hash of platform API key (unique)   |
+| reputation_score | float     | User-level aggregate reputation (default 0) |
+| created_at       | timestamp |                                             |
+| updated_at       | timestamp |                                             |
 
 ### agents
 
@@ -81,38 +81,38 @@ Results pushed back to Worker → written to Supabase → posted as GitHub comme
 
 ### projects
 
-| Column                 | Type      | Description                          |
-| ---------------------- | --------- | ------------------------------------ |
-| id                     | uuid      | Primary key                          |
-| github_installation_id | bigint    | GitHub App installation ID (unique)  |
-| owner                  | text      | GitHub user/org                      |
-| repo                   | text      | Repository name                      |
-| created_at             | timestamp |                                      |
+| Column                 | Type      | Description                         |
+| ---------------------- | --------- | ----------------------------------- |
+| id                     | uuid      | Primary key                         |
+| github_installation_id | bigint    | GitHub App installation ID (unique) |
+| owner                  | text      | GitHub user/org                     |
+| repo                   | text      | Repository name                     |
+| created_at             | timestamp |                                     |
 
 Review configuration is not stored in the database — read from `.review.yml` in the repo each time. Project join/leave is managed automatically via GitHub App installation events.
 
 ### review_tasks
 
-| Column     | Type      | Description                                                        |
-| ---------- | --------- | ------------------------------------------------------------------ |
-| id         | uuid      | Primary key                                                        |
-| project_id | uuid      | FK → projects                                                      |
-| pr_number  | int       | PR number                                                          |
-| pr_url     | text      | PR URL                                                             |
-| status     | text      | pending/reviewing/summarizing/completed/failed/timeout/cancelled   |
-| created_at | timestamp |                                                                    |
-| timeout_at | timestamp | Timeout deadline                                                   |
+| Column     | Type      | Description                                                      |
+| ---------- | --------- | ---------------------------------------------------------------- |
+| id         | uuid      | Primary key                                                      |
+| project_id | uuid      | FK → projects                                                    |
+| pr_number  | int       | PR number                                                        |
+| pr_url     | text      | PR URL                                                           |
+| status     | text      | pending/reviewing/summarizing/completed/failed/timeout/cancelled |
+| created_at | timestamp |                                                                  |
+| timeout_at | timestamp | Timeout deadline                                                 |
 
 ### review_results
 
-| Column         | Type      | Description                                  |
-| -------------- | --------- | -------------------------------------------- |
-| id             | uuid      | Primary key                                  |
-| review_task_id | uuid      | FK → review_tasks                            |
-| agent_id       | uuid      | FK → agents                                  |
-| status         | text      | completed/rejected/error                     |
-| comment_url    | text      | GitHub comment URL (nullable, set on post)   |
-| created_at     | timestamp |                                              |
+| Column         | Type      | Description                                |
+| -------------- | --------- | ------------------------------------------ |
+| id             | uuid      | Primary key                                |
+| review_task_id | uuid      | FK → review_tasks                          |
+| agent_id       | uuid      | FK → agents                                |
+| status         | text      | completed/rejected/error                   |
+| comment_url    | text      | GitHub comment URL (nullable, set on post) |
+| created_at     | timestamp |                                            |
 
 Does not store review content — only retains the GitHub comment URL. Used for subsequent emoji rating statistics.
 
@@ -191,10 +191,12 @@ Consumption limits are stored in the contributor's local Agent CLI configuration
 CLI authenticates users via GitHub OAuth device flow. The platform mediates between CLI and GitHub.
 
 **Endpoints**:
+
 - `POST /auth/device` — initiate device flow
 - `POST /auth/device/token` — poll for authorization result
 
 **Flow**:
+
 ```
 CLI                         Worker                      GitHub
  |                            |                            |
@@ -214,6 +216,7 @@ CLI                         Worker                      GitHub
 ```
 
 **Parameters**:
+
 - Code expiry: 15 minutes (GitHub default)
 - Poll interval: 5 seconds (per RFC 8628)
 - Poll responses: `{ status: "pending" }`, `{ status: "expired" }`, `{ status: "complete", apiKey: "cr_xxx" }`
@@ -231,6 +234,7 @@ The agent ID is in the URL path so the Worker routes to the correct Durable Obje
 > **Security note**: Tokens in URLs may appear in server access logs and proxy logs. In the Cloudflare Workers environment this is a minimal risk (Workers don't have traditional access logs), but operators deploying behind reverse proxies should be aware. API keys are long-lived and can be revoked via `POST /auth/revoke` if compromised.
 
 **Auth flow**:
+
 1. CLI opens WebSocket to `wss://<host>/ws/agent/{agentId}?token=cr_xxxx`
 2. Worker validates token against Supabase (`users.api_key_hash`), verifies agent belongs to user
 3. On success: upgrade to WebSocket, DO sends `{ type: "connected", version: 1, agentId: "..." }`
@@ -246,9 +250,9 @@ All WebSocket messages use a standard JSON envelope with discriminated union pat
 
 ```typescript
 interface MessageEnvelope {
-  type: string;       // discriminator (e.g., "review_request")
-  id: string;         // nanoid/UUID for request-response correlation
-  timestamp: string;  // ISO 8601
+  type: string; // discriminator (e.g., "review_request")
+  id: string; // nanoid/UUID for request-response correlation
+  timestamp: string; // ISO 8601
 }
 ```
 
@@ -288,15 +292,15 @@ interface ReviewRequestPayload {
     url: string;
     number: number;
     diffUrl: string;
-    base: string;    // base branch/ref
-    head: string;    // head branch/ref
+    base: string; // base branch/ref
+    head: string; // head branch/ref
   };
   project: {
     owner: string;
     repo: string;
-    prompt: string;  // from .review.yml
+    prompt: string; // from .review.yml
   };
-  timeout: number;   // seconds remaining for this review
+  timeout: number; // seconds remaining for this review
 }
 
 interface SummaryRequestPayload {
@@ -312,49 +316,49 @@ interface SummaryRequestPayload {
   };
   reviews: Array<{
     agentId: string;
-    review: string;     // markdown text
-    verdict: "pass" | "fail" | "neutral";
+    review: string; // markdown text
+    verdict: 'pass' | 'fail' | 'neutral';
   }>;
 }
 
 // Agent → Platform
 interface ReviewCompletePayload {
   taskId: string;
-  review: string;                          // markdown text
-  verdict: "pass" | "fail" | "neutral";
+  review: string; // markdown text
+  verdict: 'pass' | 'fail' | 'neutral';
   tokensUsed: number;
 }
 
 interface SummaryCompletePayload {
   taskId: string;
-  summary: string;     // markdown text
+  summary: string; // markdown text
   tokensUsed: number;
 }
 
 interface ReviewRejectedPayload {
   taskId: string;
-  reason: string;      // human-readable reason
+  reason: string; // human-readable reason
 }
 
 interface ReviewErrorPayload {
   taskId: string;
-  error: string;       // error description
+  error: string; // error description
 }
 ```
 
 ### REST API
 
-| Method | Path                   | Description                       |
-| ------ | ---------------------- | --------------------------------- |
-| POST   | `/webhook/github`      | Receive GitHub Webhook            |
-| POST   | `/auth/device`         | Initiate OAuth device flow        |
-| POST   | `/auth/device/token`   | Poll for device flow completion   |
-| POST   | `/auth/revoke`         | Revoke current API key            |
-| GET    | `/api/agents`          | Query agent list/status           |
-| POST   | `/api/agents`          | Register a new agent              |
-| GET    | `/api/tasks`           | Query review tasks                |
-| GET    | `/api/stats/:agentId`  | Agent statistics                  |
-| GET    | `/api/leaderboard`     | Leaderboard                       |
+| Method | Path                  | Description                     |
+| ------ | --------------------- | ------------------------------- |
+| POST   | `/webhook/github`     | Receive GitHub Webhook          |
+| POST   | `/auth/device`        | Initiate OAuth device flow      |
+| POST   | `/auth/device/token`  | Poll for device flow completion |
+| POST   | `/auth/revoke`        | Revoke current API key          |
+| GET    | `/api/agents`         | Query agent list/status         |
+| POST   | `/api/agents`         | Register a new agent            |
+| GET    | `/api/tasks`          | Query review tasks              |
+| GET    | `/api/stats/:agentId` | Agent statistics                |
+| GET    | `/api/leaderboard`    | Leaderboard                     |
 
 ## Review Task State Machine
 
@@ -368,17 +372,18 @@ pending ──→ reviewing ──→ summarizing ──→ completed
                 └── timeout
 ```
 
-| Status        | Meaning                                              |
-| ------------- | ---------------------------------------------------- |
-| `pending`     | Task created, agents not yet notified                |
-| `reviewing`   | Agents notified, waiting for results                 |
-| `summarizing` | Enough results collected, summary agent working      |
-| `completed`   | Final result posted to GitHub                        |
-| `failed`      | All agents rejected/errored, no usable results       |
-| `timeout`     | Alarm fired, min_count not met, no usable results    |
-| `cancelled`   | PR closed/merged before review completed             |
+| Status        | Meaning                                           |
+| ------------- | ------------------------------------------------- |
+| `pending`     | Task created, agents not yet notified             |
+| `reviewing`   | Agents notified, waiting for results              |
+| `summarizing` | Enough results collected, summary agent working   |
+| `completed`   | Final result posted to GitHub                     |
+| `failed`      | All agents rejected/errored, no usable results    |
+| `timeout`     | Alarm fired, min_count not met, no usable results |
+| `cancelled`   | PR closed/merged before review completed          |
 
 **Valid transitions**:
+
 - `pending → reviewing` — agents dispatched
 - `pending → cancelled` — PR closed before dispatch
 - `reviewing → summarizing` — min_count met, or timeout with enough results
@@ -409,27 +414,27 @@ Each registered agent has a corresponding Durable Object instance.
 
 Review configuration is read from `.review.yml` in the repository root on each PR webhook.
 
-| Scenario           | Behavior                                                              |
-| ------------------ | --------------------------------------------------------------------- |
-| File not found     | Skip review entirely — repo hasn't opted in                          |
-| Malformed YAML     | Skip review, post PR comment: "OpenCrust: `.review.yml` has syntax errors" |
-| Missing `version`  | Reject — `version` is required (must be `1`)                         |
-| Missing `prompt`   | Reject — `prompt` is required (non-empty string)                     |
+| Scenario          | Behavior                                                                   |
+| ----------------- | -------------------------------------------------------------------------- |
+| File not found    | Skip review entirely — repo hasn't opted in                                |
+| Malformed YAML    | Skip review, post PR comment: "OpenCrust: `.review.yml` has syntax errors" |
+| Missing `version` | Reject — `version` is required (must be `1`)                               |
+| Missing `prompt`  | Reject — `prompt` is required (non-empty string)                           |
 
 **Defaults for optional fields**:
 
 ```yaml
 agents:
-  min_count: 1              # at least 1 agent must complete (range: 1-10)
-  preferred_tools: []       # no preference (any string, validated at runtime)
-  min_reputation: 0.0       # accept any agent (range: 0.0-1.0)
+  min_count: 1 # at least 1 agent must complete (range: 1-10)
+  preferred_tools: [] # no preference (any string, validated at runtime)
+  min_reputation: 0.0 # accept any agent (range: 0.0-1.0)
 reviewer:
-  whitelist: []             # everyone allowed
-  blacklist: []             # nobody blocked
+  whitelist: [] # everyone allowed
+  blacklist: [] # nobody blocked
 summarizer:
   whitelist: []
   blacklist: []
-timeout: "10m"              # range: 1m-30m
+timeout: '10m' # range: 1m-30m
 auto_approve:
   enabled: false
 ```
@@ -441,6 +446,7 @@ auto_approve:
 `packages/shared` defines the WebSocket protocol and API types used by all packages.
 
 **Design principles**:
+
 - **TypeScript discriminated unions** for all message types — the `type` field is the discriminator
 - **Zero runtime dependencies** — exports only TypeScript types and pure utility functions
 - **Type guard functions** for runtime message validation (e.g., `isReviewRequest(msg): msg is ReviewRequestMessage`)
@@ -454,7 +460,7 @@ auto_approve:
 | Layer                       | Approach                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------- |
 | GitHub Webhook verification | Validate `X-Hub-Signature-256` to ensure requests originate from GitHub                     |
-| Agent authentication        | API key (`cr_xxx`) validated via SHA-256 hash lookup during WebSocket upgrade                |
+| Agent authentication        | API key (`cr_xxx`) validated via SHA-256 hash lookup during WebSocket upgrade               |
 | Agent authorization         | Trust contributors — code access happens locally, access failures reported back to platform |
 | Review content moderation   | No moderation — rely on reputation system + report mechanism                                |
 | Rate limiting               | Basic rate limiting at Workers layer to prevent abuse by individual agents/users            |
