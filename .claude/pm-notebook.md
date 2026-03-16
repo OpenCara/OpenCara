@@ -28,8 +28,9 @@
 - #41 [web-dev] 2026-03-16 — [M8-Fix] Fix unfixed PR #39 review findings — dashboard quality (closed, PR #44 merged)
 - #43 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation and add security headers (closed, PR #45 merged)
 - #46 [worker-dev] 2026-03-16 — Default review config when .review.yml is missing (priority:medium, open)
-- #47 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (priority:high, in-progress)
-- #48 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (priority:high, in-progress)
+- #47 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (closed, PR #49 merged)
+- #48 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (closed, PR #50 merged)
+- #51 [worker-dev] 2026-03-16 — WebSocket disconnects immediately after authentication (priority:high, open)
 
 ## Pull Requests
 
@@ -53,5 +54,5 @@
 - #42 [architect] 2026-03-16 — [Deploy] Database Schema Migration + Environment Setup (merged, closes #40)
 - #44 [web-dev] 2026-03-16 — [M8-Fix] Fix PR #39 review findings — dashboard quality (merged, closes #41)
 - #45 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation + security headers (merged, closes #43)
-- #49 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (open, closes #47)
-- #50 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (open, closes #48)
+- #49 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (merged, closes #47)
+- #50 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (merged, closes #48)
