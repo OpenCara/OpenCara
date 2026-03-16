@@ -23,6 +23,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 const MAX_REVIEW_ATTEMPTS = 3;
 const MIN_REMAINING_SECONDS_FOR_PICKUP = 30;
+const CONNECT_DEBOUNCE_MS = 5_000;
 
 const VERDICT_LABELS: Record<ReviewVerdict, string> = {
   approve: '\u2705 Approve',
@@ -83,8 +84,16 @@ export class AgentConnection implements DurableObject {
       return new Response('Expected WebSocket', { status: 426 });
     }
 
-    // Check if this is a reconnect (existing WebSocket being replaced)
+    // Debounce: if connected recently and WebSocket is still alive, reject
     const existingWebSockets = this.state.getWebSockets();
+    const lastConnectedAt = await this.state.storage.get<string>('connectedAt');
+    if (lastConnectedAt && existingWebSockets.length > 0) {
+      const elapsed = Date.now() - new Date(lastConnectedAt).getTime();
+      if (elapsed < CONNECT_DEBOUNCE_MS) {
+        return new Response('Already connected', { status: 409 });
+      }
+    }
+
     const isReconnect = existingWebSockets.length > 0;
 
     // Close existing connection if any
@@ -134,8 +143,9 @@ export class AgentConnection implements DurableObject {
 
     await this.state.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
 
-    // Pick up any pending tasks that need agents
-    if (supabase) {
+    // Only pick up pending tasks on fresh connections, not reconnects.
+    // On reconnect the agent already has in-flight tasks from the previous connection.
+    if (supabase && !isReconnect) {
       try {
         await this.pickUpPendingTasks(agentId, supabase);
       } catch (err) {

@@ -1524,10 +1524,11 @@ describe('AgentConnection', () => {
     it('preserves inFlightTaskIds on reconnect (existing WebSocket replaced)', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      // Simulate existing WebSocket
+      // Simulate existing WebSocket with connectedAt old enough to pass debounce
       const existingWs = createMockWebSocket();
       mockCtx._websockets.push(existingWs);
       storage.store.set('inFlightTaskIds', ['task-in-progress']);
+      storage.store.set('connectedAt', new Date(Date.now() - 10_000).toISOString());
 
       const request = new Request('https://internal/websocket?agentId=agent-1', {
         headers: { Upgrade: 'websocket' },
@@ -1541,6 +1542,147 @@ describe('AgentConnection', () => {
 
       // Existing WebSocket should have been closed with 4002
       expect(existingWs.close).toHaveBeenCalledWith(4002, 'replaced');
+    });
+  });
+
+  describe('handleWebSocket debounce', () => {
+    it('returns 409 when reconnecting within debounce window', async () => {
+      // Simulate existing WebSocket with recent connectedAt
+      const existingWs = createMockWebSocket();
+      mockCtx._websockets.push(existingWs);
+      storage.store.set('connectedAt', new Date(Date.now() - 1_000).toISOString());
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      const response = await connection.fetch(request);
+      expect(response.status).toBe(409);
+      expect(await response.text()).toBe('Already connected');
+
+      // Existing WebSocket should NOT have been closed
+      expect(existingWs.close).not.toHaveBeenCalled();
+    });
+
+    it('allows reconnection after debounce window expires', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Simulate existing WebSocket with old connectedAt (beyond 5s debounce)
+      const existingWs = createMockWebSocket();
+      mockCtx._websockets.push(existingWs);
+      storage.store.set('connectedAt', new Date(Date.now() - 6_000).toISOString());
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Should proceed past debounce — reaches Response(101) which throws in Node
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // Existing WebSocket should have been closed with 4002
+      expect(existingWs.close).toHaveBeenCalledWith(4002, 'replaced');
+    });
+
+    it('allows connection when no connectedAt is stored', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Existing WebSocket but no connectedAt — first-ever connection scenario
+      const existingWs = createMockWebSocket();
+      mockCtx._websockets.push(existingWs);
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Should proceed — reaches Response(101) which throws in Node
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+      expect(existingWs.close).toHaveBeenCalledWith(4002, 'replaced');
+    });
+
+    it('allows connection when connectedAt exists but no WebSocket', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // connectedAt is recent but no WebSocket exists (e.g., WS already closed)
+      storage.store.set('connectedAt', new Date(Date.now() - 1_000).toISOString());
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Should proceed — reaches Response(101) which throws in Node
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+    });
+  });
+
+  describe('handleWebSocket skips pickUpPendingTasks on reconnect', () => {
+    it('skips pickUpPendingTasks when reconnecting (existing WebSocket)', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Simulate existing WebSocket with connectedAt old enough to pass debounce
+      const existingWs = createMockWebSocket();
+      mockCtx._websockets.push(existingWs);
+      storage.store.set('connectedAt', new Date(Date.now() - 10_000).toISOString());
+
+      // Set up mock with pending tasks to verify they are NOT picked up
+      const pendingTaskMock = createSupabaseMock({
+        selectResults: {
+          review_tasks: {
+            data: [
+              {
+                id: 'pending-task-1',
+                pr_number: 10,
+                pr_url: 'https://github.com/org/repo/pull/10',
+                timeout_at: new Date(Date.now() + 300_000).toISOString(),
+                diff_content: 'diff',
+                config_json: { prompt: 'Review', minCount: 1 },
+                project_id: 'proj-1',
+                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        pendingTaskMock as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — RangeError in Node
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // review_tasks should NOT have been queried (pickUpPendingTasks was skipped)
+      const reviewTasksFromCalls = pendingTaskMock._calls.from.filter(
+        (t) => t === 'review_tasks',
+      );
+      expect(reviewTasksFromCalls).toHaveLength(0);
+    });
+
+    it('calls pickUpPendingTasks on fresh connection (no existing WebSocket)', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // No existing WebSockets — fresh connection
+      const freshMock = createSupabaseMock({
+        selectResults: {
+          review_tasks: { data: [] },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        freshMock as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — RangeError in Node
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // review_tasks should have been queried (pickUpPendingTasks was called)
+      const reviewTasksFromCalls = freshMock._calls.from.filter((t) => t === 'review_tasks');
+      expect(reviewTasksFromCalls.length).toBeGreaterThan(0);
     });
   });
 
