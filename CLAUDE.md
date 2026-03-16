@@ -69,6 +69,7 @@ npm run format           # Prettier formatting
 ```
 
 Package-specific:
+
 ```bash
 cd packages/worker && npx wrangler dev     # Local Worker dev server
 cd packages/web && npx next dev            # Local Next.js dev server
@@ -85,17 +86,18 @@ cd packages/cli && npm run dev             # CLI development mode
 
 Event-driven, PM-centric multi-agent workflow. All agents defined in `.claude/agents/`.
 
-| Agent | Model | Role | Lifecycle |
-|-------|-------|------|-----------|
-| **pm** | opus | Coordinator — triages, designs, dispatches, tracks | Long-running |
-| **architect** | opus | Shared types, protocol, infrastructure | Ephemeral (worktree) |
-| **worker-dev** | sonnet | Cloudflare Workers backend | Ephemeral (worktree) |
-| **cli-dev** | sonnet | CLI npm package | Ephemeral (worktree) |
-| **web-dev** | sonnet | Next.js dashboard | Ephemeral (worktree) |
-| **qa** | sonnet | Post-merge verification | Ephemeral (worktree) |
-| **clarifier** | sonnet | Multi-AI issue analysis | Ephemeral |
+| Agent          | Model  | Role                                               | Lifecycle            |
+| -------------- | ------ | -------------------------------------------------- | -------------------- |
+| **pm**         | opus   | Coordinator — triages, designs, dispatches, tracks | Long-running         |
+| **architect**  | opus   | Shared types, protocol, infrastructure             | Ephemeral (worktree) |
+| **worker-dev** | sonnet | Cloudflare Workers backend                         | Ephemeral (worktree) |
+| **cli-dev**    | sonnet | CLI npm package                                    | Ephemeral (worktree) |
+| **web-dev**    | sonnet | Next.js dashboard                                  | Ephemeral (worktree) |
+| **qa**         | sonnet | Post-merge verification                            | Ephemeral (worktree) |
+| **clarifier**  | sonnet | Multi-AI issue analysis                            | Ephemeral            |
 
 ### Agent Rules
+
 - Only one PM at a time; PM never implements code, only plans and dispatches
 - Use `/spawn <agent-type> [issue-number]` to spawn agents
 - Team lead stays on `main`; dev agents work only in worktrees
@@ -103,6 +105,7 @@ Event-driven, PM-centric multi-agent workflow. All agents defined in `.claude/ag
 - Team name: `opencrust-dev`
 
 ### Worktree Isolation (CRITICAL)
+
 - Dev agents MUST work in worktrees — never modify the root project `/home/quabug/opencrust/`
 - Root project must always stay on `main` branch
 - Pre-create worktrees from root project directory, never from inside another worktree:
@@ -114,12 +117,14 @@ Event-driven, PM-centric multi-agent workflow. All agents defined in `.claude/ag
 - Each parallel agent needs its own unique worktree
 
 ### Workflow Rules (auto-loaded)
+
 - `.claude/rules/agent-workflow.md` — agent roster, flow, design decisions
 - `.claude/rules/development-workflow.md` — dev agent lifecycle, self-review, merge process
 
 ## Development Status
 
 Project is in design phase. MVP milestones in order:
+
 1. **M0**: Monorepo scaffolding
 2. **M1**: GitHub App + webhook endpoint
 3. **M2**: Database schema + auth

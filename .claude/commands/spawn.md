@@ -7,6 +7,7 @@ Spawn a teammate agent from the project's agent definitions in `.claude/agents/`
 `$ARGUMENTS` — format: `<agent-type> [issue-number] [extra context]`
 
 Examples:
+
 - `/spawn architect 61` — spawn architect for issue #61
 - `/spawn pm` — spawn the PM agent
 - `/spawn worker-dev 63 "Add webhook endpoint"` — spawn worker-dev for issue #63
@@ -17,6 +18,7 @@ Examples:
 ### Step 1: Parse arguments
 
 Extract from `$ARGUMENTS`:
+
 - **agent-type** (required): one of the agent files in `.claude/agents/` (architect, pm, worker-dev, cli-dev, web-dev, qa, clarifier)
 - **issue-number** (optional): GitHub issue to work on
 - **extra-context** (optional): additional instructions
@@ -33,15 +35,15 @@ Read `.claude/agents/<agent-type>.md` to get the full agent definition.
 
 ### Step 4: Determine spawn configuration
 
-| Agent | Isolation | Mode |
-|-------|-----------|------|
-| pm | none (root project) | auto |
-| architect | worktree | auto |
-| worker-dev | worktree | auto |
-| cli-dev | worktree | auto |
-| web-dev | worktree | auto |
-| qa | worktree | auto |
-| clarifier | none | auto |
+| Agent      | Isolation           | Mode |
+| ---------- | ------------------- | ---- |
+| pm         | none (root project) | auto |
+| architect  | worktree            | auto |
+| worker-dev | worktree            | auto |
+| cli-dev    | worktree            | auto |
+| web-dev    | worktree            | auto |
+| qa         | worktree            | auto |
+| clarifier  | none                | auto |
 
 **Model**: Do NOT set the `model` parameter on the Agent tool. The model is defined in each agent's `.md` file and will be used automatically. This ensures agent definitions are the single source of truth for model selection.
 
@@ -58,6 +60,7 @@ git worktree add .claude/worktrees/<agent-type>-<issue-number>-<short-desc> orig
 ```
 
 If no issue number, use a descriptive name:
+
 ```bash
 git worktree add .claude/worktrees/<agent-type>-<task-desc> origin/main -b <agent-type>-<task-desc>
 ```
@@ -65,6 +68,7 @@ git worktree add .claude/worktrees/<agent-type>-<task-desc> origin/main -b <agen
 ### Step 6: Spawn the agent as a teammate
 
 Use the Agent tool with:
+
 - **name**: `<agent-type>-<issue-number>` (e.g., `architect-61`) or `<agent-type>` for PM/QA
 - Do NOT set `model` — let it inherit from the agent definition file
 - **mode**: `auto`
@@ -82,6 +86,7 @@ Do NOT set `run_in_background`. The Agent tool with `team_name` automatically ad
 ### Step 7: Confirm
 
 Report to the user:
+
 - Agent name and type
 - Issue number (if any)
 - Worktree path (if any)
