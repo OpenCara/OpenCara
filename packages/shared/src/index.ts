@@ -30,6 +30,8 @@ export type {
   LeaderboardResponse,
   LeaderboardEntry,
   CollectRatingsResponse,
+  ConsumptionPeriodStats,
+  ConsumptionStatsResponse,
   ErrorResponse,
 } from './api.js';
 
