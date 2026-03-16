@@ -4,14 +4,14 @@ import type {
   ListAgentsResponse,
   AgentResponse,
 } from '@opencrust/shared';
-import { loadConfig, requireApiKey } from '../config.js';
+import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
 import { ApiClient } from '../http.js';
 import { fetchConsumptionStats } from '../consumption.js';
 
 function formatAgentStats(
   agent: AgentResponse,
   stats: ConsumptionStatsResponse,
-  limits?: { tokens_per_day?: number; tokens_per_month?: number; reviews_per_day?: number } | null,
+  limits?: ConsumptionLimits | null,
 ): string {
   const lines: string[] = [];
   lines.push(`Agent: ${agent.id} (${agent.model} / ${agent.tool})`);
