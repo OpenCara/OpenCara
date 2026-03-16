@@ -4,12 +4,43 @@ import type {
   ReviewErrorMessage,
   SummaryCompleteMessage,
   ReviewRequestMessage,
+  ReviewVerdict,
 } from '@opencrust/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
+import { getInstallationToken, postPrComment } from './github.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
+const MAX_REVIEW_ATTEMPTS = 3;
+
+const VERDICT_LABELS: Record<ReviewVerdict, string> = {
+  approve: '\u2705 Approve',
+  request_changes: '\u274C Changes Requested',
+  comment: '\uD83D\uDCAC Comment',
+};
+
+export function formatReviewComment(
+  verdict: ReviewVerdict,
+  model: string,
+  tool: string,
+  review: string,
+): string {
+  const verdictLabel = VERDICT_LABELS[verdict];
+  return [
+    '## \uD83D\uDD0D OpenCrust Review',
+    '',
+    `**Verdict**: ${verdictLabel}`,
+    `**Agent**: \`${model}\` / \`${tool}\``,
+    '',
+    '---',
+    '',
+    review,
+    '',
+    '---',
+    '<sub>Reviewed by <a href="https://github.com/user/opencrust">OpenCrust</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate this review</sub>',
+  ].join('\n');
+}
 
 export class AgentConnection implements DurableObject {
   private state: DurableObjectState;
@@ -251,6 +282,67 @@ export class AgentConnection implements DurableObject {
         console.error(`Failed to insert consumption log for task ${msg.taskId}:`, logError);
       }
     }
+
+    // Look up task + project info for posting the review
+    const { data: taskData } = await supabase
+      .from('review_tasks')
+      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
+      .eq('id', msg.taskId)
+      .single();
+
+    if (!taskData) {
+      console.error(`Task ${msg.taskId} not found for review posting`);
+      return;
+    }
+
+    const project = taskData.projects as unknown as {
+      owner: string;
+      repo: string;
+      github_installation_id: number;
+    };
+
+    // Look up agent model/tool for comment formatting
+    const { data: agentData } = await supabase
+      .from('agents')
+      .select('model, tool')
+      .eq('id', agentId)
+      .single();
+
+    const model = agentData?.model ?? 'unknown';
+    const tool = agentData?.tool ?? 'unknown';
+
+    // Format and post the review as a PR comment
+    const formattedReview = formatReviewComment(msg.verdict, model, tool, msg.review);
+
+    try {
+      const installationToken = await getInstallationToken(
+        project.github_installation_id,
+        this.env,
+      );
+      const commentUrl = await postPrComment(
+        project.owner,
+        project.repo,
+        taskData.pr_number as number,
+        formattedReview,
+        installationToken,
+      );
+
+      // Update review_results with comment_url
+      await supabase
+        .from('review_results')
+        .update({ comment_url: commentUrl })
+        .eq('review_task_id', msg.taskId)
+        .eq('agent_id', agentId);
+
+      // Transition task to completed
+      await supabase
+        .from('review_tasks')
+        .update({ status: 'completed' })
+        .eq('id', msg.taskId)
+        .eq('status', 'reviewing');
+    } catch (err) {
+      console.error(`Failed to post review for task ${msg.taskId}:`, err);
+    }
   }
 
   private async handleReviewRejected(msg: ReviewRejectedMessage): Promise<void> {
@@ -268,6 +360,7 @@ export class AgentConnection implements DurableObject {
     }
 
     await this.removeInFlightTask(msg.taskId);
+    await this.redistributeTask(msg.taskId, supabase);
   }
 
   private async handleReviewError(msg: ReviewErrorMessage): Promise<void> {
@@ -285,7 +378,101 @@ export class AgentConnection implements DurableObject {
     }
 
     await this.removeInFlightTask(msg.taskId);
+    await this.redistributeTask(msg.taskId, supabase);
   }
+
+  private async redistributeTask(
+    taskId: string,
+    supabase: ReturnType<typeof createSupabaseClient>,
+  ): Promise<void> {
+    // Count total attempts for this task
+    const { count } = await supabase
+      .from('review_results')
+      .select('id', { count: 'exact', head: true })
+      .eq('review_task_id', taskId);
+
+    if ((count ?? 0) >= MAX_REVIEW_ATTEMPTS) {
+      // Max attempts reached, fail the task
+      await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
+      console.log(`Task ${taskId} failed after ${count} attempts`);
+      return;
+    }
+
+    // Get agents that already attempted this task
+    const { data: previousAttempts } = await supabase
+      .from('review_results')
+      .select('agent_id')
+      .eq('review_task_id', taskId);
+
+    const excludedAgentIds = (previousAttempts ?? []).map((r: { agent_id: string }) => r.agent_id);
+
+    // Find another eligible online agent with reputation >= 0
+    const { data: candidates } = await supabase
+      .from('agents')
+      .select('id')
+      .eq('status', 'online')
+      .gte('reputation_score', 0);
+
+    const eligible = (candidates ?? []).filter(
+      (a: { id: string }) => !excludedAgentIds.includes(a.id),
+    );
+
+    if (eligible.length === 0) {
+      await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
+      console.log(`Task ${taskId} failed: no eligible agents remaining`);
+      return;
+    }
+
+    // Look up task info for redistribution
+    const { data: taskData } = await supabase
+      .from('review_tasks')
+      .select('pr_number, pr_url, timeout_at, projects!inner(owner, repo, github_installation_id)')
+      .eq('id', taskId)
+      .single();
+
+    if (!taskData) {
+      console.error(`Task ${taskId} not found for redistribution`);
+      return;
+    }
+
+    const project = taskData.projects as unknown as {
+      owner: string;
+      repo: string;
+      github_installation_id: number;
+    };
+
+    const timeoutAt = new Date(taskData.timeout_at as string).getTime();
+    const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
+
+    // Push task to the next eligible agent's DO
+    const nextAgentId = (eligible[0] as { id: string }).id;
+    try {
+      const doId = this.env.AGENT_CONNECTION.idFromName(nextAgentId);
+      const stub = this.env.AGENT_CONNECTION.get(doId);
+      await stub.fetch(
+        new Request('https://internal/push-task', {
+          method: 'POST',
+          body: JSON.stringify({
+            taskId,
+            pr: {
+              url: taskData.pr_url,
+              number: taskData.pr_number,
+              diffUrl: `https://github.com/${project.owner}/${project.repo}/pull/${taskData.pr_number}.diff`,
+              base: 'main',
+              head: 'unknown',
+            },
+            project: { owner: project.owner, repo: project.repo, prompt: '' },
+            timeout: remainingSeconds,
+            diffContent: '',
+          }),
+        }),
+      );
+      console.log(`Task ${taskId} redistributed to agent ${nextAgentId}`);
+    } catch (err) {
+      console.error(`Failed to redistribute task ${taskId} to agent ${nextAgentId}:`, err);
+    }
+  }
+
 
   private async handleSummaryComplete(msg: SummaryCompleteMessage): Promise<void> {
     // Summary handling will be implemented in M6

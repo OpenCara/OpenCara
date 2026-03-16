@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
-import {
-  getInstallationToken,
-  fetchReviewConfig,
-  postPrComment,
-} from '../github.js';
+import { getInstallationToken, fetchReviewConfig, fetchPrDiff, postPrComment } from '../github.js';
 import type { Env } from '../env.js';
 
 const originalFetch = globalThis.fetch;
@@ -78,7 +74,9 @@ describe('github', () => {
       const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
       const headers = call[1].headers;
       // JWT format: header.payload.signature
-      expect(headers.Authorization).toMatch(/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+      expect(headers.Authorization).toMatch(
+        /^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+      );
     });
 
     it('throws on non-ok response', async () => {
@@ -144,17 +142,69 @@ describe('github', () => {
         statusText: 'Internal Server Error',
       });
 
-      await expect(
-        fetchReviewConfig('o', 'r', 'main', 'tok'),
-      ).rejects.toThrow('Failed to fetch .review.yml: 500 Internal Server Error');
+      await expect(fetchReviewConfig('o', 'r', 'main', 'tok')).rejects.toThrow(
+        'Failed to fetch .review.yml: 500 Internal Server Error',
+      );
+    });
+  });
+
+  describe('fetchPrDiff', () => {
+    it('returns diff content on success', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve('diff --git a/file.ts b/file.ts\n'),
+      });
+
+      const diff = await fetchPrDiff('owner', 'repo', 42, 'tok');
+      expect(diff).toBe('diff --git a/file.ts b/file.ts\n');
+    });
+
+    it('calls correct GitHub API endpoint with diff accept header', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve('diff content'),
+      });
+
+      await fetchPrDiff('myorg', 'myrepo', 10, 'mytoken');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/myorg/myrepo/pulls/10',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer mytoken',
+            Accept: 'application/vnd.github.diff',
+            'User-Agent': 'OpenCrust-Worker',
+            'X-GitHub-Api-Version': '2022-11-28',
+          }),
+        }),
+      );
+    });
+
+    it('throws on non-ok response', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+      });
+
+      await expect(fetchPrDiff('o', 'r', 1, 'tok')).rejects.toThrow(
+        'Failed to fetch PR diff: 404 Not Found',
+      );
     });
   });
 
   describe('postPrComment', () => {
-    it('posts comment successfully', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    it('posts comment and returns html_url', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            html_url: 'https://github.com/owner/repo/pull/42#issuecomment-123',
+          }),
+      });
 
-      await postPrComment('owner', 'repo', 42, 'Test comment', 'tok');
+      const url = await postPrComment('owner', 'repo', 42, 'Test comment', 'tok');
+      expect(url).toBe('https://github.com/owner/repo/pull/42#issuecomment-123');
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
         'https://api.github.com/repos/owner/repo/issues/42/comments',
@@ -176,9 +226,9 @@ describe('github', () => {
         statusText: 'Forbidden',
       });
 
-      await expect(
-        postPrComment('o', 'r', 42, 'Test', 'tok'),
-      ).rejects.toThrow('Failed to post PR comment: 403 Forbidden');
+      await expect(postPrComment('o', 'r', 42, 'Test', 'tok')).rejects.toThrow(
+        'Failed to post PR comment: 403 Forbidden',
+      );
     });
   });
 });

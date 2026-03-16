@@ -1,11 +1,7 @@
 import { parseReviewConfig } from '@opencrust/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
-import {
-  fetchReviewConfig,
-  getInstallationToken,
-  postPrComment,
-} from './github.js';
+import { fetchPrDiff, fetchReviewConfig, getInstallationToken, postPrComment } from './github.js';
 import { distributeTask } from './task-distribution.js';
 
 /**
@@ -77,10 +73,7 @@ interface InstallationPayload {
   repositories?: Array<{ name: string; full_name: string }>;
 }
 
-async function handlePullRequest(
-  payload: PullRequestPayload,
-  env: Env,
-): Promise<Response> {
+async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise<Response> {
   const { installation, repository, pull_request } = payload;
 
   if (!installation) {
@@ -93,9 +86,7 @@ async function handlePullRequest(
   const prNumber = pull_request.number;
   const headRef = pull_request.head.ref;
 
-  console.log(
-    `Processing PR #${prNumber} on ${owner}/${repo} (head: ${headRef})`,
-  );
+  console.log(`Processing PR #${prNumber} on ${owner}/${repo} (head: ${headRef})`);
 
   let token: string;
   try {
@@ -146,6 +137,15 @@ async function handlePullRequest(
     headRef,
   });
 
+  // Fetch the PR diff content
+  let diffContent: string;
+  try {
+    diffContent = await fetchPrDiff(owner, repo, prNumber, token);
+  } catch (err) {
+    console.error('Failed to fetch PR diff:', err);
+    return new Response('OK', { status: 200 });
+  }
+
   // Create review task and distribute to eligible agents
   const supabase = createSupabaseClient(env);
   try {
@@ -159,6 +159,7 @@ async function handlePullRequest(
       baseRef: pull_request.base.ref,
       headRef,
       config: result,
+      diffContent,
     });
   } catch (err) {
     console.error('Failed to distribute task:', err);
@@ -167,15 +168,11 @@ async function handlePullRequest(
   return new Response('OK', { status: 200 });
 }
 
-async function handleInstallationCreated(
-  payload: InstallationPayload,
-): Promise<Response> {
+async function handleInstallationCreated(payload: InstallationPayload): Promise<Response> {
   const { installation, repositories } = payload;
   const owner = installation.account.login;
 
-  console.log(
-    `GitHub App installed by ${owner} (installation: ${installation.id})`,
-  );
+  console.log(`GitHub App installed by ${owner} (installation: ${installation.id})`);
 
   if (repositories) {
     for (const repo of repositories) {
@@ -190,15 +187,11 @@ async function handleInstallationCreated(
   return new Response('OK', { status: 200 });
 }
 
-async function handleInstallationDeleted(
-  payload: InstallationPayload,
-): Promise<Response> {
+async function handleInstallationDeleted(payload: InstallationPayload): Promise<Response> {
   const { installation } = payload;
   const owner = installation.account.login;
 
-  console.log(
-    `GitHub App uninstalled by ${owner} (installation: ${installation.id})`,
-  );
+  console.log(`GitHub App uninstalled by ${owner} (installation: ${installation.id})`);
 
   // TODO (M2): Delete project records from Supabase
   // DELETE FROM projects WHERE github_installation_id = $installation_id;
@@ -206,10 +199,7 @@ async function handleInstallationDeleted(
   return new Response('OK', { status: 200 });
 }
 
-export async function handleGitHubWebhook(
-  request: Request,
-  env: Env,
-): Promise<Response> {
+export async function handleGitHubWebhook(request: Request, env: Env): Promise<Response> {
   const body = await request.text();
   const signature = request.headers.get('X-Hub-Signature-256');
 
@@ -236,13 +226,9 @@ export async function handleGitHubWebhook(
       break;
     case 'installation':
       if (action === 'created') {
-        return handleInstallationCreated(
-          payload as unknown as InstallationPayload,
-        );
+        return handleInstallationCreated(payload as unknown as InstallationPayload);
       } else if (action === 'deleted') {
-        return handleInstallationDeleted(
-          payload as unknown as InstallationPayload,
-        );
+        return handleInstallationDeleted(payload as unknown as InstallationPayload);
       }
       break;
   }

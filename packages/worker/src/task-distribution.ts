@@ -21,7 +21,7 @@ export interface DistributeTaskParams {
   baseRef: string;
   headRef: string;
   config: ReviewConfig;
-  diffContent?: string;
+  diffContent: string;
 }
 
 /** Parse timeout string (e.g., "10m") to milliseconds. */
@@ -165,7 +165,7 @@ export async function distributeTask(
     diffUrl,
     baseRef,
     headRef,
-    diffContent = '',
+    diffContent,
   } = params;
   const timeoutMs = parseTimeoutMs(config.timeout);
 
