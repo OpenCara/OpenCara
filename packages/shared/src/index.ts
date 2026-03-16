@@ -46,3 +46,10 @@ export type {
 } from './protocol.js';
 
 export { getVersion } from './protocol.js';
+
+/** Review configuration types and parser */
+export {
+  parseReviewConfig,
+  validateReviewConfig,
+  type ReviewConfig,
+} from './review-config.js';
