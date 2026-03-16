@@ -80,7 +80,7 @@ This skill automatically:
 ```bash
 git fetch origin main
 git merge origin/main
-npm run build && npm run test && npm run lint
+npm run build && npm run test && npm run lint && npm run format:check && npm run typecheck
 ```
 
 If any check fails, fix the issue before merging. Do NOT merge with failing tests.

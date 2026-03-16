@@ -86,15 +86,17 @@ cd packages/cli && npm run dev             # CLI development mode
 
 Event-driven, PM-centric multi-agent workflow. All agents defined in `.claude/agents/`.
 
-| Agent          | Model  | Role                                               | Lifecycle            |
-| -------------- | ------ | -------------------------------------------------- | -------------------- |
-| **pm**         | opus   | Coordinator — triages, designs, dispatches, tracks | Long-running         |
-| **architect**  | opus   | Shared types, protocol, infrastructure             | Ephemeral (worktree) |
-| **worker-dev** | sonnet | Cloudflare Workers backend                         | Ephemeral (worktree) |
-| **cli-dev**    | sonnet | CLI npm package                                    | Ephemeral (worktree) |
-| **web-dev**    | sonnet | Next.js dashboard                                  | Ephemeral (worktree) |
-| **qa**         | sonnet | Post-merge verification                            | Ephemeral (worktree) |
-| **clarifier**  | sonnet | Multi-AI issue analysis                            | Ephemeral            |
+| Agent          | Role                                               | Lifecycle            |
+| -------------- | -------------------------------------------------- | -------------------- |
+| **pm**         | Coordinator — triages, designs, dispatches, tracks | Long-running         |
+| **architect**  | Shared types, protocol, infrastructure             | Ephemeral (worktree) |
+| **worker-dev** | Cloudflare Workers backend                         | Ephemeral (worktree) |
+| **cli-dev**    | CLI npm package                                    | Ephemeral (worktree) |
+| **web-dev**    | Next.js dashboard                                  | Ephemeral (worktree) |
+| **qa**         | Post-merge verification                            | Ephemeral (worktree) |
+| **clarifier**  | Multi-AI issue analysis                            | Ephemeral            |
+
+All agents inherit their model and context window from the team lead.
 
 ### Agent Rules
 

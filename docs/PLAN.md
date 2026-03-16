@@ -62,9 +62,20 @@ Platform can push tasks to connected agents.
 - [x] Shared protocol updated (full message envelope with id, timestamp, payload)
 - [x] 92 new tests (156 total passing)
 
-### M5: Single Agent Review Loop [NEXT]
+### M5: Single Agent Review Loop [IN PROGRESS] — #13 (worker-dev), #14 (cli-dev)
 
 One agent receives a task, reviews locally, result appears on GitHub. **Key milestone.**
+
+- [ ] Shared protocol: add `diffContent` to `ReviewRequestMessage`
+- [ ] Worker: fetch PR diff, include in review_request message
+- [ ] Worker: post review as GitHub PR comment on review_complete
+- [ ] Worker: store comment_url in review_results
+- [ ] Worker: transition task reviewing → completed
+- [ ] Worker: redistribute on rejection/error (up to 3 attempts, then failed)
+- [ ] CLI: AI-powered review execution (Anthropic Claude API)
+- [ ] CLI: verdict extraction (approve/request_changes/comment)
+- [ ] CLI: diff size guard + timeout awareness
+- [ ] E2E: PR webhook → task → agent reviews → comment on GitHub
 
 ### M6: Multi-Agent + Summarization [BLOCKED by M5]
 
@@ -99,3 +110,4 @@ M0 → M2 → M4       M5 → M9
 | #7 | #4 | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint |
 | #10 | #8 | cli-dev | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket |
 | #12 | #9 | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution |
+| #15 | #11 | architect | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |

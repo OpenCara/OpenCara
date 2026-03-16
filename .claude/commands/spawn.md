@@ -45,7 +45,7 @@ Read `.claude/agents/<agent-type>.md` to get the full agent definition.
 | qa         | worktree            | auto |
 | clarifier  | none                | auto |
 
-**Model**: Do NOT set the `model` parameter on the Agent tool. The model is defined in each agent's `.md` file and will be used automatically. This ensures agent definitions are the single source of truth for model selection.
+**Model**: Do NOT set the `model` parameter on the Agent tool. Agents inherit the model and context window from the team lead. This ensures all agents run with the same model configuration (including 1M context if the team lead has it).
 
 ### Step 5: Pre-create worktree (if needed)
 
@@ -70,13 +70,13 @@ git worktree add .claude/worktrees/<agent-type>-<task-desc> origin/main -b <agen
 Use the Agent tool with:
 
 - **name**: `<agent-type>-<issue-number>` (e.g., `architect-61`) or `<agent-type>` for PM/QA
-- Do NOT set `model` — let it inherit from the agent definition file
+- Do NOT set `model` — agents inherit from the team lead
 - **mode**: `auto`
 - **team_name**: `opencrust-dev` (adds agent to the team)
 - **prompt**: Include the full agent definition from the .md file, plus:
   - The issue number and instructions to read it with `gh issue view <number>`
   - The worktree path (if applicable)
-  - Dependencies that are already merged (check pm-state.md or ask)
+  - Dependencies that are already merged (check pm-notebook.md or ask)
   - Reminder to follow `.claude/rules/development-workflow.md`
   - CRITICAL warning about working only in their worktree
   - Instruction to read and follow project configuration at startup: `CLAUDE.md` (project conventions, code style), all rules in `.claude/rules/` (workflow requirements), and `.claude/settings.local.json` (project settings). These apply to all agents.

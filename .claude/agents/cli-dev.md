@@ -1,6 +1,3 @@
----
-model: sonnet[1m]
----
 
 # cli-dev — CLI Developer
 

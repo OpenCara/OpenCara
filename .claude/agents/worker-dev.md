@@ -1,6 +1,3 @@
----
-model: sonnet[1m]
----
 
 # worker-dev — Cloudflare Workers Developer
 

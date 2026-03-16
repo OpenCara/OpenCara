@@ -1,6 +1,3 @@
----
-model: sonnet[1m]
----
 
 # web-dev — Next.js Frontend Developer
 

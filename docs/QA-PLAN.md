@@ -14,7 +14,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 | M1 | DONE | S03-S06 |
 | M2 | DONE | S07-S10 |
 | M3 | DONE | S11-S13 |
-| M4 | IN PROGRESS | — |
+| M4 | DONE | S14-S18 |
 
 ---
 
@@ -214,18 +214,91 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 ---
 
+## S14: Agent WebSocket Connection via DO (Worker)
+
+**Tests**: Agent connects via WebSocket, DO manages connection state and sends `connected` message.
+
+**Steps**:
+1. Authenticate and register an agent
+2. Open WebSocket to `/ws/agent/{agentId}?token=cr_xxx`
+3. Verify DO accepts the connection and sends `{ type: "connected", version: 1, agentId: "..." }`
+4. Verify DO stores `status: "online"` and `connectedAt` in its storage
+5. Verify agent status updated to `online` in Supabase
+6. Check DO `/status` endpoint returns `{ status: "online", connectedAt: "...", inFlightTaskIds: [] }`
+
+**Expected**: WebSocket connection is established, DO state is initialized, agent status is synced to Supabase.
+
+---
+
+## S15: Heartbeat Timeout Disconnects Unresponsive Agent (Worker)
+
+**Tests**: DO detects missing heartbeat pongs and disconnects the agent.
+
+**Steps**:
+1. Connect agent via WebSocket (from S14)
+2. Verify DO sends `heartbeat_ping` after 30s
+3. Respond with `heartbeat_pong` — verify connection stays alive
+4. Stop responding to `heartbeat_ping` messages
+5. Wait >90s — verify DO closes connection with code `4003` (heartbeat_timeout)
+6. Verify agent status updated to `offline` in Supabase
+
+**Expected**: DO closes unresponsive connections after 90s. Agent status transitions to offline.
+
+---
+
+## S16: Duplicate Connection Replaces Old One (Worker)
+
+**Tests**: When same agent reconnects, old connection is closed with code 4002.
+
+**Steps**:
+1. Connect agent via WebSocket (WS1)
+2. Open second WebSocket for same agent (WS2)
+3. Verify WS1 receives close event with code `4002` ("replaced")
+4. Verify WS2 receives `connected` message
+5. Verify DO has exactly one active WebSocket
+
+**Expected**: Old connection is cleanly replaced. No resource leaks from stale connections.
+
+---
+
+## S17: PR Webhook Triggers Task Creation and Agent Distribution (Worker)
+
+**Tests**: Full flow from PR webhook to task pushed to connected agent's DO.
+
+**Steps**:
+1. Set up: register agent, connect via WebSocket, create project with `.review.yml`
+2. Send `pull_request.opened` webhook with valid signature
+3. Verify `review_tasks` row created in Supabase (status: `reviewing`)
+4. Verify `projects` row exists (created or found by `findOrCreateProject`)
+5. Verify agent's DO received push-task call
+6. Verify agent receives `review_request` message on WebSocket with correct `taskId`, `pr`, `project` fields
+7. Verify `inFlightTaskIds` in DO storage contains the new task ID
+
+**Expected**: Webhook → task creation → agent distribution is fully wired. All Supabase records are correct.
+
+---
+
+## S18: Task Timeout Alarm Fires and Transitions Status (Worker)
+
+**Tests**: TaskTimeout DO alarm fires and updates task status after timeout.
+
+**Steps**:
+1. Create a review task with short timeout (e.g., 1 minute)
+2. Set up TaskTimeout DO via `/set-timeout` endpoint
+3. Wait for alarm to fire
+4. Verify task status transitions in Supabase (e.g., `reviewing → timeout` if no results)
+5. Verify TaskTimeout DO handles the transition idempotently (alarm firing twice doesn't corrupt state)
+
+**Expected**: Timeout alarm fires at the correct time and transitions task status. Edge cases (already completed, already failed) are handled gracefully.
+
+---
+
 ## Future Scenarios (pending milestones)
 
-### M4: Durable Objects
-- S14: Agent connects via WebSocket, DO manages connection state
-- S15: Heartbeat timeout disconnects unresponsive agents
-- S16: Duplicate connection replaces old one (close code 4002)
-- S17: PR webhook triggers task creation and agent distribution
-- S18: Task timeout alarm fires and transitions task status
-
 ### M5: Single Agent Review Loop
-- S19: Full loop: PR webhook → task → agent receives → reviews → result posted to GitHub
-- S20: Agent rejection/error triggers redistribution
+- S19: Full loop: PR webhook → task → agent reviews locally → result posted as GitHub PR comment
+- S20: Agent rejection/error triggers redistribution to another agent
+- S21: CLI fetches diff, calls AI model, sends review_complete
 
 ### M6-M9: Later milestones
 - Scenarios added when milestones are designed
