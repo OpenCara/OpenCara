@@ -77,33 +77,80 @@ One agent receives a task, reviews locally, result appears on GitHub. **Key mile
 - [x] Worker: redistribute on rejection/error (up to 3 attempts, then failed) — PR #17
 - [x] E2E: PR webhook → task → agent reviews → comment on GitHub — QA PASSED (294 tests, S01-S23)
 
-### M6: Multi-Agent + Summarization [IN PROGRESS] — #19 (worker-dev, dispatched), #20 (cli-dev, dispatched)
+### M6: Multi-Agent + Summarization [DONE] — #19 → PR #23 (worker-dev), #20 → PR #22 (cli-dev)
 
 Multiple agents review in parallel with consolidated summary.
 
-- [ ] Shared protocol: update `SummaryRequestMessage` with full payload (pr, project, reviews[], timeout)
-- [ ] Worker: dispatch to ALL eligible agents (not just min_count)
-- [ ] Worker: collect reviews — no immediate GitHub post when min_count > 1
-- [ ] Worker: trigger summarization when min_count completed results arrive
-- [ ] Worker: select highest-reputation agent for summarization
-- [ ] Worker: post summary as main PR comment, individual reviews as follow-ups
-- [ ] Worker: fallback to individual review posts if summary fails
-- [ ] Worker: timeout with partial results triggers summarization
-- [ ] CLI: summary execution engine (AI synthesis of multiple reviews)
-- [ ] CLI: `summary_complete` with consolidated summary + tokensUsed
-- [ ] Single-agent mode (min_count=1) preserves M5 behavior exactly
+- [x] Shared protocol: update `SummaryRequestMessage` with full payload (pr, project, reviews[], timeout) — PR #23
+- [x] Worker: dispatch to ALL eligible agents (not just min_count) — PR #23
+- [x] Worker: collect reviews — no immediate GitHub post when min_count > 1 — PR #23
+- [x] Worker: trigger summarization when min_count completed results arrive — PR #23
+- [x] Worker: select highest-reputation agent for summarization — PR #23
+- [x] Worker: post summary as main PR comment, individual reviews as follow-ups — PR #23
+- [x] Worker: fallback to individual review posts if summary fails — PR #23
+- [x] Worker: timeout with partial results triggers summarization — PR #23
+- [x] Single-agent mode (min_count=1) preserves M5 behavior exactly — PR #23
+- [x] CLI: summary execution engine (AI synthesis of multiple reviews) — PR #22
+- [x] CLI: `summary_complete` with consolidated summary + tokensUsed — PR #22
 
-### M7: Reputation System [NEXT]
+### M7: Reputation System [DONE] — #25 → PR #29 (worker-dev)
 
-Maintainers rate reviews, agent reputation updates.
+Maintainers rate reviews via emoji reactions, agent and user reputation updates via Wilson scoring.
 
-### M8: Web Dashboard [BLOCKED by M7]
+- [x] Rating collection via GitHub Reactions API (fetchCommentReactions with pagination)
+- [x] Rating logic (thumbsup +1, thumbsdown -1, deduplicate by rater, upsert)
+- [x] Wilson confidence interval scoring (agent-level and user-level)
+- [x] Reputation history tracking (score deltas with reasons)
+- [x] `GET /api/stats/:agentId` — reputation + review stats (authenticated, ownership-verified)
+- [x] `GET /api/leaderboard` — top 50 agents by Wilson score (public)
+- [x] `POST /api/tasks/:taskId/collect-ratings` — manual trigger for rating collection
+- [x] Fixed duplicate SummaryReview interface (#24)
+- [x] Shared types: AgentStatsResponse, LeaderboardResponse, LeaderboardEntry, CollectRatingsResponse
+- [x] 447 tests, 100% coverage on new files
 
-Public leaderboard and personal stats.
+### M8: Web Dashboard [DONE] — #31,#32 → PR #37 (web-dev), #33 → PR #36 (worker-dev), #34 → PR #39 (web-dev)
 
-### M9: Consumption Tracking [NEXT]
+Public leaderboard, personal stats dashboard, and GitHub OAuth web flow.
+
+- [x] #31 [web-dev] Landing page + Tailwind CSS setup + shared layout (nav, footer) — PR #37
+- [x] #32 [web-dev] Leaderboard page — public agent rankings — PR #37
+- [x] #33 [worker-dev] Web OAuth callback endpoint (`GET /auth/login`, `/auth/callback`, `/auth/logout`, CORS) — PR #36
+- [x] #34 [web-dev] Dashboard page — authenticated personal stats + consumption — PR #39
+- [x] 511+ tests after M8, 92% overall coverage, 100% on M8 files
+
+### M9: Consumption Tracking [DONE] — #26 → PR #28 (worker-dev), #27 → PR #30 (cli-dev)
 
 Contributors can track and limit token consumption.
+
+- [x] Worker: `GET /api/consumption/:agentId` — aggregated consumption stats (total, 24h, 7d, 30d) — PR #28
+- [x] Shared: `ConsumptionPeriodStats` and `ConsumptionStatsResponse` types — PR #28
+- [x] CLI: `opencrust stats` command — display consumption for all/specific agents — PR #30
+- [x] CLI: Local consumption limits in `~/.opencrust/config.yml` — PR #30
+- [x] CLI: Limit enforcement before review execution (reject with `consumption_limit_exceeded`) — PR #30
+- [x] CLI: Post-review consumption notification in console — PR #30
+- [x] Graceful degradation when consumption API unavailable — PR #30
+
+## MVP Complete
+
+All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
+
+1. A maintainer can install the GitHub App and have PRs automatically reviewed
+2. A contributor can run `opencrust login && opencrust agent create && opencrust agent start` and begin reviewing
+3. Multiple agents review a PR in parallel with a consolidated summary
+4. Maintainers can rate reviews with emoji, affecting agent reputation
+5. A web dashboard shows leaderboard and personal stats
+6. Contributors can track and limit their token consumption
+
+## Post-MVP
+
+- #40 [architect, DONE] Database Schema Migration + Environment Setup — PR #42 merged
+- #41 [web-dev, DONE] Fix dashboard quality issues (hydration, errors, AbortController, coverage) — PR #44 merged
+- #43 [worker-dev, DONE] Fix CORS origin validation + add security headers — PR #45 merged
+
+## Backlog
+
+- #35 [worker-dev, priority:medium] Optimize leaderboard endpoint — eliminate N+1 queries
+- #38 [worker-dev, priority:low] Implement installation event handlers — project upsert and cleanup
 
 ## Dependency Graph
 
@@ -115,14 +162,25 @@ M0 → M2 → M4       M5 → M9
 
 ## Merged PRs
 
-| PR  | Issue | Agent      | Date       | Description                                                     |
-| --- | ----- | ---------- | ---------- | --------------------------------------------------------------- |
-| #2  | #1    | architect  | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup                         |
-| #6  | #5    | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints                             |
-| #7  | #4    | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint                                |
-| #10 | #8    | cli-dev    | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket               |
-| #12 | #9    | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
-| #15 | #11   | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
-| #16 | #14   | cli-dev    | 2026-03-16 | M5-C CLI AI-powered review execution engine                     |
-| #17 | #13   | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution     |
-| #21 | #18   | architect  | 2026-03-16 | Fix pre-existing typecheck and formatting issues                |
+| PR  | Issue  | Agent      | Date       | Description                                                     |
+| --- | ------ | ---------- | ---------- | --------------------------------------------------------------- |
+| #2  | #1     | architect  | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup                         |
+| #6  | #5     | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints                             |
+| #7  | #4     | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint                                |
+| #10 | #8     | cli-dev    | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket               |
+| #12 | #9     | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
+| #15 | #11    | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
+| #16 | #14    | cli-dev    | 2026-03-16 | M5-C CLI AI-powered review execution engine                     |
+| #17 | #13    | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution      |
+| #21 | #18    | architect  | 2026-03-16 | Fix pre-existing typecheck and formatting issues                 |
+| #22 | #20    | cli-dev    | 2026-03-16 | M6-C CLI Summary Execution Engine                                |
+| #23 | #19    | worker-dev | 2026-03-16 | M6-W Multi-Agent Dispatch + Summarization Trigger                |
+| #28 | #26    | worker-dev | 2026-03-16 | M9-W Consumption Stats API Endpoint                              |
+| #29 | #25    | worker-dev | 2026-03-16 | M7 Reputation System — Wilson Scoring + Leaderboard              |
+| #30 | #27    | cli-dev    | 2026-03-16 | M9-C CLI Stats Command + Local Consumption Limits                |
+| #36 | #33    | worker-dev | 2026-03-16 | M8-WK Web OAuth Callback Endpoint                                |
+| #37 | #31,32 | web-dev    | 2026-03-16 | M8 Landing Page, Layout, Leaderboard                             |
+| #39 | #34    | web-dev    | 2026-03-16 | M8 Dashboard — Personal Stats + Consumption                      |
+| #42 | #40    | architect  | 2026-03-16 | Deployment guide + rating uniqueness constraint                   |
+| #44 | #41    | web-dev    | 2026-03-16 | Fix dashboard quality — hydration, errors, AbortController        |
+| #45 | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                     |

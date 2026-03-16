@@ -26,7 +26,7 @@
 - #38 [worker-dev] 2026-03-16 — Implement installation event handlers — project upsert and cleanup (priority:low, backlog)
 - #40 [architect] 2026-03-16 — [Deploy] Database Schema Migration + Environment Setup (closed, PR #42 merged)
 - #41 [web-dev] 2026-03-16 — [M8-Fix] Fix unfixed PR #39 review findings — dashboard quality (closed, PR #44 merged)
-- #43 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation and add security headers (priority:medium, in-progress, PR #45 open)
+- #43 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation and add security headers (closed, PR #45 merged)
 
 ## Pull Requests
 
@@ -49,4 +49,4 @@
 - #39 [web-dev] 2026-03-16 — [M8] Dashboard — Personal Stats + Consumption (merged, closes #34)
 - #42 [architect] 2026-03-16 — [Deploy] Database Schema Migration + Environment Setup (merged, closes #40)
 - #44 [web-dev] 2026-03-16 — [M8-Fix] Fix PR #39 review findings — dashboard quality (merged, closes #41)
-- #45 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation + security headers (open, closes #43)
+- #45 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation + security headers (merged, closes #43)
