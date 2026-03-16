@@ -20,7 +20,6 @@ import {
   CONFIG_DIR,
   CONFIG_FILE,
   DEFAULT_PLATFORM_URL,
-  DEFAULT_REVIEW_MODEL,
   DEFAULT_MAX_DIFF_SIZE_KB,
 } from '../config.js';
 
@@ -56,8 +55,6 @@ describe('config', () => {
 
       expect(config.apiKey).toBeNull();
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
-      expect(config.anthropicApiKey).toBeNull();
-      expect(config.reviewModel).toBe(DEFAULT_REVIEW_MODEL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.limits).toBeNull();
     });
@@ -74,33 +71,13 @@ describe('config', () => {
       expect(config.platformUrl).toBe('https://custom.dev');
     });
 
-    it('parses review-related config fields', () => {
+    it('parses max_diff_size_kb config field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'anthropic_api_key: sk-ant-test\nreview_model: claude-opus-4-6\nmax_diff_size_kb: 200\n',
-      );
+      vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: 200\n');
 
       const config = loadConfig();
 
-      expect(config.anthropicApiKey).toBe('sk-ant-test');
-      expect(config.reviewModel).toBe('claude-opus-4-6');
       expect(config.maxDiffSizeKb).toBe(200);
-    });
-
-    it('returns defaults for non-string anthropic_api_key', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('anthropic_api_key: 123\n');
-
-      const config = loadConfig();
-      expect(config.anthropicApiKey).toBeNull();
-    });
-
-    it('returns defaults for non-string review_model', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('review_model: 123\n');
-
-      const config = loadConfig();
-      expect(config.reviewModel).toBe(DEFAULT_REVIEW_MODEL);
     });
 
     it('returns defaults for non-number max_diff_size_kb', () => {
@@ -109,6 +86,20 @@ describe('config', () => {
 
       const config = loadConfig();
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
+    });
+
+    it('silently ignores old anthropic_api_key and review_model fields', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'anthropic_api_key: sk-ant-test\nreview_model: claude-opus-4-6\napi_key: cr_test\n',
+      );
+
+      const config = loadConfig();
+
+      // Old fields are ignored, no errors thrown
+      expect(config.apiKey).toBe('cr_test');
+      expect(config).not.toHaveProperty('anthropicApiKey');
+      expect(config).not.toHaveProperty('reviewModel');
     });
 
     it('returns defaults for empty config file', () => {
@@ -228,8 +219,6 @@ describe('config', () => {
     const baseConfig = {
       apiKey: null as string | null,
       platformUrl: 'https://api.dev',
-      anthropicApiKey: null as string | null,
-      reviewModel: DEFAULT_REVIEW_MODEL,
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       limits: null as import('../config.js').ConsumptionLimits | null,
     };
@@ -259,24 +248,11 @@ describe('config', () => {
       expect(content).toContain('platform_url');
     });
 
-    it('saves anthropic_api_key when present', () => {
-      saveConfig({ ...baseConfig, anthropicApiKey: 'sk-ant-test' });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('anthropic_api_key: sk-ant-test');
-    });
-
-    it('saves review_model when non-default', () => {
-      saveConfig({ ...baseConfig, reviewModel: 'claude-opus-4-6' });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('review_model: claude-opus-4-6');
-    });
-
-    it('does not save review_model when default', () => {
+    it('does not save anthropic_api_key or review_model', () => {
       saveConfig(baseConfig);
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('anthropic_api_key');
       expect(content).not.toContain('review_model');
     });
 
@@ -319,8 +295,6 @@ describe('config', () => {
       const key = requireApiKey({
         apiKey: 'cr_test',
         platformUrl: 'test',
-        anthropicApiKey: null,
-        reviewModel: DEFAULT_REVIEW_MODEL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         limits: null,
       });
@@ -337,8 +311,6 @@ describe('config', () => {
         requireApiKey({
           apiKey: null,
           platformUrl: 'test',
-          anthropicApiKey: null,
-          reviewModel: DEFAULT_REVIEW_MODEL,
           maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
           limits: null,
         }),

@@ -1,5 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { ReviewExecutorDeps } from './review.js';
+import { executeTool, type ToolExecutorResult } from './tool-executor.js';
 
 export interface SummaryReviewInput {
   agentId: string;
@@ -25,7 +25,6 @@ export interface SummaryResponse {
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
-export const MAX_RESPONSE_TOKENS = 4096;
 export const MAX_INPUT_SIZE_BYTES = 200 * 1024;
 
 export class InputTooLargeError extends Error {
@@ -71,7 +70,12 @@ export function calculateInputSize(prompt: string, reviews: SummaryReviewInput[]
 export async function executeSummary(
   req: SummaryRequest,
   deps: ReviewExecutorDeps,
-  createClient: (apiKey: string) => Anthropic = (key) => new Anthropic({ apiKey: key }),
+  runTool: (
+    toolName: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
   const inputSize = calculateInputSize(req.prompt, req.reviews);
   if (inputSize > MAX_INPUT_SIZE_BYTES) {
@@ -85,36 +89,20 @@ export async function executeSummary(
     throw new Error('Not enough time remaining to start summary');
   }
 
+  const effectiveTimeout = timeoutMs - TIMEOUT_SAFETY_MARGIN_MS;
   const abortController = new AbortController();
   const abortTimer = setTimeout(() => {
     abortController.abort();
-  }, timeoutMs - TIMEOUT_SAFETY_MARGIN_MS);
+  }, effectiveTimeout);
 
   try {
-    const client = createClient(deps.anthropicApiKey);
-    const response = await client.messages.create(
-      {
-        model: deps.reviewModel,
-        max_tokens: MAX_RESPONSE_TOKENS,
-        system: buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length),
-        messages: [
-          {
-            role: 'user',
-            content: buildSummaryUserMessage(req.prompt, req.reviews),
-          },
-        ],
-      },
-      { signal: abortController.signal },
-    );
+    const systemPrompt = buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length);
+    const userMessage = buildSummaryUserMessage(req.prompt, req.reviews);
+    const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
-    const summary = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
+    const result = await runTool(deps.tool, fullPrompt, effectiveTimeout, abortController.signal);
 
-    const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
-
-    return { summary, tokensUsed };
+    return { summary: result.stdout, tokensUsed: result.tokensUsed };
   } finally {
     clearTimeout(abortTimer);
   }
