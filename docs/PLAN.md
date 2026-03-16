@@ -146,6 +146,8 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #40 [architect, DONE] Database Schema Migration + Environment Setup — PR #42 merged
 - #41 [web-dev, DONE] Fix dashboard quality issues (hydration, errors, AbortController, coverage) — PR #44 merged
 - #43 [worker-dev, DONE] Fix CORS origin validation + add security headers — PR #45 merged
+- #47 [cli-dev, DONE] Refactor CLI to invoke local tools instead of Anthropic API — PR #49 merged
+- #48 [worker-dev, DONE] Distribute pending tasks when agent comes online — PR #50 merged
 
 ## Backlog
 
@@ -184,3 +186,5 @@ M0 → M2 → M4       M5 → M9
 | #42 | #40    | architect  | 2026-03-16 | Deployment guide + rating uniqueness constraint                   |
 | #44 | #41    | web-dev    | 2026-03-16 | Fix dashboard quality — hydration, errors, AbortController        |
 | #45 | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                     |
+| #49 | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API        |
+| #50 | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                   |
