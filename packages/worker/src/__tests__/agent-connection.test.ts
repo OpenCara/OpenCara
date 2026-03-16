@@ -1503,6 +1503,114 @@ describe('AgentConnection', () => {
     });
   });
 
+  describe('handleWebSocket resilience', () => {
+    // Note: In Node.js test environment, `new Response(null, { status: 101 })` throws
+    // RangeError because Node's Response only accepts 200-599 status codes.
+    // The Cloudflare Workers runtime supports 101 natively. We verify resilience by
+    // confirming the code reaches the Response(101) line (throws RangeError) rather
+    // than failing earlier with the Supabase/pickUpPendingTasks error.
+
+    it('WebSocket setup completes when pickUpPendingTasks throws', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Make pickUpPendingTasks throw by having the review_tasks select throw
+      const throwingMock = createSupabaseMock();
+      let selectCallCount = 0;
+      const originalFrom = throwingMock.from;
+      throwingMock.from = vi.fn((table: string) => {
+        const chain = originalFrom(table);
+        if (table === 'review_tasks') {
+          chain.select = vi.fn(() => {
+            selectCallCount++;
+            throw new Error('column diff_content does not exist');
+          });
+        }
+        return chain;
+      }) as typeof throwingMock.from;
+
+      mockedCreateSupabase.mockReturnValue(
+        throwingMock as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — throws RangeError in Node but would succeed in Workers
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // Heartbeat alarm was set (before pickUpPendingTasks)
+      expect(storage.setAlarm).toHaveBeenCalled();
+
+      // Agent stored as online in DO storage
+      expect(storage.store.get('status')).toBe('online');
+      expect(storage.store.get('agentId')).toBe('agent-1');
+
+      // pickUpPendingTasks was attempted and caught
+      expect(selectCallCount).toBeGreaterThan(0);
+    });
+
+    it('WebSocket setup completes when createSupabaseClient throws', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Make createSupabaseClient throw
+      mockedCreateSupabase.mockImplementation(() => {
+        throw new Error('Supabase connection refused');
+      });
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — RangeError in Node, success in Workers
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // Heartbeat alarm was set
+      expect(storage.setAlarm).toHaveBeenCalled();
+
+      // Agent stored as online in DO storage
+      expect(storage.store.get('status')).toBe('online');
+      expect(storage.store.get('agentId')).toBe('agent-1');
+    });
+
+    it('WebSocket setup completes when Supabase status update rejects', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Create a mock where the agents update rejects
+      const rejectingMock = createSupabaseMock();
+      const originalFrom = rejectingMock.from;
+      rejectingMock.from = vi.fn((table: string) => {
+        const chain = originalFrom(table);
+        if (table === 'agents') {
+          chain.update = vi.fn(() => {
+            const eqChain = {
+              eq: vi.fn(() => Promise.reject(new Error('network timeout'))),
+            };
+            return eqChain;
+          });
+        }
+        return chain;
+      }) as typeof rejectingMock.from;
+
+      mockedCreateSupabase.mockReturnValue(
+        rejectingMock as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      // Reaches Response(101) — RangeError in Node, success in Workers
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // Heartbeat alarm was set
+      expect(storage.setAlarm).toHaveBeenCalled();
+
+      // Agent stored as online in DO storage
+      expect(storage.store.get('status')).toBe('online');
+    });
+  });
+
   describe('redistribution uses stored diff_content and config_json', () => {
     beforeEach(() => {
       storage.store.set('agentId', 'agent-1');
