@@ -1,14 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildSystemPrompt,
   buildUserMessage,
   extractVerdict,
   executeReview,
-  getAnthropicApiKey,
   DiffTooLargeError,
   type ReviewRequest,
   type ReviewExecutorDeps,
 } from '../review.js';
+import type { ToolExecutorResult } from '../tool-executor.js';
 
 describe('buildSystemPrompt', () => {
   it('inserts owner and repo into template', () => {
@@ -64,32 +64,6 @@ describe('extractVerdict', () => {
   });
 });
 
-describe('getAnthropicApiKey', () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    process.env = { ...originalEnv };
-    delete process.env['ANTHROPIC_API_KEY'];
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-  });
-
-  it('prefers environment variable over config', () => {
-    process.env['ANTHROPIC_API_KEY'] = 'env-key';
-    expect(getAnthropicApiKey('config-key')).toBe('env-key');
-  });
-
-  it('falls back to config key', () => {
-    expect(getAnthropicApiKey('config-key')).toBe('config-key');
-  });
-
-  it('throws when neither env nor config key is available', () => {
-    expect(() => getAnthropicApiKey(null)).toThrow('Anthropic API key not found');
-  });
-});
-
 describe('DiffTooLargeError', () => {
   it('has correct name and message', () => {
     const err = new DiffTooLargeError('too big');
@@ -111,155 +85,121 @@ describe('executeReview', () => {
   };
 
   const defaultDeps: ReviewExecutorDeps = {
-    anthropicApiKey: 'sk-ant-test',
-    reviewModel: 'claude-sonnet-4-6',
+    tool: 'claude-code',
     maxDiffSizeKb: 100,
   };
 
-  it('calls Anthropic API and returns parsed response', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'VERDICT: APPROVE\nGreat code!' }],
-      usage: { input_tokens: 100, output_tokens: 50 },
-    });
-    const mockClient = { messages: { create: mockCreate } };
-    const createClient = vi.fn().mockReturnValue(mockClient);
+  it('invokes tool subprocess and returns parsed response', async () => {
+    const mockRunTool = vi
+      .fn<
+        (
+          toolName: string,
+          prompt: string,
+          timeoutMs: number,
+          signal?: AbortSignal,
+        ) => Promise<ToolExecutorResult>
+      >()
+      .mockResolvedValue({
+        stdout: 'VERDICT: APPROVE\nGreat code!',
+        tokensUsed: 0,
+      });
 
-    const result = await executeReview(defaultRequest, defaultDeps, createClient as never);
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.verdict).toBe('approve');
     expect(result.review).toBe('Great code!');
-    expect(result.tokensUsed).toBe(150);
-    expect(createClient).toHaveBeenCalledWith('sk-ant-test');
-    expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        system: expect.stringContaining('acme/widgets'),
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: 'user',
-            content: expect.stringContaining('Review this PR'),
-          }),
-        ]),
-      }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    expect(result.tokensUsed).toBe(0);
+    expect(mockRunTool).toHaveBeenCalledWith(
+      'claude-code',
+      expect.stringContaining('acme/widgets'),
+      expect.any(Number),
+      expect.any(AbortSignal),
     );
+    // Prompt should contain both system and user content
+    const prompt = mockRunTool.mock.calls[0][1];
+    expect(prompt).toContain('Review this PR');
+    expect(prompt).toContain('some diff');
   });
 
   it('rejects diff that exceeds max size', async () => {
     const largeDiff = 'x'.repeat(200 * 1024); // 200KB
     const request = { ...defaultRequest, diffContent: largeDiff };
 
-    await expect(executeReview(request, defaultDeps, vi.fn() as never)).rejects.toThrow(
-      DiffTooLargeError,
-    );
+    await expect(executeReview(request, defaultDeps, vi.fn())).rejects.toThrow(DiffTooLargeError);
   });
 
   it('rejects when not enough time remaining', async () => {
     const request = { ...defaultRequest, timeout: 0 };
 
-    await expect(executeReview(request, defaultDeps, vi.fn() as never)).rejects.toThrow(
+    await expect(executeReview(request, defaultDeps, vi.fn())).rejects.toThrow(
       'Not enough time remaining',
     );
   });
 
   it('handles request_changes verdict', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'VERDICT: REQUEST_CHANGES\nFix the bug.' }],
-      usage: { input_tokens: 80, output_tokens: 20 },
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: REQUEST_CHANGES\nFix the bug.',
+      tokensUsed: 0,
     });
-    const mockClient = { messages: { create: mockCreate } };
 
-    const result = await executeReview(
-      defaultRequest,
-      defaultDeps,
-      vi.fn().mockReturnValue(mockClient) as never,
-    );
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.verdict).toBe('request_changes');
     expect(result.review).toBe('Fix the bug.');
-    expect(result.tokensUsed).toBe(100);
   });
 
   it('defaults to comment verdict when not found', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'Some observations about the code.' }],
-      usage: { input_tokens: 50, output_tokens: 30 },
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'Some observations about the code.',
+      tokensUsed: 0,
     });
-    const mockClient = { messages: { create: mockCreate } };
 
-    const result = await executeReview(
-      defaultRequest,
-      defaultDeps,
-      vi.fn().mockReturnValue(mockClient) as never,
-    );
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.verdict).toBe('comment');
     expect(result.review).toBe('Some observations about the code.');
   });
 
-  it('handles missing usage in response', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'VERDICT: APPROVE\nOK' }],
-      usage: undefined,
+  it('returns tokensUsed from tool when reported', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: APPROVE\nOK',
+      tokensUsed: 150,
     });
-    const mockClient = { messages: { create: mockCreate } };
 
-    const result = await executeReview(
-      defaultRequest,
-      defaultDeps,
-      vi.fn().mockReturnValue(mockClient) as never,
-    );
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.tokensUsed).toBe(0);
+    expect(result.tokensUsed).toBe(150);
   });
 
-  it('propagates API errors', async () => {
-    const mockCreate = vi.fn().mockRejectedValue(new Error('API rate limited'));
-    const mockClient = { messages: { create: mockCreate } };
+  it('propagates tool errors', async () => {
+    const mockRunTool = vi.fn().mockRejectedValue(new Error('Tool not found'));
 
-    await expect(
-      executeReview(defaultRequest, defaultDeps, vi.fn().mockReturnValue(mockClient) as never),
-    ).rejects.toThrow('API rate limited');
+    await expect(executeReview(defaultRequest, defaultDeps, mockRunTool)).rejects.toThrow(
+      'Tool not found',
+    );
   });
 
-  it('joins multiple text blocks in response', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [
-        { type: 'text', text: 'VERDICT: COMMENT' },
-        { type: 'text', text: 'More text here.' },
-      ],
-      usage: { input_tokens: 10, output_tokens: 10 },
+  it('passes correct timeout to tool', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: APPROVE\nOK',
+      tokensUsed: 0,
     });
-    const mockClient = { messages: { create: mockCreate } };
 
-    const result = await executeReview(
-      defaultRequest,
-      defaultDeps,
-      vi.fn().mockReturnValue(mockClient) as never,
-    );
+    await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.verdict).toBe('comment');
-    expect(result.review).toContain('More text here.');
+    // timeout is 300s, safety margin is 30s, so effective timeout is 270s = 270000ms
+    const timeoutMs = mockRunTool.mock.calls[0][2];
+    expect(timeoutMs).toBe(270_000);
   });
 
-  it('filters out non-text blocks', async () => {
-    const mockCreate = vi.fn().mockResolvedValue({
-      content: [
-        { type: 'tool_use', text: 'ignored' },
-        { type: 'text', text: 'VERDICT: APPROVE\nGood.' },
-      ],
-      usage: { input_tokens: 10, output_tokens: 10 },
+  it('passes the tool name from deps', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: COMMENT\nLooks OK.',
+      tokensUsed: 0,
     });
-    const mockClient = { messages: { create: mockCreate } };
 
-    const result = await executeReview(
-      defaultRequest,
-      defaultDeps,
-      vi.fn().mockReturnValue(mockClient) as never,
-    );
+    await executeReview(defaultRequest, { tool: 'codex', maxDiffSizeKb: 100 }, mockRunTool);
 
-    expect(result.verdict).toBe('approve');
-    expect(result.review).toBe('Good.');
+    expect(mockRunTool.mock.calls[0][0]).toBe('codex');
   });
 });

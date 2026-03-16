@@ -12,8 +12,6 @@ export interface ConsumptionLimits {
 export interface CliConfig {
   apiKey: string | null;
   platformUrl: string;
-  anthropicApiKey: string | null;
-  reviewModel: string;
   maxDiffSizeKb: number;
   limits: ConsumptionLimits | null;
 }
@@ -26,7 +24,6 @@ export function ensureConfigDir(): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
 }
 
-export const DEFAULT_REVIEW_MODEL = 'claude-sonnet-4-6';
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 
 function parseLimits(data: Record<string, unknown>): ConsumptionLimits | null {
@@ -45,8 +42,6 @@ export function loadConfig(): CliConfig {
   const defaults: CliConfig = {
     apiKey: null,
     platformUrl: DEFAULT_PLATFORM_URL,
-    anthropicApiKey: null,
-    reviewModel: DEFAULT_REVIEW_MODEL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     limits: null,
   };
@@ -65,8 +60,6 @@ export function loadConfig(): CliConfig {
   return {
     apiKey: typeof data.api_key === 'string' ? data.api_key : null,
     platformUrl: typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL,
-    anthropicApiKey: typeof data.anthropic_api_key === 'string' ? data.anthropic_api_key : null,
-    reviewModel: typeof data.review_model === 'string' ? data.review_model : DEFAULT_REVIEW_MODEL,
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
     limits: parseLimits(data),
@@ -80,12 +73,6 @@ export function saveConfig(config: CliConfig): void {
   };
   if (config.apiKey) {
     data.api_key = config.apiKey;
-  }
-  if (config.anthropicApiKey) {
-    data.anthropic_api_key = config.anthropicApiKey;
-  }
-  if (config.reviewModel !== DEFAULT_REVIEW_MODEL) {
-    data.review_model = config.reviewModel;
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;

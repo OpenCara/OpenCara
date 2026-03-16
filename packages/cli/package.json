@@ -12,7 +12,6 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "@opencrust/shared": "*",
     "commander": "^13.0.0",
     "ws": "^8.18.0",

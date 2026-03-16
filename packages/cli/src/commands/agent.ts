@@ -13,13 +13,9 @@ import type {
 import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
 import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
-import {
-  executeReview,
-  getAnthropicApiKey,
-  DiffTooLargeError,
-  type ReviewExecutorDeps,
-} from '../review.js';
+import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
+import { getSupportedTools } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   fetchConsumptionStats,
@@ -318,7 +314,7 @@ export function handleMessage(
           id: crypto.randomUUID(),
           timestamp: Date.now(),
           taskId: summaryRequest.taskId,
-          reason: 'Summary execution not configured (no API key)',
+          reason: 'Review tool not configured',
         });
         break;
       }
@@ -453,8 +449,10 @@ agentCommand
     const config = loadConfig();
     const apiKey = requireApiKey(config);
 
+    const client = new ApiClient(config.platformUrl, apiKey);
+    let agentTool: string | undefined;
+
     if (!agentId) {
-      const client = new ApiClient(config.platformUrl, apiKey);
       let res: ListAgentsResponse;
       try {
         res = await client.get<ListAgentsResponse>('/api/agents');
@@ -470,6 +468,7 @@ agentCommand
 
       if (res.agents.length === 1) {
         agentId = res.agents[0].id;
+        agentTool = res.agents[0].tool;
         console.log(`Using agent ${agentId}`);
       } else {
         console.error('Multiple agents found. Please specify an agent ID:');
@@ -478,22 +477,38 @@ agentCommand
         }
         process.exit(1);
       }
+    } else {
+      // Fetch agent info to get the tool field
+      try {
+        const res = await client.get<ListAgentsResponse>('/api/agents');
+        const agent = res.agents.find((a) => a.id === agentId);
+        if (agent) {
+          agentTool = agent.tool;
+        }
+      } catch (err) {
+        console.warn(
+          `Warning: Failed to fetch agent info: ${err instanceof Error ? err.message : 'unknown error'}`,
+        );
+      }
     }
 
     let reviewDeps: ReviewExecutorDeps | undefined;
-    try {
-      const anthropicKey = getAnthropicApiKey(config.anthropicApiKey);
+    if (agentTool) {
+      const supported = getSupportedTools();
+      if (!supported.includes(agentTool)) {
+        console.error(`Unsupported tool "${agentTool}". Supported tools: ${supported.join(', ')}`);
+        process.exit(1);
+      }
       reviewDeps = {
-        anthropicApiKey: anthropicKey,
-        reviewModel: config.reviewModel,
+        tool: agentTool,
         maxDiffSizeKb: config.maxDiffSizeKb,
       };
-    } catch {
-      console.warn('Warning: Anthropic API key not configured. Reviews will be rejected.');
+    } else {
+      console.warn('Warning: Could not determine agent tool. Reviews will be rejected.');
     }
 
     const consumptionDeps: ConsumptionDeps = {
-      client: new ApiClient(config.platformUrl, apiKey),
+      client,
       agentId,
       limits: config.limits,
       session: createSessionTracker(),

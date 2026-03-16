@@ -1,5 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { ReviewVerdict } from '@opencrust/shared';
+import { executeTool, type ToolExecutorResult } from './tool-executor.js';
 
 export interface ReviewRequest {
   taskId: string;
@@ -18,7 +18,6 @@ export interface ReviewResponse {
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
-export const MAX_RESPONSE_TOKENS = 4096;
 
 const SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and provide:
@@ -56,24 +55,19 @@ export function extractVerdict(text: string): { verdict: ReviewVerdict; review: 
 }
 
 export interface ReviewExecutorDeps {
-  anthropicApiKey: string;
-  reviewModel: string;
+  tool: string;
   maxDiffSizeKb: number;
-}
-
-export function getAnthropicApiKey(configKey: string | null): string {
-  const envKey = process.env['ANTHROPIC_API_KEY'];
-  if (envKey) return envKey;
-  if (configKey) return configKey;
-  throw new Error(
-    'Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable or add anthropic_api_key to ~/.opencrust/config.yml',
-  );
 }
 
 export async function executeReview(
   req: ReviewRequest,
   deps: ReviewExecutorDeps,
-  createClient: (apiKey: string) => Anthropic = (key) => new Anthropic({ apiKey: key }),
+  runTool: (
+    toolName: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<ReviewResponse> {
   const diffSizeKb = Buffer.byteLength(req.diffContent, 'utf-8') / 1024;
   if (diffSizeKb > deps.maxDiffSizeKb) {
@@ -87,37 +81,21 @@ export async function executeReview(
     throw new Error('Not enough time remaining to start review');
   }
 
+  const effectiveTimeout = timeoutMs - TIMEOUT_SAFETY_MARGIN_MS;
   const abortController = new AbortController();
   const abortTimer = setTimeout(() => {
     abortController.abort();
-  }, timeoutMs - TIMEOUT_SAFETY_MARGIN_MS);
+  }, effectiveTimeout);
 
   try {
-    const client = createClient(deps.anthropicApiKey);
-    const response = await client.messages.create(
-      {
-        model: deps.reviewModel,
-        max_tokens: MAX_RESPONSE_TOKENS,
-        system: buildSystemPrompt(req.owner, req.repo),
-        messages: [
-          {
-            role: 'user',
-            content: buildUserMessage(req.prompt, req.diffContent),
-          },
-        ],
-      },
-      { signal: abortController.signal },
-    );
+    const systemPrompt = buildSystemPrompt(req.owner, req.repo);
+    const userMessage = buildUserMessage(req.prompt, req.diffContent);
+    const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
-    const rawText = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
+    const result = await runTool(deps.tool, fullPrompt, effectiveTimeout, abortController.signal);
 
-    const { verdict, review } = extractVerdict(rawText);
-    const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
-
-    return { review, verdict, tokensUsed };
+    const { verdict, review } = extractVerdict(result.stdout);
+    return { review, verdict, tokensUsed: result.tokensUsed };
   } finally {
     clearTimeout(abortTimer);
   }
