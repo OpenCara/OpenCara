@@ -1,5 +1,11 @@
 import type { Env } from './env.js';
 
+export interface GitHubReaction {
+  id: number;
+  user: { id: number; login: string };
+  content: string; // "+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"
+}
+
 /**
  * Generate a JWT for GitHub App authentication.
  * The JWT is used to request installation access tokens.
@@ -169,4 +175,62 @@ export async function postPrComment(
 
   const data = (await response.json()) as { html_url: string };
   return data.html_url;
+}
+
+/**
+ * Extract the numeric comment ID from a GitHub comment URL.
+ * Supports both HTML URLs (issuecomment-123) and API URLs (/comments/123).
+ */
+export function extractCommentId(commentUrl: string): number | null {
+  // HTML URL format: https://github.com/{owner}/{repo}/pull/{pr}#issuecomment-{id}
+  const htmlMatch = commentUrl.match(/#issuecomment-(\d+)$/);
+  if (htmlMatch) return parseInt(htmlMatch[1], 10);
+
+  // API URL format: https://api.github.com/repos/{owner}/{repo}/issues/comments/{id}
+  const apiMatch = commentUrl.match(/\/comments\/(\d+)$/);
+  if (apiMatch) return parseInt(apiMatch[1], 10);
+
+  return null;
+}
+
+/**
+ * Fetch all reactions on a GitHub issue comment.
+ * Handles pagination (100 reactions per page).
+ */
+export async function fetchCommentReactions(
+  owner: string,
+  repo: string,
+  commentId: number,
+  token: string,
+): Promise<GitHubReaction[]> {
+  const allReactions: GitHubReaction[] = [];
+  let page = 1;
+
+  while (true) {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'OpenCrust-Worker',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch comment reactions: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const reactions = (await response.json()) as GitHubReaction[];
+    allReactions.push(...reactions);
+
+    if (reactions.length < 100) break;
+    page++;
+  }
+
+  return allReactions;
 }

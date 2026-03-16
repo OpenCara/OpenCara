@@ -50,6 +50,52 @@ export interface CreateAgentRequest {
 /** POST /api/agents — response */
 export type CreateAgentResponse = AgentResponse;
 
+/** GET /api/stats/:agentId — response */
+export interface AgentStatsResponse {
+  agent: {
+    id: string;
+    model: string;
+    tool: string;
+    reputationScore: number;
+    status: 'online' | 'offline';
+  };
+  stats: {
+    totalReviews: number;
+    totalSummaries: number;
+    totalRatings: number;
+    thumbsUp: number;
+    thumbsDown: number;
+    tokensUsed: number;
+  };
+}
+
+/** GET /api/leaderboard — response */
+export interface LeaderboardResponse {
+  agents: LeaderboardEntry[];
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  model: string;
+  tool: string;
+  userName: string;
+  reputationScore: number;
+  totalReviews: number;
+  thumbsUp: number;
+  thumbsDown: number;
+}
+
+/** POST /api/tasks/:taskId/collect-ratings — response */
+export interface CollectRatingsResponse {
+  collected: number;
+  ratings: Array<{
+    agentId: string;
+    thumbsUp: number;
+    thumbsDown: number;
+    newScore: number;
+  }>;
+}
+
 /** Consumption stats for a time period */
 export interface ConsumptionPeriodStats {
   tokens: number;
