@@ -10,7 +10,8 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@opencrust/shared": "*"
+    "@opencrust/shared": "*",
+    "@supabase/supabase-js": "^2.99.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250214.0",
