@@ -279,7 +279,7 @@ describe('github', () => {
       expect(reactions).toEqual(mockReactions);
     });
 
-    it('calls correct GitHub API endpoint', async () => {
+    it('calls correct GitHub API endpoint with pagination params', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve([]),
@@ -288,7 +288,7 @@ describe('github', () => {
       await fetchCommentReactions('myorg', 'myrepo', 456, 'mytoken');
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'https://api.github.com/repos/myorg/myrepo/issues/comments/456/reactions',
+        'https://api.github.com/repos/myorg/myrepo/issues/comments/456/reactions?per_page=100&page=1',
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: 'Bearer mytoken',
@@ -297,6 +297,28 @@ describe('github', () => {
             'X-GitHub-Api-Version': '2022-11-28',
           }),
         }),
+      );
+    });
+
+    it('paginates when first page has 100 reactions', async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({
+        id: i,
+        user: { id: i, login: `user${i}` },
+        content: '+1',
+      }));
+      const page2 = [{ id: 100, user: { id: 100, login: 'user100' }, content: '-1' }];
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(page1) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(page2) });
+
+      const reactions = await fetchCommentReactions('o', 'r', 1, 'tok');
+      expect(reactions).toHaveLength(101);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('page=2'),
+        expect.anything(),
       );
     });
 

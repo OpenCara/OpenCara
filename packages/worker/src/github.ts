@@ -194,8 +194,8 @@ export function extractCommentId(commentUrl: string): number | null {
 }
 
 /**
- * Fetch reactions on a GitHub issue comment.
- * Returns all reactions (paginated up to 100 per page).
+ * Fetch all reactions on a GitHub issue comment.
+ * Handles pagination (100 reactions per page).
  */
 export async function fetchCommentReactions(
   owner: string,
@@ -203,21 +203,34 @@ export async function fetchCommentReactions(
   commentId: number,
   token: string,
 ): Promise<GitHubReaction[]> {
-  const response = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'OpenCrust-Worker',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    },
-  );
+  const allReactions: GitHubReaction[] = [];
+  let page = 1;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch comment reactions: ${response.status} ${response.statusText}`);
+  while (true) {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'OpenCrust-Worker',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch comment reactions: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const reactions = (await response.json()) as GitHubReaction[];
+    allReactions.push(...reactions);
+
+    if (reactions.length < 100) break;
+    page++;
   }
 
-  return (await response.json()) as GitHubReaction[];
+  return allReactions;
 }

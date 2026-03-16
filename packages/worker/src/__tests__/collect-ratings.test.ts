@@ -30,17 +30,21 @@ function createMockEnv(): any {
   };
 }
 
-describe('handleCollectRatings', () => {
-  it('returns 404 when task not found', async () => {
-    const mockSupabase = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: null }),
-          }),
+function createMockSupabase(taskData: any): any {
+  return {
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: taskData }),
         }),
       }),
-    } as any;
+    }),
+  };
+}
+
+describe('handleCollectRatings', () => {
+  it('returns 404 when task not found', async () => {
+    const mockSupabase = createMockSupabase(null);
 
     const response = await handleCollectRatings('task-x', mockUser, createMockEnv(), mockSupabase);
     expect(response.status).toBe(404);
@@ -49,18 +53,26 @@ describe('handleCollectRatings', () => {
     expect(data.error).toBe('Task not found');
   });
 
+  it('returns 404 when task belongs to a different user', async () => {
+    const mockSupabase = createMockSupabase({
+      id: 'task-1',
+      status: 'completed',
+      projects: { user_id: 'other-user' },
+    });
+
+    const response = await handleCollectRatings('task-1', mockUser, createMockEnv(), mockSupabase);
+    expect(response.status).toBe(404);
+
+    const data = await response.json();
+    expect(data.error).toBe('Task not found');
+  });
+
   it('returns collected ratings on success', async () => {
-    const mockSupabase = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'task-1', status: 'completed' },
-            }),
-          }),
-        }),
-      }),
-    } as any;
+    const mockSupabase = createMockSupabase({
+      id: 'task-1',
+      status: 'completed',
+      projects: { user_id: 'user-123' },
+    });
 
     vi.mocked(collectTaskRatings).mockResolvedValue({
       collected: 5,
@@ -77,17 +89,11 @@ describe('handleCollectRatings', () => {
   });
 
   it('returns 500 when collectTaskRatings throws', async () => {
-    const mockSupabase = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'task-1', status: 'completed' },
-            }),
-          }),
-        }),
-      }),
-    } as any;
+    const mockSupabase = createMockSupabase({
+      id: 'task-1',
+      status: 'completed',
+      projects: { user_id: 'user-123' },
+    });
 
     vi.mocked(collectTaskRatings).mockRejectedValue(new Error('GitHub API failed'));
 
@@ -99,17 +105,11 @@ describe('handleCollectRatings', () => {
   });
 
   it('handles non-Error thrown values', async () => {
-    const mockSupabase = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'task-1', status: 'completed' },
-            }),
-          }),
-        }),
-      }),
-    } as any;
+    const mockSupabase = createMockSupabase({
+      id: 'task-1',
+      status: 'completed',
+      projects: { user_id: 'user-123' },
+    });
 
     vi.mocked(collectTaskRatings).mockRejectedValue('string error');
 

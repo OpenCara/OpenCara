@@ -99,15 +99,6 @@ describe('collectTaskRatings', () => {
             }),
           };
         }
-        if (table === 'review_summaries') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                not: vi.fn().mockResolvedValue({ data: [] }),
-              }),
-            }),
-          };
-        }
         return {};
       }),
     } as any;
@@ -148,15 +139,6 @@ describe('collectTaskRatings', () => {
                   data: [{ id: 'result-1' }],
                 }),
               };
-            }),
-          };
-        }
-        if (table === 'review_summaries') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                not: vi.fn().mockResolvedValue({ data: [] }),
-              }),
             }),
           };
         }
@@ -254,7 +236,7 @@ describe('collectTaskRatings', () => {
   it('throws when task is not found', async () => {
     const mockSupabase = {
       from: vi.fn().mockImplementation((table: string) => {
-        if (table === 'review_results' || table === 'review_summaries') {
+        if (table === 'review_results') {
           return {
             select: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({

@@ -13,18 +13,23 @@ function json(data: unknown, status = 200): Response {
 /** POST /api/tasks/:taskId/collect-ratings — triggers rating collection for a task */
 export async function handleCollectRatings(
   taskId: string,
-  _user: User,
+  user: User,
   env: Env,
   supabase: SupabaseClient,
 ): Promise<Response> {
-  // Verify task exists
+  // Verify task exists and user has access via project ownership
   const { data: task } = await supabase
     .from('review_tasks')
-    .select('id, status')
+    .select('id, status, projects!inner(user_id)')
     .eq('id', taskId)
     .single();
 
   if (!task) {
+    return json({ error: 'Task not found' }, 404);
+  }
+
+  const project = task.projects as unknown as { user_id: string };
+  if (project.user_id !== user.id) {
     return json({ error: 'Task not found' }, 404);
   }
 

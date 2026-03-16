@@ -142,12 +142,13 @@ export async function collectTaskRatings(
 }
 
 /**
- * Get all comments (review results and summaries) with URLs for a task.
+ * Get all review result comments with URLs for a task.
+ * Only collects from review_results (not summaries) since the ratings table
+ * uses review_result_id as a foreign key to the review_results table.
  */
 async function getTaskComments(supabase: SupabaseClient, taskId: string): Promise<CommentInfo[]> {
   const comments: CommentInfo[] = [];
 
-  // Review results
   const { data: results } = await supabase
     .from('review_results')
     .select('id, agent_id, comment_url')
@@ -165,24 +166,6 @@ async function getTaskComments(supabase: SupabaseClient, taskId: string): Promis
     }
   }
 
-  // Review summaries
-  const { data: summaries } = await supabase
-    .from('review_summaries')
-    .select('id, agent_id, comment_url')
-    .eq('review_task_id', taskId)
-    .not('comment_url', 'is', null);
-
-  if (summaries) {
-    for (const s of summaries as Array<{ id: string; agent_id: string; comment_url: string }>) {
-      comments.push({
-        id: s.id,
-        agentId: s.agent_id,
-        commentUrl: s.comment_url,
-        source: 'review_summary',
-      });
-    }
-  }
-
   return comments;
 }
 
@@ -194,28 +177,31 @@ export async function recalculateAgentReputation(
   agentId: string,
   supabase: SupabaseClient,
 ): Promise<{ thumbsUp: number; thumbsDown: number; newScore: number }> {
+  // Fetch review result IDs once and reuse for both counts
+  const { data: results } = await supabase
+    .from('review_results')
+    .select('id')
+    .eq('agent_id', agentId);
+
+  const resultIds = (results ?? []).map((r: { id: string }) => r.id);
+
+  // Early return if no review results exist
+  if (resultIds.length === 0) {
+    return { thumbsUp: 0, thumbsDown: 0, newScore: 0 };
+  }
+
   // Count thumbs up across all review results for this agent
   const { count: thumbsUp } = await supabase
     .from('ratings')
     .select('id', { count: 'exact', head: true })
     .eq('emoji', 'thumbs_up')
-    .in(
-      'review_result_id',
-      (await supabase.from('review_results').select('id').eq('agent_id', agentId)).data?.map(
-        (r: { id: string }) => r.id,
-      ) ?? [],
-    );
+    .in('review_result_id', resultIds);
 
   const { count: thumbsDown } = await supabase
     .from('ratings')
     .select('id', { count: 'exact', head: true })
     .eq('emoji', 'thumbs_down')
-    .in(
-      'review_result_id',
-      (await supabase.from('review_results').select('id').eq('agent_id', agentId)).data?.map(
-        (r: { id: string }) => r.id,
-      ) ?? [],
-    );
+    .in('review_result_id', resultIds);
 
   const up = thumbsUp ?? 0;
   const down = thumbsDown ?? 0;
@@ -268,18 +254,24 @@ export async function recalculateUserReputation(
   let weightedSum = 0;
 
   for (const agent of agents as Array<{ id: string; reputation_score: number }>) {
-    // Count ratings for this agent's reviews
-    const { count } = await supabase
-      .from('ratings')
-      .select('id', { count: 'exact', head: true })
-      .in(
-        'review_result_id',
-        (await supabase.from('review_results').select('id').eq('agent_id', agent.id)).data?.map(
-          (r: { id: string }) => r.id,
-        ) ?? [],
-      );
+    // Fetch review result IDs once per agent
+    const { data: results } = await supabase
+      .from('review_results')
+      .select('id')
+      .eq('agent_id', agent.id);
 
-    const weight = Math.max(1, count ?? 0); // minimum weight of 1
+    const resultIds = (results ?? []).map((r: { id: string }) => r.id);
+
+    let ratingCount = 0;
+    if (resultIds.length > 0) {
+      const { count } = await supabase
+        .from('ratings')
+        .select('id', { count: 'exact', head: true })
+        .in('review_result_id', resultIds);
+      ratingCount = count ?? 0;
+    }
+
+    const weight = Math.max(1, ratingCount); // minimum weight of 1
     totalWeight += weight;
     weightedSum += agent.reputation_score * weight;
   }

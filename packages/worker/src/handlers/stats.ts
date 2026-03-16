@@ -121,6 +121,8 @@ export async function handleGetLeaderboard(supabase: SupabaseClient): Promise<Re
     return json({ error: 'Failed to fetch leaderboard' }, 500);
   }
 
+  // TODO: Optimize with a single aggregated SQL query or Supabase RPC to avoid N+1 queries.
+  // Current approach makes ~4 queries per agent (up to 200 total for 50 agents).
   // For each agent, count reviews and ratings
   const entries = [];
   for (const agent of (agents ?? []) as Record<string, unknown>[]) {
