@@ -51,12 +51,12 @@ Summary of what you need:
 
 Note down these values:
 
-| Value | Where to find it |
-|---|---|
-| **App ID** | App settings page |
-| **Client ID** | App settings page |
-| **Client Secret** | App settings page (generate one) |
-| **Private Key** | Downloaded `.pem` file |
+| Value              | Where to find it                     |
+| ------------------ | ------------------------------------ |
+| **App ID**         | App settings page                    |
+| **Client ID**      | App settings page                    |
+| **Client Secret**  | App settings page (generate one)     |
+| **Private Key**    | Downloaded `.pem` file               |
 | **Webhook Secret** | The secret you chose during creation |
 
 ## 3. Cloudflare Workers Setup
@@ -136,9 +136,9 @@ You should get a JSON response (empty array if no data yet).
 
 In the Vercel project settings (**Settings > Environment Variables**):
 
-| Variable | Value | Environment |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | `https://<your-worker-url>` | Production |
+| Variable              | Value                       | Environment |
+| --------------------- | --------------------------- | ----------- |
+| `NEXT_PUBLIC_API_URL` | `https://<your-worker-url>` | Production  |
 
 ### 4.3 Deploy
 
@@ -170,7 +170,7 @@ https://<your-worker-url>/webhook/github
 2. Add a `.review.yml` file to the repo:
    ```yaml
    version: 1
-   prompt: "Review this PR for code quality and correctness."
+   prompt: 'Review this PR for code quality and correctness.'
    ```
 3. Open a PR — the Worker should receive the webhook and create a review task
 4. Run the CLI agent: `npx opencrust agent start`
@@ -180,22 +180,22 @@ https://<your-worker-url>/webhook/github
 
 ### Cloudflare Worker Secrets
 
-| Secret | Description | Source |
-|---|---|---|
-| `GITHUB_WEBHOOK_SECRET` | Webhook signature verification | GitHub App settings |
-| `GITHUB_APP_ID` | GitHub App identifier | GitHub App settings |
-| `GITHUB_APP_PRIVATE_KEY` | RSA private key (PEM format) | Downloaded from GitHub App |
-| `GITHUB_CLIENT_ID` | OAuth client identifier | GitHub App settings |
-| `GITHUB_CLIENT_SECRET` | OAuth client secret | GitHub App settings |
-| `SUPABASE_URL` | Supabase project URL | Supabase dashboard (Settings > API) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | Supabase dashboard (Settings > API) |
-| `WEB_URL` | Frontend URL (for CORS, redirects) | Your Vercel domain |
-| `WORKER_URL` | Worker URL (for OAuth callbacks) | Your Workers domain |
+| Secret                      | Description                        | Source                              |
+| --------------------------- | ---------------------------------- | ----------------------------------- |
+| `GITHUB_WEBHOOK_SECRET`     | Webhook signature verification     | GitHub App settings                 |
+| `GITHUB_APP_ID`             | GitHub App identifier              | GitHub App settings                 |
+| `GITHUB_APP_PRIVATE_KEY`    | RSA private key (PEM format)       | Downloaded from GitHub App          |
+| `GITHUB_CLIENT_ID`          | OAuth client identifier            | GitHub App settings                 |
+| `GITHUB_CLIENT_SECRET`      | OAuth client secret                | GitHub App settings                 |
+| `SUPABASE_URL`              | Supabase project URL               | Supabase dashboard (Settings > API) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key          | Supabase dashboard (Settings > API) |
+| `WEB_URL`                   | Frontend URL (for CORS, redirects) | Your Vercel domain                  |
+| `WORKER_URL`                | Worker URL (for OAuth callbacks)   | Your Workers domain                 |
 
 ### Vercel Environment Variables
 
-| Variable | Description | Source |
-|---|---|---|
+| Variable              | Description                  | Source              |
+| --------------------- | ---------------------------- | ------------------- |
 | `NEXT_PUBLIC_API_URL` | Worker API URL (client-side) | Your Workers domain |
 
 ### CLI Configuration
