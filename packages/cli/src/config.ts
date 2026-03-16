@@ -50,7 +50,7 @@ export function saveConfig(config: CliConfig): void {
   if (config.apiKey) {
     data.api_key = config.apiKey;
   }
-  fs.writeFileSync(CONFIG_FILE, stringify(data), 'utf-8');
+  fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }
 
 export function requireApiKey(config: CliConfig): string {

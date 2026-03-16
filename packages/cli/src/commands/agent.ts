@@ -58,6 +58,7 @@ function startAgent(agentId: string, platformUrl: string, apiKey: string): void 
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentWs: WebSocket | null = null;
 
   function clearHeartbeatTimer(): void {
     if (heartbeatTimer) {
@@ -66,9 +67,21 @@ function startAgent(agentId: string, platformUrl: string, apiKey: string): void 
     }
   }
 
+  function shutdown(): void {
+    intentionalClose = true;
+    clearHeartbeatTimer();
+    if (currentWs) currentWs.close();
+    console.log('Disconnected.');
+    process.exit(0);
+  }
+
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+
   function connect(): void {
     const url = buildWsUrl(platformUrl, agentId, apiKey);
     const ws = new WebSocket(url);
+    currentWs = ws;
 
     function resetHeartbeatTimer(): void {
       clearHeartbeatTimer();
@@ -105,16 +118,6 @@ function startAgent(agentId: string, platformUrl: string, apiKey: string): void 
     ws.on('error', (err) => {
       console.error(`WebSocket error: ${err.message}`);
     });
-
-    function onShutdown(): void {
-      intentionalClose = true;
-      clearHeartbeatTimer();
-      ws.close();
-      console.log('Disconnected.');
-      process.exit(0);
-    }
-    process.on('SIGINT', onShutdown);
-    process.on('SIGTERM', onShutdown);
   }
 
   async function reconnect(): Promise<void> {
