@@ -52,7 +52,7 @@ export function addCorsHeaders(request: Request, response: Response, env: Env): 
 /** Handle OPTIONS preflight requests — only sets CORS headers if Origin matches */
 export function handleCorsPreflightRequest(request: Request, env: Env): Response {
   if (!isOriginAllowed(request, env)) {
-    return new Response(null, { status: 204 });
+    return new Response(null, { status: 204, headers: { Vary: 'Origin' } });
   }
   return new Response(null, {
     status: 204,
@@ -62,6 +62,7 @@ export function handleCorsPreflightRequest(request: Request, env: Env): Response
       'Access-Control-Allow-Methods': ALLOWED_METHODS,
       'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Max-Age': '86400',
+      Vary: 'Origin',
     },
   });
 }

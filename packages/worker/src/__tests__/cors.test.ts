@@ -86,6 +86,7 @@ describe('handleCorsPreflightRequest', () => {
     expect(response.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST, OPTIONS');
     expect(response.headers.get('Access-Control-Allow-Credentials')).toBe('true');
     expect(response.headers.get('Access-Control-Max-Age')).toBe('86400');
+    expect(response.headers.get('Vary')).toBe('Origin');
   });
 
   it('returns empty body', async () => {
@@ -101,6 +102,7 @@ describe('handleCorsPreflightRequest', () => {
     expect(response.status).toBe(204);
     expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
     expect(response.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(response.headers.get('Vary')).toBe('Origin');
   });
 
   it('returns 204 without CORS headers when Origin is missing', () => {
@@ -109,6 +111,7 @@ describe('handleCorsPreflightRequest', () => {
 
     expect(response.status).toBe(204);
     expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    expect(response.headers.get('Vary')).toBe('Origin');
   });
 });
 
