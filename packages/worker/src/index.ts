@@ -4,7 +4,11 @@ import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
 import { handleCollectRatings } from './handlers/collect-ratings.js';
 import { handleGetConsumption } from './handlers/consumption.js';
-import { addCorsHeaders, handleCorsPreflightRequest } from './handlers/cors.js';
+import {
+  addCorsHeaders,
+  addSecurityHeaders,
+  handleCorsPreflightRequest,
+} from './handlers/cors.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from './handlers/device-flow.js';
 import { handleGetStats, handleGetLeaderboard } from './handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from './handlers/web-auth.js';
@@ -28,12 +32,12 @@ export default {
 
     // CORS preflight for /api/* routes
     if (method === 'OPTIONS' && pathname.startsWith('/api/')) {
-      return handleCorsPreflightRequest(env);
+      return addSecurityHeaders(handleCorsPreflightRequest(request, env));
     }
 
     // Webhook endpoint (public, validated by signature)
     if (method === 'POST' && pathname === '/webhook/github') {
-      return handleGitHubWebhook(request, env);
+      return addSecurityHeaders(await handleGitHubWebhook(request, env));
     }
 
     // WebSocket connection for agents
@@ -45,39 +49,39 @@ export default {
 
     // Web OAuth endpoints (public)
     if (method === 'GET' && pathname === '/auth/login') {
-      return handleWebLogin(request, env);
+      return addSecurityHeaders(await handleWebLogin(request, env));
     }
     if (method === 'GET' && pathname === '/auth/callback') {
-      return handleWebCallback(request, env, supabase);
+      return addSecurityHeaders(await handleWebCallback(request, env, supabase));
     }
     if (method === 'GET' && pathname === '/auth/logout') {
-      return handleWebLogout(request, env);
+      return addSecurityHeaders(await handleWebLogout(request, env));
     }
 
     // Device flow auth endpoints (public)
     if (method === 'POST' && pathname === '/auth/device') {
-      return handleDeviceFlow(env);
+      return addSecurityHeaders(await handleDeviceFlow(env));
     }
     if (method === 'POST' && pathname === '/auth/device/token') {
-      return handleDeviceToken(request, env, supabase);
+      return addSecurityHeaders(await handleDeviceToken(request, env, supabase));
     }
 
     // Auth endpoints (authenticated)
     if (method === 'POST' && pathname === '/auth/revoke') {
       const user = await authenticateRequest(request, supabase);
       if (!user) {
-        return json({ error: 'Unauthorized' }, 401);
+        return addSecurityHeaders(json({ error: 'Unauthorized' }, 401));
       }
-      return handleRevokeKey(user, supabase);
+      return addSecurityHeaders(await handleRevokeKey(user, supabase));
     }
 
     // --- API routes (with CORS) ---
     const response = await handleApiRoutes(request, method, pathname, env, supabase);
     if (response) {
-      return addCorsHeaders(response, env);
+      return addSecurityHeaders(addCorsHeaders(request, response, env));
     }
 
-    return json({ error: 'Not found' }, 404);
+    return addSecurityHeaders(json({ error: 'Not found' }, 404));
   },
 } satisfies ExportedHandler<Env>;
 

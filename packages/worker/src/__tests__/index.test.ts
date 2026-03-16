@@ -96,7 +96,8 @@ vi.mock('../handlers/web-auth.js', () => ({
 }));
 
 vi.mock('../handlers/cors.js', () => ({
-  addCorsHeaders: vi.fn((response: Response) => response),
+  addCorsHeaders: vi.fn((_request: Request, response: Response) => response),
+  addSecurityHeaders: vi.fn((response: Response) => response),
   handleCorsPreflightRequest: vi.fn().mockReturnValue(new Response(null, { status: 204 })),
 }));
 
@@ -108,7 +109,7 @@ import { handleCollectRatings } from '../handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
 import { handleGetStats, handleGetLeaderboard } from '../handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from '../handlers/web-auth.js';
-import { addCorsHeaders, handleCorsPreflightRequest } from '../handlers/cors.js';
+import { addCorsHeaders, addSecurityHeaders, handleCorsPreflightRequest } from '../handlers/cors.js';
 
 const mockEnv: Env = {
   GITHUB_WEBHOOK_SECRET: 'test',
@@ -400,15 +401,57 @@ describe('worker router', () => {
   // --- CORS routes ---
 
   it('handles OPTIONS preflight for /api/* routes', async () => {
-    const response = await worker.fetch(
-      new Request('http://localhost/api/agents', { method: 'OPTIONS' }),
-      mockEnv,
-    );
+    const req = new Request('http://localhost/api/agents', { method: 'OPTIONS' });
+    const response = await worker.fetch(req, mockEnv);
     expect(response.status).toBe(204);
-    expect(handleCorsPreflightRequest).toHaveBeenCalledWith(mockEnv);
+    expect(handleCorsPreflightRequest).toHaveBeenCalledWith(req, mockEnv);
   });
 
   it('adds CORS headers to /api/* responses', async () => {
+    const mockUser = { id: 'user-1', name: 'test' };
+    vi.mocked(authenticateRequest).mockResolvedValue(mockUser as any);
+
+    const req = new Request('http://localhost/api/agents', {
+      headers: { Authorization: 'Bearer cr_test' },
+    });
+    await worker.fetch(req, mockEnv);
+    expect(addCorsHeaders).toHaveBeenCalledWith(req, expect.any(Response), mockEnv);
+  });
+
+  it('does not add CORS headers to non-api routes', async () => {
+    await worker.fetch(new Request('http://localhost/auth/device', { method: 'POST' }), mockEnv);
+    expect(addCorsHeaders).not.toHaveBeenCalled();
+  });
+
+  // --- Security headers ---
+
+  it('adds security headers to all responses', async () => {
+    await worker.fetch(new Request('http://localhost/unknown'), mockEnv);
+    expect(addSecurityHeaders).toHaveBeenCalled();
+  });
+
+  it('adds security headers to webhook responses', async () => {
+    await worker.fetch(
+      new Request('http://localhost/webhook/github', { method: 'POST', body: '{}' }),
+      mockEnv,
+    );
+    expect(addSecurityHeaders).toHaveBeenCalled();
+  });
+
+  it('adds security headers to auth responses', async () => {
+    await worker.fetch(new Request('http://localhost/auth/device', { method: 'POST' }), mockEnv);
+    expect(addSecurityHeaders).toHaveBeenCalled();
+  });
+
+  it('adds security headers to preflight responses', async () => {
+    await worker.fetch(
+      new Request('http://localhost/api/agents', { method: 'OPTIONS' }),
+      mockEnv,
+    );
+    expect(addSecurityHeaders).toHaveBeenCalled();
+  });
+
+  it('adds security headers to API responses', async () => {
     const mockUser = { id: 'user-1', name: 'test' };
     vi.mocked(authenticateRequest).mockResolvedValue(mockUser as any);
 
@@ -418,11 +461,6 @@ describe('worker router', () => {
       }),
       mockEnv,
     );
-    expect(addCorsHeaders).toHaveBeenCalled();
-  });
-
-  it('does not add CORS headers to non-api routes', async () => {
-    await worker.fetch(new Request('http://localhost/auth/device', { method: 'POST' }), mockEnv);
-    expect(addCorsHeaders).not.toHaveBeenCalled();
+    expect(addSecurityHeaders).toHaveBeenCalled();
   });
 });
