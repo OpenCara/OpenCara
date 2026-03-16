@@ -1,3 +1,6 @@
+---
+model: opus[1m]
+---
 # pm — Project Manager
 
 ## Role

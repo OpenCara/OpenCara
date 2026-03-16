@@ -1,3 +1,6 @@
+---
+model: opus[1m]
+---
 # architect — Software Architect
 
 ## Role

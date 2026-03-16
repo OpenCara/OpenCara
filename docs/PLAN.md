@@ -62,34 +62,46 @@ Platform can push tasks to connected agents.
 - [x] Shared protocol updated (full message envelope with id, timestamp, payload)
 - [x] 92 new tests (156 total passing)
 
-### M5: Single Agent Review Loop [IN PROGRESS] — #13 (worker-dev), #14 (cli-dev)
+### M5: Single Agent Review Loop [DONE] — #13 → PR #17 (worker-dev), #14 → PR #16 (cli-dev)
 
 One agent receives a task, reviews locally, result appears on GitHub. **Key milestone.**
 
-- [ ] Shared protocol: add `diffContent` to `ReviewRequestMessage`
-- [ ] Worker: fetch PR diff, include in review_request message
-- [ ] Worker: post review as GitHub PR comment on review_complete
-- [ ] Worker: store comment_url in review_results
-- [ ] Worker: transition task reviewing → completed
-- [ ] Worker: redistribute on rejection/error (up to 3 attempts, then failed)
-- [ ] CLI: AI-powered review execution (Anthropic Claude API)
-- [ ] CLI: verdict extraction (approve/request_changes/comment)
-- [ ] CLI: diff size guard + timeout awareness
-- [ ] E2E: PR webhook → task → agent reviews → comment on GitHub
+- [x] CLI: AI-powered review execution (Anthropic Claude API) — PR #16
+- [x] CLI: verdict extraction (approve/request_changes/comment) — PR #16
+- [x] CLI: diff size guard + timeout awareness — PR #16
+- [x] Shared protocol: add `diffContent` to `ReviewRequestMessage` — PR #17
+- [x] Worker: fetch PR diff, include in review_request message — PR #17
+- [x] Worker: post review as GitHub PR comment on review_complete — PR #17
+- [x] Worker: store comment_url in review_results — PR #17
+- [x] Worker: transition task reviewing → completed — PR #17
+- [x] Worker: redistribute on rejection/error (up to 3 attempts, then failed) — PR #17
+- [x] E2E: PR webhook → task → agent reviews → comment on GitHub — QA PASSED (294 tests, S01-S23)
 
-### M6: Multi-Agent + Summarization [BLOCKED by M5]
+### M6: Multi-Agent + Summarization [IN PROGRESS] — #19 (worker-dev, dispatched), #20 (cli-dev, dispatched)
 
 Multiple agents review in parallel with consolidated summary.
 
-### M7: Reputation System [BLOCKED by M5]
+- [ ] Shared protocol: update `SummaryRequestMessage` with full payload (pr, project, reviews[], timeout)
+- [ ] Worker: dispatch to ALL eligible agents (not just min_count)
+- [ ] Worker: collect reviews — no immediate GitHub post when min_count > 1
+- [ ] Worker: trigger summarization when min_count completed results arrive
+- [ ] Worker: select highest-reputation agent for summarization
+- [ ] Worker: post summary as main PR comment, individual reviews as follow-ups
+- [ ] Worker: fallback to individual review posts if summary fails
+- [ ] Worker: timeout with partial results triggers summarization
+- [ ] CLI: summary execution engine (AI synthesis of multiple reviews)
+- [ ] CLI: `summary_complete` with consolidated summary + tokensUsed
+- [ ] Single-agent mode (min_count=1) preserves M5 behavior exactly
+
+### M7: Reputation System [NEXT]
 
 Maintainers rate reviews, agent reputation updates.
 
-### M8: Web Dashboard [BLOCKED by M0, M7]
+### M8: Web Dashboard [BLOCKED by M7]
 
 Public leaderboard and personal stats.
 
-### M9: Consumption Tracking [BLOCKED by M5]
+### M9: Consumption Tracking [NEXT]
 
 Contributors can track and limit token consumption.
 
@@ -103,11 +115,14 @@ M0 → M2 → M4       M5 → M9
 
 ## Merged PRs
 
-| PR  | Issue | Agent      | Date       | Description                                                     |
-| --- | ----- | ---------- | ---------- | --------------------------------------------------------------- |
-| #2  | #1    | architect  | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup                         |
-| #6  | #5    | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints                             |
-| #7  | #4    | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint                                |
-| #10 | #8    | cli-dev    | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket               |
-| #12 | #9    | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
-| #15 | #11   | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
+| PR | Issue | Agent | Date | Description |
+|----|-------|-------|------|-------------|
+| #2 | #1 | architect | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup |
+| #6 | #5 | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints |
+| #7 | #4 | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint |
+| #10 | #8 | cli-dev | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket |
+| #12 | #9 | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution |
+| #15 | #11 | architect | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
+| #16 | #14 | cli-dev | 2026-03-16 | M5-C CLI AI-powered review execution engine |
+| #17 | #13 | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution |
+| #21 | #18 | architect | 2026-03-16 | Fix pre-existing typecheck and formatting issues |

@@ -1,3 +1,6 @@
+---
+model: sonnet[1m]
+---
 # clarifier — Issue Clarifier (Multi-AI)
 
 ## Role

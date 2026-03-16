@@ -9,8 +9,11 @@
 - #8 [cli-dev] 2026-03-16 — [M3] Agent CLI — Login, Agent Management, WebSocket Connection (closed)
 - #9 [worker-dev] 2026-03-16 — [M4] Durable Objects — Agent WebSocket & Task Distribution (closed)
 - #11 [architect] 2026-03-16 — Increase test coverage to near 100% (priority:high) (closed)
-- #13 [worker-dev] 2026-03-16 — [M5-W] Worker — Review Result Posting + Task Lifecycle
-- #14 [cli-dev] 2026-03-16 — [M5-C] CLI — AI-Powered Review Execution Engine
+- #13 [worker-dev] 2026-03-16 — [M5-W] Worker — Review Result Posting + Task Lifecycle (closed, PR #17 merged)
+- #14 [cli-dev] 2026-03-16 — [M5-C] CLI — AI-Powered Review Execution Engine (closed, PR #16 merged)
+- #18 [architect] 2026-03-16 — Fix pre-existing typecheck and formatting issues (closed, PR #21 merged)
+- #19 [worker-dev] 2026-03-16 — [M6-W] Worker — Multi-Agent Dispatch + Summarization Trigger + Summary Posting (dispatched)
+- #20 [cli-dev] 2026-03-16 — [M6-C] CLI — Summary Execution Engine (dispatched)
 
 ## Pull Requests
 
@@ -20,3 +23,6 @@
 - #10 [cli-dev] 2026-03-16 — [M3] Agent CLI — Login, Agent Management, WebSocket (merged)
 - #12 [worker-dev] 2026-03-16 — [M4] Durable Objects — Agent WebSocket & Task Distribution (merged)
 - #15 [architect] 2026-03-16 — Increase test coverage to near 100% (merged)
+- #16 [cli-dev] 2026-03-16 — [M5-C] Implement AI-powered review execution engine (merged)
+- #17 [worker-dev] 2026-03-16 — [M5-W] Review result posting, task lifecycle & redistribution (merged, QA PASSED)
+- #21 [architect] 2026-03-16 — Fix typecheck and formatting issues (merged)
