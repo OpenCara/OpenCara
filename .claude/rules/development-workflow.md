@@ -67,6 +67,8 @@ This skill automatically:
 - Posts structured inline review comments via `gh pr-review` (threaded on specific file+line locations)
 - Falls back to a single synthesized comment if inline review is unavailable
 
+**CRITICAL**: You MUST wait for ALL review agents to complete before proceeding. Do NOT move on after the first agent (typically Codex) finishes. Collect results from every agent via `TaskOutput` one at a time. If an agent times out after 600s, note it as "did not complete" and proceed with the rest — but never skip waiting. Killing background review tasks prematurely is a workflow violation.
+
 ### Step 2: Fix & Re-review (max 3 iterations)
 
 1. Read the review findings posted on the PR
