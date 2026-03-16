@@ -148,6 +148,7 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #43 [worker-dev, DONE] Fix CORS origin validation + add security headers — PR #45 merged
 - #47 [cli-dev, DONE] Refactor CLI to invoke local tools instead of Anthropic API — PR #49 merged
 - #48 [worker-dev, DONE] Distribute pending tasks when agent comes online — PR #50 merged
+- #51 [worker-dev, DONE] Fix WebSocket disconnect on authentication — PR #52 merged
 
 ## Backlog
 
@@ -188,3 +189,4 @@ M0 → M2 → M4       M5 → M9
 | #45 | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                     |
 | #49 | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API        |
 | #50 | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                   |
+| #52 | #51    | worker-dev | 2026-03-16 | Fix WebSocket disconnect on authentication                         |

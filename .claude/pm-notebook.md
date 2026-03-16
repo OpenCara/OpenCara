@@ -30,7 +30,7 @@
 - #46 [worker-dev] 2026-03-16 — Default review config when .review.yml is missing (priority:medium, open)
 - #47 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (closed, PR #49 merged)
 - #48 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (closed, PR #50 merged)
-- #51 [worker-dev] 2026-03-16 — WebSocket disconnects immediately after authentication (priority:high, open)
+- #51 [worker-dev] 2026-03-16 — WebSocket disconnects immediately after authentication (closed, PR #52 merged)
 
 ## Pull Requests
 
@@ -56,3 +56,4 @@
 - #45 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation + security headers (merged, closes #43)
 - #49 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (merged, closes #47)
 - #50 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (merged, closes #48)
+- #52 [worker-dev] 2026-03-16 — Fix WebSocket disconnect on authentication (merged, closes #51)
