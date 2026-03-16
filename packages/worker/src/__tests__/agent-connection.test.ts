@@ -81,7 +81,7 @@ describe('AgentConnection', () => {
     mockCtx = createMockCtx(storage);
     mockSupabase = createChainableSupabase();
     mockedCreateSupabase.mockReturnValue(mockSupabase as unknown as ReturnType<typeof createSupabaseClient>);
-    connection = new AgentConnection(mockCtx as any, mockEnv as any);
+    connection = new AgentConnection(mockCtx as unknown as DurableObjectState, mockEnv as unknown as Record<string, unknown>);
   });
 
   describe('webSocketMessage', () => {
@@ -206,6 +206,18 @@ describe('AgentConnection', () => {
       );
 
       expect(mockSupabase.from).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('webSocketError', () => {
+    it('closes the WebSocket with error code', async () => {
+      const mockWs = createMockWebSocket();
+      await connection.webSocketError(
+        mockWs as unknown as WebSocket,
+        new Error('connection reset'),
+      );
+
+      expect(mockWs.close).toHaveBeenCalledWith(4004, 'websocket_error');
     });
   });
 

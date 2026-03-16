@@ -74,7 +74,7 @@ describe('TaskTimeout', () => {
       storage,
       id: { toString: () => 'test-do-id' },
     };
-    timeout = new TaskTimeout(mockCtx as unknown as DurableObjectState, mockEnv as any);
+    timeout = new TaskTimeout(mockCtx as unknown as DurableObjectState, mockEnv as unknown as Record<string, unknown>);
   });
 
   describe('fetch /set-timeout', () => {

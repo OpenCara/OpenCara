@@ -221,7 +221,13 @@ export async function distributeTask(
     return taskId;
   }
 
-  // 4. Push task to each selected agent's DO
+  // 4. Update task status to reviewing before distributing (avoid race with timeout alarm)
+  await supabase
+    .from('review_tasks')
+    .update({ status: 'reviewing' })
+    .eq('id', taskId);
+
+  // 5. Push task to each selected agent's DO
   const remainingSeconds = Math.floor(timeoutMs / 1000);
   for (const agent of selected) {
     try {
@@ -249,7 +255,7 @@ export async function distributeTask(
     }
   }
 
-  // 5. Set up task timeout
+  // 6. Set up task timeout
   try {
     const timeoutDoId = env.TASK_TIMEOUT.idFromName(taskId);
     const timeoutStub = env.TASK_TIMEOUT.get(timeoutDoId);
@@ -266,12 +272,6 @@ export async function distributeTask(
   } catch (err) {
     console.error(`Failed to set task timeout for ${taskId}:`, err);
   }
-
-  // 6. Update task status to reviewing
-  await supabase
-    .from('review_tasks')
-    .update({ status: 'reviewing' })
-    .eq('id', taskId);
 
   console.log(
     `Task ${taskId} distributed to ${selected.length} agent(s)`,

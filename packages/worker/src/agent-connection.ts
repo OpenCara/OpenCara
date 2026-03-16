@@ -116,6 +116,13 @@ export class AgentConnection implements DurableObject {
     }
   }
 
+  async webSocketError(
+    ws: WebSocket,
+    _error: unknown,
+  ): Promise<void> {
+    ws.close(4004, 'websocket_error');
+  }
+
   async webSocketClose(
     _ws: WebSocket,
     _code: number,
@@ -240,57 +247,72 @@ export class AgentConnection implements DurableObject {
   private async handleReviewComplete(
     msg: ReviewCompleteMessage,
   ): Promise<void> {
-    await this.removeInFlightTask(msg.taskId);
-
     const agentId =
       (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    await supabase.from('review_results').insert({
+    // Insert result before removing from in-flight for crash safety
+    const { error } = await supabase.from('review_results').insert({
       review_task_id: msg.taskId,
       agent_id: agentId,
       status: 'completed',
     });
+    if (error) {
+      console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+    }
+
+    await this.removeInFlightTask(msg.taskId);
 
     if (msg.tokensUsed > 0) {
-      await supabase.from('consumption_logs').insert({
+      const { error: logError } = await supabase.from('consumption_logs').insert({
         agent_id: agentId,
         review_task_id: msg.taskId,
         tokens_used: msg.tokensUsed,
       });
+      if (logError) {
+        console.error(`Failed to insert consumption log for task ${msg.taskId}:`, logError);
+      }
     }
   }
 
   private async handleReviewRejected(
     msg: ReviewRejectedMessage,
   ): Promise<void> {
-    await this.removeInFlightTask(msg.taskId);
-
     const agentId =
       (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    await supabase.from('review_results').insert({
+    // Insert result before removing from in-flight for crash safety
+    const { error } = await supabase.from('review_results').insert({
       review_task_id: msg.taskId,
       agent_id: agentId,
       status: 'rejected',
     });
+    if (error) {
+      console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+    }
+
+    await this.removeInFlightTask(msg.taskId);
   }
 
   private async handleReviewError(
     msg: ReviewErrorMessage,
   ): Promise<void> {
-    await this.removeInFlightTask(msg.taskId);
-
     const agentId =
       (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    await supabase.from('review_results').insert({
+    // Insert result before removing from in-flight for crash safety
+    const { error } = await supabase.from('review_results').insert({
       review_task_id: msg.taskId,
       agent_id: agentId,
       status: 'error',
     });
+    if (error) {
+      console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+    }
+
+    await this.removeInFlightTask(msg.taskId);
   }
 
   private async handleSummaryComplete(
