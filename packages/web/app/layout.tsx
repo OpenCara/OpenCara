@@ -1,32 +1,10 @@
 import './globals.css';
+import NavBar from './components/NavBar';
 
 export const metadata = {
   title: 'OpenCrust',
   description: 'Distributed AI code review',
 };
-
-function NavBar() {
-  return (
-    <header className="border-b border-surface-800">
-      <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-        <a href="/" className="text-xl font-bold text-crust-500">
-          OpenCrust
-        </a>
-        <div className="flex items-center gap-6">
-          <a href="/leaderboard" className="text-surface-100 hover:text-crust-400">
-            Leaderboard
-          </a>
-          <a href="/dashboard" className="text-surface-100 hover:text-crust-400">
-            Dashboard
-          </a>
-          <button className="rounded-md bg-crust-600 px-4 py-2 text-sm font-medium text-white hover:bg-crust-500">
-            Login
-          </button>
-        </div>
-      </nav>
-    </header>
-  );
-}
 
 function Footer() {
   return (
