@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
 import {
   handleListAgents,
@@ -90,6 +91,25 @@ describe('handleListAgents', () => {
 
     const response = await handleListAgents(mockUser, mockSupabase);
     expect(response.status).toBe(500);
+  });
+
+  it('handles null data gracefully (uses empty array fallback)', async () => {
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            order: vi
+              .fn()
+              .mockResolvedValue({ data: null, error: null }),
+          }),
+        }),
+      }),
+    } as any;
+
+    const response = await handleListAgents(mockUser, mockSupabase);
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.agents).toEqual([]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   calculateDelay,
   DEFAULT_RECONNECT_OPTIONS,
@@ -40,5 +40,30 @@ describe('reconnect', () => {
     expect(DEFAULT_RECONNECT_OPTIONS.maxDelay).toBe(30000);
     expect(DEFAULT_RECONNECT_OPTIONS.multiplier).toBe(2);
     expect(DEFAULT_RECONNECT_OPTIONS.jitter).toBe(true);
+  });
+});
+
+describe('sleep', () => {
+  it('resolves after the specified delay', async () => {
+    const { sleep } = await import('../reconnect.js');
+    vi.useFakeTimers();
+
+    const promise = sleep(100);
+    vi.advanceTimersByTime(100);
+    await promise;
+
+    vi.useRealTimers();
+  });
+
+  it('resolves with undefined', async () => {
+    const { sleep } = await import('../reconnect.js');
+    vi.useFakeTimers();
+
+    const promise = sleep(0);
+    vi.advanceTimersByTime(0);
+    const result = await promise;
+
+    expect(result).toBeUndefined();
+    vi.useRealTimers();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ApiClient, HttpError } from '../http.js';
 
 describe('ApiClient', () => {
@@ -91,5 +91,16 @@ describe('ApiClient', () => {
     expect(err.status).toBe(403);
     expect(err.message).toBe('Forbidden');
     expect(err.name).toBe('HttpError');
+  });
+
+  it('falls back to generic message when error response is not JSON', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: () => Promise.reject(new Error('not json')),
+    });
+
+    const client = new ApiClient('https://api.test.com', 'cr_key');
+    await expect(client.get('/test')).rejects.toThrow('HTTP 502');
   });
 });

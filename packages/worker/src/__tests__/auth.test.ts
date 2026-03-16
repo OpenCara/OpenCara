@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
 import { API_KEY_PREFIX } from '@opencrust/shared';
 import { generateApiKey, hashApiKey, authenticateRequest } from '../auth.js';

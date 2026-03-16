@@ -1,0 +1,184 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+import {
+  getInstallationToken,
+  fetchReviewConfig,
+  postPrComment,
+} from '../github.js';
+import type { Env } from '../env.js';
+
+const originalFetch = globalThis.fetch;
+
+const BASE_ENV: Env = {
+  GITHUB_WEBHOOK_SECRET: 'test-secret',
+  GITHUB_APP_ID: '12345',
+  GITHUB_APP_PRIVATE_KEY: '',
+  GITHUB_CLIENT_ID: 'test-client',
+  GITHUB_CLIENT_SECRET: 'test-secret',
+  SUPABASE_URL: 'https://test.supabase.co',
+  SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+};
+
+describe('github', () => {
+  let testEnv: Env;
+
+  beforeEach(() => {
+    const { privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    testEnv = { ...BASE_ENV, GITHUB_APP_PRIVATE_KEY: privateKey };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  describe('getInstallationToken', () => {
+    it('returns token on success', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ token: 'ghs_test_token' }),
+      });
+
+      const token = await getInstallationToken(42, testEnv);
+      expect(token).toBe('ghs_test_token');
+    });
+
+    it('calls correct GitHub API endpoint', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ token: 'ghs_t' }),
+      });
+
+      await getInstallationToken(99, testEnv);
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/app/installations/99/access_tokens',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'OpenCrust-Worker',
+            'X-GitHub-Api-Version': '2022-11-28',
+          }),
+        }),
+      );
+    });
+
+    it('includes Bearer JWT in Authorization header', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ token: 'ghs_t' }),
+      });
+
+      await getInstallationToken(1, testEnv);
+
+      const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const headers = call[1].headers;
+      // JWT format: header.payload.signature
+      expect(headers.Authorization).toMatch(/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    });
+
+    it('throws on non-ok response', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+      });
+
+      await expect(getInstallationToken(42, testEnv)).rejects.toThrow(
+        'Failed to get installation token: 401 Unauthorized',
+      );
+    });
+  });
+
+  describe('fetchReviewConfig', () => {
+    it('returns file content on success', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('version: 1\nprompt: Review\n'),
+      });
+
+      const content = await fetchReviewConfig('owner', 'repo', 'main', 'tok');
+      expect(content).toBe('version: 1\nprompt: Review\n');
+    });
+
+    it('calls correct GitHub API endpoint', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('v: 1'),
+      });
+
+      await fetchReviewConfig('myorg', 'myrepo', 'feature', 'mytoken');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/myorg/myrepo/contents/.review.yml?ref=feature',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer mytoken',
+            Accept: 'application/vnd.github.raw+json',
+            'User-Agent': 'OpenCrust-Worker',
+          }),
+        }),
+      );
+    });
+
+    it('returns null when file not found (404)', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+      });
+
+      const content = await fetchReviewConfig('o', 'r', 'main', 'tok');
+      expect(content).toBeNull();
+    });
+
+    it('throws on non-404 error', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+      });
+
+      await expect(
+        fetchReviewConfig('o', 'r', 'main', 'tok'),
+      ).rejects.toThrow('Failed to fetch .review.yml: 500 Internal Server Error');
+    });
+  });
+
+  describe('postPrComment', () => {
+    it('posts comment successfully', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+
+      await postPrComment('owner', 'repo', 42, 'Test comment', 'tok');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/owner/repo/issues/42/comments',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer tok',
+            'Content-Type': 'application/json',
+          }),
+          body: JSON.stringify({ body: 'Test comment' }),
+        }),
+      );
+    });
+
+    it('throws on failure', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+      });
+
+      await expect(
+        postPrComment('o', 'r', 42, 'Test', 'tok'),
+      ).rejects.toThrow('Failed to post PR comment: 403 Forbidden');
+    });
+  });
+});
