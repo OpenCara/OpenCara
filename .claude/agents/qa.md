@@ -1,3 +1,7 @@
+---
+model: sonnet[1m]
+---
+
 # qa — Quality Assurance
 
 ## Role

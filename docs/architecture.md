@@ -317,7 +317,7 @@ interface SummaryRequestPayload {
   reviews: Array<{
     agentId: string;
     review: string; // markdown text
-    verdict: 'pass' | 'fail' | 'neutral';
+    verdict: 'approve' | 'request_changes' | 'comment';
   }>;
 }
 
@@ -325,7 +325,7 @@ interface SummaryRequestPayload {
 interface ReviewCompletePayload {
   taskId: string;
   review: string; // markdown text
-  verdict: 'pass' | 'fail' | 'neutral';
+  verdict: 'approve' | 'request_changes' | 'comment';
   tokensUsed: number;
 }
 

@@ -15,6 +15,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 | M2        | DONE   | S07-S10   |
 | M3        | DONE   | S11-S13   |
 | M4        | DONE   | S14-S18   |
+| M5        | DONE   | S19-S23   |
 
 ---
 
@@ -311,13 +312,96 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 ---
 
+## S19: Full Review Loop — PR Webhook to GitHub Comment (Worker + CLI)
+
+**Tests**: End-to-end: PR webhook arrives, task created, agent receives review_request with diff content, executes AI review, sends review_complete, platform posts GitHub PR comment.
+
+**Steps**:
+
+1. Set up: register agent, connect via WebSocket, create project with `.review.yml`
+2. Send `pull_request.opened` webhook with valid signature
+3. Verify agent receives `review_request` message containing `diffContent` field (non-empty unified diff)
+4. Agent sends `review_complete` with review text, verdict, and tokensUsed
+5. Verify review posted as GitHub PR comment with OpenCrust formatting (verdict emoji, agent model/tool, review body, rating footer)
+6. Verify `review_results` row has `comment_url` set (non-null)
+7. Verify `review_tasks` status transitions: `pending → reviewing → completed`
+8. Verify `consumption_logs` row created with correct `tokens_used`
+
+**Expected**: Complete single-agent review loop works end-to-end. GitHub PR has a formatted review comment.
+
+---
+
+## S20: Review Rejection Triggers Redistribution (Worker)
+
+**Tests**: When an agent rejects a review, platform redistributes to another eligible agent (up to 3 attempts).
+
+**Steps**:
+
+1. Set up: register 3 agents (A, B, C), all connected via WebSocket, create project
+2. Send `pull_request.opened` webhook → task distributed to Agent A
+3. Agent A sends `review_rejected` with reason
+4. Verify task redistributed to Agent B (receives `review_request`)
+5. Agent B sends `review_error` with error description
+6. Verify task redistributed to Agent C
+7. Agent C sends `review_rejected`
+8. Verify task status transitions to `failed` (3 attempts exhausted)
+9. Verify `review_results` has 3 rows (one per agent, statuses: rejected, error, rejected)
+
+**Expected**: Redistribution cycles through available agents. After 3 failures, task is marked `failed`. Agents that already attempted the task are excluded from redistribution.
+
+---
+
+## S21: CLI Review Execution — AI Model Integration (CLI)
+
+**Tests**: CLI receives review_request, calls Anthropic Claude API, extracts verdict, sends review_complete.
+
+**Steps**:
+
+1. Set `ANTHROPIC_API_KEY` environment variable (or configure in `~/.opencrust/config.yml`)
+2. Simulate receiving a `review_request` message with `diffContent` containing a small PR diff
+3. Verify CLI calls Anthropic API with system prompt + custom prompt + diff
+4. Verify verdict extraction: response starting with `VERDICT: APPROVE` → verdict is `approve`
+5. Verify verdict extraction: `VERDICT: REQUEST_CHANGES` → verdict is `request_changes`
+6. Verify verdict extraction: `VERDICT: COMMENT` → verdict is `comment`
+7. Verify fallback: no verdict marker → defaults to `comment`
+8. Verify `review_complete` message includes review text (verdict line stripped), verdict, and tokensUsed
+
+**Expected**: CLI correctly integrates with AI model, parses response, and sends structured review back.
+
+---
+
+## S22: CLI Diff Size Guard (CLI)
+
+**Tests**: CLI rejects oversized diffs before calling the AI model.
+
+**Steps**:
+
+1. Configure `max_diff_size_kb: 100` (default)
+2. Send `review_request` with `diffContent` of 50KB → review executes normally
+3. Send `review_request` with `diffContent` of 150KB → expect `review_rejected` with reason mentioning size limit
+4. Configure `max_diff_size_kb: 200` → 150KB diff now processes normally
+
+**Expected**: Diff size guard prevents expensive AI calls on oversized diffs. Limit is configurable.
+
+---
+
+## S23: Diff Content Included in Review Request (Worker)
+
+**Tests**: Worker fetches PR diff from GitHub API and includes it in the review_request message.
+
+**Steps**:
+
+1. Set up: register agent, connect via WebSocket, create project
+2. Send `pull_request.opened` webhook (mock GitHub API to return a known diff)
+3. Verify agent receives `review_request` with `diffContent` matching the mocked diff
+4. Verify diff is fetched using `Accept: application/vnd.github.diff` header
+5. Verify the `fetchPrDiff` function uses the installation token for authentication
+
+**Expected**: Platform fetches and relays PR diff content to agents. Agents don't need GitHub access to read diffs.
+
+---
+
 ## Future Scenarios (pending milestones)
-
-### M5: Single Agent Review Loop
-
-- S19: Full loop: PR webhook → task → agent reviews locally → result posted as GitHub PR comment
-- S20: Agent rejection/error triggers redistribution to another agent
-- S21: CLI fetches diff, calls AI model, sends review_complete
 
 ### M6-M9: Later milestones
 
