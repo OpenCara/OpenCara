@@ -15,6 +15,7 @@ import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
+import { getSupportedTools } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   fetchConsumptionStats,
@@ -484,13 +485,20 @@ agentCommand
         if (agent) {
           agentTool = agent.tool;
         }
-      } catch {
-        // If we can't fetch agent info, we'll proceed without tool
+      } catch (err) {
+        console.warn(
+          `Warning: Failed to fetch agent info: ${err instanceof Error ? err.message : 'unknown error'}`,
+        );
       }
     }
 
     let reviewDeps: ReviewExecutorDeps | undefined;
     if (agentTool) {
+      const supported = getSupportedTools();
+      if (!supported.includes(agentTool)) {
+        console.error(`Unsupported tool "${agentTool}". Supported tools: ${supported.join(', ')}`);
+        process.exit(1);
+      }
       reviewDeps = {
         tool: agentTool,
         maxDiffSizeKb: config.maxDiffSizeKb,
