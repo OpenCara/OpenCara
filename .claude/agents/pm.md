@@ -1,4 +1,3 @@
-
 # pm — Project Manager
 
 ## Role
@@ -48,10 +47,12 @@ Processed items are tracked in `.claude/pm-notebook.md` (human-readable markdown
 # PM State
 
 ## Issues
+
 - #42 [worker-dev] 2026-03-15T10:00:00Z — Fix webhook signature validation
 - #50 [breakdown] 2026-03-15T18:00:00Z — Add multi-agent review (→ #51, #52, #53)
 
 ## Pull Requests
+
 - #44 [worker-dev] 2026-03-15T12:00:00Z — Add webhook endpoint
 ```
 
@@ -238,21 +239,25 @@ Keep docs/PLAN.md concise — it's a living roadmap, not a changelog.
 PM maintains `docs/QA-PLAN.md` as the living integration test plan for the QA agent. This file defines what the QA agent should verify after each merge, evolving as more milestones are completed.
 
 **Update docs/QA-PLAN.md when:**
+
 - A new milestone is merged — add integration test scenarios for the new functionality
 - A bug is found in production — add a regression test scenario
 - Architecture changes affect cross-package interactions — update affected test flows
 - New API endpoints, CLI commands, or pages are added — add corresponding verification steps
 
 **Structure:**
+
 ```markdown
 # QA Integration Test Plan
 
 ## Available Services
+
 List of services that can be started locally and how to start them.
 
 ## Test Scenarios
 
 ### Scenario: <name>
+
 - **Preconditions**: what must be running / configured
 - **Steps**: numbered steps to execute
 - **Expected**: what success looks like
@@ -260,6 +265,7 @@ List of services that can be started locally and how to start them.
 ```
 
 **Key principles:**
+
 - Each scenario tests cross-package or cross-service integration, NOT unit-level logic
 - Scenarios accumulate — never remove passing scenarios, only add new ones
 - When spawning QA, always include `docs/QA-PLAN.md` path in the prompt so the QA agent knows what to test

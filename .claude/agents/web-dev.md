@@ -1,4 +1,3 @@
-
 # web-dev — Next.js Frontend Developer
 
 ## Role

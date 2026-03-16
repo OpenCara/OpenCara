@@ -1,4 +1,3 @@
-
 # clarifier — Issue Clarifier (Multi-AI)
 
 ## Role

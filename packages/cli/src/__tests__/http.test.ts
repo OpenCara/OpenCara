@@ -38,8 +38,7 @@ describe('ApiClient', () => {
     const client = new ApiClient('https://api.test.com');
     await client.get('/test');
 
-    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
-      .calls[0][1].headers;
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
     expect(calledHeaders).not.toHaveProperty('Authorization');
   });
 

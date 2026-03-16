@@ -32,9 +32,7 @@ describe('CLI entry point', () => {
   });
 
   it('sets correct description', () => {
-    expect(mockProgram.description).toHaveBeenCalledWith(
-      expect.stringContaining('OpenCrust'),
-    );
+    expect(mockProgram.description).toHaveBeenCalledWith(expect.stringContaining('OpenCrust'));
   });
 
   it('sets version from shared package', () => {

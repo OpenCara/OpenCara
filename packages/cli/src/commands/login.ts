@@ -14,10 +14,7 @@ export const loginCommand = new Command('login')
     try {
       flow = await client.post<DeviceFlowResponse>('/auth/device');
     } catch (err) {
-      console.error(
-        'Failed to start device flow:',
-        err instanceof Error ? err.message : err,
-      );
+      console.error('Failed to start device flow:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
 
@@ -37,15 +34,11 @@ export const loginCommand = new Command('login')
 
       let tokenRes: DeviceTokenResponse;
       try {
-        tokenRes = await client.post<DeviceTokenResponse>(
-          '/auth/device/token',
-          { deviceCode: flow.deviceCode },
-        );
+        tokenRes = await client.post<DeviceTokenResponse>('/auth/device/token', {
+          deviceCode: flow.deviceCode,
+        });
       } catch (err) {
-        console.error(
-          'Polling error:',
-          err instanceof Error ? err.message : err,
-        );
+        console.error('Polling error:', err instanceof Error ? err.message : err);
         continue;
       }
 

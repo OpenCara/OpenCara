@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  parseReviewConfig,
-  validateReviewConfig,
-  type ReviewConfig,
-} from '../review-config.js';
+import { parseReviewConfig, validateReviewConfig, type ReviewConfig } from '../review-config.js';
 
 const VALID_FULL_CONFIG = `
 version: 1
@@ -49,10 +45,7 @@ describe('parseReviewConfig', () => {
     expect(config.agents.minCount).toBe(2);
     expect(config.agents.preferredTools).toEqual(['claude-code', 'codex']);
     expect(config.agents.minReputation).toBe(0.6);
-    expect(config.reviewer.whitelist).toEqual([
-      { user: 'alice' },
-      { agent: 'abc-123' },
-    ]);
+    expect(config.reviewer.whitelist).toEqual([{ user: 'alice' }, { agent: 'abc-123' }]);
     expect(config.reviewer.blacklist).toEqual([{ user: 'bob' }]);
     expect(config.summarizer.whitelist).toEqual([{ user: 'alice' }]);
     expect(config.summarizer.blacklist).toEqual([{ user: 'charlie' }]);
@@ -88,41 +81,31 @@ describe('parseReviewConfig', () => {
   it('returns error for non-object YAML', () => {
     const result = parseReviewConfig('just a string');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe(
-      'Configuration must be a YAML object',
-    );
+    expect((result as { error: string }).error).toBe('Configuration must be a YAML object');
   });
 
   it('returns error when version is missing', () => {
     const result = parseReviewConfig('prompt: hello');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe(
-      'Missing required field: version',
-    );
+    expect((result as { error: string }).error).toBe('Missing required field: version');
   });
 
   it('returns error when version is not a number', () => {
     const result = parseReviewConfig('version: "one"\nprompt: hello');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe(
-      'Field "version" must be a number',
-    );
+    expect((result as { error: string }).error).toBe('Field "version" must be a number');
   });
 
   it('returns error when prompt is missing', () => {
     const result = parseReviewConfig('version: 1');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe(
-      'Missing required field: prompt',
-    );
+    expect((result as { error: string }).error).toBe('Missing required field: prompt');
   });
 
   it('returns error when prompt is not a string', () => {
     const result = parseReviewConfig('version: 1\nprompt: 123');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe(
-      'Field "prompt" must be a string',
-    );
+    expect((result as { error: string }).error).toBe('Field "prompt" must be a string');
   });
 
   it('clamps min_count to range 1-10', () => {
@@ -150,28 +133,20 @@ describe('parseReviewConfig', () => {
   });
 
   it('uses default timeout for invalid format', () => {
-    const result = parseReviewConfig(
-      'version: 1\nprompt: test\ntimeout: 2h',
-    ) as ReviewConfig;
+    const result = parseReviewConfig('version: 1\nprompt: test\ntimeout: 2h') as ReviewConfig;
     expect(result.timeout).toBe('10m');
   });
 
   it('uses default timeout for out-of-range minutes', () => {
-    const result = parseReviewConfig(
-      'version: 1\nprompt: test\ntimeout: 60m',
-    ) as ReviewConfig;
+    const result = parseReviewConfig('version: 1\nprompt: test\ntimeout: 60m') as ReviewConfig;
     expect(result.timeout).toBe('10m');
   });
 
   it('accepts valid timeout values', () => {
-    const r1 = parseReviewConfig(
-      'version: 1\nprompt: test\ntimeout: 1m',
-    ) as ReviewConfig;
+    const r1 = parseReviewConfig('version: 1\nprompt: test\ntimeout: 1m') as ReviewConfig;
     expect(r1.timeout).toBe('1m');
 
-    const r30 = parseReviewConfig(
-      'version: 1\nprompt: test\ntimeout: 30m',
-    ) as ReviewConfig;
+    const r30 = parseReviewConfig('version: 1\nprompt: test\ntimeout: 30m') as ReviewConfig;
     expect(r30.timeout).toBe('30m');
   });
 
@@ -207,8 +182,6 @@ describe('validateReviewConfig', () => {
   });
 
   it('returns false for object with wrong types', () => {
-    expect(validateReviewConfig({ version: 'one', prompt: 'test' })).toBe(
-      false,
-    );
+    expect(validateReviewConfig({ version: 'one', prompt: 'test' })).toBe(false);
   });
 });

@@ -68,13 +68,18 @@ describe('TaskTimeout', () => {
     vi.restoreAllMocks();
     storage = createMockStorage();
     mockSupabase = createChainableSupabase();
-    mockedCreateSupabase.mockReturnValue(mockSupabase as unknown as ReturnType<typeof createSupabaseClient>);
+    mockedCreateSupabase.mockReturnValue(
+      mockSupabase as unknown as ReturnType<typeof createSupabaseClient>,
+    );
 
     const mockCtx = {
       storage,
       id: { toString: () => 'test-do-id' },
     };
-    timeout = new TaskTimeout(mockCtx as unknown as DurableObjectState, mockEnv as unknown as Record<string, unknown>);
+    timeout = new TaskTimeout(
+      mockCtx as unknown as DurableObjectState,
+      mockEnv as unknown as Record<string, unknown>,
+    );
   });
 
   describe('fetch /set-timeout', () => {

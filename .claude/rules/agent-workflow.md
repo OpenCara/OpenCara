@@ -2,15 +2,15 @@
 
 Event-driven, PM-centric architecture. All agents defined in `.claude/agents/`.
 
-| Agent          | Role                                                                                                             | Lifecycle                      |
-| -------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| Agent          | Role                                                                                                                  | Lifecycle                      |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
 | **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Long-running                   |
-| **architect**  | Architecture, shared types, protocol, infrastructure                                                             | Ephemeral per-issue (worktree) |
-| **worker-dev** | Cloudflare Workers backend, Durable Objects, REST API                                                            | Ephemeral per-issue (worktree) |
-| **cli-dev**    | CLI npm package, WebSocket client, agent commands                                                                | Ephemeral per-issue (worktree) |
-| **web-dev**    | Next.js dashboard, leaderboard, stats                                                                            | Ephemeral per-issue (worktree) |
-| **qa**         | Post-merge verification (build, tests, smoke tests)                                                              | Ephemeral (worktree)           |
-| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                            | Ephemeral                      |
+| **architect**  | Architecture, shared types, protocol, infrastructure                                                                  | Ephemeral per-issue (worktree) |
+| **worker-dev** | Cloudflare Workers backend, Durable Objects, REST API                                                                 | Ephemeral per-issue (worktree) |
+| **cli-dev**    | CLI npm package, WebSocket client, agent commands                                                                     | Ephemeral per-issue (worktree) |
+| **web-dev**    | Next.js dashboard, leaderboard, stats                                                                                 | Ephemeral per-issue (worktree) |
+| **qa**         | Post-merge verification (build, tests, smoke tests)                                                                   | Ephemeral (worktree)           |
+| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Ephemeral                      |
 
 All agents inherit their model and context window from the team lead.
 

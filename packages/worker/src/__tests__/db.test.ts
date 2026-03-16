@@ -21,10 +21,7 @@ const mockEnv: Env = {
 describe('createSupabaseClient', () => {
   it('creates Supabase client with correct URL and key', () => {
     const client = createSupabaseClient(mockEnv);
-    expect(createClient).toHaveBeenCalledWith(
-      'https://test.supabase.co',
-      'test-service-key',
-    );
+    expect(createClient).toHaveBeenCalledWith('https://test.supabase.co', 'test-service-key');
     expect(client).toBe('mock-supabase-client');
   });
 });

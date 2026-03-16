@@ -1,9 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
-import {
-  handleListAgents,
-  handleCreateAgent,
-} from '../handlers/agents.js';
+import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
 import type { User } from '@opencrust/shared';
 
 const mockUser: User = {
@@ -53,9 +50,7 @@ describe('handleListAgents', () => {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            order: vi
-              .fn()
-              .mockResolvedValue({ data: mockAgents, error: null }),
+            order: vi.fn().mockResolvedValue({ data: mockAgents, error: null }),
           }),
         }),
       }),
@@ -81,9 +76,7 @@ describe('handleListAgents', () => {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            order: vi
-              .fn()
-              .mockResolvedValue({ data: null, error: { message: 'fail' } }),
+            order: vi.fn().mockResolvedValue({ data: null, error: { message: 'fail' } }),
           }),
         }),
       }),
@@ -98,9 +91,7 @@ describe('handleListAgents', () => {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            order: vi
-              .fn()
-              .mockResolvedValue({ data: null, error: null }),
+            order: vi.fn().mockResolvedValue({ data: null, error: null }),
           }),
         }),
       }),

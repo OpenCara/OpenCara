@@ -1,4 +1,3 @@
-
 # qa — Quality Assurance
 
 ## Role

@@ -2,11 +2,7 @@ import { authenticateRequest, hashApiKey } from './auth.js';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
-import {
-  handleDeviceFlow,
-  handleDeviceToken,
-  handleRevokeKey,
-} from './handlers/device-flow.js';
+import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from './handlers/device-flow.js';
 import { handleGitHubWebhook } from './webhook.js';
 
 export { AgentConnection } from './agent-connection.js';
@@ -76,11 +72,7 @@ export default {
  * Authenticate and forward agent WebSocket connection to the DO.
  * URL format: /ws/agent/{agentId}?token={apiKey}
  */
-async function handleAgentWebSocket(
-  request: Request,
-  url: URL,
-  env: Env,
-): Promise<Response> {
+async function handleAgentWebSocket(request: Request, url: URL, env: Env): Promise<Response> {
   const upgradeHeader = request.headers.get('Upgrade');
   if (!upgradeHeader || upgradeHeader !== 'websocket') {
     return json({ error: 'Expected WebSocket' }, 426);

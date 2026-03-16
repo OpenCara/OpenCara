@@ -103,11 +103,11 @@ M0 → M2 → M4       M5 → M9
 
 ## Merged PRs
 
-| PR | Issue | Agent | Date | Description |
-|----|-------|-------|------|-------------|
-| #2 | #1 | architect | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup |
-| #6 | #5 | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints |
-| #7 | #4 | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint |
-| #10 | #8 | cli-dev | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket |
-| #12 | #9 | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution |
-| #15 | #11 | architect | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
+| PR  | Issue | Agent      | Date       | Description                                                     |
+| --- | ----- | ---------- | ---------- | --------------------------------------------------------------- |
+| #2  | #1    | architect  | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup                         |
+| #6  | #5    | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints                             |
+| #7  | #4    | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint                                |
+| #10 | #8    | cli-dev    | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket               |
+| #12 | #9    | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
+| #15 | #11   | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |

@@ -1,9 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import {
-  calculateDelay,
-  DEFAULT_RECONNECT_OPTIONS,
-  type ReconnectOptions,
-} from '../reconnect.js';
+import { calculateDelay, DEFAULT_RECONNECT_OPTIONS, type ReconnectOptions } from '../reconnect.js';
 
 describe('reconnect', () => {
   const noJitter: ReconnectOptions = {

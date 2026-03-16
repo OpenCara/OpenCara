@@ -70,21 +70,18 @@ export async function handleDeviceToken(
     return json({ error: 'deviceCode is required' }, 400);
   }
 
-  const response = await fetch(
-    'https://github.com/login/oauth/access_token',
-    {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        client_id: env.GITHUB_CLIENT_ID,
-        device_code: body.deviceCode,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      }),
+  const response = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
     },
-  );
+    body: JSON.stringify({
+      client_id: env.GITHUB_CLIENT_ID,
+      device_code: body.deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    }),
+  });
 
   const data = (await response.json()) as {
     access_token?: string;
@@ -153,10 +150,7 @@ export async function handleDeviceToken(
 }
 
 /** POST /auth/revoke — revoke current API key and issue a new one */
-export async function handleRevokeKey(
-  user: User,
-  supabase: SupabaseClient,
-): Promise<Response> {
+export async function handleRevokeKey(user: User, supabase: SupabaseClient): Promise<Response> {
   const newApiKey = await generateApiKey();
   const newHash = await hashApiKey(newApiKey);
 
