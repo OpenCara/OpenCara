@@ -13,5 +13,8 @@
   },
   "dependencies": {
     "@opencrust/shared": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
   }
 }

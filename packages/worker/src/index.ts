@@ -1,6 +1,5 @@
 export default {
-  async fetch(request: Request): Promise<Response> {
-    void request;
+  async fetch(_request: Request): Promise<Response> {
     return new Response('OK', { status: 200 });
   },
 } satisfies ExportedHandler;
