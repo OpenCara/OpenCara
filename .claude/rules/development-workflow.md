@@ -73,13 +73,25 @@ This skill automatically:
 2. If no critical/major issues → proceed to merge
 3. Otherwise: fix issues, run tests, commit, push, and re-review the changes yourself (agent-only review — do NOT re-run `/multi-agents:review-pr` on subsequent iterations)
 
-### Step 3: Merge
+### Step 3: Pre-merge Verification
+
+**MANDATORY**: Before merging, pull latest main and run the full test suite locally:
+
+```bash
+git fetch origin main
+git merge origin/main
+npm run build && npm run test && npm run lint
+```
+
+If any check fails, fix the issue before merging. Do NOT merge with failing tests.
+
+### Step 4: Merge
 
 ```bash
 gh pr merge <PR_NUMBER> --squash --delete-branch
 ```
 
-### Step 4: Report Completion to PM
+### Step 5: Report Completion to PM
 
 After merging, notify PM so it can immediately dispatch any newly unblocked issues:
 
@@ -100,7 +112,7 @@ This enables PM to dispatch dependent work without waiting for the GitHub webhoo
 ## Common Guidelines
 
 - Follow **SOLID**, **KISS**, **YAGNI** principles
-- Use Vitest for unit tests across all packages
+- Use Vitest for unit tests across all packages — **test coverage must be close to 100%**. Run `npx vitest run --coverage` to verify before creating PRs
 - ESLint + Prettier for code quality (run `npm run lint` before committing)
 - If the issue spec is unclear, comment on the issue asking PM for clarification and shut down
 - If an issue requires work outside your scope, comment on the issue explaining what's needed and shut down — PM will re-triage

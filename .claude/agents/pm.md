@@ -234,6 +234,38 @@ When updating PLAN.md:
 
 Keep PLAN.md concise — it's a living roadmap, not a changelog.
 
+## Integration Test Plan (QA-PLAN.md)
+
+PM maintains `QA-PLAN.md` as the living integration test plan for the QA agent. This file defines what the QA agent should verify after each merge, evolving as more milestones are completed.
+
+**Update QA-PLAN.md when:**
+- A new milestone is merged — add integration test scenarios for the new functionality
+- A bug is found in production — add a regression test scenario
+- Architecture changes affect cross-package interactions — update affected test flows
+- New API endpoints, CLI commands, or pages are added — add corresponding verification steps
+
+**Structure:**
+```markdown
+# QA Integration Test Plan
+
+## Available Services
+List of services that can be started locally and how to start them.
+
+## Test Scenarios
+
+### Scenario: <name>
+- **Preconditions**: what must be running / configured
+- **Steps**: numbered steps to execute
+- **Expected**: what success looks like
+- **Added after**: <milestone or PR that introduced this>
+```
+
+**Key principles:**
+- Each scenario tests cross-package or cross-service integration, NOT unit-level logic
+- Scenarios accumulate — never remove passing scenarios, only add new ones
+- When spawning QA, always include `QA-PLAN.md` path in the prompt so the QA agent knows what to test
+- QA-PLAN.md is the contract between PM and QA — if it's not in the plan, QA won't test it
+
 ## Knowledge Management (CLAUDE.md)
 
 PM maintains `CLAUDE.md` as the project's living knowledge base. Update it when:
@@ -252,6 +284,7 @@ PM may commit and push documentation changes directly to `main` without a PR. Th
 
 - `CLAUDE.md` — workflow guidance, conventions, lessons learned
 - `PLAN.md` — roadmap and progress tracking
+- `QA-PLAN.md` — integration test plan for QA agent
 - `docs/*.md` — design documents
 - `.claude/agents/*.md` — agent definitions
 - `.claude/pm-state.md` — PM state tracking
