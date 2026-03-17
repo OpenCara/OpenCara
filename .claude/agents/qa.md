@@ -107,15 +107,15 @@ Verify the CLI binary works and commands are registered:
 
 ```bash
 # Test CLI help
-pnpm opencrust --help
+pnpm opencara --help
 # Expect: shows available commands (login, agent, stats)
 
 # Test subcommands exist
-pnpm opencrust agent --help
+pnpm opencara agent --help
 # Expect: shows agent subcommands (create, list, start)
 
 # Test CLI handles missing config gracefully (no crash)
-pnpm opencrust agent list 2>&1
+pnpm opencara agent list 2>&1
 # Expect: error message about not being logged in, NOT a crash/stack trace
 ```
 

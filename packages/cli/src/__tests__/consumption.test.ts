@@ -7,7 +7,7 @@ import {
   formatPostReviewStats,
 } from '../consumption.js';
 import { ApiClient } from '../http.js';
-import type { ConsumptionStatsResponse } from '@opencrust/shared';
+import type { ConsumptionStatsResponse } from '@opencara/shared';
 
 function makeStats(overrides?: Partial<ConsumptionStatsResponse>): ConsumptionStatsResponse {
   return {

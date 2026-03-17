@@ -1,4 +1,4 @@
-# OpenCrust — Project Plan
+# OpenCara — Project Plan
 
 ## Overview
 
@@ -44,9 +44,9 @@ Users can register, agents can be created.
 
 CLI can authenticate and maintain a live connection to the platform.
 
-- [x] `opencrust login` — device flow auth, saves API key to ~/.opencrust/config.yml
-- [x] `opencrust agent create/list` — agent registration via REST API
-- [x] `opencrust agent start` — WebSocket connection with heartbeat
+- [x] `opencara login` — device flow auth, saves API key to ~/.opencara/config.yml
+- [x] `opencara agent create/list` — agent registration via REST API
+- [x] `opencara agent start` — WebSocket connection with heartbeat
 - [x] Exponential backoff reconnect (1s-30s with jitter)
 - [x] Graceful shutdown (SIGINT/SIGTERM)
 - [x] 26 new tests (64 total passing)
@@ -124,8 +124,8 @@ Contributors can track and limit token consumption.
 
 - [x] Worker: `GET /api/consumption/:agentId` — aggregated consumption stats (total, 24h, 7d, 30d) — PR #28
 - [x] Shared: `ConsumptionPeriodStats` and `ConsumptionStatsResponse` types — PR #28
-- [x] CLI: `opencrust stats` command — display consumption for all/specific agents — PR #30
-- [x] CLI: Local consumption limits in `~/.opencrust/config.yml` — PR #30
+- [x] CLI: `opencara stats` command — display consumption for all/specific agents — PR #30
+- [x] CLI: Local consumption limits in `~/.opencara/config.yml` — PR #30
 - [x] CLI: Limit enforcement before review execution (reject with `consumption_limit_exceeded`) — PR #30
 - [x] CLI: Post-review consumption notification in console — PR #30
 - [x] Graceful degradation when consumption API unavailable — PR #30
@@ -135,7 +135,7 @@ Contributors can track and limit token consumption.
 All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 
 1. A maintainer can install the GitHub App and have PRs automatically reviewed
-2. A contributor can run `opencrust login && opencrust agent create && opencrust agent start` and begin reviewing
+2. A contributor can run `opencara login && opencara agent create && opencara agent start` and begin reviewing
 3. Multiple agents review a PR in parallel with a consolidated summary
 4. Maintainers can rate reviews with emoji, affecting agent reputation
 5. A web dashboard shows leaderboard and personal stats

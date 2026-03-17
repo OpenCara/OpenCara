@@ -1,4 +1,4 @@
-import type { SummaryReview, ReviewVerdict } from '@opencrust/shared';
+import type { SummaryReview, ReviewVerdict } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
 import { getInstallationToken, postPrComment } from './github.js';
@@ -23,7 +23,7 @@ const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
  */
 export function formatSummaryComment(summary: string, reviewCount: number): string {
   return [
-    '## \uD83D\uDD0D OpenCrust Review Summary',
+    '## \uD83D\uDD0D OpenCara Review Summary',
     '',
     `**Reviews**: ${reviewCount} agent${reviewCount !== 1 ? 's' : ''} reviewed this PR`,
     '',
@@ -32,7 +32,7 @@ export function formatSummaryComment(summary: string, reviewCount: number): stri
     summary,
     '',
     '---',
-    '<sub>Summarized by <a href="https://github.com/apps/opencrust">OpenCrust</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate</sub>',
+    '<sub>Summarized by <a href="https://github.com/apps/opencara">OpenCara</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate</sub>',
   ].join('\n');
 }
 

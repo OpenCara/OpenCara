@@ -63,7 +63,7 @@ describe('github', () => {
           method: 'POST',
           headers: expect.objectContaining({
             Accept: 'application/vnd.github+json',
-            'User-Agent': 'OpenCrust-Worker',
+            'User-Agent': 'OpenCara-Worker',
             'X-GitHub-Api-Version': '2022-11-28',
           }),
         }),
@@ -126,7 +126,7 @@ describe('github', () => {
           headers: expect.objectContaining({
             Authorization: 'Bearer mytoken',
             Accept: 'application/vnd.github.raw+json',
-            'User-Agent': 'OpenCrust-Worker',
+            'User-Agent': 'OpenCara-Worker',
           }),
         }),
       );
@@ -180,7 +180,7 @@ describe('github', () => {
           headers: expect.objectContaining({
             Authorization: 'Bearer mytoken',
             Accept: 'application/vnd.github.diff',
-            'User-Agent': 'OpenCrust-Worker',
+            'User-Agent': 'OpenCara-Worker',
             'X-GitHub-Api-Version': '2022-11-28',
           }),
         }),
@@ -293,7 +293,7 @@ describe('github', () => {
           headers: expect.objectContaining({
             Authorization: 'Bearer mytoken',
             Accept: 'application/vnd.github+json',
-            'User-Agent': 'OpenCrust-Worker',
+            'User-Agent': 'OpenCara-Worker',
             'X-GitHub-Api-Version': '2022-11-28',
           }),
         }),

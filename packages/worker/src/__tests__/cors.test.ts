@@ -8,7 +8,7 @@ import {
 import type { Env } from '../env.js';
 
 const mockEnv: Env = {
-  WEB_URL: 'https://opencrust.dev',
+  WEB_URL: 'https://opencara.dev',
 } as any;
 
 const emptyEnv: Env = {
@@ -23,11 +23,11 @@ function requestWithOrigin(origin: string): Request {
 
 describe('addCorsHeaders', () => {
   it('adds CORS headers when request Origin matches WEB_URL', () => {
-    const req = requestWithOrigin('https://opencrust.dev');
+    const req = requestWithOrigin('https://opencara.dev');
     const original = new Response('OK', { status: 200 });
     const result = addCorsHeaders(req, original, mockEnv);
 
-    expect(result.headers.get('Access-Control-Allow-Origin')).toBe('https://opencrust.dev');
+    expect(result.headers.get('Access-Control-Allow-Origin')).toBe('https://opencara.dev');
     expect(result.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type');
     expect(result.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST, OPTIONS');
     expect(result.headers.get('Access-Control-Allow-Credentials')).toBe('true');
@@ -35,14 +35,14 @@ describe('addCorsHeaders', () => {
   });
 
   it('preserves original response status', () => {
-    const req = requestWithOrigin('https://opencrust.dev');
+    const req = requestWithOrigin('https://opencara.dev');
     const original = new Response('Created', { status: 201 });
     const result = addCorsHeaders(req, original, mockEnv);
     expect(result.status).toBe(201);
   });
 
   it('preserves original response headers', () => {
-    const req = requestWithOrigin('https://opencrust.dev');
+    const req = requestWithOrigin('https://opencara.dev');
     const original = new Response('OK', {
       headers: { 'Content-Type': 'application/json', 'X-Custom': 'value' },
     });
@@ -66,7 +66,7 @@ describe('addCorsHeaders', () => {
   });
 
   it('does not add CORS headers when WEB_URL is empty', () => {
-    const req = requestWithOrigin('https://opencrust.dev');
+    const req = requestWithOrigin('https://opencara.dev');
     const original = new Response('OK');
     const result = addCorsHeaders(req, original, emptyEnv);
     expect(result.headers.get('Access-Control-Allow-Origin')).toBeNull();
@@ -75,11 +75,11 @@ describe('addCorsHeaders', () => {
 
 describe('handleCorsPreflightRequest', () => {
   it('returns 204 with CORS headers when Origin matches', () => {
-    const req = requestWithOrigin('https://opencrust.dev');
+    const req = requestWithOrigin('https://opencara.dev');
     const response = handleCorsPreflightRequest(req, mockEnv);
 
     expect(response.status).toBe(204);
-    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://opencrust.dev');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://opencara.dev');
     expect(response.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, Content-Type',
     );
@@ -90,7 +90,7 @@ describe('handleCorsPreflightRequest', () => {
   });
 
   it('returns empty body', async () => {
-    const req = requestWithOrigin('https://opencrust.dev');
+    const req = requestWithOrigin('https://opencara.dev');
     const response = handleCorsPreflightRequest(req, mockEnv);
     expect(response.body).toBeNull();
   });

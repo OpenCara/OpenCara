@@ -6,7 +6,7 @@ import type {
   SummaryRequestMessage,
   ReviewRequestMessage,
   ReviewVerdict,
-} from '@opencrust/shared';
+} from '@opencara/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { getInstallationToken, postPrComment } from './github.js';
@@ -39,7 +39,7 @@ export function formatReviewComment(
 ): string {
   const verdictLabel = VERDICT_LABELS[verdict];
   return [
-    '## \uD83D\uDD0D OpenCrust Review',
+    '## \uD83D\uDD0D OpenCara Review',
     '',
     `**Verdict**: ${verdictLabel}`,
     `**Agent**: \`${model}\` / \`${tool}\``,
@@ -49,7 +49,7 @@ export function formatReviewComment(
     review,
     '',
     '---',
-    '<sub>Reviewed by <a href="https://github.com/user/opencrust">OpenCrust</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate this review</sub>',
+    '<sub>Reviewed by <a href="https://github.com/user/opencara">OpenCara</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate this review</sub>',
   ].join('\n');
 }
 

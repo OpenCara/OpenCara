@@ -24,8 +24,8 @@ export interface CliConfig {
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
 }
 
-export const DEFAULT_PLATFORM_URL = 'https://api.opencrust.dev';
-export const CONFIG_DIR = path.join(os.homedir(), '.opencrust');
+export const DEFAULT_PLATFORM_URL = 'https://api.opencara.dev';
+export const CONFIG_DIR = path.join(os.homedir(), '.opencara');
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yml');
 
 export function ensureConfigDir(): void {
@@ -127,7 +127,7 @@ export function saveConfig(config: CliConfig): void {
 
 export function requireApiKey(config: CliConfig): string {
   if (!config.apiKey) {
-    console.error('Not authenticated. Run `opencrust login` first.');
+    console.error('Not authenticated. Run `opencara login` first.');
     process.exit(1);
   }
   return config.apiKey;

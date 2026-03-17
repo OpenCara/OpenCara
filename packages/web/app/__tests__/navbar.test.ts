@@ -8,9 +8,9 @@ async function renderNavBar() {
 }
 
 describe('NavBar', () => {
-  it('renders OpenCrust brand link', async () => {
+  it('renders OpenCara brand link', async () => {
     const html = await renderNavBar();
-    expect(html).toContain('OpenCrust');
+    expect(html).toContain('OpenCara');
     expect(html).toContain('href="/"');
   });
 
@@ -29,7 +29,7 @@ describe('NavBar', () => {
   it('renders GitHub link', async () => {
     const html = await renderNavBar();
     expect(html).toContain('GitHub');
-    expect(html).toContain('https://github.com/yugoo-ai/OpenCrust');
+    expect(html).toContain('https://github.com/OpenCara/OpenCara');
   });
 
   it('does not render Leaderboard link', async () => {

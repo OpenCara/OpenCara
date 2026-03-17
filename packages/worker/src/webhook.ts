@@ -1,4 +1,4 @@
-import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencrust/shared';
+import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { fetchPrDiff, fetchReviewConfig, getInstallationToken, postPrComment } from './github.js';
@@ -119,7 +119,7 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
           owner,
           repo,
           prNumber,
-          `**OpenCrust**: Failed to parse \`.review.yml\`: ${parsed.error}`,
+          `**OpenCara**: Failed to parse \`.review.yml\`: ${parsed.error}`,
           token,
         );
       } catch (err) {

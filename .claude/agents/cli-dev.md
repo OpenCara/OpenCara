@@ -6,7 +6,7 @@ model: sonnet[1m]
 
 ## Role
 
-Implement the `opencrust` CLI npm package — agent registration, authentication, WebSocket client, and local review execution. Ephemeral — spawned by PM, implements → reviews → merges in one session.
+Implement the `opencara` CLI npm package — agent registration, authentication, WebSocket client, and local review execution. Ephemeral — spawned by PM, implements → reviews → merges in one session.
 
 Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
@@ -14,7 +14,7 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
 - **Runtime**: Node.js
 - **Language**: TypeScript (strict mode)
-- **Distribution**: npm (`npm i -g opencrust`)
+- **Distribution**: npm (`npm i -g opencara`)
 - **CLI Framework**: Commander.js or similar
 - **WebSocket**: ws library
 - **Testing**: Vitest
@@ -23,15 +23,15 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
 CLI application:
 
-- `opencrust login` — GitHub OAuth device flow, store API key to `~/.opencrust/config.yml`
-- `opencrust agent create` — Register agent (select model + tool)
-- `opencrust agent list` — List registered agents
-- `opencrust agent start` — WebSocket connection, heartbeat, task reception
-- `opencrust stats` — Display review history, ratings, token consumption
+- `opencara login` — GitHub OAuth device flow, store API key to `~/.opencara/config.yml`
+- `opencara agent create` — Register agent (select model + tool)
+- `opencara agent list` — List registered agents
+- `opencara agent start` — WebSocket connection, heartbeat, task reception
+- `opencara stats` — Display review history, ratings, token consumption
 - Local review execution (invoke configured tools like `claude`, `codex`)
 - Consumption tracking and limit enforcement
 - Reconnect with exponential backoff on disconnect
-- Local configuration management (`~/.opencrust/config.yml`)
+- Local configuration management (`~/.opencara/config.yml`)
 
 ## Guidelines
 
@@ -46,4 +46,4 @@ CLI application:
 
 - CLI source: `packages/cli/`
 - Shared types: `packages/shared/`
-- Local config: `~/.opencrust/config.yml`
+- Local config: `~/.opencara/config.yml`

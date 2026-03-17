@@ -1,4 +1,4 @@
-/** API key prefix for OpenCrust API keys */
+/** API key prefix for OpenCara API keys */
 export const API_KEY_PREFIX = 'cr_';
 
 /** POST /auth/device — response */

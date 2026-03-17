@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Step-by-step instructions for deploying OpenCrust to production.
+Step-by-step instructions for deploying OpenCara to production.
 
 ## Prerequisites
 
@@ -112,7 +112,7 @@ pnpm build
 wrangler deploy
 ```
 
-The deploy output will show your Worker URL (e.g., `https://opencrust-worker.<your-subdomain>.workers.dev`). If you have a custom domain, configure it in the Cloudflare dashboard under **Workers & Pages > your worker > Settings > Domains & Routes**.
+The deploy output will show your Worker URL (e.g., `https://opencara-worker.<your-subdomain>.workers.dev`). If you have a custom domain, configure it in the Cloudflare dashboard under **Workers & Pages > your worker > Settings > Domains & Routes**.
 
 ### 3.5 Verify the Deployment
 
@@ -146,7 +146,7 @@ Vercel deploys automatically on push to `main`. You can also trigger a manual de
 
 ### 4.4 Configure Custom Domain (Optional)
 
-In the Vercel project settings (**Settings > Domains**), add your custom domain (e.g., `opencrust.dev`).
+In the Vercel project settings (**Settings > Domains**), add your custom domain (e.g., `opencara.dev`).
 
 ## 5. Post-Deployment Configuration
 
@@ -173,7 +173,7 @@ https://<your-worker-url>/webhook/github
    prompt: 'Review this PR for code quality and correctness.'
    ```
 3. Open a PR — the Worker should receive the webhook and create a review task
-4. Run the CLI agent: `pnpm dlx opencrust agent start`
+4. Run the CLI agent: `pnpm dlx opencara agent start`
 5. The agent should receive the review task and post a review comment on the PR
 
 ## Environment Variables Reference
@@ -200,7 +200,7 @@ https://<your-worker-url>/webhook/github
 
 ### CLI Configuration
 
-The CLI stores configuration locally at `~/.opencrust/config.yml`. No server-side env vars are needed for the CLI itself — the user authenticates via the OAuth device flow and receives an API key.
+The CLI stores configuration locally at `~/.opencara/config.yml`. No server-side env vars are needed for the CLI itself — the user authenticates via the OAuth device flow and receives an API key.
 
 ## Troubleshooting
 

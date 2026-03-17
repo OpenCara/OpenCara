@@ -1,6 +1,6 @@
 version: 1
 prompt: |
-  Review this pull request for the OpenCrust platform — a distributed AI code review service.
+  Review this pull request for the OpenCara platform — a distributed AI code review service.
 
   Tech stack: TypeScript, Cloudflare Workers + Durable Objects, Supabase (PostgreSQL),
   Next.js, pnpm monorepo (packages: worker, cli, web, shared).

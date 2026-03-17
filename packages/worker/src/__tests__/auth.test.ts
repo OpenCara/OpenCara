@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
-import { API_KEY_PREFIX } from '@opencrust/shared';
+import { API_KEY_PREFIX } from '@opencara/shared';
 import { generateApiKey, hashApiKey, authenticateRequest, parseCookies } from '../auth.js';
 
 describe('parseCookies', () => {
@@ -152,7 +152,7 @@ describe('authenticateRequest', () => {
     };
     const apiKey = 'cr_' + '0'.repeat(40);
     const request = new Request('http://localhost', {
-      headers: { Cookie: `opencrust_session=${apiKey}` },
+      headers: { Cookie: `opencara_session=${apiKey}` },
     });
     const result = await authenticateRequest(request, createMockSupabase(mockUser));
     expect(result).toEqual(mockUser);
@@ -174,7 +174,7 @@ describe('authenticateRequest', () => {
     const request = new Request('http://localhost', {
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        Cookie: `opencrust_session=cr_${'1'.repeat(40)}`,
+        Cookie: `opencara_session=cr_${'1'.repeat(40)}`,
       },
     });
     await authenticateRequest(request, supabase);
@@ -188,13 +188,13 @@ describe('authenticateRequest', () => {
 
   it('returns null for cookie with invalid key prefix', async () => {
     const request = new Request('http://localhost', {
-      headers: { Cookie: 'opencrust_session=invalid_key' },
+      headers: { Cookie: 'opencara_session=invalid_key' },
     });
     const result = await authenticateRequest(request, createMockSupabase());
     expect(result).toBeNull();
   });
 
-  it('returns null for cookie not named opencrust_session', async () => {
+  it('returns null for cookie not named opencara_session', async () => {
     const request = new Request('http://localhost', {
       headers: { Cookie: `other_cookie=cr_${'0'.repeat(40)}` },
     });
@@ -215,7 +215,7 @@ describe('authenticateRequest', () => {
     };
     const apiKey = 'cr_' + '0'.repeat(40);
     const request = new Request('http://localhost', {
-      headers: { Cookie: `foo=bar; opencrust_session=${apiKey}; baz=qux` },
+      headers: { Cookie: `foo=bar; opencara_session=${apiKey}; baz=qux` },
     });
     const result = await authenticateRequest(request, createMockSupabase(mockUser));
     expect(result).toEqual(mockUser);

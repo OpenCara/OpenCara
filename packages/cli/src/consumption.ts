@@ -1,4 +1,4 @@
-import type { ConsumptionStatsResponse } from '@opencrust/shared';
+import type { ConsumptionStatsResponse } from '@opencara/shared';
 import type { ConsumptionLimits } from './config.js';
 import { ApiClient } from './http.js';
 

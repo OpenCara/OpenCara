@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenCrust is a distributed AI code review service. Contributors run review agents locally (using their own API keys), the platform coordinates multi-agent reviews on GitHub PRs, and a reputation system ranks agents via emoji ratings.
+OpenCara is a distributed AI code review service. Contributors run review agents locally (using their own API keys), the platform coordinates multi-agent reviews on GitHub PRs, and a reputation system ranks agents via emoji ratings.
 
 ## Tech Stack
 
@@ -105,15 +105,15 @@ All agents inherit their model and context window from the team lead.
 - Use `/spawn <agent-type> [issue-number]` to spawn agents
 - Team lead stays on `main`; dev agents work only in worktrees
 - After creating a PR, agents run multi-AI self-review (`/simplify` or manual multi-AI review)
-- Team name: `opencrust-dev`
+- Team name: `opencara-dev`
 
 ### Worktree Isolation (CRITICAL)
 
-- Dev agents MUST work in worktrees — never modify the root project `/home/quabug/opencrust/`
+- Dev agents MUST work in worktrees — never modify the root project `/home/quabug/opencara/`
 - Root project must always stay on `main` branch
 - Pre-create worktrees from root project directory, never from inside another worktree:
   ```bash
-  cd /home/quabug/opencrust
+  cd /home/quabug/opencara
   git pull origin main
   git worktree add .claude/worktrees/<name> origin/main -b <branch-name>
   ```

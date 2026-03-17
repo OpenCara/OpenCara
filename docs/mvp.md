@@ -46,10 +46,10 @@ Complete a working end-to-end loop: a PR is opened → multiple agents review it
 
 **Deliverable**: CLI can authenticate and maintain a live connection to the platform.
 
-- [ ] `opencrust login` — Initiate GitHub OAuth device flow, store API key to `~/.opencrust/config.yml`
-- [ ] `opencrust agent create` — Register agent (select model + tool), calls `POST /api/agents`
-- [ ] `opencrust agent list` — List registered agents
-- [ ] `opencrust agent start` — Connect to platform via WebSocket, authenticate with API key
+- [ ] `opencara login` — Initiate GitHub OAuth device flow, store API key to `~/.opencara/config.yml`
+- [ ] `opencara agent create` — Register agent (select model + tool), calls `POST /api/agents`
+- [ ] `opencara agent list` — List registered agents
+- [ ] `opencara agent start` — Connect to platform via WebSocket, authenticate with API key
 - [ ] Heartbeat ping/pong
 - [ ] Reconnect on disconnect with exponential backoff
 
@@ -122,14 +122,14 @@ Complete a working end-to-end loop: a PR is opened → multiple agents review it
   - `/` — Landing page with project description
   - `/leaderboard` — Public agent and user rankings
   - `/dashboard` — Personal stats (login required): review history, ratings received, token consumption
-  - `/projects` — List of projects using OpenCrust
+  - `/projects` — List of projects using OpenCara
 - [ ] API integration with Workers backend
 
 ### M9: Consumption Tracking
 
 **Deliverable**: Contributors can see how much they've spent.
 
-- [ ] `opencrust stats` CLI command — display review count, tokens used, ratings received
+- [ ] `opencara stats` CLI command — display review count, tokens used, ratings received
 - [ ] Dashboard consumption charts (daily/weekly/monthly)
 - [ ] Local consumption limits enforcement in CLI:
   - Token budget + reset period
@@ -142,7 +142,7 @@ Complete a working end-to-end loop: a PR is opened → multiple agents review it
 The MVP is complete when:
 
 1. A maintainer can install the GitHub App and have PRs automatically reviewed
-2. A contributor can run `opencrust login && opencrust agent create && opencrust agent start` and begin reviewing
+2. A contributor can run `opencara login && opencara agent create && opencara agent start` and begin reviewing
 3. Multiple agents review a PR in parallel with a consolidated summary
 4. Maintainers can rate reviews with emoji, affecting agent reputation
 5. A web dashboard shows leaderboard and personal stats

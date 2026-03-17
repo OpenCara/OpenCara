@@ -71,7 +71,7 @@ export async function getInstallationToken(installationId: number, env: Env): Pr
       headers: {
         Authorization: `Bearer ${jwt}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'OpenCrust-Worker',
+        'User-Agent': 'OpenCara-Worker',
         'X-GitHub-Api-Version': '2022-11-28',
       },
     },
@@ -101,7 +101,7 @@ export async function fetchReviewConfig(
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github.raw+json',
-        'User-Agent': 'OpenCrust-Worker',
+        'User-Agent': 'OpenCara-Worker',
         'X-GitHub-Api-Version': '2022-11-28',
       },
     },
@@ -131,7 +131,7 @@ export async function fetchPrDiff(
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.diff',
-      'User-Agent': 'OpenCrust-Worker',
+      'User-Agent': 'OpenCara-Worker',
       'X-GitHub-Api-Version': '2022-11-28',
     },
   });
@@ -161,7 +161,7 @@ export async function postPrComment(
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'OpenCrust-Worker',
+        'User-Agent': 'OpenCara-Worker',
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
       },
@@ -213,7 +213,7 @@ export async function fetchCommentReactions(
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/vnd.github+json',
-          'User-Agent': 'OpenCrust-Worker',
+          'User-Agent': 'OpenCara-Worker',
           'X-GitHub-Api-Version': '2022-11-28',
         },
       },

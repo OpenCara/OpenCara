@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handleGetConsumption } from '../handlers/consumption.js';
-import type { User } from '@opencrust/shared';
+import type { User } from '@opencara/shared';
 
 const mockUser: User = {
   id: 'user-123',

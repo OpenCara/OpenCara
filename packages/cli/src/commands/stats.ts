@@ -5,7 +5,7 @@ import type {
   AgentResponse,
   AgentStatsResponse,
   TrustTierInfo,
-} from '@opencrust/shared';
+} from '@opencara/shared';
 import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
 import { ApiClient } from '../http.js';
 import { fetchConsumptionStats } from '../consumption.js';
@@ -147,7 +147,7 @@ export const statsCommand = new Command('stats')
     }
 
     if (agentsRes.agents.length === 0) {
-      console.log('No agents registered. Run `opencrust agent create` to register one.');
+      console.log('No agents registered. Run `opencara agent create` to register one.');
       return;
     }
 

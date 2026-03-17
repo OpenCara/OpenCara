@@ -1,4 +1,4 @@
-import type { ErrorResponse } from '@opencrust/shared';
+import type { ErrorResponse } from '@opencara/shared';
 
 export class HttpError extends Error {
   constructor(
@@ -46,7 +46,7 @@ export class ApiClient {
   private async handleResponse<T>(res: Response): Promise<T> {
     if (!res.ok) {
       if (res.status === 401) {
-        throw new HttpError(401, 'Not authenticated. Run `opencrust login` first.');
+        throw new HttpError(401, 'Not authenticated. Run `opencara login` first.');
       }
       let message = `HTTP ${res.status}`;
       try {

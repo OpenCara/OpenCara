@@ -5,7 +5,7 @@ import type {
   TrustTier,
   TrustTierInfo,
   User,
-} from '@opencrust/shared';
+} from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 function json(data: unknown, status = 200): Response {

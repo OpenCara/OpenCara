@@ -1,4 +1,4 @@
-import type { ReviewVerdict } from '@opencrust/shared';
+import type { ReviewVerdict } from '@opencara/shared';
 import { executeTool, type ToolExecutorResult } from './tool-executor.js';
 
 export interface ReviewRequest {

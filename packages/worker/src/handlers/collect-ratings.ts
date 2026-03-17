@@ -1,4 +1,4 @@
-import type { CollectRatingsResponse, User } from '@opencrust/shared';
+import type { CollectRatingsResponse, User } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from '../env.js';
 import { collectTaskRatings } from '../reputation.js';

@@ -1,4 +1,4 @@
-import type { ConsumptionStatsResponse, User } from '@opencrust/shared';
+import type { ConsumptionStatsResponse, User } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 function json(data: unknown, status = 200): Response {

@@ -1,9 +1,9 @@
-import { API_KEY_PREFIX } from '@opencrust/shared';
-import type { User } from '@opencrust/shared';
+import { API_KEY_PREFIX } from '@opencara/shared';
+import type { User } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const API_KEY_HEX_LENGTH = 40;
-const SESSION_COOKIE_NAME = 'opencrust_session';
+const SESSION_COOKIE_NAME = 'opencara_session';
 
 /** Generate a new API key: "cr_" + 40 random hex chars */
 export async function generateApiKey(): Promise<string> {
@@ -39,7 +39,7 @@ export function parseCookies(cookieHeader: string | null): Record<string, string
 
 /**
  * Extract API key from Authorization header or session cookie.
- * Priority: Authorization header > opencrust_session cookie.
+ * Priority: Authorization header > opencara_session cookie.
  */
 function extractApiKey(request: Request): string | null {
   // Try Authorization header first
@@ -63,7 +63,7 @@ function extractApiKey(request: Request): string | null {
 
 /**
  * Validate the Authorization header (or session cookie) and return the matching user, or null.
- * Checks Authorization: Bearer header first, then opencrust_session cookie.
+ * Checks Authorization: Bearer header first, then opencara_session cookie.
  */
 export async function authenticateRequest(
   request: Request,

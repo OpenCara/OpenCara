@@ -2,7 +2,7 @@ import './globals.css';
 import NavBar from './components/NavBar';
 
 export const metadata = {
-  title: 'OpenCrust',
+  title: 'OpenCara',
   description: 'Distributed AI code review',
 };
 
@@ -10,7 +10,7 @@ function Footer() {
   return (
     <footer className="border-t border-surface-800 py-8">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 text-sm text-surface-100/60">
-        <span>&copy; {new Date().getFullYear()} OpenCrust</span>
+        <span>&copy; {new Date().getFullYear()} OpenCara</span>
         <div className="flex gap-4">
           <a
             href="https://discord.gg/JGnmrUXF"
@@ -21,7 +21,7 @@ function Footer() {
             Discord
           </a>
           <a
-            href="https://github.com/yugoo-ai/OpenCrust"
+            href="https://github.com/OpenCara/OpenCara"
             className="hover:text-crust-400"
             target="_blank"
             rel="noopener noreferrer"

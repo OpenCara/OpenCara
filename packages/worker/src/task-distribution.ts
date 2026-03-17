@@ -1,4 +1,4 @@
-import type { ReviewConfig } from '@opencrust/shared';
+import type { ReviewConfig } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
 

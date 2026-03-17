@@ -12,7 +12,7 @@ import {
   type PlatformMessage,
   type ReviewRequestMessage,
   type SummaryRequestMessage,
-} from '@opencrust/shared';
+} from '@opencara/shared';
 import {
   loadConfig,
   saveConfig,
@@ -46,7 +46,7 @@ const CONNECTION_STABILITY_THRESHOLD_MS = 30_000;
 
 function formatTable(agents: AgentResponse[], trustLabels?: Map<string, string>): void {
   if (agents.length === 0) {
-    console.log('No agents registered. Run `opencrust agent create` to register one.');
+    console.log('No agents registered. Run `opencara agent create` to register one.');
     return;
   }
 
@@ -677,7 +677,7 @@ agentCommand
     }
 
     if (res.agents.length === 0) {
-      console.log('No server-side agents found. Use `opencrust agent create` to add one.');
+      console.log('No server-side agents found. Use `opencara agent create` to add one.');
       return;
     }
 
@@ -714,7 +714,7 @@ agentCommand
 
     console.log(`Imported ${imported} agent(s) to local config.`);
     if (imported > 0) {
-      console.log('Edit ~/.opencrust/config.yml to adjust commands for your system.');
+      console.log('Edit ~/.opencara/config.yml to adjust commands for your system.');
     }
   });
 
@@ -880,11 +880,10 @@ agentCommand
 
       // === Path A: Old server-side behavior (no agents section) ===
       console.log(
-        'Hint: No agents in local config. Run `opencrust agent init` to import, or `opencrust agent create` to add agents.',
+        'Hint: No agents in local config. Run `opencara agent init` to import, or `opencara agent create` to add agents.',
       );
 
       let agentId = agentIdOrModel;
-      let agentTool: string | undefined;
 
       if (!agentId) {
         let res: ListAgentsResponse;
@@ -896,13 +895,12 @@ agentCommand
         }
 
         if (res.agents.length === 0) {
-          console.error('No agents registered. Run `opencrust agent create` first.');
+          console.error('No agents registered. Run `opencara agent create` first.');
           process.exit(1);
         }
 
         if (res.agents.length === 1) {
           agentId = res.agents[0].id;
-          agentTool = res.agents[0].tool;
           console.log(`Using agent ${agentId}`);
         } else {
           console.error('Multiple agents found. Please specify an agent ID:');
@@ -910,18 +908,6 @@ agentCommand
             console.error(`  ${a.id}  ${a.model} / ${a.tool}`);
           }
           process.exit(1);
-        }
-      } else {
-        try {
-          const res = await client.get<ListAgentsResponse>('/api/agents');
-          const agent = res.agents.find((a) => a.id === agentId);
-          if (agent) {
-            agentTool = agent.tool;
-          }
-        } catch (err) {
-          console.warn(
-            `Warning: Failed to fetch agent info: ${err instanceof Error ? err.message : 'unknown error'}`,
-          );
         }
       }
 
