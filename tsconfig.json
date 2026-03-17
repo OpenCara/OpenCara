@@ -13,7 +13,6 @@
   "references": [
     { "path": "packages/shared" },
     { "path": "packages/worker" },
-    { "path": "packages/cli" },
-    { "path": "packages/web" }
+    { "path": "packages/cli" }
   ]
 }
