@@ -1,5 +1,6 @@
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
+import { getInstallationToken, postPrComment } from './github.js';
 import { type InFlightTaskMeta, triggerSummarization } from './summarization.js';
 
 export class TaskTimeout implements DurableObject {
@@ -37,7 +38,7 @@ export class TaskTimeout implements DurableObject {
     await this.state.storage.put('taskId', taskId);
     await this.state.storage.put('reviewCount', reviewCount);
 
-    // Store task meta for summarization dispatch
+    // Store task meta for summarization dispatch and timeout comments
     if (installationId !== undefined) {
       const meta: InFlightTaskMeta = {
         reviewCount,
@@ -48,11 +49,32 @@ export class TaskTimeout implements DurableObject {
         prompt: prompt ?? '',
       };
       await this.state.storage.put('taskMeta', meta);
+    } else {
+      // Clear stale meta from previous task to avoid posting to wrong PR
+      await this.state.storage.delete('taskMeta');
     }
 
     await this.state.storage.setAlarm(Date.now() + timeoutMs);
 
     return new Response('OK', { status: 200 });
+  }
+
+  private async postTimeoutComment(taskId: string, reason: string): Promise<void> {
+    const meta = await this.state.storage.get<InFlightTaskMeta>('taskMeta');
+    if (!meta || !meta.installationId || !meta.owner || !meta.repo || !meta.prNumber) return;
+
+    try {
+      const token = await getInstallationToken(meta.installationId, this.env);
+      await postPrComment(
+        meta.owner,
+        meta.repo,
+        meta.prNumber,
+        `**OpenCara**: ${reason}\n\nComment \`/opencara review\` to retry.`,
+        token,
+      );
+    } catch (err) {
+      console.error(`Failed to post timeout comment for task ${taskId}:`, err);
+    }
   }
 
   async alarm(): Promise<void> {
@@ -74,8 +96,19 @@ export class TaskTimeout implements DurableObject {
 
     if (task.status === 'pending') {
       // No agent ever picked it up — timeout
-      await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
+      const { error: updateErr } = await supabase
+        .from('review_tasks')
+        .update({ status: 'timeout' })
+        .eq('id', taskId);
+      if (updateErr) {
+        console.error(`Failed to update task ${taskId} to timeout:`, updateErr);
+        return;
+      }
       console.log(`Task ${taskId} timed out while pending (no agents available)`);
+      await this.postTimeoutComment(
+        taskId,
+        'No agents were available within the configured timeout.',
+      );
       return;
     }
 
@@ -90,8 +123,16 @@ export class TaskTimeout implements DurableObject {
 
     if (completedCount === 0) {
       // No results at all — timeout
-      await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
+      const { error: updateErr } = await supabase
+        .from('review_tasks')
+        .update({ status: 'timeout' })
+        .eq('id', taskId);
+      if (updateErr) {
+        console.error(`Failed to update task ${taskId} to timeout:`, updateErr);
+        return;
+      }
       console.log(`Task ${taskId} timed out with no results`);
+      await this.postTimeoutComment(taskId, 'Review timed out — no agent completed a review.');
     } else {
       // Has results — move to summarizing and dispatch
       await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
