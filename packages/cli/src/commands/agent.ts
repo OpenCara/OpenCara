@@ -535,54 +535,68 @@ agentCommand
         },
       };
 
+      const existingAgents = config.agents ?? [];
+      const toolChoices = registry.tools.map((t) => ({
+        name: t.displayName,
+        value: t.name,
+      }));
+
       try {
-        // Step 1: Select tool with fuzzy filter
-        const toolChoices = registry.tools.map((t) => ({
-          name: t.displayName,
-          value: t.name,
-        }));
+        // Loop: select tool → select model → check duplicate → if dup, restart
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          // Step 1: Select tool
+          tool = await search({
+            message: 'Select a tool:',
+            theme: searchTheme,
+            source: (term) => {
+              const q = (term ?? '').toLowerCase();
+              return toolChoices.filter(
+                (c) => c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q),
+              );
+            },
+          });
 
-        tool = await search({
-          message: 'Select a tool:',
-          theme: searchTheme,
-          source: (term) => {
-            const q = (term ?? '').toLowerCase();
-            return toolChoices.filter(
-              (c) => c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q),
-            );
-          },
-        });
+          // Step 2: Select model — compatible first, others dimmed
+          const compatible = registry.models.filter((m) => m.tools.includes(tool));
+          const incompatible = registry.models.filter((m) => !m.tools.includes(tool));
 
-        // Step 2: Select model — compatible models first, others greyed out
-        const compatible = registry.models.filter((m) => m.tools.includes(tool));
-        const incompatible = registry.models.filter((m) => !m.tools.includes(tool));
+          const modelChoices = [
+            ...compatible.map((m) => ({
+              name: m.displayName,
+              value: m.name,
+            })),
+            ...incompatible.map((m) => ({
+              name: `\x1b[38;5;249m${m.displayName}\x1b[0m`,
+              value: m.name,
+            })),
+          ];
 
-        const modelChoices = [
-          ...compatible.map((m) => ({
-            name: m.displayName,
-            value: m.name,
-          })),
-          ...incompatible.map((m) => ({
-            name: `\x1b[38;5;249m${m.displayName}\x1b[0m`,
-            value: m.name,
-          })),
-        ];
+          model = await search({
+            message: 'Select a model:',
+            theme: searchTheme,
+            source: (term) => {
+              const q = (term ?? '').toLowerCase();
+              return modelChoices.filter(
+                (c) => c.value.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
+              );
+            },
+          });
 
-        model = await search({
-          message: 'Select a model:',
-          theme: searchTheme,
-          source: (term) => {
-            const q = (term ?? '').toLowerCase();
-            return modelChoices.filter(
-              (c) => c.value.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
-            );
-          },
-        });
+          // Check duplicate before proceeding
+          const isDup = existingAgents.some((a) => a.model === model && a.tool === tool);
+          if (isDup) {
+            console.warn(`"${model}" / "${tool}" already exists in config. Choose again.`);
+            continue;
+          }
 
-        // Warn if model isn't compatible with selected tool
-        const modelEntry = registry.models.find((m) => m.name === model);
-        if (modelEntry && !modelEntry.tools.includes(tool)) {
-          console.warn(`Warning: "${model}" is not listed as compatible with "${tool}".`);
+          // Warn if model isn't compatible with selected tool
+          const modelEntry = registry.models.find((m) => m.name === model);
+          if (modelEntry && !modelEntry.tools.includes(tool)) {
+            console.warn(`Warning: "${model}" is not listed as compatible with "${tool}".`);
+          }
+
+          break;
         }
 
         // Step 3: Resolve default command and let user edit it
