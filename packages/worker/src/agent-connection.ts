@@ -805,8 +805,15 @@ export class AgentConnection implements DurableObject {
         this.env,
       );
 
+      // Get the number of contributing reviews for the summary header
+      const { count: reviewCount } = await supabase
+        .from('review_results')
+        .select('id', { count: 'exact', head: true })
+        .eq('review_task_id', msg.taskId)
+        .eq('status', 'completed');
+
       // Post synthesized review as a PR review
-      const summaryBody = formatSummaryComment(msg.summary, 0);
+      const summaryBody = formatSummaryComment(msg.summary, reviewCount ?? 0);
       const summaryUrl = await postPrReview(
         project.owner,
         project.repo,

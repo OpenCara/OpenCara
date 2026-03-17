@@ -53,12 +53,14 @@ describe('protocol', () => {
       },
       timeout: 600,
       diffContent: 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts',
+      reviewMode: 'full',
     };
     expect(msg.type).toBe('review_request');
     expect(msg.pr.number).toBe(1);
     expect(msg.project.owner).toBe('org');
     expect(msg.timeout).toBe(600);
     expect(msg.diffContent).toContain('diff --git');
+    expect(msg.reviewMode).toBe('full');
   });
 
   it('constructs a valid ReviewCompleteMessage with verdict and tokensUsed', () => {
@@ -158,12 +160,14 @@ describe('protocol', () => {
       project: { owner: 'org', repo: 'repo', prompt: 'Review this' },
       reviews: [review],
       timeout: 300,
+      diffContent: 'diff --git a/file.ts b/file.ts',
     };
     expect(msg.reviews).toHaveLength(1);
     expect(msg.reviews[0].verdict).toBe('approve');
     expect(msg.pr.number).toBe(1);
     expect(msg.project.owner).toBe('org');
     expect(msg.timeout).toBe(300);
+    expect(msg.diffContent).toContain('diff --git');
   });
 
   it('SummaryReview has all required fields', () => {

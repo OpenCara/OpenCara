@@ -271,6 +271,7 @@ export async function distributeTask(
             diffContent,
             minCount: config.agents.minCount,
             installationId,
+            reviewMode: config.agents.minCount > 1 ? 'compact' : 'full',
           }),
         }),
       );
