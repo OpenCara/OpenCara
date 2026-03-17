@@ -163,8 +163,12 @@ export function startAgent(
       // Send RFC 6455 WebSocket ping frames to keep the Cloudflare proxy layer alive
       clearWsPingTimer();
       wsPingTimer = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.ping();
+        try {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.ping();
+          }
+        } catch {
+          // Swallow ping errors — socket may be closing
         }
       }, WS_PING_INTERVAL_MS);
 
@@ -196,12 +200,12 @@ export function startAgent(
     });
 
     ws.on('close', (code, reason) => {
+      if (intentionalClose) return;
+      if (ws !== currentWs) return; // Stale WS — don't clear active timers
+
       clearHeartbeatTimer();
       clearStabilityTimer();
       clearWsPingTimer();
-
-      if (intentionalClose) return;
-      if (ws !== currentWs) return; // Stale WS — don't reconnect
 
       // Log connection lifetime
       if (connectionOpenedAt) {
