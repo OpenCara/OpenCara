@@ -94,31 +94,43 @@ export const MAX_AGENTS_PER_TASK = 10;
 
 /**
  * Select up to `reviewCount` agents for a review.
- * Preferred tools first, then sorted by reputation (descending).
+ * Priority: preferred models > preferred tools > others, sorted by reputation within each group.
  * Returns empty only if no agents are available at all.
- * Returns fewer than reviewCount if not enough agents are online.
  */
 export function selectAgents(
   agents: EligibleAgent[],
   reviewCount: number,
+  preferredModels: string[],
   preferredTools: string[],
 ): EligibleAgent[] {
   if (agents.length === 0) return [];
 
   const count = Math.min(reviewCount, agents.length);
-
-  // Sort by reputation descending within each group
   const byReputation = (a: EligibleAgent, b: EligibleAgent) =>
     b.reputationScore - a.reputationScore;
 
-  if (preferredTools.length === 0) {
+  const hasModelPref = preferredModels.length > 0;
+  const hasToolPref = preferredTools.length > 0;
+
+  if (!hasModelPref && !hasToolPref) {
     return [...agents].sort(byReputation).slice(0, count);
   }
 
-  const preferred = agents.filter((a) => preferredTools.includes(a.tool)).sort(byReputation);
-  const others = agents.filter((a) => !preferredTools.includes(a.tool)).sort(byReputation);
+  const modelMatch = hasModelPref
+    ? agents.filter((a) => preferredModels.includes(a.model)).sort(byReputation)
+    : [];
+  const modelMatchIds = new Set(modelMatch.map((a) => a.id));
 
-  return [...preferred, ...others].slice(0, count);
+  const toolMatch = hasToolPref
+    ? agents
+        .filter((a) => preferredTools.includes(a.tool) && !modelMatchIds.has(a.id))
+        .sort(byReputation)
+    : [];
+  const matchedIds = new Set([...modelMatchIds, ...toolMatch.map((a) => a.id)]);
+
+  const others = agents.filter((a) => !matchedIds.has(a.id)).sort(byReputation);
+
+  return [...modelMatch, ...toolMatch, ...others].slice(0, count);
 }
 
 /**
@@ -243,7 +255,12 @@ export async function distributeTask(
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
-  const selected = selectAgents(filtered, config.agents.reviewCount, config.agents.preferredTools);
+  const selected = selectAgents(
+    filtered,
+    config.agents.reviewCount,
+    config.agents.preferredModels,
+    config.agents.preferredTools,
+  );
 
   if (selected.length === 0) {
     console.log(`No eligible agents found for task ${taskId} — stays pending for pickup`);

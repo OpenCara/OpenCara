@@ -12,6 +12,7 @@ export interface ReviewConfig {
   trigger: TriggerConfig;
   agents: {
     reviewCount: number;
+    preferredModels: string[];
     preferredTools: string[];
     minReputation: number;
   };
@@ -84,6 +85,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   trigger: DEFAULT_TRIGGER,
   agents: {
     reviewCount: 1,
+    preferredModels: [],
     preferredTools: [],
     minReputation: 0,
   },
@@ -153,6 +155,9 @@ export function parseReviewConfig(yaml: string): ParseResult {
         1,
         10,
       ),
+      preferredModels: Array.isArray(agentsRaw.preferred_models)
+        ? agentsRaw.preferred_models.filter((t: unknown) => typeof t === 'string')
+        : [],
       preferredTools: Array.isArray(agentsRaw.preferred_tools)
         ? agentsRaw.preferred_tools.filter((t: unknown) => typeof t === 'string')
         : [],
