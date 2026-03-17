@@ -530,7 +530,7 @@ agentCommand
         registry = DEFAULT_REGISTRY;
       }
 
-      const { search } = await import('@inquirer/prompts');
+      const { search, input } = await import('@inquirer/prompts');
 
       // Tool-first selection with fuzzy filter
       const toolChoices = registry.tools.map((t) => ({
@@ -553,7 +553,6 @@ agentCommand
         model = compatibleModels[0].name;
         console.log(`Model: ${compatibleModels[0].displayName} (${model})`);
       } else if (compatibleModels.length === 0) {
-        const { input } = await import('@inquirer/prompts');
         model = await input({ message: 'Enter model name:' });
       } else {
         const modelChoices = compatibleModels.map((m) => ({
@@ -647,6 +646,11 @@ agentCommand
       if (isDuplicate) continue;
 
       const command = DEFAULT_COMMANDS[agent.tool] ?? undefined;
+      if (!command) {
+        console.warn(
+          `Warning: no default command for ${agent.model}/${agent.tool} — set command manually in config`,
+        );
+      }
       existing.push({ model: agent.model, tool: agent.tool, command });
       imported++;
     }
@@ -731,8 +735,10 @@ agentCommand
           let cmd: string;
           try {
             cmd = resolveLocalAgentCommand(local, config.agentCommand);
-          } catch {
-            console.warn(`Skipping ${local.model}/${local.tool}: no command template available`);
+          } catch (err) {
+            console.warn(
+              `Skipping ${local.model}/${local.tool}: ${err instanceof Error ? err.message : 'no command template available'}`,
+            );
             continue;
           }
           if (!validateCommandBinary(cmd)) {

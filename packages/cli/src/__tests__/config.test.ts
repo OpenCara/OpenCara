@@ -341,6 +341,7 @@ describe('config', () => {
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         limits: null,
         agentCommand: null,
+        agents: null,
       });
       expect(key).toBe('cr_test');
     });
@@ -358,6 +359,7 @@ describe('config', () => {
           maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
           limits: null,
           agentCommand: null,
+          agents: null,
         }),
       ).toThrow('process.exit');
 
@@ -366,6 +368,88 @@ describe('config', () => {
 
       exitSpy.mockRestore();
       errorSpy.mockRestore();
+    });
+  });
+
+  describe('agents parsing', () => {
+    it('returns null when agents key is absent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+
+      const config = loadConfig();
+      expect(config.agents).toBeNull();
+    });
+
+    it('returns empty array when agents key is present but empty', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\nagents: []\n');
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([]);
+    });
+
+    it('parses agents with model, tool, and command', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'api_key: cr_test\nagents:\n  - model: claude-opus-4-6\n    tool: claude-code\n    command: claude -p\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([
+        { model: 'claude-opus-4-6', tool: 'claude-code', command: 'claude -p' },
+      ]);
+    });
+
+    it('parses agents without command field', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'api_key: cr_test\nagents:\n  - model: glm-5\n    tool: qwen\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([{ model: 'glm-5', tool: 'qwen' }]);
+    });
+
+    it('skips invalid entries and warns', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'api_key: cr_test\nagents:\n  - model: valid\n    tool: ok\n  - broken: true\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([{ model: 'valid', tool: 'ok' }]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('agents[1]'));
+      warnSpy.mockRestore();
+    });
+
+    it('saveConfig writes agents when not null', () => {
+      saveConfig({
+        apiKey: 'cr_test',
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
+        agentCommand: null,
+        agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(written).toContain('agents');
+      expect(written).toContain('glm-5');
+    });
+
+    it('saveConfig omits agents when null', () => {
+      saveConfig({
+        apiKey: 'cr_test',
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(written).not.toContain('agents');
     });
   });
 });

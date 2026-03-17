@@ -86,6 +86,10 @@ vi.mock('../handlers/stats.js', () => ({
   ),
 }));
 
+vi.mock('../handlers/registry.js', () => ({
+  handleGetRegistry: vi.fn().mockReturnValue(Response.json({ tools: [], models: [] })),
+}));
+
 vi.mock('../handlers/web-auth.js', () => ({
   handleWebLogin: vi
     .fn()
@@ -116,6 +120,7 @@ import { handleGetConsumption } from '../handlers/consumption.js';
 import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
 import { handleCollectRatings } from '../handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
+import { handleGetRegistry } from '../handlers/registry.js';
 import { handleGetStats, handleGetProjectStats } from '../handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from '../handlers/web-auth.js';
 import {
@@ -327,6 +332,12 @@ describe('worker router', () => {
     );
     expect(response.status).toBe(200);
     expect(handleGetProjectStats).toHaveBeenCalledWith('mock-supabase');
+  });
+
+  it('routes GET /api/registry (public)', async () => {
+    const response = await worker.fetch(new Request('http://localhost/api/registry'), mockEnv);
+    expect(response.status).toBe(200);
+    expect(handleGetRegistry).toHaveBeenCalled();
   });
 
   it('returns 404 for GET /api/leaderboard (removed)', async () => {

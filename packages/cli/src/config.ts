@@ -52,10 +52,17 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
   if (!Array.isArray(raw)) return null;
 
   const agents: LocalAgentConfig[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== 'object') continue;
+  for (let i = 0; i < raw.length; i++) {
+    const entry = raw[i];
+    if (!entry || typeof entry !== 'object') {
+      console.warn(`Warning: agents[${i}] is not an object, skipping`);
+      continue;
+    }
     const obj = entry as Record<string, unknown>;
-    if (typeof obj.model !== 'string' || typeof obj.tool !== 'string') continue;
+    if (typeof obj.model !== 'string' || typeof obj.tool !== 'string') {
+      console.warn(`Warning: agents[${i}] missing required model/tool fields, skipping`);
+      continue;
+    }
     const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
     if (typeof obj.command === 'string') agent.command = obj.command;
     agents.push(agent);

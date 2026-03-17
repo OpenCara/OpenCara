@@ -149,10 +149,22 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #47 [cli-dev, DONE] Refactor CLI to invoke local tools instead of Anthropic API — PR #49 merged
 - #48 [worker-dev, DONE] Distribute pending tasks when agent comes online — PR #50 merged
 - #51 [worker-dev, DONE] Fix WebSocket disconnect on authentication — PR #52 merged
+- #53 [worker-dev, DONE] Fix WebSocket reconnect loop — stale close guard + code 4002 — PR #54 merged
+- #55 [worker-dev, DONE] Fix WebSocket re-entrance: debounce + skip pickup on reconnect — PR #56 merged
+- #57 [worker-dev, DONE] E2E review loop fix — default config, reconnect pickup, diagnostics — PR #59 merged
+- #58 [architect, DONE] Migrate from npm to pnpm with global virtual store — PR #60 merged
+- #61 [cli-dev, DONE] CLI WebSocket disconnects — diagnostics + reconnect stability — PR #68 merged
+- #62 [cli-dev, DONE] Tool executor stdin delivery + stderr capture — PR #68 merged
+- #63 [cli-dev, DONE] Configurable agent tool command via template string — PR #76 merged
+- #64 [breakdown] Dashboard redesign: CLI-first personal stats + public web project stats
+  - #69 [architect, DONE] Shared types: remove leaderboard, add trust tier + project stats — PR #74 merged
+  - #70 [worker-dev, DONE] Worker: project stats API + trust tier — PR #75 merged
+  - #71 [web-dev, IN PROGRESS] Web: landing + public community page, no auth
+  - #72 [cli-dev, IN PROGRESS] CLI: enrich stats with trust tier + quality
 
 ## Backlog
 
-- #35 [worker-dev, priority:medium] Optimize leaderboard endpoint — eliminate N+1 queries
+- #35 [worker-dev, DONE] Optimize leaderboard endpoint — resolved by PR #75 (endpoint removed)
 - #38 [worker-dev, priority:low] Implement installation event handlers — project upsert and cleanup
 
 ## Dependency Graph
@@ -190,3 +202,11 @@ M0 → M2 → M4       M5 → M9
 | #49 | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API     |
 | #50 | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                |
 | #52 | #51    | worker-dev | 2026-03-16 | Fix WebSocket disconnect on authentication                      |
+| #54 | #53    | worker-dev | 2026-03-16 | Fix WebSocket reconnect loop — stale close guard + code 4002    |
+| #56 | #55    | worker-dev | 2026-03-16 | Fix WebSocket re-entrance: debounce + skip pickup on reconnect  |
+| #59 | #57,46 | worker-dev | 2026-03-17 | Fix E2E review loop — default config, reconnect pickup          |
+| #60 | #58    | architect  | 2026-03-17 | Migrate from npm to pnpm with global virtual store              |
+| #68 | #61,62 | cli-dev    | 2026-03-17 | WebSocket diagnostics + tool executor stdin delivery            |
+| #74 | #69    | architect  | 2026-03-17 | Remove leaderboard types, add trust tier + project stats        |
+| #75 | #70,35 | worker-dev | 2026-03-17 | Replace leaderboard with project stats + trust tier API         |
+| #76 | #63    | cli-dev    | 2026-03-17 | Configurable agent tool command via template strings            |
