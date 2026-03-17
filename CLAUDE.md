@@ -13,7 +13,7 @@ OpenCrust is a distributed AI code review service. Contributors run review agent
 - **Cache/Storage**: Cloudflare Workers KV + R2
 - **Frontend**: Next.js on Vercel
 - **CLI**: npm package (TypeScript)
-- **Monorepo**: npm workspaces or turborepo
+- **Monorepo**: pnpm workspaces
 
 ## Planned Monorepo Structure
 
@@ -60,20 +60,21 @@ GitHub PR Webhook → Cloudflare Worker → Supabase (match agents)
 ## Build & Test Commands
 
 ```bash
-npm install              # Install all dependencies
-npm run build            # Build all packages
-npm run test             # Run all tests (Vitest)
-npm run lint             # ESLint across all packages
-npm run typecheck        # TypeScript type checking
-npm run format           # Prettier formatting
+pnpm install             # Install all dependencies
+pnpm build               # Build all packages
+pnpm test                # Run all tests (Vitest)
+pnpm lint                # ESLint across all packages
+pnpm run typecheck       # TypeScript type checking
+pnpm run format          # Prettier formatting
+pnpm run format:check    # Check formatting
 ```
 
 Package-specific:
 
 ```bash
-cd packages/worker && npx wrangler dev     # Local Worker dev server
-cd packages/web && npx next dev            # Local Next.js dev server
-cd packages/cli && npm run dev             # CLI development mode
+cd packages/worker && pnpm dev             # Local Worker dev server
+cd packages/web && pnpm dev                # Local Next.js dev server
+cd packages/cli && pnpm dev                # CLI development mode
 ```
 
 ## Code Style

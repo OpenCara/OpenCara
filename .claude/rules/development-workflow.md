@@ -10,7 +10,7 @@ All dev agents (architect, worker-dev, cli-dev, web-dev) follow this standard li
 4. Rename the worktree branch to `issue-<NUMBER>-<short-description>`
 5. Implement the changes
 6. Write tests for new code
-7. Build and test: `npm run build && npm run test`
+7. Build and test: `pnpm build && pnpm test`
 8. Commit, push, and create a PR (referencing the issue)
 9. **Self-review**: run multi-AI review → fix findings → re-review (max 3 iterations)
 10. When clean → merge the PR
@@ -27,7 +27,7 @@ git branch -m issue-<NUMBER>-<short-description>
 # ... implement changes ...
 
 # Build and test
-npm run build && npm run test
+pnpm build && pnpm test
 
 # Commit with issue reference
 git add <specific files>
@@ -82,7 +82,7 @@ This skill automatically:
 ```bash
 git fetch origin main
 git merge origin/main
-npm run build && npm run test && npm run lint && npm run format:check && npm run typecheck
+pnpm build && pnpm test && pnpm lint && pnpm run format:check && pnpm run typecheck
 ```
 
 If any check fails, fix the issue before merging. Do NOT merge with failing tests.
@@ -90,7 +90,7 @@ If any check fails, fix the issue before merging. Do NOT merge with failing test
 After all checks pass, run coverage and post the report to the PR:
 
 ````bash
-npx vitest run --coverage 2>&1 | tail -40 > /tmp/coverage-report.txt
+pnpm vitest run --coverage 2>&1 | tail -40 > /tmp/coverage-report.txt
 gh pr comment <PR_NUMBER> --body "$(printf '## Coverage Report\n\n```\n'; cat /tmp/coverage-report.txt; printf '```\n')"
 rm -f /tmp/coverage-report.txt
 ````
@@ -118,7 +118,7 @@ This enables PM to dispatch dependent work without waiting for the GitHub webhoo
 Before any `git push origin main`:
 
 ```bash
-npm run build && npm run test && npm run lint && npm run format:check && npm run typecheck
+pnpm build && pnpm test && pnpm lint && pnpm run format:check && pnpm run typecheck
 ```
 
 If any check fails, fix it before pushing. Never push broken code to main.
@@ -134,7 +134,7 @@ If any check fails, fix it before pushing. Never push broken code to main.
 ## Common Guidelines
 
 - Follow **SOLID**, **KISS**, **YAGNI** principles
-- Use Vitest for unit tests across all packages — **test coverage must be close to 100%**. Run `npx vitest run --coverage` to verify before creating PRs
-- ESLint + Prettier for code quality (run `npm run lint` before committing)
+- Use Vitest for unit tests across all packages — **test coverage must be close to 100%**. Run `pnpm vitest run --coverage` to verify before creating PRs
+- ESLint + Prettier for code quality (run `pnpm lint` before committing)
 - If the issue spec is unclear, comment on the issue asking PM for clarification and shut down
 - If an issue requires work outside your scope, comment on the issue explaining what's needed and shut down — PM will re-triage

@@ -10,7 +10,7 @@ Complete a working end-to-end loop: a PR is opened → multiple agents review it
 
 **Deliverable**: Monorepo with all packages buildable.
 
-- [ ] Initialize monorepo (turborepo or npm workspaces)
+- [ ] Initialize monorepo (pnpm workspaces)
   - `packages/worker` — Cloudflare Workers backend
   - `packages/cli` — Agent CLI (npm package)
   - `packages/web` — Next.js frontend

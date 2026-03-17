@@ -10,7 +10,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@opencrust/shared": "*",
+    "@opencrust/shared": "workspace:*",
     "@supabase/supabase-js": "^2.99.1"
   },
   "devDependencies": {
