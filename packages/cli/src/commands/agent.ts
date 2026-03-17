@@ -32,6 +32,9 @@ export interface ConsumptionDeps {
   session: SessionStats;
 }
 
+/** Minimum time (ms) a connection must be alive before we reset the attempt counter */
+const CONNECTION_STABILITY_THRESHOLD_MS = 30_000;
+
 function formatTable(agents: AgentResponse[]): void {
   if (agents.length === 0) {
     console.log('No agents registered. Run `opencrust agent create` to register one.');
@@ -71,17 +74,25 @@ export { buildWsUrl };
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 
+export interface StartAgentOptions {
+  verbose?: boolean;
+}
+
 export function startAgent(
   agentId: string,
   platformUrl: string,
   apiKey: string,
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
+  options?: StartAgentOptions,
 ): void {
+  const verbose = options?.verbose ?? false;
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   let currentWs: WebSocket | null = null;
+  let connectionOpenedAt: number | null = null;
+  let stabilityTimer: ReturnType<typeof setTimeout> | null = null;
 
   function clearHeartbeatTimer(): void {
     if (heartbeatTimer) {
@@ -90,9 +101,17 @@ export function startAgent(
     }
   }
 
+  function clearStabilityTimer(): void {
+    if (stabilityTimer) {
+      clearTimeout(stabilityTimer);
+      stabilityTimer = null;
+    }
+  }
+
   function shutdown(): void {
     intentionalClose = true;
     clearHeartbeatTimer();
+    clearStabilityTimer();
     if (currentWs) currentWs.close();
     console.log('Disconnected.');
     process.exit(0);
@@ -115,9 +134,24 @@ export function startAgent(
     }
 
     ws.on('open', () => {
-      attempt = 0;
+      connectionOpenedAt = Date.now();
       console.log('Connected to platform.');
       resetHeartbeatTimer();
+
+      if (verbose) {
+        console.log(`[verbose] Connection opened at ${new Date(connectionOpenedAt).toISOString()}`);
+      }
+
+      // Deferred attempt reset: only reset after connection is stable for 30s
+      clearStabilityTimer();
+      stabilityTimer = setTimeout(() => {
+        if (verbose) {
+          console.log(
+            `[verbose] Connection stable for ${CONNECTION_STABILITY_THRESHOLD_MS / 1000}s — resetting reconnect counter`,
+          );
+        }
+        attempt = 0;
+      }, CONNECTION_STABILITY_THRESHOLD_MS);
     });
 
     ws.on('message', (data: WebSocket.Data) => {
@@ -128,18 +162,33 @@ export function startAgent(
         return;
       }
 
-      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps, consumptionDeps);
+      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps, consumptionDeps, verbose);
     });
 
     ws.on('close', (code, reason) => {
       clearHeartbeatTimer();
+      clearStabilityTimer();
+
       if (intentionalClose) return;
       if (ws !== currentWs) return; // Stale WS — don't reconnect
+
+      // Log connection lifetime
+      if (connectionOpenedAt) {
+        const lifetimeMs = Date.now() - connectionOpenedAt;
+        const lifetimeSec = (lifetimeMs / 1000).toFixed(1);
+        console.log(
+          `Disconnected (code=${code}, reason=${reason.toString()}). Connection was alive for ${lifetimeSec}s.`,
+        );
+      } else {
+        console.log(`Disconnected (code=${code}, reason=${reason.toString()}).`);
+      }
+
       if (code === 4002) {
         console.log('Connection replaced by server — not reconnecting.');
         return;
       }
-      console.log(`Disconnected (code=${code}, reason=${reason.toString()}).`);
+
+      connectionOpenedAt = null;
       reconnect();
     });
 
@@ -209,6 +258,7 @@ export function handleMessage(
   resetHeartbeat?: () => void,
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
+  verbose?: boolean,
 ): void {
   switch (msg.type) {
     case 'connected':
@@ -217,6 +267,9 @@ export function handleMessage(
 
     case 'heartbeat_ping':
       ws.send(JSON.stringify({ type: 'heartbeat_pong', timestamp: Date.now() }));
+      if (verbose) {
+        console.log(`[verbose] Heartbeat ping received, pong sent at ${new Date().toISOString()}`);
+      }
       if (resetHeartbeat) resetHeartbeat();
       break;
 
@@ -450,7 +503,8 @@ agentCommand
 agentCommand
   .command('start [agentId]')
   .description('Connect agent to platform via WebSocket')
-  .action(async (agentId?: string) => {
+  .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
+  .action(async (agentId: string | undefined, opts: { verbose?: boolean }) => {
     const config = loadConfig();
     const apiKey = requireApiKey(config);
 
@@ -520,5 +574,7 @@ agentCommand
     };
 
     console.log(`Starting agent ${agentId}...`);
-    startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps);
+    startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
+      verbose: opts.verbose,
+    });
   });

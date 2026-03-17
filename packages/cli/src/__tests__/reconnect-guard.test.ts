@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import EventEmitter from 'node:events';
 
 // Track all created mock WebSocket instances
@@ -30,9 +30,14 @@ import { startAgent } from '../commands/agent.js';
 describe('startAgent reconnect guards', () => {
   beforeEach(() => {
     mockWsInstances.length = 0;
+    vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('does not reconnect when a stale WebSocket closes (ws !== currentWs)', async () => {
@@ -46,16 +51,17 @@ describe('startAgent reconnect guards', () => {
     // WS-A closes normally — triggers reconnect, creates WS-B
     wsA.emit('close', 1006, Buffer.from('abnormal'));
 
-    await vi.waitFor(() => {
-      expect(mockWsInstances).toHaveLength(2);
-    });
+    // Flush the microtask queue so the async reconnect() runs
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockWsInstances).toHaveLength(2);
 
     const wsB = mockWsInstances[1];
     wsB.emit('open');
 
     // Stale WS-A fires another close event — should NOT trigger reconnect
     wsA.emit('close', 4002, Buffer.from('replaced'));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     // Should still only have 2 instances — no third reconnect
     expect(mockWsInstances).toHaveLength(2);
@@ -70,7 +76,7 @@ describe('startAgent reconnect guards', () => {
 
     // Close with 4002 "replaced" — should NOT reconnect
     ws.emit('close', 4002, Buffer.from('replaced'));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(console.log).toHaveBeenCalledWith('Connection replaced by server — not reconnecting.');
     expect(mockWsInstances).toHaveLength(1);
@@ -86,10 +92,90 @@ describe('startAgent reconnect guards', () => {
     // Normal close — should reconnect
     ws.emit('close', 1006, Buffer.from('abnormal'));
 
-    await vi.waitFor(() => {
-      expect(mockWsInstances).toHaveLength(2);
-    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockWsInstances).toHaveLength(2);
 
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Reconnecting'));
+  });
+
+  it('does not reset attempt counter immediately on open', async () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key');
+
+    const ws1 = mockWsInstances[0];
+    ws1.emit('open');
+
+    // Disconnect quickly (before 30s stability threshold)
+    ws1.emit('close', 1006, Buffer.from('quick disconnect'));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockWsInstances).toHaveLength(2);
+
+    // The reconnect message should show attempt 1 (not reset to 0)
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('attempt 1'));
+  });
+
+  it('resets attempt counter after connection is stable for 30s', async () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key');
+
+    const ws1 = mockWsInstances[0];
+    ws1.emit('open');
+
+    // Advance time past the stability threshold (30s)
+    vi.advanceTimersByTime(31_000);
+
+    // Now disconnect
+    ws1.emit('close', 1006, Buffer.from('late disconnect'));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockWsInstances).toHaveLength(2);
+
+    // After stability threshold passed, attempt should have been reset to 0
+    // So the next reconnect should show attempt 1 (0 + 1)
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('attempt 1'));
+  });
+
+  it('logs connection lifetime on disconnect', async () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key');
+
+    const ws = mockWsInstances[0];
+    ws.emit('open');
+
+    // Advance time by 5 seconds
+    vi.advanceTimersByTime(5000);
+
+    ws.emit('close', 1006, Buffer.from('test'));
+
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('alive for'));
+  });
+
+  it('logs verbose diagnostics when verbose option is enabled', async () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key', undefined, undefined, {
+      verbose: true,
+    });
+
+    const ws = mockWsInstances[0];
+    ws.emit('open');
+
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('[verbose] Connection opened'),
+    );
+
+    // Advance past stability threshold
+    vi.advanceTimersByTime(31_000);
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('[verbose] Connection stable'),
+    );
+  });
+
+  it('does not log verbose diagnostics when verbose option is not set', () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key');
+
+    const ws = mockWsInstances[0];
+    ws.emit('open');
+
+    const verboseCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('[verbose]'),
+    );
+    expect(verboseCalls).toHaveLength(0);
   });
 });
