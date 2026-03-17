@@ -4,17 +4,20 @@ import { apiFetch } from '../../lib/api';
 export const dynamic = 'force-dynamic';
 
 function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return '--';
   return n.toLocaleString();
 }
 
 function formatPercent(n: number): string {
+  if (!Number.isFinite(n)) return '--';
   return `${Math.round(n * 100)}%`;
 }
 
 function formatTimeAgo(dateString: string): string {
   const now = Date.now();
   const then = new Date(dateString).getTime();
-  const diffMs = now - then;
+  if (isNaN(then)) return 'unknown';
+  const diffMs = Math.max(0, now - then);
   const diffMin = Math.floor(diffMs / 60_000);
   if (diffMin < 1) return 'just now';
   if (diffMin < 60) return `${diffMin}m ago`;

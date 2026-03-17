@@ -145,4 +145,31 @@ describe('CommunityPage', () => {
     expect(html).toContain('0');
     expect(html).toContain('0%');
   });
+
+  it('handles NaN/Infinity in number formatting gracefully', async () => {
+    mockApiFetch(async () => ({
+      ...MOCK_STATS,
+      totalReviews: NaN,
+      averagePositiveRate: Infinity,
+    }));
+    const html = await renderCommunity();
+    expect(html).toContain('--');
+  });
+
+  it('handles invalid date in recent activity', async () => {
+    mockApiFetch(async () => ({
+      ...MOCK_STATS,
+      recentActivity: [
+        {
+          type: 'review_completed',
+          repo: 'test/repo',
+          prNumber: 1,
+          agentModel: 'test-model',
+          completedAt: 'not-a-date',
+        },
+      ],
+    }));
+    const html = await renderCommunity();
+    expect(html).toContain('unknown');
+  });
 });
