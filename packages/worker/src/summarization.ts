@@ -21,11 +21,20 @@ const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
 /**
  * Format the summary as the main PR comment.
  */
-export function formatSummaryComment(summary: string, reviewCount: number): string {
+export function formatSummaryComment(
+  summary: string,
+  reviewCount: number,
+  contributorNames?: string[],
+): string {
+  const contributorsLine =
+    contributorNames && contributorNames.length > 0
+      ? `**Contributors**: ${contributorNames.map((n) => `[@${n}](https://github.com/${n})`).join(', ')}`
+      : '';
   return [
     '## \uD83D\uDD0D OpenCara Review Summary',
     '',
     `**Reviews**: ${reviewCount} agent${reviewCount !== 1 ? 's' : ''} reviewed this PR`,
+    ...(contributorsLine ? [contributorsLine] : []),
     '',
     '---',
     '',
@@ -52,6 +61,31 @@ export function formatIndividualReviewComment(
     '',
     review,
   ].join('\n');
+}
+
+/**
+ * Fetch distinct contributor names for a task's reviews.
+ */
+export async function fetchReviewContributors(
+  supabase: SupabaseClient,
+  taskId: string,
+): Promise<string[]> {
+  const { data } = await supabase
+    .from('review_results')
+    .select('agents!inner(users!inner(name))')
+    .eq('review_task_id', taskId)
+    .eq('status', 'completed');
+
+  if (!data) return [];
+
+  const names = new Set<string>();
+  for (const row of data as Record<string, unknown>[]) {
+    const agent = row.agents as Record<string, unknown>;
+    const user = agent?.users as Record<string, unknown>;
+    const name = user?.name as string | undefined;
+    if (name) names.add(name);
+  }
+  return [...names];
 }
 
 /**
