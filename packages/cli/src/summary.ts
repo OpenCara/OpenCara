@@ -71,7 +71,7 @@ export async function executeSummary(
   req: SummaryRequest,
   deps: ReviewExecutorDeps,
   runTool: (
-    toolName: string,
+    commandTemplate: string,
     prompt: string,
     timeoutMs: number,
     signal?: AbortSignal,
@@ -100,7 +100,12 @@ export async function executeSummary(
     const userMessage = buildSummaryUserMessage(req.prompt, req.reviews);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
-    const result = await runTool(deps.tool, fullPrompt, effectiveTimeout, abortController.signal);
+    const result = await runTool(
+      deps.commandTemplate,
+      fullPrompt,
+      effectiveTimeout,
+      abortController.signal,
+    );
 
     return { summary: result.stdout, tokensUsed: result.tokensUsed };
   } finally {

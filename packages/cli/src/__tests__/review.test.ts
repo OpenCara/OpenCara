@@ -85,7 +85,7 @@ describe('executeReview', () => {
   };
 
   const defaultDeps: ReviewExecutorDeps = {
-    tool: 'claude-code',
+    commandTemplate: 'claude -p --output-format text',
     maxDiffSizeKb: 100,
   };
 
@@ -93,7 +93,7 @@ describe('executeReview', () => {
     const mockRunTool = vi
       .fn<
         (
-          toolName: string,
+          commandTemplate: string,
           prompt: string,
           timeoutMs: number,
           signal?: AbortSignal,
@@ -110,7 +110,7 @@ describe('executeReview', () => {
     expect(result.review).toBe('Great code!');
     expect(result.tokensUsed).toBe(0);
     expect(mockRunTool).toHaveBeenCalledWith(
-      'claude-code',
+      'claude -p --output-format text',
       expect.stringContaining('acme/widgets'),
       expect.any(Number),
       expect.any(AbortSignal),
@@ -192,14 +192,18 @@ describe('executeReview', () => {
     expect(timeoutMs).toBe(270_000);
   });
 
-  it('passes the tool name from deps', async () => {
+  it('passes the command template from deps', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: COMMENT\nLooks OK.',
       tokensUsed: 0,
     });
 
-    await executeReview(defaultRequest, { tool: 'codex', maxDiffSizeKb: 100 }, mockRunTool);
+    await executeReview(
+      defaultRequest,
+      { commandTemplate: 'codex exec', maxDiffSizeKb: 100 },
+      mockRunTool,
+    );
 
-    expect(mockRunTool.mock.calls[0][0]).toBe('codex');
+    expect(mockRunTool.mock.calls[0][0]).toBe('codex exec');
   });
 });

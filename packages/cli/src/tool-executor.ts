@@ -6,70 +6,19 @@ export interface ToolExecutorResult {
   tokensUsed: number;
 }
 
-export interface ToolCommand {
-  buildCommand(): { command: string; args: string[] };
-  parseTokenUsage?(stdout: string): number;
-}
-
-const TOOL_REGISTRY: Record<string, ToolCommand> = {
-  'claude-code': {
-    buildCommand() {
-      return { command: 'claude', args: ['-p', '--output-format', 'json'] };
-    },
-    parseTokenUsage(stdout: string): number {
-      try {
-        const parsed = JSON.parse(stdout);
-        if (parsed && typeof parsed.usage === 'object' && parsed.usage !== null) {
-          const input =
-            typeof parsed.usage.input_tokens === 'number' ? parsed.usage.input_tokens : 0;
-          const output =
-            typeof parsed.usage.output_tokens === 'number' ? parsed.usage.output_tokens : 0;
-          return input + output;
-        }
-      } catch {
-        // Not JSON or no usage field — return 0
-      }
-      return 0;
-    },
-  },
-  codex: {
-    buildCommand() {
-      return { command: 'codex', args: ['exec'] };
-    },
-  },
-  gemini: {
-    buildCommand() {
-      return { command: 'gemini', args: ['-p'] };
-    },
-  },
-};
-
-export function getSupportedTools(): string[] {
-  return Object.keys(TOOL_REGISTRY);
-}
-
-export function getToolCommand(toolName: string): ToolCommand {
-  const tool = TOOL_REGISTRY[toolName];
-  if (!tool) {
-    const supported = getSupportedTools().join(', ');
-    throw new UnsupportedToolError(`Unknown tool "${toolName}". Supported tools: ${supported}`);
-  }
-  return tool;
-}
-
-export class UnsupportedToolError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UnsupportedToolError';
-  }
-}
-
 export class ToolTimeoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ToolTimeoutError';
   }
 }
+
+/** Default command templates for known tools (backward compatibility) */
+export const DEFAULT_COMMANDS: Record<string, string> = {
+  'claude-code': 'claude -p --output-format text',
+  codex: 'codex exec',
+  gemini: 'gemini -p',
+};
 
 /** Minimum stdout length to treat a non-zero exit as a partial success */
 const MIN_PARTIAL_RESULT_LENGTH = 50;
@@ -78,29 +27,85 @@ const MIN_PARTIAL_RESULT_LENGTH = 50;
 const MAX_STDERR_LENGTH = 1000;
 
 /**
- * Extract the text result from claude-code JSON output.
- * Falls back to raw stdout if parsing fails.
+ * Parse a command template string into command + args.
+ * Splits on whitespace, respecting double-quoted and single-quoted segments.
+ * Interpolates ${VAR} variables from the provided vars map.
  */
-export function extractClaudeCodeResult(stdout: string): string {
-  try {
-    const parsed = JSON.parse(stdout);
-    if (parsed && typeof parsed.result === 'string') {
-      return parsed.result;
-    }
-  } catch {
-    // Not valid JSON — return raw stdout
+export function parseCommandTemplate(
+  template: string,
+  vars: Record<string, string> = {},
+): { command: string; args: string[] } {
+  // Interpolate variables
+  let interpolated = template;
+  for (const [key, value] of Object.entries(vars)) {
+    interpolated = interpolated.replaceAll(`\${${key}}`, value);
   }
-  return stdout;
+
+  // Split on whitespace, respecting quoted strings
+  const parts: string[] = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < interpolated.length; i++) {
+    const ch = interpolated[i];
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (/\s/.test(ch) && !inSingle && !inDouble) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0) {
+    parts.push(current);
+  }
+
+  if (parts.length === 0) {
+    throw new Error('Empty command template');
+  }
+
+  return { command: parts[0], args: parts.slice(1) };
 }
 
+/**
+ * Resolve a command template from explicit config or default fallback.
+ * Returns the template string or throws if neither is available.
+ */
+export function resolveCommandTemplate(
+  agentCommand: string | null,
+  toolName: string | undefined,
+): string {
+  if (agentCommand) {
+    return agentCommand;
+  }
+  if (toolName && toolName in DEFAULT_COMMANDS) {
+    return DEFAULT_COMMANDS[toolName];
+  }
+  const supported = Object.keys(DEFAULT_COMMANDS).join(', ');
+  throw new Error(
+    `No agent_command configured and no default for tool "${toolName ?? 'unknown'}". ` +
+      `Set agent_command in ~/.opencrust/config.yml or use a supported tool: ${supported}`,
+  );
+}
+
+/**
+ * Execute a tool command with prompt delivered via stdin.
+ * The commandTemplate is a shell-style command string (e.g., "claude -p --output-format text").
+ */
 export function executeTool(
-  toolName: string,
+  commandTemplate: string,
   prompt: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  vars?: Record<string, string>,
 ): Promise<ToolExecutorResult> {
-  const tool = getToolCommand(toolName);
-  const { command, args } = tool.buildCommand();
+  const { command, args } = parseCommandTemplate(commandTemplate, vars);
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -173,39 +178,34 @@ export function executeTool(
       if (sig === 'SIGTERM' || sig === 'SIGKILL') {
         reject(
           new ToolTimeoutError(
-            `Tool "${toolName}" timed out after ${Math.round(timeoutMs / 1000)}s`,
+            `Tool "${command}" timed out after ${Math.round(timeoutMs / 1000)}s`,
           ),
         );
         return;
       }
 
-      // For claude-code, extract text from JSON wrapper
-      const outputText = toolName === 'claude-code' ? extractClaudeCodeResult(stdout) : stdout;
-
       if (code !== 0) {
         // Non-zero exit but has meaningful output — treat as partial success
         if (stdout.length >= MIN_PARTIAL_RESULT_LENGTH) {
           console.warn(
-            `Tool "${toolName}" exited with code ${code} but produced output. Treating as partial result.`,
+            `Tool "${command}" exited with code ${code} but produced output. Treating as partial result.`,
           );
           if (stderr) {
             console.warn(`Tool stderr: ${stderr.slice(0, MAX_STDERR_LENGTH)}`);
           }
-          const tokensUsed = tool.parseTokenUsage ? tool.parseTokenUsage(stdout) : 0;
-          resolve({ stdout: outputText, stderr, tokensUsed });
+          resolve({ stdout, stderr, tokensUsed: 0 });
           return;
         }
 
         // No meaningful output — actual failure
         const errMsg = stderr
-          ? `Tool "${toolName}" failed (exit code ${code}): ${stderr.slice(0, MAX_STDERR_LENGTH)}`
-          : `Tool "${toolName}" failed with exit code ${code}`;
+          ? `Tool "${command}" failed (exit code ${code}): ${stderr.slice(0, MAX_STDERR_LENGTH)}`
+          : `Tool "${command}" failed with exit code ${code}`;
         reject(new Error(errMsg));
         return;
       }
 
-      const tokensUsed = tool.parseTokenUsage ? tool.parseTokenUsage(stdout) : 0;
-      resolve({ stdout: outputText, stderr, tokensUsed });
+      resolve({ stdout, stderr, tokensUsed: 0 });
     });
   });
 }

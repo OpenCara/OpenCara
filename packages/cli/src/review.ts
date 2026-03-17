@@ -55,7 +55,7 @@ export function extractVerdict(text: string): { verdict: ReviewVerdict; review: 
 }
 
 export interface ReviewExecutorDeps {
-  tool: string;
+  commandTemplate: string;
   maxDiffSizeKb: number;
 }
 
@@ -63,7 +63,7 @@ export async function executeReview(
   req: ReviewRequest,
   deps: ReviewExecutorDeps,
   runTool: (
-    toolName: string,
+    commandTemplate: string,
     prompt: string,
     timeoutMs: number,
     signal?: AbortSignal,
@@ -92,7 +92,12 @@ export async function executeReview(
     const userMessage = buildUserMessage(req.prompt, req.diffContent);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
-    const result = await runTool(deps.tool, fullPrompt, effectiveTimeout, abortController.signal);
+    const result = await runTool(
+      deps.commandTemplate,
+      fullPrompt,
+      effectiveTimeout,
+      abortController.signal,
+    );
 
     const { verdict, review } = extractVerdict(result.stdout);
     return { review, verdict, tokensUsed: result.tokensUsed };

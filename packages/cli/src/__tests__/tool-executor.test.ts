@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  getToolCommand,
-  getSupportedTools,
   executeTool,
-  extractClaudeCodeResult,
-  UnsupportedToolError,
+  parseCommandTemplate,
+  resolveCommandTemplate,
+  DEFAULT_COMMANDS,
   ToolTimeoutError,
 } from '../tool-executor.js';
 
@@ -65,51 +64,143 @@ function emitOutput(
   child.emit('close', opts.code ?? 0, opts.signal ?? null);
 }
 
-describe('getSupportedTools', () => {
-  it('returns all registered tool names', () => {
-    const tools = getSupportedTools();
-    expect(tools).toContain('claude-code');
-    expect(tools).toContain('codex');
-    expect(tools).toContain('gemini');
-    expect(tools.length).toBe(3);
+describe('parseCommandTemplate', () => {
+  it('splits simple command into command and args', () => {
+    const result = parseCommandTemplate('claude -p --output-format text');
+    expect(result).toEqual({
+      command: 'claude',
+      args: ['-p', '--output-format', 'text'],
+    });
+  });
+
+  it('handles command with no args', () => {
+    const result = parseCommandTemplate('my-script');
+    expect(result).toEqual({ command: 'my-script', args: [] });
+  });
+
+  it('handles double-quoted arguments', () => {
+    const result = parseCommandTemplate('cmd --flag "hello world" --other');
+    expect(result).toEqual({
+      command: 'cmd',
+      args: ['--flag', 'hello world', '--other'],
+    });
+  });
+
+  it('handles single-quoted arguments', () => {
+    const result = parseCommandTemplate("cmd 'hello world'");
+    expect(result).toEqual({
+      command: 'cmd',
+      args: ['hello world'],
+    });
+  });
+
+  it('interpolates ${TOOL} variable', () => {
+    const result = parseCommandTemplate('ollama run ${TOOL}', { TOOL: 'claude-code' });
+    expect(result).toEqual({
+      command: 'ollama',
+      args: ['run', 'claude-code'],
+    });
+  });
+
+  it('interpolates ${MODEL} variable', () => {
+    const result = parseCommandTemplate('claude -p --model ${MODEL}', {
+      MODEL: 'claude-sonnet-4-6',
+    });
+    expect(result).toEqual({
+      command: 'claude',
+      args: ['-p', '--model', 'claude-sonnet-4-6'],
+    });
+  });
+
+  it('interpolates multiple variables', () => {
+    const result = parseCommandTemplate('tool --model ${MODEL} --via ${TOOL}', {
+      MODEL: 'gpt-4',
+      TOOL: 'custom',
+    });
+    expect(result).toEqual({
+      command: 'tool',
+      args: ['--model', 'gpt-4', '--via', 'custom'],
+    });
+  });
+
+  it('leaves unmatched variables as-is', () => {
+    const result = parseCommandTemplate('cmd ${UNKNOWN}', {});
+    expect(result).toEqual({
+      command: 'cmd',
+      args: ['${UNKNOWN}'],
+    });
+  });
+
+  it('handles extra whitespace', () => {
+    const result = parseCommandTemplate('  cmd   arg1   arg2  ');
+    expect(result).toEqual({ command: 'cmd', args: ['arg1', 'arg2'] });
+  });
+
+  it('throws on empty template', () => {
+    expect(() => parseCommandTemplate('')).toThrow('Empty command template');
+  });
+
+  it('throws on whitespace-only template', () => {
+    expect(() => parseCommandTemplate('   ')).toThrow('Empty command template');
+  });
+
+  it('handles absolute paths as command', () => {
+    const result = parseCommandTemplate('/home/user/my-review-tool.sh --flag');
+    expect(result).toEqual({
+      command: '/home/user/my-review-tool.sh',
+      args: ['--flag'],
+    });
   });
 });
 
-describe('getToolCommand', () => {
-  it('returns tool command for claude-code (no prompt in args)', () => {
-    const tool = getToolCommand('claude-code');
-    const { command, args } = tool.buildCommand();
-    expect(command).toBe('claude');
-    expect(args).toEqual(['-p', '--output-format', 'json']);
+describe('resolveCommandTemplate', () => {
+  it('returns explicit agentCommand when provided', () => {
+    const result = resolveCommandTemplate('my-custom-tool --flag', 'claude-code');
+    expect(result).toBe('my-custom-tool --flag');
   });
 
-  it('returns tool command for codex (no prompt in args)', () => {
-    const tool = getToolCommand('codex');
-    const { command, args } = tool.buildCommand();
-    expect(command).toBe('codex');
-    expect(args).toEqual(['exec']);
+  it('falls back to default for claude-code', () => {
+    const result = resolveCommandTemplate(null, 'claude-code');
+    expect(result).toBe(DEFAULT_COMMANDS['claude-code']);
   });
 
-  it('returns tool command for gemini (no prompt in args)', () => {
-    const tool = getToolCommand('gemini');
-    const { command, args } = tool.buildCommand();
-    expect(command).toBe('gemini');
-    expect(args).toEqual(['-p']);
+  it('falls back to default for codex', () => {
+    const result = resolveCommandTemplate(null, 'codex');
+    expect(result).toBe(DEFAULT_COMMANDS['codex']);
   });
 
-  it('throws UnsupportedToolError for unknown tool', () => {
-    expect(() => getToolCommand('unknown-tool')).toThrow(UnsupportedToolError);
-    expect(() => getToolCommand('unknown-tool')).toThrow(/Supported tools:/);
-    expect(() => getToolCommand('unknown-tool')).toThrow(/claude-code/);
+  it('falls back to default for gemini', () => {
+    const result = resolveCommandTemplate(null, 'gemini');
+    expect(result).toBe(DEFAULT_COMMANDS['gemini']);
+  });
+
+  it('throws for unknown tool with no agentCommand', () => {
+    expect(() => resolveCommandTemplate(null, 'custom-tool')).toThrow(
+      /No agent_command configured/,
+    );
+    expect(() => resolveCommandTemplate(null, 'custom-tool')).toThrow(/config\.yml/);
+  });
+
+  it('throws for undefined tool with no agentCommand', () => {
+    expect(() => resolveCommandTemplate(null, undefined)).toThrow(/No agent_command configured/);
+  });
+
+  it('prefers explicit agentCommand over default', () => {
+    const result = resolveCommandTemplate('my-claude --special', 'claude-code');
+    expect(result).toBe('my-claude --special');
   });
 });
 
-describe('UnsupportedToolError', () => {
-  it('has correct name and message', () => {
-    const err = new UnsupportedToolError('bad tool');
-    expect(err.name).toBe('UnsupportedToolError');
-    expect(err.message).toBe('bad tool');
-    expect(err).toBeInstanceOf(Error);
+describe('DEFAULT_COMMANDS', () => {
+  it('has entries for claude-code, codex, and gemini', () => {
+    expect(Object.keys(DEFAULT_COMMANDS)).toEqual(
+      expect.arrayContaining(['claude-code', 'codex', 'gemini']),
+    );
+    expect(Object.keys(DEFAULT_COMMANDS).length).toBe(3);
+  });
+
+  it('claude-code default uses text output format', () => {
+    expect(DEFAULT_COMMANDS['claude-code']).toBe('claude -p --output-format text');
   });
 });
 
@@ -119,45 +210,6 @@ describe('ToolTimeoutError', () => {
     expect(err.name).toBe('ToolTimeoutError');
     expect(err.message).toBe('timed out');
     expect(err).toBeInstanceOf(Error);
-  });
-});
-
-describe('extractClaudeCodeResult', () => {
-  it('extracts result from valid JSON', () => {
-    const json = JSON.stringify({ result: 'VERDICT: APPROVE\nLGTM', usage: {} });
-    expect(extractClaudeCodeResult(json)).toBe('VERDICT: APPROVE\nLGTM');
-  });
-
-  it('returns raw stdout if JSON has no result field', () => {
-    const json = JSON.stringify({ output: 'something' });
-    expect(extractClaudeCodeResult(json)).toBe(json);
-  });
-
-  it('returns raw stdout if not valid JSON', () => {
-    const raw = 'VERDICT: APPROVE\nPlain text output';
-    expect(extractClaudeCodeResult(raw)).toBe(raw);
-  });
-});
-
-describe('claude-code parseTokenUsage', () => {
-  it('parses token usage from JSON output', () => {
-    const tool = getToolCommand('claude-code');
-    const json = JSON.stringify({
-      result: 'review text',
-      usage: { input_tokens: 1000, output_tokens: 500 },
-    });
-    expect(tool.parseTokenUsage!(json)).toBe(1500);
-  });
-
-  it('returns 0 when usage is missing', () => {
-    const tool = getToolCommand('claude-code');
-    const json = JSON.stringify({ result: 'review text' });
-    expect(tool.parseTokenUsage!(json)).toBe(0);
-  });
-
-  it('returns 0 when output is not JSON', () => {
-    const tool = getToolCommand('claude-code');
-    expect(tool.parseTokenUsage!('plain text')).toBe(0);
   });
 });
 
@@ -176,9 +228,9 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'Review this code', 60_000);
+    const promise = executeTool('codex exec', 'Review this code', 60_000);
 
-    // Verify spawn was called without prompt in args
+    // Verify spawn was called with parsed command template
     expect(mockSpawn).toHaveBeenCalledWith('codex', ['exec'], expect.any(Object));
 
     emitOutput(child, { stdout: 'VERDICT: APPROVE\nLGTM', code: 0 });
@@ -192,7 +244,7 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 60_000);
+    const promise = executeTool('codex exec', 'test', 60_000);
 
     emitOutput(child, { stdout: 'output', stderr: 'some warning', code: 0 });
 
@@ -206,9 +258,8 @@ describe('executeTool', () => {
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
     const prompt = 'Please review this code carefully';
-    const promise = executeTool('codex', prompt, 60_000);
+    const promise = executeTool('codex exec', prompt, 60_000);
 
-    // Verify stdin was written to with the prompt
     expect(child.stdin.write).toHaveBeenCalledWith(prompt);
     expect(child.stdin.end).toHaveBeenCalled();
 
@@ -222,7 +273,7 @@ describe('executeTool', () => {
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
     const largePrompt = 'x'.repeat(150 * 1024); // 150KB
-    const promise = executeTool('codex', largePrompt, 60_000);
+    const promise = executeTool('codex exec', largePrompt, 60_000);
 
     expect(child.stdin.write).toHaveBeenCalledWith(largePrompt);
 
@@ -237,7 +288,7 @@ describe('executeTool', () => {
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const promise = executeTool('codex', 'test', 60_000);
+    const promise = executeTool('codex exec', 'test', 60_000);
 
     emitOutput(child, {
       stdout: 'VERDICT: APPROVE\nPartial review output that is long enough',
@@ -257,7 +308,7 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 60_000);
+    const promise = executeTool('codex exec', 'test', 60_000);
 
     emitOutput(child, { stderr: 'command not found', code: 127 });
 
@@ -268,7 +319,7 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 60_000);
+    const promise = executeTool('codex exec', 'test', 60_000);
 
     emitOutput(child, { stdout: 'err', code: 1 });
 
@@ -279,7 +330,7 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 30_000);
+    const promise = executeTool('codex exec', 'test', 30_000);
 
     emitOutput(child, { code: null, signal: 'SIGTERM' });
 
@@ -291,22 +342,18 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 30_000);
+    const promise = executeTool('codex exec', 'test', 30_000);
 
     emitOutput(child, { code: null, signal: 'SIGKILL' });
 
     await expect(promise).rejects.toThrow(ToolTimeoutError);
   });
 
-  it('throws UnsupportedToolError for unknown tool', () => {
-    expect(() => executeTool('nonexistent', 'test', 30_000)).toThrow(UnsupportedToolError);
-  });
-
   it('rejects immediately when signal is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(executeTool('codex', 'test', 30_000, controller.signal)).rejects.toThrow(
+    await expect(executeTool('codex exec', 'test', 30_000, controller.signal)).rejects.toThrow(
       ToolTimeoutError,
     );
   });
@@ -316,53 +363,21 @@ describe('executeTool', () => {
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
     const controller = new AbortController();
-    const promise = executeTool('codex', 'test', 60_000, controller.signal);
+    const promise = executeTool('codex exec', 'test', 60_000, controller.signal);
 
-    // Abort the signal
     controller.abort();
     expect(child.kill).toHaveBeenCalled();
 
-    // Simulate the process closing after kill
     emitOutput(child, { code: null, signal: 'SIGTERM' });
 
     await expect(promise).rejects.toThrow(ToolTimeoutError);
-  });
-
-  it('extracts text from claude-code JSON output', async () => {
-    const child = createMockChild();
-    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
-
-    const promise = executeTool('claude-code', 'Review this', 60_000);
-
-    const jsonOutput = JSON.stringify({
-      result: 'VERDICT: APPROVE\nLooks great!',
-      usage: { input_tokens: 100, output_tokens: 50 },
-    });
-    emitOutput(child, { stdout: jsonOutput, code: 0 });
-
-    const result = await promise;
-    expect(result.stdout).toBe('VERDICT: APPROVE\nLooks great!');
-    expect(result.tokensUsed).toBe(150);
-  });
-
-  it('falls back to raw output if claude-code JSON parsing fails', async () => {
-    const child = createMockChild();
-    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
-
-    const promise = executeTool('claude-code', 'Review this', 60_000);
-
-    emitOutput(child, { stdout: 'VERDICT: APPROVE\nPlain text fallback', code: 0 });
-
-    const result = await promise;
-    expect(result.stdout).toBe('VERDICT: APPROVE\nPlain text fallback');
-    expect(result.tokensUsed).toBe(0);
   });
 
   it('propagates spawn error events', async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 30_000);
+    const promise = executeTool('codex exec', 'test', 30_000);
 
     child.emit('error', new Error('ENOENT: command not found'));
 
@@ -373,10 +388,42 @@ describe('executeTool', () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
-    const promise = executeTool('codex', 'test', 60_000);
+    const promise = executeTool('codex exec', 'test', 60_000);
 
     emitOutput(child, { stderr: 'Error: authentication failed', code: 1 });
 
     await expect(promise).rejects.toThrow(/authentication failed/);
+  });
+
+  it('interpolates vars when provided', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeTool('claude -p --model ${MODEL}', 'test', 60_000, undefined, {
+      MODEL: 'claude-sonnet-4-6',
+    });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'claude',
+      ['-p', '--model', 'claude-sonnet-4-6'],
+      expect.any(Object),
+    );
+
+    emitOutput(child, { stdout: 'result', code: 0 });
+    await promise;
+  });
+
+  it('uses custom command templates', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeTool('/home/user/my-review-tool.sh', 'review this', 60_000);
+
+    expect(mockSpawn).toHaveBeenCalledWith('/home/user/my-review-tool.sh', [], expect.any(Object));
+
+    emitOutput(child, { stdout: 'VERDICT: APPROVE\nAll good', code: 0 });
+
+    const result = await promise;
+    expect(result.stdout).toBe('VERDICT: APPROVE\nAll good');
   });
 });
