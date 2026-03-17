@@ -400,6 +400,51 @@ describe('agent commands', () => {
       vi.useRealTimers();
     });
 
+    it('accepts valid --stability-threshold option', async () => {
+      await agentCommand.parseAsync(['start', 'a1', '--stability-threshold', '60000'], {
+        from: 'user',
+      });
+
+      expect(logSpy).toHaveBeenCalledWith('Starting agent a1...');
+      expect(mockWsInstances).toHaveLength(1);
+    });
+
+    it('rejects --stability-threshold below minimum', async () => {
+      await expect(
+        agentCommand.parseAsync(['start', 'a1', '--stability-threshold', '1000'], {
+          from: 'user',
+        }),
+      ).rejects.toThrow('process.exit');
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid --stability-threshold'),
+      );
+    });
+
+    it('rejects --stability-threshold above maximum', async () => {
+      await expect(
+        agentCommand.parseAsync(['start', 'a1', '--stability-threshold', '500000'], {
+          from: 'user',
+        }),
+      ).rejects.toThrow('process.exit');
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid --stability-threshold'),
+      );
+    });
+
+    it('rejects non-integer --stability-threshold', async () => {
+      await expect(
+        agentCommand.parseAsync(['start', 'a1', '--stability-threshold', 'abc'], {
+          from: 'user',
+        }),
+      ).rejects.toThrow('process.exit');
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid --stability-threshold'),
+      );
+    });
+
     it('shuts down gracefully on SIGINT', async () => {
       const onceSpy = vi.mocked(process.once);
 
