@@ -15,5 +15,7 @@ prompt: |
 
   Be concise. Flag real issues, skip nitpicks.
 agents:
-  min_count: 1
+  min_count: 3
+  # TODO: preferred_models not yet supported in config schema
+  # Desired: claude-opus-4-6, qwen3.5-plus, glm-5
 timeout: 10m
