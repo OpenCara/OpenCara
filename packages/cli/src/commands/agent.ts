@@ -528,57 +528,72 @@ agentCommand
 
       const { search, input } = await import('@inquirer/prompts');
 
-      // Step 1: Select tool with fuzzy filter
-      const toolChoices = registry.tools.map((t) => ({
-        name: `${t.displayName} (${t.name})`,
-        value: t.name,
-      }));
+      try {
+        // Step 1: Select tool with fuzzy filter
+        const toolChoices = registry.tools.map((t) => ({
+          name: `${t.displayName} (${t.name})`,
+          value: t.name,
+        }));
 
-      tool = await search({
-        message: 'Select a tool:',
-        source: (term) => {
-          const q = (term ?? '').toLowerCase();
-          return toolChoices.filter((c) => c.name.toLowerCase().includes(q));
-        },
-      });
+        tool = await search({
+          message: 'Select a tool:',
+          source: (term) => {
+            const q = (term ?? '').toLowerCase();
+            return toolChoices.filter((c) => c.name.toLowerCase().includes(q));
+          },
+        });
 
-      // Step 2: Select model from ALL models with fuzzy filter
-      const allModelChoices = registry.models.map((m) => {
-        const compatible = m.tools.includes(tool);
-        return {
-          name: compatible
-            ? `${m.displayName} (${m.name})`
-            : `${m.displayName} (${m.name}) [requires ${m.tools.join(', ')}]`,
-          value: m.name,
-        };
-      });
+        // Step 2: Select model — compatible models first, others greyed out
+        const compatible = registry.models.filter((m) => m.tools.includes(tool));
+        const incompatible = registry.models.filter((m) => !m.tools.includes(tool));
 
-      model = await search({
-        message: 'Select a model:',
-        source: (term) => {
-          const q = (term ?? '').toLowerCase();
-          return allModelChoices.filter((c) => c.name.toLowerCase().includes(q));
-        },
-      });
+        const modelChoices = [
+          ...compatible.map((m) => ({
+            name: `${m.displayName} (${m.name})`,
+            value: m.name,
+          })),
+          ...incompatible.map((m) => ({
+            name: `\x1b[90m${m.displayName} (${m.name})\x1b[0m`,
+            value: m.name,
+          })),
+        ];
 
-      // Warn if model isn't compatible with selected tool
-      const modelEntry = registry.models.find((m) => m.name === model);
-      if (modelEntry && !modelEntry.tools.includes(tool)) {
-        console.warn(
-          `Warning: model "${model}" is not listed as compatible with tool "${tool}". Proceeding anyway.`,
-        );
+        model = await search({
+          message: 'Select a model:',
+          source: (term) => {
+            const q = (term ?? '').toLowerCase();
+            return modelChoices.filter((c) =>
+              c.value.toLowerCase().includes(q) ||
+              c.name.toLowerCase().includes(q),
+            );
+          },
+        });
+
+        // Warn if model isn't compatible with selected tool
+        const modelEntry = registry.models.find((m) => m.name === model);
+        if (modelEntry && !modelEntry.tools.includes(tool)) {
+          console.warn(
+            `Warning: model "${model}" is not listed as compatible with tool "${tool}". Proceeding anyway.`,
+          );
+        }
+
+        // Step 3: Resolve default command and let user edit it
+        const toolEntry = registry.tools.find((t) => t.name === tool);
+        const defaultCommand = toolEntry
+          ? toolEntry.commandTemplate.replaceAll('${MODEL}', model)
+          : `${tool} --model ${model} -p \${PROMPT}`;
+
+        command = await input({
+          message: 'Command:',
+          default: defaultCommand,
+        });
+      } catch (err) {
+        if (err && typeof err === 'object' && 'name' in err && err.name === 'ExitPromptError') {
+          console.log('Cancelled.');
+          return;
+        }
+        throw err;
       }
-
-      // Step 3: Resolve default command and let user edit it
-      const toolEntry = registry.tools.find((t) => t.name === tool);
-      const defaultCommand = toolEntry
-        ? toolEntry.commandTemplate.replaceAll('${MODEL}', model)
-        : `${tool} --model ${model} -p \${PROMPT}`;
-
-      command = await input({
-        message: 'Command:',
-        default: defaultCommand,
-      });
     }
 
     // Resolve command from registry if not set (non-interactive mode)
