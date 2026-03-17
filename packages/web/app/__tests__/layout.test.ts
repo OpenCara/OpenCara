@@ -1,18 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-
-beforeEach(() => {
-  vi.restoreAllMocks();
-  vi.resetModules();
-  // Mock auth module for NavBar (client component)
-  vi.doMock('../../lib/auth.js', () => ({
-    isAuthenticated: () => false,
-    getLoginUrl: () => '/auth/login',
-    getLogoutUrl: () => '/auth/logout',
-    getSessionToken: () => null,
-  }));
-});
 
 async function renderLayout(children: React.ReactNode) {
   const mod = await import('../layout.js');
@@ -51,17 +39,18 @@ describe('RootLayout', () => {
     expect(html).toContain('href="/"');
   });
 
-  it('renders nav link for Leaderboard', async () => {
+  it('renders nav link for Community', async () => {
     const child = createElement('span', null, 'test');
     const html = await renderLayout(child);
-    expect(html).toContain('href="/leaderboard"');
-    expect(html).toContain('Leaderboard');
+    expect(html).toContain('href="/community"');
+    expect(html).toContain('Community');
   });
 
-  it('hides auth links during SSR (mounted guard)', async () => {
+  it('does not render leaderboard or auth links', async () => {
     const child = createElement('span', null, 'test');
     const html = await renderLayout(child);
-    // Auth links are hidden until client-side mount to avoid hydration flash
+    expect(html).not.toContain('Leaderboard');
+    expect(html).not.toContain('/leaderboard');
     expect(html).not.toContain('Login');
     expect(html).not.toContain('Logout');
     expect(html).not.toContain('Dashboard');

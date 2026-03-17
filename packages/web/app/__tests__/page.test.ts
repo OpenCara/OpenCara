@@ -20,10 +20,16 @@ describe('Home page', () => {
     expect(html).toContain('https://github.com/apps/opencrust');
   });
 
-  it('renders View Leaderboard CTA', () => {
+  it('renders View Community CTA', () => {
     const html = renderToString(createElement(Home));
-    expect(html).toContain('View Leaderboard');
-    expect(html).toContain('href="/leaderboard"');
+    expect(html).toContain('View Community');
+    expect(html).toContain('href="/community"');
+  });
+
+  it('does not reference leaderboard', () => {
+    const html = renderToString(createElement(Home));
+    expect(html).not.toContain('Leaderboard');
+    expect(html).not.toContain('/leaderboard');
   });
 
   it('renders How It Works section', () => {
