@@ -72,7 +72,10 @@ export class ToolTimeoutError extends Error {
 }
 
 /** Minimum stdout length to treat a non-zero exit as a partial success */
-const MIN_PARTIAL_RESULT_LENGTH = 10;
+const MIN_PARTIAL_RESULT_LENGTH = 50;
+
+/** Maximum stderr length included in error/warning messages */
+const MAX_STDERR_LENGTH = 1000;
 
 /**
  * Extract the text result from claude-code JSON output.
@@ -130,8 +133,24 @@ export function executeTool(
     child.stdin?.write(prompt);
     child.stdin?.end();
 
-    child.on('error', (err) => {
+    // Set up abort signal handler (stored for cleanup)
+    let onAbort: (() => void) | undefined;
+    if (signal) {
+      onAbort = () => {
+        child.kill();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    function cleanup(): void {
       clearTimeout(timer);
+      if (onAbort && signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    }
+
+    child.on('error', (err) => {
+      cleanup();
       if (settled) return;
       settled = true;
       if (signal?.aborted) {
@@ -142,7 +161,7 @@ export function executeTool(
     });
 
     child.on('close', (code, sig) => {
-      clearTimeout(timer);
+      cleanup();
       if (settled) return;
       settled = true;
 
@@ -170,7 +189,7 @@ export function executeTool(
             `Tool "${toolName}" exited with code ${code} but produced output. Treating as partial result.`,
           );
           if (stderr) {
-            console.warn(`Tool stderr: ${stderr.slice(0, 500)}`);
+            console.warn(`Tool stderr: ${stderr.slice(0, MAX_STDERR_LENGTH)}`);
           }
           const tokensUsed = tool.parseTokenUsage ? tool.parseTokenUsage(stdout) : 0;
           resolve({ stdout: outputText, stderr, tokensUsed });
@@ -179,7 +198,7 @@ export function executeTool(
 
         // No meaningful output — actual failure
         const errMsg = stderr
-          ? `Tool "${toolName}" failed (exit code ${code}): ${stderr.slice(0, 1000)}`
+          ? `Tool "${toolName}" failed (exit code ${code}): ${stderr.slice(0, MAX_STDERR_LENGTH)}`
           : `Tool "${toolName}" failed with exit code ${code}`;
         reject(new Error(errMsg));
         return;
@@ -188,12 +207,5 @@ export function executeTool(
       const tokensUsed = tool.parseTokenUsage ? tool.parseTokenUsage(stdout) : 0;
       resolve({ stdout: outputText, stderr, tokensUsed });
     });
-
-    if (signal) {
-      const onAbort = () => {
-        child.kill();
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
   });
 }
