@@ -1,6 +1,8 @@
 packages:
   - 'packages/*'
 
+enableGlobalVirtualStore: true
+
 onlyBuiltDependencies:
   - esbuild
   - sharp
