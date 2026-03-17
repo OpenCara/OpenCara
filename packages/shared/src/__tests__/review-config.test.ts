@@ -175,6 +175,45 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
     expect(DEFAULT_REVIEW_CONFIG.agents.minReputation).toBe(0);
     expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
     expect(DEFAULT_REVIEW_CONFIG.autoApprove.enabled).toBe(false);
+    expect(DEFAULT_REVIEW_CONFIG.trigger.on).toEqual(['opened']);
+    expect(DEFAULT_REVIEW_CONFIG.trigger.comment).toBe('/opencara review');
+    expect(DEFAULT_REVIEW_CONFIG.trigger.skip).toEqual(['draft']);
+  });
+});
+
+describe('trigger config parsing', () => {
+  it('parses custom trigger config', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\ntrigger:\n  on: [opened, synchronize]\n  comment: "/review"\n  skip: [draft, "label:wip"]',
+    );
+    expect('error' in config).toBe(false);
+    if (!('error' in config)) {
+      expect(config.trigger.on).toEqual(['opened', 'synchronize']);
+      expect(config.trigger.comment).toBe('/review');
+      expect(config.trigger.skip).toEqual(['draft', 'label:wip']);
+    }
+  });
+
+  it('uses defaults when trigger section is missing', () => {
+    const config = parseReviewConfig('version: 1\nprompt: test');
+    expect('error' in config).toBe(false);
+    if (!('error' in config)) {
+      expect(config.trigger.on).toEqual(['opened']);
+      expect(config.trigger.comment).toBe('/opencara review');
+      expect(config.trigger.skip).toEqual(['draft']);
+    }
+  });
+
+  it('uses defaults for individual missing trigger fields', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\ntrigger:\n  on: [ready_for_review]',
+    );
+    expect('error' in config).toBe(false);
+    if (!('error' in config)) {
+      expect(config.trigger.on).toEqual(['ready_for_review']);
+      expect(config.trigger.comment).toBe('/opencara review');
+      expect(config.trigger.skip).toEqual(['draft']);
+    }
   });
 });
 

@@ -1,8 +1,15 @@
 import { parse as parseYaml } from 'yaml';
 
+export interface TriggerConfig {
+  on: string[];
+  comment: string;
+  skip: string[];
+}
+
 export interface ReviewConfig {
   version: number;
   prompt: string;
+  trigger: TriggerConfig;
   agents: {
     reviewCount: number;
     preferredTools: string[];
@@ -65,9 +72,16 @@ export function validateReviewConfig(config: unknown): config is ReviewConfig {
 /**
  * Default review configuration used when .review.yml is not present in the repo.
  */
+const DEFAULT_TRIGGER: TriggerConfig = {
+  on: ['opened'],
+  comment: '/opencara review',
+  skip: ['draft'],
+};
+
 export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   version: 1,
   prompt: 'Review this pull request for bugs, security issues, and code quality.',
+  trigger: DEFAULT_TRIGGER,
   agents: {
     reviewCount: 1,
     preferredTools: [],
@@ -114,6 +128,7 @@ export function parseReviewConfig(yaml: string): ParseResult {
     return { error: 'Field "prompt" must be a string' };
   }
 
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : {};
   const agentsRaw = isObject(raw.agents) ? raw.agents : {};
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
   const summarizerRaw = isObject(raw.summarizer) ? raw.summarizer : {};
@@ -122,6 +137,16 @@ export function parseReviewConfig(yaml: string): ParseResult {
   const config: ReviewConfig = {
     version: raw.version,
     prompt: raw.prompt,
+    trigger: {
+      on: Array.isArray(triggerRaw.on)
+        ? triggerRaw.on.filter((v: unknown) => typeof v === 'string')
+        : DEFAULT_TRIGGER.on,
+      comment:
+        typeof triggerRaw.comment === 'string' ? triggerRaw.comment : DEFAULT_TRIGGER.comment,
+      skip: Array.isArray(triggerRaw.skip)
+        ? triggerRaw.skip.filter((v: unknown) => typeof v === 'string')
+        : DEFAULT_TRIGGER.skip,
+    },
     agents: {
       reviewCount: clamp(
         typeof agentsRaw.review_count === 'number' ? agentsRaw.review_count : 1,

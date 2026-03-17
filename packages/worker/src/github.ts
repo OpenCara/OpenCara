@@ -144,6 +144,44 @@ export async function fetchPrDiff(
   return response.text();
 }
 
+export interface PrDetails {
+  number: number;
+  html_url: string;
+  diff_url: string;
+  base: { ref: string };
+  head: { ref: string };
+  draft: boolean;
+  labels: Array<{ name: string }>;
+}
+
+/**
+ * Fetch PR details from the GitHub API.
+ * Used by the comment trigger handler which doesn't have PR data in the webhook payload.
+ */
+export async function fetchPrDetails(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string,
+): Promise<PrDetails | null> {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'OpenCara-Worker',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!response.ok) {
+    console.error(`Failed to fetch PR details: ${response.status} ${response.statusText}`);
+    return null;
+  }
+
+  const data = (await response.json()) as PrDetails;
+  return data;
+}
+
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 
 const VERDICT_TO_EVENT: Record<ReviewVerdict, ReviewEvent> = {

@@ -1,7 +1,13 @@
 import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
-import { fetchPrDiff, fetchReviewConfig, getInstallationToken, postPrComment } from './github.js';
+import {
+  fetchPrDiff,
+  fetchPrDetails,
+  fetchReviewConfig,
+  getInstallationToken,
+  postPrComment,
+} from './github.js';
 import { distributeTask } from './task-distribution.js';
 
 /**
@@ -64,6 +70,22 @@ interface PullRequestPayload {
     diff_url: string;
     base: { ref: string };
     head: { ref: string };
+    draft?: boolean;
+    labels?: Array<{ name: string }>;
+  };
+}
+
+interface IssueCommentPayload {
+  action: string;
+  installation?: { id: number };
+  repository: { owner: { login: string }; name: string };
+  issue: {
+    number: number;
+    pull_request?: { url: string };
+  };
+  comment: {
+    body: string;
+    user: { login: string };
   };
 }
 
@@ -73,7 +95,143 @@ interface InstallationPayload {
   repositories?: Array<{ name: string; full_name: string }>;
 }
 
-async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise<Response> {
+/**
+ * Check if the PR should be skipped based on trigger.skip conditions.
+ */
+function shouldSkipReview(
+  config: ReviewConfig,
+  pr: { draft?: boolean; labels?: Array<{ name: string }>; headRef: string },
+): string | null {
+  for (const condition of config.trigger.skip) {
+    if (condition === 'draft' && pr.draft) {
+      return 'PR is a draft';
+    }
+    if (condition.startsWith('label:')) {
+      const labelName = condition.slice(6);
+      if (pr.labels?.some((l) => l.name === labelName)) {
+        return `PR has label "${labelName}"`;
+      }
+    }
+    if (condition.startsWith('branch:')) {
+      const pattern = condition.slice(7);
+      if (matchGlob(pattern, pr.headRef)) {
+        return `Branch "${pr.headRef}" matches skip pattern "${pattern}"`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Simple glob matching: supports * as wildcard.
+ */
+function matchGlob(pattern: string, text: string): boolean {
+  const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+  return regex.test(text);
+}
+
+/**
+ * Fetch .review.yml and parse config. Returns DEFAULT_REVIEW_CONFIG on error/missing.
+ * Posts a PR comment if the YAML is malformed.
+ */
+async function loadReviewConfig(
+  owner: string,
+  repo: string,
+  headRef: string,
+  prNumber: number,
+  token: string,
+): Promise<ReviewConfig> {
+  let configYaml: string | null;
+  try {
+    configYaml = await fetchReviewConfig(owner, repo, headRef, token);
+  } catch (err) {
+    console.error('Failed to fetch .review.yml:', err);
+    return DEFAULT_REVIEW_CONFIG;
+  }
+
+  if (configYaml === null) {
+    console.log(`No .review.yml found in ${owner}/${repo} — using default review config`);
+    return DEFAULT_REVIEW_CONFIG;
+  }
+
+  const parsed = parseReviewConfig(configYaml);
+  if ('error' in parsed) {
+    console.log(`.review.yml parse error: ${parsed.error}`);
+    try {
+      await postPrComment(
+        owner,
+        repo,
+        prNumber,
+        `**OpenCara**: Failed to parse \`.review.yml\`: ${parsed.error}`,
+        token,
+      );
+    } catch (err) {
+      console.error('Failed to post error comment:', err);
+    }
+    return DEFAULT_REVIEW_CONFIG;
+  }
+
+  return parsed;
+}
+
+/**
+ * Fetch diff and distribute a review task for a PR.
+ */
+async function dispatchReview(
+  installationId: number,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  prUrl: string,
+  diffUrl: string,
+  baseRef: string,
+  headRef: string,
+  config: ReviewConfig,
+  token: string,
+  env: Env,
+): Promise<string | null> {
+  console.log(`Review config for ${owner}/${repo}:`, {
+    version: config.version,
+    reviewCount: config.agents.reviewCount,
+    trigger: config.trigger,
+    timeout: config.timeout,
+  });
+
+  let diffContent: string;
+  try {
+    diffContent = await fetchPrDiff(owner, repo, prNumber, token);
+  } catch (err) {
+    console.error('Failed to fetch PR diff:', err);
+    return null;
+  }
+
+  const supabase = createSupabaseClient(env);
+  try {
+    const taskId = await distributeTask(env, supabase, {
+      installationId,
+      owner,
+      repo,
+      prNumber,
+      prUrl,
+      diffUrl,
+      baseRef,
+      headRef,
+      config,
+      diffContent,
+    });
+    console.log(`Task distributed: ${taskId ?? 'failed'} for PR #${prNumber}`);
+    return taskId;
+  } catch (err) {
+    console.error('Failed to distribute task:', err);
+    return null;
+  }
+}
+
+async function handlePullRequest(
+  payload: PullRequestPayload,
+  action: string,
+  env: Env,
+): Promise<Response> {
   const { installation, repository, pull_request } = payload;
 
   if (!installation) {
@@ -86,7 +244,7 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
   const prNumber = pull_request.number;
   const headRef = pull_request.head.ref;
 
-  console.log(`Processing PR #${prNumber} on ${owner}/${repo} (head: ${headRef})`);
+  console.log(`PR #${prNumber} on ${owner}/${repo}: action=${action}, head=${headRef}`);
 
   let token: string;
   try {
@@ -96,79 +254,102 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
     return new Response('OK', { status: 200 });
   }
 
-  let configYaml: string | null;
-  try {
-    configYaml = await fetchReviewConfig(owner, repo, headRef, token);
-  } catch (err) {
-    console.error('Failed to fetch .review.yml:', err);
+  const config = await loadReviewConfig(owner, repo, headRef, prNumber, token);
+
+  // Check if this action is in the trigger.on list
+  if (!config.trigger.on.includes(action)) {
+    console.log(
+      `PR #${prNumber}: action "${action}" not in trigger.on [${config.trigger.on.join(', ')}] — skipping`,
+    );
     return new Response('OK', { status: 200 });
   }
 
-  let config: ReviewConfig;
-
-  if (configYaml === null) {
-    console.log(`No .review.yml found in ${owner}/${repo} — using default review config`);
-    config = DEFAULT_REVIEW_CONFIG;
-  } else {
-    const parsed = parseReviewConfig(configYaml);
-
-    if ('error' in parsed) {
-      console.log(`.review.yml parse error: ${parsed.error}`);
-      try {
-        await postPrComment(
-          owner,
-          repo,
-          prNumber,
-          `**OpenCara**: Failed to parse \`.review.yml\`: ${parsed.error}`,
-          token,
-        );
-      } catch (err) {
-        console.error('Failed to post error comment:', err);
-      }
-      return new Response('OK', { status: 200 });
-    }
-    config = parsed;
-  }
-
-  console.log(`Review config for ${owner}/${repo}:`, {
-    version: config.version,
-    reviewCount: config.agents.reviewCount,
-    timeout: config.timeout,
-    hasCustomConfig: configYaml !== null,
-    prUrl: pull_request.html_url,
-    diffUrl: pull_request.diff_url,
-    baseRef: pull_request.base.ref,
+  // Check skip conditions
+  const skipReason = shouldSkipReview(config, {
+    draft: pull_request.draft,
+    labels: pull_request.labels,
     headRef,
   });
-
-  // Fetch the PR diff content
-  let diffContent: string;
-  try {
-    diffContent = await fetchPrDiff(owner, repo, prNumber, token);
-  } catch (err) {
-    console.error('Failed to fetch PR diff:', err);
+  if (skipReason) {
+    console.log(`PR #${prNumber}: skipped — ${skipReason}`);
     return new Response('OK', { status: 200 });
   }
 
-  // Create review task and distribute to eligible agents
-  const supabase = createSupabaseClient(env);
-  try {
-    const taskId = await distributeTask(env, supabase, {
-      installationId: installation.id,
-      owner,
-      repo,
-      prNumber,
-      prUrl: pull_request.html_url,
-      diffUrl: pull_request.diff_url,
-      baseRef: pull_request.base.ref,
-      headRef,
-      config,
-      diffContent,
-    });
-    console.log(`Task distributed: ${taskId ?? 'failed'} for PR #${prNumber}`);
-  } catch (err) {
-    console.error('Failed to distribute task:', err);
+  await dispatchReview(
+    installation.id,
+    owner,
+    repo,
+    prNumber,
+    pull_request.html_url,
+    pull_request.diff_url,
+    pull_request.base.ref,
+    headRef,
+    config,
+    token,
+    env,
+  );
+
+  return new Response('OK', { status: 200 });
+}
+
+async function handleIssueComment(payload: IssueCommentPayload, env: Env): Promise<Response> {
+  const { installation, repository, issue, comment } = payload;
+
+  // Only handle comments on PRs
+  if (!issue.pull_request) {
+    return new Response('OK', { status: 200 });
   }
+
+  if (!installation) {
+    console.log('Comment event without installation — skipping');
+    return new Response('OK', { status: 200 });
+  }
+
+  const owner = repository.owner.login;
+  const repo = repository.name;
+  const prNumber = issue.number;
+
+  let token: string;
+  try {
+    token = await getInstallationToken(installation.id, env);
+  } catch (err) {
+    console.error('Failed to get installation token:', err);
+    return new Response('OK', { status: 200 });
+  }
+
+  // Fetch PR details (issue_comment payload doesn't include them)
+  const pr = await fetchPrDetails(owner, repo, prNumber, token);
+  if (!pr) {
+    console.error(`Failed to fetch PR #${prNumber} details`);
+    return new Response('OK', { status: 200 });
+  }
+
+  const config = await loadReviewConfig(owner, repo, pr.head.ref, prNumber, token);
+
+  // Check if comment matches the trigger command
+  const triggerCommand = config.trigger.comment;
+  if (!comment.body.trim().toLowerCase().startsWith(triggerCommand.toLowerCase())) {
+    return new Response('OK', { status: 200 });
+  }
+
+  console.log(
+    `${triggerCommand} triggered by @${comment.user.login} on PR #${prNumber} (${owner}/${repo})`,
+  );
+
+  // Dispatch the review (skip conditions don't apply to manual triggers)
+  await dispatchReview(
+    installation.id,
+    owner,
+    repo,
+    prNumber,
+    pr.html_url,
+    pr.diff_url,
+    pr.base.ref,
+    pr.head.ref,
+    config,
+    token,
+    env,
+  );
 
   return new Response('OK', { status: 200 });
 }
@@ -225,8 +406,14 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 
   switch (event) {
     case 'pull_request':
-      if (action === 'opened' || action === 'synchronize') {
-        return handlePullRequest(payload as unknown as PullRequestPayload, env);
+      // Pass all PR actions — trigger filtering happens inside handlePullRequest
+      if (action === 'opened' || action === 'synchronize' || action === 'ready_for_review') {
+        return handlePullRequest(payload as unknown as PullRequestPayload, action, env);
+      }
+      break;
+    case 'issue_comment':
+      if (action === 'created') {
+        return handleIssueComment(payload as unknown as IssueCommentPayload, env);
       }
       break;
     case 'installation':
