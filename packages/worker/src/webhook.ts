@@ -86,8 +86,11 @@ interface IssueCommentPayload {
   comment: {
     body: string;
     user: { login: string };
+    author_association: string;
   };
 }
+
+const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
 interface InstallationPayload {
   action: string;
@@ -124,10 +127,16 @@ function shouldSkipReview(
 
 /**
  * Simple glob matching: supports * as wildcard.
+ * Escapes regex metacharacters to prevent crashes from malformed patterns.
  */
 function matchGlob(pattern: string, text: string): boolean {
-  const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-  return regex.test(text);
+  try {
+    // Escape all regex metacharacters except *, then replace * with .*
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    return new RegExp('^' + escaped + '$').test(text);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -140,18 +149,18 @@ async function loadReviewConfig(
   headRef: string,
   prNumber: number,
   token: string,
-): Promise<ReviewConfig> {
+): Promise<{ config: ReviewConfig; parseError: boolean }> {
   let configYaml: string | null;
   try {
     configYaml = await fetchReviewConfig(owner, repo, headRef, token);
   } catch (err) {
     console.error('Failed to fetch .review.yml:', err);
-    return DEFAULT_REVIEW_CONFIG;
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
   if (configYaml === null) {
     console.log(`No .review.yml found in ${owner}/${repo} — using default review config`);
-    return DEFAULT_REVIEW_CONFIG;
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
   const parsed = parseReviewConfig(configYaml);
@@ -168,10 +177,10 @@ async function loadReviewConfig(
     } catch (err) {
       console.error('Failed to post error comment:', err);
     }
-    return DEFAULT_REVIEW_CONFIG;
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
   }
 
-  return parsed;
+  return { config: parsed, parseError: false };
 }
 
 /**
@@ -254,7 +263,13 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  const config = await loadReviewConfig(owner, repo, headRef, prNumber, token);
+  const { config, parseError } = await loadReviewConfig(owner, repo, headRef, prNumber, token);
+
+  // Abort on parse errors — don't run reviews with wrong config
+  if (parseError) {
+    console.log(`PR #${prNumber}: aborting due to .review.yml parse error`);
+    return new Response('OK', { status: 200 });
+  }
 
   // Check if this action is in the trigger.on list
   if (!config.trigger.on.includes(action)) {
@@ -324,11 +339,19 @@ async function handleIssueComment(payload: IssueCommentPayload, env: Env): Promi
     return new Response('OK', { status: 200 });
   }
 
-  const config = await loadReviewConfig(owner, repo, pr.head.ref, prNumber, token);
+  const { config } = await loadReviewConfig(owner, repo, pr.head.ref, prNumber, token);
 
   // Check if comment matches the trigger command
   const triggerCommand = config.trigger.comment;
   if (!comment.body.trim().toLowerCase().startsWith(triggerCommand.toLowerCase())) {
+    return new Response('OK', { status: 200 });
+  }
+
+  // Only trusted users can trigger reviews
+  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
+    console.log(
+      `${triggerCommand} ignored from @${comment.user.login} (${comment.author_association}) — not a trusted contributor`,
+    );
     return new Response('OK', { status: 200 });
   }
 
@@ -406,11 +429,8 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 
   switch (event) {
     case 'pull_request':
-      // Pass all PR actions — trigger filtering happens inside handlePullRequest
-      if (action === 'opened' || action === 'synchronize' || action === 'ready_for_review') {
-        return handlePullRequest(payload as unknown as PullRequestPayload, action, env);
-      }
-      break;
+      // All PR actions passed through — trigger.on filtering happens inside handlePullRequest
+      return handlePullRequest(payload as unknown as PullRequestPayload, action, env);
     case 'issue_comment':
       if (action === 'created') {
         return handleIssueComment(payload as unknown as IssueCommentPayload, env);
