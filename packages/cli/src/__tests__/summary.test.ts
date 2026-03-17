@@ -148,7 +148,8 @@ describe('executeSummary', () => {
     const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.summary).toBe('## Summary\nAll good.');
-    expect(result.tokensUsed).toBe(0);
+    // Includes input prompt estimate + output estimate
+    expect(result.tokensUsed).toBeGreaterThan(0);
     expect(mockRunTool).toHaveBeenCalledWith(
       'claude -p --output-format text',
       expect.stringContaining('acme/widgets'),
@@ -209,7 +210,8 @@ describe('executeSummary', () => {
 
     const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.tokensUsed).toBe(200);
+    // 200 from tool + input prompt estimate
+    expect(result.tokensUsed).toBeGreaterThan(200);
   });
 
   it('propagates tool errors', async () => {

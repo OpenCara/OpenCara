@@ -17,6 +17,7 @@ import {
   loadConfig,
   saveConfig,
   requireApiKey,
+  resolveAgentLimits,
   type ConsumptionLimits,
   type LocalAgentConfig,
 } from '../config.js';
@@ -868,7 +869,7 @@ agentCommand
         const consumptionDeps: ConsumptionDeps = {
           client,
           agentId,
-          limits: config.limits,
+          limits: resolveAgentLimits(selected.local.limits, config.limits),
           session: createSessionTracker(),
         };
 

@@ -1,5 +1,5 @@
 import type { ReviewExecutorDeps } from './review.js';
-import { executeTool, type ToolExecutorResult } from './tool-executor.js';
+import { executeTool, estimateTokens, type ToolExecutorResult } from './tool-executor.js';
 
 export interface SummaryReviewInput {
   agentId: string;
@@ -127,7 +127,8 @@ export async function executeSummary(
       abortController.signal,
     );
 
-    return { summary: result.stdout, tokensUsed: result.tokensUsed };
+    const inputTokens = estimateTokens(fullPrompt);
+    return { summary: result.stdout, tokensUsed: result.tokensUsed + inputTokens };
   } finally {
     clearTimeout(abortTimer);
   }

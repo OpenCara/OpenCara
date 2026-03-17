@@ -109,7 +109,8 @@ describe('executeReview', () => {
 
     expect(result.verdict).toBe('approve');
     expect(result.review).toBe('Great code!');
-    expect(result.tokensUsed).toBe(0);
+    // Includes input prompt estimate + output estimate
+    expect(result.tokensUsed).toBeGreaterThan(0);
     expect(mockRunTool).toHaveBeenCalledWith(
       'claude -p --output-format text',
       expect.stringContaining('acme/widgets'),
@@ -169,7 +170,8 @@ describe('executeReview', () => {
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.tokensUsed).toBe(150);
+    // 150 from tool + input prompt estimate
+    expect(result.tokensUsed).toBeGreaterThan(150);
   });
 
   it('propagates tool errors', async () => {

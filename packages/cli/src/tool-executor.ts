@@ -115,6 +115,43 @@ export function resolveCommandTemplate(agentCommand: string | null | undefined):
   );
 }
 
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Estimate token count from text length (~4 chars per token).
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+/**
+ * Parse token usage from tool output. Tries tool-specific patterns first,
+ * then falls back to character-based estimation.
+ */
+export function parseTokenUsage(stdout: string, stderr: string): number {
+  // Codex: "tokens used 1,801" or "tokens used\n1,801" in stdout footer
+  const codexMatch = stdout.match(/tokens\s+used[\s:]*([0-9,]+)/i);
+  if (codexMatch) return parseInt(codexMatch[1].replace(/,/g, ''), 10);
+
+  // Claude JSON: "input_tokens": N ... "output_tokens": M
+  const claudeMatch = stdout.match(/"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s);
+  if (claudeMatch) return parseInt(claudeMatch[1], 10) + parseInt(claudeMatch[2], 10);
+
+  // Also check stderr for Claude usage (some modes write usage to stderr)
+  const claudeStderrMatch = stderr.match(
+    /"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s,
+  );
+  if (claudeStderrMatch)
+    return parseInt(claudeStderrMatch[1], 10) + parseInt(claudeStderrMatch[2], 10);
+
+  // Qwen JSON stats: "tokens": {"total": N}
+  const qwenMatch = stdout.match(/"tokens"\s*:\s*\{[^}]*"total"\s*:\s*(\d+)/);
+  if (qwenMatch) return parseInt(qwenMatch[1], 10);
+
+  // Fallback: estimate from output text length
+  return estimateTokens(stdout);
+}
+
 /**
  * Execute a tool command with prompt.
  *
@@ -220,7 +257,7 @@ export function executeTool(
           if (stderr) {
             console.warn(`Tool stderr: ${stderr.slice(0, MAX_STDERR_LENGTH)}`);
           }
-          resolve({ stdout, stderr, tokensUsed: 0 });
+          resolve({ stdout, stderr, tokensUsed: parseTokenUsage(stdout, stderr) });
           return;
         }
 
@@ -232,7 +269,7 @@ export function executeTool(
         return;
       }
 
-      resolve({ stdout, stderr, tokensUsed: 0 });
+      resolve({ stdout, stderr, tokensUsed: parseTokenUsage(stdout, stderr) });
     });
   });
 }

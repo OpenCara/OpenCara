@@ -1,5 +1,5 @@
 import type { ReviewMode, ReviewVerdict } from '@opencara/shared';
-import { executeTool, type ToolExecutorResult } from './tool-executor.js';
+import { executeTool, estimateTokens, type ToolExecutorResult } from './tool-executor.js';
 
 export interface ReviewRequest {
   taskId: string;
@@ -118,7 +118,8 @@ export async function executeReview(
     );
 
     const { verdict, review } = extractVerdict(result.stdout);
-    return { review, verdict, tokensUsed: result.tokensUsed };
+    const inputTokens = estimateTokens(fullPrompt);
+    return { review, verdict, tokensUsed: result.tokensUsed + inputTokens };
   } finally {
     clearTimeout(abortTimer);
   }
