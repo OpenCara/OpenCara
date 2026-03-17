@@ -314,7 +314,7 @@ export class AgentConnection implements DurableObject {
       const installationId = (config.installationId as number) ?? project.github_installation_id;
 
       // Fetch diff from GitHub API (not stored in DB)
-      let diffContent = '';
+      let diffContent: string;
       try {
         const token = await getInstallationToken(installationId, this.env);
         diffContent = await fetchPrDiff(
@@ -324,7 +324,13 @@ export class AgentConnection implements DurableObject {
           token,
         );
       } catch (err) {
-        console.error(`Failed to fetch diff for task ${task.id}:`, err);
+        console.error(`Failed to fetch diff for task ${task.id}, reverting to pending:`, err);
+        await supabase
+          .from('review_tasks')
+          .update({ status: 'pending' })
+          .eq('id', task.id)
+          .eq('status', 'reviewing');
+        continue;
       }
 
       try {
@@ -820,6 +826,8 @@ export class AgentConnection implements DurableObject {
             },
             timeout: remainingSeconds,
             diffContent: redistDiff,
+            reviewCount: (config.reviewCount as number) ?? 1,
+            installationId: project.github_installation_id,
             reviewMode: ((config.reviewCount as number) ?? 1) > 1 ? 'compact' : 'full',
           }),
         }),
