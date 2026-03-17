@@ -30,7 +30,6 @@ export async function handleListAgents(user: User, supabase: SupabaseClient): Pr
     id: agent.id as string,
     model: agent.model as string,
     tool: agent.tool as string,
-    reputationScore: agent.reputation_score as number,
     status: agent.status as 'online' | 'offline',
     createdAt: agent.created_at as string,
   }));
@@ -74,7 +73,6 @@ export async function handleCreateAgent(
       id: data.id,
       model: data.model,
       tool: data.tool,
-      reputationScore: data.reputation_score,
       status: data.status,
       createdAt: data.created_at,
     } satisfies CreateAgentResponse,

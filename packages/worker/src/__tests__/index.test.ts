@@ -70,10 +70,19 @@ vi.mock('../handlers/stats.js', () => ({
       headers: { 'Content-Type': 'application/json' },
     }),
   ),
-  handleGetLeaderboard: vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ agents: [] }), {
-      headers: { 'Content-Type': 'application/json' },
-    }),
+  handleGetProjectStats: vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        totalReviews: 0,
+        totalContributors: 0,
+        activeContributorsThisWeek: 0,
+        averagePositiveRate: 0,
+        recentActivity: [],
+      }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ),
   ),
 }));
 
@@ -107,7 +116,7 @@ import { handleGetConsumption } from '../handlers/consumption.js';
 import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
 import { handleCollectRatings } from '../handlers/collect-ratings.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from '../handlers/device-flow.js';
-import { handleGetStats, handleGetLeaderboard } from '../handlers/stats.js';
+import { handleGetStats, handleGetProjectStats } from '../handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from '../handlers/web-auth.js';
 import {
   addCorsHeaders,
@@ -309,12 +318,20 @@ describe('worker router', () => {
     expect(response.status).toBe(401);
   });
 
-  // --- Leaderboard routes ---
+  // --- Project stats routes ---
 
-  it('routes GET /api/leaderboard (public)', async () => {
-    const response = await worker.fetch(new Request('http://localhost/api/leaderboard'), mockEnv);
+  it('routes GET /api/projects/stats (public)', async () => {
+    const response = await worker.fetch(
+      new Request('http://localhost/api/projects/stats'),
+      mockEnv,
+    );
     expect(response.status).toBe(200);
-    expect(handleGetLeaderboard).toHaveBeenCalledWith('mock-supabase');
+    expect(handleGetProjectStats).toHaveBeenCalledWith('mock-supabase');
+  });
+
+  it('returns 404 for GET /api/leaderboard (removed)', async () => {
+    const response = await worker.fetch(new Request('http://localhost/api/leaderboard'), mockEnv);
+    expect(response.status).toBe(404);
   });
 
   // --- Collect ratings routes ---

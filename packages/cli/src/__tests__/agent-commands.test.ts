@@ -129,7 +129,6 @@ describe('agent commands', () => {
             model: 'gpt-4',
             tool: 'claude-code',
             status: 'online',
-            reputationScore: 4.5,
             createdAt: '2024-01-01',
           },
         ],

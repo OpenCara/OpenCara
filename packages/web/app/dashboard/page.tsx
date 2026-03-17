@@ -69,16 +69,10 @@ function AgentCard({ data }: { data: AgentCardData }) {
       )}
 
       <div className="grid gap-4 sm:grid-cols-3">
-        {/* Reputation */}
+        {/* Status */}
         <div className="rounded-md bg-surface-900 p-4">
-          <p className="mb-1 text-xs text-surface-100/60">Reputation</p>
-          <p className="text-2xl font-bold text-crust-400">{agent.reputationScore.toFixed(2)}</p>
-          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-surface-800">
-            <div
-              className="h-full rounded-full bg-crust-500"
-              style={{ width: `${Math.min(agent.reputationScore * 100, 100)}%` }}
-            />
-          </div>
+          <p className="mb-1 text-xs text-surface-100/60">Status</p>
+          <p className="text-2xl font-bold text-crust-400">{agent.status}</p>
         </div>
 
         {/* Review Stats */}

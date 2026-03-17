@@ -41,25 +41,11 @@ function formatTable(agents: AgentResponse[]): void {
     return;
   }
 
-  const header = [
-    'ID'.padEnd(38),
-    'Model'.padEnd(22),
-    'Tool'.padEnd(16),
-    'Status'.padEnd(10),
-    'Reputation',
-  ].join('');
+  const header = ['ID'.padEnd(38), 'Model'.padEnd(22), 'Tool'.padEnd(16), 'Status'].join('');
   console.log(header);
 
   for (const a of agents) {
-    console.log(
-      [
-        a.id.padEnd(38),
-        a.model.padEnd(22),
-        a.tool.padEnd(16),
-        a.status.padEnd(10),
-        a.reputationScore.toFixed(2),
-      ].join(''),
-    );
+    console.log([a.id.padEnd(38), a.model.padEnd(22), a.tool.padEnd(16), a.status].join(''));
   }
 }
 
