@@ -119,9 +119,9 @@ describe('selectAgents', () => {
     expect(result.map((a) => a.id)).toEqual(['a2', 'a3']); // highest reputation first
   });
 
-  it('returns empty when fewer agents than reviewCount', () => {
+  it('returns available agents when fewer than reviewCount', () => {
     const result = selectAgents([agents[0]], 3, []);
-    expect(result).toHaveLength(0);
+    expect(result).toHaveLength(1); // dispatches to what's available
   });
 
   it('returns empty array for empty agents', () => {

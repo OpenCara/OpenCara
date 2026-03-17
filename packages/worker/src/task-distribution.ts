@@ -93,29 +93,32 @@ export function filterByAccessList(
 export const MAX_AGENTS_PER_TASK = 10;
 
 /**
- * Select exactly `reviewCount` agents for a review.
+ * Select up to `reviewCount` agents for a review.
  * Preferred tools first, then sorted by reputation (descending).
- * Returns empty if fewer than reviewCount agents are available.
+ * Returns empty only if no agents are available at all.
+ * Returns fewer than reviewCount if not enough agents are online.
  */
 export function selectAgents(
   agents: EligibleAgent[],
   reviewCount: number,
   preferredTools: string[],
 ): EligibleAgent[] {
-  if (agents.length < reviewCount) return [];
+  if (agents.length === 0) return [];
+
+  const count = Math.min(reviewCount, agents.length);
 
   // Sort by reputation descending within each group
   const byReputation = (a: EligibleAgent, b: EligibleAgent) =>
     b.reputationScore - a.reputationScore;
 
   if (preferredTools.length === 0) {
-    return [...agents].sort(byReputation).slice(0, reviewCount);
+    return [...agents].sort(byReputation).slice(0, count);
   }
 
   const preferred = agents.filter((a) => preferredTools.includes(a.tool)).sort(byReputation);
   const others = agents.filter((a) => !preferredTools.includes(a.tool)).sort(byReputation);
 
-  return [...preferred, ...others].slice(0, reviewCount);
+  return [...preferred, ...others].slice(0, count);
 }
 
 /**

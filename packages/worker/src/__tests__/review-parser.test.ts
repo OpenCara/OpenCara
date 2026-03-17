@@ -16,6 +16,15 @@ diff --git a/src/bar.ts b/src/bar.ts
     expect(files).toEqual(new Set(['src/foo.ts', 'src/bar.ts']));
   });
 
+  it('handles new files (a/dev/null)', () => {
+    const diff = `diff --git a/dev/null b/src/new-file.ts
+--- /dev/null
++++ b/src/new-file.ts`;
+    const files = parseDiffFiles(diff);
+    expect(files).toEqual(new Set(['src/new-file.ts']));
+    expect(files.has('dev/null')).toBe(false);
+  });
+
   it('returns empty set for empty diff', () => {
     expect(parseDiffFiles('')).toEqual(new Set());
   });
@@ -40,11 +49,13 @@ REQUEST_CHANGES`;
     expect(result.comments[0]).toEqual({
       path: 'src/foo.ts',
       line: 42,
+      side: 'RIGHT',
       body: '**[major]** Division by zero when count is 0',
     });
     expect(result.comments[1]).toEqual({
       path: 'src/bar.ts',
       line: 15,
+      side: 'RIGHT',
       body: '**[minor]** Unused import',
     });
   });

@@ -12,8 +12,10 @@ export interface ParsedReview {
  */
 export function parseDiffFiles(diffContent: string): Set<string> {
   const files = new Set<string>();
-  for (const match of diffContent.matchAll(/^diff --git a\/(.+?) b\//gm)) {
-    files.add(match[1]);
+  for (const match of diffContent.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)) {
+    // Add both a/ and b/ paths to handle renames and new files
+    if (match[1] !== 'dev/null') files.add(match[1]);
+    if (match[2] !== 'dev/null') files.add(match[2]);
   }
   return files;
 }
@@ -53,9 +55,11 @@ export function parseStructuredReview(text: string): ParsedReview {
       const path = match[2];
       const line = parseInt(match[3], 10);
       const description = match[4].trim();
+      if (isNaN(line)) continue;
       comments.push({
         path,
         line,
+        side: 'RIGHT',
         body: `**[${severity}]** ${description}`,
       });
     }

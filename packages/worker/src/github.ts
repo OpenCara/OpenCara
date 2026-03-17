@@ -159,6 +159,7 @@ export function verdictToReviewEvent(verdict: ReviewVerdict): ReviewEvent {
 export interface ReviewComment {
   path: string;
   line: number;
+  side: 'RIGHT' | 'LEFT';
   body: string;
 }
 
