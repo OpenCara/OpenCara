@@ -53,11 +53,15 @@ Format your response as:
 [Overall assessment, 2-3 sentences]
 
 ## Findings
-[List findings grouped by severity: critical > major > minor > suggestion]
-[Each finding: file:line - description]
+List each finding on its own line:
+- **[severity]** \`file:line\` — description
+
+Severities: critical, major, minor, suggestion
+Only include findings with specific file:line references from the diff.
+If no issues found, write "No issues found."
 
 ## Verdict
-[APPROVE / REQUEST_CHANGES / COMMENT with rationale]`;
+APPROVE | REQUEST_CHANGES | COMMENT`;
 }
 
 export function buildSummaryUserMessage(

@@ -22,31 +22,39 @@ export interface ReviewResponse {
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
 
 const FULL_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
-Review the following pull request diff and provide:
-1. A verdict: APPROVE, REQUEST_CHANGES, or COMMENT
-2. A detailed review in markdown format
+Review the following pull request diff and provide a structured review.
 
-Start your response with one of these exact lines:
-VERDICT: APPROVE
-VERDICT: REQUEST_CHANGES
-VERDICT: COMMENT
+Format your response as:
 
-Then provide your review.`;
+## Summary
+[2-3 sentence overall assessment]
+
+## Findings
+List each finding on its own line:
+- **[severity]** \`file:line\` — description
+
+Severities: critical, major, minor, suggestion
+Only include findings with specific file:line references from the diff.
+If no issues found, write "No issues found."
+
+## Verdict
+APPROVE | REQUEST_CHANGES | COMMENT`;
 
 const COMPACT_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and return a compact, structured assessment.
 
-Start with a verdict line:
-VERDICT: APPROVE
-VERDICT: REQUEST_CHANGES
-VERDICT: COMMENT
+Format your response as:
 
-Then list findings, one per line, in this format:
-- [severity] file:line - description
+## Summary
+[1-2 sentence assessment]
+
+## Findings
+- **[severity]** \`file:line\` — description
 
 Severities: critical, major, minor, suggestion
 
-End with a brief summary (1-2 sentences).`;
+## Verdict
+APPROVE | REQUEST_CHANGES | COMMENT`;
 
 export function buildSystemPrompt(owner: string, repo: string, mode: ReviewMode = 'full'): string {
   const template =
@@ -58,19 +66,35 @@ export function buildUserMessage(prompt: string, diffContent: string): string {
   return `${prompt}\n\n---\n\n${diffContent}`;
 }
 
-const VERDICT_PATTERN = /^VERDICT:\s*(APPROVE|REQUEST_CHANGES|COMMENT)\s*$/m;
+// New format: ## Verdict section at end of markdown
+const SECTION_VERDICT_PATTERN = /##\s*Verdict\s*\n+\s*(APPROVE|REQUEST_CHANGES|COMMENT)\b/im;
+// Legacy format: VERDICT: X on its own line
+const LEGACY_VERDICT_PATTERN = /^VERDICT:\s*(APPROVE|REQUEST_CHANGES|COMMENT)\s*$/m;
 
 export function extractVerdict(text: string): { verdict: ReviewVerdict; review: string } {
-  const match = VERDICT_PATTERN.exec(text);
-  if (!match) {
-    return { verdict: 'comment', review: text };
+  // Try new ## Verdict section format first
+  const sectionMatch = SECTION_VERDICT_PATTERN.exec(text);
+  if (sectionMatch) {
+    const verdictStr = sectionMatch[1].toLowerCase() as ReviewVerdict;
+    // Remove the ## Verdict section from the review text
+    const review = text
+      .slice(0, sectionMatch.index)
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return { verdict: verdictStr, review };
   }
 
-  const verdictStr = match[1].toLowerCase() as ReviewVerdict;
-  const before = text.slice(0, match.index);
-  const after = text.slice(match.index + match[0].length);
-  const review = (before + after).replace(/\n{3,}/g, '\n\n').trim();
-  return { verdict: verdictStr, review };
+  // Fall back to legacy VERDICT: X format
+  const legacyMatch = LEGACY_VERDICT_PATTERN.exec(text);
+  if (legacyMatch) {
+    const verdictStr = legacyMatch[1].toLowerCase() as ReviewVerdict;
+    const before = text.slice(0, legacyMatch.index);
+    const after = text.slice(legacyMatch.index + legacyMatch[0].length);
+    const review = (before + after).replace(/\n{3,}/g, '\n\n').trim();
+    return { verdict: verdictStr, review };
+  }
+
+  return { verdict: 'comment', review: text };
 }
 
 export interface ReviewExecutorDeps {

@@ -4,7 +4,7 @@ export interface ReviewConfig {
   version: number;
   prompt: string;
   agents: {
-    minCount: number;
+    reviewCount: number;
     preferredTools: string[];
     minReputation: number;
   };
@@ -69,7 +69,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   version: 1,
   prompt: 'Review this pull request for bugs, security issues, and code quality.',
   agents: {
-    minCount: 1,
+    reviewCount: 1,
     preferredTools: [],
     minReputation: 0,
   },
@@ -123,7 +123,11 @@ export function parseReviewConfig(yaml: string): ParseResult {
     version: raw.version,
     prompt: raw.prompt,
     agents: {
-      minCount: clamp(typeof agentsRaw.min_count === 'number' ? agentsRaw.min_count : 1, 1, 10),
+      reviewCount: clamp(
+        typeof agentsRaw.review_count === 'number' ? agentsRaw.review_count : 1,
+        1,
+        10,
+      ),
       preferredTools: Array.isArray(agentsRaw.preferred_tools)
         ? agentsRaw.preferred_tools.filter((t: unknown) => typeof t === 'string')
         : [],

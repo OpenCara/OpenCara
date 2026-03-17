@@ -132,7 +132,7 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
 
   console.log(`Review config for ${owner}/${repo}:`, {
     version: config.version,
-    agentMinCount: config.agents.minCount,
+    reviewCount: config.agents.reviewCount,
     timeout: config.timeout,
     hasCustomConfig: configYaml !== null,
     prUrl: pull_request.html_url,

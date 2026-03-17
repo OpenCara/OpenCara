@@ -3,7 +3,6 @@ import {
   parseTimeoutMs,
   filterByAccessList,
   selectAgents,
-  MAX_AGENTS_PER_TASK,
   type EligibleAgent,
 } from '../task-distribution.js';
 
@@ -98,32 +97,29 @@ describe('selectAgents', () => {
     makeAgent({ id: 'a4', tool: 'jetbrains' }),
   ];
 
-  it('returns ALL eligible agents (not just minCount) when no preferred tools', () => {
+  it('returns exactly reviewCount agents', () => {
     const result = selectAgents(agents, 2, []);
-    expect(result).toHaveLength(4);
-    expect(result.map((a) => a.id)).toEqual(['a1', 'a2', 'a3', 'a4']);
+    expect(result).toHaveLength(2);
   });
 
-  it('orders preferred tools first when returning all agents', () => {
+  it('selects preferred tools first, then by reputation', () => {
     const result = selectAgents(agents, 2, ['cursor']);
-    expect(result).toHaveLength(4);
-    // Preferred (cursor) first, then others
-    expect(result[0].id).toBe('a1');
-    expect(result[1].id).toBe('a3');
-    expect(result[2].id).toBe('a2');
-    expect(result[3].id).toBe('a4');
+    expect(result).toHaveLength(2);
+    // Both cursor agents selected (preferred)
+    expect(result.map((a) => a.id)).toEqual(['a1', 'a3']);
   });
 
-  it('orders preferred tools first with mixed tools', () => {
-    const result = selectAgents(agents, 1, ['jetbrains']);
-    expect(result).toHaveLength(4);
-    expect(result[0].id).toBe('a4'); // preferred
-    expect(result[1].id).toBe('a1'); // other
-    expect(result[2].id).toBe('a2'); // other
-    expect(result[3].id).toBe('a3'); // other
+  it('orders by reputation within groups', () => {
+    const ranked = [
+      makeAgent({ id: 'a1', tool: 'cursor', reputationScore: 0.5 }),
+      makeAgent({ id: 'a2', tool: 'vscode', reputationScore: 0.9 }),
+      makeAgent({ id: 'a3', tool: 'cursor', reputationScore: 0.7 }),
+    ];
+    const result = selectAgents(ranked, 2, []);
+    expect(result.map((a) => a.id)).toEqual(['a2', 'a3']); // highest reputation first
   });
 
-  it('returns empty when fewer agents than minCount', () => {
+  it('returns empty when fewer agents than reviewCount', () => {
     const result = selectAgents([agents[0]], 3, []);
     expect(result).toHaveLength(0);
   });
@@ -132,15 +128,15 @@ describe('selectAgents', () => {
     expect(selectAgents([], 2, ['cursor'])).toEqual([]);
   });
 
-  it('caps at MAX_AGENTS_PER_TASK', () => {
+  it('caps at reviewCount even with many agents', () => {
     const manyAgents = Array.from({ length: 15 }, (_, i) =>
       makeAgent({ id: `a${i}`, tool: 'cursor' }),
     );
-    const result = selectAgents(manyAgents, 1, []);
-    expect(result).toHaveLength(MAX_AGENTS_PER_TASK);
+    const result = selectAgents(manyAgents, 3, []);
+    expect(result).toHaveLength(3);
   });
 
-  it('returns all agents when exactly minCount are available', () => {
+  it('returns all agents when exactly reviewCount are available', () => {
     const result = selectAgents(agents, 4, []);
     expect(result).toHaveLength(4);
   });

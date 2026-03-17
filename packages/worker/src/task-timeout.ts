@@ -22,11 +22,11 @@ export class TaskTimeout implements DurableObject {
   }
 
   private async handleSetTimeout(request: Request): Promise<Response> {
-    const { taskId, timeoutMs, minCount, installationId, owner, repo, prNumber, prompt } =
+    const { taskId, timeoutMs, reviewCount, installationId, owner, repo, prNumber, prompt } =
       (await request.json()) as {
         taskId: string;
         timeoutMs: number;
-        minCount: number;
+        reviewCount: number;
         installationId?: number;
         owner?: string;
         repo?: string;
@@ -35,12 +35,12 @@ export class TaskTimeout implements DurableObject {
       };
 
     await this.state.storage.put('taskId', taskId);
-    await this.state.storage.put('minCount', minCount);
+    await this.state.storage.put('reviewCount', reviewCount);
 
     // Store task meta for summarization dispatch
     if (installationId !== undefined) {
       const meta: InFlightTaskMeta = {
-        minCount,
+        reviewCount,
         installationId,
         owner: owner ?? '',
         repo: repo ?? '',
@@ -57,7 +57,7 @@ export class TaskTimeout implements DurableObject {
 
   async alarm(): Promise<void> {
     const taskId = await this.state.storage.get<string>('taskId');
-    const minCount = (await this.state.storage.get<number>('minCount')) ?? 1;
+    const reviewCount = (await this.state.storage.get<number>('reviewCount')) ?? 1;
 
     if (!taskId) return;
 
@@ -96,7 +96,7 @@ export class TaskTimeout implements DurableObject {
       // Has results — move to summarizing and dispatch
       await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
       console.log(
-        `Task ${taskId} has ${completedCount}/${minCount} results at timeout, moving to summarizing`,
+        `Task ${taskId} has ${completedCount}/${reviewCount} results at timeout, moving to summarizing`,
       );
 
       // Dispatch summarization if we have task meta

@@ -4,7 +4,7 @@ import type { Env } from './env.js';
 import { getInstallationToken, postPrReview, verdictToReviewEvent } from './github.js';
 
 export interface InFlightTaskMeta {
-  minCount: number;
+  reviewCount: number;
   installationId: number;
   owner: string;
   repo: string;

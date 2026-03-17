@@ -12,7 +12,7 @@ prompt: |
   Focus on code quality, security, and test coverage.
   This project uses TypeScript + React, following ESLint standards.
 agents:
-  min_count: 2
+  review_count: 2
   preferred_tools:
     - claude-code
     - codex
@@ -47,7 +47,7 @@ describe('parseReviewConfig', () => {
     const config = result as ReviewConfig;
     expect(config.version).toBe(1);
     expect(config.prompt).toContain('Focus on code quality');
-    expect(config.agents.minCount).toBe(2);
+    expect(config.agents.reviewCount).toBe(2);
     expect(config.agents.preferredTools).toEqual(['claude-code', 'codex']);
     expect(config.agents.minReputation).toBe(0.6);
     expect(config.reviewer.whitelist).toEqual([{ user: 'alice' }, { agent: 'abc-123' }]);
@@ -65,7 +65,7 @@ describe('parseReviewConfig', () => {
     const config = result as ReviewConfig;
     expect(config.version).toBe(1);
     expect(config.prompt).toBe('Review this code.');
-    expect(config.agents.minCount).toBe(1);
+    expect(config.agents.reviewCount).toBe(1);
     expect(config.agents.preferredTools).toEqual([]);
     expect(config.agents.minReputation).toBe(0.0);
     expect(config.reviewer.whitelist).toEqual([]);
@@ -113,16 +113,16 @@ describe('parseReviewConfig', () => {
     expect((result as { error: string }).error).toBe('Field "prompt" must be a string');
   });
 
-  it('clamps min_count to range 1-10', () => {
+  it('clamps review_count to range 1-10', () => {
     const low = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  min_count: 0',
+      'version: 1\nprompt: test\nagents:\n  review_count: 0',
     ) as ReviewConfig;
-    expect(low.agents.minCount).toBe(1);
+    expect(low.agents.reviewCount).toBe(1);
 
     const high = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  min_count: 99',
+      'version: 1\nprompt: test\nagents:\n  review_count: 99',
     ) as ReviewConfig;
-    expect(high.agents.minCount).toBe(10);
+    expect(high.agents.reviewCount).toBe(10);
   });
 
   it('clamps min_reputation to range 0.0-1.0', () => {
@@ -171,7 +171,7 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
   it('has sensible defaults', () => {
     expect(DEFAULT_REVIEW_CONFIG.version).toBe(1);
     expect(DEFAULT_REVIEW_CONFIG.prompt).toBeTruthy();
-    expect(DEFAULT_REVIEW_CONFIG.agents.minCount).toBe(1);
+    expect(DEFAULT_REVIEW_CONFIG.agents.reviewCount).toBe(1);
     expect(DEFAULT_REVIEW_CONFIG.agents.minReputation).toBe(0);
     expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
     expect(DEFAULT_REVIEW_CONFIG.autoApprove.enabled).toBe(false);
