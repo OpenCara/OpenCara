@@ -133,3 +133,79 @@ export interface ConsumptionStatsResponse {
 export interface ErrorResponse {
   error: string;
 }
+
+/** Tool entry in the platform registry */
+export interface ToolRegistryEntry {
+  name: string;
+  displayName: string;
+  binary: string;
+  commandTemplate: string;
+  tokenParser: string;
+}
+
+/** Model entry in the platform registry */
+export interface ModelRegistryEntry {
+  name: string;
+  displayName: string;
+  tools: string[];
+}
+
+/** GET /api/registry — response */
+export interface RegistryResponse {
+  tools: ToolRegistryEntry[];
+  models: ModelRegistryEntry[];
+}
+
+/** Default registry data — single source of truth for worker + CLI fallback */
+export const DEFAULT_REGISTRY: RegistryResponse = {
+  tools: [
+    {
+      name: 'claude',
+      displayName: 'Claude',
+      binary: 'claude',
+      commandTemplate: 'claude --model ${MODEL} -p ${PROMPT} --output-format text',
+      tokenParser: 'claude',
+    },
+    {
+      name: 'codex',
+      displayName: 'Codex',
+      binary: 'codex',
+      commandTemplate: 'codex --model ${MODEL} -p ${PROMPT}',
+      tokenParser: 'codex',
+    },
+    {
+      name: 'gemini',
+      displayName: 'Gemini',
+      binary: 'gemini',
+      commandTemplate: 'gemini --model ${MODEL} -p ${PROMPT}',
+      tokenParser: 'gemini',
+    },
+    {
+      name: 'qwen',
+      displayName: 'Qwen',
+      binary: 'qwen',
+      commandTemplate: 'qwen --model ${MODEL} -p ${PROMPT} -y',
+      tokenParser: 'qwen',
+    },
+  ],
+  models: [
+    { name: 'claude-opus-4-6', displayName: 'Claude Opus 4.6', tools: ['claude'] },
+    {
+      name: 'claude-opus-4-6[1m]',
+      displayName: 'Claude Opus 4.6 (1M context)',
+      tools: ['claude'],
+    },
+    { name: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', tools: ['claude'] },
+    {
+      name: 'claude-sonnet-4-6[1m]',
+      displayName: 'Claude Sonnet 4.6 (1M context)',
+      tools: ['claude'],
+    },
+    { name: 'gpt-5-codex', displayName: 'GPT-5 Codex', tools: ['codex'] },
+    { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', tools: ['gemini'] },
+    { name: 'qwen3.5-plus', displayName: 'Qwen 3.5 Plus', tools: ['qwen'] },
+    { name: 'glm-5', displayName: 'GLM-5', tools: ['qwen'] },
+    { name: 'kimi-k2.5', displayName: 'Kimi K2.5', tools: ['qwen'] },
+    { name: 'minimax-m2.5', displayName: 'Minimax M2.5', tools: ['qwen'] },
+  ],
+};

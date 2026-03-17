@@ -13,6 +13,7 @@ vi.mock('../config.js', () => ({
     apiKey: 'cr_testkey',
     platformUrl: 'https://test.api.dev',
     limits: null,
+    agents: null,
   })),
   requireApiKey: vi.fn((config: { apiKey: string }) => config.apiKey),
 }));

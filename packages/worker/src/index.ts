@@ -6,6 +6,7 @@ import { handleCollectRatings } from './handlers/collect-ratings.js';
 import { handleGetConsumption } from './handlers/consumption.js';
 import { addCorsHeaders, addSecurityHeaders, handleCorsPreflightRequest } from './handlers/cors.js';
 import { handleDeviceFlow, handleDeviceToken, handleRevokeKey } from './handlers/device-flow.js';
+import { handleGetRegistry } from './handlers/registry.js';
 import { handleGetStats, handleGetProjectStats } from './handlers/stats.js';
 import { handleWebLogin, handleWebCallback, handleWebLogout } from './handlers/web-auth.js';
 import { handleGitHubWebhook } from './webhook.js';
@@ -116,6 +117,11 @@ async function handleApiRoutes(
   // Project stats endpoint (public)
   if (method === 'GET' && pathname === '/api/projects/stats') {
     return handleGetProjectStats(supabase);
+  }
+
+  // Tool/model registry endpoint (public)
+  if (method === 'GET' && pathname === '/api/registry') {
+    return handleGetRegistry();
   }
 
   // Collect ratings endpoint (authenticated)

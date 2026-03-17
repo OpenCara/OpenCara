@@ -1,4 +1,6 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface ToolExecutorResult {
   stdout: string;
@@ -13,18 +15,41 @@ export class ToolTimeoutError extends Error {
   }
 }
 
-/** Default command templates for known tools (backward compatibility) */
-export const DEFAULT_COMMANDS: Record<string, string> = {
-  'claude-code': 'claude -p --output-format text',
-  codex: 'codex exec',
-  gemini: 'gemini -p',
-};
-
 /** Minimum stdout length to treat a non-zero exit as a partial success */
 const MIN_PARTIAL_RESULT_LENGTH = 50;
 
 /** Maximum stderr length included in error/warning messages */
 const MAX_STDERR_LENGTH = 1000;
+
+/**
+ * Validate that the binary referenced by a command template exists and is executable.
+ * Cross-platform: uses `where` on Windows, `command -v` via shell on Unix.
+ */
+export function validateCommandBinary(commandTemplate: string): boolean {
+  const { command } = parseCommandTemplate(commandTemplate);
+
+  if (path.isAbsolute(command)) {
+    try {
+      fs.accessSync(command, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    const isWindows = process.platform === 'win32';
+    if (isWindows) {
+      execFileSync('where', [command], { stdio: 'pipe' });
+    } else {
+      // Pass command as positional arg to avoid shell injection
+      execFileSync('sh', ['-c', 'command -v -- "$1"', '_', command], { stdio: 'pipe' });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Parse a command template string into command + args.
@@ -74,29 +99,24 @@ export function parseCommandTemplate(
 }
 
 /**
- * Resolve a command template from explicit config or default fallback.
- * Returns the template string or throws if neither is available.
+ * Resolve a command template from explicit config.
+ * Returns the template string or throws if not available.
  */
-export function resolveCommandTemplate(
-  agentCommand: string | null,
-  toolName: string | undefined,
-): string {
+export function resolveCommandTemplate(agentCommand: string | null | undefined): string {
   if (agentCommand) {
     return agentCommand;
   }
-  if (toolName && toolName in DEFAULT_COMMANDS) {
-    return DEFAULT_COMMANDS[toolName];
-  }
-  const supported = Object.keys(DEFAULT_COMMANDS).join(', ');
   throw new Error(
-    `No agent_command configured and no default for tool "${toolName ?? 'unknown'}". ` +
-      `Set agent_command in ~/.opencrust/config.yml or use a supported tool: ${supported}`,
+    'No command configured for this agent. ' +
+      'Set command in ~/.opencrust/config.yml agents section or run `opencrust agent create`.',
   );
 }
 
 /**
- * Execute a tool command with prompt delivered via stdin.
- * The commandTemplate is a shell-style command string (e.g., "claude -p --output-format text").
+ * Execute a tool command with prompt.
+ *
+ * If the command template contains `${PROMPT}`, the prompt is interpolated
+ * as a CLI argument. Otherwise, the prompt is delivered via stdin.
  */
 export function executeTool(
   commandTemplate: string,
@@ -105,7 +125,9 @@ export function executeTool(
   signal?: AbortSignal,
   vars?: Record<string, string>,
 ): Promise<ToolExecutorResult> {
-  const { command, args } = parseCommandTemplate(commandTemplate, vars);
+  const promptViaArg = commandTemplate.includes('${PROMPT}');
+  const allVars = { ...vars, PROMPT: prompt };
+  const { command, args } = parseCommandTemplate(commandTemplate, allVars);
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -134,8 +156,10 @@ export function executeTool(
       stderr += chunk.toString();
     });
 
-    // Write prompt to stdin and close it
-    child.stdin?.write(prompt);
+    // Deliver prompt via stdin only if not already in args
+    if (!promptViaArg) {
+      child.stdin?.write(prompt);
+    }
     child.stdin?.end();
 
     // Set up abort signal handler (stored for cleanup)
