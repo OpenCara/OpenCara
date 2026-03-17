@@ -72,4 +72,5 @@ export {
   validateReviewConfig,
   DEFAULT_REVIEW_CONFIG,
   type ReviewConfig,
+  type TriggerConfig,
 } from './review-config.js';

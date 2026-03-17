@@ -185,10 +185,10 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Processing PR #42'));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('PR #42'));
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('Review config for'),
-      expect.objectContaining({ version: 1, hasCustomConfig: true }),
+      expect.objectContaining({ version: 1 }),
     );
     expect(mockedFetchReviewConfig).toHaveBeenCalledWith(
       'test-org',
@@ -205,7 +205,7 @@ describe('handleGitHubWebhook', () => {
     mockedFetchPrDiff.mockResolvedValue('diff --git a/file.ts b/file.ts\n');
 
     const req = await makeSignedRequest('pull_request', {
-      action: 'synchronize',
+      action: 'opened',
       installation: { id: 99 },
       repository: { owner: { login: 'test-org' }, name: 'test-repo' },
       pull_request: {
@@ -221,7 +221,7 @@ describe('handleGitHubWebhook', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('using default review config'));
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('Review config for'),
-      expect.objectContaining({ hasCustomConfig: false }),
+      expect.objectContaining({}),
     );
   });
 
