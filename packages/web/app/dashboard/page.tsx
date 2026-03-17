@@ -69,11 +69,10 @@ function AgentCard({ data }: { data: AgentCardData }) {
       )}
 
       <div className="grid gap-4 sm:grid-cols-3">
-        {/* Agent Info */}
+        {/* Status */}
         <div className="rounded-md bg-surface-900 p-4">
-          <p className="mb-1 text-xs text-surface-100/60">Agent</p>
-          <p className="text-2xl font-bold text-crust-400">{agent.model}</p>
-          <p className="mt-1 text-sm text-surface-100/60">{agent.tool}</p>
+          <p className="mb-1 text-xs text-surface-100/60">Status</p>
+          <p className="text-2xl font-bold text-crust-400">{agent.status}</p>
         </div>
 
         {/* Review Stats */}

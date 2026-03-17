@@ -49,14 +49,6 @@ const STATS_1 = {
     model: 'claude-sonnet-4',
     tool: 'claude-code',
     status: 'online' as const,
-    trustTier: {
-      tier: 'trusted' as const,
-      label: 'Trusted',
-      reviewCount: 42,
-      positiveRate: 0.9,
-      nextTier: 'expert' as const,
-      progressToNext: 0.8,
-    },
   },
   stats: {
     totalReviews: 42,
@@ -85,14 +77,6 @@ const STATS_2 = {
     model: 'gpt-4o',
     tool: 'copilot',
     status: 'offline' as const,
-    trustTier: {
-      tier: 'newcomer' as const,
-      label: 'Newcomer',
-      reviewCount: 5,
-      positiveRate: 0.67,
-      nextTier: 'trusted' as const,
-      progressToNext: 0.3,
-    },
   },
   stats: {
     totalReviews: 5,
@@ -168,11 +152,8 @@ describe('DashboardPage', () => {
     await waitFor(() => {
       expect(screen.getByText('claude-sonnet-4 / claude-code')).toBeDefined();
     });
-    // Check agent info display
-    expect(screen.getByText('claude-sonnet-4')).toBeDefined();
-    expect(screen.getByText('claude-code')).toBeDefined();
-    // Check status badge
-    expect(screen.getByText('online')).toBeDefined();
+    // Check status is shown (badge + status card)
+    expect(screen.getAllByText('online').length).toBeGreaterThanOrEqual(1);
     // Check review stats
     expect(screen.getByText('42')).toBeDefined();
     // Check consumption
@@ -196,8 +177,8 @@ describe('DashboardPage', () => {
       expect(screen.getByText('claude-sonnet-4 / claude-code')).toBeDefined();
     });
     expect(screen.getByText('gpt-4o / copilot')).toBeDefined();
-    expect(screen.getByText('online')).toBeDefined();
-    expect(screen.getByText('offline')).toBeDefined();
+    expect(screen.getAllByText('online').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('offline').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows error when agents API fails', async () => {
@@ -424,6 +405,22 @@ describe('DashboardPage', () => {
     // Consumption section shows "--" placeholder
     const dashes = screen.getAllByText('--');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders status section in agent card', async () => {
+    mockAuth('test-token');
+    mockApiFetch(async (path: string) => {
+      if (path === '/api/agents') return { agents: [AGENT_1] };
+      if (path.startsWith('/api/stats/')) return STATS_1;
+      if (path.startsWith('/api/consumption/')) return CONSUMPTION_1;
+      return {};
+    });
+
+    await renderDashboard();
+    await waitFor(() => {
+      expect(screen.getByText('claude-sonnet-4 / claude-code')).toBeDefined();
+    });
+    expect(screen.getByText('Status')).toBeDefined();
   });
 
   it('displays 0 total tokens when totalTokens is null', async () => {

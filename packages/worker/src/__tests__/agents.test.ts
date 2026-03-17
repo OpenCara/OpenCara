@@ -137,6 +137,7 @@ describe('handleCreateAgent', () => {
     expect(data.id).toBe('agent-new');
     expect(data.model).toBe('claude-3');
     expect(data.tool).toBe('cursor');
+    expect(data).not.toHaveProperty('reputationScore');
     expect(data.status).toBe('offline');
   });
 
