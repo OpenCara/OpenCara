@@ -49,7 +49,8 @@ export function validateCommandBinary(commandTemplate: string): boolean {
     if (isWindows) {
       execFileSync('where', [command], { stdio: 'pipe' });
     } else {
-      execFileSync('sh', ['-c', `command -v ${command}`], { stdio: 'pipe' });
+      // Pass command as positional arg to avoid shell injection
+      execFileSync('sh', ['-c', 'command -v -- "$1"', '_', command], { stdio: 'pipe' });
     }
     return true;
   } catch {
