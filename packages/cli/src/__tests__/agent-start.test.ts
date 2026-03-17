@@ -75,6 +75,7 @@ describe('handleMessage', () => {
       review: 'Looks good!',
       verdict: 'approve',
       tokensUsed: 150,
+      tokensEstimated: false,
     });
 
     const { handleMessage: hm } = await import('../commands/agent.js');
@@ -230,6 +231,7 @@ describe('handleMessage', () => {
     const executeSpy = vi.spyOn(summaryModule, 'executeSummary').mockResolvedValue({
       summary: '## Summary\nAll reviews agree the code is good.',
       tokensUsed: 200,
+      tokensEstimated: false,
     });
 
     const { handleMessage: hm } = await import('../commands/agent.js');
@@ -512,6 +514,7 @@ describe('handleMessage', () => {
       review: 'Looks good!',
       verdict: 'approve',
       tokensUsed: 150,
+      tokensEstimated: false,
     });
 
     const { handleMessage: hm } = await import('../commands/agent.js');

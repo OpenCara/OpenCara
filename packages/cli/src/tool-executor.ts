@@ -6,6 +6,9 @@ export interface ToolExecutorResult {
   stdout: string;
   stderr: string;
   tokensUsed: number;
+  /** True if tokensUsed was parsed from tool output (includes input+output).
+   *  False if estimated from output text only (callers should add input estimate). */
+  tokensParsed: boolean;
 }
 
 export class ToolTimeoutError extends Error {
@@ -115,6 +118,48 @@ export function resolveCommandTemplate(agentCommand: string | null | undefined):
   );
 }
 
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Estimate token count from text length (~4 chars per token).
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+function parseClaudeTokens(text: string): number | null {
+  const inputMatch = text.match(/"input_tokens"\s*:\s*(\d+)/);
+  const outputMatch = text.match(/"output_tokens"\s*:\s*(\d+)/);
+  if (inputMatch && outputMatch) {
+    return parseInt(inputMatch[1], 10) + parseInt(outputMatch[1], 10);
+  }
+  return null;
+}
+
+/**
+ * Parse token usage from tool output. Tries tool-specific patterns first,
+ * then falls back to character-based estimation.
+ */
+export function parseTokenUsage(
+  stdout: string,
+  stderr: string,
+): { tokens: number; parsed: boolean } {
+  // Codex: "tokens used 1,801" or "tokens used\n1,801" in stdout footer
+  const codexMatch = stdout.match(/tokens\s+used[\s:]*([0-9,]+)/i);
+  if (codexMatch) return { tokens: parseInt(codexMatch[1].replace(/,/g, ''), 10), parsed: true };
+
+  // Claude JSON: "input_tokens" and "output_tokens" (order-independent)
+  const claudeTotal = parseClaudeTokens(stdout) ?? parseClaudeTokens(stderr);
+  if (claudeTotal !== null) return { tokens: claudeTotal, parsed: true };
+
+  // Qwen JSON stats: "tokens": {"total": N}
+  const qwenMatch = stdout.match(/"tokens"\s*:\s*\{[^}]*"total"\s*:\s*(\d+)/);
+  if (qwenMatch) return { tokens: parseInt(qwenMatch[1], 10), parsed: true };
+
+  // Fallback: estimate from output text length
+  return { tokens: estimateTokens(stdout), parsed: false };
+}
+
 /**
  * Execute a tool command with prompt.
  *
@@ -220,7 +265,8 @@ export function executeTool(
           if (stderr) {
             console.warn(`Tool stderr: ${stderr.slice(0, MAX_STDERR_LENGTH)}`);
           }
-          resolve({ stdout, stderr, tokensUsed: 0 });
+          const usage = parseTokenUsage(stdout, stderr);
+          resolve({ stdout, stderr, tokensUsed: usage.tokens, tokensParsed: usage.parsed });
           return;
         }
 
@@ -232,7 +278,8 @@ export function executeTool(
         return;
       }
 
-      resolve({ stdout, stderr, tokensUsed: 0 });
+      const usage = parseTokenUsage(stdout, stderr);
+      resolve({ stdout, stderr, tokensUsed: usage.tokens, tokensParsed: usage.parsed });
     });
   });
 }

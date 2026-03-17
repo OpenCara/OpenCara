@@ -13,6 +13,7 @@ export interface LocalAgentConfig {
   model: string;
   tool: string;
   command?: string;
+  limits?: ConsumptionLimits;
 }
 
 export interface CliConfig {
@@ -65,6 +66,8 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     }
     const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
     if (typeof obj.command === 'string') agent.command = obj.command;
+    const agentLimits = parseLimits(obj);
+    if (agentLimits) agent.limits = agentLimits;
     agents.push(agent);
   }
   return agents;
@@ -123,6 +126,21 @@ export function saveConfig(config: CliConfig): void {
     data.agents = config.agents;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
+}
+
+/**
+ * Merge per-agent limits with global limits.
+ * Agent values override global; missing fields fall back to global.
+ */
+export function resolveAgentLimits(
+  agentLimits: ConsumptionLimits | undefined,
+  globalLimits: ConsumptionLimits | null,
+): ConsumptionLimits | null {
+  if (!agentLimits && !globalLimits) return null;
+  if (!agentLimits) return globalLimits;
+  if (!globalLimits) return agentLimits;
+  const merged: ConsumptionLimits = { ...globalLimits, ...agentLimits };
+  return Object.keys(merged).length === 0 ? null : merged;
 }
 
 export function requireApiKey(config: CliConfig): string {

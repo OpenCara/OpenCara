@@ -102,14 +102,17 @@ describe('executeReview', () => {
       >()
       .mockResolvedValue({
         stdout: 'VERDICT: APPROVE\nGreat code!',
+        stderr: '',
         tokensUsed: 0,
+        tokensParsed: false,
       });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.verdict).toBe('approve');
     expect(result.review).toBe('Great code!');
-    expect(result.tokensUsed).toBe(0);
+    // Includes input prompt estimate + output estimate
+    expect(result.tokensUsed).toBeGreaterThan(0);
     expect(mockRunTool).toHaveBeenCalledWith(
       'claude -p --output-format text',
       expect.stringContaining('acme/widgets'),
@@ -140,7 +143,9 @@ describe('executeReview', () => {
   it('handles request_changes verdict', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: REQUEST_CHANGES\nFix the bug.',
+      stderr: '',
       tokensUsed: 0,
+      tokensParsed: false,
     });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -152,7 +157,9 @@ describe('executeReview', () => {
   it('defaults to comment verdict when not found', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'Some observations about the code.',
+      stderr: '',
       tokensUsed: 0,
+      tokensParsed: false,
     });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -164,11 +171,14 @@ describe('executeReview', () => {
   it('returns tokensUsed from tool when reported', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: APPROVE\nOK',
+      stderr: '',
       tokensUsed: 150,
+      tokensParsed: true,
     });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
+    // 150 from tool (parsed, no input estimate added)
     expect(result.tokensUsed).toBe(150);
   });
 
@@ -183,7 +193,9 @@ describe('executeReview', () => {
   it('passes correct timeout to tool', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: APPROVE\nOK',
+      stderr: '',
       tokensUsed: 0,
+      tokensParsed: false,
     });
 
     await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -196,7 +208,9 @@ describe('executeReview', () => {
   it('passes the command template from deps', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: COMMENT\nLooks OK.',
+      stderr: '',
       tokensUsed: 0,
+      tokensParsed: false,
     });
 
     await executeReview(

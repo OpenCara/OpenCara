@@ -339,7 +339,7 @@ describe('AgentConnection', () => {
       });
     });
 
-    it('handles review_complete without consumption log when tokensUsed is 0', async () => {
+    it('handles review_complete with consumption log even when tokensUsed is 0', async () => {
       mockSupa = createSupabaseMock({
         singleResults: {
           review_tasks: {
@@ -376,7 +376,8 @@ describe('AgentConnection', () => {
 
       const insertTables = mockSupa._calls.insert.map((c) => c.table);
       expect(insertTables).toContain('review_results');
-      expect(insertTables).not.toContain('consumption_logs');
+      // Consumption log always inserted, even with tokensUsed=0
+      expect(insertTables).toContain('consumption_logs');
     });
 
     it('handles review_complete when task lookup fails', async () => {

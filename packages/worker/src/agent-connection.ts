@@ -488,15 +488,14 @@ export class AgentConnection implements DurableObject {
 
     await this.removeInFlightTask(msg.taskId);
 
-    if (msg.tokensUsed > 0) {
-      const { error: logError } = await supabase.from('consumption_logs').insert({
-        agent_id: agentId,
-        review_task_id: msg.taskId,
-        tokens_used: msg.tokensUsed,
-      });
-      if (logError) {
-        console.error(`Failed to insert consumption log for task ${msg.taskId}:`, logError);
-      }
+    // Always log consumption — even with 0 tokens, the row counts for reviews_per_day
+    const { error: logError } = await supabase.from('consumption_logs').insert({
+      agent_id: agentId,
+      review_task_id: msg.taskId,
+      tokens_used: msg.tokensUsed,
+    });
+    if (logError) {
+      console.error(`Failed to insert consumption log for task ${msg.taskId}:`, logError);
     }
 
     if (minCount === 1) {
@@ -772,13 +771,17 @@ export class AgentConnection implements DurableObject {
 
     await this.removeInFlightTask(msg.taskId);
 
-    // Log consumption for the summary agent
-    if (msg.tokensUsed > 0) {
-      await supabase.from('consumption_logs').insert({
-        agent_id: agentId,
-        review_task_id: msg.taskId,
-        tokens_used: msg.tokensUsed,
-      });
+    // Always log consumption for the summary agent
+    const { error: summaryLogError } = await supabase.from('consumption_logs').insert({
+      agent_id: agentId,
+      review_task_id: msg.taskId,
+      tokens_used: msg.tokensUsed,
+    });
+    if (summaryLogError) {
+      console.error(
+        `Failed to insert consumption log for summary task ${msg.taskId}:`,
+        summaryLogError,
+      );
     }
 
     // Look up task + project info

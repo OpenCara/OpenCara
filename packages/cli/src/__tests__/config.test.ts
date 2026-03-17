@@ -17,6 +17,7 @@ import {
   saveConfig,
   ensureConfigDir,
   requireApiKey,
+  resolveAgentLimits,
   CONFIG_DIR,
   CONFIG_FILE,
   DEFAULT_PLATFORM_URL,
@@ -450,6 +451,64 @@ describe('config', () => {
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(written).not.toContain('agents');
+    });
+  });
+
+  describe('resolveAgentLimits', () => {
+    it('returns null when both are null/undefined', () => {
+      expect(resolveAgentLimits(undefined, null)).toBeNull();
+    });
+
+    it('returns global limits when agent has none', () => {
+      const global = { tokens_per_day: 100000, reviews_per_day: 50 };
+      expect(resolveAgentLimits(undefined, global)).toEqual(global);
+    });
+
+    it('returns agent limits when global is null', () => {
+      const agent = { tokens_per_day: 30000 };
+      expect(resolveAgentLimits(agent, null)).toEqual(agent);
+    });
+
+    it('agent limits override global, missing fields fall back', () => {
+      const global = { tokens_per_day: 100000, tokens_per_month: 2000000, reviews_per_day: 50 };
+      const agent = { tokens_per_day: 30000 };
+      expect(resolveAgentLimits(agent, global)).toEqual({
+        tokens_per_day: 30000,
+        tokens_per_month: 2000000,
+        reviews_per_day: 50,
+      });
+    });
+
+    it('agent fully overrides all global fields', () => {
+      const global = { tokens_per_day: 100000, reviews_per_day: 50 };
+      const agent = { tokens_per_day: 10000, reviews_per_day: 5 };
+      expect(resolveAgentLimits(agent, global)).toEqual({
+        tokens_per_day: 10000,
+        reviews_per_day: 5,
+      });
+    });
+  });
+
+  describe('per-agent limits in config', () => {
+    it('parses per-agent limits from YAML', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    limits:
+      tokens_per_day: 30000
+      reviews_per_day: 10
+  - model: glm-5
+    tool: qwen
+`);
+      const config = loadConfig();
+      expect(config.agents).toHaveLength(2);
+      expect(config.agents![0].limits).toEqual({
+        tokens_per_day: 30000,
+        reviews_per_day: 10,
+      });
+      expect(config.agents![1].limits).toBeUndefined();
     });
   });
 });

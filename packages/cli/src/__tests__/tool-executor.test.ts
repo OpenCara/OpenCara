@@ -3,6 +3,8 @@ import {
   executeTool,
   parseCommandTemplate,
   resolveCommandTemplate,
+  parseTokenUsage,
+  estimateTokens,
   ToolTimeoutError,
 } from '../tool-executor.js';
 
@@ -201,7 +203,8 @@ describe('executeTool', () => {
 
     const result = await promise;
     expect(result.stdout).toBe('VERDICT: APPROVE\nLGTM');
-    expect(result.tokensUsed).toBe(0);
+    // Estimated from output length: ceil(24 / 4) = 6
+    expect(result.tokensUsed).toBeGreaterThan(0);
   });
 
   it('captures stderr alongside stdout', async () => {
@@ -389,5 +392,61 @@ describe('executeTool', () => {
 
     const result = await promise;
     expect(result.stdout).toBe('VERDICT: APPROVE\nAll good');
+  });
+});
+
+describe('estimateTokens', () => {
+  it('estimates ~4 chars per token', () => {
+    expect(estimateTokens('abcd')).toBe(1);
+    expect(estimateTokens('abcdefgh')).toBe(2);
+    expect(estimateTokens('abc')).toBe(1); // ceil(3/4) = 1
+  });
+
+  it('returns 0 for empty string', () => {
+    expect(estimateTokens('')).toBe(0);
+  });
+});
+
+describe('parseTokenUsage', () => {
+  it('parses Codex "tokens used" footer', () => {
+    const stdout = 'Some review output\n\ntokens used 1,801';
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 1801, parsed: true });
+  });
+
+  it('parses Codex "tokens used" without comma', () => {
+    const stdout = 'Output\ntokens used 275';
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 275, parsed: true });
+  });
+
+  it('parses Claude JSON usage from stdout', () => {
+    const stdout = '{"result":"ok","usage":{"input_tokens":1234,"output_tokens":567}}';
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 1801, parsed: true });
+  });
+
+  it('parses Claude JSON with output_tokens before input_tokens', () => {
+    const stdout = '{"usage":{"output_tokens":567,"input_tokens":1234}}';
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 1801, parsed: true });
+  });
+
+  it('parses Claude JSON usage from stderr', () => {
+    const stderr = '{"input_tokens": 500, "output_tokens": 200}';
+    expect(parseTokenUsage('plain text output', stderr)).toEqual({ tokens: 700, parsed: true });
+  });
+
+  it('parses Qwen JSON stats', () => {
+    const stdout = '{"stats":{"models":{"qwen":{"tokens":{"total":3500}}}}}';
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 3500, parsed: true });
+  });
+
+  it('falls back to character estimate when no pattern matches', () => {
+    const stdout = 'Just a plain review with no token info';
+    expect(parseTokenUsage(stdout, '')).toEqual({
+      tokens: Math.ceil(stdout.length / 4),
+      parsed: false,
+    });
+  });
+
+  it('returns 0 for empty output', () => {
+    expect(parseTokenUsage('', '')).toEqual({ tokens: 0, parsed: false });
   });
 });

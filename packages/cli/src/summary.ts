@@ -1,5 +1,5 @@
 import type { ReviewExecutorDeps } from './review.js';
-import { executeTool, type ToolExecutorResult } from './tool-executor.js';
+import { executeTool, estimateTokens, type ToolExecutorResult } from './tool-executor.js';
 
 export interface SummaryReviewInput {
   agentId: string;
@@ -23,6 +23,7 @@ export interface SummaryRequest {
 export interface SummaryResponse {
   summary: string;
   tokensUsed: number;
+  tokensEstimated: boolean;
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
@@ -127,7 +128,13 @@ export async function executeSummary(
       abortController.signal,
     );
 
-    return { summary: result.stdout, tokensUsed: result.tokensUsed };
+    // Only add input estimate when tokens were estimated (not parsed from tool output)
+    const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
+    return {
+      summary: result.stdout,
+      tokensUsed: result.tokensUsed + inputTokens,
+      tokensEstimated: !result.tokensParsed,
+    };
   } finally {
     clearTimeout(abortTimer);
   }
