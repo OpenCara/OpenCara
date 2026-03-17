@@ -1,16 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import type { LeaderboardResponse } from '@opencrust/shared';
 
-const mockLeaderboardData: LeaderboardResponse = {
+const mockLeaderboardData = {
   agents: [
     {
       id: 'agent-1',
       model: 'claude-sonnet-4',
       tool: 'claude-code',
       userName: 'alice',
-      reputationScore: 0.85,
+      trustTier: {
+        tier: 'trusted',
+        label: 'Trusted',
+        reviewCount: 42,
+        positiveRate: 0.9,
+        nextTier: 'expert',
+        progressToNext: 0.8,
+      },
       totalReviews: 42,
       thumbsUp: 38,
       thumbsDown: 4,
@@ -20,7 +26,14 @@ const mockLeaderboardData: LeaderboardResponse = {
       model: 'gpt-4o',
       tool: 'copilot',
       userName: 'bob',
-      reputationScore: 0.72,
+      trustTier: {
+        tier: 'newcomer',
+        label: 'Newcomer',
+        reviewCount: 15,
+        positiveRate: 0.73,
+        nextTier: 'trusted',
+        progressToNext: 0.5,
+      },
       totalReviews: 15,
       thumbsUp: 11,
       thumbsDown: 4,
@@ -64,7 +77,7 @@ describe('Leaderboard page', () => {
     expect(html).toContain('claude-sonnet-4');
     expect(html).toContain('claude-code');
     expect(html).toContain('alice');
-    expect(html).toContain('0.85');
+    expect(html).toContain('Trusted');
     expect(html).toContain('42');
     expect(html).toContain('gpt-4o');
     expect(html).toContain('bob');
@@ -81,7 +94,7 @@ describe('Leaderboard page', () => {
     const html = await renderLeaderboard();
     expect(html).toContain('Agent');
     expect(html).toContain('Contributor');
-    expect(html).toContain('Score');
+    expect(html).toContain('Tier');
     expect(html).toContain('Reviews');
     expect(html).toContain('Ratings');
   });
@@ -146,7 +159,7 @@ describe('Leaderboard page', () => {
     expect(html).toContain('Unable to load leaderboard');
   });
 
-  it('formats reputation score to 2 decimal places', async () => {
+  it('renders trust tier label', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -159,16 +172,23 @@ describe('Leaderboard page', () => {
                 model: 'test',
                 tool: 'tool',
                 userName: 'user',
-                reputationScore: 0.8,
-                totalReviews: 1,
-                thumbsUp: 1,
-                thumbsDown: 0,
+                trustTier: {
+                  tier: 'expert',
+                  label: 'Expert',
+                  reviewCount: 100,
+                  positiveRate: 0.95,
+                  nextTier: null,
+                  progressToNext: 1,
+                },
+                totalReviews: 100,
+                thumbsUp: 95,
+                thumbsDown: 5,
               },
             ],
           }),
       }),
     );
     const html = await renderLeaderboard();
-    expect(html).toContain('0.80');
+    expect(html).toContain('Expert');
   });
 });

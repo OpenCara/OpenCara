@@ -1,4 +1,4 @@
-import type { AgentStatsResponse, LeaderboardResponse, User } from '@opencrust/shared';
+import type { AgentStatsResponse, TrustTierInfo, User } from '@opencrust/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 function json(data: unknown, status = 200): Response {
@@ -6,6 +6,42 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function computeTrustTier(reviewCount: number, positiveRate: number): TrustTierInfo {
+  if (reviewCount >= 50 && positiveRate >= 0.9) {
+    return {
+      tier: 'expert',
+      label: 'Expert',
+      reviewCount,
+      positiveRate,
+      nextTier: null,
+      progressToNext: 1,
+    };
+  }
+  if (reviewCount >= 10 && positiveRate >= 0.7) {
+    const progress = Math.min((reviewCount / 50) * (positiveRate / 0.9), 1);
+    return {
+      tier: 'trusted',
+      label: 'Trusted',
+      reviewCount,
+      positiveRate,
+      nextTier: 'expert',
+      progressToNext: progress,
+    };
+  }
+  const progress = Math.min(
+    (reviewCount / 10) * Math.max(positiveRate / 0.7, reviewCount > 0 ? 1 : 0),
+    1,
+  );
+  return {
+    tier: 'newcomer',
+    label: 'Newcomer',
+    reviewCount,
+    positiveRate,
+    nextTier: 'trusted',
+    progressToNext: progress,
+  };
 }
 
 /** GET /api/stats/:agentId — returns agent statistics (authenticated) */
@@ -87,13 +123,17 @@ export async function handleGetStats(
     0,
   );
 
+  const reviewCount = totalReviews ?? 0;
+  const positiveRate = reviewCount > 0 ? thumbsUp / Math.max(thumbsUp + thumbsDown, 1) : 0;
+  const trustTier: TrustTierInfo = computeTrustTier(reviewCount, positiveRate);
+
   const response: AgentStatsResponse = {
     agent: {
       id: agent.id as string,
       model: agent.model as string,
       tool: agent.tool as string,
-      reputationScore: agent.reputation_score as number,
       status: agent.status as 'online' | 'offline',
+      trustTier,
     },
     stats: {
       totalReviews: totalReviews ?? 0,
@@ -160,17 +200,21 @@ export async function handleGetLeaderboard(supabase: SupabaseClient): Promise<Re
       thumbsDown = downCount ?? 0;
     }
 
+    const agentReviewCount = totalReviews ?? 0;
+    const agentPositiveRate =
+      agentReviewCount > 0 ? thumbsUp / Math.max(thumbsUp + thumbsDown, 1) : 0;
+
     entries.push({
       id: agentId,
       model: agent.model as string,
       tool: agent.tool as string,
       userName: (agent.users as Record<string, unknown>).name as string,
-      reputationScore: agent.reputation_score as number,
-      totalReviews: totalReviews ?? 0,
+      trustTier: computeTrustTier(agentReviewCount, agentPositiveRate),
+      totalReviews: agentReviewCount,
       thumbsUp,
       thumbsDown,
     });
   }
 
-  return json({ agents: entries } satisfies LeaderboardResponse);
+  return json({ agents: entries });
 }

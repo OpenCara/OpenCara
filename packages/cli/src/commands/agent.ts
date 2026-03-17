@@ -15,7 +15,7 @@ import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
-import { getSupportedTools } from '../tool-executor.js';
+import { resolveCommandTemplate } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   fetchConsumptionStats,
@@ -41,25 +41,11 @@ function formatTable(agents: AgentResponse[]): void {
     return;
   }
 
-  const header = [
-    'ID'.padEnd(38),
-    'Model'.padEnd(22),
-    'Tool'.padEnd(16),
-    'Status'.padEnd(10),
-    'Reputation',
-  ].join('');
+  const header = ['ID'.padEnd(38), 'Model'.padEnd(22), 'Tool'.padEnd(16), 'Status'].join('');
   console.log(header);
 
   for (const a of agents) {
-    console.log(
-      [
-        a.id.padEnd(38),
-        a.model.padEnd(22),
-        a.tool.padEnd(16),
-        a.status.padEnd(10),
-        a.reputationScore.toFixed(2),
-      ].join(''),
-    );
+    console.log([a.id.padEnd(38), a.model.padEnd(22), a.tool.padEnd(16), a.status].join(''));
   }
 }
 
@@ -552,18 +538,17 @@ agentCommand
     }
 
     let reviewDeps: ReviewExecutorDeps | undefined;
-    if (agentTool) {
-      const supported = getSupportedTools();
-      if (!supported.includes(agentTool)) {
-        console.error(`Unsupported tool "${agentTool}". Supported tools: ${supported.join(', ')}`);
-        process.exit(1);
-      }
+    try {
+      const commandTemplate = resolveCommandTemplate(config.agentCommand, agentTool);
       reviewDeps = {
-        tool: agentTool,
+        commandTemplate,
         maxDiffSizeKb: config.maxDiffSizeKb,
       };
-    } else {
-      console.warn('Warning: Could not determine agent tool. Reviews will be rejected.');
+    } catch (err) {
+      console.warn(
+        `Warning: ${err instanceof Error ? err.message : 'Could not determine agent command.'}` +
+          ' Reviews will be rejected.',
+      );
     }
 
     const consumptionDeps: ConsumptionDeps = {

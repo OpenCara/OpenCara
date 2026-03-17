@@ -14,6 +14,7 @@ export interface CliConfig {
   platformUrl: string;
   maxDiffSizeKb: number;
   limits: ConsumptionLimits | null;
+  agentCommand: string | null;
 }
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencrust.dev';
@@ -44,6 +45,7 @@ export function loadConfig(): CliConfig {
     platformUrl: DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     limits: null,
+    agentCommand: null,
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -63,6 +65,7 @@ export function loadConfig(): CliConfig {
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
     limits: parseLimits(data),
+    agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
   };
 }
 
@@ -79,6 +82,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.limits) {
     data.limits = config.limits;
+  }
+  if (config.agentCommand) {
+    data.agent_command = config.agentCommand;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }

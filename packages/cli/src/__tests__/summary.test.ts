@@ -108,7 +108,7 @@ describe('InputTooLargeError', () => {
 
 describe('executeSummary', () => {
   const defaultDeps: ReviewExecutorDeps = {
-    tool: 'claude-code',
+    commandTemplate: 'claude -p --output-format text',
     maxDiffSizeKb: 100,
   };
 
@@ -126,7 +126,7 @@ describe('executeSummary', () => {
     return vi
       .fn<
         (
-          toolName: string,
+          commandTemplate: string,
           prompt: string,
           timeoutMs: number,
           signal?: AbortSignal,
@@ -143,7 +143,7 @@ describe('executeSummary', () => {
     expect(result.summary).toBe('## Summary\nAll good.');
     expect(result.tokensUsed).toBe(0);
     expect(mockRunTool).toHaveBeenCalledWith(
-      'claude-code',
+      'claude -p --output-format text',
       expect.stringContaining('acme/widgets'),
       expect.any(Number),
       expect.any(AbortSignal),

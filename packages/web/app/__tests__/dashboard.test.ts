@@ -31,7 +31,6 @@ const AGENT_1 = {
   id: 'agent-1',
   model: 'claude-sonnet-4',
   tool: 'claude-code',
-  reputationScore: 0.85,
   status: 'online' as const,
   createdAt: '2025-01-01T00:00:00Z',
 };
@@ -40,7 +39,6 @@ const AGENT_2 = {
   id: 'agent-2',
   model: 'gpt-4o',
   tool: 'copilot',
-  reputationScore: 0.72,
   status: 'offline' as const,
   createdAt: '2025-01-02T00:00:00Z',
 };
@@ -50,8 +48,15 @@ const STATS_1 = {
     id: 'agent-1',
     model: 'claude-sonnet-4',
     tool: 'claude-code',
-    reputationScore: 0.85,
     status: 'online' as const,
+    trustTier: {
+      tier: 'trusted' as const,
+      label: 'Trusted',
+      reviewCount: 42,
+      positiveRate: 0.9,
+      nextTier: 'expert' as const,
+      progressToNext: 0.8,
+    },
   },
   stats: {
     totalReviews: 42,
@@ -79,8 +84,15 @@ const STATS_2 = {
     id: 'agent-2',
     model: 'gpt-4o',
     tool: 'copilot',
-    reputationScore: 0.72,
     status: 'offline' as const,
+    trustTier: {
+      tier: 'newcomer' as const,
+      label: 'Newcomer',
+      reviewCount: 5,
+      positiveRate: 0.67,
+      nextTier: 'trusted' as const,
+      progressToNext: 0.3,
+    },
   },
   stats: {
     totalReviews: 5,
@@ -156,8 +168,9 @@ describe('DashboardPage', () => {
     await waitFor(() => {
       expect(screen.getByText('claude-sonnet-4 / claude-code')).toBeDefined();
     });
-    // Check reputation display
-    expect(screen.getByText('0.85')).toBeDefined();
+    // Check agent info display
+    expect(screen.getByText('claude-sonnet-4')).toBeDefined();
+    expect(screen.getByText('claude-code')).toBeDefined();
     // Check status badge
     expect(screen.getByText('online')).toBeDefined();
     // Check review stats
@@ -411,45 +424,6 @@ describe('DashboardPage', () => {
     // Consumption section shows "--" placeholder
     const dashes = screen.getAllByText('--');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('renders reputation bar with correct width', async () => {
-    mockAuth('test-token');
-    mockApiFetch(async (path: string) => {
-      if (path === '/api/agents') return { agents: [AGENT_1] };
-      if (path.startsWith('/api/stats/')) return STATS_1;
-      if (path.startsWith('/api/consumption/')) return CONSUMPTION_1;
-      return {};
-    });
-
-    await renderDashboard();
-    await waitFor(() => {
-      expect(screen.getByText('0.85')).toBeDefined();
-    });
-    // The reputation bar div should have a width style
-    const bars = document.querySelectorAll('.bg-crust-500');
-    expect(bars.length).toBeGreaterThanOrEqual(1);
-    const bar = bars[0] as HTMLElement;
-    expect(bar.style.width).toBe('85%');
-  });
-
-  it('caps reputation bar width at 100%', async () => {
-    const highRepAgent = { ...AGENT_1, reputationScore: 1.5 };
-    mockAuth('test-token');
-    mockApiFetch(async (path: string) => {
-      if (path === '/api/agents') return { agents: [highRepAgent] };
-      if (path.startsWith('/api/stats/')) return STATS_1;
-      if (path.startsWith('/api/consumption/')) return CONSUMPTION_1;
-      return {};
-    });
-
-    await renderDashboard();
-    await waitFor(() => {
-      expect(screen.getByText('1.50')).toBeDefined();
-    });
-    const bars = document.querySelectorAll('.bg-crust-500');
-    const bar = bars[0] as HTMLElement;
-    expect(bar.style.width).toBe('100%');
   });
 
   it('displays 0 total tokens when totalTokens is null', async () => {

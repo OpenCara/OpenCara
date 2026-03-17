@@ -133,7 +133,8 @@ describe('handleGetStats', () => {
     const data = await response.json();
     expect(data.agent.id).toBe('agent-1');
     expect(data.agent.model).toBe('gpt-4');
-    expect(data.agent.reputationScore).toBe(0.75);
+    expect(data.agent.trustTier).toBeDefined();
+    expect(data.agent.trustTier.tier).toBe('newcomer');
     expect(data.stats.tokensUsed).toBe(3000);
   });
 
@@ -310,7 +311,7 @@ describe('handleGetLeaderboard', () => {
     expect(data.agents).toHaveLength(2);
     expect(data.agents[0].id).toBe('agent-1');
     expect(data.agents[0].userName).toBe('alice');
-    expect(data.agents[0].reputationScore).toBe(0.9);
+    expect(data.agents[0].trustTier).toBeDefined();
     expect(data.agents[1].id).toBe('agent-2');
     expect(data.agents[1].userName).toBe('bob');
   });

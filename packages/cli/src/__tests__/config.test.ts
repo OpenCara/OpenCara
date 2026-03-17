@@ -57,6 +57,7 @@ describe('config', () => {
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.limits).toBeNull();
+      expect(config.agentCommand).toBeNull();
     });
 
     it('parses valid config file', () => {
@@ -213,6 +214,33 @@ describe('config', () => {
 
       expect(config.limits).toBeNull();
     });
+
+    it('parses agent_command config field', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('agent_command: "ollama run codestral"\n');
+
+      const config = loadConfig();
+
+      expect(config.agentCommand).toBe('ollama run codestral');
+    });
+
+    it('returns null agentCommand for non-string values', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('agent_command: 123\n');
+
+      const config = loadConfig();
+
+      expect(config.agentCommand).toBeNull();
+    });
+
+    it('returns null agentCommand when not present', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+
+      const config = loadConfig();
+
+      expect(config.agentCommand).toBeNull();
+    });
   });
 
   describe('saveConfig', () => {
@@ -221,6 +249,7 @@ describe('config', () => {
       platformUrl: 'https://api.dev',
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       limits: null as import('../config.js').ConsumptionLimits | null,
+      agentCommand: null as string | null,
     };
 
     it('saves config with API key', () => {
@@ -288,6 +317,20 @@ describe('config', () => {
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('limits');
     });
+
+    it('saves agent_command when present', () => {
+      saveConfig({ ...baseConfig, agentCommand: 'ollama run codestral' });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('agent_command: ollama run codestral');
+    });
+
+    it('does not save agent_command when null', () => {
+      saveConfig(baseConfig);
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('agent_command');
+    });
   });
 
   describe('requireApiKey', () => {
@@ -297,6 +340,7 @@ describe('config', () => {
         platformUrl: 'test',
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         limits: null,
+        agentCommand: null,
       });
       expect(key).toBe('cr_test');
     });
@@ -313,6 +357,7 @@ describe('config', () => {
           platformUrl: 'test',
           maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
           limits: null,
+          agentCommand: null,
         }),
       ).toThrow('process.exit');
 

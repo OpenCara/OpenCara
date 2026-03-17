@@ -1,7 +1,22 @@
-import type { LeaderboardResponse } from '@opencrust/shared';
+import type { TrustTierInfo } from '@opencrust/shared';
 import { apiFetch } from '../../lib/api';
 
 export const dynamic = 'force-dynamic';
+
+interface LeaderboardEntry {
+  id: string;
+  model: string;
+  tool: string;
+  userName: string;
+  trustTier: TrustTierInfo;
+  totalReviews: number;
+  thumbsUp: number;
+  thumbsDown: number;
+}
+
+interface LeaderboardResponse {
+  agents: LeaderboardEntry[];
+}
 
 async function getLeaderboard(): Promise<{ data?: LeaderboardResponse; error?: string }> {
   try {
@@ -39,7 +54,7 @@ export default async function LeaderboardPage() {
                 <th className="px-4 py-3">#</th>
                 <th className="px-4 py-3">Agent</th>
                 <th className="px-4 py-3">Contributor</th>
-                <th className="px-4 py-3 text-right">Score</th>
+                <th className="px-4 py-3 text-right">Tier</th>
                 <th className="px-4 py-3 text-right">Reviews</th>
                 <th className="px-4 py-3 text-right">Ratings</th>
               </tr>
@@ -56,7 +71,7 @@ export default async function LeaderboardPage() {
                   </td>
                   <td className="px-4 py-3 text-surface-100/80">{agent.userName}</td>
                   <td className="px-4 py-3 text-right font-mono text-crust-400">
-                    {agent.reputationScore.toFixed(2)}
+                    {agent.trustTier.label}
                   </td>
                   <td className="px-4 py-3 text-right text-surface-100/80">{agent.totalReviews}</td>
                   <td className="px-4 py-3 text-right text-surface-100/80">

@@ -10,6 +10,7 @@ vi.mock('../config.js', () => ({
     apiKey: 'cr_testkey',
     platformUrl: 'https://test.api.dev',
     limits: null,
+    agentCommand: null,
   })),
   requireApiKey: vi.fn((config: { apiKey: string }) => config.apiKey),
 }));
@@ -129,7 +130,6 @@ describe('agent commands', () => {
             model: 'gpt-4',
             tool: 'claude-code',
             status: 'online',
-            reputationScore: 4.5,
             createdAt: '2024-01-01',
           },
         ],
@@ -193,17 +193,20 @@ describe('agent commands', () => {
       expect(logSpy).toHaveBeenCalledWith('Starting agent agent-solo...');
     });
 
-    it('exits when agent tool is unsupported', async () => {
+    it('warns when agent tool has no default command and no agentCommand', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
       mockGet.mockResolvedValueOnce({
         agents: [{ id: 'agent-bad', model: 'gpt-4', tool: 'unknown-tool' }],
       });
 
-      await expect(agentCommand.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
-        'process.exit',
-      );
+      await agentCommand.parseAsync(['start'], { from: 'user' });
 
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Unsupported tool'));
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unknown-tool'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No agent_command configured'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Reviews will be rejected'));
+      // Agent still starts despite the warning
+      expect(logSpy).toHaveBeenCalledWith('Starting agent agent-bad...');
+      warnSpy.mockRestore();
     });
 
     it('warns when agent fetch fails with explicit ID', async () => {
