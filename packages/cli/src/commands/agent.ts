@@ -528,6 +528,13 @@ agentCommand
 
       const { search, input } = await import('@inquirer/prompts');
 
+      const searchTheme = {
+        style: {
+          keysHelpTip: (keys: Array<[string, string]>) =>
+            keys.map(([key, action]) => `${key} ${action}`).join(', ') + ', ^C exit',
+        },
+      };
+
       try {
         // Step 1: Select tool with fuzzy filter
         const toolChoices = registry.tools.map((t) => ({
@@ -536,10 +543,13 @@ agentCommand
         }));
 
         tool = await search({
-          message: 'Select a tool (Ctrl+C to cancel):',
+          message: 'Select a tool:',
+          theme: searchTheme,
           source: (term) => {
             const q = (term ?? '').toLowerCase();
-            return toolChoices.filter((c) => c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
+            return toolChoices.filter(
+              (c) => c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q),
+            );
           },
         });
 
@@ -559,12 +569,12 @@ agentCommand
         ];
 
         model = await search({
-          message: 'Select a model (Ctrl+C to cancel):',
+          message: 'Select a model:',
+          theme: searchTheme,
           source: (term) => {
             const q = (term ?? '').toLowerCase();
-            return modelChoices.filter((c) =>
-              c.value.toLowerCase().includes(q) ||
-              c.name.toLowerCase().includes(q),
+            return modelChoices.filter(
+              (c) => c.value.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
             );
           },
         });
@@ -572,9 +582,7 @@ agentCommand
         // Warn if model isn't compatible with selected tool
         const modelEntry = registry.models.find((m) => m.name === model);
         if (modelEntry && !modelEntry.tools.includes(tool)) {
-          console.warn(
-            `Warning: model "${model}" is not listed as compatible with tool "${tool}". Proceeding anyway.`,
-          );
+          console.warn(`Warning: "${model}" is not listed as compatible with "${tool}".`);
         }
 
         // Step 3: Resolve default command and let user edit it
@@ -586,6 +594,7 @@ agentCommand
         command = await input({
           message: 'Command:',
           default: defaultCommand,
+          prefill: 'editable',
         });
       } catch (err) {
         if (err && typeof err === 'object' && 'name' in err && err.name === 'ExitPromptError') {
