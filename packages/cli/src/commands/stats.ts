@@ -3,50 +3,96 @@ import type {
   ConsumptionStatsResponse,
   ListAgentsResponse,
   AgentResponse,
+  AgentStatsResponse,
+  TrustTierInfo,
 } from '@opencrust/shared';
 import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
 import { ApiClient } from '../http.js';
 import { fetchConsumptionStats } from '../consumption.js';
 
-function formatAgentStats(
-  agent: AgentResponse,
-  stats: ConsumptionStatsResponse,
+function formatTrustTier(tier: TrustTierInfo): string {
+  const lines: string[] = [];
+  const pctPositive = Math.round(tier.positiveRate * 100);
+  lines.push(`  Trust:    ${tier.label} (${tier.reviewCount} reviews, ${pctPositive}% positive)`);
+  if (tier.nextTier) {
+    const pctProgress = Math.round(tier.progressToNext * 100);
+    const nextLabel = tier.nextTier.charAt(0).toUpperCase() + tier.nextTier.slice(1);
+    lines.push(`            Progress to ${nextLabel}: ${pctProgress}%`);
+  }
+  return lines.join('\n');
+}
+
+function formatReviewQuality(stats: AgentStatsResponse['stats']): string {
+  const lines: string[] = [];
+  lines.push(`  Reviews:  ${stats.totalReviews} completed, ${stats.totalSummaries} summaries`);
+  const totalRatings = stats.thumbsUp + stats.thumbsDown;
+  if (totalRatings > 0) {
+    const pctPositive = Math.round((stats.thumbsUp / totalRatings) * 100);
+    lines.push(`  Quality:  ${stats.thumbsUp}/${totalRatings} positive ratings (${pctPositive}%)`);
+  } else {
+    lines.push(`  Quality:  No ratings yet`);
+  }
+  return lines.join('\n');
+}
+
+function formatConsumption(
+  consumption: ConsumptionStatsResponse,
   limits?: ConsumptionLimits | null,
 ): string {
   const lines: string[] = [];
-  lines.push(`Agent: ${agent.id} (${agent.model} / ${agent.tool})`);
   lines.push(
-    `  Total: ${stats.totalTokens.toLocaleString()} tokens across ${stats.totalReviews} reviews`,
-  );
-  lines.push(
-    `  Last 24h: ${stats.period.last24h.tokens.toLocaleString()} tokens / ${stats.period.last24h.reviews} reviews`,
-  );
-  lines.push(
-    `  Last 7d:  ${stats.period.last7d.tokens.toLocaleString()} tokens / ${stats.period.last7d.reviews} reviews`,
-  );
-  lines.push(
-    `  Last 30d: ${stats.period.last30d.tokens.toLocaleString()} tokens / ${stats.period.last30d.reviews} reviews`,
+    `  Tokens:   ${consumption.totalTokens.toLocaleString()} total (${consumption.period.last24h.tokens.toLocaleString()} today, ${consumption.period.last7d.tokens.toLocaleString()} this week)`,
   );
 
   if (limits?.tokens_per_day) {
-    const remaining = Math.max(0, limits.tokens_per_day - stats.period.last24h.tokens);
+    const remaining = Math.max(0, limits.tokens_per_day - consumption.period.last24h.tokens);
     lines.push(
-      `  Budget:   ${stats.period.last24h.tokens.toLocaleString()} / ${limits.tokens_per_day.toLocaleString()} tokens (24h) — ${remaining.toLocaleString()} remaining`,
+      `  Budget:   ${consumption.period.last24h.tokens.toLocaleString()} / ${limits.tokens_per_day.toLocaleString()} tokens (24h) — ${remaining.toLocaleString()} remaining`,
     );
   } else if (limits?.tokens_per_month) {
-    const remaining = Math.max(0, limits.tokens_per_month - stats.period.last30d.tokens);
+    const remaining = Math.max(0, limits.tokens_per_month - consumption.period.last30d.tokens);
     lines.push(
-      `  Budget:   ${stats.period.last30d.tokens.toLocaleString()} / ${limits.tokens_per_month.toLocaleString()} tokens (30d) — ${remaining.toLocaleString()} remaining`,
+      `  Budget:   ${consumption.period.last30d.tokens.toLocaleString()} / ${limits.tokens_per_month.toLocaleString()} tokens (30d) — ${remaining.toLocaleString()} remaining`,
     );
   }
 
   return lines.join('\n');
 }
 
-export { formatAgentStats };
+function formatAgentStats(
+  agent: AgentResponse,
+  consumption: ConsumptionStatsResponse,
+  limits?: ConsumptionLimits | null,
+  agentStats?: AgentStatsResponse | null,
+): string {
+  const lines: string[] = [];
+  lines.push(`Agent: ${agent.id} (${agent.model} / ${agent.tool})`);
+
+  if (agentStats) {
+    lines.push(formatTrustTier(agentStats.agent.trustTier));
+    lines.push(formatReviewQuality(agentStats.stats));
+  }
+
+  lines.push(formatConsumption(consumption, limits));
+
+  return lines.join('\n');
+}
+
+export { formatAgentStats, formatTrustTier, formatReviewQuality, formatConsumption };
+
+async function fetchAgentStats(
+  client: ApiClient,
+  agentId: string,
+): Promise<AgentStatsResponse | null> {
+  try {
+    return await client.get<AgentStatsResponse>(`/api/stats/${agentId}`);
+  } catch {
+    return null;
+  }
+}
 
 export const statsCommand = new Command('stats')
-  .description('Display consumption statistics for agents')
+  .description('Display agent dashboard: trust tier, review quality, and consumption stats')
   .option('--agent <agentId>', 'Show stats for a specific agent')
   .action(async (opts: { agent?: string }) => {
     const config = loadConfig();
@@ -54,9 +100,9 @@ export const statsCommand = new Command('stats')
     const client = new ApiClient(config.platformUrl, apiKey);
 
     if (opts.agent) {
-      let stats: ConsumptionStatsResponse;
+      let consumption: ConsumptionStatsResponse;
       try {
-        stats = await fetchConsumptionStats(client, opts.agent);
+        consumption = await fetchConsumptionStats(client, opts.agent);
       } catch (err) {
         console.error(
           'Failed to fetch consumption stats:',
@@ -86,7 +132,8 @@ export const statsCommand = new Command('stats')
         // Proceed with unknown model/tool
       }
 
-      console.log(formatAgentStats(agent, stats, config.limits));
+      const agentStats = await fetchAgentStats(client, opts.agent);
+      console.log(formatAgentStats(agent, consumption, config.limits, agentStats));
       return;
     }
 
@@ -107,8 +154,9 @@ export const statsCommand = new Command('stats')
     const outputs: string[] = [];
     for (const agent of agentsRes.agents) {
       try {
-        const stats = await fetchConsumptionStats(client, agent.id);
-        outputs.push(formatAgentStats(agent, stats, config.limits));
+        const consumption = await fetchConsumptionStats(client, agent.id);
+        const agentStats = await fetchAgentStats(client, agent.id);
+        outputs.push(formatAgentStats(agent, consumption, config.limits, agentStats));
       } catch (err) {
         outputs.push(
           `Agent: ${agent.id} (${agent.model} / ${agent.tool})\n  Error: ${err instanceof Error ? err.message : 'Failed to fetch stats'}`,

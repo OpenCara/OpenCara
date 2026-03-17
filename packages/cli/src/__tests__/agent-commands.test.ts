@@ -122,27 +122,75 @@ describe('agent commands', () => {
   });
 
   describe('agent list', () => {
-    it('displays agents in table format', async () => {
-      mockGet.mockResolvedValueOnce({
-        agents: [
-          {
+    it('displays agents in table format with Trust column', async () => {
+      mockGet
+        .mockResolvedValueOnce({
+          agents: [
+            {
+              id: 'agent-1',
+              model: 'gpt-4',
+              tool: 'claude-code',
+              status: 'online',
+              createdAt: '2024-01-01',
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          agent: {
             id: 'agent-1',
             model: 'gpt-4',
             tool: 'claude-code',
             status: 'online',
-            createdAt: '2024-01-01',
+            trustTier: {
+              tier: 'trusted',
+              label: 'Trusted',
+              reviewCount: 25,
+              positiveRate: 0.88,
+              nextTier: 'expert',
+              progressToNext: 0.6,
+            },
           },
-        ],
-      });
+          stats: {
+            totalReviews: 25,
+            totalSummaries: 8,
+            totalRatings: 20,
+            thumbsUp: 18,
+            thumbsDown: 2,
+            tokensUsed: 50000,
+          },
+        });
 
       await agentCommand.parseAsync(['list'], { from: 'user' });
 
       // Header row
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ID'));
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Model'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Trust'));
       // Agent row
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('agent-1'));
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('gpt-4'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Trusted'));
+    });
+
+    it('shows -- for trust when stats fetch fails', async () => {
+      mockGet
+        .mockResolvedValueOnce({
+          agents: [
+            {
+              id: 'agent-1',
+              model: 'gpt-4',
+              tool: 'claude-code',
+              status: 'online',
+              createdAt: '2024-01-01',
+            },
+          ],
+        })
+        .mockRejectedValueOnce(new Error('Stats unavailable'));
+
+      await agentCommand.parseAsync(['list'], { from: 'user' });
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('agent-1'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('--'));
     });
 
     it('shows message when no agents', async () => {
