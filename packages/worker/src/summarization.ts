@@ -1,7 +1,7 @@
 import type { SummaryReview, ReviewVerdict } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
-import { getInstallationToken, postPrReview, verdictToReviewEvent } from './github.js';
+import { getInstallationToken, fetchPrDiff, postPrReview, verdictToReviewEvent } from './github.js';
 
 export interface InFlightTaskMeta {
   reviewCount: number;
@@ -210,10 +210,10 @@ export async function triggerSummarization(
     agent_id: summaryAgentId,
   });
 
-  // Calculate remaining timeout and fetch diff content for synthesizer
+  // Calculate remaining timeout
   const { data: taskData } = await supabase
     .from('review_tasks')
-    .select('timeout_at, diff_content')
+    .select('timeout_at')
     .eq('id', taskId)
     .single();
 
@@ -221,7 +221,15 @@ export async function triggerSummarization(
     ? new Date(taskData.timeout_at as string).getTime()
     : Date.now() + 300_000;
   const remainingSeconds = Math.max(60, Math.floor((timeoutAt - Date.now()) / 1000));
-  const diffContent = (taskData?.diff_content as string) ?? '';
+
+  // Fetch diff from GitHub for synthesizer
+  let diffContent = '';
+  try {
+    const token = await getInstallationToken(meta.installationId, env);
+    diffContent = await fetchPrDiff(meta.owner, meta.repo, meta.prNumber, token);
+  } catch {
+    // Diff fetch failed — synthesizer will work without diff
+  }
 
   try {
     await pushSummaryToAgent(
