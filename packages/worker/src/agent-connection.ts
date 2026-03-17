@@ -49,7 +49,7 @@ export function formatReviewComment(
     review,
     '',
     '---',
-    '<sub>Reviewed by <a href="https://github.com/user/opencara">OpenCara</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate this review</sub>',
+    '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate this review</sub>',
   ].join('\n');
 }
 

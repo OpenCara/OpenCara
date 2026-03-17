@@ -1,4 +1,4 @@
--- OpenCrust Initial Schema
+-- OpenCara Initial Schema
 -- Migration: 001_initial_schema
 
 -- users
