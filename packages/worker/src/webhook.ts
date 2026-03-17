@@ -1,4 +1,4 @@
-import { parseReviewConfig } from '@opencrust/shared';
+import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencrust/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { fetchPrDiff, fetchReviewConfig, getInstallationToken, postPrComment } from './github.js';
@@ -104,33 +104,37 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
     return new Response('OK', { status: 200 });
   }
 
+  let config: ReviewConfig;
+
   if (configYaml === null) {
-    console.log(`No .review.yml found in ${owner}/${repo} — skipping review`);
-    return new Response('OK', { status: 200 });
-  }
+    console.log(`No .review.yml found in ${owner}/${repo} — using default review config`);
+    config = DEFAULT_REVIEW_CONFIG;
+  } else {
+    const parsed = parseReviewConfig(configYaml);
 
-  const result = parseReviewConfig(configYaml);
-
-  if ('error' in result) {
-    console.log(`.review.yml parse error: ${result.error}`);
-    try {
-      await postPrComment(
-        owner,
-        repo,
-        prNumber,
-        `**OpenCrust**: Failed to parse \`.review.yml\`: ${result.error}`,
-        token,
-      );
-    } catch (err) {
-      console.error('Failed to post error comment:', err);
+    if ('error' in parsed) {
+      console.log(`.review.yml parse error: ${parsed.error}`);
+      try {
+        await postPrComment(
+          owner,
+          repo,
+          prNumber,
+          `**OpenCrust**: Failed to parse \`.review.yml\`: ${parsed.error}`,
+          token,
+        );
+      } catch (err) {
+        console.error('Failed to post error comment:', err);
+      }
+      return new Response('OK', { status: 200 });
     }
-    return new Response('OK', { status: 200 });
+    config = parsed;
   }
 
-  console.log(`Valid .review.yml parsed for ${owner}/${repo}:`, {
-    version: result.version,
-    agentMinCount: result.agents.minCount,
-    timeout: result.timeout,
+  console.log(`Review config for ${owner}/${repo}:`, {
+    version: config.version,
+    agentMinCount: config.agents.minCount,
+    timeout: config.timeout,
+    hasCustomConfig: configYaml !== null,
     prUrl: pull_request.html_url,
     diffUrl: pull_request.diff_url,
     baseRef: pull_request.base.ref,
@@ -149,7 +153,7 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
   // Create review task and distribute to eligible agents
   const supabase = createSupabaseClient(env);
   try {
-    await distributeTask(env, supabase, {
+    const taskId = await distributeTask(env, supabase, {
       installationId: installation.id,
       owner,
       repo,
@@ -158,9 +162,10 @@ async function handlePullRequest(payload: PullRequestPayload, env: Env): Promise
       diffUrl: pull_request.diff_url,
       baseRef: pull_request.base.ref,
       headRef,
-      config: result,
+      config,
       diffContent,
     });
+    console.log(`Task distributed: ${taskId ?? 'failed'} for PR #${prNumber}`);
   } catch (err) {
     console.error('Failed to distribute task:', err);
   }

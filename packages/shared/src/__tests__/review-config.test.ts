@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseReviewConfig, validateReviewConfig, type ReviewConfig } from '../review-config.js';
+import {
+  parseReviewConfig,
+  validateReviewConfig,
+  DEFAULT_REVIEW_CONFIG,
+  type ReviewConfig,
+} from '../review-config.js';
 
 const VALID_FULL_CONFIG = `
 version: 1
@@ -155,6 +160,21 @@ describe('parseReviewConfig', () => {
       'version: 1\nprompt: test\nagents:\n  preferred_tools:\n    - claude-code\n    - 123\n    - codex',
     ) as ReviewConfig;
     expect(result.agents.preferredTools).toEqual(['claude-code', 'codex']);
+  });
+});
+
+describe('DEFAULT_REVIEW_CONFIG', () => {
+  it('is a valid ReviewConfig', () => {
+    expect(validateReviewConfig(DEFAULT_REVIEW_CONFIG)).toBe(true);
+  });
+
+  it('has sensible defaults', () => {
+    expect(DEFAULT_REVIEW_CONFIG.version).toBe(1);
+    expect(DEFAULT_REVIEW_CONFIG.prompt).toBeTruthy();
+    expect(DEFAULT_REVIEW_CONFIG.agents.minCount).toBe(1);
+    expect(DEFAULT_REVIEW_CONFIG.agents.minReputation).toBe(0);
+    expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
+    expect(DEFAULT_REVIEW_CONFIG.autoApprove.enabled).toBe(false);
   });
 });
 

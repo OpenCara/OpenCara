@@ -62,6 +62,32 @@ export function validateReviewConfig(config: unknown): config is ReviewConfig {
   return true;
 }
 
+/**
+ * Default review configuration used when .review.yml is not present in the repo.
+ */
+export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
+  version: 1,
+  prompt: 'Review this pull request for bugs, security issues, and code quality.',
+  agents: {
+    minCount: 1,
+    preferredTools: [],
+    minReputation: 0,
+  },
+  reviewer: {
+    whitelist: [],
+    blacklist: [],
+  },
+  summarizer: {
+    whitelist: [],
+    blacklist: [],
+  },
+  timeout: '10m',
+  autoApprove: {
+    enabled: false,
+    conditions: [],
+  },
+};
+
 export function parseReviewConfig(yaml: string): ParseResult {
   let raw: unknown;
   try {

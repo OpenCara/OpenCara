@@ -1634,14 +1634,17 @@ describe('AgentConnection', () => {
     });
   });
 
-  describe('handleWebSocket skips pickUpPendingTasks on reconnect', () => {
-    it('skips pickUpPendingTasks when reconnecting (existing WebSocket)', async () => {
+  describe('handleWebSocket pickUpPendingTasks on reconnect', () => {
+    it('skips pickUpPendingTasks when reconnecting with in-flight tasks', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
 
       // Simulate existing WebSocket with connectedAt old enough to pass debounce
       const existingWs = createMockWebSocket();
       mockCtx._websockets.push(existingWs);
       storage.store.set('connectedAt', new Date(Date.now() - 10_000).toISOString());
+      // Set in-flight tasks so pickup is skipped
+      storage.store.set('inFlightTaskIds', ['task-in-flight-1']);
 
       // Set up mock with pending tasks to verify they are NOT picked up
       const pendingTaskMock = createSupabaseMock({
@@ -1676,6 +1679,37 @@ describe('AgentConnection', () => {
       // review_tasks should NOT have been queried (pickUpPendingTasks was skipped)
       const reviewTasksFromCalls = pendingTaskMock._calls.from.filter((t) => t === 'review_tasks');
       expect(reviewTasksFromCalls).toHaveLength(0);
+    });
+
+    it('picks up pending tasks on reconnect when no in-flight tasks', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      // Simulate existing WebSocket with connectedAt old enough to pass debounce
+      const existingWs = createMockWebSocket();
+      mockCtx._websockets.push(existingWs);
+      storage.store.set('connectedAt', new Date(Date.now() - 10_000).toISOString());
+      // No in-flight tasks — reconnect should pick up pending tasks
+      storage.store.set('inFlightTaskIds', []);
+
+      const reconnectMock = createSupabaseMock({
+        selectResults: {
+          review_tasks: { data: [] },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        reconnectMock as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const request = new Request('https://internal/websocket?agentId=agent-1', {
+        headers: { Upgrade: 'websocket' },
+      });
+
+      await expect(connection.fetch(request)).rejects.toThrow('init["status"]');
+
+      // review_tasks SHOULD have been queried (pickUpPendingTasks ran)
+      const reviewTasksFromCalls = reconnectMock._calls.from.filter((t) => t === 'review_tasks');
+      expect(reviewTasksFromCalls.length).toBeGreaterThan(0);
     });
 
     it('calls pickUpPendingTasks on fresh connection (no existing WebSocket)', async () => {

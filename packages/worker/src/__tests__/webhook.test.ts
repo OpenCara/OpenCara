@@ -185,8 +185,8 @@ describe('handleGitHubWebhook', () => {
     expect(res.status).toBe(200);
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Processing PR #42'));
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Valid .review.yml parsed'),
-      expect.objectContaining({ version: 1 }),
+      expect.stringContaining('Review config for'),
+      expect.objectContaining({ version: 1, hasCustomConfig: true }),
     );
     expect(mockedFetchReviewConfig).toHaveBeenCalledWith(
       'test-org',
@@ -196,10 +196,11 @@ describe('handleGitHubWebhook', () => {
     );
   });
 
-  it('skips review when .review.yml is not found', async () => {
+  it('uses default config when .review.yml is not found', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     mockedGetInstallationToken.mockResolvedValue('test-token');
     mockedFetchReviewConfig.mockResolvedValue(null);
+    mockedFetchPrDiff.mockResolvedValue('diff --git a/file.ts b/file.ts\n');
 
     const req = await makeSignedRequest('pull_request', {
       action: 'synchronize',
@@ -215,7 +216,11 @@ describe('handleGitHubWebhook', () => {
     });
     const res = await handleGitHubWebhook(req, TEST_ENV);
     expect(res.status).toBe(200);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('No .review.yml found'));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('using default review config'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Review config for'),
+      expect.objectContaining({ hasCustomConfig: false }),
+    );
   });
 
   it('posts error comment when .review.yml is malformed', async () => {
