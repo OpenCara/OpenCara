@@ -258,16 +258,12 @@ describe('agent commands', () => {
       warnSpy.mockRestore();
     });
 
-    it('warns when agent fetch fails with explicit ID', async () => {
+    it('warns when no command configured in legacy mode', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-      mockGet.mockRejectedValueOnce(new Error('API down'));
 
       await agentCommand.parseAsync(['start', 'agent-123'], { from: 'user' });
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to fetch agent info: API down'),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No command configured'));
       warnSpy.mockRestore();
     });
 
