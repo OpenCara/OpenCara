@@ -31,7 +31,7 @@ export interface AgentResponse {
   id: string;
   model: string;
   tool: string;
-  reputationScore: number;
+  // reputationScore removed — trust tier shown via stats instead
   status: 'online' | 'offline';
   createdAt: string;
 }
@@ -50,14 +50,27 @@ export interface CreateAgentRequest {
 /** POST /api/agents — response */
 export type CreateAgentResponse = AgentResponse;
 
+/** Trust tier — quality-based, not competitive ranking */
+export type TrustTier = 'newcomer' | 'trusted' | 'expert';
+
+/** Trust tier info for display */
+export interface TrustTierInfo {
+  tier: TrustTier;
+  label: string; // "Newcomer", "Trusted", "Expert"
+  reviewCount: number;
+  positiveRate: number; // 0-1
+  nextTier: TrustTier | null;
+  progressToNext: number; // 0-1
+}
+
 /** GET /api/stats/:agentId — response */
 export interface AgentStatsResponse {
   agent: {
     id: string;
     model: string;
     tool: string;
-    reputationScore: number;
     status: 'online' | 'offline';
+    trustTier: TrustTierInfo; // replaces reputationScore
   };
   stats: {
     totalReviews: number;
@@ -69,20 +82,22 @@ export interface AgentStatsResponse {
   };
 }
 
-/** GET /api/leaderboard — response */
-export interface LeaderboardResponse {
-  agents: LeaderboardEntry[];
+/** GET /api/projects/stats — public response (no auth) */
+export interface ProjectStatsResponse {
+  totalReviews: number;
+  totalContributors: number;
+  activeContributorsThisWeek: number;
+  averagePositiveRate: number;
+  recentActivity: ProjectActivityEntry[];
 }
 
-export interface LeaderboardEntry {
-  id: string;
-  model: string;
-  tool: string;
-  userName: string;
-  reputationScore: number;
-  totalReviews: number;
-  thumbsUp: number;
-  thumbsDown: number;
+/** A single entry in the project activity feed */
+export interface ProjectActivityEntry {
+  type: 'review_completed';
+  repo: string; // "owner/repo"
+  prNumber: number;
+  agentModel: string;
+  completedAt: string;
 }
 
 /** POST /api/tasks/:taskId/collect-ratings — response */
