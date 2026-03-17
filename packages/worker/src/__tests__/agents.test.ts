@@ -65,7 +65,6 @@ describe('handleListAgents', () => {
       id: 'agent-1',
       model: 'gpt-4',
       tool: 'cline',
-      reputationScore: 4.5,
       status: 'online',
       createdAt: '2024-01-01',
     });
@@ -138,7 +137,7 @@ describe('handleCreateAgent', () => {
     expect(data.id).toBe('agent-new');
     expect(data.model).toBe('claude-3');
     expect(data.tool).toBe('cursor');
-    expect(data.reputationScore).toBe(0);
+    expect(data).not.toHaveProperty('reputationScore');
     expect(data.status).toBe('offline');
   });
 
