@@ -902,7 +902,13 @@ agentCommand
           process.exit(1);
         }
 
+        // Increase listener limit when starting multiple agents
+        if (agentsToStart.length > 1) {
+          process.setMaxListeners(process.getMaxListeners() + agentsToStart.length * 2);
+        }
+
         // Start each agent
+        let startedCount = 0;
         for (const selected of agentsToStart) {
           let agentId: string;
           try {
@@ -910,6 +916,13 @@ agentCommand
             agentId = sync.agentId;
             if (sync.created) {
               console.log(`Registered new agent ${agentId} on platform`);
+              // Update snapshot to prevent duplicate registrations
+              serverAgents.push({
+                id: agentId,
+                model: selected.local.model,
+                tool: selected.local.tool,
+                status: 'offline',
+              } as AgentResponse);
             }
           } catch (err) {
             console.error(
@@ -936,6 +949,12 @@ agentCommand
             verbose: opts.verbose,
             stabilityThresholdMs,
           });
+          startedCount++;
+        }
+
+        if (startedCount === 0) {
+          console.error('No agents could be started.');
+          process.exit(1);
         }
         return;
       }
