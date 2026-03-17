@@ -82,13 +82,13 @@ describe('agent commands', () => {
 
   describe('agent create', () => {
     it('adds agent to local config in non-interactive mode', async () => {
-      await agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
+      await agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude'], {
         from: 'user',
       });
 
       expect(logSpy).toHaveBeenCalledWith('Agent added to config:');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('gpt-4'));
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('claude-code'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('claude'));
     });
 
     it('errors when only --model is provided without --tool', async () => {
@@ -108,12 +108,12 @@ describe('agent commands', () => {
         platformUrl: 'https://test.api.dev',
         limits: null,
         agentCommand: null,
-        agents: [{ model: 'gpt-4', tool: 'claude-code' }],
+        agents: [{ model: 'gpt-4', tool: 'claude' }],
         maxDiffSizeKb: 100,
       });
 
       await expect(
-        agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
+        agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude'], {
           from: 'user',
         }),
       ).rejects.toThrow('process.exit');
@@ -130,7 +130,7 @@ describe('agent commands', () => {
             {
               id: 'agent-1',
               model: 'gpt-4',
-              tool: 'claude-code',
+              tool: 'claude',
               status: 'online',
               createdAt: '2024-01-01',
             },
@@ -140,7 +140,7 @@ describe('agent commands', () => {
           agent: {
             id: 'agent-1',
             model: 'gpt-4',
-            tool: 'claude-code',
+            tool: 'claude',
             status: 'online',
             trustTier: {
               tier: 'trusted',
@@ -180,7 +180,7 @@ describe('agent commands', () => {
             {
               id: 'agent-1',
               model: 'gpt-4',
-              tool: 'claude-code',
+              tool: 'claude',
               status: 'online',
               createdAt: '2024-01-01',
             },
@@ -233,7 +233,7 @@ describe('agent commands', () => {
 
     it('auto-selects single agent when no ID', async () => {
       mockGet.mockResolvedValueOnce({
-        agents: [{ id: 'agent-solo', model: 'gpt-4', tool: 'claude-code' }],
+        agents: [{ id: 'agent-solo', model: 'gpt-4', tool: 'claude' }],
       });
 
       await agentCommand.parseAsync(['start'], { from: 'user' });

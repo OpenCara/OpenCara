@@ -16,7 +16,7 @@ describe('handleGetRegistry', () => {
   it('includes expected tools', async () => {
     const { tools } = await handleGetRegistry().json();
     const toolNames = tools.map((t: { name: string }) => t.name);
-    expect(toolNames).toContain('claude-code');
+    expect(toolNames).toContain('claude');
     expect(toolNames).toContain('qwen');
     expect(toolNames).toContain('gemini');
     expect(toolNames).toContain('codex');
