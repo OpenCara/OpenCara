@@ -28,7 +28,7 @@ Read `docs/QA-PLAN.md` at startup — it contains the integration test scenarios
 ### 1. Build Gate (quick sanity check)
 
 ```bash
-npm run build && npm run test
+pnpm build && pnpm test
 ```
 
 If the build or unit tests fail, stop here — the PR should not have been merged. Create a bug issue immediately.
@@ -40,7 +40,7 @@ Start the Worker locally and verify actual HTTP behavior — not just that it bo
 ```bash
 cd packages/worker
 PORT=$((RANDOM % 10000 + 20000))
-npx wrangler dev --port $PORT &
+pnpm wrangler dev --port $PORT &
 WORKER_PID=$!
 sleep 5
 
@@ -74,7 +74,7 @@ Start Next.js and verify the pages render and any API calls work:
 ```bash
 cd packages/web
 PORT=$((RANDOM % 10000 + 30000))
-npx next dev --port $PORT &
+pnpm next dev --port $PORT &
 WEB_PID=$!
 sleep 10
 
@@ -95,7 +95,7 @@ Verify that shared types are consistent across packages:
 
 ```bash
 # TypeScript project references resolve correctly
-npm run typecheck
+pnpm run typecheck
 
 # Shared package exports match what worker/cli/web import
 # Check for any import errors or missing exports
@@ -107,15 +107,15 @@ Verify the CLI binary works and commands are registered:
 
 ```bash
 # Test CLI help
-npx opencrust --help
+pnpm opencrust --help
 # Expect: shows available commands (login, agent, stats)
 
 # Test subcommands exist
-npx opencrust agent --help
+pnpm opencrust agent --help
 # Expect: shows agent subcommands (create, list, start)
 
 # Test CLI handles missing config gracefully (no crash)
-npx opencrust agent list 2>&1
+pnpm opencrust agent list 2>&1
 # Expect: error message about not being logged in, NOT a crash/stack trace
 ```
 

@@ -65,7 +65,7 @@ After replacement, run a verification:
 
 1. **Grep again** for the old pattern — should return zero matches
 2. **Grep for the new pattern** — should match the expected count
-3. **Build check**: `npm run build`
+3. **Build check**: `pnpm build`
 
 Report results to the user.
 

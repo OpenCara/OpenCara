@@ -10,7 +10,7 @@ Distributed AI code review service. Contributors run review agents locally, the 
 
 Monorepo with all packages buildable.
 
-- [x] Initialize monorepo (npm workspaces) — 4 packages: shared, worker, cli, web
+- [x] Initialize monorepo (pnpm workspaces) — 4 packages: shared, worker, cli, web
 - [x] TypeScript strict config with project references
 - [x] ESLint 9 flat config + Prettier
 - [x] Vitest workspace (5 tests passing)

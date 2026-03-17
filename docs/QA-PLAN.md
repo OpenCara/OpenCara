@@ -25,11 +25,11 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 **Steps**:
 
-1. `npm ci` — install all dependencies
-2. `npm run build` — build all packages
-3. `npm run typecheck` — verify TypeScript across all packages
-4. `npm run lint` — lint passes
-5. `npm run format:check` — formatting is consistent
+1. `pnpm install --frozen-lockfile` — install all dependencies
+2. `pnpm build` — build all packages
+3. `pnpm run typecheck` — verify TypeScript across all packages
+4. `pnpm lint` — lint passes
+5. `pnpm run format:check` — formatting is consistent
 
 **Expected**: All commands exit 0. No warnings about missing types or broken references.
 
@@ -41,9 +41,9 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 **Steps**:
 
-1. Build shared: `cd packages/shared && npm run build`
-2. Build worker: `cd packages/worker && npm run build` (imports from @opencrust/shared)
-3. Build cli: `cd packages/cli && npm run build` (imports from @opencrust/shared)
+1. Build shared: `cd packages/shared && pnpm build`
+2. Build worker: `cd packages/worker && pnpm build` (imports from @opencrust/shared)
+3. Build cli: `cd packages/cli && pnpm build` (imports from @opencrust/shared)
 4. Verify key exports exist: `ReviewConfig`, `API_KEY_PREFIX`, `PlatformMessage`, `AgentMessage`, `DeviceFlowResponse`
 
 **Expected**: All builds succeed. No "module not found" or type errors on shared imports.
@@ -56,7 +56,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 **Steps**:
 
-1. Start Worker locally: `cd packages/worker && npx wrangler dev --port $PORT`
+1. Start Worker locally: `cd packages/worker && pnpm wrangler dev --port $PORT`
 2. Send POST with valid signature → expect 200
 3. Send POST with invalid signature → expect 401
 4. Send POST with missing `X-Hub-Signature-256` header → expect 401

@@ -2,3 +2,4 @@
 coverage
 .claude/worktrees
 pr-reviews
+pnpm-lock.yaml

@@ -5,8 +5,8 @@ Step-by-step instructions for deploying OpenCrust to production.
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v18+
-- [npm](https://www.npmjs.com/) v9+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`npm i -g wrangler`)
+- [pnpm](https://pnpm.io/) v9+
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`pnpm add -g wrangler`)
 - A [Cloudflare](https://cloudflare.com/) account (free tier)
 - A [Supabase](https://supabase.com/) account (free tier)
 - A [Vercel](https://vercel.com/) account (free tier)
@@ -108,7 +108,7 @@ wrangler secret put WORKER_URL
 
 ```bash
 cd packages/worker
-npm run build
+pnpm build
 wrangler deploy
 ```
 
@@ -130,7 +130,7 @@ You should get a JSON response (empty array if no data yet).
 2. In the project settings:
    - Set **Root Directory** to `packages/web`
    - Set **Framework Preset** to `Next.js`
-   - Set **Build Command** to `npm run build` (Vercel auto-detects)
+   - Set **Build Command** to `pnpm build` (Vercel auto-detects)
 
 ### 4.2 Set Environment Variables
 
@@ -173,7 +173,7 @@ https://<your-worker-url>/webhook/github
    prompt: 'Review this PR for code quality and correctness.'
    ```
 3. Open a PR — the Worker should receive the webhook and create a review task
-4. Run the CLI agent: `npx opencrust agent start`
+4. Run the CLI agent: `pnpm dlx opencrust agent start`
 5. The agent should receive the review task and post a review comment on the PR
 
 ## Environment Variables Reference

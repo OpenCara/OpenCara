@@ -17,7 +17,7 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 - **CLI**: Node.js (npm package)
 - **Frontend**: Next.js (React)
 - **Database**: PostgreSQL via Supabase
-- **Monorepo**: npm workspaces or turborepo
+- **Monorepo**: pnpm workspaces
 
 ## Scope
 
