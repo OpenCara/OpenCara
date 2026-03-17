@@ -6,6 +6,7 @@ import type {
   CreateAgentResponse,
   ListAgentsResponse,
   AgentResponse,
+  AgentStatsResponse,
   PlatformMessage,
   ReviewRequestMessage,
   SummaryRequestMessage,
@@ -35,17 +36,26 @@ export interface ConsumptionDeps {
 /** Minimum time (ms) a connection must be alive before we reset the attempt counter */
 const CONNECTION_STABILITY_THRESHOLD_MS = 30_000;
 
-function formatTable(agents: AgentResponse[]): void {
+function formatTable(agents: AgentResponse[], trustLabels?: Map<string, string>): void {
   if (agents.length === 0) {
     console.log('No agents registered. Run `opencrust agent create` to register one.');
     return;
   }
 
-  const header = ['ID'.padEnd(38), 'Model'.padEnd(22), 'Tool'.padEnd(16), 'Status'].join('');
+  const header = [
+    'ID'.padEnd(38),
+    'Model'.padEnd(22),
+    'Tool'.padEnd(16),
+    'Status'.padEnd(10),
+    'Trust',
+  ].join('');
   console.log(header);
 
   for (const a of agents) {
-    console.log([a.id.padEnd(38), a.model.padEnd(22), a.tool.padEnd(16), a.status].join(''));
+    const trust = trustLabels?.get(a.id) ?? '--';
+    console.log(
+      [a.id.padEnd(38), a.model.padEnd(22), a.tool.padEnd(16), a.status.padEnd(10), trust].join(''),
+    );
   }
 }
 
@@ -483,7 +493,18 @@ agentCommand
       process.exit(1);
     }
 
-    formatTable(res.agents);
+    // Fetch trust tier labels for each agent
+    const trustLabels = new Map<string, string>();
+    for (const agent of res.agents) {
+      try {
+        const stats = await client.get<AgentStatsResponse>(`/api/stats/${agent.id}`);
+        trustLabels.set(agent.id, stats.agent.trustTier.label);
+      } catch {
+        // Leave as '--' if stats unavailable
+      }
+    }
+
+    formatTable(res.agents, trustLabels);
   });
 
 agentCommand

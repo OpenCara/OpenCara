@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ConsumptionStatsResponse, AgentResponse } from '@opencrust/shared';
+import type {
+  ConsumptionStatsResponse,
+  AgentResponse,
+  AgentStatsResponse,
+} from '@opencrust/shared';
 
 const mockGet = vi.hoisted(() => vi.fn());
 const mockFetchConsumptionStats = vi.hoisted(() => vi.fn());
@@ -25,7 +29,13 @@ vi.mock('../consumption.js', async (importOriginal) => {
   };
 });
 
-import { formatAgentStats, statsCommand } from '../commands/stats.js';
+import {
+  formatAgentStats,
+  formatTrustTier,
+  formatReviewQuality,
+  formatConsumption,
+  statsCommand,
+} from '../commands/stats.js';
 
 function makeAgent(overrides?: Partial<AgentResponse>): AgentResponse {
   return {
@@ -38,7 +48,7 @@ function makeAgent(overrides?: Partial<AgentResponse>): AgentResponse {
   };
 }
 
-function makeStats(overrides?: Partial<ConsumptionStatsResponse>): ConsumptionStatsResponse {
+function makeConsumption(overrides?: Partial<ConsumptionStatsResponse>): ConsumptionStatsResponse {
   return {
     agentId: 'agent-1',
     period: {
@@ -48,6 +58,34 @@ function makeStats(overrides?: Partial<ConsumptionStatsResponse>): ConsumptionSt
     },
     totalTokens: 125_430,
     totalReviews: 47,
+    ...overrides,
+  };
+}
+
+function makeAgentStats(overrides?: Partial<AgentStatsResponse>): AgentStatsResponse {
+  return {
+    agent: {
+      id: 'agent-1',
+      model: 'claude-sonnet-4-6',
+      tool: 'claude-code',
+      status: 'online',
+      trustTier: {
+        tier: 'trusted',
+        label: 'Trusted',
+        reviewCount: 25,
+        positiveRate: 0.88,
+        nextTier: 'expert',
+        progressToNext: 0.6,
+      },
+    },
+    stats: {
+      totalReviews: 25,
+      totalSummaries: 8,
+      totalRatings: 20,
+      thumbsUp: 18,
+      thumbsDown: 2,
+      tokensUsed: 50_000,
+    },
     ...overrides,
   };
 }
@@ -69,34 +107,120 @@ describe('stats command', () => {
     vi.restoreAllMocks();
   });
 
-  describe('formatAgentStats', () => {
-    it('displays agent info and all period stats', () => {
-      const output = formatAgentStats(makeAgent(), makeStats());
-      expect(output).toContain('Agent: agent-1 (claude-sonnet-4-6 / claude-code)');
-      expect(output).toContain('Total: 125,430 tokens across 47 reviews');
-      expect(output).toContain('Last 24h: 12,300 tokens / 5 reviews');
-      expect(output).toContain('Last 7d:  45,200 tokens / 18 reviews');
-      expect(output).toContain('Last 30d: 98,100 tokens / 39 reviews');
+  describe('formatTrustTier', () => {
+    it('shows trust tier with review count and positive rate', () => {
+      const output = formatTrustTier({
+        tier: 'trusted',
+        label: 'Trusted',
+        reviewCount: 25,
+        positiveRate: 0.88,
+        nextTier: 'expert',
+        progressToNext: 0.6,
+      });
+      expect(output).toContain('Trusted');
+      expect(output).toContain('25 reviews');
+      expect(output).toContain('88% positive');
     });
 
-    it('shows daily budget line when tokens_per_day configured', () => {
-      const output = formatAgentStats(makeAgent(), makeStats(), { tokens_per_day: 100_000 });
+    it('shows progress to next tier', () => {
+      const output = formatTrustTier({
+        tier: 'newcomer',
+        label: 'Newcomer',
+        reviewCount: 3,
+        positiveRate: 0.67,
+        nextTier: 'trusted',
+        progressToNext: 0.3,
+      });
+      expect(output).toContain('Progress to Trusted: 30%');
+    });
+
+    it('does not show progress when at max tier', () => {
+      const output = formatTrustTier({
+        tier: 'expert',
+        label: 'Expert',
+        reviewCount: 100,
+        positiveRate: 0.95,
+        nextTier: null,
+        progressToNext: 1,
+      });
+      expect(output).toContain('Expert');
+      expect(output).not.toContain('Progress to');
+    });
+
+    it('capitalizes next tier name', () => {
+      const output = formatTrustTier({
+        tier: 'trusted',
+        label: 'Trusted',
+        reviewCount: 25,
+        positiveRate: 0.88,
+        nextTier: 'expert',
+        progressToNext: 0.5,
+      });
+      expect(output).toContain('Progress to Expert');
+    });
+  });
+
+  describe('formatReviewQuality', () => {
+    it('shows reviews completed and summaries', () => {
+      const output = formatReviewQuality({
+        totalReviews: 25,
+        totalSummaries: 8,
+        totalRatings: 20,
+        thumbsUp: 18,
+        thumbsDown: 2,
+        tokensUsed: 50_000,
+      });
+      expect(output).toContain('25 completed');
+      expect(output).toContain('8 summaries');
+    });
+
+    it('shows quality percentage', () => {
+      const output = formatReviewQuality({
+        totalReviews: 25,
+        totalSummaries: 8,
+        totalRatings: 20,
+        thumbsUp: 18,
+        thumbsDown: 2,
+        tokensUsed: 50_000,
+      });
+      expect(output).toContain('18/20 positive ratings (90%)');
+    });
+
+    it('shows no ratings message when no ratings', () => {
+      const output = formatReviewQuality({
+        totalReviews: 5,
+        totalSummaries: 1,
+        totalRatings: 0,
+        thumbsUp: 0,
+        thumbsDown: 0,
+        tokensUsed: 10_000,
+      });
+      expect(output).toContain('No ratings yet');
+    });
+  });
+
+  describe('formatConsumption', () => {
+    it('shows token totals with today and this week', () => {
+      const output = formatConsumption(makeConsumption());
+      expect(output).toContain('125,430 total');
+      expect(output).toContain('12,300 today');
+      expect(output).toContain('45,200 this week');
+    });
+
+    it('shows daily budget when configured', () => {
+      const output = formatConsumption(makeConsumption(), { tokens_per_day: 100_000 });
       expect(output).toContain('Budget:');
-      expect(output).toContain('12,300');
-      expect(output).toContain('100,000');
       expect(output).toContain('87,700 remaining');
     });
 
-    it('shows monthly budget line when tokens_per_month configured but no daily limit', () => {
-      const output = formatAgentStats(makeAgent(), makeStats(), { tokens_per_month: 200_000 });
+    it('shows monthly budget when no daily limit', () => {
+      const output = formatConsumption(makeConsumption(), { tokens_per_month: 200_000 });
       expect(output).toContain('Budget:');
-      expect(output).toContain('98,100');
-      expect(output).toContain('200,000');
       expect(output).toContain('101,900 remaining');
     });
 
-    it('prefers daily budget over monthly when both configured', () => {
-      const output = formatAgentStats(makeAgent(), makeStats(), {
+    it('prefers daily budget over monthly', () => {
+      const output = formatConsumption(makeConsumption(), {
         tokens_per_day: 100_000,
         tokens_per_month: 200_000,
       });
@@ -104,20 +228,14 @@ describe('stats command', () => {
       expect(output).not.toContain('(30d)');
     });
 
-    it('does not show budget line when no limits configured', () => {
-      const output = formatAgentStats(makeAgent(), makeStats());
-      expect(output).not.toContain('Budget:');
-    });
-
-    it('does not show budget line when limits is null', () => {
-      const output = formatAgentStats(makeAgent(), makeStats(), null);
+    it('does not show budget when no limits', () => {
+      const output = formatConsumption(makeConsumption());
       expect(output).not.toContain('Budget:');
     });
 
     it('shows 0 remaining when budget exceeded', () => {
-      const output = formatAgentStats(
-        makeAgent(),
-        makeStats({
+      const output = formatConsumption(
+        makeConsumption({
           period: {
             last24h: { tokens: 150_000, reviews: 60 },
             last7d: { tokens: 150_000, reviews: 60 },
@@ -130,27 +248,61 @@ describe('stats command', () => {
     });
   });
 
+  describe('formatAgentStats', () => {
+    it('displays agent info and consumption', () => {
+      const output = formatAgentStats(makeAgent(), makeConsumption());
+      expect(output).toContain('Agent: agent-1 (claude-sonnet-4-6 / claude-code)');
+      expect(output).toContain('Tokens:');
+      expect(output).toContain('125,430 total');
+    });
+
+    it('displays trust tier when agent stats provided', () => {
+      const output = formatAgentStats(makeAgent(), makeConsumption(), null, makeAgentStats());
+      expect(output).toContain('Trusted');
+      expect(output).toContain('25 reviews');
+      expect(output).toContain('88% positive');
+    });
+
+    it('displays review quality when agent stats provided', () => {
+      const output = formatAgentStats(makeAgent(), makeConsumption(), null, makeAgentStats());
+      expect(output).toContain('25 completed');
+      expect(output).toContain('18/20 positive ratings');
+    });
+
+    it('omits trust and quality when no agent stats', () => {
+      const output = formatAgentStats(makeAgent(), makeConsumption());
+      expect(output).not.toContain('Trust:');
+      expect(output).not.toContain('Quality:');
+    });
+
+    it('shows budget when limits configured', () => {
+      const output = formatAgentStats(makeAgent(), makeConsumption(), { tokens_per_day: 100_000 });
+      expect(output).toContain('Budget:');
+      expect(output).toContain('87,700 remaining');
+    });
+  });
+
   describe('statsCommand action', () => {
-    it('displays stats for a specific agent', async () => {
-      const stats = makeStats();
-      mockFetchConsumptionStats.mockResolvedValueOnce(stats);
-      mockGet.mockResolvedValueOnce({
-        agents: [makeAgent()],
-      });
+    it('displays stats for a specific agent with trust tier', async () => {
+      const consumption = makeConsumption();
+      mockFetchConsumptionStats.mockResolvedValueOnce(consumption);
+      mockGet
+        .mockResolvedValueOnce({ agents: [makeAgent()] }) // /api/agents
+        .mockResolvedValueOnce(makeAgentStats()); // /api/stats/:agentId
 
       await statsCommand.parseAsync(['--agent', 'agent-1'], { from: 'user' });
 
       expect(mockFetchConsumptionStats).toHaveBeenCalled();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Agent: agent-1'));
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('claude-sonnet-4-6 / claude-code'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Trusted'));
     });
 
     it('shows unknown model/tool when agent list fetch fails for specific agent', async () => {
-      const stats = makeStats();
-      mockFetchConsumptionStats.mockResolvedValueOnce(stats);
-      mockGet.mockRejectedValueOnce(new Error('Network error'));
+      const consumption = makeConsumption();
+      mockFetchConsumptionStats.mockResolvedValueOnce(consumption);
+      mockGet
+        .mockRejectedValueOnce(new Error('Network error')) // /api/agents fails
+        .mockResolvedValueOnce(makeAgentStats()); // /api/stats/:agentId
 
       await statsCommand.parseAsync(['--agent', 'agent-1'], { from: 'user' });
 
@@ -158,15 +310,31 @@ describe('stats command', () => {
     });
 
     it('shows unknown model/tool when agent not found in list', async () => {
-      const stats = makeStats();
-      mockFetchConsumptionStats.mockResolvedValueOnce(stats);
-      mockGet.mockResolvedValueOnce({
-        agents: [makeAgent({ id: 'other-agent' })],
-      });
+      const consumption = makeConsumption();
+      mockFetchConsumptionStats.mockResolvedValueOnce(consumption);
+      mockGet
+        .mockResolvedValueOnce({ agents: [makeAgent({ id: 'other-agent' })] })
+        .mockResolvedValueOnce(makeAgentStats());
 
       await statsCommand.parseAsync(['--agent', 'agent-1'], { from: 'user' });
 
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('unknown / unknown'));
+    });
+
+    it('displays stats without trust tier when agent stats fail', async () => {
+      const consumption = makeConsumption();
+      mockFetchConsumptionStats.mockResolvedValueOnce(consumption);
+      mockGet
+        .mockResolvedValueOnce({ agents: [makeAgent()] })
+        .mockRejectedValueOnce(new Error('Stats unavailable'));
+
+      await statsCommand.parseAsync(['--agent', 'agent-1'], { from: 'user' });
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Agent: agent-1'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tokens:'));
+      // Should not contain trust info since stats fetch failed
+      const output = logSpy.mock.calls.map((c) => c[0]).join('\n');
+      expect(output).not.toContain('Trust:');
     });
 
     it('exits when consumption stats fetch fails for specific agent', async () => {
@@ -190,12 +358,17 @@ describe('stats command', () => {
     });
 
     it('displays stats for all agents', async () => {
-      mockGet.mockResolvedValueOnce({
-        agents: [makeAgent(), makeAgent({ id: 'agent-2', model: 'gpt-4', tool: 'copilot' })],
-      });
+      mockGet
+        .mockResolvedValueOnce({
+          agents: [makeAgent(), makeAgent({ id: 'agent-2', model: 'gpt-4', tool: 'copilot' })],
+        })
+        .mockResolvedValueOnce(makeAgentStats()) // stats for agent-1
+        .mockResolvedValueOnce(
+          makeAgentStats({ agent: { ...makeAgentStats().agent, id: 'agent-2' } }),
+        ); // stats for agent-2
       mockFetchConsumptionStats
-        .mockResolvedValueOnce(makeStats())
-        .mockResolvedValueOnce(makeStats({ agentId: 'agent-2' }));
+        .mockResolvedValueOnce(makeConsumption())
+        .mockResolvedValueOnce(makeConsumption({ agentId: 'agent-2' }));
 
       await statsCommand.parseAsync([], { from: 'user' });
 
@@ -228,11 +401,13 @@ describe('stats command', () => {
     });
 
     it('handles individual agent stats fetch failure in all-agents mode', async () => {
-      mockGet.mockResolvedValueOnce({
-        agents: [makeAgent(), makeAgent({ id: 'agent-2', model: 'gpt-4', tool: 'copilot' })],
-      });
+      mockGet
+        .mockResolvedValueOnce({
+          agents: [makeAgent(), makeAgent({ id: 'agent-2', model: 'gpt-4', tool: 'copilot' })],
+        })
+        .mockResolvedValueOnce(makeAgentStats()); // stats for agent-1 (agent-2 consumption fails)
       mockFetchConsumptionStats
-        .mockResolvedValueOnce(makeStats())
+        .mockResolvedValueOnce(makeConsumption())
         .mockRejectedValueOnce(new Error('Agent offline'));
 
       await statsCommand.parseAsync([], { from: 'user' });
