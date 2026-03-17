@@ -528,7 +528,7 @@ agentCommand
 
       const { search, input } = await import('@inquirer/prompts');
 
-      // Tool-first selection with fuzzy filter
+      // Step 1: Select tool with fuzzy filter
       const toolChoices = registry.tools.map((t) => ({
         name: `${t.displayName} (${t.name})`,
         value: t.name,
@@ -536,44 +536,52 @@ agentCommand
 
       tool = await search({
         message: 'Select a tool:',
-        source: (input) => {
-          const term = (input ?? '').toLowerCase();
-          return toolChoices.filter((c) => c.name.toLowerCase().includes(term));
+        source: (term) => {
+          const q = (term ?? '').toLowerCase();
+          return toolChoices.filter((c) => c.name.toLowerCase().includes(q));
         },
       });
 
-      // Find compatible models for this tool
-      const compatibleModels = registry.models.filter((m) => m.tools.includes(tool));
-
-      if (compatibleModels.length === 1) {
-        model = compatibleModels[0].name;
-        console.log(`Model: ${compatibleModels[0].displayName} (${model})`);
-      } else if (compatibleModels.length === 0) {
-        model = await input({ message: 'Enter model name:' });
-      } else {
-        const modelChoices = compatibleModels.map((m) => ({
-          name: `${m.displayName} (${m.name})`,
+      // Step 2: Select model from ALL models with fuzzy filter
+      const allModelChoices = registry.models.map((m) => {
+        const compatible = m.tools.includes(tool);
+        return {
+          name: compatible
+            ? `${m.displayName} (${m.name})`
+            : `${m.displayName} (${m.name}) [requires ${m.tools.join(', ')}]`,
           value: m.name,
-        }));
-        model = await search({
-          message: `Select a model for ${tool}:`,
-          source: (input) => {
-            const term = (input ?? '').toLowerCase();
-            return modelChoices.filter((c) => c.name.toLowerCase().includes(term));
-          },
-        });
+        };
+      });
+
+      model = await search({
+        message: 'Select a model:',
+        source: (term) => {
+          const q = (term ?? '').toLowerCase();
+          return allModelChoices.filter((c) => c.name.toLowerCase().includes(q));
+        },
+      });
+
+      // Warn if model isn't compatible with selected tool
+      const modelEntry = registry.models.find((m) => m.name === model);
+      if (modelEntry && !modelEntry.tools.includes(tool)) {
+        console.warn(
+          `Warning: model "${model}" is not listed as compatible with tool "${tool}". Proceeding anyway.`,
+        );
       }
 
-      // Resolve command from registry
-      if (!command) {
-        const toolEntry = registry.tools.find((t) => t.name === tool);
-        if (toolEntry) {
-          command = toolEntry.commandTemplate.replaceAll('${MODEL}', model);
-        }
-      }
+      // Step 3: Resolve default command and let user edit it
+      const toolEntry = registry.tools.find((t) => t.name === tool);
+      const defaultCommand = toolEntry
+        ? toolEntry.commandTemplate.replaceAll('${MODEL}', model)
+        : `${tool} --model ${model} -p \${PROMPT}`;
+
+      command = await input({
+        message: 'Command:',
+        default: defaultCommand,
+      });
     }
 
-    // Resolve command from registry if not set
+    // Resolve command from registry if not set (non-interactive mode)
     if (!command) {
       const toolEntry = DEFAULT_REGISTRY.tools.find((t) => t.name === tool);
       if (toolEntry) {
