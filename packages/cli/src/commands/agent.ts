@@ -807,6 +807,7 @@ agentCommand
 agentCommand
   .command('start [agentIdOrModel]')
   .description('Connect agent to platform via WebSocket')
+  .option('--all', 'Start all agents from local config concurrently')
   .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
   .option(
     '--stability-threshold <ms>',
@@ -815,7 +816,7 @@ agentCommand
   .action(
     async (
       agentIdOrModel: string | undefined,
-      opts: { verbose?: boolean; stabilityThreshold?: string },
+      opts: { all?: boolean; verbose?: boolean; stabilityThreshold?: string },
     ) => {
       let stabilityThresholdMs: number | undefined;
       if (opts.stabilityThreshold !== undefined) {
@@ -865,9 +866,11 @@ agentCommand
           process.exit(1);
         }
 
-        // Select agent
-        let selected: { local: LocalAgentConfig; command: string };
-        if (agentIdOrModel) {
+        // Determine which agents to start
+        let agentsToStart: Array<{ local: LocalAgentConfig; command: string }>;
+        if (opts.all) {
+          agentsToStart = validAgents;
+        } else if (agentIdOrModel) {
           const match = validAgents.find((a) => a.local.model === agentIdOrModel);
           if (!match) {
             console.error(`No agent with model "${agentIdOrModel}" found in local config.`);
@@ -877,19 +880,19 @@ agentCommand
             }
             process.exit(1);
           }
-          selected = match;
+          agentsToStart = [match];
         } else if (validAgents.length === 1) {
-          selected = validAgents[0];
-          console.log(`Using agent ${selected.local.model} (${selected.local.tool})`);
+          agentsToStart = [validAgents[0]];
+          console.log(`Using agent ${validAgents[0].local.model} (${validAgents[0].local.tool})`);
         } else {
-          console.error('Multiple agents in config. Specify a model name:');
+          console.error('Multiple agents in config. Specify a model name or use --all:');
           for (const a of validAgents) {
             console.error(`  ${a.local.model}  (${a.local.tool})`);
           }
           process.exit(1);
         }
 
-        // Sync to server
+        // Sync all agents to server
         let serverAgents: AgentResponse[];
         try {
           const res = await client.get<ListAgentsResponse>('/api/agents');
@@ -899,38 +902,41 @@ agentCommand
           process.exit(1);
         }
 
-        let agentId: string;
-        try {
-          const sync = await syncAgentToServer(client, serverAgents, selected.local);
-          agentId = sync.agentId;
-          if (sync.created) {
-            console.log(`Registered new agent ${agentId} on platform`);
+        // Start each agent
+        for (const selected of agentsToStart) {
+          let agentId: string;
+          try {
+            const sync = await syncAgentToServer(client, serverAgents, selected.local);
+            agentId = sync.agentId;
+            if (sync.created) {
+              console.log(`Registered new agent ${agentId} on platform`);
+            }
+          } catch (err) {
+            console.error(
+              `Failed to sync agent ${selected.local.model} to server:`,
+              err instanceof Error ? err.message : err,
+            );
+            continue;
           }
-        } catch (err) {
-          console.error(
-            'Failed to sync agent to server:',
-            err instanceof Error ? err.message : err,
-          );
-          process.exit(1);
+
+          const reviewDeps: ReviewExecutorDeps = {
+            commandTemplate: selected.command,
+            maxDiffSizeKb: config.maxDiffSizeKb,
+          };
+
+          const consumptionDeps: ConsumptionDeps = {
+            client,
+            agentId,
+            limits: resolveAgentLimits(selected.local.limits, config.limits),
+            session: createSessionTracker(),
+          };
+
+          console.log(`Starting agent ${selected.local.model} (${agentId})...`);
+          startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
+            verbose: opts.verbose,
+            stabilityThresholdMs,
+          });
         }
-
-        const reviewDeps: ReviewExecutorDeps = {
-          commandTemplate: selected.command,
-          maxDiffSizeKb: config.maxDiffSizeKb,
-        };
-
-        const consumptionDeps: ConsumptionDeps = {
-          client,
-          agentId,
-          limits: resolveAgentLimits(selected.local.limits, config.limits),
-          session: createSessionTracker(),
-        };
-
-        console.log(`Starting agent ${selected.local.model} (${agentId})...`);
-        startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
-          verbose: opts.verbose,
-          stabilityThresholdMs,
-        });
         return;
       }
 
