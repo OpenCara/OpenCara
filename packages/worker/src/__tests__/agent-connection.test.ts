@@ -8,14 +8,23 @@ vi.mock('../db.js', () => ({
 vi.mock('../github.js', () => ({
   getInstallationToken: vi.fn(),
   postPrComment: vi.fn(),
+  postPrReview: vi.fn(),
+  verdictToReviewEvent: vi.fn((v: string) => {
+    const map: Record<string, string> = {
+      approve: 'APPROVE',
+      request_changes: 'REQUEST_CHANGES',
+      comment: 'COMMENT',
+    };
+    return map[v] ?? 'COMMENT';
+  }),
 }));
 
 import { createSupabaseClient } from '../db.js';
-import { getInstallationToken, postPrComment } from '../github.js';
+import { getInstallationToken, postPrReview } from '../github.js';
 
 const mockedCreateSupabase = vi.mocked(createSupabaseClient);
 const mockedGetInstallationToken = vi.mocked(getInstallationToken);
-const mockedPostPrComment = vi.mocked(postPrComment);
+const mockedPostPrReview = vi.mocked(postPrReview);
 
 function createMockStorage() {
   const store = new Map<string, unknown>();
@@ -268,7 +277,9 @@ describe('AgentConnection', () => {
         mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
       );
       mockedGetInstallationToken.mockResolvedValue('test-token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/org/repo/pull/42#issuecomment-1');
+      mockedPostPrReview.mockResolvedValue(
+        'https://github.com/org/repo/pull/42#pullrequestreview-1',
+      );
 
       const mockWs = createMockWebSocket();
       await connection.webSocketMessage(
@@ -304,20 +315,21 @@ describe('AgentConnection', () => {
         data: expect.objectContaining({ tokens_used: 100 }),
       });
 
-      // GitHub comment posted
+      // GitHub PR review posted
       expect(mockedGetInstallationToken).toHaveBeenCalledWith(99, expect.anything());
-      expect(mockedPostPrComment).toHaveBeenCalledWith(
+      expect(mockedPostPrReview).toHaveBeenCalledWith(
         'org',
         'repo',
         42,
         expect.stringContaining('\u2705 Approve'),
+        'APPROVE',
         'test-token',
       );
 
       // Comment URL stored
       expect(mockSupa._calls.update).toContainEqual({
         table: 'review_results',
-        data: { comment_url: 'https://github.com/org/repo/pull/42#issuecomment-1' },
+        data: { comment_url: 'https://github.com/org/repo/pull/42#pullrequestreview-1' },
       });
 
       // Task transitioned to completed
@@ -346,7 +358,7 @@ describe('AgentConnection', () => {
         mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
       );
       mockedGetInstallationToken.mockResolvedValue('test-token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
 
       const mockWs = createMockWebSocket();
       await connection.webSocketMessage(
@@ -384,7 +396,7 @@ describe('AgentConnection', () => {
       );
 
       expect(mockSupa._calls.insert.map((c) => c.table)).toContain('review_results');
-      expect(mockedPostPrComment).not.toHaveBeenCalled();
+      expect(mockedPostPrReview).not.toHaveBeenCalled();
     });
 
     it('handles review_complete when GitHub posting fails', async () => {
@@ -446,7 +458,7 @@ describe('AgentConnection', () => {
         mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
       );
       mockedGetInstallationToken.mockResolvedValue('test-token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
 
       const mockWs = createMockWebSocket();
       await connection.webSocketMessage(
@@ -463,11 +475,12 @@ describe('AgentConnection', () => {
       );
 
       // Should use 'unknown' for model/tool
-      expect(mockedPostPrComment).toHaveBeenCalledWith(
+      expect(mockedPostPrReview).toHaveBeenCalledWith(
         'org',
         'repo',
         42,
         expect.stringContaining('`unknown` / `unknown`'),
+        'REQUEST_CHANGES',
         'test-token',
       );
     });
@@ -728,7 +741,7 @@ describe('AgentConnection', () => {
         mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
       );
       mockedGetInstallationToken.mockResolvedValue('test-token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
 
       const mockWs = createMockWebSocket();
       await connection.webSocketMessage(
@@ -743,8 +756,8 @@ describe('AgentConnection', () => {
         }),
       );
 
-      // Summary comment posted
-      expect(mockedPostPrComment).toHaveBeenCalled();
+      // Summary posted as PR review
+      expect(mockedPostPrReview).toHaveBeenCalled();
       // Task transitioned to completed
       expect(mockSupa._calls.update).toContainEqual({
         table: 'review_tasks',
@@ -766,7 +779,7 @@ describe('AgentConnection', () => {
           tokensUsed: 0,
         }),
       );
-      expect(mockedPostPrComment).not.toHaveBeenCalled();
+      expect(mockedPostPrReview).not.toHaveBeenCalled();
     });
 
     it('handles summary_complete with GitHub posting failure — falls back to individual reviews', async () => {
@@ -904,7 +917,7 @@ describe('AgentConnection', () => {
 
       // Should NOT post to GitHub (multi-agent mode, waiting for more)
       expect(mockedGetInstallationToken).not.toHaveBeenCalled();
-      expect(mockedPostPrComment).not.toHaveBeenCalled();
+      expect(mockedPostPrReview).not.toHaveBeenCalled();
       // Should NOT transition to completed
       const completedUpdates = mockSupa._calls.update.filter(
         (u) =>

@@ -9,12 +9,11 @@ import type {
 } from '@opencara/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
-import { getInstallationToken, postPrComment } from './github.js';
+import { getInstallationToken, postPrReview, verdictToReviewEvent } from './github.js';
 import {
   type InFlightTaskMeta,
   triggerSummarization,
   formatSummaryComment,
-  formatIndividualReviewComment,
   postIndividualReviewsFallback,
   fetchCompletedReviews,
 } from './summarization.js';
@@ -329,6 +328,7 @@ export class AgentConnection implements DurableObject {
           },
           timeout: remainingSeconds,
           diffContent,
+          reviewMode: ((config.minCount as number) ?? 1) > 1 ? 'compact' : 'full',
         };
 
         websockets[0].send(JSON.stringify(message));
@@ -384,6 +384,7 @@ export class AgentConnection implements DurableObject {
       diffContent: string;
       minCount?: number;
       installationId?: number;
+      reviewMode?: 'full' | 'compact';
     };
 
     console.log(
@@ -400,6 +401,7 @@ export class AgentConnection implements DurableObject {
       project: payload.project,
       timeout: payload.timeout,
       diffContent: payload.diffContent,
+      reviewMode: payload.reviewMode ?? 'full',
     };
 
     websockets[0].send(JSON.stringify(message));
@@ -507,7 +509,7 @@ export class AgentConnection implements DurableObject {
   }
 
   /**
-   * M5-compatible: post review as GitHub PR comment immediately.
+   * Single-agent mode: post review as GitHub PR review immediately.
    */
   private async postReviewDirectly(
     msg: ReviewCompleteMessage,
@@ -555,11 +557,12 @@ export class AgentConnection implements DurableObject {
         project.github_installation_id,
         this.env,
       );
-      const commentUrl = await postPrComment(
+      const commentUrl = await postPrReview(
         project.owner,
         project.repo,
         taskData.pr_number as number,
         formattedReview,
+        verdictToReviewEvent(msg.verdict),
         installationToken,
       );
 
@@ -753,6 +756,7 @@ export class AgentConnection implements DurableObject {
             },
             timeout: remainingSeconds,
             diffContent: (taskData.diff_content as string) ?? '',
+            reviewMode: ((config.minCount as number) ?? 1) > 1 ? 'compact' : 'full',
           }),
         }),
       );
@@ -795,22 +799,20 @@ export class AgentConnection implements DurableObject {
       github_installation_id: number;
     };
 
-    // Fetch individual reviews for follow-up comments
-    const reviews = await fetchCompletedReviews(supabase, msg.taskId);
-
     try {
       const installationToken = await getInstallationToken(
         project.github_installation_id,
         this.env,
       );
 
-      // Post summary as main comment
-      const summaryBody = formatSummaryComment(msg.summary, reviews.length);
-      const summaryUrl = await postPrComment(
+      // Post synthesized review as a PR review
+      const summaryBody = formatSummaryComment(msg.summary, 0);
+      const summaryUrl = await postPrReview(
         project.owner,
         project.repo,
         taskData.pr_number as number,
         summaryBody,
+        'COMMENT',
         installationToken,
       );
 
@@ -821,23 +823,6 @@ export class AgentConnection implements DurableObject {
         .eq('review_task_id', msg.taskId)
         .eq('agent_id', agentId);
 
-      // Post each individual review as a follow-up comment
-      for (const review of reviews) {
-        const body = formatIndividualReviewComment(
-          review.model,
-          review.tool,
-          review.verdict,
-          review.review,
-        );
-        await postPrComment(
-          project.owner,
-          project.repo,
-          taskData.pr_number as number,
-          body,
-          installationToken,
-        );
-      }
-
       // Transition task to completed
       await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', msg.taskId);
 
@@ -846,6 +831,7 @@ export class AgentConnection implements DurableObject {
       console.error(`Failed to post summary for task ${msg.taskId}:`, err);
 
       // Fallback: try posting individual reviews
+      const reviews = await fetchCompletedReviews(supabase, msg.taskId);
       const meta: InFlightTaskMeta = {
         minCount: 0,
         installationId: project.github_installation_id,

@@ -55,6 +55,7 @@ export type {
   SummaryRequestMessage,
   HeartbeatPingMessage,
   PlatformErrorMessage,
+  ReviewMode,
   ReviewVerdict,
   ReviewCompleteMessage,
   SummaryCompleteMessage,

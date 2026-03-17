@@ -33,21 +33,22 @@ describe('buildSummarySystemPrompt', () => {
   it('includes owner, repo, and review count', () => {
     const prompt = buildSummarySystemPrompt('acme', 'widgets', 3);
     expect(prompt).toContain('acme/widgets');
-    expect(prompt).toContain('3 individual code reviews');
-    expect(prompt).toContain('code review summarizer');
+    expect(prompt).toContain('3 compact reviews');
+    expect(prompt).toContain('senior code reviewer and synthesizer');
   });
 
   it('includes formatting instructions', () => {
     const prompt = buildSummarySystemPrompt('org', 'repo', 1);
     expect(prompt).toContain('markdown');
-    expect(prompt).toContain('action items');
+    expect(prompt).toContain('## Findings');
   });
 });
 
 describe('buildSummaryUserMessage', () => {
-  it('includes project prompt and all reviews', () => {
-    const message = buildSummaryUserMessage('Check for bugs', sampleReviews);
+  it('includes project prompt, diff, and all reviews', () => {
+    const message = buildSummaryUserMessage('Check for bugs', sampleReviews, 'diff content');
     expect(message).toContain('Check for bugs');
+    expect(message).toContain('diff content');
     expect(message).toContain('claude-sonnet/claude-code');
     expect(message).toContain('Verdict: approve');
     expect(message).toContain('Code looks clean. LGTM.');
@@ -57,26 +58,29 @@ describe('buildSummaryUserMessage', () => {
   });
 
   it('handles single review', () => {
-    const message = buildSummaryUserMessage('Review', [sampleReviews[0]]);
+    const message = buildSummaryUserMessage('Review', [sampleReviews[0]], 'diff');
     expect(message).toContain('claude-sonnet/claude-code');
     expect(message).not.toContain('gpt-4');
   });
 
   it('handles empty reviews array', () => {
-    const message = buildSummaryUserMessage('Review', []);
+    const message = buildSummaryUserMessage('Review', [], 'diff');
     expect(message).toContain('Review');
-    expect(message).toContain('Individual reviews:');
+    expect(message).toContain('Compact reviews from other agents:');
   });
 });
 
 describe('calculateInputSize', () => {
-  it('sums byte lengths of prompt and review fields', () => {
-    const size = calculateInputSize('short prompt', [
-      { agentId: 'a1', model: 'model', tool: 'tool', review: 'review text', verdict: 'approve' },
-    ]);
+  it('sums byte lengths of prompt, diff, and review fields', () => {
+    const size = calculateInputSize(
+      'short prompt',
+      [{ agentId: 'a1', model: 'model', tool: 'tool', review: 'review text', verdict: 'approve' }],
+      'diff data',
+    );
     expect(size).toBeGreaterThan(0);
     expect(size).toBe(
       Buffer.byteLength('short prompt', 'utf-8') +
+        Buffer.byteLength('diff data', 'utf-8') +
         Buffer.byteLength('review text', 'utf-8') +
         Buffer.byteLength('model', 'utf-8') +
         Buffer.byteLength('tool', 'utf-8') +
@@ -84,15 +88,17 @@ describe('calculateInputSize', () => {
     );
   });
 
-  it('returns prompt size for empty reviews', () => {
-    const size = calculateInputSize('my prompt', []);
-    expect(size).toBe(Buffer.byteLength('my prompt', 'utf-8'));
+  it('returns prompt + diff size for empty reviews', () => {
+    const size = calculateInputSize('my prompt', [], 'diff');
+    expect(size).toBe(Buffer.byteLength('my prompt', 'utf-8') + Buffer.byteLength('diff', 'utf-8'));
   });
 
   it('handles multi-byte characters', () => {
-    const size = calculateInputSize('', [
-      { agentId: 'a', model: 'm', tool: 't', review: '\u{1F600}'.repeat(10), verdict: 'approve' },
-    ]);
+    const size = calculateInputSize(
+      '',
+      [{ agentId: 'a', model: 'm', tool: 't', review: '\u{1F600}'.repeat(10), verdict: 'approve' }],
+      '',
+    );
     expect(size).toBeGreaterThan(10);
   });
 });
@@ -120,6 +126,7 @@ describe('executeSummary', () => {
     repo: 'widgets',
     prNumber: 42,
     timeout: 300,
+    diffContent: 'diff --git a/file.ts\n+hello',
   };
 
   function createMockRunTool(stdout: string, tokensUsed = 0) {
@@ -168,7 +175,7 @@ describe('executeSummary', () => {
     await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
     const prompt = mockRunTool.mock.calls[0][1];
-    expect(prompt).toContain('2 individual code reviews');
+    expect(prompt).toContain('2 compact reviews');
   });
 
   it('rejects when input is too large', async () => {

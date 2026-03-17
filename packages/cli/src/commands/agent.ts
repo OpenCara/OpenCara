@@ -332,6 +332,7 @@ export function handleMessage(
               repo: request.project.repo,
               prNumber: request.pr.number,
               timeout: request.timeout,
+              reviewMode: request.reviewMode ?? 'full',
             },
             reviewDeps,
           );
@@ -417,6 +418,7 @@ export function handleMessage(
               repo: summaryRequest.project.repo,
               prNumber: summaryRequest.pr.number,
               timeout: summaryRequest.timeout,
+              diffContent: summaryRequest.diffContent ?? '',
             },
             reviewDeps,
           );

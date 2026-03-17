@@ -1,3 +1,4 @@
+import type { ReviewVerdict } from '@opencara/shared';
 import type { Env } from './env.js';
 
 export interface GitHubReaction {
@@ -143,6 +144,53 @@ export async function fetchPrDiff(
   return response.text();
 }
 
+export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+
+const VERDICT_TO_EVENT: Record<ReviewVerdict, ReviewEvent> = {
+  approve: 'APPROVE',
+  request_changes: 'REQUEST_CHANGES',
+  comment: 'COMMENT',
+};
+
+export function verdictToReviewEvent(verdict: ReviewVerdict): ReviewEvent {
+  return VERDICT_TO_EVENT[verdict];
+}
+
+/**
+ * Post a PR review using the GitHub Pull Request Review API.
+ * Returns the html_url of the created review.
+ */
+export async function postPrReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  body: string,
+  event: ReviewEvent,
+  token: string,
+): Promise<string> {
+  const response = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'OpenCara-Worker',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ body, event }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to post PR review: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as { html_url: string };
+  return data.html_url;
+}
+
 /**
  * Post a comment on a GitHub pull request.
  * Returns the html_url of the created comment.
@@ -185,6 +233,10 @@ export function extractCommentId(commentUrl: string): number | null {
   // HTML URL format: https://github.com/{owner}/{repo}/pull/{pr}#issuecomment-{id}
   const htmlMatch = commentUrl.match(/#issuecomment-(\d+)$/);
   if (htmlMatch) return parseInt(htmlMatch[1], 10);
+
+  // PR review URL format: https://github.com/{owner}/{repo}/pull/{pr}#pullrequestreview-{id}
+  const reviewMatch = commentUrl.match(/#pullrequestreview-(\d+)$/);
+  if (reviewMatch) return parseInt(reviewMatch[1], 10);
 
   // API URL format: https://api.github.com/repos/{owner}/{repo}/issues/comments/{id}
   const apiMatch = commentUrl.match(/\/comments\/(\d+)$/);

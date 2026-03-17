@@ -1,4 +1,4 @@
-import type { ReviewVerdict } from '@opencara/shared';
+import type { ReviewMode, ReviewVerdict } from '@opencara/shared';
 import { executeTool, type ToolExecutorResult } from './tool-executor.js';
 
 export interface ReviewRequest {
@@ -9,6 +9,7 @@ export interface ReviewRequest {
   repo: string;
   prNumber: number;
   timeout: number;
+  reviewMode: ReviewMode;
 }
 
 export interface ReviewResponse {
@@ -19,7 +20,7 @@ export interface ReviewResponse {
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
 
-const SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
+const FULL_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and provide:
 1. A verdict: APPROVE, REQUEST_CHANGES, or COMMENT
 2. A detailed review in markdown format
@@ -31,8 +32,25 @@ VERDICT: COMMENT
 
 Then provide your review.`;
 
-export function buildSystemPrompt(owner: string, repo: string): string {
-  return SYSTEM_PROMPT_TEMPLATE.replace('{owner}', owner).replace('{repo}', repo);
+const COMPACT_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
+Review the following pull request diff and return a compact, structured assessment.
+
+Start with a verdict line:
+VERDICT: APPROVE
+VERDICT: REQUEST_CHANGES
+VERDICT: COMMENT
+
+Then list findings, one per line, in this format:
+- [severity] file:line - description
+
+Severities: critical, major, minor, suggestion
+
+End with a brief summary (1-2 sentences).`;
+
+export function buildSystemPrompt(owner: string, repo: string, mode: ReviewMode = 'full'): string {
+  const template =
+    mode === 'compact' ? COMPACT_SYSTEM_PROMPT_TEMPLATE : FULL_SYSTEM_PROMPT_TEMPLATE;
+  return template.replace('{owner}', owner).replace('{repo}', repo);
 }
 
 export function buildUserMessage(prompt: string, diffContent: string): string {
@@ -88,7 +106,7 @@ export async function executeReview(
   }, effectiveTimeout);
 
   try {
-    const systemPrompt = buildSystemPrompt(req.owner, req.repo);
+    const systemPrompt = buildSystemPrompt(req.owner, req.repo, req.reviewMode);
     const userMessage = buildUserMessage(req.prompt, req.diffContent);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
