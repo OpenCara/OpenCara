@@ -1,5 +1,6 @@
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
+import { getInstallationToken, postPrComment } from './github.js';
 import { type InFlightTaskMeta, triggerSummarization } from './summarization.js';
 
 export class TaskTimeout implements DurableObject {
@@ -55,6 +56,24 @@ export class TaskTimeout implements DurableObject {
     return new Response('OK', { status: 200 });
   }
 
+  private async postTimeoutComment(taskId: string, reason: string): Promise<void> {
+    const meta = await this.state.storage.get<InFlightTaskMeta>('taskMeta');
+    if (!meta || !meta.installationId || !meta.owner || !meta.repo || !meta.prNumber) return;
+
+    try {
+      const token = await getInstallationToken(meta.installationId, this.env);
+      await postPrComment(
+        meta.owner,
+        meta.repo,
+        meta.prNumber,
+        `**OpenCara**: ${reason}\n\nComment \`/opencara review\` to retry.`,
+        token,
+      );
+    } catch (err) {
+      console.error(`Failed to post timeout comment for task ${taskId}:`, err);
+    }
+  }
+
   async alarm(): Promise<void> {
     const taskId = await this.state.storage.get<string>('taskId');
     const reviewCount = (await this.state.storage.get<number>('reviewCount')) ?? 1;
@@ -76,6 +95,10 @@ export class TaskTimeout implements DurableObject {
       // No agent ever picked it up — timeout
       await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
       console.log(`Task ${taskId} timed out while pending (no agents available)`);
+      await this.postTimeoutComment(
+        taskId,
+        'No agents were available within the configured timeout.',
+      );
       return;
     }
 
@@ -92,6 +115,7 @@ export class TaskTimeout implements DurableObject {
       // No results at all — timeout
       await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
       console.log(`Task ${taskId} timed out with no results`);
+      await this.postTimeoutComment(taskId, 'Review timed out — no agent completed a review.');
     } else {
       // Has results — move to summarizing and dispatch
       await supabase.from('review_tasks').update({ status: 'summarizing' }).eq('id', taskId);
