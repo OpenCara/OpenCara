@@ -553,7 +553,7 @@ agentCommand
             value: m.name,
           })),
           ...incompatible.map((m) => ({
-            name: `\x1b[2m${m.displayName} (${m.name})\x1b[0m`,
+            name: `\x1b[38;5;249m${m.displayName} (${m.name})\x1b[0m`,
             value: m.name,
           })),
         ];
