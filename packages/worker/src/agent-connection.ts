@@ -9,7 +9,7 @@ import type {
 } from '@opencara/shared';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
-import { getInstallationToken, postPrReview, verdictToReviewEvent } from './github.js';
+import { getInstallationToken, fetchPrDiff, postPrReview, verdictToReviewEvent } from './github.js';
 import { parseStructuredReview, parseDiffFiles, filterValidComments } from './review-parser.js';
 import {
   type InFlightTaskMeta,
@@ -278,7 +278,7 @@ export class AgentConnection implements DurableObject {
     const { data: pendingTasks } = await supabase
       .from('review_tasks')
       .select(
-        'id, pr_number, pr_url, timeout_at, diff_content, config_json, project_id, projects!inner(owner, repo, github_installation_id)',
+        'id, pr_number, pr_url, timeout_at, config_json, project_id, projects!inner(owner, repo, github_installation_id)',
       )
       .eq('status', 'pending')
       .gt('timeout_at', new Date().toISOString())
@@ -311,7 +311,27 @@ export class AgentConnection implements DurableObject {
         github_installation_id: number;
       };
       const config = (task.config_json as Record<string, unknown>) ?? {};
-      const diffContent = (task.diff_content as string) ?? '';
+      const installationId = (config.installationId as number) ?? project.github_installation_id;
+
+      // Fetch diff from GitHub API (not stored in DB)
+      let diffContent: string;
+      try {
+        const token = await getInstallationToken(installationId, this.env);
+        diffContent = await fetchPrDiff(
+          project.owner,
+          project.repo,
+          task.pr_number as number,
+          token,
+        );
+      } catch (err) {
+        console.error(`Failed to fetch diff for task ${task.id}, reverting to pending:`, err);
+        await supabase
+          .from('review_tasks')
+          .update({ status: 'pending' })
+          .eq('id', task.id)
+          .eq('status', 'reviewing');
+        continue;
+      }
 
       try {
         const message: ReviewRequestMessage = {
@@ -525,9 +545,7 @@ export class AgentConnection implements DurableObject {
     // Look up task + project info for posting the review
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select(
-        'pr_number, pr_url, diff_content, project_id, projects!inner(owner, repo, github_installation_id)',
-      )
+      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
       .eq('id', msg.taskId)
       .single();
 
@@ -557,7 +575,19 @@ export class AgentConnection implements DurableObject {
 
     // Parse structured review for inline comments
     const parsed = parseStructuredReview(msg.review);
-    const diffContent = (taskData.diff_content as string) ?? '';
+    // Fetch diff from GitHub for inline comment validation
+    let diffContent = '';
+    try {
+      const diffToken = await getInstallationToken(project.github_installation_id, this.env);
+      diffContent = await fetchPrDiff(
+        project.owner,
+        project.repo,
+        taskData.pr_number as number,
+        diffToken,
+      );
+    } catch {
+      // Diff fetch failed — inline comments will be skipped
+    }
     const diffFiles = parseDiffFiles(diffContent);
     const inlineComments = filterValidComments(parsed.comments, diffFiles);
 
@@ -736,7 +766,7 @@ export class AgentConnection implements DurableObject {
     const { data: taskData } = await supabase
       .from('review_tasks')
       .select(
-        'pr_number, pr_url, timeout_at, diff_content, config_json, projects!inner(owner, repo, github_installation_id)',
+        'pr_number, pr_url, timeout_at, config_json, projects!inner(owner, repo, github_installation_id)',
       )
       .eq('id', taskId)
       .single();
@@ -755,6 +785,20 @@ export class AgentConnection implements DurableObject {
     const config = (taskData.config_json as Record<string, unknown>) ?? {};
     const timeoutAt = new Date(taskData.timeout_at as string).getTime();
     const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
+
+    // Fetch diff for redistribution
+    let redistDiff = '';
+    try {
+      const redistToken = await getInstallationToken(project.github_installation_id, this.env);
+      redistDiff = await fetchPrDiff(
+        project.owner,
+        project.repo,
+        taskData.pr_number as number,
+        redistToken,
+      );
+    } catch {
+      // Diff fetch failed — agent will get empty diff
+    }
 
     // Push task to the next eligible agent's DO
     const nextAgentId = (eligible[0] as { id: string }).id;
@@ -781,7 +825,9 @@ export class AgentConnection implements DurableObject {
               prompt: (config.prompt as string) ?? '',
             },
             timeout: remainingSeconds,
-            diffContent: (taskData.diff_content as string) ?? '',
+            diffContent: redistDiff,
+            reviewCount: (config.reviewCount as number) ?? 1,
+            installationId: project.github_installation_id,
             reviewMode: ((config.reviewCount as number) ?? 1) > 1 ? 'compact' : 'full',
           }),
         }),
@@ -811,12 +857,10 @@ export class AgentConnection implements DurableObject {
       );
     }
 
-    // Look up task + project info (include diff_content for inline comment validation)
+    // Look up task + project info
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select(
-        'pr_number, pr_url, diff_content, project_id, projects!inner(owner, repo, github_installation_id)',
-      )
+      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
       .eq('id', msg.taskId)
       .single();
 
@@ -846,7 +890,19 @@ export class AgentConnection implements DurableObject {
 
       // Parse structured review for inline comments
       const parsed = parseStructuredReview(msg.summary);
-      const diffContent = (taskData.diff_content as string) ?? '';
+      // Fetch diff from GitHub for inline comment validation
+      let diffContent = '';
+      try {
+        const diffToken = await getInstallationToken(project.github_installation_id, this.env);
+        diffContent = await fetchPrDiff(
+          project.owner,
+          project.repo,
+          taskData.pr_number as number,
+          diffToken,
+        );
+      } catch {
+        // Diff fetch failed — inline comments will be skipped
+      }
       const diffFiles = parseDiffFiles(diffContent);
       const inlineComments = filterValidComments(parsed.comments, diffFiles);
 

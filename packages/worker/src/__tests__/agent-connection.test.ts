@@ -7,6 +7,7 @@ vi.mock('../db.js', () => ({
 
 vi.mock('../github.js', () => ({
   getInstallationToken: vi.fn(),
+  fetchPrDiff: vi.fn(),
   postPrComment: vi.fn(),
   postPrReview: vi.fn(),
   verdictToReviewEvent: vi.fn((v: string) => {
@@ -20,10 +21,11 @@ vi.mock('../github.js', () => ({
 }));
 
 import { createSupabaseClient } from '../db.js';
-import { getInstallationToken, postPrReview } from '../github.js';
+import { getInstallationToken, fetchPrDiff, postPrReview } from '../github.js';
 
 const mockedCreateSupabase = vi.mocked(createSupabaseClient);
 const mockedGetInstallationToken = vi.mocked(getInstallationToken);
+const mockedFetchPrDiff = vi.mocked(fetchPrDiff);
 const mockedPostPrReview = vi.mocked(postPrReview);
 
 function createMockStorage() {
@@ -199,6 +201,7 @@ describe('AgentConnection', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mockDoFetch.mockResolvedValue(new Response('OK', { status: 200 }));
+    mockedFetchPrDiff.mockResolvedValue('');
     storage = createMockStorage();
     mockCtx = createMockCtx(storage);
     mockSupa = createSupabaseMock();
@@ -1203,6 +1206,8 @@ describe('AgentConnection', () => {
       mockCtx._websockets.push(mockWs);
       storage.store.set('agentId', 'agent-1');
       storage.store.set('inFlightTaskIds', []);
+      mockedGetInstallationToken.mockResolvedValue('test-token');
+      mockedFetchPrDiff.mockResolvedValue('diff --git a/file.ts\n+hello');
 
       mockSupa = createSupabaseMock({
         selectResults: {
@@ -1870,8 +1875,10 @@ describe('AgentConnection', () => {
       storage.store.set('inFlightTaskIds', ['task-1']);
     });
 
-    it('redistributes with stored diff_content and config_json from task', async () => {
+    it('redistributes with fetched diff and config_json from task', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('test-token');
+      mockedFetchPrDiff.mockResolvedValue('stored diff content');
       mockSupa = createSupabaseMock({
         countResults: {
           review_results: { count: 1 },

@@ -193,7 +193,7 @@ export async function distributeTask(
   const projectId = await findOrCreateProject(supabase, installationId, owner, repo);
   if (!projectId) return null;
 
-  // 2. Create review_task with diff_content and config_json for pending pickup
+  // 2. Create review_task with config_json for pending pickup (diff fetched on demand)
   const configJson = {
     prompt: config.prompt,
     reviewCount: config.agents.reviewCount,
@@ -212,7 +212,6 @@ export async function distributeTask(
       pr_url: prUrl,
       status: 'pending',
       timeout_at: new Date(Date.now() + timeoutMs).toISOString(),
-      diff_content: diffContent,
       config_json: configJson,
     })
     .select('id')
