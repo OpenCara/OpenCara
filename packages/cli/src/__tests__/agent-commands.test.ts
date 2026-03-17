@@ -38,6 +38,8 @@ vi.mock('ws', () => {
     send = vi.fn();
     close = vi.fn();
     terminate = vi.fn();
+    ping = vi.fn();
+    readyState = 1;
 
     constructor() {
       mockWsInstances.push(this);
@@ -54,6 +56,7 @@ vi.mock('ws', () => {
     }
   }
 
+  (MockWebSocket as unknown as Record<string, unknown>).OPEN = 1;
   return { default: MockWebSocket };
 });
 

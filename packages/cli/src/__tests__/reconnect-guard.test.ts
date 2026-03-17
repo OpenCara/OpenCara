@@ -9,12 +9,17 @@ function createMockWs() {
   (emitter as Record<string, unknown>).send = vi.fn();
   (emitter as Record<string, unknown>).close = vi.fn();
   (emitter as Record<string, unknown>).terminate = vi.fn();
+  (emitter as Record<string, unknown>).ping = vi.fn();
+  (emitter as Record<string, unknown>).readyState = 1; // WebSocket.OPEN
   mockWsInstances.push(emitter);
   return emitter;
 }
 
 vi.mock('ws', () => ({
-  default: vi.fn(() => createMockWs()),
+  default: Object.assign(
+    vi.fn(() => createMockWs()),
+    { OPEN: 1 },
+  ),
 }));
 
 vi.mock('../reconnect.js', async (importOriginal) => {

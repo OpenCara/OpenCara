@@ -87,6 +87,9 @@ export interface StartAgentOptions {
   stabilityThresholdMs?: number;
 }
 
+/** Interval for sending RFC 6455 WebSocket ping frames to keep the proxy layer alive */
+const WS_PING_INTERVAL_MS = 20_000;
+
 export function startAgent(
   agentId: string,
   platformUrl: string,
@@ -100,6 +103,7 @@ export function startAgent(
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  let wsPingTimer: ReturnType<typeof setInterval> | null = null;
   let currentWs: WebSocket | null = null;
   let connectionOpenedAt: number | null = null;
   let stabilityTimer: ReturnType<typeof setTimeout> | null = null;
@@ -118,10 +122,18 @@ export function startAgent(
     }
   }
 
+  function clearWsPingTimer(): void {
+    if (wsPingTimer) {
+      clearInterval(wsPingTimer);
+      wsPingTimer = null;
+    }
+  }
+
   function shutdown(): void {
     intentionalClose = true;
     clearHeartbeatTimer();
     clearStabilityTimer();
+    clearWsPingTimer();
     if (currentWs) currentWs.close();
     console.log('Disconnected.');
     process.exit(0);
@@ -147,6 +159,14 @@ export function startAgent(
       connectionOpenedAt = Date.now();
       console.log('Connected to platform.');
       resetHeartbeatTimer();
+
+      // Send RFC 6455 WebSocket ping frames to keep the Cloudflare proxy layer alive
+      clearWsPingTimer();
+      wsPingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.ping();
+        }
+      }, WS_PING_INTERVAL_MS);
 
       if (verbose) {
         console.log(`[verbose] Connection opened at ${new Date(connectionOpenedAt).toISOString()}`);
@@ -178,6 +198,7 @@ export function startAgent(
     ws.on('close', (code, reason) => {
       clearHeartbeatTimer();
       clearStabilityTimer();
+      clearWsPingTimer();
 
       if (intentionalClose) return;
       if (ws !== currentWs) return; // Stale WS — don't reconnect
@@ -200,6 +221,12 @@ export function startAgent(
 
       connectionOpenedAt = null;
       reconnect();
+    });
+
+    ws.on('pong', () => {
+      if (verbose) {
+        console.log(`[verbose] WS pong received at ${new Date().toISOString()}`);
+      }
     });
 
     ws.on('error', (err) => {
