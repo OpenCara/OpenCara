@@ -18,6 +18,8 @@ const BASE_ENV: Env = {
   GITHUB_APP_PRIVATE_KEY: '',
   GITHUB_CLIENT_ID: 'test-client',
   GITHUB_CLIENT_SECRET: 'test-secret',
+  GITHUB_CLI_CLIENT_ID: 'test-cli-client',
+  GITHUB_CLI_CLIENT_SECRET: 'test-cli-secret',
   SUPABASE_URL: 'https://test.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'test-key',
 };

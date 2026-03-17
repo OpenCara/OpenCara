@@ -169,6 +169,8 @@ const mockEnv = {
   GITHUB_APP_PRIVATE_KEY: 'test-key',
   GITHUB_CLIENT_ID: 'test-client',
   GITHUB_CLIENT_SECRET: 'test-secret',
+  GITHUB_CLI_CLIENT_ID: 'test-cli-client',
+  GITHUB_CLI_CLIENT_SECRET: 'test-cli-secret',
   GITHUB_WEBHOOK_SECRET: 'test-secret',
   AGENT_CONNECTION: {
     idFromName: vi.fn(() => ({ toString: () => 'do-id' })),

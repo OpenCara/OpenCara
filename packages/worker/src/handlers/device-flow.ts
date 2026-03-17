@@ -25,7 +25,7 @@ export async function handleDeviceFlow(env: Env): Promise<Response> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      client_id: env.GITHUB_CLIENT_ID,
+      client_id: env.GITHUB_CLI_CLIENT_ID,
       scope: 'read:user',
     }),
   });
@@ -77,7 +77,7 @@ export async function handleDeviceToken(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      client_id: env.GITHUB_CLIENT_ID,
+      client_id: env.GITHUB_CLI_CLIENT_ID,
       device_code: body.deviceCode,
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
     }),

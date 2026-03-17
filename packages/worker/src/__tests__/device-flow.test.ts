@@ -6,6 +6,8 @@ import type { Env } from '../env.js';
 const mockEnv: Env = {
   GITHUB_CLIENT_ID: 'test-client-id',
   GITHUB_CLIENT_SECRET: 'test-secret',
+  GITHUB_CLI_CLIENT_ID: 'test-cli-client',
+  GITHUB_CLI_CLIENT_SECRET: 'test-cli-secret',
   GITHUB_WEBHOOK_SECRET: '',
   GITHUB_APP_ID: '',
   GITHUB_APP_PRIVATE_KEY: '',
@@ -69,7 +71,7 @@ describe('handleDeviceFlow', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          client_id: 'test-client-id',
+          client_id: 'test-cli-client',
           scope: 'read:user',
         }),
       }),
