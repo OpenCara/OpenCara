@@ -4,7 +4,7 @@ import type {
   DeviceTokenResponse,
   RevokeResponse,
   User,
-} from '@opencrust/shared';
+} from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateApiKey, hashApiKey } from '../auth.js';
 import type { Env } from '../env.js';
@@ -109,7 +109,7 @@ export async function handleDeviceToken(
     headers: {
       Authorization: `Bearer ${data.access_token}`,
       Accept: 'application/json',
-      'User-Agent': 'OpenCrust',
+      'User-Agent': 'OpenCara',
     },
   });
 

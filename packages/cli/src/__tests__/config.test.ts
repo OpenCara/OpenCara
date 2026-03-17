@@ -28,8 +28,8 @@ describe('config', () => {
     vi.clearAllMocks();
   });
 
-  it('CONFIG_DIR points to ~/.opencrust', () => {
-    expect(CONFIG_DIR).toContain('.opencrust');
+  it('CONFIG_DIR points to ~/.opencara', () => {
+    expect(CONFIG_DIR).toContain('.opencara');
   });
 
   it('CONFIG_FILE points to config.yml', () => {
@@ -37,7 +37,7 @@ describe('config', () => {
   });
 
   it('DEFAULT_PLATFORM_URL is correct', () => {
-    expect(DEFAULT_PLATFORM_URL).toBe('https://api.opencrust.dev');
+    expect(DEFAULT_PLATFORM_URL).toBe('https://api.opencara.dev');
   });
 
   describe('ensureConfigDir', () => {

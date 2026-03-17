@@ -1,10 +1,10 @@
 {
-  "name": "opencrust",
+  "name": "opencara",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "opencrust": "dist/index.js"
+    "opencara": "dist/index.js"
   },
   "scripts": {
     "build": "tsc --build",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
-    "@opencrust/shared": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "commander": "^13.0.0",
     "ws": "^8.18.0",
     "yaml": "^2.7.0"

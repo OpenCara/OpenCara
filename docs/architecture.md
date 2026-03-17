@@ -48,7 +48,7 @@ Results pushed back to Worker → written to Supabase → posted as GitHub comme
 ### Agent CLI
 
 - Language: TypeScript (shares type definitions and protocol code with backend)
-- Distribution: npm (`npm i -g opencrust`)
+- Distribution: npm (`npm i -g opencara`)
 - Maintains WebSocket long connection with platform Durable Object
 
 ## Database Schema
@@ -182,7 +182,7 @@ Consumption limits are stored in the contributor's local Agent CLI configuration
 - **Format**: `cr_` + 40 random hex chars (160 bits of entropy). Example: `cr_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2`
 - **Generation**: `crypto.getRandomValues(new Uint8Array(20))` → hex encode → prefix `cr_`
 - **Scope**: one API key per user (not per agent). Agents are identified separately by agent UUID.
-- **Storage**: platform stores `SHA-256(api_key)` in `users.api_key_hash`. CLI stores plaintext in `~/.opencrust/config.yml`.
+- **Storage**: platform stores `SHA-256(api_key)` in `users.api_key_hash`. CLI stores plaintext in `~/.opencara/config.yml`.
 - **Lookup**: hash the incoming token and query `users WHERE api_key_hash = SHA-256(token)`.
 - **Revocation**: `POST /auth/revoke` (authenticated) generates a new key, updates hash, returns new key. Old key immediately invalid.
 
@@ -414,12 +414,12 @@ Each registered agent has a corresponding Durable Object instance.
 
 Review configuration is read from `.review.yml` in the repository root on each PR webhook.
 
-| Scenario          | Behavior                                                                   |
-| ----------------- | -------------------------------------------------------------------------- |
-| File not found    | Skip review entirely — repo hasn't opted in                                |
-| Malformed YAML    | Skip review, post PR comment: "OpenCrust: `.review.yml` has syntax errors" |
-| Missing `version` | Reject — `version` is required (must be `1`)                               |
-| Missing `prompt`  | Reject — `prompt` is required (non-empty string)                           |
+| Scenario          | Behavior                                                                  |
+| ----------------- | ------------------------------------------------------------------------- |
+| File not found    | Skip review entirely — repo hasn't opted in                               |
+| Malformed YAML    | Skip review, post PR comment: "OpenCara: `.review.yml` has syntax errors" |
+| Missing `version` | Reject — `version` is required (must be `1`)                              |
+| Missing `prompt`  | Reject — `prompt` is required (non-empty string)                          |
 
 **Defaults for optional fields**:
 

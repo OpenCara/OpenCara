@@ -27,7 +27,7 @@ If agent-type is missing or not found in `.claude/agents/`, list available agent
 
 ### Step 2: Ensure a team exists
 
-Check if a team is active. If not, create one with `TeamCreate` (team name: `opencrust-dev`).
+Check if a team is active. If not, create one with `TeamCreate` (team name: `opencara-dev`).
 
 ### Step 3: Read the agent definition
 
@@ -51,10 +51,10 @@ Read `.claude/agents/<agent-type>.md` to get the full agent definition.
 
 For agents that need a worktree (all except pm and clarifier):
 
-**CRITICAL**: Always create worktrees from the root project directory `/home/quabug/opencrust` on `main` branch. NEVER create worktrees from inside another worktree — this causes nested paths and broken worktrees.
+**CRITICAL**: Always create worktrees from the root project directory `/home/quabug/opencara` on `main` branch. NEVER create worktrees from inside another worktree — this causes nested paths and broken worktrees.
 
 ```bash
-cd /home/quabug/opencrust  # MUST be root project, NOT a worktree
+cd /home/quabug/opencara  # MUST be root project, NOT a worktree
 git pull origin main
 git worktree add .claude/worktrees/<agent-type>-<issue-number>-<short-desc> origin/main -b issue-<issue-number>-<short-desc>
 ```
@@ -72,7 +72,7 @@ Use the Agent tool with:
 - **name**: `<agent-type>-<issue-number>` (e.g., `architect-61`) or `<agent-type>` for PM/QA
 - Do NOT set `model` — agents inherit from the team lead
 - **mode**: `auto`
-- **team_name**: `opencrust-dev` (adds agent to the team)
+- **team_name**: `opencara-dev` (adds agent to the team)
 - **prompt**: Include the full agent definition from the .md file, plus:
   - The issue number and instructions to read it with `gh issue view <number>`
   - The worktree path (if applicable)

@@ -32,10 +32,10 @@ describe('RootLayout', () => {
     expect(typeof mod.default).toBe('function');
   });
 
-  it('renders nav bar with OpenCrust brand link', async () => {
+  it('renders nav bar with OpenCara brand link', async () => {
     const child = createElement('span', null, 'test');
     const html = await renderLayout(child);
-    expect(html).toContain('OpenCrust');
+    expect(html).toContain('OpenCara');
     expect(html).toContain('href="/"');
   });
 
@@ -67,7 +67,7 @@ describe('RootLayout', () => {
     const child = createElement('span', null, 'test');
     const html = await renderLayout(child);
     expect(html).toContain('GitHub');
-    expect(html).toContain('https://github.com/yugoo-ai/OpenCrust');
+    expect(html).toContain('https://github.com/OpenCara/OpenCara');
   });
 
   it('renders footer with current year', async () => {
@@ -90,7 +90,7 @@ describe('RootLayout', () => {
 describe('metadata', () => {
   it('has correct title', async () => {
     const metadata = await getMetadata();
-    expect(metadata.title).toBe('OpenCrust');
+    expect(metadata.title).toBe('OpenCara');
   });
 
   it('has correct description', async () => {

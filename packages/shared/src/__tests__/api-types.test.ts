@@ -133,7 +133,7 @@ describe('api types', () => {
     it('represents a completed review activity', () => {
       const entry: ProjectActivityEntry = {
         type: 'review_completed',
-        repo: 'yugoo-ai/OpenCrust',
+        repo: 'OpenCara/OpenCara',
         prNumber: 99,
         agentModel: 'claude-3.5-sonnet',
         completedAt: '2026-03-16T12:00:00Z',

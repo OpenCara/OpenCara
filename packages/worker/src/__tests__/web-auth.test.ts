@@ -11,8 +11,8 @@ const mockEnv: Env = {
   GITHUB_APP_PRIVATE_KEY: '',
   SUPABASE_URL: '',
   SUPABASE_SERVICE_ROLE_KEY: '',
-  WEB_URL: 'https://opencrust.dev',
-  WORKER_URL: 'https://api.opencrust.dev',
+  WEB_URL: 'https://opencara.dev',
+  WORKER_URL: 'https://api.opencara.dev',
 } as any;
 
 const originalFetch = globalThis.fetch;
@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe('handleWebLogin', () => {
   it('redirects to GitHub OAuth with correct params', async () => {
-    const request = new Request('https://api.opencrust.dev/auth/login');
+    const request = new Request('https://api.opencara.dev/auth/login');
     const response = await handleWebLogin(request, mockEnv);
 
     expect(response.status).toBe(302);
@@ -33,17 +33,17 @@ describe('handleWebLogin', () => {
     expect(url.origin).toBe('https://github.com');
     expect(url.pathname).toBe('/login/oauth/authorize');
     expect(url.searchParams.get('client_id')).toBe('test-client-id');
-    expect(url.searchParams.get('redirect_uri')).toBe('https://api.opencrust.dev/auth/callback');
+    expect(url.searchParams.get('redirect_uri')).toBe('https://api.opencara.dev/auth/callback');
     expect(url.searchParams.get('scope')).toBe('read:user');
     expect(url.searchParams.get('state')).toMatch(/^[0-9a-f]{32}$/);
   });
 
   it('sets state cookie with correct flags', async () => {
-    const request = new Request('https://api.opencrust.dev/auth/login');
+    const request = new Request('https://api.opencara.dev/auth/login');
     const response = await handleWebLogin(request, mockEnv);
 
     const setCookie = response.headers.get('Set-Cookie')!;
-    expect(setCookie).toContain('opencrust_oauth_state=');
+    expect(setCookie).toContain('opencara_oauth_state=');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('Secure');
     expect(setCookie).toContain('SameSite=Lax');
@@ -60,7 +60,7 @@ describe('handleWebLogin', () => {
   });
 
   it('state in cookie matches state in redirect URL', async () => {
-    const request = new Request('https://api.opencrust.dev/auth/login');
+    const request = new Request('https://api.opencara.dev/auth/login');
     const response = await handleWebLogin(request, mockEnv);
 
     const location = new URL(response.headers.get('Location')!);
@@ -89,7 +89,7 @@ describe('handleWebCallback', () => {
     state?: string;
     cookie?: string;
   }): Request {
-    const url = new URL('https://api.opencrust.dev/auth/callback');
+    const url = new URL('https://api.opencara.dev/auth/callback');
     if (params.code) url.searchParams.set('code', params.code);
     if (params.state) url.searchParams.set('state', params.state);
 
@@ -119,7 +119,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=different_state`,
+      cookie: `opencara_oauth_state=different_state`,
     });
     const response = await handleWebCallback(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(403);
@@ -142,7 +142,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     const response = await handleWebCallback(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(502);
@@ -158,7 +158,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     const response = await handleWebCallback(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(502);
@@ -177,7 +177,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     const response = await handleWebCallback(request, mockEnv, createMockSupabase());
     expect(response.status).toBe(502);
@@ -203,7 +203,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     const response = await handleWebCallback(
       request,
@@ -233,19 +233,19 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     const response = await handleWebCallback(request, mockEnv, createMockSupabase());
 
     expect(response.status).toBe(302);
-    expect(response.headers.get('Location')).toBe('https://opencrust.dev/dashboard');
+    expect(response.headers.get('Location')).toBe('https://opencara.dev/dashboard');
 
     // Check cookies - response has multiple Set-Cookie headers
     const cookies = response.headers.getSetCookie();
     expect(cookies.length).toBe(2);
 
     // Session cookie
-    const sessionCookie = cookies.find((c) => c.startsWith('opencrust_session='))!;
+    const sessionCookie = cookies.find((c) => c.startsWith('opencara_session='))!;
     expect(sessionCookie).toContain('cr_');
     expect(sessionCookie).toContain('HttpOnly');
     expect(sessionCookie).toContain('Secure');
@@ -253,7 +253,7 @@ describe('handleWebCallback', () => {
     expect(sessionCookie).toContain('Max-Age=2592000');
 
     // State cookie cleared
-    const stateCookie = cookies.find((c) => c.startsWith('opencrust_oauth_state='))!;
+    const stateCookie = cookies.find((c) => c.startsWith('opencara_oauth_state='))!;
     expect(stateCookie).toContain('Max-Age=0');
   });
 
@@ -278,7 +278,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'my-auth-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     await handleWebCallback(request, mockEnv, createMockSupabase());
 
@@ -318,7 +318,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     await handleWebCallback(request, mockEnv, mockSupabase);
 
@@ -356,7 +356,7 @@ describe('handleWebCallback', () => {
     const request = makeCallbackRequest({
       code: 'test-code',
       state: validState,
-      cookie: `opencrust_oauth_state=${validState}`,
+      cookie: `opencara_oauth_state=${validState}`,
     });
     const response = await handleWebCallback(request, envWithoutWebUrl, createMockSupabase());
     expect(response.headers.get('Location')).toBe('http://localhost:3000/dashboard');
@@ -365,19 +365,19 @@ describe('handleWebCallback', () => {
 
 describe('handleWebLogout', () => {
   it('redirects to web homepage', async () => {
-    const request = new Request('https://api.opencrust.dev/auth/logout');
+    const request = new Request('https://api.opencara.dev/auth/logout');
     const response = await handleWebLogout(request, mockEnv);
 
     expect(response.status).toBe(302);
-    expect(response.headers.get('Location')).toBe('https://opencrust.dev');
+    expect(response.headers.get('Location')).toBe('https://opencara.dev');
   });
 
   it('clears the session cookie', async () => {
-    const request = new Request('https://api.opencrust.dev/auth/logout');
+    const request = new Request('https://api.opencara.dev/auth/logout');
     const response = await handleWebLogout(request, mockEnv);
 
     const setCookie = response.headers.get('Set-Cookie')!;
-    expect(setCookie).toContain('opencrust_session=');
+    expect(setCookie).toContain('opencara_session=');
     expect(setCookie).toContain('Max-Age=0');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('Secure');

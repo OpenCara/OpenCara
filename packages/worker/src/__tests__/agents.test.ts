@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
 import { handleListAgents, handleCreateAgent } from '../handlers/agents.js';
-import type { User } from '@opencrust/shared';
+import type { User } from '@opencara/shared';
 
 const mockUser: User = {
   id: 'user-123',

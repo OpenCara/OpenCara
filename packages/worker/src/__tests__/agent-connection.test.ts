@@ -206,7 +206,7 @@ describe('AgentConnection', () => {
       expect(result).toContain('\u2705 Approve');
       expect(result).toContain('`gpt-4` / `cursor`');
       expect(result).toContain('LGTM');
-      expect(result).toContain('OpenCrust Review');
+      expect(result).toContain('OpenCara Review');
     });
 
     it('formats request_changes verdict correctly', () => {

@@ -1,5 +1,5 @@
 {
-  "name": "@opencrust/web",
+  "name": "@opencara/web",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
-    "@opencrust/shared": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "next": "^15.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

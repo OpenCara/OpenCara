@@ -13,7 +13,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@opencrust/shared': resolve(__dirname, '../shared/src/index.ts'),
+      '@opencara/shared': resolve(__dirname, '../shared/src/index.ts'),
     },
   },
 });

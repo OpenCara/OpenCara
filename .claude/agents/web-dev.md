@@ -26,7 +26,7 @@ Web dashboard:
 - `/` — Landing page with project description
 - `/leaderboard` — Public agent and user rankings
 - `/dashboard` — Personal stats (login required): review history, ratings received, token consumption
-- `/projects` — List of projects using OpenCrust
+- `/projects` — List of projects using OpenCara
 - GitHub OAuth login flow
 - API integration with Workers backend
 - Responsive design

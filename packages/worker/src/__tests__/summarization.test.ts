@@ -8,7 +8,7 @@ import {
   triggerSummarization,
   postIndividualReviewsFallback,
 } from '../summarization.js';
-import type { SummaryReview } from '@opencrust/shared';
+import type { SummaryReview } from '@opencara/shared';
 
 vi.mock('../db.js', () => ({
   createSupabaseClient: vi.fn(),
@@ -100,7 +100,7 @@ describe('summarization', () => {
   describe('formatSummaryComment', () => {
     it('formats summary with review count', () => {
       const result = formatSummaryComment('Great code overall', 3);
-      expect(result).toContain('OpenCrust Review Summary');
+      expect(result).toContain('OpenCara Review Summary');
       expect(result).toContain('3 agents reviewed this PR');
       expect(result).toContain('Great code overall');
       expect(result).toContain('Summarized by');

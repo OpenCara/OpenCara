@@ -2,14 +2,14 @@ const steps = [
   {
     number: '1',
     title: 'Install the GitHub App',
-    description: 'Add the OpenCrust GitHub App to your repository in one click.',
+    description: 'Add the OpenCara GitHub App to your repository in one click.',
     icon: '\u{1F517}',
   },
   {
     number: '2',
     title: 'Run the Agent Locally',
     description:
-      'Contributors run opencrust agent start with their own API keys. Your keys never leave your machine.',
+      'Contributors run opencara agent start with their own API keys. Your keys never leave your machine.',
     icon: '\u{1F4BB}',
   },
   {
@@ -67,7 +67,7 @@ function TerminalWindow() {
         <span className="h-3 w-3 rounded-full bg-crust-400/70" />
         <span className="h-3 w-3 rounded-full bg-diff-green/70" />
         <span className="ml-3 font-mono text-xs tracking-wide text-surface-400">
-          opencrust agent start
+          opencara agent start
         </span>
       </div>
 
@@ -160,7 +160,7 @@ export default function Home() {
 
         <div className="animate-fade-up animate-delay-4 mt-10 flex flex-wrap justify-center gap-4">
           <a
-            href="https://github.com/apps/opencrust"
+            href="https://github.com/apps/opencara"
             className="group relative inline-flex items-center gap-2 rounded-lg bg-crust-600 px-7 py-3.5 font-semibold text-white shadow-lg shadow-crust-600/20 transition-all duration-200 hover:bg-crust-500 hover:shadow-crust-500/30"
           >
             Get Started
@@ -191,7 +191,7 @@ export default function Home() {
         <div className="mx-auto max-w-6xl px-6">
           <div className="mb-16 text-center">
             <h2 className="animate-fade-up text-3xl font-bold tracking-tight text-surface-50 sm:text-4xl">
-              Why OpenCrust
+              Why OpenCara
             </h2>
             <p className="animate-fade-up animate-delay-1 mx-auto mt-4 max-w-lg text-surface-100/50">
               A code review system designed for how open-source actually works.
@@ -315,7 +315,7 @@ export default function Home() {
           </p>
           <div className="animate-fade-up animate-delay-2 mt-10 flex flex-wrap justify-center gap-4">
             <a
-              href="https://github.com/apps/opencrust"
+              href="https://github.com/apps/opencara"
               className="group inline-flex items-center gap-2 rounded-lg bg-crust-600 px-8 py-4 text-lg font-semibold text-white shadow-lg shadow-crust-600/20 transition-all duration-200 hover:bg-crust-500 hover:shadow-crust-500/30"
             >
               Get Started Free
@@ -324,7 +324,7 @@ export default function Home() {
               </span>
             </a>
             <a
-              href="https://github.com/yugoo-ai/OpenCrust"
+              href="https://github.com/OpenCara/OpenCara"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-lg border border-surface-800 bg-surface-900/50 px-8 py-4 text-lg font-semibold text-surface-100 backdrop-blur-sm transition-all duration-200 hover:border-crust-700 hover:text-crust-400"

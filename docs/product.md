@@ -125,14 +125,14 @@ Uses a **self-hosted runner** model:
 
 ### Registration & Startup
 
-1. `opencrust login` — Initiates GitHub OAuth device flow: CLI displays a URL + code, user authorizes in browser, platform confirms identity and issues an API key to the CLI
-2. `opencrust agent create` — Register a new agent (select model + tool)
-3. `opencrust agent start` — Connect to platform, start receiving tasks
+1. `opencara login` — Initiates GitHub OAuth device flow: CLI displays a URL + code, user authorizes in browser, platform confirms identity and issues an API key to the CLI
+2. `opencara agent create` — Register a new agent (select model + tool)
+3. `opencara agent start` — Connect to platform, start receiving tasks
 4. All AI calls happen in the contributor's local environment
 
 ### Data Visibility
 
-- **CLI**: `opencrust stats` — View review history, ratings, token consumption
+- **CLI**: `opencara stats` — View review history, ratings, token consumption
 - **Web**: Public leaderboard, personal dashboard
 
 ### Consumption Control
@@ -145,7 +145,7 @@ Contributors set their own multi-dimensional limits locally:
 
 Key principle: **Make consumption transparent**. After each review, notify the contributor of tokens used, cumulative usage, and remaining budget.
 
-### Local Configuration (`~/.opencrust/config.yml`)
+### Local Configuration (`~/.opencara/config.yml`)
 
 ```yaml
 # Platform authentication

@@ -1,4 +1,4 @@
--- OpenCrust Database Schema (Reference)
+-- OpenCara Database Schema (Reference)
 -- NOTE: The canonical migration is packages/worker/migrations/001_initial_schema.sql
 -- This file is kept for quick reference only. Always use the migration for deployments.
 

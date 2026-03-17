@@ -32,11 +32,11 @@ import '../index.js';
 
 describe('CLI entry point', () => {
   it('creates program with correct name', () => {
-    expect(mockProgram.name).toHaveBeenCalledWith('opencrust');
+    expect(mockProgram.name).toHaveBeenCalledWith('opencara');
   });
 
   it('sets correct description', () => {
-    expect(mockProgram.description).toHaveBeenCalledWith(expect.stringContaining('OpenCrust'));
+    expect(mockProgram.description).toHaveBeenCalledWith(expect.stringContaining('OpenCara'));
   });
 
   it('sets version from shared package', () => {

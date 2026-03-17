@@ -1,5 +1,5 @@
 {
-  "name": "opencrust-monorepo",
+  "name": "opencara-monorepo",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.32.1",

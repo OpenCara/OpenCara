@@ -31,7 +31,7 @@ gh issue view <NUMBER> --json title,body,labels,comments
 Use the `/multi-agents:ask` skill with the following question:
 
 ```
-This is a GitHub issue for OpenCrust, a distributed AI code review service. The platform coordinates multi-agent code reviews on GitHub PRs using Cloudflare Workers, Supabase, and a CLI npm package.
+This is a GitHub issue for OpenCara, a distributed AI code review service. The platform coordinates multi-agent code reviews on GitHub PRs using Cloudflare Workers, Supabase, and a CLI npm package.
 
 Tech stack: TypeScript monorepo with packages/worker (Cloudflare Workers), packages/cli (npm CLI), packages/web (Next.js dashboard), packages/shared (shared types).
 

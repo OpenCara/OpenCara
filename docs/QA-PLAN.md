@@ -42,8 +42,8 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 **Steps**:
 
 1. Build shared: `cd packages/shared && pnpm build`
-2. Build worker: `cd packages/worker && pnpm build` (imports from @opencrust/shared)
-3. Build cli: `cd packages/cli && pnpm build` (imports from @opencrust/shared)
+2. Build worker: `cd packages/worker && pnpm build` (imports from @opencara/shared)
+3. Build cli: `cd packages/cli && pnpm build` (imports from @opencara/shared)
 4. Verify key exports exist: `ReviewConfig`, `API_KEY_PREFIX`, `PlatformMessage`, `AgentMessage`, `DeviceFlowResponse`
 
 **Expected**: All builds succeed. No "module not found" or type errors on shared imports.
@@ -181,15 +181,15 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 ## S11: CLI Login Flow (CLI → Worker)
 
-**Tests**: `opencrust login` calls the correct Worker endpoints and saves config.
+**Tests**: `opencara login` calls the correct Worker endpoints and saves config.
 
 **Steps**:
 
 1. Start Worker locally
-2. Run `opencrust login` (with mocked user interaction or `--platform-url` flag)
+2. Run `opencara login` (with mocked user interaction or `--platform-url` flag)
 3. Verify it calls `POST /auth/device`
 4. Verify it polls `POST /auth/device/token`
-5. On success, verify `~/.opencrust/config.yml` contains `api_key: cr_...`
+5. On success, verify `~/.opencara/config.yml` contains `api_key: cr_...`
 6. Verify config file permissions are 0o600
 
 **Expected**: Login flow produces valid config file with correct API key.
@@ -198,13 +198,13 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 ## S12: CLI Agent Commands (CLI → Worker)
 
-**Tests**: `opencrust agent create/list` calls correct Worker endpoints.
+**Tests**: `opencara agent create/list` calls correct Worker endpoints.
 
 **Steps**:
 
 1. Ensure valid config exists (from S11 or manual setup)
-2. `opencrust agent create --model claude-sonnet-4-6 --tool claude-code` → expect success output with agent ID
-3. `opencrust agent list` → expect table output with created agent
+2. `opencara agent create --model claude-sonnet-4-6 --tool claude-code` → expect success output with agent ID
+3. `opencara agent list` → expect table output with created agent
 4. Run commands without config (no API key) → expect clear error message
 
 **Expected**: CLI correctly calls REST API and displays results. Error messages are actionable.
@@ -213,12 +213,12 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 ## S13: CLI WebSocket Connection (CLI → Worker)
 
-**Tests**: `opencrust agent start` establishes WebSocket and handles messages.
+**Tests**: `opencara agent start` establishes WebSocket and handles messages.
 
 **Steps**:
 
 1. Ensure valid config and registered agent exist
-2. `opencrust agent start <agentId>` → verify WebSocket connection attempt
+2. `opencara agent start <agentId>` → verify WebSocket connection attempt
 3. On connection: verify `connected` message is received
 4. Verify heartbeat_ping → heartbeat_pong exchange
 5. Send SIGINT → verify graceful disconnect
@@ -322,7 +322,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 2. Send `pull_request.opened` webhook with valid signature
 3. Verify agent receives `review_request` message containing `diffContent` field (non-empty unified diff)
 4. Agent sends `review_complete` with review text, verdict, and tokensUsed
-5. Verify review posted as GitHub PR comment with OpenCrust formatting (verdict emoji, agent model/tool, review body, rating footer)
+5. Verify review posted as GitHub PR comment with OpenCara formatting (verdict emoji, agent model/tool, review body, rating footer)
 6. Verify `review_results` row has `comment_url` set (non-null)
 7. Verify `review_tasks` status transitions: `pending → reviewing → completed`
 8. Verify `consumption_logs` row created with correct `tokens_used`
@@ -357,7 +357,7 @@ Cross-service integration test scenarios for the QA agent. Updated after each mi
 
 **Steps**:
 
-1. Set `ANTHROPIC_API_KEY` environment variable (or configure in `~/.opencrust/config.yml`)
+1. Set `ANTHROPIC_API_KEY` environment variable (or configure in `~/.opencara/config.yml`)
 2. Simulate receiving a `review_request` message with `diffContent` containing a small PR diff
 3. Verify CLI calls Anthropic API with system prompt + custom prompt + diff
 4. Verify verdict extraction: response starting with `VERDICT: APPROVE` → verdict is `approve`

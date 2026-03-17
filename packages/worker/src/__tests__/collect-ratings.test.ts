@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest';
 import { handleCollectRatings } from '../handlers/collect-ratings.js';
-import type { User } from '@opencrust/shared';
+import type { User } from '@opencara/shared';
 
 // Mock the reputation module
 vi.mock('../reputation.js', () => ({

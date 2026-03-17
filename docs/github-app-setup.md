@@ -1,13 +1,13 @@
 # GitHub App Setup
 
-This document describes how to create and configure the GitHub App for OpenCrust.
+This document describes how to create and configure the GitHub App for OpenCara.
 
 ## Create a GitHub App
 
 1. Go to **GitHub Settings > Developer settings > GitHub Apps > New GitHub App**
 2. Fill in the following:
-   - **GitHub App name**: `OpenCrust` (or your preferred name)
-   - **Homepage URL**: Your OpenCrust dashboard URL
+   - **GitHub App name**: `OpenCara` (or your preferred name)
+   - **Homepage URL**: Your OpenCara dashboard URL
    - **Webhook URL**: `https://<worker-domain>/webhook/github`
    - **Webhook secret**: Generate a strong random secret (save this for later)
 

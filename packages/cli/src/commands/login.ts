@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import type { DeviceFlowResponse, DeviceTokenResponse } from '@opencrust/shared';
+import type { DeviceFlowResponse, DeviceTokenResponse } from '@opencara/shared';
 import { loadConfig, saveConfig } from '../config.js';
 import { ApiClient } from '../http.js';
 import { sleep } from '../reconnect.js';
@@ -48,18 +48,18 @@ export const loginCommand = new Command('login')
       }
 
       if (tokenRes.status === 'expired') {
-        console.error('\nDevice code expired. Please run `opencrust login` again.');
+        console.error('\nDevice code expired. Please run `opencara login` again.');
         process.exit(1);
       }
 
       if (tokenRes.status === 'complete') {
         config.apiKey = tokenRes.apiKey;
         saveConfig(config);
-        console.log('\nLogged in successfully. API key saved to ~/.opencrust/config.yml');
+        console.log('\nLogged in successfully. API key saved to ~/.opencara/config.yml');
         return;
       }
     }
 
-    console.error('\nDevice code expired. Please run `opencrust login` again.');
+    console.error('\nDevice code expired. Please run `opencara login` again.');
     process.exit(1);
   });

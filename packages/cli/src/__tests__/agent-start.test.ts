@@ -6,8 +6,8 @@ import { ApiClient } from '../http.js';
 
 describe('buildWsUrl', () => {
   it('converts https to wss', () => {
-    const url = buildWsUrl('https://api.opencrust.dev', 'agent-123', 'cr_key');
-    expect(url).toBe('wss://api.opencrust.dev/ws/agent/agent-123?token=cr_key');
+    const url = buildWsUrl('https://api.opencara.dev', 'agent-123', 'cr_key');
+    expect(url).toBe('wss://api.opencara.dev/ws/agent/agent-123?token=cr_key');
   });
 
   it('converts http to ws', () => {

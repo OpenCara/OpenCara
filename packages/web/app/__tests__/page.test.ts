@@ -17,7 +17,7 @@ describe('Home page', () => {
   it('renders Get Started CTA linking to GitHub App', () => {
     const html = renderToString(createElement(Home));
     expect(html).toContain('Get Started');
-    expect(html).toContain('https://github.com/apps/opencrust');
+    expect(html).toContain('https://github.com/apps/opencara');
   });
 
   it('renders View Community CTA', () => {

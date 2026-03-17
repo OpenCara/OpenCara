@@ -99,12 +99,12 @@ vi.mock('../handlers/web-auth.js', () => ({
   handleWebCallback: vi
     .fn()
     .mockResolvedValue(
-      new Response(null, { status: 302, headers: { Location: 'https://opencrust.dev/dashboard' } }),
+      new Response(null, { status: 302, headers: { Location: 'https://opencara.dev/dashboard' } }),
     ),
   handleWebLogout: vi
     .fn()
     .mockResolvedValue(
-      new Response(null, { status: 302, headers: { Location: 'https://opencrust.dev' } }),
+      new Response(null, { status: 302, headers: { Location: 'https://opencara.dev' } }),
     ),
 }));
 
@@ -139,8 +139,8 @@ const mockEnv: Env = {
   SUPABASE_SERVICE_ROLE_KEY: 'test-key',
   AGENT_CONNECTION: {} as DurableObjectNamespace,
   TASK_TIMEOUT: {} as DurableObjectNamespace,
-  WEB_URL: 'https://opencrust.dev',
-  WORKER_URL: 'https://api.opencrust.dev',
+  WEB_URL: 'https://opencara.dev',
+  WORKER_URL: 'https://api.opencara.dev',
 };
 
 describe('worker router', () => {

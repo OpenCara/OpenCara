@@ -2,8 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateApiKey, hashApiKey, parseCookies } from '../auth.js';
 import type { Env } from '../env.js';
 
-const SESSION_COOKIE_NAME = 'opencrust_session';
-const STATE_COOKIE_NAME = 'opencrust_oauth_state';
+const SESSION_COOKIE_NAME = 'opencara_session';
+const STATE_COOKIE_NAME = 'opencara_oauth_state';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
 const STATE_MAX_AGE = 300; // 5 minutes in seconds
 
@@ -119,7 +119,7 @@ export async function handleWebCallback(
     headers: {
       Authorization: `Bearer ${tokenData.access_token}`,
       Accept: 'application/json',
-      'User-Agent': 'OpenCrust',
+      'User-Agent': 'OpenCara',
     },
   });
 

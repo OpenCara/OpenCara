@@ -1,4 +1,4 @@
-name = "opencrust-worker"
+name = "opencara-worker"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
@@ -10,8 +10,8 @@ compatibility_date = "2024-12-01"
 # - GITHUB_CLIENT_SECRET: GitHub App client secret
 
 [vars]
-WEB_URL = "https://opencrust.vercel.app"
-WORKER_URL = "https://opencrust-worker.opencrust.workers.dev"
+WEB_URL = "https://opencara.vercel.app"
+WORKER_URL = "https://opencara-worker.opencara.workers.dev"
 
 [durable_objects]
 bindings = [

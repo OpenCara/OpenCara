@@ -1,4 +1,4 @@
-import type { ProjectStatsResponse } from '@opencrust/shared';
+import type { ProjectStatsResponse } from '@opencara/shared';
 import { apiFetch } from '../../lib/api';
 
 export const dynamic = 'force-dynamic';

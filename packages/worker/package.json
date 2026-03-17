@@ -1,5 +1,5 @@
 {
-  "name": "@opencrust/worker",
+  "name": "@opencara/worker",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@opencrust/shared": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "@supabase/supabase-js": "^2.99.1"
   },
   "devDependencies": {

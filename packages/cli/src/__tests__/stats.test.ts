@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type {
-  ConsumptionStatsResponse,
-  AgentResponse,
-  AgentStatsResponse,
-} from '@opencrust/shared';
+import type { ConsumptionStatsResponse, AgentResponse, AgentStatsResponse } from '@opencara/shared';
 
 const mockGet = vi.hoisted(() => vi.fn());
 const mockFetchConsumptionStats = vi.hoisted(() => vi.fn());

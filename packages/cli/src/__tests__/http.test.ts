@@ -51,7 +51,7 @@ describe('ApiClient', () => {
 
     const client = new ApiClient('https://api.test.com', 'cr_bad');
     await expect(client.get('/test')).rejects.toThrow(
-      'Not authenticated. Run `opencrust login` first.',
+      'Not authenticated. Run `opencara login` first.',
     );
   });
 
