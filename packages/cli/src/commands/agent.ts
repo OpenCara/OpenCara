@@ -487,7 +487,7 @@ function resolveLocalAgentCommand(
   globalAgentCommand: string | null,
 ): string {
   const effectiveCommand = localAgent.command ?? globalAgentCommand;
-  return resolveCommandTemplate(effectiveCommand, localAgent.tool);
+  return resolveCommandTemplate(effectiveCommand);
 }
 
 export { syncAgentToServer, resolveLocalAgentCommand };
@@ -927,7 +927,7 @@ agentCommand
 
       let reviewDeps: ReviewExecutorDeps | undefined;
       try {
-        const commandTemplate = resolveCommandTemplate(config.agentCommand, agentTool);
+        const commandTemplate = resolveCommandTemplate(config.agentCommand);
         reviewDeps = {
           commandTemplate,
           maxDiffSizeKb: config.maxDiffSizeKb,

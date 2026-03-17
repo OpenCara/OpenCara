@@ -102,10 +102,7 @@ export function parseCommandTemplate(
  * Resolve a command template from explicit config.
  * Returns the template string or throws if not available.
  */
-export function resolveCommandTemplate(
-  agentCommand: string | null | undefined,
-  _toolName?: string,
-): string {
+export function resolveCommandTemplate(agentCommand: string | null | undefined): string {
   if (agentCommand) {
     return agentCommand;
   }
