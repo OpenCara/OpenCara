@@ -554,4 +554,47 @@ describe('handleMessage', () => {
     fetchSpy.mockRestore();
     executeSpy.mockRestore();
   });
+
+  it('logs verbose heartbeat diagnostics when verbose is true', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const send = vi.fn();
+    const ws = { send };
+
+    handleMessage(
+      ws,
+      { type: 'heartbeat_ping', timestamp: 1000 },
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    const verboseCalls = consoleSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('[verbose]'),
+    );
+    expect(verboseCalls.length).toBeGreaterThan(0);
+    expect(verboseCalls[0][0]).toContain('Heartbeat ping received');
+    consoleSpy.mockRestore();
+  });
+
+  it('does not log verbose heartbeat diagnostics when verbose is false', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const send = vi.fn();
+    const ws = { send };
+
+    handleMessage(
+      ws,
+      { type: 'heartbeat_ping', timestamp: 1000 },
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    const verboseCalls = consoleSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('[verbose]'),
+    );
+    expect(verboseCalls).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
 });
