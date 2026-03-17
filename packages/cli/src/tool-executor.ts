@@ -1,4 +1,6 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface ToolExecutorResult {
   stdout: string;
@@ -25,6 +27,29 @@ const MIN_PARTIAL_RESULT_LENGTH = 50;
 
 /** Maximum stderr length included in error/warning messages */
 const MAX_STDERR_LENGTH = 1000;
+
+/**
+ * Validate that the binary referenced by a command template exists and is executable.
+ */
+export function validateCommandBinary(commandTemplate: string): boolean {
+  const { command } = parseCommandTemplate(commandTemplate);
+
+  if (path.isAbsolute(command)) {
+    try {
+      fs.accessSync(command, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    execFileSync('which', [command], { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Parse a command template string into command + args.

@@ -35,6 +35,9 @@ export type {
   ConsumptionPeriodStats,
   ConsumptionStatsResponse,
   ErrorResponse,
+  ToolRegistryEntry,
+  ModelRegistryEntry,
+  RegistryResponse,
 } from './api.js';
 
 // WebSocket protocol types

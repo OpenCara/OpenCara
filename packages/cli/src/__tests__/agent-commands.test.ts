@@ -11,7 +11,9 @@ vi.mock('../config.js', () => ({
     platformUrl: 'https://test.api.dev',
     limits: null,
     agentCommand: null,
+    agents: null,
   })),
+  saveConfig: vi.fn(),
   requireApiKey: vi.fn((config: { apiKey: string }) => config.apiKey),
 }));
 
@@ -79,37 +81,36 @@ describe('agent commands', () => {
   });
 
   describe('agent create', () => {
-    it('creates agent successfully', async () => {
-      mockPost.mockResolvedValueOnce({
-        id: 'agent-new',
-        model: 'gpt-4',
-        tool: 'claude-code',
-      });
-
+    it('adds agent to local config in non-interactive mode', async () => {
       await agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
         from: 'user',
       });
 
-      expect(logSpy).toHaveBeenCalledWith('Agent created:');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('agent-new'));
+      expect(logSpy).toHaveBeenCalledWith('Agent added to config:');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('gpt-4'));
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('claude-code'));
     });
 
-    it('handles create failure with Error', async () => {
-      mockPost.mockRejectedValueOnce(new Error('Server error'));
-
+    it('errors when only --model is provided without --tool', async () => {
       await expect(
-        agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
-          from: 'user',
-        }),
+        agentCommand.parseAsync(['create', '--model', 'gpt-4'], { from: 'user' }),
       ).rejects.toThrow('process.exit');
 
-      expect(errorSpy).toHaveBeenCalledWith('Failed to create agent:', 'Server error');
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Both --model and --tool are required in non-interactive mode.',
+      );
     });
 
-    it('handles create failure with non-Error', async () => {
-      mockPost.mockRejectedValueOnce('raw error');
+    it('rejects duplicate agent in local config', async () => {
+      const { loadConfig } = await import('../config.js');
+      vi.mocked(loadConfig).mockReturnValueOnce({
+        apiKey: 'cr_testkey',
+        platformUrl: 'https://test.api.dev',
+        limits: null,
+        agentCommand: null,
+        agents: [{ model: 'gpt-4', tool: 'claude-code' }],
+        maxDiffSizeKb: 100,
+      });
 
       await expect(
         agentCommand.parseAsync(['create', '--model', 'gpt-4', '--tool', 'claude-code'], {
@@ -117,7 +118,7 @@ describe('agent commands', () => {
         }),
       ).rejects.toThrow('process.exit');
 
-      expect(errorSpy).toHaveBeenCalledWith('Failed to create agent:', 'raw error');
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('already exists in config'));
     });
   });
 

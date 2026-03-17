@@ -9,12 +9,19 @@ export interface ConsumptionLimits {
   reviews_per_day?: number;
 }
 
+export interface LocalAgentConfig {
+  model: string;
+  tool: string;
+  command?: string;
+}
+
 export interface CliConfig {
   apiKey: string | null;
   platformUrl: string;
   maxDiffSizeKb: number;
   limits: ConsumptionLimits | null;
   agentCommand: string | null;
+  agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
 }
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencrust.dev';
@@ -39,6 +46,23 @@ function parseLimits(data: Record<string, unknown>): ConsumptionLimits | null {
   return limits;
 }
 
+function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
+  if (!('agents' in data)) return null;
+  const raw = data.agents;
+  if (!Array.isArray(raw)) return null;
+
+  const agents: LocalAgentConfig[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const obj = entry as Record<string, unknown>;
+    if (typeof obj.model !== 'string' || typeof obj.tool !== 'string') continue;
+    const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
+    if (typeof obj.command === 'string') agent.command = obj.command;
+    agents.push(agent);
+  }
+  return agents;
+}
+
 export function loadConfig(): CliConfig {
   const defaults: CliConfig = {
     apiKey: null,
@@ -46,6 +70,7 @@ export function loadConfig(): CliConfig {
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     limits: null,
     agentCommand: null,
+    agents: null,
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -66,6 +91,7 @@ export function loadConfig(): CliConfig {
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
     limits: parseLimits(data),
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
+    agents: parseAgents(data),
   };
 }
 
@@ -85,6 +111,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;
+  }
+  if (config.agents !== null) {
+    data.agents = config.agents;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }

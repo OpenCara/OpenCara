@@ -7,16 +7,27 @@ import type {
   ListAgentsResponse,
   AgentResponse,
   AgentStatsResponse,
+  RegistryResponse,
   PlatformMessage,
   ReviewRequestMessage,
   SummaryRequestMessage,
 } from '@opencrust/shared';
-import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
+import {
+  loadConfig,
+  saveConfig,
+  requireApiKey,
+  type ConsumptionLimits,
+  type LocalAgentConfig,
+} from '../config.js';
 import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
-import { resolveCommandTemplate } from '../tool-executor.js';
+import {
+  resolveCommandTemplate,
+  validateCommandBinary,
+  DEFAULT_COMMANDS,
+} from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   fetchConsumptionStats,
@@ -25,6 +36,52 @@ import {
   formatPostReviewStats,
   type SessionStats,
 } from '../consumption.js';
+
+/** Built-in registry used when server is unreachable */
+const FALLBACK_REGISTRY: RegistryResponse = {
+  tools: [
+    {
+      name: 'claude-code',
+      displayName: 'Claude Code',
+      binary: 'claude',
+      commandTemplate: 'claude -p --output-format text',
+      tokenParser: 'claude',
+    },
+    {
+      name: 'codex',
+      displayName: 'Codex',
+      binary: 'codex',
+      commandTemplate: 'codex exec',
+      tokenParser: 'codex',
+    },
+    {
+      name: 'gemini',
+      displayName: 'Gemini',
+      binary: 'gemini',
+      commandTemplate: 'gemini -p',
+      tokenParser: 'gemini',
+    },
+    {
+      name: 'qwen',
+      displayName: 'Qwen',
+      binary: 'qwen',
+      commandTemplate: 'qwen -y -m ${MODEL}',
+      tokenParser: 'qwen',
+    },
+  ],
+  models: [
+    { name: 'claude-opus-4-6', displayName: 'Claude Opus 4.6', tools: ['claude-code'] },
+    { name: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', tools: ['claude-code'] },
+    { name: 'gpt-5-codex', displayName: 'GPT-5 Codex', tools: ['codex'] },
+    { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', tools: ['gemini'] },
+    { name: 'qwen3.5-plus', displayName: 'Qwen 3.5 Plus', tools: ['qwen'] },
+    { name: 'glm-5', displayName: 'GLM-5', tools: ['qwen'] },
+    { name: 'kimi-k2.5', displayName: 'Kimi K2.5', tools: ['qwen'] },
+    { name: 'minimax-m2.5', displayName: 'Minimax M2.5', tools: ['qwen'] },
+  ],
+};
+
+export { FALLBACK_REGISTRY };
 
 export interface ConsumptionDeps {
   client: ApiClient;
@@ -455,31 +512,197 @@ export function handleMessage(
   }
 }
 
+/** Sync a local agent to the server: find existing by model+tool or create new */
+async function syncAgentToServer(
+  client: ApiClient,
+  serverAgents: AgentResponse[],
+  localAgent: LocalAgentConfig,
+): Promise<{ agentId: string; created: boolean }> {
+  const existing = serverAgents.find(
+    (a) => a.model === localAgent.model && a.tool === localAgent.tool,
+  );
+  if (existing) {
+    return { agentId: existing.id, created: false };
+  }
+
+  const body: CreateAgentRequest = { model: localAgent.model, tool: localAgent.tool };
+  const created = await client.post<CreateAgentResponse>('/api/agents', body);
+  return { agentId: created.id, created: true };
+}
+
+/** Resolve the effective command template for a local agent */
+function resolveLocalAgentCommand(
+  localAgent: LocalAgentConfig,
+  globalAgentCommand: string | null,
+): string {
+  const effectiveCommand = localAgent.command ?? globalAgentCommand;
+  return resolveCommandTemplate(effectiveCommand, localAgent.tool);
+}
+
+export { syncAgentToServer, resolveLocalAgentCommand };
+
 export const agentCommand = new Command('agent').description('Manage review agents');
 
 agentCommand
   .command('create')
-  .description('Register a new agent')
-  .requiredOption('--model <model>', 'AI model (e.g., claude-sonnet-4-6)')
-  .requiredOption('--tool <tool>', 'Review tool (e.g., claude-code)')
-  .action(async (opts: { model: string; tool: string }) => {
+  .description('Add an agent to local config (interactive or via flags)')
+  .option('--model <model>', 'AI model name (e.g., claude-opus-4-6)')
+  .option('--tool <tool>', 'Review tool name (e.g., claude-code)')
+  .option('--command <cmd>', 'Custom command template (bypasses registry lookup)')
+  .action(async (opts: { model?: string; tool?: string; command?: string }) => {
+    const config = loadConfig();
+    requireApiKey(config);
+
+    let model: string;
+    let tool: string;
+    let command: string | undefined = opts.command;
+
+    if (opts.model && opts.tool) {
+      // Non-interactive mode
+      model = opts.model;
+      tool = opts.tool;
+    } else if (opts.model || opts.tool) {
+      console.error('Both --model and --tool are required in non-interactive mode.');
+      process.exit(1);
+    } else {
+      // Interactive mode: fetch registry and prompt
+      const client = new ApiClient(config.platformUrl, config.apiKey!);
+      let registry: RegistryResponse;
+      try {
+        registry = await client.get<RegistryResponse>('/api/registry');
+      } catch {
+        console.warn('Could not fetch registry from server. Using built-in defaults.');
+        registry = FALLBACK_REGISTRY;
+      }
+
+      const { search } = await import('@inquirer/prompts');
+
+      // Tool-first selection with fuzzy filter
+      const toolChoices = registry.tools.map((t) => ({
+        name: `${t.displayName} (${t.name})`,
+        value: t.name,
+      }));
+
+      tool = await search({
+        message: 'Select a tool:',
+        source: (input) => {
+          const term = (input ?? '').toLowerCase();
+          return toolChoices.filter((c) => c.name.toLowerCase().includes(term));
+        },
+      });
+
+      // Find compatible models for this tool
+      const compatibleModels = registry.models.filter((m) => m.tools.includes(tool));
+
+      if (compatibleModels.length === 1) {
+        model = compatibleModels[0].name;
+        console.log(`Model: ${compatibleModels[0].displayName} (${model})`);
+      } else if (compatibleModels.length === 0) {
+        const { input } = await import('@inquirer/prompts');
+        model = await input({ message: 'Enter model name:' });
+      } else {
+        const modelChoices = compatibleModels.map((m) => ({
+          name: `${m.displayName} (${m.name})`,
+          value: m.name,
+        }));
+        model = await search({
+          message: `Select a model for ${tool}:`,
+          source: (input) => {
+            const term = (input ?? '').toLowerCase();
+            return modelChoices.filter((c) => c.name.toLowerCase().includes(term));
+          },
+        });
+      }
+
+      // Resolve command from registry
+      if (!command) {
+        const toolEntry = registry.tools.find((t) => t.name === tool);
+        if (toolEntry) {
+          command = toolEntry.commandTemplate.replaceAll('${MODEL}', model);
+        }
+      }
+    }
+
+    // Resolve command if not set
+    if (!command) {
+      try {
+        command = resolveCommandTemplate(null, tool);
+      } catch {
+        console.error(`No default command for tool "${tool}". Use --command to specify one.`);
+        process.exit(1);
+      }
+    }
+
+    // Validate binary
+    if (validateCommandBinary(command)) {
+      console.log(`Verifying... binary found.`);
+    } else {
+      console.warn(
+        `Warning: binary for command "${command.split(' ')[0]}" not found on this machine.`,
+      );
+    }
+
+    // Write to local config
+    const newAgent: LocalAgentConfig = { model, tool, command };
+    if (config.agents === null) {
+      config.agents = [];
+    }
+
+    const isDuplicate = config.agents.some((a) => a.model === model && a.tool === tool);
+    if (isDuplicate) {
+      console.error(`Agent with model "${model}" and tool "${tool}" already exists in config.`);
+      process.exit(1);
+    }
+
+    config.agents.push(newAgent);
+    saveConfig(config);
+
+    console.log('Agent added to config:');
+    console.log(`  Model:   ${model}`);
+    console.log(`  Tool:    ${tool}`);
+    console.log(`  Command: ${command}`);
+  });
+
+agentCommand
+  .command('init')
+  .description('Import server-side agents into local config')
+  .action(async () => {
     const config = loadConfig();
     const apiKey = requireApiKey(config);
     const client = new ApiClient(config.platformUrl, apiKey);
 
-    const body: CreateAgentRequest = { model: opts.model, tool: opts.tool };
-    let agent: CreateAgentResponse;
+    let res: ListAgentsResponse;
     try {
-      agent = await client.post<CreateAgentResponse>('/api/agents', body);
+      res = await client.get<ListAgentsResponse>('/api/agents');
     } catch (err) {
-      console.error('Failed to create agent:', err instanceof Error ? err.message : err);
+      console.error('Failed to list agents:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
 
-    console.log('Agent created:');
-    console.log(`  ID:    ${agent.id}`);
-    console.log(`  Model: ${agent.model}`);
-    console.log(`  Tool:  ${agent.tool}`);
+    if (res.agents.length === 0) {
+      console.log('No server-side agents found. Use `opencrust agent create` to add one.');
+      return;
+    }
+
+    const existing = config.agents ?? [];
+    let imported = 0;
+
+    for (const agent of res.agents) {
+      const isDuplicate = existing.some((e) => e.model === agent.model && e.tool === agent.tool);
+      if (isDuplicate) continue;
+
+      const command = DEFAULT_COMMANDS[agent.tool] ?? undefined;
+      existing.push({ model: agent.model, tool: agent.tool, command });
+      imported++;
+    }
+
+    config.agents = existing;
+    saveConfig(config);
+
+    console.log(`Imported ${imported} agent(s) to local config.`);
+    if (imported > 0) {
+      console.log('Edit ~/.opencrust/config.yml to adjust commands for your system.');
+    }
   });
 
 agentCommand
@@ -513,7 +736,7 @@ agentCommand
   });
 
 agentCommand
-  .command('start [agentId]')
+  .command('start [agentIdOrModel]')
   .description('Connect agent to platform via WebSocket')
   .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
   .option(
@@ -522,7 +745,7 @@ agentCommand
   )
   .action(
     async (
-      agentId: string | undefined,
+      agentIdOrModel: string | undefined,
       opts: { verbose?: boolean; stabilityThreshold?: string },
     ) => {
       let stabilityThresholdMs: number | undefined;
@@ -540,10 +763,112 @@ agentCommand
         }
         stabilityThresholdMs = val;
       }
+
       const config = loadConfig();
       const apiKey = requireApiKey(config);
-
       const client = new ApiClient(config.platformUrl, apiKey);
+
+      // === Path B: Local-config mode (agents section exists) ===
+      if (config.agents !== null) {
+        // Validate and filter agents by binary availability
+        const validAgents: Array<{ local: LocalAgentConfig; command: string }> = [];
+        for (const local of config.agents) {
+          let cmd: string;
+          try {
+            cmd = resolveLocalAgentCommand(local, config.agentCommand);
+          } catch {
+            console.warn(`Skipping ${local.model}/${local.tool}: no command template available`);
+            continue;
+          }
+          if (!validateCommandBinary(cmd)) {
+            console.warn(
+              `Skipping ${local.model}/${local.tool}: binary "${cmd.split(' ')[0]}" not found`,
+            );
+            continue;
+          }
+          validAgents.push({ local, command: cmd });
+        }
+
+        if (validAgents.length === 0) {
+          console.error('No valid agents in config. Check that tool binaries are installed.');
+          process.exit(1);
+        }
+
+        // Select agent
+        let selected: { local: LocalAgentConfig; command: string };
+        if (agentIdOrModel) {
+          const match = validAgents.find((a) => a.local.model === agentIdOrModel);
+          if (!match) {
+            console.error(`No agent with model "${agentIdOrModel}" found in local config.`);
+            console.error('Available agents:');
+            for (const a of validAgents) {
+              console.error(`  ${a.local.model}  (${a.local.tool})`);
+            }
+            process.exit(1);
+          }
+          selected = match;
+        } else if (validAgents.length === 1) {
+          selected = validAgents[0];
+          console.log(`Using agent ${selected.local.model} (${selected.local.tool})`);
+        } else {
+          console.error('Multiple agents in config. Specify a model name:');
+          for (const a of validAgents) {
+            console.error(`  ${a.local.model}  (${a.local.tool})`);
+          }
+          process.exit(1);
+        }
+
+        // Sync to server
+        let serverAgents: AgentResponse[];
+        try {
+          const res = await client.get<ListAgentsResponse>('/api/agents');
+          serverAgents = res.agents;
+        } catch (err) {
+          console.error('Failed to fetch agents:', err instanceof Error ? err.message : err);
+          process.exit(1);
+        }
+
+        let agentId: string;
+        try {
+          const sync = await syncAgentToServer(client, serverAgents, selected.local);
+          agentId = sync.agentId;
+          if (sync.created) {
+            console.log(`Registered new agent ${agentId} on platform`);
+          }
+        } catch (err) {
+          console.error(
+            'Failed to sync agent to server:',
+            err instanceof Error ? err.message : err,
+          );
+          process.exit(1);
+        }
+
+        const reviewDeps: ReviewExecutorDeps = {
+          commandTemplate: selected.command,
+          maxDiffSizeKb: config.maxDiffSizeKb,
+        };
+
+        const consumptionDeps: ConsumptionDeps = {
+          client,
+          agentId,
+          limits: config.limits,
+          session: createSessionTracker(),
+        };
+
+        console.log(`Starting agent ${selected.local.model} (${agentId})...`);
+        startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
+          verbose: opts.verbose,
+          stabilityThresholdMs,
+        });
+        return;
+      }
+
+      // === Path A: Old server-side behavior (no agents section) ===
+      console.log(
+        'Hint: No agents in local config. Run `opencrust agent init` to import, or `opencrust agent create` to add agents.',
+      );
+
+      let agentId = agentIdOrModel;
       let agentTool: string | undefined;
 
       if (!agentId) {
@@ -572,7 +897,6 @@ agentCommand
           process.exit(1);
         }
       } else {
-        // Fetch agent info to get the tool field
         try {
           const res = await client.get<ListAgentsResponse>('/api/agents');
           const agent = res.agents.find((a) => a.id === agentId);

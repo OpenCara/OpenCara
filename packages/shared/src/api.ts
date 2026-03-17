@@ -133,3 +133,25 @@ export interface ConsumptionStatsResponse {
 export interface ErrorResponse {
   error: string;
 }
+
+/** Tool entry in the platform registry */
+export interface ToolRegistryEntry {
+  name: string;
+  displayName: string;
+  binary: string;
+  commandTemplate: string;
+  tokenParser: string;
+}
+
+/** Model entry in the platform registry */
+export interface ModelRegistryEntry {
+  name: string;
+  displayName: string;
+  tools: string[];
+}
+
+/** GET /api/registry — response */
+export interface RegistryResponse {
+  tools: ToolRegistryEntry[];
+  models: ModelRegistryEntry[];
+}
