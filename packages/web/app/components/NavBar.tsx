@@ -10,6 +10,14 @@ export default function NavBar() {
             Community
           </a>
           <a
+            href="https://discord.gg/JGnmrUXF"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-surface-100 hover:text-crust-400"
+          >
+            Discord
+          </a>
+          <a
             href="https://github.com/yugoo-ai/OpenCrust"
             target="_blank"
             rel="noopener noreferrer"

@@ -56,6 +56,13 @@ describe('RootLayout', () => {
     expect(html).not.toContain('Dashboard');
   });
 
+  it('renders footer with Discord link', async () => {
+    const child = createElement('span', null, 'test');
+    const html = await renderLayout(child);
+    expect(html).toContain('Discord');
+    expect(html).toContain('https://discord.gg/JGnmrUXF');
+  });
+
   it('renders footer with GitHub link', async () => {
     const child = createElement('span', null, 'test');
     const html = await renderLayout(child);

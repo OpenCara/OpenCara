@@ -20,6 +20,12 @@ describe('NavBar', () => {
     expect(html).toContain('href="/community"');
   });
 
+  it('renders Discord link', async () => {
+    const html = await renderNavBar();
+    expect(html).toContain('Discord');
+    expect(html).toContain('https://discord.gg/JGnmrUXF');
+  });
+
   it('renders GitHub link', async () => {
     const html = await renderNavBar();
     expect(html).toContain('GitHub');

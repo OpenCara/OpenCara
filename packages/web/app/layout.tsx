@@ -13,6 +13,14 @@ function Footer() {
         <span>&copy; {new Date().getFullYear()} OpenCrust</span>
         <div className="flex gap-4">
           <a
+            href="https://discord.gg/JGnmrUXF"
+            className="hover:text-crust-400"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Discord
+          </a>
+          <a
             href="https://github.com/yugoo-ai/OpenCrust"
             className="hover:text-crust-400"
             target="_blank"
