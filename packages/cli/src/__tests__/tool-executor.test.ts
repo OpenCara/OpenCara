@@ -410,35 +410,43 @@ describe('estimateTokens', () => {
 describe('parseTokenUsage', () => {
   it('parses Codex "tokens used" footer', () => {
     const stdout = 'Some review output\n\ntokens used 1,801';
-    expect(parseTokenUsage(stdout, '')).toBe(1801);
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 1801, parsed: true });
   });
 
   it('parses Codex "tokens used" without comma', () => {
     const stdout = 'Output\ntokens used 275';
-    expect(parseTokenUsage(stdout, '')).toBe(275);
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 275, parsed: true });
   });
 
   it('parses Claude JSON usage from stdout', () => {
     const stdout = '{"result":"ok","usage":{"input_tokens":1234,"output_tokens":567}}';
-    expect(parseTokenUsage(stdout, '')).toBe(1801);
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 1801, parsed: true });
+  });
+
+  it('parses Claude JSON with output_tokens before input_tokens', () => {
+    const stdout = '{"usage":{"output_tokens":567,"input_tokens":1234}}';
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 1801, parsed: true });
   });
 
   it('parses Claude JSON usage from stderr', () => {
     const stderr = '{"input_tokens": 500, "output_tokens": 200}';
-    expect(parseTokenUsage('plain text output', stderr)).toBe(700);
+    expect(parseTokenUsage('plain text output', stderr)).toEqual({ tokens: 700, parsed: true });
   });
 
   it('parses Qwen JSON stats', () => {
     const stdout = '{"stats":{"models":{"qwen":{"tokens":{"total":3500}}}}}';
-    expect(parseTokenUsage(stdout, '')).toBe(3500);
+    expect(parseTokenUsage(stdout, '')).toEqual({ tokens: 3500, parsed: true });
   });
 
   it('falls back to character estimate when no pattern matches', () => {
     const stdout = 'Just a plain review with no token info';
-    expect(parseTokenUsage(stdout, '')).toBe(Math.ceil(stdout.length / 4));
+    expect(parseTokenUsage(stdout, '')).toEqual({
+      tokens: Math.ceil(stdout.length / 4),
+      parsed: false,
+    });
   });
 
   it('returns 0 for empty output', () => {
-    expect(parseTokenUsage('', '')).toBe(0);
+    expect(parseTokenUsage('', '')).toEqual({ tokens: 0, parsed: false });
   });
 });

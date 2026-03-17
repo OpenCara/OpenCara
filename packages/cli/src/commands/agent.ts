@@ -231,13 +231,19 @@ async function logPostReviewStats(
   type: 'Review' | 'Summary',
   verdict: string | undefined,
   tokensUsed: number,
+  tokensEstimated: boolean,
   consumptionDeps?: ConsumptionDeps,
 ): Promise<void> {
+  const estimateTag = tokensEstimated ? ' ~' : ' ';
   if (!consumptionDeps) {
     if (verdict) {
-      console.log(`${type} complete: ${verdict} (${tokensUsed} tokens)`);
+      console.log(
+        `${type} complete: ${verdict} (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
+      );
     } else {
-      console.log(`${type} complete (${tokensUsed} tokens)`);
+      console.log(
+        `${type} complete (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
+      );
     }
     return;
   }
@@ -253,9 +259,13 @@ async function logPostReviewStats(
   }
 
   if (verdict) {
-    console.log(`${type} complete: ${verdict} (${tokensUsed.toLocaleString()} tokens)`);
+    console.log(
+      `${type} complete: ${verdict} (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
+    );
   } else {
-    console.log(`${type} complete (${tokensUsed.toLocaleString()} tokens)`);
+    console.log(
+      `${type} complete (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
+    );
   }
   console.log(
     formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits, dailyStats),
@@ -346,7 +356,13 @@ export function handleMessage(
             verdict: result.verdict,
             tokensUsed: result.tokensUsed,
           });
-          await logPostReviewStats('Review', result.verdict, result.tokensUsed, consumptionDeps);
+          await logPostReviewStats(
+            'Review',
+            result.verdict,
+            result.tokensUsed,
+            result.tokensEstimated,
+            consumptionDeps,
+          );
         } catch (err: unknown) {
           if (err instanceof DiffTooLargeError) {
             trySend(ws, {
@@ -431,7 +447,13 @@ export function handleMessage(
             summary: result.summary,
             tokensUsed: result.tokensUsed,
           });
-          await logPostReviewStats('Summary', undefined, result.tokensUsed, consumptionDeps);
+          await logPostReviewStats(
+            'Summary',
+            undefined,
+            result.tokensUsed,
+            result.tokensEstimated,
+            consumptionDeps,
+          );
         } catch (err: unknown) {
           if (err instanceof InputTooLargeError) {
             trySend(ws, {

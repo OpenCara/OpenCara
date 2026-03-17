@@ -16,6 +16,7 @@ export interface ReviewResponse {
   review: string;
   verdict: ReviewVerdict;
   tokensUsed: number;
+  tokensEstimated: boolean;
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
@@ -118,8 +119,14 @@ export async function executeReview(
     );
 
     const { verdict, review } = extractVerdict(result.stdout);
-    const inputTokens = estimateTokens(fullPrompt);
-    return { review, verdict, tokensUsed: result.tokensUsed + inputTokens };
+    // Only add input estimate when tokens were estimated (not parsed from tool output)
+    const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
+    return {
+      review,
+      verdict,
+      tokensUsed: result.tokensUsed + inputTokens,
+      tokensEstimated: !result.tokensParsed,
+    };
   } finally {
     clearTimeout(abortTimer);
   }

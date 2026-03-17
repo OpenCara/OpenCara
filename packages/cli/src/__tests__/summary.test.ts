@@ -129,7 +129,7 @@ describe('executeSummary', () => {
     diffContent: 'diff --git a/file.ts\n+hello',
   };
 
-  function createMockRunTool(stdout: string, tokensUsed = 0) {
+  function createMockRunTool(stdout: string, tokensUsed = 0, tokensParsed = false) {
     return vi
       .fn<
         (
@@ -139,7 +139,7 @@ describe('executeSummary', () => {
           signal?: AbortSignal,
         ) => Promise<ToolExecutorResult>
       >()
-      .mockResolvedValue({ stdout, tokensUsed });
+      .mockResolvedValue({ stdout, stderr: '', tokensUsed, tokensParsed });
   }
 
   it('invokes tool subprocess and returns summary', async () => {
@@ -206,12 +206,12 @@ describe('executeSummary', () => {
   });
 
   it('returns tokensUsed from tool when reported', async () => {
-    const mockRunTool = createMockRunTool('Summary', 200);
+    const mockRunTool = createMockRunTool('Summary', 200, true);
 
     const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    // 200 from tool + input prompt estimate
-    expect(result.tokensUsed).toBeGreaterThan(200);
+    // 200 from tool (parsed, no input estimate added)
+    expect(result.tokensUsed).toBe(200);
   });
 
   it('propagates tool errors', async () => {

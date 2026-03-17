@@ -772,11 +772,17 @@ export class AgentConnection implements DurableObject {
     await this.removeInFlightTask(msg.taskId);
 
     // Always log consumption for the summary agent
-    await supabase.from('consumption_logs').insert({
+    const { error: summaryLogError } = await supabase.from('consumption_logs').insert({
       agent_id: agentId,
       review_task_id: msg.taskId,
       tokens_used: msg.tokensUsed,
     });
+    if (summaryLogError) {
+      console.error(
+        `Failed to insert consumption log for summary task ${msg.taskId}:`,
+        summaryLogError,
+      );
+    }
 
     // Look up task + project info
     const { data: taskData } = await supabase
