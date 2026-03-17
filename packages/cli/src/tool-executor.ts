@@ -30,6 +30,7 @@ const MAX_STDERR_LENGTH = 1000;
 
 /**
  * Validate that the binary referenced by a command template exists and is executable.
+ * Cross-platform: uses `where` on Windows, `command -v` via shell on Unix.
  */
 export function validateCommandBinary(commandTemplate: string): boolean {
   const { command } = parseCommandTemplate(commandTemplate);
@@ -44,7 +45,12 @@ export function validateCommandBinary(commandTemplate: string): boolean {
   }
 
   try {
-    execFileSync('which', [command], { stdio: 'pipe' });
+    const isWindows = process.platform === 'win32';
+    if (isWindows) {
+      execFileSync('where', [command], { stdio: 'pipe' });
+    } else {
+      execFileSync('sh', ['-c', `command -v ${command}`], { stdio: 'pipe' });
+    }
     return true;
   } catch {
     return false;
