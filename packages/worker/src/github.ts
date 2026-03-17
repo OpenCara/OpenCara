@@ -156,8 +156,16 @@ export function verdictToReviewEvent(verdict: ReviewVerdict): ReviewEvent {
   return VERDICT_TO_EVENT[verdict];
 }
 
+export interface ReviewComment {
+  path: string;
+  line: number;
+  side: 'RIGHT' | 'LEFT';
+  body: string;
+}
+
 /**
  * Post a PR review using the GitHub Pull Request Review API.
+ * Optionally includes inline comments on specific file:line locations.
  * Returns the html_url of the created review.
  */
 export async function postPrReview(
@@ -167,7 +175,13 @@ export async function postPrReview(
   body: string,
   event: ReviewEvent,
   token: string,
+  comments?: ReviewComment[],
 ): Promise<string> {
+  const payload: Record<string, unknown> = { body, event };
+  if (comments && comments.length > 0) {
+    payload.comments = comments;
+  }
+
   const response = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
     {
@@ -179,7 +193,7 @@ export async function postPrReview(
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ body, event }),
+      body: JSON.stringify(payload),
     },
   );
 

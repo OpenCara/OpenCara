@@ -92,17 +92,17 @@ describe('TaskTimeout', () => {
   });
 
   describe('fetch /set-timeout', () => {
-    it('stores taskId and minCount, sets alarm', async () => {
+    it('stores taskId and reviewCount, sets alarm', async () => {
       const request = new Request('https://internal/set-timeout', {
         method: 'POST',
-        body: JSON.stringify({ taskId: 'task-1', timeoutMs: 60000, minCount: 2 }),
+        body: JSON.stringify({ taskId: 'task-1', timeoutMs: 60000, reviewCount: 2 }),
       });
 
       const response = await timeout.fetch(request);
 
       expect(response.status).toBe(200);
       expect(storage.store.get('taskId')).toBe('task-1');
-      expect(storage.store.get('minCount')).toBe(2);
+      expect(storage.store.get('reviewCount')).toBe(2);
       expect(storage.setAlarm).toHaveBeenCalled();
     });
 
@@ -112,7 +112,7 @@ describe('TaskTimeout', () => {
         body: JSON.stringify({
           taskId: 'task-1',
           timeoutMs: 60000,
-          minCount: 2,
+          reviewCount: 2,
           installationId: 99,
           owner: 'org',
           repo: 'repo',
@@ -125,7 +125,7 @@ describe('TaskTimeout', () => {
 
       expect(response.status).toBe(200);
       expect(storage.store.get('taskMeta')).toEqual({
-        minCount: 2,
+        reviewCount: 2,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -146,7 +146,7 @@ describe('TaskTimeout', () => {
   describe('alarm', () => {
     beforeEach(() => {
       storage.store.set('taskId', 'task-1');
-      storage.store.set('minCount', 2);
+      storage.store.set('reviewCount', 2);
     });
 
     it('does nothing when taskId is not set', async () => {
@@ -200,7 +200,7 @@ describe('TaskTimeout', () => {
     it('transitions to summarizing and dispatches summary when enough results exist', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
       storage.store.set('taskMeta', {
-        minCount: 2,
+        reviewCount: 2,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -225,14 +225,14 @@ describe('TaskTimeout', () => {
         mockEnv,
         expect.anything(),
         'task-1',
-        expect.objectContaining({ minCount: 2, installationId: 99 }),
+        expect.objectContaining({ reviewCount: 2, installationId: 99 }),
       );
     });
 
     it('transitions to summarizing with partial results and dispatches', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
       storage.store.set('taskMeta', {
-        minCount: 3,
+        reviewCount: 3,
         installationId: 99,
         owner: 'org',
         repo: 'repo',

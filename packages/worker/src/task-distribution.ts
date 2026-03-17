@@ -93,26 +93,32 @@ export function filterByAccessList(
 export const MAX_AGENTS_PER_TASK = 10;
 
 /**
- * Select agents for a review.
- * Returns ALL eligible agents (up to MAX_AGENTS_PER_TASK), ordered with preferred tools first.
- * minCount is the threshold for triggering summarization, not a cap on reviewers.
- * Returns empty if fewer than minCount agents are available.
+ * Select up to `reviewCount` agents for a review.
+ * Preferred tools first, then sorted by reputation (descending).
+ * Returns empty only if no agents are available at all.
+ * Returns fewer than reviewCount if not enough agents are online.
  */
 export function selectAgents(
   agents: EligibleAgent[],
-  minCount: number,
+  reviewCount: number,
   preferredTools: string[],
 ): EligibleAgent[] {
-  if (agents.length < minCount) return [];
+  if (agents.length === 0) return [];
+
+  const count = Math.min(reviewCount, agents.length);
+
+  // Sort by reputation descending within each group
+  const byReputation = (a: EligibleAgent, b: EligibleAgent) =>
+    b.reputationScore - a.reputationScore;
 
   if (preferredTools.length === 0) {
-    return agents.slice(0, MAX_AGENTS_PER_TASK);
+    return [...agents].sort(byReputation).slice(0, count);
   }
 
-  const preferred = agents.filter((a) => preferredTools.includes(a.tool));
-  const others = agents.filter((a) => !preferredTools.includes(a.tool));
+  const preferred = agents.filter((a) => preferredTools.includes(a.tool)).sort(byReputation);
+  const others = agents.filter((a) => !preferredTools.includes(a.tool)).sort(byReputation);
 
-  return [...preferred, ...others].slice(0, MAX_AGENTS_PER_TASK);
+  return [...preferred, ...others].slice(0, count);
 }
 
 /**
@@ -178,7 +184,7 @@ export async function distributeTask(
   // 2. Create review_task with diff_content and config_json for pending pickup
   const configJson = {
     prompt: config.prompt,
-    minCount: config.agents.minCount,
+    reviewCount: config.agents.reviewCount,
     timeout: config.timeout,
     diffUrl,
     baseRef,
@@ -217,7 +223,7 @@ export async function distributeTask(
         body: JSON.stringify({
           taskId,
           timeoutMs,
-          minCount: config.agents.minCount,
+          reviewCount: config.agents.reviewCount,
           installationId,
           owner,
           repo,
@@ -237,7 +243,7 @@ export async function distributeTask(
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
-  const selected = selectAgents(filtered, config.agents.minCount, config.agents.preferredTools);
+  const selected = selectAgents(filtered, config.agents.reviewCount, config.agents.preferredTools);
 
   if (selected.length === 0) {
     console.log(`No eligible agents found for task ${taskId} — stays pending for pickup`);
@@ -269,9 +275,9 @@ export async function distributeTask(
             project: { owner, repo, prompt: config.prompt },
             timeout: remainingSeconds,
             diffContent,
-            minCount: config.agents.minCount,
+            reviewCount: config.agents.reviewCount,
             installationId,
-            reviewMode: config.agents.minCount > 1 ? 'compact' : 'full',
+            reviewMode: config.agents.reviewCount > 1 ? 'compact' : 'full',
           }),
         }),
       );

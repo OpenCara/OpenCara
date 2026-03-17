@@ -10,6 +10,7 @@ import type {
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { getInstallationToken, postPrReview, verdictToReviewEvent } from './github.js';
+import { parseStructuredReview, parseDiffFiles, filterValidComments } from './review-parser.js';
 import {
   type InFlightTaskMeta,
   triggerSummarization,
@@ -328,7 +329,7 @@ export class AgentConnection implements DurableObject {
           },
           timeout: remainingSeconds,
           diffContent,
-          reviewMode: ((config.minCount as number) ?? 1) > 1 ? 'compact' : 'full',
+          reviewMode: ((config.reviewCount as number) ?? 1) > 1 ? 'compact' : 'full',
         };
 
         websockets[0].send(JSON.stringify(message));
@@ -338,9 +339,9 @@ export class AgentConnection implements DurableObject {
         await this.state.storage.put('inFlightTaskIds', inFlightTaskIds);
 
         // Store per-task metadata for multi-agent review collection
-        const minCount = (config.minCount as number) ?? 1;
+        const reviewCount = (config.reviewCount as number) ?? 1;
         const taskMeta: InFlightTaskMeta = {
-          minCount,
+          reviewCount,
           installationId: (config.installationId as number) ?? project.github_installation_id,
           owner: project.owner,
           repo: project.repo,
@@ -382,7 +383,7 @@ export class AgentConnection implements DurableObject {
       project: { owner: string; repo: string; prompt: string };
       timeout: number;
       diffContent: string;
-      minCount?: number;
+      reviewCount?: number;
       installationId?: number;
       reviewMode?: 'full' | 'compact';
     };
@@ -411,9 +412,9 @@ export class AgentConnection implements DurableObject {
     await this.state.storage.put('inFlightTaskIds', inFlightTaskIds);
 
     // Store per-task metadata for multi-agent review collection
-    if (payload.minCount !== undefined) {
+    if (payload.reviewCount !== undefined) {
       const taskMeta: InFlightTaskMeta = {
-        minCount: payload.minCount,
+        reviewCount: payload.reviewCount,
         installationId: payload.installationId ?? 0,
         owner: payload.project.owner,
         repo: payload.project.repo,
@@ -472,7 +473,7 @@ export class AgentConnection implements DurableObject {
 
     // Look up task meta to determine single-agent vs multi-agent mode
     const taskMeta = await this.state.storage.get<InFlightTaskMeta>(`taskMeta:${msg.taskId}`);
-    const minCount = taskMeta?.minCount ?? 1;
+    const reviewCount = taskMeta?.reviewCount ?? 1;
 
     // Insert result with review_text and verdict
     const { error } = await supabase.from('review_results').insert({
@@ -498,12 +499,12 @@ export class AgentConnection implements DurableObject {
       console.error(`Failed to insert consumption log for task ${msg.taskId}:`, logError);
     }
 
-    if (minCount === 1) {
+    if (reviewCount === 1) {
       // Single-agent mode: post review immediately (M5 backward compatible)
       await this.postReviewDirectly(msg, agentId, supabase);
     } else {
       // Multi-agent mode: check if we have enough results to trigger summarization
-      await this.checkAndTriggerSummarization(msg.taskId, minCount, taskMeta!, supabase);
+      await this.checkAndTriggerSummarization(msg.taskId, reviewCount, taskMeta!, supabase);
     }
   }
 
@@ -518,7 +519,9 @@ export class AgentConnection implements DurableObject {
     // Look up task + project info for posting the review
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
+      .select(
+        'pr_number, pr_url, diff_content, project_id, projects!inner(owner, repo, github_installation_id)',
+      )
       .eq('id', msg.taskId)
       .single();
 
@@ -543,13 +546,21 @@ export class AgentConnection implements DurableObject {
     const model = agentData?.model ?? 'unknown';
     const tool = agentData?.tool ?? 'unknown';
 
-    // Format and post the review as a PR comment
-    const formattedReview = formatReviewComment(msg.verdict, model, tool, msg.review);
+    // Parse structured review for inline comments
+    const parsed = parseStructuredReview(msg.review);
+    const diffContent = (taskData.diff_content as string) ?? '';
+    const diffFiles = parseDiffFiles(diffContent);
+    const inlineComments = filterValidComments(parsed.comments, diffFiles);
+
+    // Use parsed summary if available, otherwise use raw review text
+    const reviewBody = parsed.summary !== msg.review ? parsed.summary : msg.review;
+    const effectiveVerdict = parsed.verdict ?? msg.verdict;
+    const formattedReview = formatReviewComment(effectiveVerdict, model, tool, reviewBody);
 
     try {
       console.log(
         `Posting review for task ${msg.taskId} to ${project.owner}/${project.repo}#${taskData.pr_number}` +
-          ` (installation ${project.github_installation_id})`,
+          ` (installation ${project.github_installation_id}, ${inlineComments.length} inline comments)`,
       );
 
       const installationToken = await getInstallationToken(
@@ -561,8 +572,9 @@ export class AgentConnection implements DurableObject {
         project.repo,
         taskData.pr_number as number,
         formattedReview,
-        verdictToReviewEvent(msg.verdict),
+        verdictToReviewEvent(effectiveVerdict),
         installationToken,
+        inlineComments.length > 0 ? inlineComments : undefined,
       );
 
       console.log(`Review posted for task ${msg.taskId}: ${commentUrl}`);
@@ -590,7 +602,7 @@ export class AgentConnection implements DurableObject {
    */
   private async checkAndTriggerSummarization(
     taskId: string,
-    minCount: number,
+    reviewCount: number,
     meta: InFlightTaskMeta,
     supabase: ReturnType<typeof createSupabaseClient>,
   ): Promise<void> {
@@ -603,9 +615,9 @@ export class AgentConnection implements DurableObject {
 
     const completedCount = count ?? 0;
 
-    if (completedCount < minCount) {
+    if (completedCount < reviewCount) {
       console.log(
-        `Task ${taskId}: ${completedCount}/${minCount} reviews completed, waiting for more`,
+        `Task ${taskId}: ${completedCount}/${reviewCount} reviews completed, waiting for more`,
       );
       return;
     }
@@ -755,7 +767,7 @@ export class AgentConnection implements DurableObject {
             },
             timeout: remainingSeconds,
             diffContent: (taskData.diff_content as string) ?? '',
-            reviewMode: ((config.minCount as number) ?? 1) > 1 ? 'compact' : 'full',
+            reviewMode: ((config.reviewCount as number) ?? 1) > 1 ? 'compact' : 'full',
           }),
         }),
       );
@@ -784,10 +796,12 @@ export class AgentConnection implements DurableObject {
       );
     }
 
-    // Look up task + project info
+    // Look up task + project info (include diff_content for inline comment validation)
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
+      .select(
+        'pr_number, pr_url, diff_content, project_id, projects!inner(owner, repo, github_installation_id)',
+      )
       .eq('id', msg.taskId)
       .single();
 
@@ -809,21 +823,29 @@ export class AgentConnection implements DurableObject {
       );
 
       // Get the number of contributing reviews for the summary header
-      const { count: reviewCount } = await supabase
+      const { count: reviewCountResult } = await supabase
         .from('review_results')
         .select('id', { count: 'exact', head: true })
         .eq('review_task_id', msg.taskId)
         .eq('status', 'completed');
 
-      // Post synthesized review as a PR review
-      const summaryBody = formatSummaryComment(msg.summary, reviewCount ?? 0);
+      // Parse structured review for inline comments
+      const parsed = parseStructuredReview(msg.summary);
+      const diffContent = (taskData.diff_content as string) ?? '';
+      const diffFiles = parseDiffFiles(diffContent);
+      const inlineComments = filterValidComments(parsed.comments, diffFiles);
+
+      const summaryText = parsed.summary !== msg.summary ? parsed.summary : msg.summary;
+      const summaryBody = formatSummaryComment(summaryText, reviewCountResult ?? 0);
+      const event = parsed.verdict ? verdictToReviewEvent(parsed.verdict) : 'COMMENT';
       const summaryUrl = await postPrReview(
         project.owner,
         project.repo,
         taskData.pr_number as number,
         summaryBody,
-        'COMMENT',
+        event,
         installationToken,
+        inlineComments.length > 0 ? inlineComments : undefined,
       );
 
       // Update review_summaries with comment_url
@@ -843,7 +865,7 @@ export class AgentConnection implements DurableObject {
       // Fallback: try posting individual reviews
       const reviews = await fetchCompletedReviews(supabase, msg.taskId);
       const meta: InFlightTaskMeta = {
-        minCount: 0,
+        reviewCount: 0,
         installationId: project.github_installation_id,
         owner: project.owner,
         repo: project.repo,

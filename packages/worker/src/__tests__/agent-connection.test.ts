@@ -324,6 +324,7 @@ describe('AgentConnection', () => {
         expect.stringContaining('\u2705 Approve'),
         'APPROVE',
         'test-token',
+        undefined,
       );
 
       // Comment URL stored
@@ -483,6 +484,7 @@ describe('AgentConnection', () => {
         expect.stringContaining('`unknown` / `unknown`'),
         'REQUEST_CHANGES',
         'test-token',
+        undefined,
       );
     });
 
@@ -881,11 +883,11 @@ describe('AgentConnection', () => {
       expect(storage.store.get('inFlightTaskIds')).toEqual(['task-2']);
     });
 
-    it('handles multi-agent review_complete: waits for more reviews when below minCount', async () => {
+    it('handles multi-agent review_complete: waits for more reviews when below reviewCount', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
       // Store taskMeta to enable multi-agent mode
       storage.store.set('taskMeta:task-1', {
-        minCount: 3,
+        reviewCount: 3,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -1082,7 +1084,7 @@ describe('AgentConnection', () => {
       expect(response.status).toBe(503);
     });
 
-    it('stores taskMeta when minCount is provided', async () => {
+    it('stores taskMeta when reviewCount is provided', async () => {
       const mockWs = createMockWebSocket();
       mockCtx._websockets.push(mockWs);
       storage.store.set('inFlightTaskIds', []);
@@ -1095,7 +1097,7 @@ describe('AgentConnection', () => {
           project: { owner: 'org', repo: 'repo', prompt: 'Review' },
           timeout: 600,
           diffContent: 'diff content',
-          minCount: 3,
+          reviewCount: 3,
           installationId: 99,
         }),
       });
@@ -1104,7 +1106,7 @@ describe('AgentConnection', () => {
 
       const meta = storage.store.get('taskMeta:task-99');
       expect(meta).toEqual({
-        minCount: 3,
+        reviewCount: 3,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -1214,7 +1216,7 @@ describe('AgentConnection', () => {
                 diff_content: 'diff --git a/file.ts\n+hello',
                 config_json: {
                   prompt: 'Review',
-                  minCount: 1,
+                  reviewCount: 1,
                   timeout: '10m',
                   diffUrl: 'https://github.com/org/repo/pull/10.diff',
                   baseRef: 'main',
@@ -1254,7 +1256,7 @@ describe('AgentConnection', () => {
 
       // Verify taskMeta stored
       expect(storage.store.get('taskMeta:pending-task-1')).toEqual({
-        minCount: 1,
+        reviewCount: 1,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -1673,7 +1675,7 @@ describe('AgentConnection', () => {
                 pr_url: 'https://github.com/org/repo/pull/10',
                 timeout_at: new Date(Date.now() + 300_000).toISOString(),
                 diff_content: 'diff',
-                config_json: { prompt: 'Review', minCount: 1 },
+                config_json: { prompt: 'Review', reviewCount: 1 },
                 project_id: 'proj-1',
                 projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
               },

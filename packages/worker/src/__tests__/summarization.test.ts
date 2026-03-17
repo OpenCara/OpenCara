@@ -313,7 +313,7 @@ describe('summarization', () => {
       });
 
       const result = await triggerSummarization(mockEnv as never, mockSupa as never, 'task-1', {
-        minCount: 1,
+        reviewCount: 1,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -355,7 +355,7 @@ describe('summarization', () => {
       };
 
       const result = await triggerSummarization(mockEnv as never, mockSupa as never, 'task-1', {
-        minCount: 1,
+        reviewCount: 1,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -373,7 +373,7 @@ describe('summarization', () => {
       mockSupa._setSelectResult({ data: [] });
 
       const result = await triggerSummarization(mockEnv as never, mockSupa as never, 'task-1', {
-        minCount: 1,
+        reviewCount: 1,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -419,7 +419,7 @@ describe('summarization', () => {
       });
 
       const result = await triggerSummarization(mockEnv as never, mockSupa as never, 'task-1', {
-        minCount: 1,
+        reviewCount: 1,
         installationId: 99,
         owner: 'org',
         repo: 'repo',
@@ -456,7 +456,7 @@ describe('summarization', () => {
         mockSupa as never,
         'task-1',
         {
-          minCount: 2,
+          reviewCount: 2,
           installationId: 99,
           owner: 'org',
           repo: 'repo',
@@ -489,7 +489,7 @@ describe('summarization', () => {
         mockSupa as never,
         'task-1',
         {
-          minCount: 1,
+          reviewCount: 1,
           installationId: 99,
           owner: 'org',
           repo: 'repo',
