@@ -1,0 +1,19 @@
+version: 1
+prompt: |
+  Review this pull request for the OpenCrust platform — a distributed AI code review service.
+
+  Tech stack: TypeScript, Cloudflare Workers + Durable Objects, Supabase (PostgreSQL),
+  Next.js, pnpm monorepo (packages: worker, cli, web, shared).
+
+  Focus on:
+  - Correctness and logic errors
+  - Security issues (injection, auth bypass, token leaks)
+  - TypeScript type safety and strict mode compliance
+  - Edge cases in WebSocket handling, API responses, and error paths
+  - Test coverage for new/changed code
+  - Consistency with existing patterns in the codebase
+
+  Be concise. Flag real issues, skip nitpicks.
+agents:
+  min_count: 1
+timeout: 10m
