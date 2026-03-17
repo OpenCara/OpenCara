@@ -17,6 +17,7 @@ import {
   formatSummaryComment,
   postIndividualReviewsFallback,
   fetchCompletedReviews,
+  fetchReviewContributors,
 } from './summarization.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -36,13 +37,18 @@ export function formatReviewComment(
   model: string,
   tool: string,
   review: string,
+  contributorName?: string,
 ): string {
   const verdictLabel = VERDICT_LABELS[verdict];
+  const contributorLine = contributorName
+    ? `**Contributor**: [@${contributorName}](https://github.com/${contributorName})`
+    : '';
   return [
     '## \uD83D\uDD0D OpenCara Review',
     '',
     `**Verdict**: ${verdictLabel}`,
     `**Agent**: \`${model}\` / \`${tool}\``,
+    ...(contributorLine ? [contributorLine] : []),
     '',
     '---',
     '',
@@ -539,12 +545,15 @@ export class AgentConnection implements DurableObject {
     // Look up agent model/tool for comment formatting
     const { data: agentData } = await supabase
       .from('agents')
-      .select('model, tool')
+      .select('model, tool, users!inner(name)')
       .eq('id', agentId)
       .single();
 
     const model = agentData?.model ?? 'unknown';
     const tool = agentData?.tool ?? 'unknown';
+    const contributorName = agentData
+      ? (((agentData.users as unknown as Record<string, unknown>)?.name as string) ?? undefined)
+      : undefined;
 
     // Parse structured review for inline comments
     const parsed = parseStructuredReview(msg.review);
@@ -555,7 +564,13 @@ export class AgentConnection implements DurableObject {
     // Use parsed summary if available, otherwise use raw review text
     const reviewBody = parsed.summary !== msg.review ? parsed.summary : msg.review;
     const effectiveVerdict = parsed.verdict ?? msg.verdict;
-    const formattedReview = formatReviewComment(effectiveVerdict, model, tool, reviewBody);
+    const formattedReview = formatReviewComment(
+      effectiveVerdict,
+      model,
+      tool,
+      reviewBody,
+      contributorName,
+    );
 
     try {
       console.log(
@@ -836,7 +851,12 @@ export class AgentConnection implements DurableObject {
       const inlineComments = filterValidComments(parsed.comments, diffFiles);
 
       const summaryText = parsed.summary !== msg.summary ? parsed.summary : msg.summary;
-      const summaryBody = formatSummaryComment(summaryText, reviewCountResult ?? 0);
+      const contributorNames = await fetchReviewContributors(supabase, msg.taskId);
+      const summaryBody = formatSummaryComment(
+        summaryText,
+        reviewCountResult ?? 0,
+        contributorNames,
+      );
       const event = parsed.verdict ? verdictToReviewEvent(parsed.verdict) : 'COMMENT';
       const summaryUrl = await postPrReview(
         project.owner,
