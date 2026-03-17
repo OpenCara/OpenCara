@@ -115,10 +115,21 @@ export class AgentConnection implements DurableObject {
     await this.state.storage.put('connectedAt', now);
     await this.state.storage.put('lastHeartbeatAt', now);
 
-    // Only clear in-flight tasks on fresh connections, not reconnects
-    if (!isReconnect) {
+    // On fresh connections, clear in-flight tasks. On reconnects, check if
+    // there are actually in-flight tasks — if not, treat it as fresh.
+    const existingInFlight = isReconnect
+      ? ((await this.state.storage.get<string[]>('inFlightTaskIds')) ?? [])
+      : [];
+    const hasInFlightTasks = existingInFlight.length > 0;
+
+    if (!hasInFlightTasks) {
       await this.state.storage.put('inFlightTaskIds', [] as string[]);
     }
+
+    console.log(
+      `WebSocket ${isReconnect ? 'reconnect' : 'connect'} for agent ${agentId}` +
+        (isReconnect ? ` (${existingInFlight.length} in-flight tasks)` : ''),
+    );
 
     server.send(
       JSON.stringify({
@@ -143,9 +154,9 @@ export class AgentConnection implements DurableObject {
 
     await this.state.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
 
-    // Only pick up pending tasks on fresh connections, not reconnects.
-    // On reconnect the agent already has in-flight tasks from the previous connection.
-    if (supabase && !isReconnect) {
+    // Pick up pending tasks on fresh connections OR when reconnecting with
+    // no in-flight tasks (the previous connection's tasks were lost).
+    if (supabase && !hasInFlightTasks) {
       try {
         await this.pickUpPendingTasks(agentId, supabase);
       } catch (err) {
@@ -192,14 +203,17 @@ export class AgentConnection implements DurableObject {
   async webSocketClose(
     _ws: WebSocket,
     code: number,
-    _reason: string,
+    reason: string,
     _wasClean: boolean,
   ): Promise<void> {
+    const agentId = await this.state.storage.get<string>('agentId');
+    console.log(
+      `WebSocket closed for agent ${agentId ?? 'unknown'}: code=${code}, reason=${reason}`,
+    );
+
     // Skip cleanup for replaced connections (code 4002) — the new connection
     // already set the correct state (connectedAt, status, alarm).
     if (code === 4002) return;
-
-    const agentId = await this.state.storage.get<string>('agentId');
 
     await this.state.storage.put('status', 'offline');
     await this.state.storage.delete('connectedAt');
@@ -355,8 +369,10 @@ export class AgentConnection implements DurableObject {
   }
 
   private async handlePushTask(request: Request): Promise<Response> {
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? 'unknown';
     const websockets = this.state.getWebSockets();
     if (websockets.length === 0) {
+      console.log(`push-task: agent ${agentId} not connected — returning 503`);
       return new Response('Agent not connected', { status: 503 });
     }
 
@@ -369,6 +385,11 @@ export class AgentConnection implements DurableObject {
       minCount?: number;
       installationId?: number;
     };
+
+    console.log(
+      `push-task: sending review_request for task ${payload.taskId} to agent ${agentId}` +
+        ` (${payload.project.owner}/${payload.project.repo}#${payload.pr.number})`,
+    );
 
     const message: ReviewRequestMessage = {
       id: crypto.randomUUID(),
@@ -442,6 +463,10 @@ export class AgentConnection implements DurableObject {
   private async handleReviewComplete(msg: ReviewCompleteMessage): Promise<void> {
     const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
+
+    console.log(
+      `review_complete received: task ${msg.taskId}, agent ${agentId}, verdict ${msg.verdict}, tokens ${msg.tokensUsed}`,
+    );
 
     // Look up task meta to determine single-agent vs multi-agent mode
     const taskMeta = await this.state.storage.get<InFlightTaskMeta>(`taskMeta:${msg.taskId}`);
@@ -521,6 +546,11 @@ export class AgentConnection implements DurableObject {
     const formattedReview = formatReviewComment(msg.verdict, model, tool, msg.review);
 
     try {
+      console.log(
+        `Posting review for task ${msg.taskId} to ${project.owner}/${project.repo}#${taskData.pr_number}` +
+          ` (installation ${project.github_installation_id})`,
+      );
+
       const installationToken = await getInstallationToken(
         project.github_installation_id,
         this.env,
@@ -532,6 +562,8 @@ export class AgentConnection implements DurableObject {
         formattedReview,
         installationToken,
       );
+
+      console.log(`Review posted for task ${msg.taskId}: ${commentUrl}`);
 
       // Update review_results with comment_url
       await supabase

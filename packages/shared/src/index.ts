@@ -59,4 +59,9 @@ export type {
 export { getVersion } from './protocol.js';
 
 /** Review configuration types and parser */
-export { parseReviewConfig, validateReviewConfig, type ReviewConfig } from './review-config.js';
+export {
+  parseReviewConfig,
+  validateReviewConfig,
+  DEFAULT_REVIEW_CONFIG,
+  type ReviewConfig,
+} from './review-config.js';
