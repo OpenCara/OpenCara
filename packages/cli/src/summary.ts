@@ -17,6 +17,7 @@ export interface SummaryRequest {
   repo: string;
   prNumber: number;
   timeout: number;
+  diffContent: string;
 }
 
 export interface SummaryResponse {
@@ -35,29 +36,48 @@ export class InputTooLargeError extends Error {
 }
 
 export function buildSummarySystemPrompt(owner: string, repo: string, reviewCount: number): string {
-  return `You are a code review summarizer for the ${owner}/${repo} repository.
+  return `You are a senior code reviewer and synthesizer for the ${owner}/${repo} repository.
 
-You have received ${reviewCount} individual code reviews for a Pull Request.
-Your job is to synthesize these reviews into a single, coherent summary that:
+You will receive a pull request diff and ${reviewCount} compact review${reviewCount !== 1 ? 's' : ''} from other agents.
 
-1. Highlights the most important findings across all reviews
-2. Notes areas of agreement and disagreement between reviewers
-3. Provides a clear overall assessment
-4. Lists specific action items for the PR author
+Your job:
+1. Perform your own independent code review of the diff
+2. Synthesize findings from all reviews (including yours)
+3. Deduplicate and prioritize findings by severity
+4. Produce a final review in markdown
 
-Format your response as a markdown document. Be concise but thorough.`;
+Format your response as:
+
+## Summary
+[Overall assessment, 2-3 sentences]
+
+## Findings
+[List findings grouped by severity: critical > major > minor > suggestion]
+[Each finding: file:line - description]
+
+## Verdict
+[APPROVE / REQUEST_CHANGES / COMMENT with rationale]`;
 }
 
-export function buildSummaryUserMessage(prompt: string, reviews: SummaryReviewInput[]): string {
+export function buildSummaryUserMessage(
+  prompt: string,
+  reviews: SummaryReviewInput[],
+  diffContent: string,
+): string {
   const reviewSections = reviews
     .map((r) => `### Review by ${r.model}/${r.tool} (Verdict: ${r.verdict})\n${r.review}`)
     .join('\n\n');
 
-  return `Project review guidelines:\n${prompt}\n\nIndividual reviews:\n\n${reviewSections}`;
+  return `Project review guidelines:\n${prompt}\n\n---\n\nPull request diff:\n\n${diffContent}\n\n---\n\nCompact reviews from other agents:\n\n${reviewSections}`;
 }
 
-export function calculateInputSize(prompt: string, reviews: SummaryReviewInput[]): number {
+export function calculateInputSize(
+  prompt: string,
+  reviews: SummaryReviewInput[],
+  diffContent: string,
+): number {
   let size = Buffer.byteLength(prompt, 'utf-8');
+  size += Buffer.byteLength(diffContent, 'utf-8');
   for (const r of reviews) {
     size += Buffer.byteLength(r.review, 'utf-8');
     size += Buffer.byteLength(r.model, 'utf-8');
@@ -77,7 +97,7 @@ export async function executeSummary(
     signal?: AbortSignal,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
-  const inputSize = calculateInputSize(req.prompt, req.reviews);
+  const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent);
   if (inputSize > MAX_INPUT_SIZE_BYTES) {
     throw new InputTooLargeError(
       `Summary input too large (${Math.round(inputSize / 1024)}KB > ${Math.round(MAX_INPUT_SIZE_BYTES / 1024)}KB limit)`,
@@ -97,7 +117,7 @@ export async function executeSummary(
 
   try {
     const systemPrompt = buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length);
-    const userMessage = buildSummaryUserMessage(req.prompt, req.reviews);
+    const userMessage = buildSummaryUserMessage(req.prompt, req.reviews, req.diffContent);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
     const result = await runTool(

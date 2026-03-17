@@ -33,6 +33,8 @@ export interface ReviewRequestProject {
   prompt: string;
 }
 
+export type ReviewMode = 'full' | 'compact';
+
 export interface ReviewRequestMessage extends MessageBase {
   type: 'review_request';
   taskId: string;
@@ -40,6 +42,7 @@ export interface ReviewRequestMessage extends MessageBase {
   project: ReviewRequestProject;
   timeout: number;
   diffContent: string;
+  reviewMode: ReviewMode;
 }
 
 export interface SummaryReview {
@@ -64,6 +67,7 @@ export interface SummaryRequestMessage extends MessageBase {
   };
   reviews: SummaryReview[];
   timeout: number;
+  diffContent: string;
 }
 
 export interface HeartbeatPingMessage extends MessageBase {

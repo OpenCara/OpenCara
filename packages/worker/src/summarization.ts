@@ -1,7 +1,7 @@
 import type { SummaryReview, ReviewVerdict } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
-import { getInstallationToken, postPrComment } from './github.js';
+import { getInstallationToken, postPrReview, verdictToReviewEvent } from './github.js';
 
 export interface InFlightTaskMeta {
   minCount: number;
@@ -114,6 +114,7 @@ export async function pushSummaryToAgent(
   project: { owner: string; repo: string; prompt: string },
   reviews: SummaryReview[],
   timeoutSeconds: number,
+  diffContent: string,
 ): Promise<void> {
   const doId = env.AGENT_CONNECTION.idFromName(summaryAgentId);
   const stub = env.AGENT_CONNECTION.get(doId);
@@ -127,6 +128,7 @@ export async function pushSummaryToAgent(
     project,
     reviews,
     timeout: timeoutSeconds,
+    diffContent,
   };
 
   await stub.fetch(
@@ -174,10 +176,10 @@ export async function triggerSummarization(
     agent_id: summaryAgentId,
   });
 
-  // Calculate remaining timeout
+  // Calculate remaining timeout and fetch diff content for synthesizer
   const { data: taskData } = await supabase
     .from('review_tasks')
-    .select('timeout_at')
+    .select('timeout_at, diff_content')
     .eq('id', taskId)
     .single();
 
@@ -185,6 +187,7 @@ export async function triggerSummarization(
     ? new Date(taskData.timeout_at as string).getTime()
     : Date.now() + 300_000;
   const remainingSeconds = Math.max(60, Math.floor((timeoutAt - Date.now()) / 1000));
+  const diffContent = (taskData?.diff_content as string) ?? '';
 
   try {
     await pushSummaryToAgent(
@@ -198,6 +201,7 @@ export async function triggerSummarization(
       { owner: meta.owner, repo: meta.repo, prompt: meta.prompt },
       reviews,
       remainingSeconds,
+      diffContent,
     );
     console.log(`Summary for task ${taskId} dispatched to agent ${summaryAgentId}`);
     return true;
@@ -210,7 +214,7 @@ export async function triggerSummarization(
 }
 
 /**
- * Fallback: post each individual review as a standalone PR comment.
+ * Fallback: post each individual review as a standalone PR review.
  */
 export async function postIndividualReviewsFallback(
   env: Env,
@@ -229,7 +233,14 @@ export async function postIndividualReviewsFallback(
         review.verdict,
         review.review,
       );
-      await postPrComment(meta.owner, meta.repo, meta.prNumber, body, token);
+      await postPrReview(
+        meta.owner,
+        meta.repo,
+        meta.prNumber,
+        body,
+        verdictToReviewEvent(review.verdict),
+        token,
+      );
     }
 
     // Transition task to completed

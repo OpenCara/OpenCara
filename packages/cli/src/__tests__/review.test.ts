@@ -82,6 +82,7 @@ describe('executeReview', () => {
     repo: 'widgets',
     prNumber: 42,
     timeout: 300,
+    reviewMode: 'full',
   };
 
   const defaultDeps: ReviewExecutorDeps = {

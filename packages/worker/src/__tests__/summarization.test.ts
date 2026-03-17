@@ -17,12 +17,21 @@ vi.mock('../db.js', () => ({
 vi.mock('../github.js', () => ({
   getInstallationToken: vi.fn(),
   postPrComment: vi.fn(),
+  postPrReview: vi.fn(),
+  verdictToReviewEvent: vi.fn((v: string) => {
+    const map: Record<string, string> = {
+      approve: 'APPROVE',
+      request_changes: 'REQUEST_CHANGES',
+      comment: 'COMMENT',
+    };
+    return map[v] ?? 'COMMENT';
+  }),
 }));
 
-import { getInstallationToken, postPrComment } from '../github.js';
+import { getInstallationToken, postPrReview } from '../github.js';
 
 const mockedGetInstallationToken = vi.mocked(getInstallationToken);
-const mockedPostPrComment = vi.mocked(postPrComment);
+const mockedPostPrReview = vi.mocked(postPrReview);
 
 function createMockSupabase() {
   const calls = {
@@ -249,6 +258,7 @@ describe('summarization', () => {
         { owner: 'org', repo: 'repo', prompt: 'Review' },
         reviews,
         300,
+        'diff --git a/file.ts\n+hello',
       );
 
       expect(mockEnv.AGENT_CONNECTION.idFromName).toHaveBeenCalledWith('summary-agent');
@@ -262,6 +272,7 @@ describe('summarization', () => {
       expect(body.taskId).toBe('task-1');
       expect(body.reviews).toHaveLength(1);
       expect(body.timeout).toBe(300);
+      expect(body.diffContent).toBe('diff --git a/file.ts\n+hello');
     });
   });
 
@@ -317,7 +328,7 @@ describe('summarization', () => {
     it('falls back to individual reviews when no summary agent', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
       mockedGetInstallationToken.mockResolvedValue('token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
 
       const mockSupa = createMockSupabase();
 
@@ -353,7 +364,7 @@ describe('summarization', () => {
       });
 
       expect(result).toBe(false);
-      expect(mockedPostPrComment).toHaveBeenCalled();
+      expect(mockedPostPrReview).toHaveBeenCalled();
     });
 
     it('returns false when no completed reviews', async () => {
@@ -377,7 +388,7 @@ describe('summarization', () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
       vi.spyOn(console, 'log').mockImplementation(() => {});
       mockedGetInstallationToken.mockResolvedValue('token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
       mockDoFetch.mockRejectedValue(new Error('DO push failed'));
 
       const mockSupa = createMockSupabase();
@@ -418,15 +429,15 @@ describe('summarization', () => {
 
       expect(result).toBe(false);
       // Fell back to individual reviews
-      expect(mockedPostPrComment).toHaveBeenCalled();
+      expect(mockedPostPrReview).toHaveBeenCalled();
     });
   });
 
   describe('postIndividualReviewsFallback', () => {
-    it('posts each review as a standalone comment', async () => {
+    it('posts each review as a standalone PR review', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
       mockedGetInstallationToken.mockResolvedValue('token');
-      mockedPostPrComment.mockResolvedValue('https://github.com/comment');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
 
       const mockSupa = createMockSupabase();
       const reviews: SummaryReview[] = [
@@ -456,7 +467,7 @@ describe('summarization', () => {
       );
 
       expect(mockedGetInstallationToken).toHaveBeenCalledWith(99, mockEnv);
-      expect(mockedPostPrComment).toHaveBeenCalledTimes(2);
+      expect(mockedPostPrReview).toHaveBeenCalledTimes(2);
       // Task transitioned to completed
       expect(mockSupa._calls.update).toContainEqual({
         table: 'review_tasks',
@@ -489,7 +500,7 @@ describe('summarization', () => {
       );
 
       // Should not throw
-      expect(mockedPostPrComment).not.toHaveBeenCalled();
+      expect(mockedPostPrReview).not.toHaveBeenCalled();
     });
   });
 });
