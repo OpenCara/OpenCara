@@ -10,3 +10,4 @@ coverage/
 pr-reviews/
 assets/
 .claude/worktrees/
+audit.json
