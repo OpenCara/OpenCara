@@ -38,7 +38,7 @@ export class TaskTimeout implements DurableObject {
     await this.state.storage.put('taskId', taskId);
     await this.state.storage.put('reviewCount', reviewCount);
 
-    // Store task meta for summarization dispatch
+    // Store task meta for summarization dispatch and timeout comments
     if (installationId !== undefined) {
       const meta: InFlightTaskMeta = {
         reviewCount,
@@ -49,6 +49,9 @@ export class TaskTimeout implements DurableObject {
         prompt: prompt ?? '',
       };
       await this.state.storage.put('taskMeta', meta);
+    } else {
+      // Clear stale meta from previous task to avoid posting to wrong PR
+      await this.state.storage.delete('taskMeta');
     }
 
     await this.state.storage.setAlarm(Date.now() + timeoutMs);
@@ -93,7 +96,14 @@ export class TaskTimeout implements DurableObject {
 
     if (task.status === 'pending') {
       // No agent ever picked it up — timeout
-      await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
+      const { error: updateErr } = await supabase
+        .from('review_tasks')
+        .update({ status: 'timeout' })
+        .eq('id', taskId);
+      if (updateErr) {
+        console.error(`Failed to update task ${taskId} to timeout:`, updateErr);
+        return;
+      }
       console.log(`Task ${taskId} timed out while pending (no agents available)`);
       await this.postTimeoutComment(
         taskId,
@@ -113,7 +123,14 @@ export class TaskTimeout implements DurableObject {
 
     if (completedCount === 0) {
       // No results at all — timeout
-      await supabase.from('review_tasks').update({ status: 'timeout' }).eq('id', taskId);
+      const { error: updateErr } = await supabase
+        .from('review_tasks')
+        .update({ status: 'timeout' })
+        .eq('id', taskId);
+      if (updateErr) {
+        console.error(`Failed to update task ${taskId} to timeout:`, updateErr);
+        return;
+      }
       console.log(`Task ${taskId} timed out with no results`);
       await this.postTimeoutComment(taskId, 'Review timed out — no agent completed a review.');
     } else {
