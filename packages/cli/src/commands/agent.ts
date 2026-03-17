@@ -531,15 +531,15 @@ agentCommand
       try {
         // Step 1: Select tool with fuzzy filter
         const toolChoices = registry.tools.map((t) => ({
-          name: `${t.displayName} (${t.name})`,
+          name: t.displayName,
           value: t.name,
         }));
 
         tool = await search({
-          message: 'Select a tool:',
+          message: 'Select a tool (Ctrl+C to cancel):',
           source: (term) => {
             const q = (term ?? '').toLowerCase();
-            return toolChoices.filter((c) => c.name.toLowerCase().includes(q));
+            return toolChoices.filter((c) => c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
           },
         });
 
@@ -549,17 +549,17 @@ agentCommand
 
         const modelChoices = [
           ...compatible.map((m) => ({
-            name: `${m.displayName} (${m.name})`,
+            name: m.displayName,
             value: m.name,
           })),
           ...incompatible.map((m) => ({
-            name: `\x1b[38;5;249m${m.displayName} (${m.name})\x1b[0m`,
+            name: `\x1b[38;5;249m${m.displayName}\x1b[0m`,
             value: m.name,
           })),
         ];
 
         model = await search({
-          message: 'Select a model:',
+          message: 'Select a model (Ctrl+C to cancel):',
           source: (term) => {
             const q = (term ?? '').toLowerCase();
             return modelChoices.filter((c) =>
