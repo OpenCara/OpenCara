@@ -98,12 +98,12 @@ describe('selectAgents', () => {
   ];
 
   it('returns exactly reviewCount agents', () => {
-    const result = selectAgents(agents, 2, []);
+    const result = selectAgents(agents, 2, [], []);
     expect(result).toHaveLength(2);
   });
 
   it('selects preferred tools first, then by reputation', () => {
-    const result = selectAgents(agents, 2, ['cursor']);
+    const result = selectAgents(agents, 2, [], ['cursor']);
     expect(result).toHaveLength(2);
     // Both cursor agents selected (preferred)
     expect(result.map((a) => a.id)).toEqual(['a1', 'a3']);
@@ -115,29 +115,49 @@ describe('selectAgents', () => {
       makeAgent({ id: 'a2', tool: 'vscode', reputationScore: 0.9 }),
       makeAgent({ id: 'a3', tool: 'cursor', reputationScore: 0.7 }),
     ];
-    const result = selectAgents(ranked, 2, []);
+    const result = selectAgents(ranked, 2, [], []);
     expect(result.map((a) => a.id)).toEqual(['a2', 'a3']); // highest reputation first
   });
 
   it('returns available agents when fewer than reviewCount', () => {
-    const result = selectAgents([agents[0]], 3, []);
+    const result = selectAgents([agents[0]], 3, [], []);
     expect(result).toHaveLength(1); // dispatches to what's available
   });
 
   it('returns empty array for empty agents', () => {
-    expect(selectAgents([], 2, ['cursor'])).toEqual([]);
+    expect(selectAgents([], 2, [], ['cursor'])).toEqual([]);
   });
 
   it('caps at reviewCount even with many agents', () => {
     const manyAgents = Array.from({ length: 15 }, (_, i) =>
       makeAgent({ id: `a${i}`, tool: 'cursor' }),
     );
-    const result = selectAgents(manyAgents, 3, []);
+    const result = selectAgents(manyAgents, 3, [], []);
     expect(result).toHaveLength(3);
   });
 
   it('returns all agents when exactly reviewCount are available', () => {
-    const result = selectAgents(agents, 4, []);
+    const result = selectAgents(agents, 4, [], []);
     expect(result).toHaveLength(4);
+  });
+
+  it('prioritizes preferred models over preferred tools', () => {
+    const mixed = [
+      makeAgent({ id: 'a1', model: 'gpt-4', tool: 'cursor', reputationScore: 0.5 }),
+      makeAgent({ id: 'a2', model: 'claude-opus-4-6', tool: 'vscode', reputationScore: 0.9 }),
+      makeAgent({ id: 'a3', model: 'glm-5', tool: 'cursor', reputationScore: 0.7 }),
+    ];
+    const result = selectAgents(mixed, 2, ['claude-opus-4-6'], ['cursor']);
+    expect(result.map((a) => a.id)).toEqual(['a2', 'a3']); // model match first, then tool match by reputation
+  });
+
+  it('selects by preferred models only', () => {
+    const mixed = [
+      makeAgent({ id: 'a1', model: 'gpt-4', reputationScore: 0.9 }),
+      makeAgent({ id: 'a2', model: 'claude-opus-4-6', reputationScore: 0.5 }),
+      makeAgent({ id: 'a3', model: 'glm-5', reputationScore: 0.7 }),
+    ];
+    const result = selectAgents(mixed, 2, ['claude-opus-4-6', 'glm-5'], []);
+    expect(result.map((a) => a.id)).toEqual(['a3', 'a2']); // model matches by reputation
   });
 });

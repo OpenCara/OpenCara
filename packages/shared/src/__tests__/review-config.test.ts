@@ -13,6 +13,9 @@ prompt: |
   This project uses TypeScript + React, following ESLint standards.
 agents:
   review_count: 2
+  preferred_models:
+    - claude-opus-4-6
+    - glm-5
   preferred_tools:
     - claude-code
     - codex
@@ -48,6 +51,7 @@ describe('parseReviewConfig', () => {
     expect(config.version).toBe(1);
     expect(config.prompt).toContain('Focus on code quality');
     expect(config.agents.reviewCount).toBe(2);
+    expect(config.agents.preferredModels).toEqual(['claude-opus-4-6', 'glm-5']);
     expect(config.agents.preferredTools).toEqual(['claude-code', 'codex']);
     expect(config.agents.minReputation).toBe(0.6);
     expect(config.reviewer.whitelist).toEqual([{ user: 'alice' }, { agent: 'abc-123' }]);
