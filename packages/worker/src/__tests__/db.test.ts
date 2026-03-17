@@ -14,6 +14,8 @@ const mockEnv: Env = {
   GITHUB_APP_PRIVATE_KEY: 'key',
   GITHUB_CLIENT_ID: 'client-id',
   GITHUB_CLIENT_SECRET: 'client-secret',
+  GITHUB_CLI_CLIENT_ID: 'test-cli-client',
+  GITHUB_CLI_CLIENT_SECRET: 'test-cli-secret',
   SUPABASE_URL: 'https://test.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'test-service-key',
 };

@@ -53,27 +53,21 @@ export function validateCommandBinary(commandTemplate: string): boolean {
 
 /**
  * Parse a command template string into command + args.
- * Splits on whitespace, respecting double-quoted and single-quoted segments.
- * Interpolates ${VAR} variables from the provided vars map.
+ * Splits on whitespace first, then interpolates ${VAR} variables.
+ * This ensures variables containing spaces/special chars stay as single args.
  */
 export function parseCommandTemplate(
   template: string,
   vars: Record<string, string> = {},
 ): { command: string; args: string[] } {
-  // Interpolate variables
-  let interpolated = template;
-  for (const [key, value] of Object.entries(vars)) {
-    interpolated = interpolated.replaceAll(`\${${key}}`, value);
-  }
-
-  // Split on whitespace, respecting quoted strings
+  // Split on whitespace first, respecting quoted strings
   const parts: string[] = [];
   let current = '';
   let inSingle = false;
   let inDouble = false;
 
-  for (let i = 0; i < interpolated.length; i++) {
-    const ch = interpolated[i];
+  for (let i = 0; i < template.length; i++) {
+    const ch = template[i];
     if (ch === "'" && !inDouble) {
       inSingle = !inSingle;
     } else if (ch === '"' && !inSingle) {
@@ -91,11 +85,20 @@ export function parseCommandTemplate(
     parts.push(current);
   }
 
-  if (parts.length === 0) {
+  // Interpolate variables after splitting — each ${VAR} stays as one arg
+  const interpolated = parts.map((part) => {
+    let result = part;
+    for (const [key, value] of Object.entries(vars)) {
+      result = result.replaceAll(`\${${key}}`, value);
+    }
+    return result;
+  });
+
+  if (interpolated.length === 0) {
     throw new Error('Empty command template');
   }
 
-  return { command: parts[0], args: parts.slice(1) };
+  return { command: interpolated[0], args: interpolated.slice(1) };
 }
 
 /**
