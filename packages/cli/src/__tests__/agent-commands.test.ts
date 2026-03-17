@@ -251,7 +251,7 @@ describe('agent commands', () => {
 
       await agentCommand.parseAsync(['start'], { from: 'user' });
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No agent_command configured'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No command configured'));
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Reviews will be rejected'));
       // Agent still starts despite the warning
       expect(logSpy).toHaveBeenCalledWith('Starting agent agent-bad...');

@@ -24,11 +24,7 @@ import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
-import {
-  resolveCommandTemplate,
-  validateCommandBinary,
-  DEFAULT_COMMANDS,
-} from '../tool-executor.js';
+import { resolveCommandTemplate, validateCommandBinary } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   fetchConsumptionStats,
@@ -577,12 +573,13 @@ agentCommand
       }
     }
 
-    // Resolve command if not set
+    // Resolve command from registry if not set
     if (!command) {
-      try {
-        command = resolveCommandTemplate(null, tool);
-      } catch {
-        console.error(`No default command for tool "${tool}". Use --command to specify one.`);
+      const toolEntry = DEFAULT_REGISTRY.tools.find((t) => t.name === tool);
+      if (toolEntry) {
+        command = toolEntry.commandTemplate.replaceAll('${MODEL}', model);
+      } else {
+        console.error(`No command template for tool "${tool}". Use --command to specify one.`);
         process.exit(1);
       }
     }
@@ -638,6 +635,15 @@ agentCommand
       return;
     }
 
+    // Fetch registry for command templates
+    let registry: RegistryResponse;
+    try {
+      registry = await client.get<RegistryResponse>('/api/registry');
+    } catch {
+      registry = DEFAULT_REGISTRY;
+    }
+    const toolCommands = new Map(registry.tools.map((t) => [t.name, t.commandTemplate]));
+
     const existing = config.agents ?? [];
     let imported = 0;
 
@@ -645,10 +651,12 @@ agentCommand
       const isDuplicate = existing.some((e) => e.model === agent.model && e.tool === agent.tool);
       if (isDuplicate) continue;
 
-      const command = DEFAULT_COMMANDS[agent.tool] ?? undefined;
-      if (!command) {
+      let command = toolCommands.get(agent.tool);
+      if (command) {
+        command = command.replaceAll('${MODEL}', agent.model);
+      } else {
         console.warn(
-          `Warning: no default command for ${agent.model}/${agent.tool} — set command manually in config`,
+          `Warning: no command template for ${agent.model}/${agent.tool} — set command manually in config`,
         );
       }
       existing.push({ model: agent.model, tool: agent.tool, command });

@@ -3,7 +3,6 @@ import {
   executeTool,
   parseCommandTemplate,
   resolveCommandTemplate,
-  DEFAULT_COMMANDS,
   ToolTimeoutError,
 } from '../tool-executor.js';
 
@@ -155,52 +154,17 @@ describe('parseCommandTemplate', () => {
 
 describe('resolveCommandTemplate', () => {
   it('returns explicit agentCommand when provided', () => {
-    const result = resolveCommandTemplate('my-custom-tool --flag', 'claude-code');
+    const result = resolveCommandTemplate('my-custom-tool --flag');
     expect(result).toBe('my-custom-tool --flag');
   });
 
-  it('falls back to default for claude-code', () => {
-    const result = resolveCommandTemplate(null, 'claude-code');
-    expect(result).toBe(DEFAULT_COMMANDS['claude-code']);
+  it('throws when no command configured', () => {
+    expect(() => resolveCommandTemplate(null)).toThrow(/No command configured/);
+    expect(() => resolveCommandTemplate(undefined)).toThrow(/No command configured/);
   });
 
-  it('falls back to default for codex', () => {
-    const result = resolveCommandTemplate(null, 'codex');
-    expect(result).toBe(DEFAULT_COMMANDS['codex']);
-  });
-
-  it('falls back to default for gemini', () => {
-    const result = resolveCommandTemplate(null, 'gemini');
-    expect(result).toBe(DEFAULT_COMMANDS['gemini']);
-  });
-
-  it('throws for unknown tool with no agentCommand', () => {
-    expect(() => resolveCommandTemplate(null, 'custom-tool')).toThrow(
-      /No agent_command configured/,
-    );
-    expect(() => resolveCommandTemplate(null, 'custom-tool')).toThrow(/config\.yml/);
-  });
-
-  it('throws for undefined tool with no agentCommand', () => {
-    expect(() => resolveCommandTemplate(null, undefined)).toThrow(/No agent_command configured/);
-  });
-
-  it('prefers explicit agentCommand over default', () => {
-    const result = resolveCommandTemplate('my-claude --special', 'claude-code');
-    expect(result).toBe('my-claude --special');
-  });
-});
-
-describe('DEFAULT_COMMANDS', () => {
-  it('has entries for claude-code, codex, and gemini', () => {
-    expect(Object.keys(DEFAULT_COMMANDS)).toEqual(
-      expect.arrayContaining(['claude-code', 'codex', 'gemini']),
-    );
-    expect(Object.keys(DEFAULT_COMMANDS).length).toBe(3);
-  });
-
-  it('claude-code default uses text output format', () => {
-    expect(DEFAULT_COMMANDS['claude-code']).toBe('claude -p --output-format text');
+  it('throws with helpful message mentioning config', () => {
+    expect(() => resolveCommandTemplate(null)).toThrow(/config\.yml/);
   });
 });
 
