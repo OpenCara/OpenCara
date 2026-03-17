@@ -70,8 +70,12 @@ export { buildWsUrl };
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 
+export const STABILITY_THRESHOLD_MIN_MS = 5_000;
+export const STABILITY_THRESHOLD_MAX_MS = 300_000;
+
 export interface StartAgentOptions {
   verbose?: boolean;
+  stabilityThresholdMs?: number;
 }
 
 export function startAgent(
@@ -83,6 +87,7 @@ export function startAgent(
   options?: StartAgentOptions,
 ): void {
   const verbose = options?.verbose ?? false;
+  const stabilityThreshold = options?.stabilityThresholdMs ?? CONNECTION_STABILITY_THRESHOLD_MS;
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -138,16 +143,16 @@ export function startAgent(
         console.log(`[verbose] Connection opened at ${new Date(connectionOpenedAt).toISOString()}`);
       }
 
-      // Deferred attempt reset: only reset after connection is stable for 30s
+      // Deferred attempt reset: only reset after connection is stable
       clearStabilityTimer();
       stabilityTimer = setTimeout(() => {
         if (verbose) {
           console.log(
-            `[verbose] Connection stable for ${CONNECTION_STABILITY_THRESHOLD_MS / 1000}s — resetting reconnect counter`,
+            `[verbose] Connection stable for ${stabilityThreshold / 1000}s — resetting reconnect counter`,
           );
         }
         attempt = 0;
-      }, CONNECTION_STABILITY_THRESHOLD_MS);
+      }, stabilityThreshold);
     });
 
     ws.on('message', (data: WebSocket.Data) => {
@@ -511,76 +516,101 @@ agentCommand
   .command('start [agentId]')
   .description('Connect agent to platform via WebSocket')
   .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
-  .action(async (agentId: string | undefined, opts: { verbose?: boolean }) => {
-    const config = loadConfig();
-    const apiKey = requireApiKey(config);
-
-    const client = new ApiClient(config.platformUrl, apiKey);
-    let agentTool: string | undefined;
-
-    if (!agentId) {
-      let res: ListAgentsResponse;
-      try {
-        res = await client.get<ListAgentsResponse>('/api/agents');
-      } catch (err) {
-        console.error('Failed to list agents:', err instanceof Error ? err.message : err);
-        process.exit(1);
+  .option(
+    '--stability-threshold <ms>',
+    `Connection stability threshold in ms (${STABILITY_THRESHOLD_MIN_MS}–${STABILITY_THRESHOLD_MAX_MS}, default: ${CONNECTION_STABILITY_THRESHOLD_MS})`,
+  )
+  .action(
+    async (
+      agentId: string | undefined,
+      opts: { verbose?: boolean; stabilityThreshold?: string },
+    ) => {
+      let stabilityThresholdMs: number | undefined;
+      if (opts.stabilityThreshold !== undefined) {
+        const val = Number(opts.stabilityThreshold);
+        if (
+          !Number.isInteger(val) ||
+          val < STABILITY_THRESHOLD_MIN_MS ||
+          val > STABILITY_THRESHOLD_MAX_MS
+        ) {
+          console.error(
+            `Invalid --stability-threshold: must be an integer between ${STABILITY_THRESHOLD_MIN_MS} and ${STABILITY_THRESHOLD_MAX_MS}`,
+          );
+          process.exit(1);
+        }
+        stabilityThresholdMs = val;
       }
+      const config = loadConfig();
+      const apiKey = requireApiKey(config);
 
-      if (res.agents.length === 0) {
-        console.error('No agents registered. Run `opencrust agent create` first.');
-        process.exit(1);
-      }
+      const client = new ApiClient(config.platformUrl, apiKey);
+      let agentTool: string | undefined;
 
-      if (res.agents.length === 1) {
-        agentId = res.agents[0].id;
-        agentTool = res.agents[0].tool;
-        console.log(`Using agent ${agentId}`);
+      if (!agentId) {
+        let res: ListAgentsResponse;
+        try {
+          res = await client.get<ListAgentsResponse>('/api/agents');
+        } catch (err) {
+          console.error('Failed to list agents:', err instanceof Error ? err.message : err);
+          process.exit(1);
+        }
+
+        if (res.agents.length === 0) {
+          console.error('No agents registered. Run `opencrust agent create` first.');
+          process.exit(1);
+        }
+
+        if (res.agents.length === 1) {
+          agentId = res.agents[0].id;
+          agentTool = res.agents[0].tool;
+          console.log(`Using agent ${agentId}`);
+        } else {
+          console.error('Multiple agents found. Please specify an agent ID:');
+          for (const a of res.agents) {
+            console.error(`  ${a.id}  ${a.model} / ${a.tool}`);
+          }
+          process.exit(1);
+        }
       } else {
-        console.error('Multiple agents found. Please specify an agent ID:');
-        for (const a of res.agents) {
-          console.error(`  ${a.id}  ${a.model} / ${a.tool}`);
+        // Fetch agent info to get the tool field
+        try {
+          const res = await client.get<ListAgentsResponse>('/api/agents');
+          const agent = res.agents.find((a) => a.id === agentId);
+          if (agent) {
+            agentTool = agent.tool;
+          }
+        } catch (err) {
+          console.warn(
+            `Warning: Failed to fetch agent info: ${err instanceof Error ? err.message : 'unknown error'}`,
+          );
         }
-        process.exit(1);
       }
-    } else {
-      // Fetch agent info to get the tool field
+
+      let reviewDeps: ReviewExecutorDeps | undefined;
       try {
-        const res = await client.get<ListAgentsResponse>('/api/agents');
-        const agent = res.agents.find((a) => a.id === agentId);
-        if (agent) {
-          agentTool = agent.tool;
-        }
+        const commandTemplate = resolveCommandTemplate(config.agentCommand, agentTool);
+        reviewDeps = {
+          commandTemplate,
+          maxDiffSizeKb: config.maxDiffSizeKb,
+        };
       } catch (err) {
         console.warn(
-          `Warning: Failed to fetch agent info: ${err instanceof Error ? err.message : 'unknown error'}`,
+          `Warning: ${err instanceof Error ? err.message : 'Could not determine agent command.'}` +
+            ' Reviews will be rejected.',
         );
       }
-    }
 
-    let reviewDeps: ReviewExecutorDeps | undefined;
-    try {
-      const commandTemplate = resolveCommandTemplate(config.agentCommand, agentTool);
-      reviewDeps = {
-        commandTemplate,
-        maxDiffSizeKb: config.maxDiffSizeKb,
+      const consumptionDeps: ConsumptionDeps = {
+        client,
+        agentId,
+        limits: config.limits,
+        session: createSessionTracker(),
       };
-    } catch (err) {
-      console.warn(
-        `Warning: ${err instanceof Error ? err.message : 'Could not determine agent command.'}` +
-          ' Reviews will be rejected.',
-      );
-    }
 
-    const consumptionDeps: ConsumptionDeps = {
-      client,
-      agentId,
-      limits: config.limits,
-      session: createSessionTracker(),
-    };
-
-    console.log(`Starting agent ${agentId}...`);
-    startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
-      verbose: opts.verbose,
-    });
-  });
+      console.log(`Starting agent ${agentId}...`);
+      startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
+        verbose: opts.verbose,
+        stabilityThresholdMs,
+      });
+    },
+  );

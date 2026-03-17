@@ -178,4 +178,42 @@ describe('startAgent reconnect guards', () => {
     );
     expect(verboseCalls).toHaveLength(0);
   });
+
+  it('uses custom stability threshold when provided', async () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key', undefined, undefined, {
+      verbose: true,
+      stabilityThresholdMs: 60_000,
+    });
+
+    const ws = mockWsInstances[0];
+    ws.emit('open');
+
+    // At 31s (past default 30s but before custom 60s), should NOT have reset
+    vi.advanceTimersByTime(31_000);
+    const stableCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('Connection stable'),
+    );
+    expect(stableCalls).toHaveLength(0);
+
+    // At 61s (past custom 60s), should have reset
+    vi.advanceTimersByTime(30_000);
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('[verbose] Connection stable for 60s'),
+    );
+  });
+
+  it('uses default threshold when stabilityThresholdMs is not provided', async () => {
+    startAgent('agent-1', 'http://localhost:8787', 'test-key', undefined, undefined, {
+      verbose: true,
+    });
+
+    const ws = mockWsInstances[0];
+    ws.emit('open');
+
+    // Advance past default 30s threshold
+    vi.advanceTimersByTime(31_000);
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('[verbose] Connection stable for 30s'),
+    );
+  });
 });
