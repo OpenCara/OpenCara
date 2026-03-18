@@ -13,6 +13,7 @@ export interface ConsumptionLimits {
 export interface LocalAgentConfig {
   model: string;
   tool: string;
+  name?: string;
   command?: string;
   limits?: ConsumptionLimits;
   repos?: RepoConfig;
@@ -23,6 +24,7 @@ export interface AnonymousAgentEntry {
   apiKey: string; // cr_ key
   model: string;
   tool: string;
+  name?: string;
   repoConfig?: RepoConfig;
 }
 
@@ -138,6 +140,7 @@ function parseAnonymousAgents(data: Record<string, unknown>): AnonymousAgentEntr
       model: obj.model,
       tool: obj.tool,
     };
+    if (typeof obj.name === 'string') anon.name = obj.name;
     if (obj.repo_config && typeof obj.repo_config === 'object') {
       const rc = obj.repo_config as Record<string, unknown>;
       if (typeof rc.mode === 'string' && VALID_REPO_MODES.includes(rc.mode as RepoFilterMode)) {
@@ -171,6 +174,7 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
       continue;
     }
     const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
+    if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
     const agentLimits = parseLimits(obj);
     if (agentLimits) agent.limits = agentLimits;
@@ -243,6 +247,9 @@ export function saveConfig(config: CliConfig): void {
         model: a.model,
         tool: a.tool,
       };
+      if (a.name) {
+        entry.name = a.name;
+      }
       if (a.repoConfig) {
         entry.repo_config = a.repoConfig;
       }
