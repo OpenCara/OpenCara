@@ -119,10 +119,11 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     });
   }
 
-  it('reviewCount=3 distributes review_request to 3 agents', async () => {
+  it('reviewCount=3 distributes review_request to 3 reviewers (synthesizer reserved)', async () => {
     await setupMultiAgentEnv();
     await sendWebhook();
 
+    // With 4 agents and review_count=3: 3 reviewers + 1 synthesizer
     const pairsWithRequest = findReviewRequestPairs();
     expect(pairsWithRequest.length).toBe(3);
   });
@@ -145,7 +146,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     const { agents } = await setupMultiAgentEnv();
     const taskId = await sendWebhook();
 
-    // Find the 3 agents that received review_requests by checking DO in-flight tasks
+    // Find the agents that received review_requests (reviewers, not synthesizer)
     const reviewerAgentIds: string[] = [];
     for (const a of agents) {
       const state = ctx.agentConnectionNS.getState(a.agentId);
@@ -156,6 +157,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
         }
       }
     }
+    // 3 reviewers (synthesizer is reserved, not assigned review tasks yet)
     expect(reviewerAgentIds.length).toBe(3);
 
     // Simulate review_complete from all 3 agents
@@ -176,13 +178,13 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     expect(task!.status).toBe('summarizing');
   });
 
-  it('summary agent selected is highest rep, not involved in review', async () => {
+  it('highest-rep agent is pre-selected as synthesizer and receives summary_request', async () => {
     const { agents } = await setupMultiAgentEnv();
     const taskId = await sendWebhook();
 
-    // The agents are sorted by reputation: 0.5, 0.6, 0.7, 0.8
-    // Task distribution selects by reputation desc, so agents[3](0.8), agents[2](0.7), agents[1](0.6) review
-    // Summary agent should be agents[0] or whoever is not in the review
+    // Agents have reputation: 0.5, 0.6, 0.7, 0.8
+    // Highest-rep agent (agents[3], rep=0.8) should be reserved as synthesizer
+    // The other 3 should be reviewers
     const reviewerAgentIds: string[] = [];
     for (const a of agents) {
       const state = ctx.agentConnectionNS.getState(a.agentId);
@@ -205,17 +207,17 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       });
     }
 
-    // Find the agent that was NOT a reviewer — that should be the summary agent
-    const nonReviewerAgent = agents.find((a) => !reviewerAgentIds.includes(a.agentId));
-    expect(nonReviewerAgent).toBeDefined();
+    // The highest-rep agent should be the synthesizer
+    const synthesizerAgent = agents[3]; // rep=0.8 (highest)
+    expect(reviewerAgentIds).not.toContain(synthesizerAgent.agentId);
 
-    // Check review_summaries table for the summary agent
+    // Check review_summaries table
     const summaries = ctx.supabase.getTable('review_summaries');
     expect(summaries.length).toBe(1);
-    expect(summaries[0].agent_id).toBe(nonReviewerAgent!.agentId);
+    expect(summaries[0].agent_id).toBe(synthesizerAgent.agentId);
 
-    // The non-reviewer's DO should have a summary_request in-flight
-    const summaryState = ctx.agentConnectionNS.getState(nonReviewerAgent!.agentId);
+    // Synthesizer's DO should have a summary_request in-flight
+    const summaryState = ctx.agentConnectionNS.getState(synthesizerAgent.agentId);
     const summaryInFlight = await summaryState!.storage.get<string[]>('inFlightTaskIds');
     expect(summaryInFlight).toContain(taskId);
   });
@@ -261,7 +263,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     // Check that a review was posted to GitHub
     expect(ctx.github.postedReviews.length).toBeGreaterThan(0);
     const review = ctx.github.postedReviews.find(
-      (r) => r.body.includes('OpenCara Review Summary'),
+      (r) => r.body.includes('OpenCara Review'),
     );
     expect(review).toBeDefined();
     expect(review!.owner).toBe('test-owner');
@@ -310,8 +312,8 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     expect(task!.status).toBe('completed');
   });
 
-  it('no summary agent available falls back to individual reviews', async () => {
-    // Only create 3 agents (no spare for summary)
+  it('with only 1 agent available, falls back to single-agent mode (no multi-agent)', async () => {
+    // Only create 1 agent — can't do multi-agent review
     await ctx.createProject({
       owner: 'test-owner',
       repo: 'test-repo',
@@ -336,49 +338,38 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       ].join('\n'),
     };
 
-    const agents: Array<{ agentId: string; apiKey: string }> = [];
-    for (let i = 0; i < 3; i++) {
-      const { user, apiKey } = await ctx.createUser({
-        name: `user${i}`,
-        github_id: 2000 + i,
-      });
-      const agent = await ctx.createAgent(user.id as string, {
-        status: 'online',
-        reputation_score: 0.5 + i * 0.1,
-      });
-      agents.push({ agentId: agent.id as string, apiKey });
+    const { user, apiKey } = await ctx.createUser({ name: 'solo', github_id: 2000 });
+    const agent = await ctx.createAgent(user.id as string, {
+      status: 'online',
+      reputation_score: 0.5,
+    });
+    const agentId = agent.id as string;
 
-      const wsReq = new Request(
-        `https://api.opencara.dev/ws/agent/${agent.id}?token=${apiKey}`,
-        { headers: { Upgrade: 'websocket' } },
-      );
-      await ctx.workerFetch(wsReq);
-    }
+    const wsReq = new Request(
+      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
+      { headers: { Upgrade: 'websocket' } },
+    );
+    await ctx.workerFetch(wsReq);
 
     const taskId = await sendWebhook();
 
-    // Complete all 3 reviews
-    for (const a of agents) {
-      const state = ctx.agentConnectionNS.getState(a.agentId);
-      if (state) {
-        const inFlight = await state.storage.get<string[]>('inFlightTaskIds');
-        if (inFlight && inFlight.includes(taskId)) {
-          await ctx.simulateAgentMessage(a.agentId, {
-            type: 'review_complete',
-            taskId,
-            review: 'Individual review text',
-            verdict: 'comment',
-            tokensUsed: 80,
-          });
-        }
-      }
-    }
+    // Single agent should receive review_request (no multi-agent possible with 1 agent)
+    const state = ctx.agentConnectionNS.getState(agentId);
+    const inFlight = await state!.storage.get<string[]>('inFlightTaskIds');
+    expect(inFlight).toContain(taskId);
 
-    // No summary agent available — should fall back to individual reviews posted to GitHub
-    // Each individual review is posted as a separate PR review
-    expect(ctx.github.postedReviews.length).toBeGreaterThanOrEqual(3);
+    // Complete the review
+    await ctx.simulateAgentMessage(agentId, {
+      type: 'review_complete',
+      taskId,
+      review: 'Solo review',
+      verdict: 'comment',
+      tokensUsed: 80,
+    });
 
-    // Task should still end up completed
+    // Review posted directly to GitHub (single-agent mode)
+    expect(ctx.github.postedReviews.length).toBeGreaterThanOrEqual(1);
+
     const tasks = ctx.supabase.getTable('review_tasks');
     const task = tasks.find((t) => t.id === taskId);
     expect(task!.status).toBe('completed');

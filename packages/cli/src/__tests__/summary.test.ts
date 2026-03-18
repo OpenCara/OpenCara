@@ -33,14 +33,14 @@ describe('buildSummarySystemPrompt', () => {
   it('includes owner, repo, and review count', () => {
     const prompt = buildSummarySystemPrompt('acme', 'widgets', 3);
     expect(prompt).toContain('acme/widgets');
-    expect(prompt).toContain('3 compact reviews');
-    expect(prompt).toContain('senior code reviewer and synthesizer');
+    expect(prompt).toContain('3 reviews');
+    expect(prompt).toContain('senior code reviewer and lead synthesizer');
   });
 
   it('includes formatting instructions', () => {
     const prompt = buildSummarySystemPrompt('org', 'repo', 1);
-    expect(prompt).toContain('markdown');
     expect(prompt).toContain('## Findings');
+    expect(prompt).toContain('## Verdict');
   });
 });
 
@@ -176,7 +176,7 @@ describe('executeSummary', () => {
     await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
     const prompt = mockRunTool.mock.calls[0][1];
-    expect(prompt).toContain('2 compact reviews');
+    expect(prompt).toContain('2 reviews');
   });
 
   it('rejects when input is too large', async () => {
