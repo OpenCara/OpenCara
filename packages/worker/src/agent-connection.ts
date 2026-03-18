@@ -19,6 +19,7 @@ import {
   postIndividualReviewsFallback,
   fetchCompletedReviews,
   fetchReviewContributors,
+  fetchReviewAgents,
 } from './summarization.js';
 import { filterByRepoConfig, isValidRepoConfig, type EligibleAgent } from './task-distribution.js';
 
@@ -912,13 +913,11 @@ export class AgentConnection implements DurableObject {
     try {
       const installationToken = await getInstallationToken(taskInstallationId, this.env);
 
-      // Get the number of contributing reviews for the summary header
-      const { count: reviewCountResult } = await supabase
-        .from('review_results')
-        .select('id', { count: 'exact', head: true })
-        .eq('review_task_id', msg.taskId)
-        .eq('status', 'completed')
-        .eq('type', 'review');
+      // Fetch agent details (model, tool) for header
+      const { reviewers: agentInfos, synthesizer: synthesizerInfo } = await fetchReviewAgents(
+        supabase,
+        msg.taskId,
+      );
 
       // Parse structured review for inline comments
       const parsed = parseStructuredReview(msg.summary);
@@ -946,7 +945,8 @@ export class AgentConnection implements DurableObject {
       const contributorNames = await fetchReviewContributors(supabase, msg.taskId);
       const summaryBody = formatSummaryComment(
         summaryText,
-        reviewCountResult ?? 0,
+        agentInfos,
+        synthesizerInfo,
         contributorNames,
       );
       const event = parsed.verdict ? verdictToReviewEvent(parsed.verdict) : 'COMMENT';

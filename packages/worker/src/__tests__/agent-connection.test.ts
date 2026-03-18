@@ -793,9 +793,24 @@ describe('AgentConnection', () => {
           review_results: {
             data: [
               {
+                type: 'review',
                 agent_id: 'agent-2',
                 verdict: 'approve',
-                agents: { model: 'gpt-4', tool: 'cursor' },
+                agents: {
+                  model: 'gpt-4',
+                  tool: 'cursor',
+                  users: { name: 'alice', is_anonymous: false },
+                },
+              },
+              {
+                type: 'summary',
+                agent_id: 'agent-3',
+                verdict: null,
+                agents: {
+                  model: 'claude',
+                  tool: 'vscode',
+                  users: { name: 'bob', is_anonymous: false },
+                },
               },
             ],
           },
@@ -822,6 +837,11 @@ describe('AgentConnection', () => {
 
       // Summary posted as PR review
       expect(mockedPostPrReview).toHaveBeenCalled();
+      const reviewBody = mockedPostPrReview.mock.calls[0][3] as string;
+      expect(reviewBody).toContain('`gpt-4/cursor`');
+      expect(reviewBody).toContain('synthesized by `claude/vscode`');
+      expect(reviewBody).toContain('[@alice]');
+      expect(reviewBody).toContain('[@bob]');
       // Task transitioned to completed
       expect(mockSupa._calls.update).toContainEqual({
         table: 'review_tasks',
@@ -865,9 +885,14 @@ describe('AgentConnection', () => {
           review_results: {
             data: [
               {
+                type: 'review',
                 agent_id: 'agent-2',
                 verdict: 'approve',
-                agents: { model: 'gpt-4', tool: 'cursor' },
+                agents: {
+                  model: 'gpt-4',
+                  tool: 'cursor',
+                  users: { name: 'alice', is_anonymous: false },
+                },
               },
             ],
           },

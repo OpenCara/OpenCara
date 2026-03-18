@@ -3,10 +3,12 @@ import {
   formatSummaryComment,
   formatIndividualReviewComment,
   fetchCompletedReviews,
+  fetchReviewAgents,
   selectSummaryAgent,
   pushSummaryToAgent,
   triggerSummarization,
   postIndividualReviewsFallback,
+  type ReviewAgentInfo,
 } from '../summarization.js';
 import type { SummaryReview } from '@opencara/shared';
 
@@ -111,17 +113,56 @@ describe('summarization', () => {
   });
 
   describe('formatSummaryComment', () => {
-    it('formats summary with review count', () => {
-      const result = formatSummaryComment('Great code overall', 3);
+    it('formats summary with agent details and synthesizer', () => {
+      const agents: ReviewAgentInfo[] = [
+        { model: 'claude-sonnet-4-6', tool: 'claude' },
+        { model: 'qwen3.5-plus', tool: 'qwen' },
+      ];
+      const synth: ReviewAgentInfo = { model: 'claude-sonnet-4-6', tool: 'claude' };
+      const result = formatSummaryComment('Great code overall', agents, synth);
       expect(result).toContain('OpenCara Review');
-      expect(result).toContain('Synthesized from 4 agents');
+      expect(result).toContain(
+        '**Agents**: `claude-sonnet-4-6/claude`, `qwen3.5-plus/qwen` (synthesized by `claude-sonnet-4-6/claude`)',
+      );
       expect(result).toContain('Great code overall');
       expect(result).toContain('Reviewed by');
     });
 
-    it('uses singular for 1 agent', () => {
-      const result = formatSummaryComment('LGTM', 1);
-      expect(result).toContain('Synthesized from 2 agents');
+    it('formats with no synthesizer when null', () => {
+      const agents: ReviewAgentInfo[] = [{ model: 'gpt-4', tool: 'cursor' }];
+      const result = formatSummaryComment('LGTM', agents, null);
+      expect(result).toContain('**Agents**: `gpt-4/cursor`');
+      expect(result).not.toContain('synthesized by');
+    });
+
+    it('shows only synthesizer when no reviewers', () => {
+      const synth: ReviewAgentInfo = { model: 'claude', tool: 'vscode' };
+      const result = formatSummaryComment('Summary', [], synth);
+      expect(result).toContain('**Agents**: `claude/vscode`');
+      expect(result).not.toContain('synthesized by');
+    });
+
+    it('shows no agents line when both empty', () => {
+      const result = formatSummaryComment('Summary', [], null);
+      expect(result).not.toContain('**Agents**');
+    });
+
+    it('includes multiple contributors', () => {
+      const agents: ReviewAgentInfo[] = [{ model: 'gpt-4', tool: 'cursor' }];
+      const result = formatSummaryComment('Summary', agents, null, ['alice', 'bob']);
+      expect(result).toContain(
+        '**Contributors**: [@alice](https://github.com/alice), [@bob](https://github.com/bob)',
+      );
+    });
+
+    it('handles anonymous contributor in list', () => {
+      const agents: ReviewAgentInfo[] = [{ model: 'gpt-4', tool: 'cursor' }];
+      const result = formatSummaryComment('Summary', agents, null, [
+        'Anonymous contributor',
+        'bob',
+      ]);
+      expect(result).toContain('Anonymous contributor');
+      expect(result).toContain('[@bob](https://github.com/bob)');
     });
   });
 
@@ -210,6 +251,45 @@ describe('summarization', () => {
 
       const reviews = await fetchCompletedReviews(mockSupa as never, 'task-1');
       expect(reviews).toHaveLength(0);
+    });
+  });
+
+  describe('fetchReviewAgents', () => {
+    it('returns reviewers and synthesizer separately', async () => {
+      const mockSupa = createMockSupabase();
+      mockSupa._setSelectResult({
+        data: [
+          { type: 'review', agents: { model: 'gpt-4', tool: 'cursor' } },
+          { type: 'review', agents: { model: 'claude', tool: 'vscode' } },
+          { type: 'summary', agents: { model: 'claude-sonnet-4-6', tool: 'claude' } },
+        ],
+      });
+
+      const result = await fetchReviewAgents(mockSupa as never, 'task-1');
+      expect(result.reviewers).toHaveLength(2);
+      expect(result.reviewers[0]).toEqual({ model: 'gpt-4', tool: 'cursor' });
+      expect(result.reviewers[1]).toEqual({ model: 'claude', tool: 'vscode' });
+      expect(result.synthesizer).toEqual({ model: 'claude-sonnet-4-6', tool: 'claude' });
+    });
+
+    it('returns null synthesizer when no summary result', async () => {
+      const mockSupa = createMockSupabase();
+      mockSupa._setSelectResult({
+        data: [{ type: 'review', agents: { model: 'gpt-4', tool: 'cursor' } }],
+      });
+
+      const result = await fetchReviewAgents(mockSupa as never, 'task-1');
+      expect(result.reviewers).toHaveLength(1);
+      expect(result.synthesizer).toBeNull();
+    });
+
+    it('returns empty when no data', async () => {
+      const mockSupa = createMockSupabase();
+      mockSupa._setSelectResult({ data: null });
+
+      const result = await fetchReviewAgents(mockSupa as never, 'task-1');
+      expect(result.reviewers).toHaveLength(0);
+      expect(result.synthesizer).toBeNull();
     });
   });
 
