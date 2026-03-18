@@ -90,6 +90,7 @@ export const statsCommand = new Command('stats')
         id: opts.agent,
         model: 'unknown',
         tool: 'unknown',
+        isAnonymous: false,
         status: 'offline',
         repoConfig: null,
         createdAt: '',
