@@ -14,20 +14,40 @@ export interface InFlightTaskMeta {
   synthesizerAgentId?: string;
 }
 
+/** Agent info displayed in the synthesized review header. */
+export interface ReviewAgentInfo {
+  model: string;
+  tool: string;
+}
+
 const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
   approve: '\u2705',
   request_changes: '\u274C',
   comment: '\uD83D\uDCAC',
 };
 
+/** Format a single agent as `model/tool`. */
+function formatAgentLabel(agent: ReviewAgentInfo): string {
+  return `\`${agent.model}/${agent.tool}\``;
+}
+
 /**
  * Format the summary as the main PR comment.
  */
 export function formatSummaryComment(
   summary: string,
-  reviewCount: number,
+  agents: ReviewAgentInfo[],
+  synthesizerAgent: ReviewAgentInfo | null,
   contributorNames?: string[],
 ): string {
+  const agentLabels = agents.map(formatAgentLabel);
+  const synthLabel = synthesizerAgent ? formatAgentLabel(synthesizerAgent) : null;
+  const agentsLine =
+    agentLabels.length > 0
+      ? `**Agents**: ${agentLabels.join(', ')}${synthLabel ? ` (synthesized by ${synthLabel})` : ''}`
+      : synthLabel
+        ? `**Agents**: ${synthLabel}`
+        : '';
   const contributorsLine =
     contributorNames && contributorNames.length > 0
       ? `**Contributors**: ${contributorNames.map((n) => (n === 'Anonymous contributor' ? n : `[@${n}](https://github.com/${n})`)).join(', ')}`
@@ -35,7 +55,7 @@ export function formatSummaryComment(
   return [
     '## \uD83D\uDD0D OpenCara Review',
     '',
-    `**Synthesized from ${reviewCount + 1} agent${reviewCount !== 0 ? 's' : ''}**`,
+    ...(agentsLine ? [agentsLine] : []),
     ...(contributorsLine ? [contributorsLine] : []),
     '',
     '---',
@@ -66,7 +86,7 @@ export function formatIndividualReviewComment(
 }
 
 /**
- * Fetch distinct contributor names for a task's reviews.
+ * Fetch distinct contributor names for a task's reviews (includes synthesizer).
  */
 export async function fetchReviewContributors(
   supabase: SupabaseClient,
@@ -76,8 +96,7 @@ export async function fetchReviewContributors(
     .from('review_results')
     .select('agents!inner(users!inner(name, is_anonymous))')
     .eq('review_task_id', taskId)
-    .eq('status', 'completed')
-    .eq('type', 'review');
+    .eq('status', 'completed');
 
   if (!data) return [];
 
@@ -94,6 +113,40 @@ export async function fetchReviewContributors(
     }
   }
   return [...names];
+}
+
+/**
+ * Fetch agent details (model, tool) for all reviewers and the synthesizer of a task.
+ */
+export async function fetchReviewAgents(
+  supabase: SupabaseClient,
+  taskId: string,
+): Promise<{ reviewers: ReviewAgentInfo[]; synthesizer: ReviewAgentInfo | null }> {
+  const { data } = await supabase
+    .from('review_results')
+    .select('type, agents!inner(model, tool)')
+    .eq('review_task_id', taskId)
+    .eq('status', 'completed');
+
+  if (!data) return { reviewers: [], synthesizer: null };
+
+  const reviewers: ReviewAgentInfo[] = [];
+  let synthesizer: ReviewAgentInfo | null = null;
+
+  for (const row of data as Record<string, unknown>[]) {
+    const agent = row.agents as Record<string, unknown>;
+    const info: ReviewAgentInfo = {
+      model: (agent.model as string) ?? 'unknown',
+      tool: (agent.tool as string) ?? 'unknown',
+    };
+    if (row.type === 'summary') {
+      synthesizer = info;
+    } else {
+      reviewers.push(info);
+    }
+  }
+
+  return { reviewers, synthesizer };
 }
 
 /**
