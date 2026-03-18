@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AgentConnection, formatReviewComment } from '../agent-connection.js';
+import { AgentConnection, formatReviewComment, sanitizeDisplayName } from '../agent-connection.js';
 
 vi.mock('../db.js', () => ({
   createSupabaseClient: vi.fn(),
@@ -256,6 +256,62 @@ describe('AgentConnection', () => {
     it('omits contributor line when no name and not anonymous', () => {
       const result = formatReviewComment('approve', 'gpt-4', 'cursor', 'LGTM', undefined, false);
       expect(result).not.toContain('Contributor');
+    });
+
+    it('shows displayName before model/tool when set', () => {
+      const result = formatReviewComment(
+        'approve',
+        'gpt-4',
+        'cursor',
+        'LGTM',
+        undefined,
+        false,
+        'My Reviewer',
+      );
+      expect(result).toContain('**Agent**: My Reviewer (`gpt-4` / `cursor`)');
+    });
+
+    it('shows only model/tool when displayName is not set', () => {
+      const result = formatReviewComment('approve', 'gpt-4', 'cursor', 'LGTM');
+      expect(result).toContain('**Agent**: `gpt-4` / `cursor`');
+      expect(result).not.toContain('(');
+    });
+
+    it('escapes markdown special characters in displayName', () => {
+      const result = formatReviewComment(
+        'approve',
+        'gpt-4',
+        'cursor',
+        'LGTM',
+        undefined,
+        false,
+        '**[Click](https://evil.com)**',
+      );
+      expect(result).not.toContain('[Click]');
+      expect(result).toContain('\\*\\*\\[Click\\]\\(https://evil\\.com\\)\\*\\*');
+    });
+  });
+
+  describe('sanitizeDisplayName', () => {
+    it('returns null for null/undefined/empty', () => {
+      expect(sanitizeDisplayName(null)).toBeNull();
+      expect(sanitizeDisplayName(undefined)).toBeNull();
+      expect(sanitizeDisplayName('')).toBeNull();
+      expect(sanitizeDisplayName('   ')).toBeNull();
+    });
+
+    it('trims whitespace', () => {
+      expect(sanitizeDisplayName('  My Bot  ')).toBe('My Bot');
+    });
+
+    it('truncates to 100 chars', () => {
+      const long = 'A'.repeat(150);
+      const result = sanitizeDisplayName(long);
+      expect(result).toHaveLength(100);
+    });
+
+    it('returns valid names unchanged', () => {
+      expect(sanitizeDisplayName('My Reviewer')).toBe('My Reviewer');
     });
   });
 
@@ -2160,6 +2216,77 @@ describe('AgentConnection', () => {
       expect(mockSupa._calls.update).toContainEqual({
         table: 'agents',
         data: { repo_config: { mode: 'own' } },
+      });
+    });
+
+    it('persists displayName from agent_preferences message', async () => {
+      await connectAgent();
+      mockSupa = createSupabaseMock();
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          displayName: 'My Custom Agent',
+          repoConfig: { mode: 'all' },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'agents',
+        data: { repo_config: { mode: 'all' }, display_name: 'My Custom Agent' },
+      });
+    });
+
+    it('clears displayName when set to empty string', async () => {
+      await connectAgent();
+      mockSupa = createSupabaseMock();
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          displayName: '',
+          repoConfig: { mode: 'all' },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'agents',
+        data: { repo_config: { mode: 'all' }, display_name: null },
+      });
+    });
+
+    it('does not include display_name when displayName is not in message', async () => {
+      await connectAgent();
+      mockSupa = createSupabaseMock();
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: { mode: 'all' },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'agents',
+        data: { repo_config: { mode: 'all' } },
       });
     });
   });

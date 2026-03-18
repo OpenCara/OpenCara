@@ -21,6 +21,7 @@ CREATE TABLE agents (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   model TEXT NOT NULL,
   tool TEXT NOT NULL,
+  display_name TEXT,
   status TEXT NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline')),
   last_heartbeat_at TIMESTAMPTZ,
   repo_config JSONB DEFAULT NULL,

@@ -9,6 +9,7 @@ export interface EligibleAgent {
   userName: string;
   model: string;
   tool: string;
+  displayName?: string;
   isAnonymous: boolean;
   repoConfig: RepoConfig | null;
 }
@@ -39,7 +40,7 @@ export async function findEligibleAgents(
 ): Promise<EligibleAgent[]> {
   const { data, error } = await supabase
     .from('agents')
-    .select('id, user_id, model, tool, repo_config, users!inner(name, is_anonymous)')
+    .select('id, user_id, model, tool, display_name, repo_config, users!inner(name, is_anonymous)')
     .eq('status', 'online')
     .order('created_at', { ascending: true });
 
@@ -54,6 +55,7 @@ export async function findEligibleAgents(
     userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
     model: row.model as string,
     tool: row.tool as string,
+    ...((row.display_name as string | null) ? { displayName: row.display_name as string } : {}),
     isAnonymous: ((row.users as Record<string, unknown>)?.is_anonymous as boolean) ?? false,
     repoConfig: (row.repo_config as RepoConfig | null) ?? null,
   }));

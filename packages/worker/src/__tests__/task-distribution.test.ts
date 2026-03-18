@@ -564,6 +564,29 @@ describe('filterByRepoConfig', () => {
   });
 });
 
+describe('EligibleAgent displayName', () => {
+  it('includes optional displayName in agent', () => {
+    const agent = makeAgent({ id: 'a1', displayName: 'My Bot' });
+    expect(agent.displayName).toBe('My Bot');
+  });
+
+  it('defaults to undefined when displayName not set', () => {
+    const agent = makeAgent({ id: 'a1' });
+    expect(agent.displayName).toBeUndefined();
+  });
+
+  it('preserves displayName through filter functions', () => {
+    const agents = [
+      makeAgent({ id: 'a1', displayName: 'Bot 1', repoConfig: null }),
+      makeAgent({ id: 'a2', repoConfig: null }),
+    ];
+    const filtered = filterByRepoConfig(agents, 'owner', 'repo');
+    expect(filtered).toHaveLength(2);
+    expect(filtered[0].displayName).toBe('Bot 1');
+    expect(filtered[1].displayName).toBeUndefined();
+  });
+});
+
 describe('filterByAnonymous', () => {
   it('returns all agents when allowAnonymous is true', () => {
     const agents = [
