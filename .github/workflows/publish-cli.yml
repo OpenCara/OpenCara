@@ -37,9 +37,12 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.bump.outputs.type != 'none'
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      - name: Upgrade npm for OIDC trusted publishing support
+        if: steps.bump.outputs.type != 'none'
+        run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
         if: steps.bump.outputs.type != 'none'
       - run: pnpm build
@@ -64,8 +67,6 @@ jobs:
         if: steps.bump.outputs.type != 'none'
         working-directory: packages/cli
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Commit version bump and create release
         if: steps.bump.outputs.type != 'none'
         run: |
