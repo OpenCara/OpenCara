@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildWsUrl, handleMessage, type ConsumptionDeps } from '../commands/agent.js';
+import {
+  buildWsUrl,
+  handleMessage,
+  syncAgentToServer,
+  type ConsumptionDeps,
+} from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
+import type { AgentResponse } from '@opencara/shared';
 import { createSessionTracker } from '../consumption.js';
 import { ApiClient } from '../http.js';
 
@@ -358,13 +364,44 @@ describe('handleMessage', () => {
     consoleSpy.mockRestore();
   });
 
-  it('handles connected message', () => {
+  it('handles connected message and sends agent_preferences with default repo config', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const ws = { send: vi.fn() };
 
     handleMessage(ws, { type: 'connected', version: '1' });
 
     expect(consoleSpy).toHaveBeenCalledWith('Authenticated. Protocol v1');
+
+    // Should send agent_preferences
+    expect(ws.send).toHaveBeenCalledOnce();
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('agent_preferences');
+    expect(sent.repoConfig).toEqual({ mode: 'all' });
+    expect(sent.id).toBeDefined();
+    expect(sent.timestamp).toBeTypeOf('number');
+
+    consoleSpy.mockRestore();
+  });
+
+  it('sends agent_preferences with custom repo config on connected', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+
+    const repoConfig = { mode: 'whitelist' as const, list: ['org/repo'] };
+    handleMessage(
+      ws,
+      { type: 'connected', version: '1' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      repoConfig,
+    );
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('agent_preferences');
+    expect(sent.repoConfig).toEqual({ mode: 'whitelist', list: ['org/repo'] });
+
     consoleSpy.mockRestore();
   });
 
@@ -599,5 +636,66 @@ describe('handleMessage', () => {
     );
     expect(verboseCalls).toHaveLength(0);
     consoleSpy.mockRestore();
+  });
+});
+
+describe('syncAgentToServer', () => {
+  function makeServerAgent(overrides?: Partial<AgentResponse>): AgentResponse {
+    return {
+      id: 'agent-1',
+      model: 'claude-sonnet-4-6',
+      tool: 'claude-code',
+      status: 'online',
+      repoConfig: null,
+      createdAt: '2024-01-01T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  it('returns existing agent when model+tool match', async () => {
+    const client = { post: vi.fn() } as unknown as ApiClient;
+    const result = await syncAgentToServer(client, [makeServerAgent()], {
+      model: 'claude-sonnet-4-6',
+      tool: 'claude-code',
+    });
+
+    expect(result.agentId).toBe('agent-1');
+    expect(result.created).toBe(false);
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it('creates new agent without repoConfig when repos not specified', async () => {
+    const client = {
+      post: vi.fn().mockResolvedValue({ id: 'new-agent' }),
+    } as unknown as ApiClient;
+
+    const result = await syncAgentToServer(client, [], { model: 'gpt-4', tool: 'copilot' });
+
+    expect(result.agentId).toBe('new-agent');
+    expect(result.created).toBe(true);
+    expect(client.post).toHaveBeenCalledWith('/api/agents', {
+      model: 'gpt-4',
+      tool: 'copilot',
+    });
+  });
+
+  it('creates new agent with repoConfig when repos specified', async () => {
+    const client = {
+      post: vi.fn().mockResolvedValue({ id: 'new-agent' }),
+    } as unknown as ApiClient;
+
+    const result = await syncAgentToServer(client, [], {
+      model: 'gpt-4',
+      tool: 'copilot',
+      repos: { mode: 'whitelist', list: ['org/repo'] },
+    });
+
+    expect(result.agentId).toBe('new-agent');
+    expect(result.created).toBe(true);
+    expect(client.post).toHaveBeenCalledWith('/api/agents', {
+      model: 'gpt-4',
+      tool: 'copilot',
+      repoConfig: { mode: 'whitelist', list: ['org/repo'] },
+    });
   });
 });

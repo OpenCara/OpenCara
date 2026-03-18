@@ -31,6 +31,7 @@ import {
   formatTrustTier,
   formatReviewQuality,
   formatConsumption,
+  formatRepoConfig,
   statsCommand,
 } from '../commands/stats.js';
 
@@ -246,12 +247,48 @@ describe('stats command', () => {
     });
   });
 
+  describe('formatRepoConfig', () => {
+    it('shows default when repoConfig is null', () => {
+      expect(formatRepoConfig(null)).toContain('all (default)');
+    });
+
+    it('shows all mode', () => {
+      expect(formatRepoConfig({ mode: 'all' })).toContain('all');
+    });
+
+    it('shows own mode', () => {
+      expect(formatRepoConfig({ mode: 'own' })).toContain('own repos only');
+    });
+
+    it('shows whitelist with repos', () => {
+      const output = formatRepoConfig({ mode: 'whitelist', list: ['org/repo1', 'org/repo2'] });
+      expect(output).toContain('whitelist');
+      expect(output).toContain('org/repo1, org/repo2');
+    });
+
+    it('shows blacklist with repos', () => {
+      const output = formatRepoConfig({ mode: 'blacklist', list: ['spam/repo'] });
+      expect(output).toContain('blacklist');
+      expect(output).toContain('spam/repo');
+    });
+  });
+
   describe('formatAgentStats', () => {
     it('displays agent info and consumption', () => {
       const output = formatAgentStats(makeAgent(), makeConsumption());
       expect(output).toContain('Agent: agent-1 (claude-sonnet-4-6 / claude-code)');
+      expect(output).toContain('Repos:');
       expect(output).toContain('Tokens:');
       expect(output).toContain('125,430 total');
+    });
+
+    it('displays repo config when agent has one', () => {
+      const output = formatAgentStats(
+        makeAgent({ repoConfig: { mode: 'whitelist', list: ['org/repo'] } }),
+        makeConsumption(),
+      );
+      expect(output).toContain('whitelist');
+      expect(output).toContain('org/repo');
     });
 
     it('displays trust tier when agent stats provided', () => {

@@ -5,6 +5,7 @@ import type {
   AgentResponse,
   AgentStatsResponse,
   TrustTierInfo,
+  RepoConfig,
 } from '@opencara/shared';
 import { loadConfig, requireApiKey, type ConsumptionLimits } from '../config.js';
 import { ApiClient } from '../http.js';
@@ -33,6 +34,22 @@ function formatReviewQuality(stats: AgentStatsResponse['stats']): string {
     lines.push(`  Quality:  No ratings yet`);
   }
   return lines.join('\n');
+}
+
+function formatRepoConfig(repoConfig: RepoConfig | null): string {
+  if (!repoConfig) return '  Repos:    all (default)';
+  switch (repoConfig.mode) {
+    case 'all':
+      return '  Repos:    all';
+    case 'own':
+      return '  Repos:    own repos only';
+    case 'whitelist':
+      return `  Repos:    whitelist (${repoConfig.list?.join(', ') ?? 'none'})`;
+    case 'blacklist':
+      return `  Repos:    blacklist (${repoConfig.list?.join(', ') ?? 'none'})`;
+    default:
+      return `  Repos:    ${repoConfig.mode}`;
+  }
 }
 
 function formatConsumption(
@@ -67,6 +84,7 @@ function formatAgentStats(
 ): string {
   const lines: string[] = [];
   lines.push(`Agent: ${agent.id} (${agent.model} / ${agent.tool})`);
+  lines.push(formatRepoConfig(agent.repoConfig));
 
   if (agentStats) {
     lines.push(formatTrustTier(agentStats.agent.trustTier));
@@ -78,7 +96,13 @@ function formatAgentStats(
   return lines.join('\n');
 }
 
-export { formatAgentStats, formatTrustTier, formatReviewQuality, formatConsumption };
+export {
+  formatAgentStats,
+  formatTrustTier,
+  formatReviewQuality,
+  formatConsumption,
+  formatRepoConfig,
+};
 
 async function fetchAgentStats(
   client: ApiClient,

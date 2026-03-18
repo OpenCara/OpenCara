@@ -18,6 +18,7 @@ import {
   ensureConfigDir,
   requireApiKey,
   resolveAgentLimits,
+  RepoConfigError,
   CONFIG_DIR,
   CONFIG_FILE,
   DEFAULT_PLATFORM_URL,
@@ -509,6 +510,228 @@ agents:
         reviews_per_day: 10,
       });
       expect(config.agents![1].limits).toBeUndefined();
+    });
+  });
+
+  describe('repo config parsing', () => {
+    it('defaults to undefined repos when omitted', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toBeUndefined();
+    });
+
+    it('parses repos with mode: all', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: all
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({ mode: 'all' });
+    });
+
+    it('parses repos with mode: own', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: own
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({ mode: 'own' });
+    });
+
+    it('parses repos with mode: whitelist and list', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: whitelist
+      list:
+        - OpenCara/OpenCara
+        - myorg/my-project
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({
+        mode: 'whitelist',
+        list: ['OpenCara/OpenCara', 'myorg/my-project'],
+      });
+    });
+
+    it('parses repos with mode: blacklist and list', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: blacklist
+      list:
+        - spam-org/spam-repo
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({
+        mode: 'blacklist',
+        list: ['spam-org/spam-repo'],
+      });
+    });
+
+    it('throws RepoConfigError for invalid mode', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: invalid
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow('must be one of: all, own, whitelist, blacklist');
+    });
+
+    it('throws RepoConfigError when mode is missing', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      list:
+        - foo/bar
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow('mode is required');
+    });
+
+    it('throws RepoConfigError when repos is not an object', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos: just-a-string
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow('must be an object');
+    });
+
+    it('throws RepoConfigError when whitelist has no list', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: whitelist
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow('list is required and must be non-empty');
+    });
+
+    it('throws RepoConfigError when blacklist has empty list', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: blacklist
+      list: []
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow('list is required and must be non-empty');
+    });
+
+    it('throws RepoConfigError for invalid owner/repo format', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: whitelist
+      list:
+        - invalid-format
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow("must match 'owner/repo' format");
+    });
+
+    it('throws RepoConfigError for list entry with multiple slashes', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: whitelist
+      list:
+        - org/repo/extra
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow("must match 'owner/repo' format");
+    });
+
+    it('does not require list for mode: all', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: all
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({ mode: 'all' });
+      expect(config.agents![0].repos!.list).toBeUndefined();
+    });
+
+    it('does not require list for mode: own', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    repos:
+      mode: own
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({ mode: 'own' });
+      expect(config.agents![0].repos!.list).toBeUndefined();
+    });
+
+    it('saveConfig persists repos field on agents', () => {
+      saveConfig({
+        apiKey: 'cr_test',
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
+        agentCommand: null,
+        agents: [
+          {
+            model: 'claude-opus-4-6',
+            tool: 'claude-code',
+            repos: { mode: 'whitelist', list: ['org/repo'] },
+          },
+        ],
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(written).toContain('repos');
+      expect(written).toContain('whitelist');
+      expect(written).toContain('org/repo');
     });
   });
 });
