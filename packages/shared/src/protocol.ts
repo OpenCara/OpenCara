@@ -94,6 +94,7 @@ export type AgentMessage =
 
 export interface AgentPreferencesMessage extends MessageBase {
   type: 'agent_preferences';
+  displayName?: string;
   repoConfig: RepoConfig;
 }
 
