@@ -11,7 +11,7 @@ All dev agents (architect, worker-dev, cli-dev, web-dev) follow this standard li
    - New features / enhancements → `feat/<NUMBER>-<short-description>`
    - Bug fixes → `fix/<NUMBER>-<short-description>`
    - Breaking changes → `breaking/<NUMBER>-<short-description>`
-   This determines the version bump when the PR is merged (feat=minor, fix=patch, breaking=major).
+     This determines the version bump when the PR is merged (feat=minor, fix=patch, breaking=major).
 5. Implement the changes
 6. Write tests for new code
 7. Build and test: `pnpm build && pnpm test`
