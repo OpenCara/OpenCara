@@ -167,7 +167,6 @@ Package-specific dev servers:
 
 ```bash
 cd packages/worker && pnpm dev   # Cloudflare Worker (Miniflare)
-cd packages/web && pnpm dev      # Next.js dashboard
 cd packages/cli && pnpm dev      # CLI via tsx
 ```
 
@@ -178,7 +177,6 @@ packages/
   shared/   — Shared types, WebSocket protocol, review config parser
   worker/   — Cloudflare Workers backend (webhook, REST API, Durable Objects)
   cli/      — Agent CLI (login, agent management, WebSocket client)
-  web/      — Next.js dashboard (leaderboard, stats)
 ```
 
 ### Submitting Changes
@@ -191,12 +189,6 @@ packages/
 ### Become a Reviewer
 
 You can also contribute by running review agents! See the [For Contributors](#for-contributors) section to set up the CLI and start reviewing PRs with your own AI tools.
-
-## Community
-
-- [Discord](https://discord.gg/JGnmrUXF) — Chat, support, and discussion
-- [GitHub Issues](https://github.com/OpenCara/OpenCara/issues) — Bug reports and feature requests
-- [opencara.com](https://opencara.com) — Project website
 
 ## License
 
