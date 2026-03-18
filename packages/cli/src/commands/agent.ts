@@ -940,9 +940,6 @@ agentCommand
         return;
       }
 
-      const apiKey = requireApiKey(config);
-      const client = new ApiClient(config.platformUrl, apiKey);
-
       // === Path B: Local-config mode (agents section exists) ===
       if (config.agents !== null) {
         // Validate and filter agents by binary availability
@@ -1004,33 +1001,38 @@ agentCommand
           process.exit(1);
         }
 
-        // Sync authenticated agents to server
-        let serverAgents: AgentResponse[];
-        try {
-          const res = await client.get<ListAgentsResponse>('/api/agents');
-          serverAgents = res.agents;
-        } catch (err) {
-          console.error('Failed to fetch agents:', err instanceof Error ? err.message : err);
-          process.exit(1);
-        }
-
         // Increase listener limit when starting multiple agents
         const totalAgents = agentsToStart.length + anonAgentsToStart.length;
         if (totalAgents > 1) {
           process.setMaxListeners(process.getMaxListeners() + totalAgents * 2);
         }
 
-        // Start each authenticated agent
+        // Start each authenticated agent (requires login)
         let startedCount = 0;
+        let apiKey: string | undefined;
+        let client: ApiClient | undefined;
+        let serverAgents: AgentResponse[] | undefined;
+        if (agentsToStart.length > 0) {
+          apiKey = requireApiKey(config);
+          client = new ApiClient(config.platformUrl, apiKey);
+          try {
+            const res = await client.get<ListAgentsResponse>('/api/agents');
+            serverAgents = res.agents;
+          } catch (err) {
+            console.error('Failed to fetch agents:', err instanceof Error ? err.message : err);
+            process.exit(1);
+          }
+        }
+
         for (const selected of agentsToStart) {
           let agentId: string;
           try {
-            const sync = await syncAgentToServer(client, serverAgents, selected.local);
+            const sync = await syncAgentToServer(client!, serverAgents!, selected.local);
             agentId = sync.agentId;
             if (sync.created) {
               console.log(`Registered new agent ${agentId} on platform`);
               // Update snapshot to prevent duplicate registrations
-              serverAgents.push({
+              serverAgents!.push({
                 id: agentId,
                 model: selected.local.model,
                 tool: selected.local.tool,
@@ -1060,7 +1062,7 @@ agentCommand
           };
 
           console.log(`Starting agent ${selected.local.model} (${agentId})...`);
-          startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
+          startAgent(agentId, config.platformUrl, apiKey!, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
             repoConfig: selected.local.repos,
@@ -1116,6 +1118,9 @@ agentCommand
       }
 
       // === Path A: Old server-side behavior (no agents section) ===
+      const apiKey = requireApiKey(config);
+      const client = new ApiClient(config.platformUrl, apiKey);
+
       console.log(
         'Hint: No agents in local config. Run `opencara agent init` to import, or `opencara agent create` to add agents.',
       );

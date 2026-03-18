@@ -166,6 +166,20 @@ describe('login command', () => {
   });
 
   describe('account linking', () => {
+    let originalIsTTY: boolean | undefined;
+
+    beforeEach(() => {
+      originalIsTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process.stdin, 'isTTY', {
+        value: originalIsTTY,
+        writable: true,
+      });
+    });
+
     it('prompts to link anonymous agents after login', async () => {
       mockLoadConfig.mockReturnValue({
         apiKey: null,
@@ -252,6 +266,29 @@ describe('login command', () => {
       await loginCommand.parseAsync([], { from: 'user' });
 
       // Should not see "Found N anonymous agent(s)" message
+      const logCalls = logSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(logCalls.some((c: string) => c.includes('anonymous agent'))).toBe(false);
+      expect(saveConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips linking prompt in non-TTY environment', async () => {
+      Object.defineProperty(process.stdin, 'isTTY', { value: undefined, writable: true });
+
+      mockLoadConfig.mockReturnValue({
+        apiKey: null,
+        platformUrl: 'https://test.api.dev',
+        anonymousAgents: [
+          { agentId: 'anon-1', apiKey: 'cr_anon', model: 'claude-sonnet-4-6', tool: 'claude' },
+        ],
+      });
+
+      mockPost
+        .mockResolvedValueOnce(mockDeviceFlow())
+        .mockResolvedValueOnce({ status: 'complete', apiKey: 'cr_newkey' });
+
+      await loginCommand.parseAsync([], { from: 'user' });
+
+      // Should not prompt or attempt linking
       const logCalls = logSpy.mock.calls.map((c: unknown[]) => String(c[0]));
       expect(logCalls.some((c: string) => c.includes('anonymous agent'))).toBe(false);
       expect(saveConfig).toHaveBeenCalledTimes(1);

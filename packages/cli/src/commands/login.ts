@@ -75,8 +75,8 @@ export const loginCommand = new Command('login')
         saveConfig(config);
         console.log('\nLogged in successfully. API key saved to ~/.opencara/config.yml');
 
-        // Offer to link anonymous agents
-        if (config.anonymousAgents.length > 0) {
+        // Offer to link anonymous agents (only in interactive terminals)
+        if (config.anonymousAgents.length > 0 && process.stdin.isTTY) {
           console.log();
           console.log(`Found ${config.anonymousAgents.length} anonymous agent(s):`);
           for (const anon of config.anonymousAgents) {
