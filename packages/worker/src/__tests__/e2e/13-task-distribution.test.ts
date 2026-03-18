@@ -12,7 +12,9 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -51,10 +53,9 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     });
 
     const agentId = agent.id as string;
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     const pair = ctx.getLastWSPair()!;
@@ -88,18 +89,15 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     const agent = await ctx.createAgent(user.id as string, { status: 'online' });
     const agentId = agent.id as string;
 
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     await sendPRWebhook({ action: 'opened' });
 
     const projects = ctx.supabase.getTable('projects');
-    const project = projects.find(
-      (p) => p.owner === 'test-owner' && p.repo === 'test-repo',
-    );
+    const project = projects.find((p) => p.owner === 'test-owner' && p.repo === 'test-repo');
     expect(project).toBeDefined();
     expect(project!.github_installation_id).toBe(12345);
   });
@@ -173,10 +171,9 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     });
 
     const agentId = agent.id as string;
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     // Set review config with minReputation: 0.5
@@ -208,10 +205,9 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     });
 
     const agentId = agent.id as string;
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     ctx.github.options.reviewConfigs = {
@@ -249,10 +245,9 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
         reputation_score: 0.5 + i * 0.1,
       });
       const agentId = agent.id as string;
-      const wsReq = new Request(
-        `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-        { headers: { Upgrade: 'websocket' } },
-      );
+      const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+        headers: { Upgrade: 'websocket' },
+      });
       await ctx.workerFetch(wsReq);
       agents.push({ agentId, pair: ctx.getLastWSPair() });
     }

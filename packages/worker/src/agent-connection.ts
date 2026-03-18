@@ -1,4 +1,5 @@
 import type {
+  AgentPreferencesMessage,
   ReviewCompleteMessage,
   ReviewRejectedMessage,
   ReviewErrorMessage,
@@ -19,6 +20,7 @@ import {
   fetchCompletedReviews,
   fetchReviewContributors,
 } from './summarization.js';
+import { filterByRepoConfig, type EligibleAgent } from './task-distribution.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
@@ -186,6 +188,9 @@ export class AgentConnection implements DurableObject {
     switch (msg.type) {
       case 'heartbeat_pong':
         await this.state.storage.put('lastHeartbeatAt', new Date().toISOString());
+        break;
+      case 'agent_preferences':
+        await this.handleAgentPreferences(msg as unknown as AgentPreferencesMessage);
         break;
       case 'review_complete':
         await this.handleReviewComplete(msg as unknown as ReviewCompleteMessage);
@@ -392,6 +397,23 @@ export class AgentConnection implements DurableObject {
         );
         break; // WebSocket likely broken, stop processing
       }
+    }
+  }
+
+  private async handleAgentPreferences(msg: AgentPreferencesMessage): Promise<void> {
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
+    if (!agentId) return;
+
+    const supabase = createSupabaseClient(this.env);
+    const { error } = await supabase
+      .from('agents')
+      .update({ repo_config: msg.repoConfig })
+      .eq('id', agentId);
+
+    if (error) {
+      console.error(`Failed to update repo_config for agent ${agentId}:`, error);
+    } else {
+      console.log(`Updated repo_config for agent ${agentId}: mode=${msg.repoConfig.mode}`);
     }
   }
 
@@ -750,23 +772,6 @@ export class AgentConnection implements DurableObject {
 
     const excludedAgentIds = (previousAttempts ?? []).map((r: { agent_id: string }) => r.agent_id);
 
-    // Find another eligible online agent with reputation >= 0
-    const { data: candidates } = await supabase
-      .from('agents')
-      .select('id')
-      .eq('status', 'online')
-      .gte('reputation_score', 0);
-
-    const eligible = (candidates ?? []).filter(
-      (a: { id: string }) => !excludedAgentIds.includes(a.id),
-    );
-
-    if (eligible.length === 0) {
-      await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
-      console.log(`Task ${taskId} failed: no eligible agents remaining`);
-      return;
-    }
-
     // Look up task info for redistribution (including stored diff and config)
     const { data: taskData } = await supabase
       .from('review_tasks')
@@ -787,6 +792,33 @@ export class AgentConnection implements DurableObject {
       github_installation_id: number;
     };
 
+    // Find another eligible online agent with reputation >= 0
+    const { data: candidates } = await supabase
+      .from('agents')
+      .select('id, user_id, model, tool, reputation_score, repo_config, users!inner(name)')
+      .eq('status', 'online')
+      .gte('reputation_score', 0);
+
+    const allCandidates: EligibleAgent[] = ((candidates ?? []) as Record<string, unknown>[])
+      .filter((a) => !excludedAgentIds.includes(a.id as string))
+      .map((row) => ({
+        id: row.id as string,
+        userId: row.user_id as string,
+        userName: (row.users as Record<string, unknown>).name as string,
+        model: row.model as string,
+        tool: row.tool as string,
+        reputationScore: row.reputation_score as number,
+        repoConfig: (row.repo_config as EligibleAgent['repoConfig']) ?? null,
+      }));
+
+    const eligible = filterByRepoConfig(allCandidates, project.owner, project.repo);
+
+    if (eligible.length === 0) {
+      await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
+      console.log(`Task ${taskId} failed: no eligible agents remaining`);
+      return;
+    }
+
     const config = (taskData.config_json as Record<string, unknown>) ?? {};
     const timeoutAt = new Date(taskData.timeout_at as string).getTime();
     const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
@@ -806,7 +838,7 @@ export class AgentConnection implements DurableObject {
     }
 
     // Push task to the next eligible agent's DO
-    const nextAgentId = (eligible[0] as { id: string }).id;
+    const nextAgentId = eligible[0].id;
     try {
       const doId = this.env.AGENT_CONNECTION.idFromName(nextAgentId);
       const stub = this.env.AGENT_CONNECTION.get(doId);

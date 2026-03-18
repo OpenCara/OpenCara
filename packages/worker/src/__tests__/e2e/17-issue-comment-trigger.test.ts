@@ -12,7 +12,9 @@ describe('E2E: Issue Comment Trigger (/opencara review)', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -21,9 +23,7 @@ describe('E2E: Issue Comment Trigger (/opencara review)', () => {
   });
 
   /** Send an issue_comment webhook. */
-  async function sendCommentWebhook(
-    overrides?: Parameters<typeof buildIssueCommentPayload>[0],
-  ) {
+  async function sendCommentWebhook(overrides?: Parameters<typeof buildIssueCommentPayload>[0]) {
     const payload = buildIssueCommentPayload(overrides);
     const body = JSON.stringify(payload);
     const sig = await ctx.signWebhook(body);
@@ -50,10 +50,9 @@ describe('E2E: Issue Comment Trigger (/opencara review)', () => {
     });
 
     const agentId = agent.id as string;
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
     return { user, apiKey, agent, agentId };
   }

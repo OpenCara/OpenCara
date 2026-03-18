@@ -12,7 +12,9 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -262,9 +264,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
 
     // Check that a review was posted to GitHub
     expect(ctx.github.postedReviews.length).toBeGreaterThan(0);
-    const review = ctx.github.postedReviews.find(
-      (r) => r.body.includes('OpenCara Review'),
-    );
+    const review = ctx.github.postedReviews.find((r) => r.body.includes('OpenCara Review'));
     expect(review).toBeDefined();
     expect(review!.owner).toBe('test-owner');
     expect(review!.repo).toBe('test-repo');
@@ -345,10 +345,9 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     });
     const agentId = agent.id as string;
 
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     const taskId = await sendWebhook();
@@ -404,9 +403,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     // Check consumption_logs for each reviewer
     const logs = ctx.supabase.getTable('consumption_logs');
     for (const agentId of reviewerAgentIds) {
-      const agentLogs = logs.filter(
-        (l) => l.agent_id === agentId && l.review_task_id === taskId,
-      );
+      const agentLogs = logs.filter((l) => l.agent_id === agentId && l.review_task_id === taskId);
       expect(agentLogs.length).toBe(1);
       expect(agentLogs[0].tokens_used).toBe(250);
     }

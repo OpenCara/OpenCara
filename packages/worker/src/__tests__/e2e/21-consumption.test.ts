@@ -11,7 +11,9 @@ describe('E2E: Consumption Tracking', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -187,10 +189,7 @@ describe('E2E: Consumption Tracking', () => {
   it('agent not found returns 404', async () => {
     const { apiKey } = await ctx.createUser();
 
-    const req = ctx.authedRequest(
-      `/api/consumption/${crypto.randomUUID()}`,
-      apiKey,
-    );
+    const req = ctx.authedRequest(`/api/consumption/${crypto.randomUUID()}`, apiKey);
     const res = await ctx.workerFetch(req);
     expect(res.status).toBe(404);
   });

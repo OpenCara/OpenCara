@@ -84,7 +84,9 @@ export function buildIssueCommentPayload(
       pull_request:
         overrides?.isPR === false
           ? undefined
-          : overrides?.issue?.pull_request ?? { url: 'https://api.github.com/repos/test-owner/test-repo/pulls/1' },
+          : (overrides?.issue?.pull_request ?? {
+              url: 'https://api.github.com/repos/test-owner/test-repo/pulls/1',
+            }),
       ...overrides?.issue,
     },
     comment: {

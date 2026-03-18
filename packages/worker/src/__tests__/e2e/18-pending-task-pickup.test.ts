@@ -11,7 +11,9 @@ describe('E2E: Pending Task Pickup on Agent Connect', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -67,10 +69,9 @@ describe('E2E: Pending Task Pickup on Agent Connect', () => {
     });
     const agentId = agent.id as string;
 
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     const pair = ctx.getLastWSPair()!;
@@ -134,10 +135,9 @@ describe('E2E: Pending Task Pickup on Agent Connect', () => {
     await state.storage.put('connectedAt', new Date(Date.now() - 6_000).toISOString());
 
     // Reconnect
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     const secondPair = ctx.getLastWSPair()!;
@@ -145,9 +145,7 @@ describe('E2E: Pending Task Pickup on Agent Connect', () => {
     // Should NOT receive a review_request for the pending task
     // because reconnecting with in-flight tasks skips pickup
     const messages = secondPair.client.getReceivedParsed<{ type: string; taskId?: string }>();
-    const reviewReq = messages.find(
-      (m) => m.type === 'review_request' && m.taskId === taskId,
-    );
+    const reviewReq = messages.find((m) => m.type === 'review_request' && m.taskId === taskId);
     expect(reviewReq).toBeUndefined();
   });
 
@@ -164,19 +162,16 @@ describe('E2E: Pending Task Pickup on Agent Connect', () => {
     await state.storage.put('connectedAt', new Date(Date.now() - 6_000).toISOString());
 
     // Reconnect
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     const secondPair = ctx.getLastWSPair()!;
 
     // Should receive a review_request for the pending task
     const messages = secondPair.client.getReceivedParsed<{ type: string; taskId?: string }>();
-    const reviewReq = messages.find(
-      (m) => m.type === 'review_request' && m.taskId === taskId,
-    );
+    const reviewReq = messages.find((m) => m.type === 'review_request' && m.taskId === taskId);
     expect(reviewReq).toBeDefined();
 
     // Task status should be updated to reviewing

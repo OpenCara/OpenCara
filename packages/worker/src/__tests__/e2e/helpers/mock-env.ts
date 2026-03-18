@@ -13,7 +13,12 @@ import { hashApiKey, generateApiKey } from '../../../auth.js';
 import { AgentConnection } from '../../../agent-connection.js';
 import { TaskTimeout } from '../../../task-timeout.js';
 import { createMockSupabase, type MockSupabase } from './mock-supabase.js';
-import { createGitHubMock, installGitHubFetchInterceptor, type GitHubMock, type GitHubMockOptions } from './mock-github.js';
+import {
+  createGitHubMock,
+  installGitHubFetchInterceptor,
+  type GitHubMock,
+  type GitHubMockOptions,
+} from './mock-github.js';
 import { MockDurableObjectNamespace } from './mock-durable-objects.js';
 import { installMockWebSocketPair, type MockWebSocketPair } from './mock-websocket.js';
 
@@ -95,10 +100,15 @@ export interface E2EContext {
   workerFetch(request: Request): Promise<Response>;
 
   /** Create a user in the mock DB and return their API key */
-  createUser(overrides?: Record<string, unknown>): Promise<{ user: Record<string, unknown>; apiKey: string }>;
+  createUser(
+    overrides?: Record<string, unknown>,
+  ): Promise<{ user: Record<string, unknown>; apiKey: string }>;
 
   /** Create an agent in the mock DB */
-  createAgent(userId: string, overrides?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  createAgent(
+    userId: string,
+    overrides?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
 
   /** Create a project in the mock DB */
   createProject(overrides?: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -258,8 +268,9 @@ export function createE2EContext(githubOptions?: GitHubMockOptions): E2EContext 
       const websockets = state?.getWebSockets() ?? [];
       if (websockets.length === 0) throw new Error(`No WebSocket for agent ${agentId}`);
       // Call the DO's webSocketMessage handler directly
-      await (instance as unknown as { webSocketMessage(ws: unknown, msg: string): Promise<void> })
-        .webSocketMessage(websockets[0], JSON.stringify(message));
+      await (
+        instance as unknown as { webSocketMessage(ws: unknown, msg: string): Promise<void> }
+      ).webSocketMessage(websockets[0], JSON.stringify(message));
     },
 
     getLastWSPair() {

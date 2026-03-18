@@ -11,7 +11,9 @@ describe('E2E: Task Timeout DO Alarm', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -21,7 +23,7 @@ describe('E2E: Task Timeout DO Alarm', () => {
 
   /** Insert a review task directly into the mock DB. */
   function insertTask(overrides?: Record<string, unknown>) {
-    const taskId = overrides?.id as string ?? crypto.randomUUID();
+    const taskId = (overrides?.id as string) ?? crypto.randomUUID();
     const task: Record<string, unknown> = {
       id: taskId,
       project_id: 'proj-1',
@@ -87,7 +89,9 @@ describe('E2E: Task Timeout DO Alarm', () => {
     const { taskId } = insertTask({ status: 'reviewing' });
 
     // Create reviewer agent (participated in the review)
-    const { user: reviewerUser, apiKey: _reviewerKey } = await ctx.createUser({ name: 'reviewer1' });
+    const { user: reviewerUser, apiKey: _reviewerKey } = await ctx.createUser({
+      name: 'reviewer1',
+    });
     const reviewerAgent = await ctx.createAgent(reviewerUser.id as string, { status: 'online' });
     const reviewerAgentId = reviewerAgent.id as string;
 

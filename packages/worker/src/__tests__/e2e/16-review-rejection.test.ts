@@ -13,7 +13,9 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -60,10 +62,9 @@ describe('E2E: Review Rejection & Redistribution', () => {
       const agent = await ctx.createAgent(user.id as string, { status: 'online' });
       const agentId = agent.id as string;
 
-      const wsReq = new Request(
-        `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-        { headers: { Upgrade: 'websocket' } },
-      );
+      const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+        headers: { Upgrade: 'websocket' },
+      });
       await ctx.workerFetch(wsReq);
 
       const pair = ctx.getLastWSPair()!;

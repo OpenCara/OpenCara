@@ -69,7 +69,11 @@ describe('Auth Device Flow (E2E)', () => {
 
   it('POST /auth/device/token after complete returns apiKey', async () => {
     ctx.github.options.deviceTokenStatus = 'complete';
-    ctx.github.options.githubUser = { id: 99, login: 'newuser', avatar_url: 'https://example.com/avatar.png' };
+    ctx.github.options.githubUser = {
+      id: 99,
+      login: 'newuser',
+      avatar_url: 'https://example.com/avatar.png',
+    };
 
     const res = await ctx.workerFetch(
       new Request('https://api.opencara.dev/auth/device/token', {
@@ -97,7 +101,11 @@ describe('Auth Device Flow (E2E)', () => {
 
     // Step 2: Complete token exchange
     ctx.github.options.deviceTokenStatus = 'complete';
-    ctx.github.options.githubUser = { id: 42, login: 'cycleuser', avatar_url: 'https://example.com/a.png' };
+    ctx.github.options.githubUser = {
+      id: 42,
+      login: 'cycleuser',
+      avatar_url: 'https://example.com/a.png',
+    };
 
     const tokenRes = await ctx.workerFetch(
       new Request('https://api.opencara.dev/auth/device/token', {
@@ -112,9 +120,7 @@ describe('Auth Device Flow (E2E)', () => {
     expect(tokenData.apiKey).toMatch(/^cr_/);
 
     // Step 3: Use the API key for authenticated request
-    const agentsRes = await ctx.workerFetch(
-      ctx.authedRequest('/api/agents', tokenData.apiKey),
-    );
+    const agentsRes = await ctx.workerFetch(ctx.authedRequest('/api/agents', tokenData.apiKey));
     expect(agentsRes.status).toBe(200);
   });
 

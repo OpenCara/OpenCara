@@ -11,7 +11,9 @@ describe('E2E: Heartbeat (S15)', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -24,10 +26,9 @@ describe('E2E: Heartbeat (S15)', () => {
     const agent = await ctx.createAgent(user.id as string, { status: 'online' });
     const agentId = agent.id as string;
 
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     const response = await ctx.workerFetch(wsReq);
     expect(response.status).toBe(101);
 
@@ -63,9 +64,7 @@ describe('E2E: Heartbeat (S15)', () => {
     // The timestamp should have been updated (it may or may not differ by ms,
     // but it should be a valid ISO string that was set after the pong)
     expect(typeof afterPong).toBe('string');
-    expect(new Date(afterPong!).getTime()).toBeGreaterThanOrEqual(
-      new Date(beforePong!).getTime(),
-    );
+    expect(new Date(afterPong!).getTime()).toBeGreaterThanOrEqual(new Date(beforePong!).getTime());
   });
 
   it('heartbeat timeout (91s since last pong) closes WS with code 4003', async () => {
@@ -74,10 +73,7 @@ describe('E2E: Heartbeat (S15)', () => {
 
     // Set lastHeartbeatAt to 91 seconds ago (timeout is 90s)
     const state = ctx.agentConnectionNS.getState(agentId)!;
-    await state.storage.put(
-      'lastHeartbeatAt',
-      new Date(Date.now() - 91_000).toISOString(),
-    );
+    await state.storage.put('lastHeartbeatAt', new Date(Date.now() - 91_000).toISOString());
 
     await ctx.fireAgentAlarm(agentId);
 
@@ -91,10 +87,7 @@ describe('E2E: Heartbeat (S15)', () => {
     const { agentId } = await connectAgent();
 
     const state = ctx.agentConnectionNS.getState(agentId)!;
-    await state.storage.put(
-      'lastHeartbeatAt',
-      new Date(Date.now() - 91_000).toISOString(),
-    );
+    await state.storage.put('lastHeartbeatAt', new Date(Date.now() - 91_000).toISOString());
 
     await ctx.fireAgentAlarm(agentId);
 

@@ -23,6 +23,7 @@ CREATE TABLE agents (
   reputation_score FLOAT NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline')),
   last_heartbeat_at TIMESTAMPTZ,
+  repo_config JSONB DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

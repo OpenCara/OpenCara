@@ -499,7 +499,19 @@ describe('AgentConnection', () => {
         },
         selectResults: {
           review_results: { data: [{ agent_id: 'agent-1' }] },
-          agents: { data: [{ id: 'agent-2' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-2',
+                user_id: 'user-2',
+                model: 'gpt-4',
+                tool: 'cursor',
+                reputation_score: 0.8,
+                repo_config: null,
+                users: { name: 'bob' },
+              },
+            ],
+          },
         },
         singleResults: {
           review_tasks: {
@@ -543,7 +555,19 @@ describe('AgentConnection', () => {
         },
         selectResults: {
           review_results: { data: [{ agent_id: 'agent-1' }] },
-          agents: { data: [{ id: 'agent-3' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-3',
+                user_id: 'user-3',
+                model: 'gpt-4',
+                tool: 'cursor',
+                reputation_score: 0.8,
+                repo_config: null,
+                users: { name: 'charlie' },
+              },
+            ],
+          },
         },
         singleResults: {
           review_tasks: {
@@ -616,6 +640,17 @@ describe('AgentConnection', () => {
           review_results: { data: [{ agent_id: 'agent-1' }] },
           agents: { data: [] }, // No candidates
         },
+        singleResults: {
+          review_tasks: {
+            data: {
+              pr_number: 10,
+              pr_url: 'url',
+              timeout_at: new Date(Date.now() + 300_000).toISOString(),
+              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+            },
+            error: null,
+          },
+        },
       });
       mockedCreateSupabase.mockReturnValue(
         mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
@@ -648,7 +683,19 @@ describe('AgentConnection', () => {
         },
         selectResults: {
           review_results: { data: [{ agent_id: 'agent-1' }] },
-          agents: { data: [{ id: 'agent-2' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-2',
+                user_id: 'user-2',
+                model: 'gpt-4',
+                tool: 'cursor',
+                reputation_score: 0.8,
+                repo_config: null,
+                users: { name: 'bob' },
+              },
+            ],
+          },
         },
         // No singleResults for review_tasks -- lookup returns null
       });
@@ -682,7 +729,19 @@ describe('AgentConnection', () => {
         },
         selectResults: {
           review_results: { data: [{ agent_id: 'agent-1' }] },
-          agents: { data: [{ id: 'agent-2' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-2',
+                user_id: 'user-2',
+                model: 'gpt-4',
+                tool: 'cursor',
+                reputation_score: 0.8,
+                repo_config: null,
+                users: { name: 'bob' },
+              },
+            ],
+          },
         },
         singleResults: {
           review_tasks: {
@@ -847,7 +906,19 @@ describe('AgentConnection', () => {
         },
         selectResults: {
           review_results: { data: [{ agent_id: 'agent-1' }] },
-          agents: { data: [{ id: 'agent-2' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-2',
+                user_id: 'user-2',
+                model: 'gpt-4',
+                tool: 'cursor',
+                reputation_score: 0.8,
+                repo_config: null,
+                users: { name: 'bob' },
+              },
+            ],
+          },
         },
         singleResults: {
           review_tasks: {
@@ -1885,7 +1956,19 @@ describe('AgentConnection', () => {
         },
         selectResults: {
           review_results: { data: [{ agent_id: 'agent-1' }] },
-          agents: { data: [{ id: 'agent-2' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-2',
+                user_id: 'user-2',
+                model: 'gpt-4',
+                tool: 'cursor',
+                reputation_score: 0.8,
+                repo_config: null,
+                users: { name: 'bob' },
+              },
+            ],
+          },
         },
         singleResults: {
           review_tasks: {
