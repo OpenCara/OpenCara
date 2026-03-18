@@ -70,13 +70,14 @@ export function parseStructuredReview(text: string): ParsedReview {
     const headingLinePattern =
       /^###\s*\[(\w+)\]\s*`([^`]+?):(\d+)`\s*[-—–:]\s*(.+)$/gm;
     let headingMatch;
-    const headings: { severity: string; path: string; line: number; titleStart: string; endIdx: number }[] = [];
+    const headings: { severity: string; path: string; line: number; titleStart: string; startIdx: number; endIdx: number }[] = [];
     while ((headingMatch = headingLinePattern.exec(findingsBlock)) !== null) {
       headings.push({
         severity: headingMatch[1],
         path: headingMatch[2],
         line: parseInt(headingMatch[3], 10),
         titleStart: headingMatch[4].trim(),
+        startIdx: headingMatch.index,
         endIdx: headingMatch.index + headingMatch[0].length,
       });
     }
@@ -87,7 +88,7 @@ export function parseStructuredReview(text: string): ParsedReview {
       if (comments.some((c) => c.path === h.path && c.line === h.line)) continue;
       // Body = everything from end of heading line to start of next heading (or end of block)
       const nextStart = i + 1 < headings.length
-        ? findingsBlock.lastIndexOf('\n###', headings[i + 1].endIdx)
+        ? headings[i + 1].startIdx
         : findingsBlock.length;
       const bodyAfterTitle = findingsBlock.slice(h.endIdx, nextStart).trim();
       const fullBody = bodyAfterTitle

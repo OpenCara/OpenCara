@@ -218,6 +218,31 @@ APPROVE`;
     });
     expect(result.comments[0].body).toContain('**[suggestion]**');
   });
+
+  it('handles heading body containing non-finding ### markdown', () => {
+    const text = `## Summary
+Test
+
+## Findings
+
+### [major] \`src/foo.ts:10\` — Issue with subheading in body
+Explanation here.
+### Details
+This is a markdown subheading inside the body, not a finding.
+
+### [minor] \`src/bar.ts:20\` — Second finding
+Simple issue.
+
+## Verdict
+REQUEST_CHANGES`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(2);
+    expect(result.comments[0]).toMatchObject({ path: 'src/foo.ts', line: 10 });
+    expect(result.comments[0].body).toContain('Details');
+    expect(result.comments[0].body).toContain('subheading inside the body');
+    expect(result.comments[1]).toMatchObject({ path: 'src/bar.ts', line: 20 });
+  });
 });
 
 describe('filterValidComments', () => {
