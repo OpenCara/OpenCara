@@ -1,0 +1,43 @@
+name: Publish CLI to npm
+
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm lint
+      - run: pnpm run typecheck
+      - name: Publish @opencara/shared
+        working-directory: packages/shared
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Resolve workspace dependency
+        run: |
+          SHARED_VERSION=$(jq -r .version packages/shared/package.json)
+          cd packages/cli
+          jq --arg v "^$SHARED_VERSION" '.dependencies["@opencara/shared"] = $v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+      - name: Publish opencara CLI
+        working-directory: packages/cli
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
