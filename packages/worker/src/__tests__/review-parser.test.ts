@@ -108,6 +108,141 @@ REQUEST_CHANGES`;
     expect(result.comments[0].path).toBe('packages/worker/src/agent-connection.ts');
     expect(result.comments[0].line).toBe(100);
   });
+
+  it('parses synthesizer heading format (### [severity] `file:line` — Title)', () => {
+    const text = `## Summary
+Overall good PR with a few issues to address.
+
+## Findings
+
+### [critical] \`src/auth.ts:42\` — SQL injection vulnerability
+The user input is concatenated directly into the query string.
+Use parameterized queries instead:
+\`\`\`ts
+db.query('SELECT * FROM users WHERE id = $1', [userId]);
+\`\`\`
+
+### [major] \`src/handler.ts:15\` — Missing error handling
+The async call has no try/catch block, which will cause unhandled rejections.
+
+### [minor] \`src/utils.ts:8\` — Unused import
+\`lodash\` is imported but never used.
+
+## Verdict
+REQUEST_CHANGES`;
+
+    const result = parseStructuredReview(text);
+    expect(result.verdict).toBe('request_changes');
+    expect(result.summary).toBe('Overall good PR with a few issues to address.');
+    expect(result.comments).toHaveLength(3);
+    expect(result.comments[0]).toMatchObject({
+      path: 'src/auth.ts',
+      line: 42,
+      side: 'RIGHT',
+    });
+    expect(result.comments[0].body).toContain('**[critical]**');
+    expect(result.comments[0].body).toContain('SQL injection vulnerability');
+    expect(result.comments[0].body).toContain('parameterized queries');
+    expect(result.comments[1]).toMatchObject({
+      path: 'src/handler.ts',
+      line: 15,
+      side: 'RIGHT',
+    });
+    expect(result.comments[1].body).toContain('**[major]**');
+    expect(result.comments[2]).toMatchObject({
+      path: 'src/utils.ts',
+      line: 8,
+      side: 'RIGHT',
+    });
+    expect(result.comments[2].body).toContain('**[minor]**');
+  });
+
+  it('handles mixed list and heading formats in findings', () => {
+    const text = `## Summary
+Mixed review.
+
+## Findings
+- **[minor]** \`src/a.ts:1\` — List format finding
+
+### [major] \`src/b.ts:10\` — Heading format finding
+Detailed explanation here.
+
+## Verdict
+COMMENT`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(2);
+    expect(result.comments[0]).toMatchObject({ path: 'src/a.ts', line: 1 });
+    expect(result.comments[1]).toMatchObject({ path: 'src/b.ts', line: 10 });
+  });
+
+  it('deduplicates findings matching both formats for same file:line', () => {
+    const text = `## Summary
+Test
+
+## Findings
+- **[major]** \`src/foo.ts:42\` — Duplicate issue
+
+### [major] \`src/foo.ts:42\` — Duplicate issue explained
+More detail here.
+
+## Verdict
+REQUEST_CHANGES`;
+
+    const result = parseStructuredReview(text);
+    // List format is parsed first, heading format skips duplicates
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0].path).toBe('src/foo.ts');
+    expect(result.comments[0].line).toBe(42);
+  });
+
+  it('handles synthesizer heading with suggestion severity', () => {
+    const text = `## Summary
+LGTM with suggestions.
+
+## Findings
+
+### [suggestion] \`src/config.ts:25\` — Consider using const assertion
+Using \`as const\` here would provide better type narrowing.
+
+## Verdict
+APPROVE`;
+
+    const result = parseStructuredReview(text);
+    expect(result.verdict).toBe('approve');
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]).toMatchObject({
+      path: 'src/config.ts',
+      line: 25,
+      side: 'RIGHT',
+    });
+    expect(result.comments[0].body).toContain('**[suggestion]**');
+  });
+
+  it('handles heading body containing non-finding ### markdown', () => {
+    const text = `## Summary
+Test
+
+## Findings
+
+### [major] \`src/foo.ts:10\` — Issue with subheading in body
+Explanation here.
+### Details
+This is a markdown subheading inside the body, not a finding.
+
+### [minor] \`src/bar.ts:20\` — Second finding
+Simple issue.
+
+## Verdict
+REQUEST_CHANGES`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(2);
+    expect(result.comments[0]).toMatchObject({ path: 'src/foo.ts', line: 10 });
+    expect(result.comments[0].body).toContain('Details');
+    expect(result.comments[0].body).toContain('subheading inside the body');
+    expect(result.comments[1]).toMatchObject({ path: 'src/bar.ts', line: 20 });
+  });
 });
 
 describe('filterValidComments', () => {
