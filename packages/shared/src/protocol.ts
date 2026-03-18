@@ -1,3 +1,5 @@
+import type { RepoConfig } from './types.js';
+
 /** Base fields present on all WebSocket messages (the "envelope") */
 export interface MessageBase {
   id: string;
@@ -83,11 +85,17 @@ export interface PlatformErrorMessage extends MessageBase {
 // --- Agent → Platform messages ---
 
 export type AgentMessage =
+  | AgentPreferencesMessage
   | ReviewCompleteMessage
   | SummaryCompleteMessage
   | ReviewRejectedMessage
   | ReviewErrorMessage
   | HeartbeatPongMessage;
+
+export interface AgentPreferencesMessage extends MessageBase {
+  type: 'agent_preferences';
+  repoConfig: RepoConfig;
+}
 
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 

@@ -13,6 +13,13 @@ export interface User {
 
 export type AgentStatus = 'online' | 'offline';
 
+export type RepoFilterMode = 'all' | 'own' | 'whitelist' | 'blacklist';
+
+export interface RepoConfig {
+  mode: RepoFilterMode;
+  list?: string[]; // owner/repo entries for whitelist/blacklist modes
+}
+
 export interface Agent {
   id: string;
   user_id: string;
@@ -21,6 +28,7 @@ export interface Agent {
   reputation_score: number;
   status: AgentStatus;
   last_heartbeat_at: string | null;
+  repo_config: RepoConfig | null;
   created_at: string;
 }
 

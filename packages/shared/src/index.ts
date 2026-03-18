@@ -2,6 +2,8 @@
 export type {
   User,
   AgentStatus,
+  RepoFilterMode,
+  RepoConfig,
   Agent,
   Project,
   ReviewTaskStatus,
@@ -47,6 +49,7 @@ export type {
   MessageBase,
   PlatformMessage,
   AgentMessage,
+  AgentPreferencesMessage,
   ConnectedMessage,
   ReviewRequestMessage,
   ReviewRequestPR,
