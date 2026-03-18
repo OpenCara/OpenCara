@@ -66,8 +66,8 @@
 - #111 [worker-dev] 2026-03-18 — Evenly distribute review tasks across agents (closed, PR #117 merged)
 - #112 [breakdown] 2026-03-18 — Allow agents to configure target repos for review (→ #113, #114, #115)
 - #113 [architect] 2026-03-18 — Shared types: repo config types + protocol extension (closed, PR #116 merged)
-- #114 [worker-dev] 2026-03-18 — Filter agents by repo preferences in task distribution (open, UNBLOCKED, DISPATCHING)
-- #115 [cli-dev] 2026-03-18 — Parse and send repo config preferences from local config (open, blocked by #114)
+- #114 [worker-dev] 2026-03-18 — Filter agents by repo preferences in task distribution (closed, PR #118 merged)
+- #115 [cli-dev] 2026-03-18 — Parse and send repo config preferences from local config (open, UNBLOCKED, DISPATCHING)
 
 ## Pull Requests
 
@@ -121,4 +121,4 @@
 - #110 [direct] 2026-03-18 — Add E2E test suite + redesign multi-agent review with synthesizer (merged)
 - #116 [architect] 2026-03-18 — Add repo config types + protocol extension (merged, closes #113)
 - #117 [worker-dev] 2026-03-18 — Evenly distribute review tasks across agents (merged, closes #111)
-- #118 [worker-dev] 2026-03-18 — Filter agents by repo preferences (open, PR for #114)
+- #118 [worker-dev] 2026-03-18 — Filter agents by repo preferences (merged, closes #114)

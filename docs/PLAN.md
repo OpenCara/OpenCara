@@ -189,8 +189,8 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #111 [worker-dev, DONE] Evenly distribute review tasks across agents (load balancing) — PR #117 merged
 - #112 [breakdown] Allow agents to configure target repos for review
   - #113 [architect, DONE] Shared types: repo config + protocol extension — PR #116 merged
-  - #114 [worker-dev, IN PROGRESS] Filter agents by repo preferences
-  - #115 [cli-dev, blocked by #114] Parse and send repo config preferences
+  - #114 [worker-dev, DONE] Filter agents by repo preferences — PR #118 merged
+  - #115 [cli-dev, IN PROGRESS] Parse and send repo config preferences
 
 ## Dependency Graph
 
