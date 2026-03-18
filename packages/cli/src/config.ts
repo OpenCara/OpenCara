@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { parse, stringify } from 'yaml';
+import type { RepoConfig, RepoFilterMode } from '@opencara/shared';
 
 export interface ConsumptionLimits {
   tokens_per_day?: number;
@@ -14,6 +15,7 @@ export interface LocalAgentConfig {
   tool: string;
   command?: string;
   limits?: ConsumptionLimits;
+  repos?: RepoConfig;
 }
 
 export interface CliConfig {
@@ -47,6 +49,57 @@ function parseLimits(data: Record<string, unknown>): ConsumptionLimits | null {
   return limits;
 }
 
+const VALID_REPO_MODES: RepoFilterMode[] = ['all', 'own', 'whitelist', 'blacklist'];
+const REPO_PATTERN = /^[^/]+\/[^/]+$/;
+
+export class RepoConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RepoConfigError';
+  }
+}
+
+function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfig | undefined {
+  const raw = obj.repos;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object') {
+    throw new RepoConfigError(`agents[${index}].repos must be an object`);
+  }
+
+  const reposObj = raw as Record<string, unknown>;
+  const mode = reposObj.mode;
+
+  if (mode === undefined) {
+    throw new RepoConfigError(`agents[${index}].repos.mode is required`);
+  }
+  if (typeof mode !== 'string' || !VALID_REPO_MODES.includes(mode as RepoFilterMode)) {
+    throw new RepoConfigError(
+      `agents[${index}].repos.mode must be one of: ${VALID_REPO_MODES.join(', ')}`,
+    );
+  }
+
+  const config: RepoConfig = { mode: mode as RepoFilterMode };
+
+  if (mode === 'whitelist' || mode === 'blacklist') {
+    const list = reposObj.list;
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new RepoConfigError(
+        `agents[${index}].repos.list is required and must be non-empty for mode '${mode}'`,
+      );
+    }
+    for (let j = 0; j < list.length; j++) {
+      if (typeof list[j] !== 'string' || !REPO_PATTERN.test(list[j])) {
+        throw new RepoConfigError(
+          `agents[${index}].repos.list[${j}] must match 'owner/repo' format`,
+        );
+      }
+    }
+    config.list = list as string[];
+  }
+
+  return config;
+}
+
 function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
   if (!('agents' in data)) return null;
   const raw = data.agents;
@@ -68,6 +121,8 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (typeof obj.command === 'string') agent.command = obj.command;
     const agentLimits = parseLimits(obj);
     if (agentLimits) agent.limits = agentLimits;
+    const repoConfig = parseRepoConfig(obj, i);
+    if (repoConfig) agent.repos = repoConfig;
     agents.push(agent);
   }
   return agents;

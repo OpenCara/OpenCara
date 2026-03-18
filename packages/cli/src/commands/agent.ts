@@ -12,6 +12,7 @@ import {
   type PlatformMessage,
   type ReviewRequestMessage,
   type SummaryRequestMessage,
+  type RepoConfig,
 } from '@opencara/shared';
 import {
   loadConfig,
@@ -85,6 +86,7 @@ export const STABILITY_THRESHOLD_MAX_MS = 300_000;
 export interface StartAgentOptions {
   verbose?: boolean;
   stabilityThresholdMs?: number;
+  repoConfig?: RepoConfig;
 }
 
 /** Interval for sending RFC 6455 WebSocket ping frames to keep the proxy layer alive */
@@ -100,6 +102,7 @@ export function startAgent(
 ): void {
   const verbose = options?.verbose ?? false;
   const stabilityThreshold = options?.stabilityThresholdMs ?? CONNECTION_STABILITY_THRESHOLD_MS;
+  const repoConfig = options?.repoConfig;
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -196,7 +199,7 @@ export function startAgent(
         return;
       }
 
-      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps, consumptionDeps, verbose);
+      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps, consumptionDeps, verbose, repoConfig);
     });
 
     ws.on('close', (code, reason) => {
@@ -310,10 +313,18 @@ export function handleMessage(
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
   verbose?: boolean,
+  repoConfig?: RepoConfig,
 ): void {
   switch (msg.type) {
     case 'connected':
       console.log(`Authenticated. Protocol v${msg.version ?? 'unknown'}`);
+      // Send agent preferences (repo config) to the platform
+      trySend(ws, {
+        type: 'agent_preferences',
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        repoConfig: repoConfig ?? { mode: 'all' },
+      });
       break;
 
     case 'heartbeat_ping':
@@ -533,6 +544,9 @@ async function syncAgentToServer(
   }
 
   const body: CreateAgentRequest = { model: localAgent.model, tool: localAgent.tool };
+  if (localAgent.repos) {
+    body.repoConfig = localAgent.repos;
+  }
   const created = await client.post<CreateAgentResponse>('/api/agents', body);
   return { agentId: created.id, created: true };
 }
@@ -950,6 +964,7 @@ agentCommand
           startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
+            repoConfig: selected.local.repos,
           });
           startedCount++;
         }
