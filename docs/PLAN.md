@@ -186,7 +186,7 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #80 [cli-dev, priority:low] Add growth trends to opencrust stats
 - #81 [cli-dev, priority:low] Add expertise areas to opencrust stats
 - #90 [worker-dev, priority:low] Dynamic tool/model registry — admin API + database storage
-- #121 [architect, priority:high] Schema simplification — 9→7 tables, drop redundant columns, privacy-preserving ratings
+- #121 [architect, DONE] Schema simplification — 9→7 tables, drop redundant columns, privacy-preserving ratings — PR #122 merged
 - #111 [worker-dev, DONE] Evenly distribute review tasks across agents (load balancing) — PR #117 merged
 - #112 [breakdown, DONE] Allow agents to configure target repos for review
   - #113 [architect, DONE] Shared types: repo config + protocol extension — PR #116 merged
@@ -253,3 +253,8 @@ M0 → M2 → M4       M5 → M9
 | #108 | #88    | direct     | 2026-03-17 | Post timeout comment on PR when review times out                |
 | #109 | #85    | direct     | 2026-03-17 | Add --all flag to start all agents concurrently                 |
 | #110 | —      | direct     | 2026-03-18 | E2E test suite + multi-agent review redesign with synthesizer   |
+| #116 | #113   | architect  | 2026-03-18 | Add repo config types + protocol extension                      |
+| #117 | #111   | worker-dev | 2026-03-18 | Evenly distribute review tasks across agents (load balancing)   |
+| #118 | #114   | worker-dev | 2026-03-18 | Filter agents by repo preferences in task distribution          |
+| #119 | #115   | cli-dev    | 2026-03-18 | Parse and send repo config preferences from local config        |
+| #122 | #121   | architect  | 2026-03-18 | Schema simplification: 9→7 tables, privacy-preserving ratings   |
