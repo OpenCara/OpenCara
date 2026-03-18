@@ -1,13 +1,24 @@
 name: Auto version bump and publish
 
 on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
   pull_request:
     types: [closed]
     branches: [main]
 
 jobs:
   bump-and-publish:
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,18 +27,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - name: Determine bump type from branch name
+      - name: Determine bump type
         id: bump
         run: |
-          BRANCH="${{ github.event.pull_request.head.ref }}"
-          if [[ "$BRANCH" == feat/* ]] || [[ "$BRANCH" == improve/* ]] || [[ "$BRANCH" == feature/* ]]; then
-            echo "type=minor" >> "$GITHUB_OUTPUT"
-          elif [[ "$BRANCH" == fix/* ]] || [[ "$BRANCH" == bugfix/* ]]; then
-            echo "type=patch" >> "$GITHUB_OUTPUT"
-          elif [[ "$BRANCH" == breaking/* ]] || [[ "$BRANCH" == major/* ]]; then
-            echo "type=major" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "type=${{ inputs.bump_type }}" >> "$GITHUB_OUTPUT"
           else
-            echo "type=none" >> "$GITHUB_OUTPUT"
+            BRANCH="${{ github.event.pull_request.head.ref }}"
+            if [[ "$BRANCH" == feat/* ]] || [[ "$BRANCH" == improve/* ]] || [[ "$BRANCH" == feature/* ]]; then
+              echo "type=minor" >> "$GITHUB_OUTPUT"
+            elif [[ "$BRANCH" == fix/* ]] || [[ "$BRANCH" == bugfix/* ]]; then
+              echo "type=patch" >> "$GITHUB_OUTPUT"
+            elif [[ "$BRANCH" == breaking/* ]] || [[ "$BRANCH" == major/* ]]; then
+              echo "type=major" >> "$GITHUB_OUTPUT"
+            else
+              echo "type=none" >> "$GITHUB_OUTPUT"
+            fi
           fi
       - name: Skip if no bump needed
         if: steps.bump.outputs.type == 'none'
@@ -57,12 +72,6 @@ jobs:
           npm version ${{ steps.bump.outputs.type }} --no-git-tag-version
           VERSION=$(node -p "require('./package.json').version")
           echo "new=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Remove workspace dependency before publish
-        if: steps.bump.outputs.type != 'none'
-        run: |
-          cd packages/cli
-          jq 'del(.dependencies["@opencara/shared"])' package.json > package.json.tmp
-          mv package.json.tmp package.json
       - name: Publish opencara CLI
         if: steps.bump.outputs.type != 'none'
         working-directory: packages/cli
