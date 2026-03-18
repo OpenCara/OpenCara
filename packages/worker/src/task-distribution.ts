@@ -8,6 +8,7 @@ export interface EligibleAgent {
   userName: string;
   model: string;
   tool: string;
+  isAnonymous: boolean;
   repoConfig: RepoConfig | null;
 }
 
@@ -37,7 +38,7 @@ export async function findEligibleAgents(
 ): Promise<EligibleAgent[]> {
   const { data, error } = await supabase
     .from('agents')
-    .select('id, user_id, model, tool, repo_config, users!inner(name)')
+    .select('id, user_id, model, tool, repo_config, users!inner(name, is_anonymous)')
     .eq('status', 'online')
     .order('created_at', { ascending: true });
 
@@ -52,6 +53,7 @@ export async function findEligibleAgents(
     userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
     model: row.model as string,
     tool: row.tool as string,
+    isAnonymous: ((row.users as Record<string, unknown>)?.is_anonymous as boolean) ?? false,
     repoConfig: (row.repo_config as RepoConfig | null) ?? null,
   }));
 }
@@ -113,6 +115,15 @@ export function filterByRepoConfig(
         return true;
     }
   });
+}
+
+/** Filter agents by anonymous status based on allowAnonymous config. */
+export function filterByAnonymous(
+  agents: EligibleAgent[],
+  allowAnonymous: boolean,
+): EligibleAgent[] {
+  if (allowAnonymous) return agents;
+  return agents.filter((agent) => !agent.isAnonymous);
 }
 
 /** Validate that a value is a valid RepoConfig structure. */
@@ -329,7 +340,8 @@ export async function distributeTask(
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
-  const filtered = filterByRepoConfig(accessFiltered, owner, repo);
+  const repoFiltered = filterByRepoConfig(accessFiltered, owner, repo);
+  const filtered = filterByAnonymous(repoFiltered, config.reviewer.allowAnonymous);
 
   // Query each candidate's DO for in-flight task count; partition into low-load / overflow
   const { lowLoad, overflow } = await partitionByLoad(env, filtered);
@@ -368,10 +380,16 @@ export async function distributeTask(
 
   if (config.agents.reviewCount > 1 && selected.length > config.agents.reviewCount) {
     // Only reserve a synthesizer when we have MORE agents than the requested reviewer count.
-    // Pick the first agent as synthesizer (all have equal weight now).
-    const synthesizer = selected[0];
-    synthesizerAgentId = synthesizer.id;
-    reviewers = selected.slice(1);
+    // Pick the first non-anonymous agent as synthesizer.
+    const synthIdx = selected.findIndex((a) => !a.isAnonymous);
+    if (synthIdx >= 0) {
+      const synthesizer = selected[synthIdx];
+      synthesizerAgentId = synthesizer.id;
+      reviewers = selected.filter((_, i) => i !== synthIdx);
+    } else {
+      // All agents are anonymous — no synthesizer, use all as reviewers
+      reviewers = selected.slice(0, config.agents.reviewCount);
+    }
 
     console.log(
       `Task ${taskId}: reserved agent ${synthesizerAgentId} as synthesizer, ` +

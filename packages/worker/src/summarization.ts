@@ -30,7 +30,7 @@ export function formatSummaryComment(
 ): string {
   const contributorsLine =
     contributorNames && contributorNames.length > 0
-      ? `**Contributors**: ${contributorNames.map((n) => `[@${n}](https://github.com/${n})`).join(', ')}`
+      ? `**Contributors**: ${contributorNames.map((n) => (n === 'Anonymous contributor' ? n : `[@${n}](https://github.com/${n})`)).join(', ')}`
       : '';
   return [
     '## \uD83D\uDD0D OpenCara Review',
@@ -74,7 +74,7 @@ export async function fetchReviewContributors(
 ): Promise<string[]> {
   const { data } = await supabase
     .from('review_results')
-    .select('agents!inner(users!inner(name))')
+    .select('agents!inner(users!inner(name, is_anonymous))')
     .eq('review_task_id', taskId)
     .eq('status', 'completed')
     .eq('type', 'review');
@@ -85,8 +85,13 @@ export async function fetchReviewContributors(
   for (const row of data as Record<string, unknown>[]) {
     const agent = row.agents as Record<string, unknown>;
     const user = agent?.users as Record<string, unknown>;
+    const isAnonymous = (user?.is_anonymous as boolean) ?? false;
     const name = user?.name as string | undefined;
-    if (name) names.add(name);
+    if (isAnonymous) {
+      names.add('Anonymous contributor');
+    } else if (name) {
+      names.add(name);
+    }
   }
   return [...names];
 }
@@ -129,17 +134,24 @@ export async function selectSummaryAgent(
   supabase: SupabaseClient,
   excludeAgentIds: string[],
 ): Promise<string | null> {
-  const { data } = await supabase.from('agents').select('id').eq('status', 'online');
+  // Exclude anonymous agents from synthesizer selection
+  const { data } = await supabase
+    .from('agents')
+    .select('id, users!inner(is_anonymous)')
+    .eq('status', 'online');
 
   if (!data || data.length === 0) return null;
 
-  const candidates = (data as { id: string }[]).filter((a) => !excludeAgentIds.includes(a.id));
+  const candidates = (data as Record<string, unknown>[]).filter((a) => {
+    const isAnon = ((a.users as Record<string, unknown>)?.is_anonymous as boolean) ?? false;
+    return !isAnon && !excludeAgentIds.includes(a.id as string);
+  });
 
   if (candidates.length === 0) return null;
 
   // Random selection (reputation_score removed from agents)
   const idx = Math.floor(Math.random() * candidates.length);
-  return candidates[idx].id;
+  return candidates[idx].id as string;
 }
 
 /**

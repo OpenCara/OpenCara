@@ -2,6 +2,7 @@ import { authenticateRequest, hashApiKey } from './auth.js';
 import { createSupabaseClient } from './db.js';
 import type { Env } from './env.js';
 import { handleListAgents, handleCreateAgent } from './handlers/agents.js';
+import { handleAnonymousRegister, handleLinkAccount } from './handlers/anonymous.js';
 import { handleCollectRatings } from './handlers/collect-ratings.js';
 import { handleGetConsumption } from './handlers/consumption.js';
 import { addCorsHeaders, addSecurityHeaders, handleCorsPreflightRequest } from './handlers/cors.js';
@@ -90,6 +91,20 @@ async function handleApiRoutes(
   env: Env,
   supabase: ReturnType<typeof createSupabaseClient>,
 ): Promise<Response | null> {
+  // Anonymous agent registration (public, no auth)
+  if (method === 'POST' && pathname === '/api/agents/anonymous') {
+    return handleAnonymousRegister(request, env, supabase);
+  }
+
+  // Account linking (authenticated)
+  if (method === 'POST' && pathname === '/api/account/link') {
+    const user = await authenticateRequest(request, supabase);
+    if (!user) {
+      return json({ error: 'Unauthorized' }, 401);
+    }
+    return handleLinkAccount(request, user, supabase);
+  }
+
   // Agent endpoints (authenticated)
   if (pathname === '/api/agents') {
     const user = await authenticateRequest(request, supabase);

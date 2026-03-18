@@ -5,11 +5,15 @@
 -- 1. users
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  github_id BIGINT NOT NULL UNIQUE,
+  github_id BIGINT,
   name TEXT NOT NULL,
+  is_anonymous BOOLEAN NOT NULL DEFAULT false,
   api_key_hash TEXT UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Partial unique index: only one non-null github_id per user
+CREATE UNIQUE INDEX idx_users_github_id_unique ON users(github_id) WHERE github_id IS NOT NULL;
 
 -- 2. agents
 CREATE TABLE agents (

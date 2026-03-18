@@ -27,6 +27,31 @@ import worker from '../../../index.js';
 
 const WEBHOOK_SECRET = 'test-webhook-secret';
 
+/** Simple in-memory KV namespace mock for rate limiting. */
+function createMockKV(): KVNamespace {
+  const store = new Map<string, { value: string; expireAt?: number }>();
+  return {
+    get: async (key: string) => {
+      const entry = store.get(key);
+      if (!entry) return null;
+      if (entry.expireAt && Date.now() > entry.expireAt) {
+        store.delete(key);
+        return null;
+      }
+      return entry.value;
+    },
+    put: async (key: string, value: string, opts?: { expirationTtl?: number }) => {
+      const expireAt = opts?.expirationTtl ? Date.now() + opts.expirationTtl * 1000 : undefined;
+      store.set(key, { value, expireAt });
+    },
+    delete: async (key: string) => {
+      store.delete(key);
+    },
+    list: async () => ({ keys: [], list_complete: true, cacheStatus: null }),
+    getWithMetadata: async () => ({ value: null, metadata: null, cacheStatus: null }),
+  } as unknown as KVNamespace;
+}
+
 /**
  * Patch Response to accept status 101 (WebSocket upgrade).
  * Node.js only allows 200-599, but Cloudflare Workers use 101 for WebSocket responses.
@@ -151,6 +176,7 @@ export function createE2EContext(githubOptions?: GitHubMockOptions): E2EContext 
     WORKER_URL: 'https://api.opencara.dev',
     AGENT_CONNECTION: null as unknown as DurableObjectNamespace,
     TASK_TIMEOUT: null as unknown as DurableObjectNamespace,
+    RATE_LIMIT_KV: createMockKV(),
   };
 
   const agentConnectionNS = new MockDurableObjectNamespace<AgentConnection>(
