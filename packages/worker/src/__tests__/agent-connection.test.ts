@@ -240,6 +240,23 @@ describe('AgentConnection', () => {
       expect(result).toContain('\uD83D\uDC4D');
       expect(result).toContain('\uD83D\uDC4E');
     });
+
+    it('includes contributor name with GitHub link when not anonymous', () => {
+      const result = formatReviewComment('approve', 'gpt-4', 'cursor', 'LGTM', 'alice', false);
+      expect(result).toContain('**Contributor**: [@alice](https://github.com/alice)');
+    });
+
+    it('shows "Anonymous contributor" when isAnonymous is true', () => {
+      const result = formatReviewComment('approve', 'gpt-4', 'cursor', 'LGTM', 'anonymous', true);
+      expect(result).toContain('**Contributor**: Anonymous contributor');
+      // Should not contain a GitHub profile link for the contributor
+      expect(result).not.toContain('[@anonymous]');
+    });
+
+    it('omits contributor line when no name and not anonymous', () => {
+      const result = formatReviewComment('approve', 'gpt-4', 'cursor', 'LGTM', undefined, false);
+      expect(result).not.toContain('Contributor');
+    });
   });
 
   describe('webSocketMessage', () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   parseTimeoutMs,
   filterByAccessList,
+  filterByAnonymous,
   filterByRepoConfig,
   isValidRepoConfig,
   selectAgents,
@@ -22,6 +23,7 @@ function makeAgent(
     userName: 'alice',
     model: 'gpt-4',
     tool: 'cursor',
+    isAnonymous: false,
     repoConfig: null,
     ...rest,
   };
@@ -547,6 +549,52 @@ describe('filterByRepoConfig', () => {
     expect(result).toHaveLength(1); // default: return true
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown repoConfig mode'));
     warnSpy.mockRestore();
+  });
+});
+
+describe('filterByAnonymous', () => {
+  it('returns all agents when allowAnonymous is true', () => {
+    const agents = [
+      makeAgent({ id: 'a1', isAnonymous: false }),
+      makeAgent({ id: 'a2', isAnonymous: true }),
+      makeAgent({ id: 'a3', isAnonymous: false }),
+    ];
+    const result = filterByAnonymous(agents, true);
+    expect(result).toHaveLength(3);
+  });
+
+  it('excludes anonymous agents when allowAnonymous is false', () => {
+    const agents = [
+      makeAgent({ id: 'a1', isAnonymous: false }),
+      makeAgent({ id: 'a2', isAnonymous: true }),
+      makeAgent({ id: 'a3', isAnonymous: false }),
+    ];
+    const result = filterByAnonymous(agents, false);
+    expect(result).toHaveLength(2);
+    expect(result.map((a) => a.id)).toEqual(['a1', 'a3']);
+  });
+
+  it('returns empty array when all agents are anonymous and allowAnonymous is false', () => {
+    const agents = [
+      makeAgent({ id: 'a1', isAnonymous: true }),
+      makeAgent({ id: 'a2', isAnonymous: true }),
+    ];
+    const result = filterByAnonymous(agents, false);
+    expect(result).toHaveLength(0);
+  });
+
+  it('returns all agents when none are anonymous and allowAnonymous is false', () => {
+    const agents = [
+      makeAgent({ id: 'a1', isAnonymous: false }),
+      makeAgent({ id: 'a2', isAnonymous: false }),
+    ];
+    const result = filterByAnonymous(agents, false);
+    expect(result).toHaveLength(2);
+  });
+
+  it('handles empty agents array', () => {
+    expect(filterByAnonymous([], true)).toEqual([]);
+    expect(filterByAnonymous([], false)).toEqual([]);
   });
 });
 

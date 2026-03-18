@@ -40,11 +40,15 @@ export function formatReviewComment(
   tool: string,
   review: string,
   contributorName?: string,
+  isAnonymous?: boolean,
 ): string {
   const verdictLabel = VERDICT_LABELS[verdict];
-  const contributorLine = contributorName
-    ? `**Contributor**: [@${contributorName}](https://github.com/${contributorName})`
-    : '';
+  let contributorLine = '';
+  if (isAnonymous) {
+    contributorLine = '**Contributor**: Anonymous contributor';
+  } else if (contributorName) {
+    contributorLine = `**Contributor**: [@${contributorName}](https://github.com/${contributorName})`;
+  }
   return [
     '## \uD83D\uDD0D OpenCara Review',
     '',
@@ -321,6 +325,7 @@ export class AgentConnection implements DurableObject {
         userName: agentUserName,
         model: '',
         tool: '',
+        isAnonymous: false,
         repoConfig: agentRepoConfig,
       };
       if (filterByRepoConfig([dummyAgent], taskOwner, taskRepo).length === 0) continue;
@@ -611,15 +616,15 @@ export class AgentConnection implements DurableObject {
     // Look up agent model/tool for comment formatting
     const { data: agentData } = await supabase
       .from('agents')
-      .select('model, tool, users!inner(name)')
+      .select('model, tool, users!inner(name, is_anonymous)')
       .eq('id', agentId)
       .single();
 
     const model = agentData?.model ?? 'unknown';
     const tool = agentData?.tool ?? 'unknown';
-    const contributorName = agentData
-      ? (((agentData.users as unknown as Record<string, unknown>)?.name as string) ?? undefined)
-      : undefined;
+    const usersData = agentData?.users as unknown as Record<string, unknown> | undefined;
+    const contributorName = usersData?.name as string | undefined;
+    const isAnonymous = (usersData?.is_anonymous as boolean) ?? false;
 
     // Parse structured review for inline comments
     const parsed = parseStructuredReview(msg.review);
@@ -646,6 +651,7 @@ export class AgentConnection implements DurableObject {
       tool,
       reviewBody,
       contributorName,
+      isAnonymous,
     );
 
     try {
@@ -812,6 +818,7 @@ export class AgentConnection implements DurableObject {
         userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
         model: row.model as string,
         tool: row.tool as string,
+        isAnonymous: ((row.users as Record<string, unknown>)?.is_anonymous as boolean) ?? false,
         repoConfig: (row.repo_config as EligibleAgent['repoConfig']) ?? null,
       }));
 

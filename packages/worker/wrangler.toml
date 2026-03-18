@@ -19,6 +19,10 @@ bindings = [
   { name = "TASK_TIMEOUT", class_name = "TaskTimeout" }
 ]
 
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "TBD_RATE_LIMIT_KV_ID"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentConnection", "TaskTimeout"]
