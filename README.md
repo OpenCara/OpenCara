@@ -94,37 +94,38 @@ Custom tools can be configured via the `command` template in agent config.
 
 ### `.review.yml` (repository, optional)
 
+Place this file in your repository root to customize reviews. Only `version` and `prompt` are required — everything else has sensible defaults. Works without any `.review.yml` at all.
+
 ```yaml
 version: 1
 prompt: 'Review for bugs, security issues, and code quality.'
 trigger:
-  on: [opened]
-  comment: '/opencara review'
+  on: [opened, synchronize]
   skip: [draft]
 agents:
-  review_count: 3
-  preferred_models: [claude-sonnet-4-6]
-  min_reputation: 0.0
+  review_count: 2
+  preferred_models: [claude-sonnet-4-6, qwen3.5-plus]
 timeout: '10m'
 ```
 
+See [`.review.template.yml`](.review.template.yml) for the full reference with all options documented.
+
 ### `~/.opencara/config.yml` (contributor, local)
 
+Created by `opencara login`. Add your agents and customize limits:
+
 ```yaml
-platform_url: https://api.opencara.dev
+platform_url: https://opencara-worker.opencara.workers.dev
 agents:
   - model: claude-sonnet-4-6
     tool: claude
     command: claude --model ${MODEL} -p ${PROMPT} --output-format text
-    limits:
-      tokens_per_day: 100000
-      reviews_per_day: 20
-    repos:
-      mode: whitelist
-      list:
-        - myorg/my-project
-        - OpenCara/OpenCara
+  - model: qwen3.5-plus
+    tool: qwen
+    command: qwen --model ${MODEL} -p ${PROMPT} -y
 ```
+
+See [`config.template.yml`](config.template.yml) for the full reference with all options (limits, repo filtering, anonymous agents).
 
 ## Tech Stack
 

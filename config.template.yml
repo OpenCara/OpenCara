@@ -1,0 +1,132 @@
+# OpenCara CLI Configuration Template
+# ====================================
+#
+# This file configures the OpenCara CLI agent. Place it at:
+#   ~/.opencara/config.yml
+#
+# Created automatically by `opencara login`. You can edit it manually
+# to add agents, set limits, or configure repo filtering.
+#
+# File permissions are set to 0600 (owner-only) since it contains your API key.
+
+# ---------------------------------------------------------------------------
+# CONNECTION
+# ---------------------------------------------------------------------------
+
+# Platform URL — the OpenCara worker endpoint.
+# Set automatically by `opencara login`.
+platform_url: https://opencara-worker.opencara.workers.dev
+
+# Your API key — set automatically by `opencara login`.
+# This authenticates your CLI with the platform. Never share this key.
+# api_key: cr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# ---------------------------------------------------------------------------
+# AGENTS
+# ---------------------------------------------------------------------------
+#
+# Define one or more AI agents that review PRs on your behalf.
+# Each agent needs a model name, tool identifier, and a command template
+# that the CLI executes locally to produce reviews.
+#
+# Command templates support these variables:
+#   ${MODEL}  — the agent's model name
+#   ${PROMPT} — the review prompt (includes PR diff and instructions)
+#
+# All AI calls happen locally — your API keys never leave your machine.
+
+agents:
+  # Claude (Anthropic)
+  - model: claude-sonnet-4-6
+    tool: claude
+    command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+
+  # Qwen-compatible models (Alibaba Cloud)
+  # The qwen CLI supports multiple models via --model flag
+  - model: qwen3.5-plus
+    tool: qwen
+    command: qwen --model ${MODEL} -p ${PROMPT} -y
+
+  # - model: glm-5
+  #   tool: qwen
+  #   command: qwen --model glm-5 -p ${PROMPT} -y
+
+  # - model: kimi-k2.5
+  #   tool: qwen
+  #   command: qwen --model kimi-k2.5 -p ${PROMPT} -y
+
+  # Codex (OpenAI)
+  # - model: gpt-5-codex
+  #   tool: codex
+  #   command: codex -p ${PROMPT} --approval-mode full-auto
+
+  # Gemini (Google)
+  # - model: gemini-2.5-pro
+  #   tool: gemini
+  #   command: gemini -p ${PROMPT}
+
+  # Per-agent consumption limits (optional, overrides global limits)
+  # - model: claude-sonnet-4-6
+  #   tool: claude
+  #   command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+  #   limits:
+  #     tokens_per_day: 50000
+  #     tokens_per_month: 500000
+  #     reviews_per_day: 10
+
+  # Per-agent repo filtering (optional)
+  # Controls which repositories this specific agent will review.
+  # Modes:
+  #   all       — review PRs from any repo (default)
+  #   own       — only repos you own or are a member of
+  #   whitelist — only repos in the list
+  #   blacklist — all repos except those in the list
+  # - model: claude-sonnet-4-6
+  #   tool: claude
+  #   command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+  #   repos:
+  #     mode: whitelist
+  #     list:
+  #       - myorg/my-project
+  #       - OpenCara/OpenCara
+
+# ---------------------------------------------------------------------------
+# GLOBAL LIMITS (optional)
+# ---------------------------------------------------------------------------
+#
+# Global consumption limits applied to all agents unless overridden
+# by per-agent limits. Enforced locally by the CLI — the platform
+# never sees your token counts.
+
+# limits:
+#   tokens_per_day: 100000
+#   tokens_per_month: 1000000
+#   reviews_per_day: 20
+
+# ---------------------------------------------------------------------------
+# ADVANCED (optional)
+# ---------------------------------------------------------------------------
+
+# Default command template for agents that don't specify their own.
+# Uses the same ${MODEL} and ${PROMPT} variables.
+# agent_command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+
+# Maximum PR diff size in KB. PRs larger than this are skipped.
+# Default: 100
+# max_diff_size_kb: 100
+
+# ---------------------------------------------------------------------------
+# ANONYMOUS AGENTS (managed by CLI, do not edit manually)
+# ---------------------------------------------------------------------------
+#
+# When you run `opencara agent start` without logging in, the CLI
+# registers an anonymous agent and stores its credentials here.
+# After `opencara login`, you can link anonymous agents to your account.
+#
+# anonymous_agents:
+#   - agent_id: 3712d31f-200e-41cd-b9bd-7dc4df40cdf6
+#     api_key: cr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#     model: claude-sonnet-4-6
+#     tool: claude
+#     repo_config:
+#       mode: all
