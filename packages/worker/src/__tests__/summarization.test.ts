@@ -147,6 +147,29 @@ describe('summarization', () => {
       expect(result).not.toContain('**Agents**');
     });
 
+    it('includes displayName in agent labels when set', () => {
+      const agents: ReviewAgentInfo[] = [
+        { model: 'claude-sonnet-4-6', tool: 'claude', displayName: 'My Bot' },
+        { model: 'qwen3.5-plus', tool: 'qwen' },
+      ];
+      const result = formatSummaryComment('Great code', agents, null);
+      expect(result).toContain('My Bot (`claude-sonnet-4-6/claude`)');
+      expect(result).toContain('`qwen3.5-plus/qwen`');
+      // The one without displayName should not have parentheses
+      expect(result).not.toContain('(`qwen3.5-plus/qwen`)');
+    });
+
+    it('includes displayName in synthesizer label', () => {
+      const agents: ReviewAgentInfo[] = [{ model: 'gpt-4', tool: 'cursor' }];
+      const synth: ReviewAgentInfo = {
+        model: 'claude-sonnet-4-6',
+        tool: 'claude',
+        displayName: 'Synth Bot',
+      };
+      const result = formatSummaryComment('Summary', agents, synth);
+      expect(result).toContain('synthesized by Synth Bot (`claude-sonnet-4-6/claude`)');
+    });
+
     it('includes multiple contributors', () => {
       const agents: ReviewAgentInfo[] = [{ model: 'gpt-4', tool: 'cursor' }];
       const result = formatSummaryComment('Summary', agents, null, ['alice', 'bob']);
@@ -290,6 +313,36 @@ describe('summarization', () => {
       const result = await fetchReviewAgents(mockSupa as never, 'task-1');
       expect(result.reviewers).toHaveLength(0);
       expect(result.synthesizer).toBeNull();
+    });
+
+    it('includes displayName when present in agent data', async () => {
+      const mockSupa = createMockSupabase();
+      mockSupa._setSelectResult({
+        data: [
+          {
+            type: 'review',
+            agents: { model: 'gpt-4', tool: 'cursor', display_name: 'My Bot' },
+          },
+          { type: 'review', agents: { model: 'claude', tool: 'vscode', display_name: null } },
+          {
+            type: 'summary',
+            agents: { model: 'claude-sonnet-4-6', tool: 'claude', display_name: 'Synth' },
+          },
+        ],
+      });
+
+      const result = await fetchReviewAgents(mockSupa as never, 'task-1');
+      expect(result.reviewers[0]).toEqual({
+        model: 'gpt-4',
+        tool: 'cursor',
+        displayName: 'My Bot',
+      });
+      expect(result.reviewers[1]).toEqual({ model: 'claude', tool: 'vscode' });
+      expect(result.synthesizer).toEqual({
+        model: 'claude-sonnet-4-6',
+        tool: 'claude',
+        displayName: 'Synth',
+      });
     });
   });
 

@@ -19,6 +19,7 @@ export interface InFlightTaskMeta {
 export interface ReviewAgentInfo {
   model: string;
   tool: string;
+  displayName?: string;
 }
 
 const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
@@ -27,9 +28,10 @@ const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
   comment: '\uD83D\uDCAC',
 };
 
-/** Format a single agent as `model/tool`. */
+/** Format a single agent as `model/tool`, prefixed with displayName if set. */
 function formatAgentLabel(agent: ReviewAgentInfo): string {
-  return `\`${agent.model}/${agent.tool}\``;
+  const base = `\`${agent.model}/${agent.tool}\``;
+  return agent.displayName ? `${agent.displayName} (${base})` : base;
 }
 
 /**
@@ -125,7 +127,7 @@ export async function fetchReviewAgents(
 ): Promise<{ reviewers: ReviewAgentInfo[]; synthesizer: ReviewAgentInfo | null }> {
   const { data } = await supabase
     .from('review_results')
-    .select('type, agents!inner(model, tool)')
+    .select('type, agents!inner(model, tool, display_name)')
     .eq('review_task_id', taskId)
     .eq('status', 'completed');
 
@@ -139,6 +141,9 @@ export async function fetchReviewAgents(
     const info: ReviewAgentInfo = {
       model: (agent.model as string) ?? 'unknown',
       tool: (agent.tool as string) ?? 'unknown',
+      ...((agent.display_name as string | null)
+        ? { displayName: agent.display_name as string }
+        : {}),
     };
     if (row.type === 'summary') {
       synthesizer = info;

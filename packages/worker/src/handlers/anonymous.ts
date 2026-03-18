@@ -79,6 +79,7 @@ export async function handleAnonymousRegister(
       model: body.model,
       tool: body.tool,
       is_anonymous: true,
+      ...(body.displayName ? { display_name: body.displayName } : {}),
       ...(body.repoConfig ? { repo_config: body.repoConfig } : {}),
     })
     .select('id')

@@ -70,6 +70,64 @@ describe('handleListAgents', () => {
     });
   });
 
+  it('returns displayName when set', async () => {
+    const mockAgents = [
+      {
+        id: 'agent-1',
+        user_id: 'user-123',
+        model: 'gpt-4',
+        tool: 'cline',
+        display_name: 'My Reviewer',
+        status: 'online',
+        created_at: '2024-01-01',
+      },
+    ];
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({ data: mockAgents, error: null }),
+          }),
+        }),
+      }),
+    } as any;
+
+    const response = await handleListAgents(mockUser, mockSupabase);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.agents[0].displayName).toBe('My Reviewer');
+  });
+
+  it('omits displayName when null', async () => {
+    const mockAgents = [
+      {
+        id: 'agent-1',
+        user_id: 'user-123',
+        model: 'gpt-4',
+        tool: 'cline',
+        display_name: null,
+        status: 'online',
+        created_at: '2024-01-01',
+      },
+    ];
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({ data: mockAgents, error: null }),
+          }),
+        }),
+      }),
+    } as any;
+
+    const response = await handleListAgents(mockUser, mockSupabase);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.agents[0]).not.toHaveProperty('displayName');
+  });
+
   it('returns 500 when database query fails', async () => {
     const mockSupabase = {
       from: vi.fn().mockReturnValue({
@@ -138,6 +196,73 @@ describe('handleCreateAgent', () => {
     expect(data.tool).toBe('cursor');
     expect(data).not.toHaveProperty('reputationScore');
     expect(data.status).toBe('offline');
+  });
+
+  it('creates agent with displayName and returns it', async () => {
+    const insertMock = vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        single: vi.fn().mockResolvedValue({
+          data: {
+            id: 'agent-named',
+            model: 'claude-3',
+            tool: 'cursor',
+            display_name: 'My Bot',
+            status: 'offline',
+            created_at: '2024-01-01',
+          },
+          error: null,
+        }),
+      }),
+    });
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({ insert: insertMock }),
+    } as any;
+
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'claude-3', tool: 'cursor', displayName: 'My Bot' }),
+    });
+
+    const response = await handleCreateAgent(request, mockUser, mockSupabase);
+    const data = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(data.displayName).toBe('My Bot');
+    // Verify display_name was passed to insert
+    expect(insertMock).toHaveBeenCalledWith(expect.objectContaining({ display_name: 'My Bot' }));
+  });
+
+  it('omits displayName from response when not set', async () => {
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({
+              data: {
+                id: 'agent-new',
+                model: 'claude-3',
+                tool: 'cursor',
+                display_name: null,
+                status: 'offline',
+                created_at: '2024-01-01',
+              },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    } as any;
+
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'claude-3', tool: 'cursor' }),
+    });
+
+    const response = await handleCreateAgent(request, mockUser, mockSupabase);
+    const data = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(data).not.toHaveProperty('displayName');
   });
 
   it('returns 400 when model is missing', async () => {

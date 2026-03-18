@@ -42,8 +42,12 @@ export function formatReviewComment(
   review: string,
   contributorName?: string,
   isAnonymous?: boolean,
+  displayName?: string,
 ): string {
   const verdictLabel = VERDICT_LABELS[verdict];
+  const agentLabel = displayName
+    ? `${displayName} (\`${model}\` / \`${tool}\`)`
+    : `\`${model}\` / \`${tool}\``;
   let contributorLine = '';
   if (isAnonymous) {
     contributorLine = '**Contributor**: Anonymous contributor';
@@ -54,7 +58,7 @@ export function formatReviewComment(
     '## \uD83D\uDD0D OpenCara Review',
     '',
     `**Verdict**: ${verdictLabel}`,
-    `**Agent**: \`${model}\` / \`${tool}\``,
+    `**Agent**: ${agentLabel}`,
     ...(contributorLine ? [contributorLine] : []),
     '',
     '---',
@@ -432,16 +436,37 @@ export class AgentConnection implements DurableObject {
     }
 
     const supabase = createSupabaseClient(this.env);
-    const { error } = await supabase
-      .from('agents')
-      .update({ repo_config: msg.repoConfig })
-      .eq('id', agentId);
+    const updateData: Record<string, unknown> = { repo_config: msg.repoConfig };
+    if (msg.displayName !== undefined) {
+      updateData.display_name = msg.displayName || null;
+    }
+
+    const { error } = await supabase.from('agents').update(updateData).eq('id', agentId);
 
     if (error) {
-      console.error(`Failed to update repo_config for agent ${agentId}:`, error);
-      this.sendError(5000, 'Failed to save repo preferences');
+      console.error(`Failed to update preferences for agent ${agentId}:`, error);
+      this.sendError(5000, 'Failed to save agent preferences');
     } else {
-      console.log(`Updated repo_config for agent ${agentId}: mode=${msg.repoConfig.mode}`);
+      console.log(
+        `Updated preferences for agent ${agentId}: mode=${msg.repoConfig.mode}` +
+          (msg.displayName ? `, displayName=${msg.displayName}` : ''),
+      );
+    }
+  }
+
+  private async getAgentDisplayName(
+    agentId: string,
+    supabase: ReturnType<typeof createSupabaseClient>,
+  ): Promise<string | null> {
+    try {
+      const { data } = await supabase
+        .from('agents')
+        .select('display_name')
+        .eq('id', agentId)
+        .single();
+      return (data?.display_name as string | null) ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -559,8 +584,12 @@ export class AgentConnection implements DurableObject {
     const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
+    // Look up display name for logging
+    const agentDisplayName = await this.getAgentDisplayName(agentId, supabase);
+    const agentLabel = agentDisplayName ? `${agentDisplayName} (${agentId})` : agentId;
+
     console.log(
-      `review_complete received: task ${msg.taskId}, agent ${agentId}, verdict ${msg.verdict}, tokens ${msg.tokensUsed}`,
+      `review_complete received: task ${msg.taskId}, agent ${agentLabel}, verdict ${msg.verdict}, tokens ${msg.tokensUsed}`,
     );
 
     // Look up task meta to determine single-agent vs multi-agent mode
@@ -617,12 +646,13 @@ export class AgentConnection implements DurableObject {
     // Look up agent model/tool for comment formatting
     const { data: agentData } = await supabase
       .from('agents')
-      .select('model, tool, users!inner(name, is_anonymous)')
+      .select('model, tool, display_name, users!inner(name, is_anonymous)')
       .eq('id', agentId)
       .single();
 
     const model = agentData?.model ?? 'unknown';
     const tool = agentData?.tool ?? 'unknown';
+    const displayName = (agentData?.display_name as string | null) ?? undefined;
     const usersData = agentData?.users as unknown as Record<string, unknown> | undefined;
     const contributorName = usersData?.name as string | undefined;
     const isAnonymous = (usersData?.is_anonymous as boolean) ?? false;
@@ -653,6 +683,7 @@ export class AgentConnection implements DurableObject {
       reviewBody,
       contributorName,
       isAnonymous,
+      displayName,
     );
 
     try {
@@ -808,7 +839,7 @@ export class AgentConnection implements DurableObject {
     // Find another eligible online agent
     const { data: candidates } = await supabase
       .from('agents')
-      .select('id, user_id, model, tool, repo_config, users!inner(name)')
+      .select('id, user_id, model, tool, display_name, repo_config, users!inner(name)')
       .eq('status', 'online');
 
     const allCandidates: EligibleAgent[] = ((candidates ?? []) as Record<string, unknown>[])
@@ -819,6 +850,7 @@ export class AgentConnection implements DurableObject {
         userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
         model: row.model as string,
         tool: row.tool as string,
+        ...((row.display_name as string | null) ? { displayName: row.display_name as string } : {}),
         isAnonymous: ((row.users as Record<string, unknown>)?.is_anonymous as boolean) ?? false,
         repoConfig: (row.repo_config as EligibleAgent['repoConfig']) ?? null,
       }));
