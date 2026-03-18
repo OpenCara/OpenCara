@@ -3,6 +3,7 @@ import {
   buildWsUrl,
   handleMessage,
   syncAgentToServer,
+  resolveAnonymousAgent,
   type ConsumptionDeps,
 } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
@@ -689,5 +690,107 @@ describe('syncAgentToServer', () => {
       tool: 'copilot',
       repoConfig: { mode: 'whitelist', list: ['org/repo'] },
     });
+  });
+});
+
+describe('resolveAnonymousAgent', () => {
+  it('reuses stored anonymous agent with matching model+tool', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const config = {
+      apiKey: null,
+      platformUrl: 'https://test.api.dev',
+      maxDiffSizeKb: 100,
+      limits: null,
+      agentCommand: null,
+      agents: null,
+      anonymousAgents: [
+        {
+          agentId: 'existing-1',
+          apiKey: 'cr_existing',
+          model: 'claude-sonnet-4-6',
+          tool: 'claude',
+        },
+      ],
+    };
+
+    const result = await resolveAnonymousAgent(config, 'claude-sonnet-4-6', 'claude');
+
+    expect(result.entry.agentId).toBe('existing-1');
+    expect(result.entry.apiKey).toBe('cr_existing');
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Reusing stored anonymous agent'));
+    logSpy.mockRestore();
+  });
+
+  it('registers new anonymous agent when no stored credentials', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // Mock fetch for the API call and saveConfig's fs.writeFileSync
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ agentId: 'new-anon', apiKey: 'cr_new' }),
+    });
+
+    // Mock the saveConfig import to prevent fs access
+    const configModule = await import('../config.js');
+    const saveConfigSpy = vi.spyOn(configModule, 'saveConfig').mockImplementation(() => {});
+
+    const config = {
+      apiKey: null,
+      platformUrl: 'https://test.api.dev',
+      maxDiffSizeKb: 100,
+      limits: null,
+      agentCommand: null,
+      agents: null,
+      anonymousAgents: [] as Array<{
+        agentId: string;
+        apiKey: string;
+        model: string;
+        tool: string;
+        repoConfig?: unknown;
+      }>,
+    };
+
+    const result = await resolveAnonymousAgent(config, 'claude-sonnet-4-6', 'claude');
+
+    expect(result.entry.agentId).toBe('new-anon');
+    expect(result.entry.apiKey).toBe('cr_new');
+    // Agent should be added to config
+    expect(config.anonymousAgents).toHaveLength(1);
+    expect(config.anonymousAgents[0].agentId).toBe('new-anon');
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Registering anonymous agent'));
+    expect(saveConfigSpy).toHaveBeenCalled();
+
+    globalThis.fetch = originalFetch;
+    logSpy.mockRestore();
+    saveConfigSpy.mockRestore();
+  });
+
+  it('throws when API registration fails', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ error: 'Server error' }),
+    });
+
+    const config = {
+      apiKey: null,
+      platformUrl: 'https://test.api.dev',
+      maxDiffSizeKb: 100,
+      limits: null,
+      agentCommand: null,
+      agents: null,
+      anonymousAgents: [],
+    };
+
+    await expect(resolveAnonymousAgent(config, 'claude-sonnet-4-6', 'claude')).rejects.toThrow(
+      'Server error',
+    );
+
+    globalThis.fetch = originalFetch;
+    logSpy.mockRestore();
   });
 });

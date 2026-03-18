@@ -12,6 +12,7 @@ vi.mock('../config.js', () => ({
     limits: null,
     agentCommand: null,
     agents: null,
+    anonymousAgents: [],
   })),
   saveConfig: vi.fn(),
   requireApiKey: vi.fn((config: { apiKey: string }) => config.apiKey),
@@ -113,6 +114,7 @@ describe('agent commands', () => {
         agentCommand: null,
         agents: [{ model: 'gpt-4', tool: 'claude' }],
         maxDiffSizeKb: 100,
+        anonymousAgents: [],
       });
 
       await expect(

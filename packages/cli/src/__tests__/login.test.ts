@@ -2,9 +2,31 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockPost = vi.hoisted(() => vi.fn());
 
+const mockLoadConfig = vi.hoisted(() =>
+  vi.fn(() => ({
+    apiKey: null,
+    platformUrl: 'https://test.api.dev',
+    anonymousAgents: [] as Array<{
+      agentId: string;
+      apiKey: string;
+      model: string;
+      tool: string;
+    }>,
+  })),
+);
+
+const mockRlQuestion = vi.hoisted(() => vi.fn());
+
 vi.mock('../config.js', () => ({
-  loadConfig: vi.fn(() => ({ apiKey: null, platformUrl: 'https://test.api.dev' })),
+  loadConfig: mockLoadConfig,
   saveConfig: vi.fn(),
+  removeAnonymousAgent: vi.fn(
+    (config: { anonymousAgents: Array<{ agentId: string }> }, agentId: string) => {
+      config.anonymousAgents = config.anonymousAgents.filter(
+        (a: { agentId: string }) => a.agentId !== agentId,
+      );
+    },
+  ),
 }));
 
 vi.mock('../http.js', () => ({
@@ -13,6 +35,13 @@ vi.mock('../http.js', () => ({
 
 vi.mock('../reconnect.js', () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('node:readline', () => ({
+  createInterface: vi.fn(() => ({
+    question: mockRlQuestion,
+    close: vi.fn(),
+  })),
 }));
 
 import { loginCommand } from '../commands/login.js';
@@ -134,5 +163,98 @@ describe('login command', () => {
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('expired'));
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  describe('account linking', () => {
+    it('prompts to link anonymous agents after login', async () => {
+      mockLoadConfig.mockReturnValue({
+        apiKey: null,
+        platformUrl: 'https://test.api.dev',
+        anonymousAgents: [
+          { agentId: 'anon-1', apiKey: 'cr_anon', model: 'claude-sonnet-4-6', tool: 'claude' },
+        ],
+      });
+
+      // Simulate user pressing Enter (default Y)
+      mockRlQuestion.mockImplementation((_q: string, cb: (answer: string) => void) => cb(''));
+
+      mockPost
+        .mockResolvedValueOnce(mockDeviceFlow())
+        .mockResolvedValueOnce({ status: 'complete', apiKey: 'cr_newkey' })
+        .mockResolvedValueOnce({ linked: true, agentIds: ['anon-1'] }); // link response
+
+      await loginCommand.parseAsync([], { from: 'user' });
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Found 1 anonymous agent'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Linked 1 agent'));
+      // saveConfig called twice: once for apiKey, once after linking
+      expect(saveConfig).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips linking when user declines', async () => {
+      mockLoadConfig.mockReturnValue({
+        apiKey: null,
+        platformUrl: 'https://test.api.dev',
+        anonymousAgents: [
+          { agentId: 'anon-1', apiKey: 'cr_anon', model: 'claude-sonnet-4-6', tool: 'claude' },
+        ],
+      });
+
+      // Simulate user typing "n"
+      mockRlQuestion.mockImplementation((_q: string, cb: (answer: string) => void) => cb('n'));
+
+      mockPost
+        .mockResolvedValueOnce(mockDeviceFlow())
+        .mockResolvedValueOnce({ status: 'complete', apiKey: 'cr_newkey' });
+
+      await loginCommand.parseAsync([], { from: 'user' });
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Found 1 anonymous agent'));
+      // Only one saveConfig call (for apiKey)
+      expect(saveConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles link API failure gracefully', async () => {
+      mockLoadConfig.mockReturnValue({
+        apiKey: null,
+        platformUrl: 'https://test.api.dev',
+        anonymousAgents: [{ agentId: 'anon-1', apiKey: 'cr_anon', model: 'm', tool: 't' }],
+      });
+
+      mockRlQuestion.mockImplementation((_q: string, cb: (answer: string) => void) => cb(''));
+
+      mockPost
+        .mockResolvedValueOnce(mockDeviceFlow())
+        .mockResolvedValueOnce({ status: 'complete', apiKey: 'cr_newkey' })
+        .mockRejectedValueOnce(new Error('Link failed')); // link API fails
+
+      await loginCommand.parseAsync([], { from: 'user' });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to link agent'),
+        'Link failed',
+      );
+      // saveConfig still called twice (apiKey save + after link attempts)
+      expect(saveConfig).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not prompt when no anonymous agents', async () => {
+      mockLoadConfig.mockReturnValue({
+        apiKey: null,
+        platformUrl: 'https://test.api.dev',
+        anonymousAgents: [],
+      });
+
+      mockPost
+        .mockResolvedValueOnce(mockDeviceFlow())
+        .mockResolvedValueOnce({ status: 'complete', apiKey: 'cr_newkey' });
+
+      await loginCommand.parseAsync([], { from: 'user' });
+
+      // Should not see "Found N anonymous agent(s)" message
+      const logCalls = logSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(logCalls.some((c: string) => c.includes('anonymous agent'))).toBe(false);
+      expect(saveConfig).toHaveBeenCalledTimes(1);
+    });
   });
 });
