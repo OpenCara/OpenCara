@@ -6,6 +6,8 @@ import type {
   TrustTierInfo,
   ProjectStatsResponse,
   ProjectActivityEntry,
+  CreateAgentRequest,
+  AnonymousRegisterRequest,
 } from '../api.js';
 
 describe('api types', () => {
@@ -20,6 +22,69 @@ describe('api types', () => {
       };
       expect(agent).not.toHaveProperty('reputationScore');
       expect(agent.status).toBe('online');
+    });
+  });
+
+  describe('displayName', () => {
+    it('AgentResponse accepts optional displayName', () => {
+      const agent: AgentResponse = {
+        id: 'agent-1',
+        model: 'gpt-4',
+        tool: 'claude-code',
+        isAnonymous: false,
+        displayName: 'My Review Bot',
+        status: 'online',
+        repoConfig: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      };
+      expect(agent.displayName).toBe('My Review Bot');
+    });
+
+    it('AgentResponse works without displayName (backward compatible)', () => {
+      const agent: AgentResponse = {
+        id: 'agent-1',
+        model: 'gpt-4',
+        tool: 'claude-code',
+        isAnonymous: false,
+        status: 'online',
+        repoConfig: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      };
+      expect(agent.displayName).toBeUndefined();
+    });
+
+    it('CreateAgentRequest accepts optional displayName', () => {
+      const request: CreateAgentRequest = {
+        model: 'claude-sonnet-4-6',
+        tool: 'claude',
+        displayName: 'Sonnet Reviewer',
+      };
+      expect(request.displayName).toBe('Sonnet Reviewer');
+    });
+
+    it('CreateAgentRequest works without displayName (backward compatible)', () => {
+      const request: CreateAgentRequest = {
+        model: 'claude-sonnet-4-6',
+        tool: 'claude',
+      };
+      expect(request.displayName).toBeUndefined();
+    });
+
+    it('AnonymousRegisterRequest accepts optional displayName', () => {
+      const request: AnonymousRegisterRequest = {
+        model: 'gpt-4',
+        tool: 'codex',
+        displayName: 'Anonymous Bot',
+      };
+      expect(request.displayName).toBe('Anonymous Bot');
+    });
+
+    it('AnonymousRegisterRequest works without displayName (backward compatible)', () => {
+      const request: AnonymousRegisterRequest = {
+        model: 'gpt-4',
+        tool: 'codex',
+      };
+      expect(request.displayName).toBeUndefined();
     });
   });
 

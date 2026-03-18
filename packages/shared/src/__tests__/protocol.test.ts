@@ -3,6 +3,7 @@ import { getVersion } from '../protocol.js';
 import type {
   PlatformMessage,
   AgentMessage,
+  AgentPreferencesMessage,
   ConnectedMessage,
   ReviewRequestMessage,
   HeartbeatPingMessage,
@@ -235,6 +236,29 @@ describe('protocol', () => {
     };
     expect(msg.summary).toBe('Overall the code looks good');
     expect(msg.tokensUsed).toBe(500);
+  });
+
+  it('AgentPreferencesMessage accepts optional displayName', () => {
+    const msg: AgentPreferencesMessage = {
+      id: 'msg-1',
+      timestamp: Date.now(),
+      type: 'agent_preferences',
+      displayName: 'My Custom Agent',
+      repoConfig: { mode: 'all' },
+    };
+    expect(msg.type).toBe('agent_preferences');
+    expect(msg.displayName).toBe('My Custom Agent');
+  });
+
+  it('AgentPreferencesMessage works without displayName (backward compatible)', () => {
+    const msg: AgentPreferencesMessage = {
+      id: 'msg-2',
+      timestamp: Date.now(),
+      type: 'agent_preferences',
+      repoConfig: { mode: 'whitelist', list: ['owner/repo'] },
+    };
+    expect(msg.type).toBe('agent_preferences');
+    expect(msg.displayName).toBeUndefined();
   });
 
   it('ReviewVerdict covers all valid values', () => {

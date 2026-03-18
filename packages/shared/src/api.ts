@@ -35,6 +35,7 @@ export interface AgentResponse {
   tool: string;
   // reputationScore removed — trust tier shown via stats instead
   isAnonymous: boolean;
+  displayName?: string;
   status: 'online' | 'offline';
   repoConfig: RepoConfig | null;
   createdAt: string;
@@ -49,6 +50,7 @@ export interface ListAgentsResponse {
 export interface CreateAgentRequest {
   model: string;
   tool: string;
+  displayName?: string;
   repoConfig?: RepoConfig;
 }
 
@@ -242,6 +244,7 @@ export function getModelDefaultReputation(modelName: string): number {
 export interface AnonymousRegisterRequest {
   model: string;
   tool: string;
+  displayName?: string;
   repoConfig?: RepoConfig;
 }
 
