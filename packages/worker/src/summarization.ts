@@ -1,3 +1,4 @@
+import { getModelDefaultReputation } from '@opencara/shared';
 import type { SummaryReview, ReviewVerdict } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
@@ -181,7 +182,9 @@ export async function fetchCompletedReviews(
 }
 
 /**
- * Select a summary agent: random among online agents not involved in this review.
+ * Select a summary agent: prefer online agents with higher model reputation, excluding
+ * agents already involved in this review. Uses weighted random selection based on
+ * model default reputation.
  */
 export async function selectSummaryAgent(
   supabase: SupabaseClient,
@@ -190,7 +193,7 @@ export async function selectSummaryAgent(
   // Exclude anonymous agents from synthesizer selection
   const { data } = await supabase
     .from('agents')
-    .select('id, users!inner(is_anonymous)')
+    .select('id, model, users!inner(is_anonymous)')
     .eq('status', 'online');
 
   if (!data || data.length === 0) return null;
@@ -202,9 +205,22 @@ export async function selectSummaryAgent(
 
   if (candidates.length === 0) return null;
 
-  // Random selection (reputation_score removed from agents)
-  const idx = Math.floor(Math.random() * candidates.length);
-  return candidates[idx].id as string;
+  // Weighted random selection: higher-reputation models are more likely to be chosen as synthesizer
+  const weighted = candidates.map((c) => {
+    const model = (c.model as string) ?? '';
+    const weight = Math.max(0.1, getModelDefaultReputation(model));
+    return { id: c.id as string, weight };
+  });
+
+  const totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);
+  let roll = Math.random() * totalWeight;
+
+  for (const entry of weighted) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry.id;
+  }
+
+  return weighted[weighted.length - 1].id;
 }
 
 /**

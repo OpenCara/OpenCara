@@ -50,4 +50,27 @@ describe('handleGetRegistry', () => {
       expect(typeof tool.tokenParser).toBe('string');
     }
   });
+
+  it('each model has a defaultReputation between 0 and 1', async () => {
+    const { models } = await handleGetRegistry().json();
+    for (const model of models) {
+      expect(typeof model.defaultReputation).toBe('number');
+      expect(model.defaultReputation).toBeGreaterThanOrEqual(0);
+      expect(model.defaultReputation).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('returns expected default reputation values for known models', async () => {
+    const { models } = await handleGetRegistry().json();
+    const byName = Object.fromEntries(
+      models.map((m: { name: string; defaultReputation: number }) => [m.name, m.defaultReputation]),
+    );
+    expect(byName['claude-opus-4-6']).toBe(0.8);
+    expect(byName['claude-sonnet-4-6']).toBe(0.7);
+    expect(byName['gemini-2.5-pro']).toBe(0.7);
+    expect(byName['qwen3.5-plus']).toBe(0.6);
+    expect(byName['glm-5']).toBe(0.5);
+    expect(byName['kimi-k2.5']).toBe(0.5);
+    expect(byName['minimax-m2.5']).toBe(0.5);
+  });
 });
