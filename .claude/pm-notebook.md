@@ -69,6 +69,7 @@
 - #114 [worker-dev] 2026-03-18 — Filter agents by repo preferences in task distribution (closed, PR #118 merged)
 - #115 [cli-dev] 2026-03-18 — Parse and send repo config preferences from local config (closed, PR #119 merged)
 - #121 [architect] 2026-03-18 — Schema simplification — drop redundant columns, merge tables, privacy-preserving ratings (closed, PR #122 merged)
+- #123 [design] 2026-03-18 — Auth-free agent onboarding — allow contributors to review without GitHub login (open, priority:medium)
 
 ## Pull Requests
 
