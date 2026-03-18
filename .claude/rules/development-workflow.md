@@ -7,7 +7,11 @@ All dev agents (architect, worker-dev, cli-dev, web-dev) follow this standard li
 1. Spawned by PM in an isolated **git worktree** (auto-created branch)
 2. Receive an issue number from PM (issue body contains detailed specs from PM)
 3. Read the issue and understand the requirements
-4. Rename the worktree branch to `issue-<NUMBER>-<short-description>`
+4. Rename the worktree branch using the version bump convention:
+   - New features / enhancements → `feat/<NUMBER>-<short-description>`
+   - Bug fixes → `fix/<NUMBER>-<short-description>`
+   - Breaking changes → `breaking/<NUMBER>-<short-description>`
+   This determines the version bump when the PR is merged (feat=minor, fix=patch, breaking=major).
 5. Implement the changes
 6. Write tests for new code
 7. Build and test: `pnpm build && pnpm test`
@@ -21,8 +25,11 @@ All dev agents (architect, worker-dev, cli-dev, web-dev) follow this standard li
 ## Implementation Phase
 
 ```bash
-# Rename the auto-created worktree branch
-git branch -m issue-<NUMBER>-<short-description>
+# Rename the auto-created worktree branch using version bump convention:
+# - feat/<NUMBER>-<desc> for new features/enhancements (triggers minor version bump)
+# - fix/<NUMBER>-<desc> for bug fixes (triggers patch version bump)
+# - breaking/<NUMBER>-<desc> for breaking changes (triggers major version bump)
+git branch -m feat/<NUMBER>-<short-description>  # or fix/ or breaking/
 
 # ... implement changes ...
 
@@ -37,7 +44,7 @@ Closes #<NUMBER>"
 
 # Push and create PR — use your agent name as prefix: [architect], [worker-dev], [cli-dev], [web-dev]
 # IMPORTANT: Always label PRs and issues with your agent name (e.g., agent:architect)
-git push -u origin issue-<NUMBER>-<short-description>
+git push -u origin feat/<NUMBER>-<short-description>
 gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --body "Closes #<NUMBER>
 
 ## Summary
