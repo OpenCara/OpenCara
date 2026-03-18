@@ -55,6 +55,7 @@ function formatTable(agents: AgentResponse[], trustLabels?: Map<string, string>)
 
   const header = [
     'ID'.padEnd(38),
+    'Name'.padEnd(20),
     'Model'.padEnd(22),
     'Tool'.padEnd(16),
     'Status'.padEnd(10),
@@ -64,8 +65,16 @@ function formatTable(agents: AgentResponse[], trustLabels?: Map<string, string>)
 
   for (const a of agents) {
     const trust = trustLabels?.get(a.id) ?? '--';
+    const name = a.displayName ?? '--';
     console.log(
-      [a.id.padEnd(38), a.model.padEnd(22), a.tool.padEnd(16), a.status.padEnd(10), trust].join(''),
+      [
+        a.id.padEnd(38),
+        name.padEnd(20),
+        a.model.padEnd(22),
+        a.tool.padEnd(16),
+        a.status.padEnd(10),
+        trust,
+      ].join(''),
     );
   }
 }
@@ -88,6 +97,7 @@ export interface StartAgentOptions {
   verbose?: boolean;
   stabilityThresholdMs?: number;
   repoConfig?: RepoConfig;
+  displayName?: string;
 }
 
 /** Interval for sending RFC 6455 WebSocket ping frames to keep the proxy layer alive */
@@ -104,6 +114,7 @@ export function startAgent(
   const verbose = options?.verbose ?? false;
   const stabilityThreshold = options?.stabilityThresholdMs ?? CONNECTION_STABILITY_THRESHOLD_MS;
   const repoConfig = options?.repoConfig;
+  const displayName = options?.displayName;
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -200,7 +211,16 @@ export function startAgent(
         return;
       }
 
-      handleMessage(ws, msg, resetHeartbeatTimer, reviewDeps, consumptionDeps, verbose, repoConfig);
+      handleMessage(
+        ws,
+        msg,
+        resetHeartbeatTimer,
+        reviewDeps,
+        consumptionDeps,
+        verbose,
+        repoConfig,
+        displayName,
+      );
     });
 
     ws.on('close', (code, reason) => {
@@ -305,15 +325,17 @@ export function handleMessage(
   consumptionDeps?: ConsumptionDeps,
   verbose?: boolean,
   repoConfig?: RepoConfig,
+  displayName?: string,
 ): void {
   switch (msg.type) {
     case 'connected':
       console.log(`Authenticated. Protocol v${msg.version ?? 'unknown'}`);
-      // Send agent preferences (repo config) to the platform
+      // Send agent preferences to the platform
       trySend(ws, {
         type: 'agent_preferences',
         id: crypto.randomUUID(),
         timestamp: Date.now(),
+        ...(displayName ? { displayName } : {}),
         repoConfig: repoConfig ?? { mode: 'all' },
       });
       break;
@@ -533,6 +555,9 @@ async function syncAgentToServer(
   }
 
   const body: CreateAgentRequest = { model: localAgent.model, tool: localAgent.tool };
+  if (localAgent.name) {
+    body.displayName = localAgent.name;
+  }
   if (localAgent.repos) {
     body.repoConfig = localAgent.repos;
   }
@@ -935,6 +960,7 @@ agentCommand
         startAgent(entry.agentId, config.platformUrl, entry.apiKey, reviewDeps, consumptionDeps, {
           verbose: opts.verbose,
           stabilityThresholdMs,
+          displayName: entry.name,
           repoConfig: entry.repoConfig,
         });
         return;
@@ -1065,6 +1091,7 @@ agentCommand
           startAgent(agentId, config.platformUrl, apiKey!, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
+            displayName: selected.local.name,
             repoConfig: selected.local.repos,
           });
           startedCount++;
@@ -1105,6 +1132,7 @@ agentCommand
           startAgent(anon.agentId, config.platformUrl, anon.apiKey, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
+            displayName: anon.name,
             repoConfig: anon.repoConfig,
           });
           startedCount++;

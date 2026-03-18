@@ -406,6 +406,42 @@ describe('handleMessage', () => {
     consoleSpy.mockRestore();
   });
 
+  it('sends agent_preferences with displayName on connected', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+
+    handleMessage(
+      ws,
+      { type: 'connected', version: '1' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'SecurityBot',
+    );
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('agent_preferences');
+    expect(sent.displayName).toBe('SecurityBot');
+    expect(sent.repoConfig).toEqual({ mode: 'all' });
+
+    consoleSpy.mockRestore();
+  });
+
+  it('does not include displayName in agent_preferences when not set', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+
+    handleMessage(ws, { type: 'connected', version: '1' });
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('agent_preferences');
+    expect(sent.displayName).toBeUndefined();
+
+    consoleSpy.mockRestore();
+  });
+
   it('handles error message', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const ws = { send: vi.fn() };
@@ -690,6 +726,40 @@ describe('syncAgentToServer', () => {
       tool: 'copilot',
       repoConfig: { mode: 'whitelist', list: ['org/repo'] },
     });
+  });
+
+  it('creates new agent with displayName when name specified', async () => {
+    const client = {
+      post: vi.fn().mockResolvedValue({ id: 'new-agent' }),
+    } as unknown as ApiClient;
+
+    const result = await syncAgentToServer(client, [], {
+      model: 'gpt-4',
+      tool: 'copilot',
+      name: 'SecurityBot',
+    });
+
+    expect(result.agentId).toBe('new-agent');
+    expect(result.created).toBe(true);
+    expect(client.post).toHaveBeenCalledWith('/api/agents', {
+      model: 'gpt-4',
+      tool: 'copilot',
+      displayName: 'SecurityBot',
+    });
+  });
+
+  it('does not include displayName when name is not specified', async () => {
+    const client = {
+      post: vi.fn().mockResolvedValue({ id: 'new-agent' }),
+    } as unknown as ApiClient;
+
+    await syncAgentToServer(client, [], {
+      model: 'gpt-4',
+      tool: 'copilot',
+    });
+
+    const calledWith = client.post.mock.calls[0][1] as Record<string, unknown>;
+    expect(calledWith.displayName).toBeUndefined();
   });
 });
 
