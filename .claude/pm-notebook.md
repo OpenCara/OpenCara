@@ -1,128 +1,29 @@
 # PM State
 
-## Issues
+## Open Issues
 
-- #1 [architect] 2026-03-15 — [M0] Project Scaffolding — Monorepo Setup (closed)
-- #3 [pm-design] 2026-03-15 — Design gaps: WebSocket protocol, auth flow, DB schema, state machine (closed)
-- #4 [worker-dev] 2026-03-16 — [M1] GitHub App + Webhook Endpoint (closed)
-- #5 [worker-dev] 2026-03-16 — [M2] Database Schema + Auth Endpoints (closed)
-- #8 [cli-dev] 2026-03-16 — [M3] Agent CLI — Login, Agent Management, WebSocket Connection (closed)
-- #9 [worker-dev] 2026-03-16 — [M4] Durable Objects — Agent WebSocket & Task Distribution (closed)
-- #11 [architect] 2026-03-16 — Increase test coverage to near 100% (priority:high) (closed)
-- #13 [worker-dev] 2026-03-16 — [M5-W] Worker — Review Result Posting + Task Lifecycle (closed, PR #17 merged)
-- #14 [cli-dev] 2026-03-16 — [M5-C] CLI — AI-Powered Review Execution Engine (closed, PR #16 merged)
-- #18 [architect] 2026-03-16 — Fix pre-existing typecheck and formatting issues (closed, PR #21 merged)
-- #19 [worker-dev] 2026-03-16 — [M6-W] Worker — Multi-Agent Dispatch + Summarization Trigger + Summary Posting (closed, PR #23 merged)
-- #20 [cli-dev] 2026-03-16 — [M6-C] CLI — Summary Execution Engine (closed, PR #22 merged)
-- #24 [architect] 2026-03-16 — Remove duplicate SummaryReview interface (priority:low, closed, fixed in PR #29)
-- #25 [worker-dev] 2026-03-16 — [M7] Reputation System — Emoji Ratings + Wilson Scoring (closed, PR #29 merged)
-- #26 [worker-dev] 2026-03-16 — [M9-W] Worker — Consumption Stats API Endpoint (closed, PR #28 merged)
-- #27 [cli-dev] 2026-03-16 — [M9-C] CLI — Stats Command + Local Consumption Limits (closed, PR #30 merged)
-- #31 [web-dev] 2026-03-16 — [M8-W1] Landing Page + Tailwind Setup + Layout (closed, PR #37 merged)
-- #32 [web-dev] 2026-03-16 — [M8-W2] Leaderboard Page (closed, PR #37 merged)
-- #33 [worker-dev] 2026-03-16 — [M8-WK] Worker — Web OAuth Callback Endpoint (closed, PR #36 merged)
-- #34 [web-dev] 2026-03-16 — [M8-W3] Dashboard Page — Personal Stats + Consumption (closed, PR #39 merged)
-- #35 [worker-dev] 2026-03-16 — Optimize leaderboard endpoint — eliminate N+1 queries (closed, resolved by PR #75)
-- #38 [worker-dev] 2026-03-16 — Implement installation event handlers — project upsert and cleanup (priority:low, backlog)
-- #40 [architect] 2026-03-16 — [Deploy] Database Schema Migration + Environment Setup (closed, PR #42 merged)
-- #41 [web-dev] 2026-03-16 — [M8-Fix] Fix unfixed PR #39 review findings — dashboard quality (closed, PR #44 merged)
-- #43 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation and add security headers (closed, PR #45 merged)
-- #46 [worker-dev] 2026-03-16 — Default review config when .review.yml is missing (closed, resolved by PR #59)
-- #47 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (closed, PR #49 merged)
-- #48 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (closed, PR #50 merged)
-- #51 [worker-dev] 2026-03-16 — WebSocket disconnects immediately after authentication (closed, PR #52 merged)
-- #53 [worker-dev] 2026-03-16 — WebSocket reconnect loop — code 4002 replaced cycle (closed, PR #54 merged)
-- #55 [worker-dev] 2026-03-16 — WebSocket reconnect loop persists — DO re-entrance on pickUpPendingTasks (closed, PR #56 merged)
-- #57 [worker-dev] 2026-03-16 — E2E review loop broken — no review comments posted on test PRs (closed, PR #59 merged)
-- #58 [architect] 2026-03-17 — Migrate from npm to pnpm with global virtual store (closed, PR #60 merged)
-- #61 [cli-dev] 2026-03-17 — CLI WebSocket disconnects during long-running review execution (closed, PR #68 merged)
-- #62 [cli-dev] 2026-03-17 — Claude Code tool fails to return review results (closed, PR #68 merged)
-- #63 [cli-dev] 2026-03-17 — Configurable agent tool command via template string in CLI config (closed, PR #76 merged)
-- #64 [breakdown] 2026-03-17 — Dashboard redesign: CLI-first personal stats + public web project stats (→ #69, #70, #71, #72)
-- #65 [architect] 2026-03-17 — (closed, replaced by #69)
-- #66 [worker-dev] 2026-03-17 — (closed, replaced by #70)
-- #67 [web-dev] 2026-03-17 — (closed, replaced by #71)
-- #69 [architect] 2026-03-17 — Shared types: remove leaderboard, add trust tier + project stats (closed, PR #74 merged)
-- #70 [worker-dev] 2026-03-17 — Worker: replace leaderboard with project stats API + trust tier (closed, PR #75 merged)
-- #71 [web-dev] 2026-03-17 — Web: strip to landing + public community page, remove auth (closed, PR #77 merged)
-- #72 [cli-dev] 2026-03-17 — CLI: enrich stats with trust tier, quality, expertise (closed, PR #78 merged)
-- #73 [cli-dev] 2026-03-17 — Make agent start options configurable (stability threshold) (closed, PR #79 merged)
-- #80 [cli-dev] 2026-03-17 — Add growth trends to opencrust stats (priority:low, backlog)
-- #81 [cli-dev] 2026-03-17 — Add expertise areas to opencrust stats (priority:low, backlog)
-- #82 [worker-dev] 2026-03-17 — Use GitHub PR Review API instead of issue comments (closed, PR #93 merged)
-- #83 [worker-dev] 2026-03-17 — Always synthesize reviews, even in single-agent mode (closed, PR #93 merged)
-- #84 [worker-dev] 2026-03-17 — Add preferred_models support to .review.yml config (closed, PR #104 merged)
-- #85 [cli-dev] 2026-03-17 — Add --all flag to start all registered agents concurrently (closed, PR #109 merged)
-- #86 [cli-dev] 2026-03-17 — Local-config-driven agent management (closed, PR #89 merged)
-- #87 [cli-dev] 2026-03-17 — Fix token counting + per-agent limits (closed, PR #94 merged)
-- #88 [worker-dev] 2026-03-17 — Post timeout comment on PR + /review retry (closed, PR #108 merged)
-- #90 [worker-dev] 2026-03-17 — Dynamic tool/model registry — admin API + database storage (priority:low, backlog)
-- #95 [worker-dev] 2026-03-17 — Use accurate reviewCount, pick exact reviewer count (closed, PR #97 merged)
-- #96 [worker-dev] 2026-03-17 — Single-agent reviews must use PR Review API with inline comments (closed, PR #97 merged)
-- #99 [worker-dev] 2026-03-17 — Add trigger control for when reviews are dispatched (closed, PR #103 merged)
-- #100 [worker-dev] 2026-03-17 — Don't store diff_content in database — fetch on demand (closed, PR #107 merged)
-- #101 [worker-dev] 2026-03-17 — Show contributor GitHub profile in reviews (closed, PR #106 merged)
-- #102 [cli-dev] 2026-03-17 — Investigate periodic WebSocket disconnect (code=1006) (closed, PR #105 merged)
-- #111 [worker-dev] 2026-03-18 — Evenly distribute review tasks across agents (closed, PR #117 merged)
-- #112 [breakdown] 2026-03-18 — Allow agents to configure target repos for review (→ #113, #114, #115)
-- #113 [architect] 2026-03-18 — Shared types: repo config types + protocol extension (closed, PR #116 merged)
-- #114 [worker-dev] 2026-03-18 — Filter agents by repo preferences in task distribution (closed, PR #118 merged)
-- #115 [cli-dev] 2026-03-18 — Parse and send repo config preferences from local config (closed, PR #119 merged)
-- #121 [architect] 2026-03-18 — Schema simplification — drop redundant columns, merge tables, privacy-preserving ratings (closed, PR #122 merged)
-- #123 [design] 2026-03-18 — Auth-free agent onboarding — allow contributors to review without GitHub login (open, priority:medium)
+- #38 [worker-dev, low] Installation event handlers — project upsert and cleanup
+- #80 [cli-dev, low] Growth trends in stats
+- #81 [cli-dev, low] Expertise areas in stats
+- #90 [worker-dev, low] Dynamic tool/model registry
+- #129 [worker-dev+cli-dev, medium] Custom agent names in review logs
+- #130 [cli-dev, low] Clickable PR links in agent logs
+- #131 [worker-dev, medium] Default reputation scores per model
+- #133 [design, low] Evaluate migration to Rust or Go
 
-## Pull Requests
+## Closed Issues (processed)
 
-- #2 [architect] 2026-03-16 — [M0] Project Scaffolding — Monorepo Setup (merged)
-- #6 [worker-dev] 2026-03-16 — [M2] Database Schema + Auth Endpoints (merged)
-- #7 [worker-dev] 2026-03-16 — [M1] GitHub App + Webhook Endpoint (merged)
-- #10 [cli-dev] 2026-03-16 — [M3] Agent CLI — Login, Agent Management, WebSocket (merged)
-- #12 [worker-dev] 2026-03-16 — [M4] Durable Objects — Agent WebSocket & Task Distribution (merged)
-- #15 [architect] 2026-03-16 — Increase test coverage to near 100% (merged)
-- #16 [cli-dev] 2026-03-16 — [M5-C] Implement AI-powered review execution engine (merged)
-- #17 [worker-dev] 2026-03-16 — [M5-W] Review result posting, task lifecycle & redistribution (merged, QA PASSED)
-- #21 [architect] 2026-03-16 — Fix typecheck and formatting issues (merged)
-- #22 [cli-dev] 2026-03-16 — [M6-C] CLI Summary Execution Engine (merged)
-- #23 [worker-dev] 2026-03-16 — [M6-W] Multi-Agent Dispatch + Summarization Trigger + Summary Posting (merged, QA PASSED)
-- #28 [worker-dev] 2026-03-16 — [M9-W] Add consumption stats API endpoint (merged, closes #26)
-- #29 [worker-dev] 2026-03-16 — [M7] Reputation System — Emoji Ratings, Wilson Scoring, Leaderboard (merged, closes #25 and #24)
-- #30 [cli-dev] 2026-03-16 — [M9-C] CLI Stats Command + Local Consumption Limits (merged, closes #27)
-- #36 [worker-dev] 2026-03-16 — [M8-WK] Web OAuth Callback Endpoint (merged, closes #33, QA PASSED)
-- #37 [web-dev] 2026-03-16 — [M8] Landing Page, Layout, Leaderboard (merged, closes #31, #32, QA PASSED)
-- #39 [web-dev] 2026-03-16 — [M8] Dashboard — Personal Stats + Consumption (merged, closes #34)
-- #42 [architect] 2026-03-16 — [Deploy] Database Schema Migration + Environment Setup (merged, closes #40)
-- #44 [web-dev] 2026-03-16 — [M8-Fix] Fix PR #39 review findings — dashboard quality (merged, closes #41)
-- #45 [worker-dev] 2026-03-16 — [Security] Fix CORS origin validation + security headers (merged, closes #43)
-- #49 [cli-dev] 2026-03-16 — Refactor CLI to invoke local tools instead of Anthropic API (merged, closes #47)
-- #50 [worker-dev] 2026-03-16 — Distribute pending tasks when agent comes online (merged, closes #48)
-- #52 [worker-dev] 2026-03-16 — Fix WebSocket disconnect on authentication (merged, closes #51)
-- #54 [worker-dev] 2026-03-16 — Fix WebSocket reconnect loop — stale close guard + code 4002 (merged, closes #53)
-- #56 [worker-dev] 2026-03-16 — Fix WebSocket re-entrance: debounce + skip pickup on reconnect (merged, closes #55)
-- #59 [worker-dev] 2026-03-17 — Fix E2E review loop — default config, reconnect pickup, diagnostics (merged, closes #57, also resolves #46)
-- #60 [architect] 2026-03-17 — Migrate from npm to pnpm with global virtual store (merged, closes #58)
-- #68 [cli-dev] 2026-03-17 — Fix WebSocket diagnostics and tool executor stdin delivery (merged, closes #61, #62, QA PASSED)
-- #74 [architect] 2026-03-17 — Remove leaderboard types, add trust tier + project stats (merged, closes #69, QA PASSED)
-- #75 [worker-dev] 2026-03-17 — Replace leaderboard with project stats + trust tier API (merged, closes #70, #35, QA PASSED)
-- #76 [cli-dev] 2026-03-17 — Configurable agent tool command via template strings (merged, closes #63)
-- #77 [web-dev] 2026-03-17 — Strip to landing page + public community stats (merged, closes #71)
-- #78 [cli-dev] 2026-03-17 — Enrich opencrust stats with trust tier + review quality (merged, closes #72)
-- #79 [cli-dev] 2026-03-17 — Configurable stability threshold for agent start (merged, closes #73)
-- #89 [cli-dev] 2026-03-17 — Local-config-driven agent management (merged, closes #86)
-- #91 [direct] 2026-03-17 — Rebrand OpenCrust → OpenCara (merged)
-- #92 [direct] 2026-03-17 — Post-rebrand fixes: template interpolation + separate CLI auth (merged)
-- #93 [direct] 2026-03-17 — Use GitHub PR Review API + revised review pipeline (merged, closes #82, #83)
-- #94 [direct] 2026-03-17 — Fix token counting + per-agent limits (merged, closes #87)
-- #97 [direct] 2026-03-17 — reviewCount + inline PR review comments (merged, closes #95, #96)
-- #103 [direct] 2026-03-17 — Add trigger control for reviews (merged, closes #99)
-- #104 [direct] 2026-03-17 — Add preferred_models support to .review.yml (merged, closes #84)
-- #105 [direct] 2026-03-17 — Add RFC 6455 WebSocket ping frames to prevent disconnects (merged, closes #102)
-- #106 [direct] 2026-03-17 — Show contributor GitHub profile in reviews (merged, closes #101)
-- #107 [direct] 2026-03-17 — Don't store diff_content in database — fetch on demand (merged, closes #100)
-- #108 [direct] 2026-03-17 — Post timeout comment on PR when review times out (merged, closes #88)
-- #109 [direct] 2026-03-17 — Add --all flag to start all agents concurrently (merged, closes #85)
-- #110 [direct] 2026-03-18 — Add E2E test suite + redesign multi-agent review with synthesizer (merged)
-- #116 [architect] 2026-03-18 — Add repo config types + protocol extension (merged, closes #113)
-- #117 [worker-dev] 2026-03-18 — Evenly distribute review tasks across agents (merged, closes #111)
-- #118 [worker-dev] 2026-03-18 — Filter agents by repo preferences (merged, closes #114)
-- #119 [cli-dev] 2026-03-18 — Parse and send repo config preferences (merged, closes #115)
-- #122 [architect] 2026-03-18 — Schema simplification: drop redundant tables, merge summaries, privacy ratings (merged, closes #121, QA PASSED)
+#1, #3, #4, #5, #8, #9, #11, #13, #14, #18, #19, #20, #24, #25, #26, #27,
+#31, #32, #33, #34, #35, #38, #40, #41, #43, #46, #47, #48, #51, #53, #55,
+#57, #58, #61, #62, #63, #64, #65, #66, #67, #69, #70, #71, #72, #73,
+#80, #81, #82, #83, #84, #85, #86, #87, #88, #90, #95, #96, #99, #100,
+#101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
+#126, #129, #130, #131, #132, #133, #135, #136
+
+## Merged PRs (processed)
+
+#2, #6, #7, #10, #12, #15, #16, #17, #21, #22, #23, #28, #29, #30,
+#36, #37, #39, #42, #44, #45, #49, #50, #52, #54, #56, #59, #60,
+#68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
+#103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
+#119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143
