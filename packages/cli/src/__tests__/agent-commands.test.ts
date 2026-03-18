@@ -178,6 +178,86 @@ describe('agent commands', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Trusted'));
     });
 
+    it('displays Name column in table output', async () => {
+      mockGet
+        .mockResolvedValueOnce({
+          agents: [
+            {
+              id: 'agent-1',
+              model: 'gpt-4',
+              tool: 'claude',
+              status: 'online',
+              displayName: 'SecurityBot',
+              createdAt: '2024-01-01',
+            },
+            {
+              id: 'agent-2',
+              model: 'claude-sonnet-4-6',
+              tool: 'claude-code',
+              status: 'offline',
+              createdAt: '2024-01-01',
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          agent: {
+            id: 'agent-1',
+            model: 'gpt-4',
+            tool: 'claude',
+            status: 'online',
+            trustTier: {
+              tier: 'trusted',
+              label: 'Trusted',
+              reviewCount: 25,
+              positiveRate: 0.88,
+              nextTier: 'expert',
+              progressToNext: 0.6,
+            },
+          },
+          stats: {
+            totalReviews: 25,
+            totalSummaries: 8,
+            totalRatings: 20,
+            thumbsUp: 18,
+            thumbsDown: 2,
+            tokensUsed: 50000,
+          },
+        })
+        .mockResolvedValueOnce({
+          agent: {
+            id: 'agent-2',
+            model: 'claude-sonnet-4-6',
+            tool: 'claude-code',
+            status: 'offline',
+            trustTier: {
+              tier: 'newcomer',
+              label: 'Newcomer',
+              reviewCount: 0,
+              positiveRate: 0,
+              nextTier: 'trusted',
+              progressToNext: 0,
+            },
+          },
+          stats: {
+            totalReviews: 0,
+            totalSummaries: 0,
+            totalRatings: 0,
+            thumbsUp: 0,
+            thumbsDown: 0,
+            tokensUsed: 0,
+          },
+        });
+
+      await agentCommand.parseAsync(['list'], { from: 'user' });
+
+      // Header should include Name column
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Name'));
+      // Agent with displayName
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('SecurityBot'));
+      // Agent without displayName shows '--'
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('--'));
+    });
+
     it('shows -- for trust when stats fetch fails', async () => {
       mockGet
         .mockResolvedValueOnce({

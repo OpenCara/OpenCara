@@ -498,6 +498,97 @@ describe('config', () => {
     });
   });
 
+  describe('agent name parsing', () => {
+    it('parses name from agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - name: SecurityBot
+    model: claude-sonnet-4-6
+    tool: claude-code
+  - model: glm-5
+    tool: qwen
+`);
+      const config = loadConfig();
+      expect(config.agents).toHaveLength(2);
+      expect(config.agents![0].name).toBe('SecurityBot');
+      expect(config.agents![1].name).toBeUndefined();
+    });
+
+    it('round-trips name through save and load', () => {
+      saveConfig({
+        apiKey: 'cr_test',
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
+        agentCommand: null,
+        agents: [{ model: 'claude-sonnet-4-6', tool: 'claude-code', name: 'MyBot' }],
+        anonymousAgents: [],
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(written).toContain('name: MyBot');
+    });
+
+    it('parses name from anonymous agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+anonymous_agents:
+  - agent_id: "a1b2"
+    api_key: "cr_key"
+    model: "claude-sonnet-4-6"
+    tool: "claude"
+    name: "AnonBot"
+`);
+      const config = loadConfig();
+      expect(config.anonymousAgents[0].name).toBe('AnonBot');
+    });
+
+    it('saves name on anonymous agents', () => {
+      saveConfig({
+        apiKey: null,
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
+        agentCommand: null,
+        agents: null,
+        anonymousAgents: [
+          {
+            agentId: 'a1',
+            apiKey: 'cr_key',
+            model: 'claude-sonnet-4-6',
+            tool: 'claude',
+            name: 'AnonBot',
+          },
+        ],
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(written).toContain('name: AnonBot');
+    });
+
+    it('omits name on anonymous agents when not set', () => {
+      saveConfig({
+        apiKey: null,
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        limits: null,
+        agentCommand: null,
+        agents: null,
+        anonymousAgents: [
+          { agentId: 'a1', apiKey: 'cr_key', model: 'claude-sonnet-4-6', tool: 'claude' },
+        ],
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      // Should not contain 'name:' as a key for anonymous agents
+      // But it does contain the section keys. Let's check no 'name' key in the anonymous_agents section
+      const lines = written.split('\n');
+      const anonSection = lines.slice(lines.findIndex((l) => l.includes('anonymous_agents')));
+      expect(anonSection.some((l) => l.trim().startsWith('name:'))).toBe(false);
+    });
+  });
+
   describe('per-agent limits in config', () => {
     it('parses per-agent limits from YAML', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
