@@ -42,8 +42,8 @@ export async function handleAnonymousRegister(
   }
 
   // Rate limit by IP
-  const ip =
-    request.headers.get('CF-Connecting-IP') ?? request.headers.get('X-Forwarded-For') ?? 'unknown';
+  // Only trust CF-Connecting-IP (set by Cloudflare, not spoofable by clients)
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
   const kvKey = `anon-ip:${ip}`;
 
   const currentCount = parseInt((await env.RATE_LIMIT_KV.get(kvKey)) ?? '0', 10);
@@ -85,6 +85,8 @@ export async function handleAnonymousRegister(
     .single();
 
   if (agentError || !agent) {
+    // Clean up orphaned user on agent creation failure
+    await supabase.from('users').delete().eq('id', user.id);
     return json({ error: 'Failed to create anonymous agent' }, 500);
   }
 
