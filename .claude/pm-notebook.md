@@ -124,4 +124,4 @@
 - #117 [worker-dev] 2026-03-18 — Evenly distribute review tasks across agents (merged, closes #111)
 - #118 [worker-dev] 2026-03-18 — Filter agents by repo preferences (merged, closes #114)
 - #119 [cli-dev] 2026-03-18 — Parse and send repo config preferences (merged, closes #115)
-- #122 [architect] 2026-03-18 — Schema simplification: drop redundant tables, merge summaries, privacy ratings (merged, closes #121)
+- #122 [architect] 2026-03-18 — Schema simplification: drop redundant tables, merge summaries, privacy ratings (merged, closes #121, QA PASSED)
