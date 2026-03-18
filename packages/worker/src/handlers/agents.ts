@@ -6,6 +6,7 @@ import type {
   User,
 } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { sanitizeDisplayName } from '../agent-connection.js';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -57,13 +58,15 @@ export async function handleCreateAgent(
     return json({ error: 'model and tool are required' }, 400);
   }
 
+  const cleanDisplayName = sanitizeDisplayName(body.displayName);
+
   const { data, error } = await supabase
     .from('agents')
     .insert({
       user_id: user.id,
       model: body.model,
       tool: body.tool,
-      ...(body.displayName ? { display_name: body.displayName } : {}),
+      ...(cleanDisplayName ? { display_name: cleanDisplayName } : {}),
       ...(body.repoConfig ? { repo_config: body.repoConfig } : {}),
     })
     .select()

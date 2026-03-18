@@ -28,12 +28,25 @@ const HEARTBEAT_TIMEOUT_MS = 90_000;
 const MAX_REVIEW_ATTEMPTS = 3;
 const MIN_REMAINING_SECONDS_FOR_PICKUP = 30;
 const CONNECT_DEBOUNCE_MS = 5_000;
+const MAX_DISPLAY_NAME_LENGTH = 100;
 
 const VERDICT_LABELS: Record<ReviewVerdict, string> = {
   approve: '\u2705 Approve',
   request_changes: '\u274C Changes Requested',
   comment: '\uD83D\uDCAC Comment',
 };
+
+/** Escape markdown special characters to prevent injection. */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}[\]()#+\-.!|~>]/g, '\\$&');
+}
+
+/** Normalize displayName: trim, enforce max length, empty → null. */
+export function sanitizeDisplayName(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
+  return trimmed || null;
+}
 
 export function formatReviewComment(
   verdict: ReviewVerdict,
@@ -46,7 +59,7 @@ export function formatReviewComment(
 ): string {
   const verdictLabel = VERDICT_LABELS[verdict];
   const agentLabel = displayName
-    ? `${displayName} (\`${model}\` / \`${tool}\`)`
+    ? `${escapeMarkdown(displayName)} (\`${model}\` / \`${tool}\`)`
     : `\`${model}\` / \`${tool}\``;
   let contributorLine = '';
   if (isAnonymous) {
@@ -438,7 +451,7 @@ export class AgentConnection implements DurableObject {
     const supabase = createSupabaseClient(this.env);
     const updateData: Record<string, unknown> = { repo_config: msg.repoConfig };
     if (msg.displayName !== undefined) {
-      updateData.display_name = msg.displayName || null;
+      updateData.display_name = sanitizeDisplayName(msg.displayName);
     }
 
     const { error } = await supabase.from('agents').update(updateData).eq('id', agentId);
@@ -451,22 +464,6 @@ export class AgentConnection implements DurableObject {
         `Updated preferences for agent ${agentId}: mode=${msg.repoConfig.mode}` +
           (msg.displayName ? `, displayName=${msg.displayName}` : ''),
       );
-    }
-  }
-
-  private async getAgentDisplayName(
-    agentId: string,
-    supabase: ReturnType<typeof createSupabaseClient>,
-  ): Promise<string | null> {
-    try {
-      const { data } = await supabase
-        .from('agents')
-        .select('display_name')
-        .eq('id', agentId)
-        .single();
-      return (data?.display_name as string | null) ?? null;
-    } catch {
-      return null;
     }
   }
 
@@ -584,12 +581,8 @@ export class AgentConnection implements DurableObject {
     const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    // Look up display name for logging
-    const agentDisplayName = await this.getAgentDisplayName(agentId, supabase);
-    const agentLabel = agentDisplayName ? `${agentDisplayName} (${agentId})` : agentId;
-
     console.log(
-      `review_complete received: task ${msg.taskId}, agent ${agentLabel}, verdict ${msg.verdict}, tokens ${msg.tokensUsed}`,
+      `review_complete received: task ${msg.taskId}, agent ${agentId}, verdict ${msg.verdict}, tokens ${msg.tokensUsed}`,
     );
 
     // Look up task meta to determine single-agent vs multi-agent mode

@@ -6,6 +6,7 @@ import type {
   User,
 } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { sanitizeDisplayName } from '../agent-connection.js';
 import { generateApiKey, hashApiKey } from '../auth.js';
 import type { Env } from '../env.js';
 
@@ -72,6 +73,7 @@ export async function handleAnonymousRegister(
   }
 
   // Create agent
+  const cleanDisplayName = sanitizeDisplayName(body.displayName);
   const { data: agent, error: agentError } = await supabase
     .from('agents')
     .insert({
@@ -79,7 +81,7 @@ export async function handleAnonymousRegister(
       model: body.model,
       tool: body.tool,
       is_anonymous: true,
-      ...(body.displayName ? { display_name: body.displayName } : {}),
+      ...(cleanDisplayName ? { display_name: cleanDisplayName } : {}),
       ...(body.repoConfig ? { repo_config: body.repoConfig } : {}),
     })
     .select('id')

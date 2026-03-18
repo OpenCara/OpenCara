@@ -28,10 +28,15 @@ const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
   comment: '\uD83D\uDCAC',
 };
 
+/** Escape markdown special characters to prevent injection. */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}[\]()#+\-.!|~>]/g, '\\$&');
+}
+
 /** Format a single agent as `model/tool`, prefixed with displayName if set. */
 function formatAgentLabel(agent: ReviewAgentInfo): string {
   const base = `\`${agent.model}/${agent.tool}\``;
-  return agent.displayName ? `${agent.displayName} (${base})` : base;
+  return agent.displayName ? `${escapeMarkdown(agent.displayName)} (${base})` : base;
 }
 
 /**

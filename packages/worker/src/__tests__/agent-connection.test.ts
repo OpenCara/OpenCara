@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AgentConnection, formatReviewComment } from '../agent-connection.js';
+import { AgentConnection, formatReviewComment, sanitizeDisplayName } from '../agent-connection.js';
 
 vi.mock('../db.js', () => ({
   createSupabaseClient: vi.fn(),
@@ -275,6 +275,43 @@ describe('AgentConnection', () => {
       const result = formatReviewComment('approve', 'gpt-4', 'cursor', 'LGTM');
       expect(result).toContain('**Agent**: `gpt-4` / `cursor`');
       expect(result).not.toContain('(');
+    });
+
+    it('escapes markdown special characters in displayName', () => {
+      const result = formatReviewComment(
+        'approve',
+        'gpt-4',
+        'cursor',
+        'LGTM',
+        undefined,
+        false,
+        '**[Click](https://evil.com)**',
+      );
+      expect(result).not.toContain('[Click]');
+      expect(result).toContain('\\*\\*\\[Click\\]\\(https://evil\\.com\\)\\*\\*');
+    });
+  });
+
+  describe('sanitizeDisplayName', () => {
+    it('returns null for null/undefined/empty', () => {
+      expect(sanitizeDisplayName(null)).toBeNull();
+      expect(sanitizeDisplayName(undefined)).toBeNull();
+      expect(sanitizeDisplayName('')).toBeNull();
+      expect(sanitizeDisplayName('   ')).toBeNull();
+    });
+
+    it('trims whitespace', () => {
+      expect(sanitizeDisplayName('  My Bot  ')).toBe('My Bot');
+    });
+
+    it('truncates to 100 chars', () => {
+      const long = 'A'.repeat(150);
+      const result = sanitizeDisplayName(long);
+      expect(result).toHaveLength(100);
+    });
+
+    it('returns valid names unchanged', () => {
+      expect(sanitizeDisplayName('My Reviewer')).toBe('My Reviewer');
     });
   });
 
