@@ -42,7 +42,7 @@ export type {
   RegistryResponse,
 } from './api.js';
 
-export { DEFAULT_REGISTRY } from './api.js';
+export { DEFAULT_REGISTRY, DEFAULT_REPUTATION_FALLBACK, getModelDefaultReputation } from './api.js';
 
 // Privacy-preserving rater hash utility
 export { computeRaterHash } from './rater-hash.js';

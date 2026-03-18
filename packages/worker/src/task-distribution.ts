@@ -1,3 +1,4 @@
+import { getModelDefaultReputation } from '@opencara/shared';
 import type { RepoConfig, ReviewConfig } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
@@ -142,17 +143,18 @@ export function isValidRepoConfig(value: unknown): value is RepoConfig {
 export const MAX_AGENTS_PER_TASK = 10;
 
 /**
- * Compute a weight for weighted random selection.
- * With reputation_score removed from agents table, all agents get equal weight.
- * This can be enhanced later with computed reputation from reputation_history.
+ * Compute a weight for weighted random selection based on model default reputation.
+ * Uses the model's default reputation from the registry when no earned reputation exists.
+ * Weight is clamped to [0.1, 1] to ensure all agents have some chance of selection.
  */
-export function agentWeight(_reputationScore?: number): number {
-  return 1;
+export function agentWeight(model: string): number {
+  const rep = getModelDefaultReputation(model);
+  return Math.max(0.1, Math.min(1, rep));
 }
 
 /**
  * Weighted reservoir sampling: select `count` items from `agents`.
- * Currently uses equal weights since reputation_score was removed from agents table.
+ * Uses model default reputation as weight — higher-reputation models are more likely to be selected.
  * Accepts an optional `rng` function (returns [0,1)) for deterministic testing.
  */
 export function weightedRandomSelect(
@@ -164,7 +166,7 @@ export function weightedRandomSelect(
 
   const keyed = agents.map((agent) => ({
     agent,
-    key: Math.pow(rng(), 1 / agentWeight()),
+    key: Math.pow(rng(), 1 / agentWeight(agent.model)),
   }));
 
   keyed.sort((a, b) => b.key - a.key);
