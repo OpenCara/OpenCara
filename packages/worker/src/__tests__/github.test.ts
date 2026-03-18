@@ -93,6 +93,7 @@ describe('github', () => {
         ok: false,
         status: 401,
         statusText: 'Unauthorized',
+        text: () => Promise.resolve('{"message":"Bad credentials"}'),
       });
 
       await expect(getInstallationToken(42, testEnv)).rejects.toThrow(

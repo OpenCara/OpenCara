@@ -64,6 +64,8 @@ function createMockSupabase() {
   });
   chain.eq = vi.fn().mockReturnValue(chain);
   chain.gte = vi.fn().mockReturnValue(chain);
+  chain.in = vi.fn().mockReturnValue(chain);
+  chain.not = vi.fn().mockReturnValue(chain);
   chain.order = vi.fn().mockReturnValue(chain);
   chain.single = vi.fn(() => Promise.resolve(singleResult));
 
@@ -111,15 +113,15 @@ describe('summarization', () => {
   describe('formatSummaryComment', () => {
     it('formats summary with review count', () => {
       const result = formatSummaryComment('Great code overall', 3);
-      expect(result).toContain('OpenCara Review Summary');
-      expect(result).toContain('3 agents reviewed this PR');
+      expect(result).toContain('OpenCara Review');
+      expect(result).toContain('Synthesized from 4 agents');
       expect(result).toContain('Great code overall');
-      expect(result).toContain('Summarized by');
+      expect(result).toContain('Reviewed by');
     });
 
     it('uses singular for 1 agent', () => {
       const result = formatSummaryComment('LGTM', 1);
-      expect(result).toContain('1 agent reviewed this PR');
+      expect(result).toContain('Synthesized from 2 agents');
     });
   });
 

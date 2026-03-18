@@ -233,8 +233,8 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     expect(task!.status).toBe('pending');
   });
 
-  it('reviewCount=3 distributes to 3 agents', async () => {
-    // Create 3 online agents, each connected via WS
+  it('reviewCount=3 reserves 1 synthesizer and distributes to 3 reviewers (needs 4 agents)', async () => {
+    // Create 4 online agents: 1 will be reserved as synthesizer, 3 will review
     const agents: Array<{ agentId: string; pair: ReturnType<typeof ctx.getLastWSPair> }> = [];
     await ctx.createProject({
       owner: 'test-owner',
@@ -242,9 +242,12 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
       github_installation_id: 12345,
     });
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       const { user, apiKey } = await ctx.createUser({ name: `user${i}` });
-      const agent = await ctx.createAgent(user.id as string, { status: 'online' });
+      const agent = await ctx.createAgent(user.id as string, {
+        status: 'online',
+        reputation_score: 0.5 + i * 0.1,
+      });
       const agentId = agent.id as string;
       const wsReq = new Request(
         `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
@@ -265,14 +268,14 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
 
     await sendPRWebhook({ action: 'opened' });
 
-    // Check that all 3 agents received review_request
-    let receivedCount = 0;
+    // 3 agents should receive review_request, 1 (highest rep) is reserved as synthesizer
+    let reviewRequestCount = 0;
     for (const { pair } of agents) {
       const messages = pair!.client.getReceivedParsed<{ type: string }>();
       if (messages.some((m) => m.type === 'review_request')) {
-        receivedCount++;
+        reviewRequestCount++;
       }
     }
-    expect(receivedCount).toBe(3);
+    expect(reviewRequestCount).toBe(3);
   });
 });
