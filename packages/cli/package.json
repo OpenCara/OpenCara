@@ -1,6 +1,6 @@
 {
   "name": "opencara",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "repository": {
     "type": "git",
@@ -14,19 +14,20 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsup",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
-    "@opencara/shared": "workspace:*",
     "commander": "^13.0.0",
     "ws": "^8.18.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
+    "@opencara/shared": "workspace:*",
     "@types/ws": "^8.5.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.0.0"
   }
 }

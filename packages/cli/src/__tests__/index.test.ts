@@ -39,8 +39,8 @@ describe('CLI entry point', () => {
     expect(mockProgram.description).toHaveBeenCalledWith(expect.stringContaining('OpenCara'));
   });
 
-  it('sets version from shared package', () => {
-    expect(mockProgram.version).toHaveBeenCalledWith('0.0.1');
+  it('sets version from build-time constant', () => {
+    expect(mockProgram.version).toHaveBeenCalledWith('0.0.0-test');
   });
 
   it('registers login, agent, and stats commands', () => {
