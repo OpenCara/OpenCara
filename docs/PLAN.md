@@ -186,6 +186,7 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #80 [cli-dev, priority:low] Add growth trends to opencrust stats
 - #81 [cli-dev, priority:low] Add expertise areas to opencrust stats
 - #90 [worker-dev, priority:low] Dynamic tool/model registry — admin API + database storage
+- #121 [architect, priority:high] Schema simplification — 9→7 tables, drop redundant columns, privacy-preserving ratings
 - #111 [worker-dev, DONE] Evenly distribute review tasks across agents (load balancing) — PR #117 merged
 - #112 [breakdown, DONE] Allow agents to configure target repos for review
   - #113 [architect, DONE] Shared types: repo config + protocol extension — PR #116 merged

@@ -68,6 +68,7 @@
 - #113 [architect] 2026-03-18 — Shared types: repo config types + protocol extension (closed, PR #116 merged)
 - #114 [worker-dev] 2026-03-18 — Filter agents by repo preferences in task distribution (closed, PR #118 merged)
 - #115 [cli-dev] 2026-03-18 — Parse and send repo config preferences from local config (closed, PR #119 merged)
+- #121 [architect] 2026-03-18 — Schema simplification — drop redundant columns, merge tables, privacy-preserving ratings (open, priority:high)
 
 ## Pull Requests
 
