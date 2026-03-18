@@ -254,9 +254,12 @@ export async function distributeTask(
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
+  // For multi-agent: select reviewCount + 1 so we can reserve one as synthesizer
+  const selectionCount =
+    config.agents.reviewCount > 1 ? config.agents.reviewCount + 1 : config.agents.reviewCount;
   const selected = selectAgents(
     filtered,
-    config.agents.reviewCount,
+    selectionCount,
     config.agents.preferredModels,
     config.agents.preferredTools,
   );
@@ -267,12 +270,38 @@ export async function distributeTask(
     return taskId;
   }
 
-  // 5. Update task status to reviewing before distributing (avoid race with timeout alarm)
+  // 5. For multi-agent reviews: reserve the highest-rep agent as synthesizer FIRST,
+  //    then distribute review_request only to the remaining agents.
+  let reviewers = selected;
+  let synthesizerAgentId: string | undefined;
+
+  if (config.agents.reviewCount > 1 && selected.length > 1) {
+    // Sort by reputation descending — highest-rep agent becomes synthesizer
+    const sorted = [...selected].sort((a, b) => b.reputationScore - a.reputationScore);
+    const synthesizer = sorted[0];
+    synthesizerAgentId = synthesizer.id;
+    reviewers = sorted.slice(1);
+
+    console.log(
+      `Task ${taskId}: reserved agent ${synthesizerAgentId} (rep: ${synthesizer.reputationScore}) as synthesizer, ` +
+        `${reviewers.length} reviewer(s)`,
+    );
+
+    // Store synthesizer in config_json for later retrieval
+    await supabase
+      .from('review_tasks')
+      .update({
+        config_json: { ...configJson, synthesizerAgentId },
+      })
+      .eq('id', taskId);
+  }
+
+  // 6. Update task status to reviewing before distributing (avoid race with timeout alarm)
   await supabase.from('review_tasks').update({ status: 'reviewing' }).eq('id', taskId);
 
-  // 6. Push task to each selected agent's DO
+  // 7. Push task to each reviewer's DO (NOT the synthesizer)
   const remainingSeconds = Math.floor(timeoutMs / 1000);
-  for (const agent of selected) {
+  for (const agent of reviewers) {
     try {
       const doId = env.AGENT_CONNECTION.idFromName(agent.id);
       const stub = env.AGENT_CONNECTION.get(doId);
@@ -291,9 +320,11 @@ export async function distributeTask(
             project: { owner, repo, prompt: config.prompt },
             timeout: remainingSeconds,
             diffContent,
-            reviewCount: config.agents.reviewCount,
+            // reviewCount is the number of REVIEWERS (excluding synthesizer)
+            reviewCount: reviewers.length,
             installationId,
             reviewMode: config.agents.reviewCount > 1 ? 'compact' : 'full',
+            synthesizerAgentId,
           }),
         }),
       );
@@ -302,6 +333,9 @@ export async function distributeTask(
     }
   }
 
-  console.log(`Task ${taskId} distributed to ${selected.length} agent(s)`);
+  console.log(
+    `Task ${taskId} distributed to ${reviewers.length} reviewer(s)` +
+      (synthesizerAgentId ? ` + 1 synthesizer` : ''),
+  );
   return taskId;
 }

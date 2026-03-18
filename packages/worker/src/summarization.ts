@@ -10,6 +10,8 @@ export interface InFlightTaskMeta {
   repo: string;
   prNumber: number;
   prompt: string;
+  /** Pre-selected synthesizer agent ID (multi-agent mode). */
+  synthesizerAgentId?: string;
 }
 
 const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
@@ -31,9 +33,9 @@ export function formatSummaryComment(
       ? `**Contributors**: ${contributorNames.map((n) => `[@${n}](https://github.com/${n})`).join(', ')}`
       : '';
   return [
-    '## \uD83D\uDD0D OpenCara Review Summary',
+    '## \uD83D\uDD0D OpenCara Review',
     '',
-    `**Reviews**: ${reviewCount} agent${reviewCount !== 1 ? 's' : ''} reviewed this PR`,
+    `**Synthesized from ${reviewCount + 1} agent${reviewCount !== 0 ? 's' : ''}**`,
     ...(contributorsLine ? [contributorsLine] : []),
     '',
     '---',
@@ -41,7 +43,7 @@ export function formatSummaryComment(
     summary,
     '',
     '---',
-    '<sub>Summarized by <a href="https://github.com/apps/opencara">OpenCara</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate</sub>',
+    '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a> | React with \uD83D\uDC4D or \uD83D\uDC4E to rate this review</sub>',
   ].join('\n');
 }
 
@@ -191,12 +193,46 @@ export async function triggerSummarization(
     return false;
   }
 
-  // Select summary agent (not involved in the review)
-  const excludeIds = reviews.map((r) => r.agentId);
-  const summaryAgentId = await selectSummaryAgent(supabase, excludeIds);
+  // Use the pre-selected synthesizer if available (new flow: reserved at distribution time)
+  let summaryAgentId = meta.synthesizerAgentId ?? null;
+
+  if (summaryAgentId) {
+    // Verify the pre-selected synthesizer is still online
+    const { data: synthAgent } = await supabase
+      .from('agents')
+      .select('id')
+      .eq('id', summaryAgentId)
+      .eq('status', 'online')
+      .single();
+
+    if (!synthAgent) {
+      console.log(
+        `Pre-selected synthesizer ${summaryAgentId} for task ${taskId} is offline, finding replacement`,
+      );
+      summaryAgentId = null;
+    }
+  }
+
+  // Fallback: find any online agent (prefer uninvolved, then fall back to a reviewer)
+  if (!summaryAgentId) {
+    const excludeIds = reviews.map((r) => r.agentId);
+    summaryAgentId = await selectSummaryAgent(supabase, excludeIds);
+
+    if (!summaryAgentId) {
+      // No uninvolved agent — reuse the highest-rep reviewer
+      const { data: reviewerAgents } = await supabase
+        .from('agents')
+        .select('id')
+        .eq('status', 'online')
+        .in('id', excludeIds)
+        .order('reputation_score', { ascending: false });
+
+      summaryAgentId = (reviewerAgents?.[0]?.id as string) ?? null;
+    }
+  }
 
   if (!summaryAgentId) {
-    // Fallback: post individual reviews
+    // Last resort: all agents offline — post individual reviews
     console.log(
       `No summary agent available for task ${taskId}, falling back to individual reviews`,
     );
@@ -204,6 +240,22 @@ export async function triggerSummarization(
     return false;
   }
 
+  console.log(`Task ${taskId}: dispatching summary to synthesizer ${summaryAgentId}`);
+  return await dispatchSummaryToAgent(env, supabase, taskId, meta, reviews, summaryAgentId);
+}
+
+/**
+ * Dispatch summary to a specific agent. Shared by both the normal path
+ * (uninvolved agent) and the fallback path (reusing a reviewer).
+ */
+async function dispatchSummaryToAgent(
+  env: Env,
+  supabase: SupabaseClient,
+  taskId: string,
+  meta: InFlightTaskMeta,
+  reviews: SummaryReview[],
+  summaryAgentId: string,
+): Promise<boolean> {
   // Store summary agent in review_summaries
   await supabase.from('review_summaries').insert({
     review_task_id: taskId,

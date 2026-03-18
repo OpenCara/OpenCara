@@ -60,8 +60,11 @@ CREATE TABLE review_results (
   review_task_id UUID NOT NULL REFERENCES review_tasks(id) ON DELETE CASCADE,
   agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed', 'rejected', 'error')),
+  review_text TEXT,
+  verdict TEXT CHECK (verdict IN ('approve', 'request_changes', 'comment')),
   comment_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_review_results_task_id ON review_results(review_task_id);

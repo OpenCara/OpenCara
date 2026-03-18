@@ -412,6 +412,7 @@ export class AgentConnection implements DurableObject {
       reviewCount?: number;
       installationId?: number;
       reviewMode?: 'full' | 'compact';
+      synthesizerAgentId?: string;
     };
 
     console.log(
@@ -446,6 +447,7 @@ export class AgentConnection implements DurableObject {
         repo: payload.project.repo,
         prNumber: payload.pr.number,
         prompt: payload.project.prompt,
+        synthesizerAgentId: payload.synthesizerAgentId,
       };
       await this.state.storage.put(`taskMeta:${payload.taskId}`, taskMeta);
     }
@@ -591,8 +593,11 @@ export class AgentConnection implements DurableObject {
     const diffFiles = parseDiffFiles(diffContent);
     const inlineComments = filterValidComments(parsed.comments, diffFiles);
 
-    // Use parsed summary if available, otherwise use raw review text
-    const reviewBody = parsed.summary !== msg.review ? parsed.summary : msg.review;
+    // Use parsed summary only if inline comments survived validation;
+    // otherwise keep the full review text so findings aren't lost
+    const hasValidInline = inlineComments.length > 0;
+    const reviewBody =
+      parsed.summary !== msg.review && hasValidInline ? parsed.summary : msg.review;
     const effectiveVerdict = parsed.verdict ?? msg.verdict;
     const formattedReview = formatReviewComment(
       effectiveVerdict,
@@ -906,7 +911,11 @@ export class AgentConnection implements DurableObject {
       const diffFiles = parseDiffFiles(diffContent);
       const inlineComments = filterValidComments(parsed.comments, diffFiles);
 
-      const summaryText = parsed.summary !== msg.summary ? parsed.summary : msg.summary;
+      // If inline comments were extracted but none survived validation,
+      // use the full original text so findings aren't lost
+      const hasValidInline = inlineComments.length > 0;
+      const summaryText =
+        parsed.summary !== msg.summary && hasValidInline ? parsed.summary : msg.summary;
       const contributorNames = await fetchReviewContributors(supabase, msg.taskId);
       const summaryBody = formatSummaryComment(
         summaryText,
