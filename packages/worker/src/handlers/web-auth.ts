@@ -137,14 +137,12 @@ export async function handleWebCallback(
   const apiKey = await generateApiKey();
   const apiKeyHash = await hashApiKey(apiKey);
 
-  // Upsert user
+  // Upsert user (avatar and updated_at dropped in schema simplification)
   const { error: upsertError } = await supabase.from('users').upsert(
     {
       github_id: githubUser.id,
       name: githubUser.login,
-      avatar: githubUser.avatar_url,
       api_key_hash: apiKeyHash,
-      updated_at: new Date().toISOString(),
     },
     { onConflict: 'github_id' },
   );

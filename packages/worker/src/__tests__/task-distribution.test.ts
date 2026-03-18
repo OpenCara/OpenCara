@@ -12,16 +12,18 @@ import {
   type EligibleAgent,
 } from '../task-distribution.js';
 
-function makeAgent(overrides: Partial<EligibleAgent> = {}): EligibleAgent {
+function makeAgent(
+  overrides: Partial<EligibleAgent> & { reputationScore?: number } = {},
+): EligibleAgent {
+  const { reputationScore: _ignored, ...rest } = overrides;
   return {
     id: 'agent-1',
     userId: 'user-1',
     userName: 'alice',
     model: 'gpt-4',
     tool: 'cursor',
-    reputationScore: 0.8,
     repoConfig: null,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -109,22 +111,11 @@ describe('filterByAccessList', () => {
 });
 
 describe('agentWeight', () => {
-  it('returns reputation + 1 for positive reputation', () => {
-    expect(agentWeight(0.8)).toBeCloseTo(1.8);
-    expect(agentWeight(1.0)).toBeCloseTo(2.0);
-  });
-
-  it('returns minimum 0.1 for very low reputation', () => {
-    expect(agentWeight(-2)).toBe(0.1);
-    expect(agentWeight(-1.5)).toBe(0.1);
-  });
-
-  it('returns reputation + 1 for zero reputation', () => {
-    expect(agentWeight(0)).toBeCloseTo(1.0);
-  });
-
-  it('ensures positive weight for slightly negative reputation', () => {
-    expect(agentWeight(-0.5)).toBeCloseTo(0.5);
+  it('returns constant 1 (reputation_score removed from agents table)', () => {
+    expect(agentWeight()).toBe(1);
+    expect(agentWeight(0.8)).toBe(1);
+    expect(agentWeight(-2)).toBe(1);
+    expect(agentWeight(0)).toBe(1);
   });
 });
 
@@ -157,13 +148,10 @@ describe('weightedRandomSelect', () => {
     expect(result1.map((a) => a.id)).toEqual(result2.map((a) => a.id));
   });
 
-  it('higher reputation agents are selected more often over many trials', () => {
-    const agents = [
-      makeAgent({ id: 'high', reputationScore: 5.0 }),
-      makeAgent({ id: 'low', reputationScore: 0.0 }),
-    ];
+  it('all agents have equal selection probability (agentWeight returns constant 1)', () => {
+    const agents = [makeAgent({ id: 'a' }), makeAgent({ id: 'b' })];
 
-    const counts: Record<string, number> = { high: 0, low: 0 };
+    const counts: Record<string, number> = { a: 0, b: 0 };
     const N = 1000;
 
     for (let i = 0; i < N; i++) {
@@ -171,20 +159,19 @@ describe('weightedRandomSelect', () => {
       counts[result[0].id]++;
     }
 
-    // High-rep agent (weight 6.0) should be selected much more than low-rep (weight 1.0)
-    expect(counts['high']).toBeGreaterThan(counts['low']);
-    // But low-rep should still get SOME selections
-    expect(counts['low']).toBeGreaterThan(0);
+    // Both agents should be selected with roughly equal probability
+    expect(counts['a']).toBeGreaterThan(0);
+    expect(counts['b']).toBeGreaterThan(0);
+    // Neither should dominate (max < 3x min)
+    const min = Math.min(counts['a'], counts['b']);
+    const max = Math.max(counts['a'], counts['b']);
+    expect(max).toBeLessThan(min * 3);
   });
 
-  it('zero-reputation agents still get selected occasionally', () => {
-    const agents = [
-      makeAgent({ id: 'high', reputationScore: 2.0 }),
-      makeAgent({ id: 'zero', reputationScore: 0.0 }),
-      makeAgent({ id: 'low', reputationScore: 0.3 }),
-    ];
+  it('all agents get selected regardless of former reputation field', () => {
+    const agents = [makeAgent({ id: 'a' }), makeAgent({ id: 'b' }), makeAgent({ id: 'c' })];
 
-    const counts: Record<string, number> = { high: 0, zero: 0, low: 0 };
+    const counts: Record<string, number> = { a: 0, b: 0, c: 0 };
     const N = 1000;
 
     for (let i = 0; i < N; i++) {
@@ -192,7 +179,9 @@ describe('weightedRandomSelect', () => {
       counts[result[0].id]++;
     }
 
-    expect(counts['zero']).toBeGreaterThan(0);
+    expect(counts['a']).toBeGreaterThan(0);
+    expect(counts['b']).toBeGreaterThan(0);
+    expect(counts['c']).toBeGreaterThan(0);
   });
 
   it('distributes tasks fairly across agents with similar reputation', () => {
@@ -312,14 +301,10 @@ describe('selectAgents', () => {
     }
   });
 
-  it('reputation influences selection probability', () => {
-    const agents = [
-      makeAgent({ id: 'high', reputationScore: 5.0 }),
-      makeAgent({ id: 'med', reputationScore: 1.0 }),
-      makeAgent({ id: 'low', reputationScore: 0.0 }),
-    ];
+  it('all agents selected with equal probability (reputation_score removed)', () => {
+    const agents = [makeAgent({ id: 'a' }), makeAgent({ id: 'b' }), makeAgent({ id: 'c' })];
 
-    const counts: Record<string, number> = { high: 0, med: 0, low: 0 };
+    const counts: Record<string, number> = { a: 0, b: 0, c: 0 };
     const N = 1000;
 
     for (let i = 0; i < N; i++) {
@@ -327,11 +312,15 @@ describe('selectAgents', () => {
       counts[result[0].id]++;
     }
 
-    // Higher rep should be selected more often
-    expect(counts['high']).toBeGreaterThan(counts['med']);
-    expect(counts['med']).toBeGreaterThan(counts['low']);
-    // But low should still appear
-    expect(counts['low']).toBeGreaterThan(0);
+    // All agents should be selected with roughly equal probability
+    for (const agent of agents) {
+      expect(counts[agent.id]).toBeGreaterThan(0);
+    }
+    // No agent should dominate
+    const values = Object.values(counts);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    expect(max).toBeLessThan(min * 3);
   });
 });
 

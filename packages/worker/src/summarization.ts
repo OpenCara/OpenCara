@@ -2,7 +2,6 @@ import type { SummaryReview, ReviewVerdict } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
 import { getInstallationToken, fetchPrDiff, postPrReview, verdictToReviewEvent } from './github.js';
-import { agentWeight } from './task-distribution.js';
 
 export interface InFlightTaskMeta {
   reviewCount: number;
@@ -77,7 +76,8 @@ export async function fetchReviewContributors(
     .from('review_results')
     .select('agents!inner(users!inner(name))')
     .eq('review_task_id', taskId)
-    .eq('status', 'completed');
+    .eq('status', 'completed')
+    .eq('type', 'review');
 
   if (!data) return [];
 
@@ -92,7 +92,10 @@ export async function fetchReviewContributors(
 }
 
 /**
- * Fetch completed review results with their text, verdict, and agent info for a task.
+ * Fetch completed review results with their verdict and agent info for a task.
+ * Note: review_text was dropped from the schema. Reviews are posted directly to GitHub
+ * and the text is not stored in the DB. The review text in the message payload
+ * is used for summarization before being discarded.
  */
 export async function fetchCompletedReviews(
   supabase: SupabaseClient,
@@ -100,59 +103,43 @@ export async function fetchCompletedReviews(
 ): Promise<SummaryReview[]> {
   const { data } = await supabase
     .from('review_results')
-    .select('agent_id, review_text, verdict, agents!inner(model, tool)')
+    .select('agent_id, verdict, agents!inner(model, tool)')
     .eq('review_task_id', taskId)
-    .eq('status', 'completed');
+    .eq('status', 'completed')
+    .eq('type', 'review');
 
   if (!data) return [];
 
-  return (data as Record<string, unknown>[])
-    .filter((r) => r.review_text)
-    .map((r) => {
-      const agent = r.agents as Record<string, unknown>;
-      return {
-        agentId: r.agent_id as string,
-        model: (agent.model as string) ?? 'unknown',
-        tool: (agent.tool as string) ?? 'unknown',
-        review: r.review_text as string,
-        verdict: (r.verdict as ReviewVerdict) ?? 'comment',
-      };
-    });
+  return (data as Record<string, unknown>[]).map((r) => {
+    const agent = r.agents as Record<string, unknown>;
+    return {
+      agentId: r.agent_id as string,
+      model: (agent.model as string) ?? 'unknown',
+      tool: (agent.tool as string) ?? 'unknown',
+      review: '', // review_text no longer stored in DB
+      verdict: (r.verdict as ReviewVerdict) ?? 'comment',
+    };
+  });
 }
 
 /**
- * Select a summary agent: weighted random among online agents not involved in this review.
- * Higher-reputation agents have a higher probability but lower-rep agents can still be picked.
+ * Select a summary agent: random among online agents not involved in this review.
  */
 export async function selectSummaryAgent(
   supabase: SupabaseClient,
   excludeAgentIds: string[],
 ): Promise<string | null> {
-  const { data } = await supabase
-    .from('agents')
-    .select('id, reputation_score')
-    .eq('status', 'online')
-    .gte('reputation_score', 0);
+  const { data } = await supabase.from('agents').select('id').eq('status', 'online');
 
   if (!data || data.length === 0) return null;
 
-  const candidates = (data as { id: string; reputation_score: number }[]).filter(
-    (a) => !excludeAgentIds.includes(a.id),
-  );
+  const candidates = (data as { id: string }[]).filter((a) => !excludeAgentIds.includes(a.id));
 
   if (candidates.length === 0) return null;
 
-  // Weighted random selection using shared weight formula
-  const weights = candidates.map((a) => agentWeight(a.reputation_score));
-  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
-  let r = Math.random() * totalWeight;
-
-  for (let i = 0; i < candidates.length; i++) {
-    r -= weights[i];
-    if (r <= 0) return candidates[i].id;
-  }
-
-  return candidates[candidates.length - 1].id;
+  // Random selection (reputation_score removed from agents)
+  const idx = Math.floor(Math.random() * candidates.length);
+  return candidates[idx].id;
 }
 
 /**
@@ -235,13 +222,12 @@ export async function triggerSummarization(
     summaryAgentId = await selectSummaryAgent(supabase, excludeIds);
 
     if (!summaryAgentId) {
-      // No uninvolved agent — reuse the highest-rep reviewer
+      // No uninvolved agent — reuse any online reviewer
       const { data: reviewerAgents } = await supabase
         .from('agents')
         .select('id')
         .eq('status', 'online')
-        .in('id', excludeIds)
-        .order('reputation_score', { ascending: false });
+        .in('id', excludeIds);
 
       summaryAgentId = (reviewerAgents?.[0]?.id as string) ?? null;
     }
@@ -272,10 +258,12 @@ async function dispatchSummaryToAgent(
   reviews: SummaryReview[],
   summaryAgentId: string,
 ): Promise<boolean> {
-  // Store summary agent in review_summaries
-  await supabase.from('review_summaries').insert({
+  // Store summary agent in review_results with type='summary'
+  await supabase.from('review_results').insert({
     review_task_id: taskId,
     agent_id: summaryAgentId,
+    status: 'completed',
+    type: 'summary',
   });
 
   // Calculate remaining timeout

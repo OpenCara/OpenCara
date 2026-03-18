@@ -21,29 +21,17 @@ describe('E2E: Pending Task Pickup on Agent Connect', () => {
     vi.restoreAllMocks();
   });
 
-  /** Insert a pending review task with required relationships. */
+  /** Insert a pending review task with inlined project fields. */
   function insertPendingTask(overrides?: Record<string, unknown>) {
-    const projectId = 'proj-pending';
-    // Ensure the project exists
-    const projects = ctx.supabase.getTable('projects');
-    if (!projects.find((p) => p.id === projectId)) {
-      projects.push({
-        id: projectId,
-        github_installation_id: 12345,
-        owner: 'test-owner',
-        repo: 'test-repo',
-        created_at: new Date().toISOString(),
-      });
-    }
-
     const taskId = (overrides?.id as string) ?? crypto.randomUUID();
     const task: Record<string, unknown> = {
       id: taskId,
-      project_id: projectId,
       pr_number: 1,
-      pr_url: 'https://github.com/test-owner/test-repo/pull/1',
       status: 'pending',
       timeout_at: new Date(Date.now() + 600_000).toISOString(),
+      github_installation_id: 12345,
+      owner: 'test-owner',
+      repo: 'test-repo',
       config_json: {
         prompt: 'Review this PR',
         reviewCount: 1,

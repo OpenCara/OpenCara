@@ -43,12 +43,6 @@ describe('E2E: Single-Agent Review Loop', () => {
   async function setupConnectedAgent() {
     const { user, apiKey } = await ctx.createUser();
     const agent = await ctx.createAgent(user.id as string, { status: 'online' });
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const agentId = agent.id as string;
     const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
       headers: { Upgrade: 'websocket' },
@@ -124,7 +118,7 @@ describe('E2E: Single-Agent Review Loop', () => {
     expect(review.body).toContain('Agent');
   });
 
-  it('review_results.comment_url is set after posting', async () => {
+  it('review_results has type=review after posting', async () => {
     const { agentId, pair } = await setupConnectedAgent();
 
     const taskId = await fullReviewFlow(agentId, pair);
@@ -132,8 +126,7 @@ describe('E2E: Single-Agent Review Loop', () => {
     const results = ctx.supabase.getTable('review_results');
     const result = results.find((r) => r.review_task_id === taskId && r.status === 'completed');
     expect(result).toBeDefined();
-    expect(result!.comment_url).toBeDefined();
-    expect(typeof result!.comment_url).toBe('string');
+    expect(result!.type).toBe('review');
   });
 
   it('status transitions: pending → reviewing → completed', async () => {
@@ -145,17 +138,6 @@ describe('E2E: Single-Agent Review Loop', () => {
     const task = tasks.find((t) => t.id === taskId);
     expect(task).toBeDefined();
     expect(task!.status).toBe('completed');
-  });
-
-  it('consumption_logs created with correct tokens_used', async () => {
-    const { agentId, pair } = await setupConnectedAgent();
-
-    const taskId = await fullReviewFlow(agentId, pair);
-
-    const logs = ctx.supabase.getTable('consumption_logs');
-    const log = logs.find((l) => l.review_task_id === taskId && l.agent_id === agentId);
-    expect(log).toBeDefined();
-    expect(log!.tokens_used).toBe(1500);
   });
 
   it('APPROVE verdict → APPROVE GitHub event', async () => {

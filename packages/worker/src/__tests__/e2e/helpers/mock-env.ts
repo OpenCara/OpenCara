@@ -110,9 +110,6 @@ export interface E2EContext {
     overrides?: Record<string, unknown>,
   ): Promise<Record<string, unknown>>;
 
-  /** Create a project in the mock DB */
-  createProject(overrides?: Record<string, unknown>): Promise<Record<string, unknown>>;
-
   /** Compute HMAC-SHA256 signature for webhook payloads */
   signWebhook(body: string): Promise<string>;
 
@@ -188,11 +185,8 @@ export function createE2EContext(githubOptions?: GitHubMockOptions): E2EContext 
         id: crypto.randomUUID(),
         github_id: Math.floor(Math.random() * 1000000),
         name: 'testuser',
-        avatar: 'https://example.com/avatar.png',
         api_key_hash: apiKeyHash,
-        reputation_score: 0.5,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
         ...overrides,
       };
       supabase.getTable('users').push(user);
@@ -205,7 +199,6 @@ export function createE2EContext(githubOptions?: GitHubMockOptions): E2EContext 
         user_id: userId,
         model: 'claude-sonnet-4-6',
         tool: 'claude-code',
-        reputation_score: 0.5,
         status: 'offline',
         last_heartbeat_at: null,
         created_at: new Date().toISOString(),
@@ -213,19 +206,6 @@ export function createE2EContext(githubOptions?: GitHubMockOptions): E2EContext 
       };
       supabase.getTable('agents').push(agent);
       return agent;
-    },
-
-    async createProject(overrides?: Record<string, unknown>) {
-      const project: Record<string, unknown> = {
-        id: crypto.randomUUID(),
-        github_installation_id: 12345,
-        owner: 'test-owner',
-        repo: 'test-repo',
-        created_at: new Date().toISOString(),
-        ...overrides,
-      };
-      supabase.getTable('projects').push(project);
-      return project;
     },
 
     async signWebhook(body: string): Promise<string> {

@@ -5,15 +5,13 @@ export type {
   RepoFilterMode,
   RepoConfig,
   Agent,
-  Project,
   ReviewTaskStatus,
   ReviewTask,
   ReviewResultStatus,
+  ReviewResultType,
   ReviewResult,
-  ReviewSummary,
   Rating,
   ReputationHistory,
-  ConsumptionLog,
 } from './types.js';
 
 // API request/response types
@@ -34,8 +32,6 @@ export type {
   ProjectStatsResponse,
   ProjectActivityEntry,
   CollectRatingsResponse,
-  ConsumptionPeriodStats,
-  ConsumptionStatsResponse,
   ErrorResponse,
   ToolRegistryEntry,
   ModelRegistryEntry,
@@ -43,6 +39,9 @@ export type {
 } from './api.js';
 
 export { DEFAULT_REGISTRY } from './api.js';
+
+// Privacy-preserving rater hash utility
+export { computeRaterHash } from './rater-hash.js';
 
 // WebSocket protocol types
 export type {

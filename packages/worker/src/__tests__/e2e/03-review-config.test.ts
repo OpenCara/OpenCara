@@ -62,13 +62,6 @@ describe('Review Config Loading (E2E)', () => {
 
   it('valid .review.yml creates a task', async () => {
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': VALID_REVIEW_YAML };
-    // Ensure a project exists
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({ action: 'opened' });
     expect(res.status).toBe(200);
 
@@ -78,12 +71,6 @@ describe('Review Config Loading (E2E)', () => {
 
   it('no .review.yml uses DEFAULT_REVIEW_CONFIG and creates a task', async () => {
     // reviewConfigs not set — mock returns 404, triggering default config
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({ action: 'opened' });
     expect(res.status).toBe(200);
 
@@ -94,12 +81,6 @@ describe('Review Config Loading (E2E)', () => {
 
   it('malformed YAML posts error comment and creates no task', async () => {
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': '{{{{not valid yaml' };
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({ action: 'opened' });
     expect(res.status).toBe(200);
 
@@ -124,12 +105,6 @@ agents:
 timeout: 10m
 `;
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': yamlWithDraftSkip };
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({ action: 'opened', pr: { draft: true } });
     expect(res.status).toBe(200);
     expect(ctx.supabase.getTable('review_tasks')).toHaveLength(0);
@@ -147,12 +122,6 @@ agents:
 timeout: 10m
 `;
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': yamlWithLabelSkip };
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({
       action: 'opened',
       pr: { labels: [{ name: 'skip-review' }] },
@@ -173,12 +142,6 @@ agents:
 timeout: 10m
 `;
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': yamlWithBranchSkip };
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({
       action: 'opened',
       pr: { head: { ref: 'release/v1.0' } },
@@ -199,12 +162,6 @@ agents:
 timeout: 10m
 `;
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': yamlOpenOnly };
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({ action: 'closed' });
     expect(res.status).toBe(200);
     expect(ctx.supabase.getTable('review_tasks')).toHaveLength(0);
@@ -222,12 +179,6 @@ agents:
 timeout: 10m
 `;
     ctx.github.options.reviewConfigs = { 'test-owner/test-repo': yamlWithCount3 };
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const res = await sendPrWebhook({ action: 'opened' });
     expect(res.status).toBe(200);
 

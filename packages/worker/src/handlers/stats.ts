@@ -98,18 +98,20 @@ export async function handleGetStats(
     return json({ error: 'Agent not found' }, 404);
   }
 
-  // Count total reviews
+  // Count total reviews (type='review')
   const { count: totalReviews } = await supabase
     .from('review_results')
     .select('id', { count: 'exact', head: true })
     .eq('agent_id', agentId)
-    .eq('status', 'completed');
+    .eq('status', 'completed')
+    .eq('type', 'review');
 
-  // Count total summaries
+  // Count total summaries (type='summary')
   const { count: totalSummaries } = await supabase
-    .from('review_summaries')
+    .from('review_results')
     .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId);
+    .eq('agent_id', agentId)
+    .eq('type', 'summary');
 
   // Get all review result IDs for this agent
   const { data: resultIds } = await supabase
@@ -145,17 +147,6 @@ export async function handleGetStats(
     thumbsDown = downCount ?? 0;
   }
 
-  // Sum tokens used
-  const { data: consumptionData } = await supabase
-    .from('consumption_logs')
-    .select('tokens_used')
-    .eq('agent_id', agentId);
-
-  const tokensUsed = (consumptionData ?? []).reduce(
-    (sum: number, log: { tokens_used: number }) => sum + log.tokens_used,
-    0,
-  );
-
   const trustTier = calculateTrustTier(totalReviews ?? 0, thumbsUp, thumbsDown);
 
   const response: AgentStatsResponse = {
@@ -172,7 +163,6 @@ export async function handleGetStats(
       totalRatings,
       thumbsUp,
       thumbsDown,
-      tokensUsed,
     },
   };
 
@@ -185,7 +175,8 @@ export async function handleGetProjectStats(supabase: SupabaseClient): Promise<R
   const { count: totalReviews } = await supabase
     .from('review_results')
     .select('id', { count: 'exact', head: true })
-    .eq('status', 'completed');
+    .eq('status', 'completed')
+    .eq('type', 'review');
 
   // Count distinct contributor users (users who have at least one agent)
   const { data: contributorData } = await supabase.from('agents').select('user_id');
@@ -199,7 +190,8 @@ export async function handleGetProjectStats(supabase: SupabaseClient): Promise<R
     .from('review_results')
     .select('agent_id, agents!inner(user_id)')
     .eq('status', 'completed')
-    .gte('completed_at', oneWeekAgo);
+    .eq('type', 'review')
+    .gte('created_at', oneWeekAgo);
 
   const activeUserIds = new Set(
     (recentResults ?? []).map(
@@ -217,27 +209,25 @@ export async function handleGetProjectStats(supabase: SupabaseClient): Promise<R
     averagePositiveRate = totalUp / allRatings.length;
   }
 
-  // Last 10 completed reviews with repo + PR info
+  // Last 10 completed reviews with repo + PR info (fields inlined on review_tasks)
   const { data: recentReviews } = await supabase
     .from('review_results')
-    .select(
-      'completed_at, agents!inner(model), review_tasks!inner(pr_number, projects!inner(repo_full_name))',
-    )
+    .select('created_at, agents!inner(model), review_tasks!inner(pr_number, owner, repo)')
     .eq('status', 'completed')
-    .order('completed_at', { ascending: false })
+    .eq('type', 'review')
+    .order('created_at', { ascending: false })
     .limit(10);
 
   const recentActivity: ProjectActivityEntry[] = (recentReviews ?? []).map(
     (r: Record<string, unknown>) => {
       const agents = r.agents as Record<string, unknown>;
       const tasks = r.review_tasks as Record<string, unknown>;
-      const projects = tasks.projects as Record<string, unknown>;
       return {
         type: 'review_completed' as const,
-        repo: projects.repo_full_name as string,
+        repo: `${tasks.owner}/${tasks.repo}`,
         prNumber: tasks.pr_number as number,
         agentModel: agents.model as string,
-        completedAt: r.completed_at as string,
+        completedAt: r.created_at as string,
       };
     },
   );

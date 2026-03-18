@@ -4,7 +4,6 @@ import {
   calculateWilsonScore,
   collectTaskRatings,
   recalculateAgentReputation,
-  recalculateUserReputation,
 } from '../reputation.js';
 
 // Mock GitHub module to avoid real API calls and PEM key processing
@@ -87,14 +86,29 @@ describe('collectTaskRatings', () => {
     };
   }
 
-  it('returns empty result when no comments exist', async () => {
+  it('returns empty result when no review results exist', async () => {
     const mockSupabase = {
       from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'review_tasks') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({
+                  data: {
+                    github_installation_id: 42,
+                    owner: 'owner',
+                    repo: 'repo',
+                  },
+                }),
+              }),
+            }),
+          };
+        }
         if (table === 'review_results') {
           return {
             select: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({
-                not: vi.fn().mockResolvedValue({ data: [] }),
+                eq: vi.fn().mockResolvedValue({ data: [] }),
               }),
             }),
           };
@@ -116,47 +130,47 @@ describe('collectTaskRatings', () => {
 
     const mockSupabase = {
       from: vi.fn().mockImplementation((table: string) => {
-        if (table === 'review_results') {
-          return {
-            select: vi.fn().mockImplementation((fields: string) => {
-              if (fields === 'id, agent_id, comment_url') {
-                return {
-                  eq: vi.fn().mockReturnValue({
-                    not: vi.fn().mockResolvedValue({
-                      data: [
-                        {
-                          id: 'result-1',
-                          agent_id: 'agent-1',
-                          comment_url: 'https://github.com/owner/repo/pull/1#issuecomment-100',
-                        },
-                      ],
-                    }),
-                  }),
-                };
-              }
-              return {
-                eq: vi.fn().mockResolvedValue({
-                  data: [{ id: 'result-1' }],
-                }),
-              };
-            }),
-          };
-        }
         if (table === 'review_tasks') {
           return {
             select: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({
                 single: vi.fn().mockResolvedValue({
                   data: {
-                    project_id: 'proj-1',
-                    projects: {
-                      owner: 'owner',
-                      repo: 'repo',
-                      github_installation_id: 42,
+                    github_installation_id: 42,
+                    owner: 'owner',
+                    repo: 'repo',
+                    config_json: {
+                      commentUrl: 'https://github.com/owner/repo/pull/1#issuecomment-12345',
                     },
                   },
                 }),
               }),
+            }),
+          };
+        }
+        if (table === 'review_results') {
+          return {
+            select: vi.fn().mockImplementation((fields: string) => {
+              if (fields === 'id, agent_id') {
+                return {
+                  eq: vi.fn().mockReturnValue({
+                    eq: vi.fn().mockResolvedValue({
+                      data: [
+                        {
+                          id: 'result-1',
+                          agent_id: 'agent-1',
+                        },
+                      ],
+                    }),
+                  }),
+                };
+              }
+              // For recalculateAgentReputation: select('id').eq('agent_id', agentId)
+              return {
+                eq: vi.fn().mockResolvedValue({
+                  data: [{ id: 'result-1' }],
+                }),
+              };
             }),
           };
         }
@@ -171,54 +185,15 @@ describe('collectTaskRatings', () => {
             }),
           };
         }
-        if (table === 'agents') {
-          return {
-            select: vi.fn().mockImplementation((fields: string) => {
-              if (fields.includes('user_id')) {
-                return {
-                  eq: vi.fn().mockReturnValue({
-                    single: vi.fn().mockResolvedValue({
-                      data: { user_id: 'user-1' },
-                    }),
-                  }),
-                };
-              }
-              if (fields.includes('reputation_score') && !fields.includes('id')) {
-                return {
-                  eq: vi.fn().mockReturnValue({
-                    single: vi.fn().mockResolvedValue({
-                      data: { reputation_score: 0 },
-                    }),
-                  }),
-                };
-              }
-              return {
-                eq: vi.fn().mockResolvedValue({
-                  data: [{ id: 'agent-1', reputation_score: 0.5 }],
-                }),
-              };
-            }),
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ error: null }),
-            }),
-          };
-        }
         if (table === 'reputation_history') {
           return {
             insert: vi.fn().mockResolvedValue({ error: null }),
-          };
-        }
-        if (table === 'users') {
-          return {
             select: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({
-                single: vi.fn().mockResolvedValue({
-                  data: { reputation_score: 0 },
+                order: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockResolvedValue({ data: [] }),
                 }),
               }),
-            }),
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ error: null }),
             }),
           };
         }
@@ -236,23 +211,6 @@ describe('collectTaskRatings', () => {
   it('throws when task is not found', async () => {
     const mockSupabase = {
       from: vi.fn().mockImplementation((table: string) => {
-        if (table === 'review_results') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                not: vi.fn().mockResolvedValue({
-                  data: [
-                    {
-                      id: 'r-1',
-                      agent_id: 'a-1',
-                      comment_url: 'https://github.com/o/r/pull/1#issuecomment-1',
-                    },
-                  ],
-                }),
-              }),
-            }),
-          };
-        }
         if (table === 'review_tasks') {
           return {
             select: vi.fn().mockReturnValue({
@@ -273,7 +231,7 @@ describe('collectTaskRatings', () => {
 });
 
 describe('recalculateAgentReputation', () => {
-  it('returns zero scores when no ratings exist', async () => {
+  it('returns zero scores when no review results exist', async () => {
     const mockSupabase = {
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'review_results') {
@@ -281,34 +239,6 @@ describe('recalculateAgentReputation', () => {
             select: vi.fn().mockReturnValue({
               eq: vi.fn().mockResolvedValue({ data: [] }),
             }),
-          };
-        }
-        if (table === 'ratings') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                in: vi.fn().mockResolvedValue({ count: 0 }),
-              }),
-            }),
-          };
-        }
-        if (table === 'agents') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                single: vi.fn().mockResolvedValue({
-                  data: { reputation_score: 0 },
-                }),
-              }),
-            }),
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ error: null }),
-            }),
-          };
-        }
-        if (table === 'reputation_history') {
-          return {
-            insert: vi.fn().mockResolvedValue({ error: null }),
           };
         }
         return {};
@@ -352,23 +282,16 @@ describe('recalculateAgentReputation', () => {
             }),
           };
         }
-        if (table === 'agents') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                single: vi.fn().mockResolvedValue({
-                  data: { reputation_score: 0 },
-                }),
-              }),
-            }),
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ error: null }),
-            }),
-          };
-        }
         if (table === 'reputation_history') {
           return {
             insert: vi.fn().mockResolvedValue({ error: null }),
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                order: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockResolvedValue({ data: [] }),
+                }),
+              }),
+            }),
           };
         }
         return {};
@@ -381,104 +304,5 @@ describe('recalculateAgentReputation', () => {
     expect(result.newScore).toBeGreaterThan(0);
     expect(result.newScore).toBeGreaterThan(0.4);
     expect(result.newScore).toBeLessThan(1);
-  });
-});
-
-describe('recalculateUserReputation', () => {
-  it('does nothing when user has no agents', async () => {
-    const mockSupabase = {
-      from: vi.fn().mockImplementation((table: string) => {
-        if (table === 'agents') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ data: [] }),
-            }),
-          };
-        }
-        return {};
-      }),
-    } as any;
-
-    await recalculateUserReputation('user-1', mockSupabase);
-  });
-
-  it('calculates weighted average of agent scores', async () => {
-    const updateMock = vi.fn().mockReturnValue({
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    });
-    const insertMock = vi.fn().mockResolvedValue({ error: null });
-
-    const mockSupabase = {
-      from: vi.fn().mockImplementation((table: string) => {
-        if (table === 'agents') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({
-                data: [
-                  { id: 'agent-1', reputation_score: 0.8 },
-                  { id: 'agent-2', reputation_score: 0.4 },
-                ],
-              }),
-            }),
-          };
-        }
-        if (table === 'review_results') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({
-                data: [{ id: 'r1' }],
-              }),
-            }),
-          };
-        }
-        if (table === 'ratings') {
-          return {
-            select: vi.fn().mockReturnValue({
-              in: vi.fn().mockResolvedValue({ count: 5 }),
-            }),
-          };
-        }
-        if (table === 'users') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                single: vi.fn().mockResolvedValue({
-                  data: { reputation_score: 0 },
-                }),
-              }),
-            }),
-            update: updateMock,
-          };
-        }
-        if (table === 'reputation_history') {
-          return {
-            insert: insertMock,
-          };
-        }
-        return {};
-      }),
-    } as any;
-
-    await recalculateUserReputation('user-1', mockSupabase);
-
-    expect(updateMock).toHaveBeenCalled();
-  });
-
-  it('handles null agents data', async () => {
-    const mockSupabase = {
-      from: vi.fn().mockImplementation((table: string) => {
-        if (table === 'agents') {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ data: null }),
-            }),
-          };
-        }
-        return {};
-      }),
-    } as any;
-
-    // Should not throw
-    await recalculateUserReputation('user-1', mockSupabase);
   });
 });

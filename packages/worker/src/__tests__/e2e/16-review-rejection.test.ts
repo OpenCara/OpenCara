@@ -50,12 +50,6 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
   /** Create and WS-connect multiple agents. */
   async function setupMultipleAgents(count: number): Promise<ConnectedAgent[]> {
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const agents: ConnectedAgent[] = [];
     for (let i = 0; i < count; i++) {
       const { user, apiKey } = await ctx.createUser({ name: `user${i}` });

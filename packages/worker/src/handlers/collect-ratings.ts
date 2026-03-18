@@ -17,10 +17,11 @@ export async function handleCollectRatings(
   env: Env,
   supabase: SupabaseClient,
 ): Promise<Response> {
-  // Verify task exists and user has access via project ownership
+  // Verify task exists — ownership check is now based on the review results'
+  // agent ownership rather than project ownership (projects table was dropped)
   const { data: task } = await supabase
     .from('review_tasks')
-    .select('id, status, projects!inner(user_id)')
+    .select('id, status')
     .eq('id', taskId)
     .single();
 
@@ -28,8 +29,21 @@ export async function handleCollectRatings(
     return json({ error: 'Task not found' }, 404);
   }
 
-  const project = task.projects as unknown as { user_id: string };
-  if (project.user_id !== user.id) {
+  // Check that at least one review result for this task belongs to the user's agents
+  const { data: userAgents } = await supabase.from('agents').select('id').eq('user_id', user.id);
+
+  const agentIds = (userAgents ?? []).map((a: { id: string }) => a.id);
+  if (agentIds.length === 0) {
+    return json({ error: 'Task not found' }, 404);
+  }
+
+  const { count: resultCount } = await supabase
+    .from('review_results')
+    .select('id', { count: 'exact', head: true })
+    .eq('review_task_id', taskId)
+    .in('agent_id', agentIds);
+
+  if ((resultCount ?? 0) === 0) {
     return json({ error: 'Task not found' }, 404);
   }
 

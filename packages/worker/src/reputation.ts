@@ -1,3 +1,4 @@
+import { computeRaterHash } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
 import { extractCommentId, fetchCommentReactions, getInstallationToken } from './github.js';
@@ -34,16 +35,14 @@ export function calculateWilsonScore(
   return Math.max(0, numerator / denominator);
 }
 
-interface CommentInfo {
-  id: string;
-  agentId: string;
-  commentUrl: string;
-  source: 'review_result' | 'review_summary';
-}
-
 /**
- * Collect ratings from GitHub reactions for all comments associated with a task.
+ * Collect ratings from GitHub reactions for all review results associated with a task.
  * Returns the number of ratings collected and per-agent rating stats.
+ *
+ * Note: comment_url was dropped from the schema. The worker-dev follow-up issue
+ * will need to determine how to fetch the correct comment ID for each review result
+ * (e.g., via GitHub API search or by storing a comment ID reference differently).
+ * For now, this function is a no-op placeholder that returns empty results.
  */
 export async function collectTaskRatings(
   taskId: string,
@@ -53,16 +52,10 @@ export async function collectTaskRatings(
   collected: number;
   ratings: Array<{ agentId: string; thumbsUp: number; thumbsDown: number; newScore: number }>;
 }> {
-  // 1. Gather all comments (review results + summaries) with URLs
-  const comments = await getTaskComments(supabase, taskId);
-  if (comments.length === 0) {
-    return { collected: 0, ratings: [] };
-  }
-
-  // 2. Get installation token for this task's project
+  // Get installation token for this task
   const { data: taskData } = await supabase
     .from('review_tasks')
-    .select('project_id, projects!inner(owner, repo, github_installation_id)')
+    .select('github_installation_id, owner, repo, config_json')
     .eq('id', taskId)
     .single();
 
@@ -70,47 +63,68 @@ export async function collectTaskRatings(
     throw new Error(`Task ${taskId} not found`);
   }
 
-  const project = taskData.projects as unknown as {
-    owner: string;
-    repo: string;
-    github_installation_id: number;
-  };
+  const taskOwner = taskData.owner as string;
+  const taskRepo = taskData.repo as string;
+  const taskInstallationId = taskData.github_installation_id as number;
 
-  const token = await getInstallationToken(project.github_installation_id, env);
+  const token = await getInstallationToken(taskInstallationId, env);
 
-  // 3. For each comment, fetch reactions and upsert ratings
+  // Get all review results for this task
+  // Note: comment_url was dropped. The review result IDs are used to look up
+  // associated GitHub comments via the config_json or GitHub API.
+  const { data: results } = await supabase
+    .from('review_results')
+    .select('id, agent_id')
+    .eq('review_task_id', taskId)
+    .eq('status', 'completed');
+
+  if (!results || results.length === 0) {
+    return { collected: 0, ratings: [] };
+  }
+
+  // For each result, attempt to find the comment via GitHub API
   let totalCollected = 0;
   const affectedAgentIds = new Set<string>();
 
-  for (const comment of comments) {
-    const commentId = extractCommentId(comment.commentUrl);
+  for (const result of results as Array<{ id: string; agent_id: string }>) {
+    // Try to find the comment ID from config_json or task metadata
+    // This is a simplified implementation — the worker-dev follow-up will refine this
+    const configJson = (taskData as Record<string, unknown>).config_json as Record<
+      string,
+      unknown
+    > | null;
+    const commentUrl = configJson?.commentUrl as string | undefined;
+    if (!commentUrl) continue;
+
+    const commentId = extractCommentId(commentUrl);
     if (commentId === null) continue;
 
-    const reactions = await fetchCommentReactions(project.owner, project.repo, commentId, token);
+    const reactions = await fetchCommentReactions(taskOwner, taskRepo, commentId, token);
 
     // Filter to thumbs up (+1) and thumbs down (-1) only
     const relevantReactions = reactions.filter((r) => r.content === '+1' || r.content === '-1');
 
     for (const reaction of relevantReactions) {
       const emoji = reaction.content === '+1' ? 'thumbs_up' : 'thumbs_down';
+      const raterHash = await computeRaterHash(result.id, reaction.user.id);
 
       const { error } = await supabase.from('ratings').upsert(
         {
-          review_result_id: comment.id,
-          rater_github_id: reaction.user.id,
+          review_result_id: result.id,
+          rater_hash: raterHash,
           emoji,
         },
-        { onConflict: 'review_result_id,rater_github_id' },
+        { onConflict: 'review_result_id,rater_hash' },
       );
 
       if (!error) {
         totalCollected++;
-        affectedAgentIds.add(comment.agentId);
+        affectedAgentIds.add(result.agent_id);
       }
     }
   }
 
-  // 4. Recalculate reputation for each affected agent
+  // Recalculate reputation for each affected agent
   const agentRatings: Array<{
     agentId: string;
     thumbsUp: number;
@@ -123,55 +137,12 @@ export async function collectTaskRatings(
     agentRatings.push({ agentId, ...stats });
   }
 
-  // 5. Recalculate user reputation for each affected user
-  const affectedUserIds = new Set<string>();
-  for (const agentId of affectedAgentIds) {
-    const { data: agent } = await supabase
-      .from('agents')
-      .select('user_id')
-      .eq('id', agentId)
-      .single();
-    if (agent) affectedUserIds.add(agent.user_id as string);
-  }
-
-  for (const userId of affectedUserIds) {
-    await recalculateUserReputation(userId, supabase);
-  }
-
   return { collected: totalCollected, ratings: agentRatings };
 }
 
 /**
- * Get all review result comments with URLs for a task.
- * Only collects from review_results (not summaries) since the ratings table
- * uses review_result_id as a foreign key to the review_results table.
- */
-async function getTaskComments(supabase: SupabaseClient, taskId: string): Promise<CommentInfo[]> {
-  const comments: CommentInfo[] = [];
-
-  const { data: results } = await supabase
-    .from('review_results')
-    .select('id, agent_id, comment_url')
-    .eq('review_task_id', taskId)
-    .not('comment_url', 'is', null);
-
-  if (results) {
-    for (const r of results as Array<{ id: string; agent_id: string; comment_url: string }>) {
-      comments.push({
-        id: r.id,
-        agentId: r.agent_id,
-        commentUrl: r.comment_url,
-        source: 'review_result',
-      });
-    }
-  }
-
-  return comments;
-}
-
-/**
  * Recalculate an agent's reputation score based on all their ratings.
- * Updates the agent's reputation_score and inserts a reputation_history entry.
+ * Inserts a reputation_history entry (reputation_score column was dropped from agents).
  */
 export async function recalculateAgentReputation(
   agentId: string,
@@ -208,18 +179,17 @@ export async function recalculateAgentReputation(
   const total = up + down;
   const newScore = calculateWilsonScore(up, total);
 
-  // Get current score for delta
-  const { data: agent } = await supabase
-    .from('agents')
-    .select('reputation_score')
-    .eq('id', agentId)
-    .single();
+  // Compute running total from history as "old score"
+  const { data: allHistory } = await supabase
+    .from('reputation_history')
+    .select('score_change')
+    .eq('agent_id', agentId);
 
-  const oldScore = (agent?.reputation_score as number) ?? 0;
+  const oldScore = (allHistory ?? []).reduce(
+    (sum: number, h: { score_change: number }) => sum + h.score_change,
+    0,
+  );
   const scoreDelta = newScore - oldScore;
-
-  // Update agent reputation
-  await supabase.from('agents').update({ reputation_score: newScore }).eq('id', agentId);
 
   // Insert reputation history entry
   if (Math.abs(scoreDelta) > 0.0001) {
@@ -231,72 +201,4 @@ export async function recalculateAgentReputation(
   }
 
   return { thumbsUp: up, thumbsDown: down, newScore };
-}
-
-/**
- * Recalculate a user's reputation as the weighted average of their agents' scores.
- * Weight is proportional to the total number of ratings each agent has received.
- */
-export async function recalculateUserReputation(
-  userId: string,
-  supabase: SupabaseClient,
-): Promise<void> {
-  // Get all agents for this user
-  const { data: agents } = await supabase
-    .from('agents')
-    .select('id, reputation_score')
-    .eq('user_id', userId);
-
-  if (!agents || agents.length === 0) return;
-
-  // Calculate weighted average
-  let totalWeight = 0;
-  let weightedSum = 0;
-
-  for (const agent of agents as Array<{ id: string; reputation_score: number }>) {
-    // Fetch review result IDs once per agent
-    const { data: results } = await supabase
-      .from('review_results')
-      .select('id')
-      .eq('agent_id', agent.id);
-
-    const resultIds = (results ?? []).map((r: { id: string }) => r.id);
-
-    let ratingCount = 0;
-    if (resultIds.length > 0) {
-      const { count } = await supabase
-        .from('ratings')
-        .select('id', { count: 'exact', head: true })
-        .in('review_result_id', resultIds);
-      ratingCount = count ?? 0;
-    }
-
-    const weight = Math.max(1, ratingCount); // minimum weight of 1
-    totalWeight += weight;
-    weightedSum += agent.reputation_score * weight;
-  }
-
-  const newScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
-
-  // Get current score for delta
-  const { data: user } = await supabase
-    .from('users')
-    .select('reputation_score')
-    .eq('id', userId)
-    .single();
-
-  const oldScore = (user?.reputation_score as number) ?? 0;
-  const scoreDelta = newScore - oldScore;
-
-  // Update user reputation
-  await supabase.from('users').update({ reputation_score: newScore }).eq('id', userId);
-
-  // Insert reputation history entry
-  if (Math.abs(scoreDelta) > 0.0001) {
-    await supabase.from('reputation_history').insert({
-      user_id: userId,
-      score_change: scoreDelta,
-      reason: `Recalculated from ${agents.length} agent(s) (weighted average: ${newScore.toFixed(4)})`,
-    });
-  }
 }
