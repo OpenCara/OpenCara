@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseTimeoutMs,
   filterByAccessList,
   filterByRepoConfig,
+  isValidRepoConfig,
   selectAgents,
   type EligibleAgent,
 } from '../task-distribution.js';
@@ -302,5 +303,75 @@ describe('filterByRepoConfig', () => {
   it('handles empty agents array', () => {
     const result = filterByRepoConfig([], 'owner', 'repo');
     expect(result).toEqual([]);
+  });
+
+  it('logs warning for unknown mode values', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const agents = [
+      makeAgent({
+        id: 'a1',
+        repoConfig: { mode: 'unknown' as 'all' },
+      }),
+    ];
+    const result = filterByRepoConfig(agents, 'owner', 'repo');
+    expect(result).toHaveLength(1); // default: return true
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown repoConfig mode'));
+    warnSpy.mockRestore();
+  });
+});
+
+describe('isValidRepoConfig', () => {
+  it('returns true for valid mode: all', () => {
+    expect(isValidRepoConfig({ mode: 'all' })).toBe(true);
+  });
+
+  it('returns true for valid mode: own', () => {
+    expect(isValidRepoConfig({ mode: 'own' })).toBe(true);
+  });
+
+  it('returns true for valid mode: whitelist with list', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist', list: ['org/repo'] })).toBe(true);
+  });
+
+  it('returns true for valid mode: blacklist with list', () => {
+    expect(isValidRepoConfig({ mode: 'blacklist', list: ['org/repo'] })).toBe(true);
+  });
+
+  it('returns true for valid mode with undefined list', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist' })).toBe(true);
+  });
+
+  it('returns true for valid mode with empty list', () => {
+    expect(isValidRepoConfig({ mode: 'all', list: [] })).toBe(true);
+  });
+
+  it('returns false for null', () => {
+    expect(isValidRepoConfig(null)).toBe(false);
+  });
+
+  it('returns false for non-object', () => {
+    expect(isValidRepoConfig('all')).toBe(false);
+    expect(isValidRepoConfig(42)).toBe(false);
+    expect(isValidRepoConfig(true)).toBe(false);
+  });
+
+  it('returns false for missing mode', () => {
+    expect(isValidRepoConfig({})).toBe(false);
+    expect(isValidRepoConfig({ list: ['org/repo'] })).toBe(false);
+  });
+
+  it('returns false for invalid mode', () => {
+    expect(isValidRepoConfig({ mode: 'invalid' })).toBe(false);
+    expect(isValidRepoConfig({ mode: 123 })).toBe(false);
+  });
+
+  it('returns false for non-array list', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist', list: 'org/repo' })).toBe(false);
+    expect(isValidRepoConfig({ mode: 'whitelist', list: 42 })).toBe(false);
+  });
+
+  it('returns false for list with non-string items', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist', list: [42, 'org/repo'] })).toBe(false);
+    expect(isValidRepoConfig({ mode: 'whitelist', list: [null] })).toBe(false);
   });
 });

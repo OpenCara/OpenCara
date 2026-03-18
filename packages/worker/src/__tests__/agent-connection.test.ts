@@ -2020,6 +2020,127 @@ describe('AgentConnection', () => {
     });
   });
 
+  describe('handleAgentPreferences (via webSocketMessage)', () => {
+    async function connectAgent() {
+      storage.store.set('agentId', 'agent-1');
+      storage.store.set('status', 'online');
+      storage.store.set('inFlightTaskIds', []);
+      mockCtx._websockets.push(createMockWebSocket());
+    }
+
+    it('stores valid repoConfig in database', async () => {
+      await connectAgent();
+      mockSupa = createSupabaseMock();
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: { mode: 'whitelist', list: ['org/repo'] },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'agents',
+        data: { repo_config: { mode: 'whitelist', list: ['org/repo'] } },
+      });
+    });
+
+    it('rejects invalid repoConfig and sends error', async () => {
+      await connectAgent();
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: { mode: 'invalid_mode' },
+        }),
+      );
+
+      // Should NOT have called update
+      expect(mockSupa._calls.update).toHaveLength(0);
+
+      // Should have sent error to websocket
+      const ws = mockCtx._websockets[0] as ReturnType<typeof createMockWebSocket>;
+      expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"type":"error"'));
+    });
+
+    it('rejects non-object repoConfig', async () => {
+      await connectAgent();
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: 'all',
+        }),
+      );
+
+      expect(mockSupa._calls.update).toHaveLength(0);
+    });
+
+    it('rejects repoConfig with non-string list items', async () => {
+      await connectAgent();
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: { mode: 'whitelist', list: [42, null] },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toHaveLength(0);
+    });
+
+    it('does nothing when no agentId is stored', async () => {
+      // No agentId set
+      mockCtx._websockets.push(createMockWebSocket());
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: { mode: 'all' },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toHaveLength(0);
+    });
+
+    it('accepts valid repoConfig with mode: own', async () => {
+      await connectAgent();
+
+      await connection.webSocketMessage(
+        {} as WebSocket,
+        JSON.stringify({
+          id: 'msg-1',
+          timestamp: Date.now(),
+          type: 'agent_preferences',
+          repoConfig: { mode: 'own' },
+        }),
+      );
+
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'agents',
+        data: { repo_config: { mode: 'own' } },
+      });
+    });
+  });
+
   describe('fetch unknown path', () => {
     it('returns 404', async () => {
       const request = new Request('https://internal/unknown');

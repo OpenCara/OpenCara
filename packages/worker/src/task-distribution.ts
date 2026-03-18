@@ -52,7 +52,7 @@ export async function findEligibleAgents(
   return (data as Record<string, unknown>[]).map((row) => ({
     id: row.id as string,
     userId: row.user_id as string,
-    userName: (row.users as Record<string, unknown>).name as string,
+    userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
     model: row.model as string,
     tool: row.tool as string,
     reputationScore: row.reputation_score as number,
@@ -111,9 +111,25 @@ export function filterByRepoConfig(
       case 'blacklist':
         return !(agent.repoConfig.list ?? []).includes(fullRepo);
       default:
+        console.warn(
+          `Agent ${agent.id} has unknown repoConfig mode: ${String(agent.repoConfig.mode)}`,
+        );
         return true;
     }
   });
+}
+
+/** Validate that a value is a valid RepoConfig structure. */
+export function isValidRepoConfig(value: unknown): value is RepoConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  const validModes = ['all', 'own', 'whitelist', 'blacklist'];
+  if (typeof obj.mode !== 'string' || !validModes.includes(obj.mode)) return false;
+  if ('list' in obj && obj.list !== undefined) {
+    if (!Array.isArray(obj.list)) return false;
+    if (!obj.list.every((item: unknown) => typeof item === 'string')) return false;
+  }
+  return true;
 }
 
 export const MAX_AGENTS_PER_TASK = 10;
