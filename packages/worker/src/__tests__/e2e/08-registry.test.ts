@@ -44,16 +44,25 @@ describe('E2E: Registry (GET /api/registry)', () => {
     const req = new Request('https://api.opencara.dev/api/registry', { method: 'GET' });
     const res = await ctx.workerFetch(req);
     const body = (await res.json()) as {
-      models: Array<{ name: string; displayName: string; tools: string[] }>;
+      models: Array<{
+        name: string;
+        displayName: string;
+        tools: string[];
+        defaultReputation: number;
+      }>;
       tools: Array<{ name: string; displayName: string; binary: string; commandTemplate: string }>;
     };
 
-    // Each model should have name, displayName, and tools array
+    // Each model should have name, displayName, tools array, and defaultReputation
     for (const model of body.models) {
       expect(model).toHaveProperty('name');
       expect(model).toHaveProperty('displayName');
       expect(model).toHaveProperty('tools');
       expect(Array.isArray(model.tools)).toBe(true);
+      expect(model).toHaveProperty('defaultReputation');
+      expect(typeof model.defaultReputation).toBe('number');
+      expect(model.defaultReputation).toBeGreaterThanOrEqual(0);
+      expect(model.defaultReputation).toBeLessThanOrEqual(1);
     }
 
     // Each tool should have name, displayName, binary, and commandTemplate
