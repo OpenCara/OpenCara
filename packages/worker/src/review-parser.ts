@@ -48,9 +48,10 @@ export function parseStructuredReview(text: string): ParsedReview {
   const findingsMatch = text.match(/##\s*Findings\s*\n([\s\S]*?)(?=\n##\s|\n*$)/i);
   if (findingsMatch) {
     const findingsBlock = findingsMatch[1];
-    // Pattern: - **[severity]** `file:line` — description
-    const findingPattern = /^[-*]\s*\*?\*?\[(\w+)\]\*?\*?\s*`([^`]+?):(\d+)`\s*[-—–:]\s*(.+)/gm;
-    for (const match of findingsBlock.matchAll(findingPattern)) {
+
+    // Format 1 (single-agent): - **[severity]** `file:line` — description
+    const listPattern = /^[-*]\s*\*?\*?\[(\w+)\]\*?\*?\s*`([^`]+?):(\d+)`\s*[-—–:]\s*(.+)/gm;
+    for (const match of findingsBlock.matchAll(listPattern)) {
       const severity = match[1];
       const path = match[2];
       const line = parseInt(match[3], 10);
@@ -61,6 +62,42 @@ export function parseStructuredReview(text: string): ParsedReview {
         line,
         side: 'RIGHT',
         body: `**[${severity}]** ${description}`,
+      });
+    }
+
+    // Format 2 (synthesizer): ### [severity] `file:line` — Title\nbody text...
+    // Split findings block by ### headings and parse each section
+    const headingLinePattern =
+      /^###\s*\[(\w+)\]\s*`([^`]+?):(\d+)`\s*[-—–:]\s*(.+)$/gm;
+    let headingMatch;
+    const headings: { severity: string; path: string; line: number; titleStart: string; endIdx: number }[] = [];
+    while ((headingMatch = headingLinePattern.exec(findingsBlock)) !== null) {
+      headings.push({
+        severity: headingMatch[1],
+        path: headingMatch[2],
+        line: parseInt(headingMatch[3], 10),
+        titleStart: headingMatch[4].trim(),
+        endIdx: headingMatch.index + headingMatch[0].length,
+      });
+    }
+    for (let i = 0; i < headings.length; i++) {
+      const h = headings[i];
+      if (isNaN(h.line)) continue;
+      // Avoid duplicates if list pattern already captured this file:line
+      if (comments.some((c) => c.path === h.path && c.line === h.line)) continue;
+      // Body = everything from end of heading line to start of next heading (or end of block)
+      const nextStart = i + 1 < headings.length
+        ? findingsBlock.lastIndexOf('\n###', headings[i + 1].endIdx)
+        : findingsBlock.length;
+      const bodyAfterTitle = findingsBlock.slice(h.endIdx, nextStart).trim();
+      const fullBody = bodyAfterTitle
+        ? `${h.titleStart}\n${bodyAfterTitle}`
+        : h.titleStart;
+      comments.push({
+        path: h.path,
+        line: h.line,
+        side: 'RIGHT',
+        body: `**[${h.severity}]** ${fullBody}`,
       });
     }
   }
