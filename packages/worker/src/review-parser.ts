@@ -67,10 +67,16 @@ export function parseStructuredReview(text: string): ParsedReview {
 
     // Format 2 (synthesizer): ### [severity] `file:line` — Title\nbody text...
     // Split findings block by ### headings and parse each section
-    const headingLinePattern =
-      /^###\s*\[(\w+)\]\s*`([^`]+?):(\d+)`\s*[-—–:]\s*(.+)$/gm;
+    const headingLinePattern = /^###\s*\[(\w+)\]\s*`([^`]+?):(\d+)`\s*[-—–:]\s*(.+)$/gm;
     let headingMatch;
-    const headings: { severity: string; path: string; line: number; titleStart: string; startIdx: number; endIdx: number }[] = [];
+    const headings: {
+      severity: string;
+      path: string;
+      line: number;
+      titleStart: string;
+      startIdx: number;
+      endIdx: number;
+    }[] = [];
     while ((headingMatch = headingLinePattern.exec(findingsBlock)) !== null) {
       headings.push({
         severity: headingMatch[1],
@@ -87,13 +93,9 @@ export function parseStructuredReview(text: string): ParsedReview {
       // Avoid duplicates if list pattern already captured this file:line
       if (comments.some((c) => c.path === h.path && c.line === h.line)) continue;
       // Body = everything from end of heading line to start of next heading (or end of block)
-      const nextStart = i + 1 < headings.length
-        ? headings[i + 1].startIdx
-        : findingsBlock.length;
+      const nextStart = i + 1 < headings.length ? headings[i + 1].startIdx : findingsBlock.length;
       const bodyAfterTitle = findingsBlock.slice(h.endIdx, nextStart).trim();
-      const fullBody = bodyAfterTitle
-        ? `${h.titleStart}\n${bodyAfterTitle}`
-        : h.titleStart;
+      const fullBody = bodyAfterTitle ? `${h.titleStart}\n${bodyAfterTitle}` : h.titleStart;
       comments.push({
         path: h.path,
         line: h.line,
