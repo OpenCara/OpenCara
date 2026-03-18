@@ -1,38 +1,71 @@
-name: Publish CLI to npm
+name: Auto version bump and publish
 
 on:
-  push:
-    tags: ['v*']
-
-concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: false
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 jobs:
-  publish:
+  bump-and-publish:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          ref: main
+      - name: Determine bump type from branch name
+        id: bump
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          if [[ "$BRANCH" == feat/* ]] || [[ "$BRANCH" == improve/* ]] || [[ "$BRANCH" == feature/* ]]; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          elif [[ "$BRANCH" == fix/* ]] || [[ "$BRANCH" == bugfix/* ]]; then
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          elif [[ "$BRANCH" == breaking/* ]] || [[ "$BRANCH" == major/* ]]; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=none" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Skip if no bump needed
+        if: steps.bump.outputs.type == 'none'
+        run: echo "No version bump for this branch prefix. Skipping."
+      - uses: pnpm/action-setup@v4
+        if: steps.bump.outputs.type != 'none'
+      - uses: actions/setup-node@v4
+        if: steps.bump.outputs.type != 'none'
+        with:
+          node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
+        if: steps.bump.outputs.type != 'none'
       - run: pnpm build
+        if: steps.bump.outputs.type != 'none'
       - run: pnpm test
-      - run: pnpm lint
-      - run: pnpm run typecheck
+        if: steps.bump.outputs.type != 'none'
+      - name: Bump CLI version
+        if: steps.bump.outputs.type != 'none'
+        id: version
+        working-directory: packages/cli
+        run: |
+          npm version ${{ steps.bump.outputs.type }} --no-git-tag-version
+          VERSION=$(node -p "require('./package.json').version")
+          echo "new=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Bump shared version to match
+        if: steps.bump.outputs.type != 'none'
+        working-directory: packages/shared
+        run: npm version ${{ steps.bump.outputs.type }} --no-git-tag-version
       - name: Publish @opencara/shared
+        if: steps.bump.outputs.type != 'none'
         working-directory: packages/shared
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Resolve workspace dependency
+        if: steps.bump.outputs.type != 'none'
         run: |
           set -eo pipefail
           SHARED_VERSION=$(jq -r .version packages/shared/package.json)
@@ -40,7 +73,19 @@ jobs:
           jq --arg v "^$SHARED_VERSION" '.dependencies["@opencara/shared"] = $v' package.json > package.json.tmp
           mv package.json.tmp package.json
       - name: Publish opencara CLI
+        if: steps.bump.outputs.type != 'none'
         working-directory: packages/cli
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Commit version bump and create release
+        if: steps.bump.outputs.type != 'none'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/cli/package.json packages/shared/package.json
+          git commit -m "Bump version to ${{ steps.version.outputs.new }}"
+          git push
+          gh release create "v${{ steps.version.outputs.new }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
