@@ -113,11 +113,25 @@ describe('filterByAccessList', () => {
 });
 
 describe('agentWeight', () => {
-  it('returns constant 1 (reputation_score removed from agents table)', () => {
-    expect(agentWeight()).toBe(1);
-    expect(agentWeight(0.8)).toBe(1);
-    expect(agentWeight(-2)).toBe(1);
-    expect(agentWeight(0)).toBe(1);
+  it('returns model default reputation for known models', () => {
+    expect(agentWeight('claude-opus-4-6')).toBe(0.8);
+    expect(agentWeight('claude-sonnet-4-6')).toBe(0.7);
+    expect(agentWeight('gemini-2.5-pro')).toBe(0.7);
+    expect(agentWeight('qwen3.5-plus')).toBe(0.6);
+    expect(agentWeight('glm-5')).toBe(0.5);
+    expect(agentWeight('kimi-k2.5')).toBe(0.5);
+    expect(agentWeight('minimax-m2.5')).toBe(0.5);
+  });
+
+  it('returns 0.5 (DEFAULT_REPUTATION_FALLBACK) for unknown models', () => {
+    expect(agentWeight('unknown-model')).toBe(0.5);
+    expect(agentWeight('')).toBe(0.5);
+  });
+
+  it('clamps weight to minimum 0.1', () => {
+    // All current models have >= 0.5, so test indirectly:
+    // getModelDefaultReputation returns 0.5 for unknown models, which is >= 0.1
+    expect(agentWeight('anything')).toBeGreaterThanOrEqual(0.1);
   });
 });
 
@@ -150,28 +164,32 @@ describe('weightedRandomSelect', () => {
     expect(result1.map((a) => a.id)).toEqual(result2.map((a) => a.id));
   });
 
-  it('all agents have equal selection probability (agentWeight returns constant 1)', () => {
-    const agents = [makeAgent({ id: 'a' }), makeAgent({ id: 'b' })];
+  it('higher-reputation models are selected more often', () => {
+    const agents = [
+      makeAgent({ id: 'opus', model: 'claude-opus-4-6' }), // 0.8
+      makeAgent({ id: 'glm', model: 'glm-5' }), // 0.5
+    ];
 
-    const counts: Record<string, number> = { a: 0, b: 0 };
-    const N = 1000;
+    const counts: Record<string, number> = { opus: 0, glm: 0 };
+    const N = 2000;
 
     for (let i = 0; i < N; i++) {
       const result = weightedRandomSelect(agents, 1, seededRng(i));
       counts[result[0].id]++;
     }
 
-    // Both agents should be selected with roughly equal probability
-    expect(counts['a']).toBeGreaterThan(0);
-    expect(counts['b']).toBeGreaterThan(0);
-    // Neither should dominate (max < 3x min)
-    const min = Math.min(counts['a'], counts['b']);
-    const max = Math.max(counts['a'], counts['b']);
-    expect(max).toBeLessThan(min * 3);
+    // Both should be selected, but opus (0.8) should be selected more than glm (0.5)
+    expect(counts['opus']).toBeGreaterThan(0);
+    expect(counts['glm']).toBeGreaterThan(0);
+    expect(counts['opus']).toBeGreaterThan(counts['glm']);
   });
 
-  it('all agents get selected regardless of former reputation field', () => {
-    const agents = [makeAgent({ id: 'a' }), makeAgent({ id: 'b' }), makeAgent({ id: 'c' })];
+  it('all agents get selected regardless of model reputation', () => {
+    const agents = [
+      makeAgent({ id: 'a', model: 'claude-opus-4-6' }),
+      makeAgent({ id: 'b', model: 'glm-5' }),
+      makeAgent({ id: 'c', model: 'unknown-model' }),
+    ];
 
     const counts: Record<string, number> = { a: 0, b: 0, c: 0 };
     const N = 1000;
@@ -186,11 +204,8 @@ describe('weightedRandomSelect', () => {
     expect(counts['c']).toBeGreaterThan(0);
   });
 
-  it('distributes tasks fairly across agents with similar reputation', () => {
-    // All agents have the same reputation — should be roughly uniform
-    const agents = Array.from({ length: 5 }, (_, i) =>
-      makeAgent({ id: `a${i}`, reputationScore: 1.0 }),
-    );
+  it('distributes fairly across agents with same model (same weight)', () => {
+    const agents = Array.from({ length: 5 }, (_, i) => makeAgent({ id: `a${i}`, model: 'glm-5' }));
 
     const counts: Record<string, number> = {};
     agents.forEach((a) => (counts[a.id] = 0));
@@ -201,14 +216,10 @@ describe('weightedRandomSelect', () => {
       counts[result[0].id]++;
     }
 
-    // Each agent should get roughly N/5 = 400 selections
-    // With equal weights, no single agent should dominate
     const values = Object.values(counts);
     const min = Math.min(...values);
     const max = Math.max(...values);
-    // Allow reasonable variance — max should not exceed 3x min
     expect(max).toBeLessThan(min * 3);
-    // All agents should be selected at least once
     expect(min).toBeGreaterThan(0);
   });
 });
@@ -257,9 +268,9 @@ describe('selectAgents', () => {
 
   it('prioritizes preferred models over preferred tools', () => {
     const mixed = [
-      makeAgent({ id: 'a1', model: 'gpt-4', tool: 'cursor', reputationScore: 0.5 }),
-      makeAgent({ id: 'a2', model: 'claude-opus-4-6', tool: 'vscode', reputationScore: 0.9 }),
-      makeAgent({ id: 'a3', model: 'glm-5', tool: 'cursor', reputationScore: 0.7 }),
+      makeAgent({ id: 'a1', model: 'glm-5', tool: 'cursor' }),
+      makeAgent({ id: 'a2', model: 'claude-opus-4-6', tool: 'vscode' }),
+      makeAgent({ id: 'a3', model: 'kimi-k2.5', tool: 'cursor' }),
     ];
     // With reviewCount=2 and model pref claude-opus-4-6: a2 gets model tier (guaranteed), then tool tier has a1 and a3
     const result = selectAgents(mixed, 2, ['claude-opus-4-6'], ['cursor'], seededRng(42));
@@ -272,11 +283,11 @@ describe('selectAgents', () => {
 
   it('selects by preferred models only', () => {
     const mixed = [
-      makeAgent({ id: 'a1', model: 'gpt-4', reputationScore: 0.9 }),
-      makeAgent({ id: 'a2', model: 'claude-opus-4-6', reputationScore: 0.5 }),
-      makeAgent({ id: 'a3', model: 'glm-5', reputationScore: 0.7 }),
+      makeAgent({ id: 'a1', model: 'glm-5' }),
+      makeAgent({ id: 'a2', model: 'claude-opus-4-6' }),
+      makeAgent({ id: 'a3', model: 'kimi-k2.5' }),
     ];
-    const result = selectAgents(mixed, 2, ['claude-opus-4-6', 'glm-5'], [], seededRng(42));
+    const result = selectAgents(mixed, 2, ['claude-opus-4-6', 'kimi-k2.5'], [], seededRng(42));
     // Both model matches should be selected since there are exactly 2
     expect(result).toHaveLength(2);
     const ids = result.map((a) => a.id).sort();
@@ -285,7 +296,7 @@ describe('selectAgents', () => {
 
   it('distributes across all agents when no preferences given', () => {
     const manyAgents = Array.from({ length: 5 }, (_, i) =>
-      makeAgent({ id: `a${i}`, reputationScore: 1.0 }),
+      makeAgent({ id: `a${i}`, model: 'glm-5' }),
     );
 
     const counts: Record<string, number> = {};
@@ -303,26 +314,27 @@ describe('selectAgents', () => {
     }
   });
 
-  it('all agents selected with equal probability (reputation_score removed)', () => {
-    const agents = [makeAgent({ id: 'a' }), makeAgent({ id: 'b' }), makeAgent({ id: 'c' })];
+  it('higher-reputation models selected more often in selectAgents', () => {
+    const agents = [
+      makeAgent({ id: 'opus', model: 'claude-opus-4-6' }), // weight 0.8
+      makeAgent({ id: 'glm', model: 'glm-5' }), // weight 0.5
+      makeAgent({ id: 'unknown', model: 'no-such-model' }), // weight 0.5
+    ];
 
-    const counts: Record<string, number> = { a: 0, b: 0, c: 0 };
-    const N = 1000;
+    const counts: Record<string, number> = { opus: 0, glm: 0, unknown: 0 };
+    const N = 2000;
 
     for (let i = 0; i < N; i++) {
       const result = selectAgents(agents, 1, [], [], seededRng(i));
       counts[result[0].id]++;
     }
 
-    // All agents should be selected with roughly equal probability
+    // All agents should be selected
     for (const agent of agents) {
       expect(counts[agent.id]).toBeGreaterThan(0);
     }
-    // No agent should dominate
-    const values = Object.values(counts);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    expect(max).toBeLessThan(min * 3);
+    // Opus should be selected more than the lower-reputation models
+    expect(counts['opus']).toBeGreaterThan(counts['glm']);
   });
 });
 
