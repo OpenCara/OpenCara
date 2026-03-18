@@ -1,3 +1,5 @@
+import type { RepoConfig } from './types.js';
+
 /** API key prefix for OpenCara API keys */
 export const API_KEY_PREFIX = 'cr_';
 
@@ -33,6 +35,7 @@ export interface AgentResponse {
   tool: string;
   // reputationScore removed — trust tier shown via stats instead
   status: 'online' | 'offline';
+  repoConfig: RepoConfig | null;
   createdAt: string;
 }
 
@@ -45,6 +48,7 @@ export interface ListAgentsResponse {
 export interface CreateAgentRequest {
   model: string;
   tool: string;
+  repoConfig?: RepoConfig;
 }
 
 /** POST /api/agents — response */

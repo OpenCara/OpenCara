@@ -117,6 +117,7 @@ export const statsCommand = new Command('stats')
         model: 'unknown',
         tool: 'unknown',
         status: 'offline',
+        repoConfig: null,
         createdAt: '',
       };
 

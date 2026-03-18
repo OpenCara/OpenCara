@@ -31,6 +31,7 @@ export async function handleListAgents(user: User, supabase: SupabaseClient): Pr
     model: agent.model as string,
     tool: agent.tool as string,
     status: agent.status as 'online' | 'offline',
+    repoConfig: (agent.repo_config as AgentResponse['repoConfig']) ?? null,
     createdAt: agent.created_at as string,
   }));
 
@@ -60,6 +61,7 @@ export async function handleCreateAgent(
       user_id: user.id,
       model: body.model,
       tool: body.tool,
+      ...(body.repoConfig ? { repo_config: body.repoConfig } : {}),
     })
     .select()
     .single();
@@ -74,6 +76,7 @@ export async function handleCreateAgent(
       model: data.model,
       tool: data.tool,
       status: data.status,
+      repoConfig: data.repo_config ?? null,
       createdAt: data.created_at,
     } satisfies CreateAgentResponse,
     201,

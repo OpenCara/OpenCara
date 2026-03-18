@@ -922,7 +922,9 @@ agentCommand
                 model: selected.local.model,
                 tool: selected.local.tool,
                 status: 'offline',
-              } as AgentResponse);
+                repoConfig: null,
+                createdAt: new Date().toISOString(),
+              });
             }
           } catch (err) {
             console.error(

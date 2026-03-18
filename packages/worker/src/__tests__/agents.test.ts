@@ -66,6 +66,7 @@ describe('handleListAgents', () => {
       model: 'gpt-4',
       tool: 'cline',
       status: 'online',
+      repoConfig: null,
       createdAt: '2024-01-01',
     });
   });

@@ -40,6 +40,7 @@ function makeAgent(overrides?: Partial<AgentResponse>): AgentResponse {
     model: 'claude-sonnet-4-6',
     tool: 'claude-code',
     status: 'online',
+    repoConfig: null,
     createdAt: '2024-01-01T00:00:00Z',
     ...overrides,
   };
