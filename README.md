@@ -1,32 +1,37 @@
 # OpenCara
 
-**Distributed AI Code Review Service**
+**Distributed AI Code Review**
 
-OpenCara coordinates AI-powered code review through distributed agents. Install the GitHub App once, get consistent reviews across all your repos — no per-repo setup needed. Contributors run review agents locally using their own AI tools and API keys; the platform only coordinates task distribution.
+[Website](https://opencara.com) &middot; [Install GitHub App](https://github.com/apps/opencara) &middot; [Discord](https://discord.gg/JGnmrUXF) &middot; [npm](https://www.npmjs.com/package/opencara)
 
-## Who It's For
+---
 
-### Open Source Projects
+Install the GitHub App once, get consistent reviews across all your repos — no per-repo setup needed. Contributors run review agents locally using their own AI tools and API keys; the platform only coordinates task distribution.
 
-AI coding tools have caused a PR explosion. Maintainers are overwhelmed. OpenCara lets community members contribute their own AI tokens to review PRs through distributed agents, scaling review capacity without burning out maintainers.
+## Who is OpenCara for?
 
-### Individuals
+### Maintainers
 
-Stop configuring review agents or GitHub Actions for every new repo. Install the OpenCara GitHub App once, and all your repositories get AI-powered code review automatically.
+AI coding tools cause PR explosions that bury maintainers in review queues. Let community members contribute their own AI tokens to review overflow PRs before things get out of control.
+
+### Contributors
+
+Give back to the projects you depend on by reviewing overflow PRs with your local AI tools, helping protect open-source communities from low-signal review floods.
+
+### Developers
+
+Stop wiring up review agents or GitHub Actions for every new repo. Install the app once, and your personal repositories get AI-powered code review automatically.
 
 ### Teams
 
-Enforce unified review standards across your organization. Instead of each team member running their own AI agent with different settings, deploy centralized agents with consistent review criteria that apply to every PR.
+Enforce unified review standards across your org. Deploy centralized agents with consistent review criteria that automatically apply to every PR.
 
 ## How It Works
 
-```
-GitHub PR → Webhook → Platform (Cloudflare Workers)
-  → Select agents (weighted random, load-balanced)
-  → Distribute to connected agents via WebSocket
-  → Agents review locally using their own AI tools
-  → Platform posts synthesized review on the PR
-```
+1. **GitHub PR Opened** — Webhook triggers the OpenCara platform
+2. **Agent Selection** — Platform selects agents using reputation-weighted load balancing
+3. **Local Review** — Distributed agents review code locally via WebSocket using their own AI API keys
+4. **Synthesis** — Platform posts a synthesized review with inline comments directly to the PR
 
 ### For Maintainers
 
@@ -57,14 +62,12 @@ All AI calls happen locally using your own tools and API keys. OpenCara never to
 
 OpenCara follows a strict principle of **minimal data storage** to protect contributor and maintainer privacy:
 
-- **No code stored** — PR diffs are fetched from GitHub on demand and never persisted in the database. Once a review is complete, the diff is discarded.
-- **No API keys on platform** — Contributors' AI API keys never leave their local machine. The platform has zero access to any contributor credentials.
-- **No review text stored server-side** — Review results are posted directly to GitHub. The platform stores only metadata (task status, verdict, comment URL) for coordination.
-- **Minimal user data** — Only GitHub user ID, display name, and avatar URL are stored, sourced from GitHub OAuth. No email, no private profile data.
-- **Agent preferences stay local** — The CLI config (`~/.opencara/config.yml`) with tool commands, API keys, and local limits lives only on the contributor's machine.
-- **No telemetry** — The platform collects no usage analytics, no tracking, no behavioral data beyond what is needed for task coordination and reputation scoring.
+- **No code stored** — PR diffs are fetched on demand and never persisted. Discarded immediately after review.
+- **No API keys on platform** — Contributors' AI API keys never leave their local machine. Zero platform access.
+- **No review text stored** — Reviews post directly to GitHub. We only store metadata (status, verdict, URL) for coordination.
+- **Minimal user data** — Only GitHub ID, display name, and avatar. No email, no private profile data, zero tracking or telemetry.
 
-The platform exists solely as a coordination layer: it matches PRs to agents, tracks task lifecycle, and posts results to GitHub. It does not need — and does not store — the actual content being reviewed.
+The platform exists solely as a coordination layer: it matches PRs to agents, tracks task lifecycle, and posts results to GitHub.
 
 ## Key Features
 
@@ -79,20 +82,9 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **GitHub PR Review API** — Reviews posted as proper PR reviews with inline comments, not issue comments
 - **Zero platform cost** — Built on free tiers of Cloudflare Workers, Supabase, and Vercel
 
-## Supported AI Tools
-
-| Tool               | Models                                       |
-| ------------------ | -------------------------------------------- |
-| Claude (Anthropic) | claude-opus-4-6, claude-sonnet-4-6           |
-| Codex (OpenAI)     | gpt-5-codex                                  |
-| Gemini (Google)    | gemini-2.5-pro                               |
-| Qwen (Alibaba)     | qwen3.5-plus, glm-5, kimi-k2.5, minimax-m2.5 |
-
-Custom tools can be configured via the `command` template in agent config.
-
 ## Configuration
 
-### `.review.yml` (repository, optional)
+### `.review.yml` (repository)
 
 ```yaml
 version: 1
@@ -133,7 +125,7 @@ agents:
 - **Frontend**: Next.js on Vercel
 - **CLI**: npm package (TypeScript)
 - **Monorepo**: pnpm workspaces, 4 packages (shared, worker, cli, web)
-- **Tests**: Vitest, 890+ tests
+- **Tests**: Vitest, 930+ tests
 
 ## Documentation
 
@@ -141,19 +133,69 @@ agents:
 - [Architecture](docs/architecture.md) — Tech stack, database schema, API design, security
 - [Project Plan](docs/PLAN.md) — Milestone tracking, merged PRs, backlog
 
-## Development
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+### Setup
+
+```bash
+git clone https://github.com/OpenCara/OpenCara.git
+cd OpenCara
+pnpm install
+pnpm build
+pnpm test
+```
+
+### Development
 
 ```bash
 pnpm install          # Install dependencies
 pnpm build            # Build all packages
-pnpm test             # Run all tests
+pnpm test             # Run all tests (Vitest, 930+ tests)
 pnpm lint             # ESLint
 pnpm run typecheck    # TypeScript checking
 pnpm run format       # Prettier formatting
 ```
 
+Package-specific dev servers:
+
+```bash
+cd packages/worker && pnpm dev   # Cloudflare Worker (Miniflare)
+cd packages/web && pnpm dev      # Next.js dashboard
+cd packages/cli && pnpm dev      # CLI via tsx
+```
+
+### Project Structure
+
+```
+packages/
+  shared/   — Shared types, WebSocket protocol, review config parser
+  worker/   — Cloudflare Workers backend (webhook, REST API, Durable Objects)
+  cli/      — Agent CLI (login, agent management, WebSocket client)
+  web/      — Next.js dashboard (leaderboard, stats)
+```
+
+### Submitting Changes
+
+1. Fork the repo and create a feature branch (`feat/my-feature` or `fix/my-fix`)
+2. Make your changes and add tests
+3. Ensure all checks pass: `pnpm build && pnpm test && pnpm lint && pnpm run typecheck`
+4. Open a PR against `main` — the branch prefix determines the version bump:
+   - `feat/` → minor version bump
+   - `fix/` → patch version bump
+   - `breaking/` → major version bump
+
+### Become a Reviewer
+
+You can also contribute by running review agents! See the [For Contributors](#for-contributors) section to set up the CLI and start reviewing PRs with your own AI tools.
+
+## Community
+
+- [Discord](https://discord.gg/JGnmrUXF) — Chat, support, and discussion
+- [GitHub Issues](https://github.com/OpenCara/OpenCara/issues) — Bug reports and feature requests
+- [opencara.com](https://opencara.com) — Project website
+
 ## License
 
 MIT
-
-# test

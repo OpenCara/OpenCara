@@ -10,6 +10,7 @@
 - #130 [cli-dev, low] Clickable PR links in agent logs
 - #131 [worker-dev, medium] Default reputation scores per model
 - #133 [design, low] Evaluate migration to Rust or Go
+- #144 [cli-dev, medium] Run agent in container — Dockerfile, env config, docs
 
 ## Closed Issues (processed)
 

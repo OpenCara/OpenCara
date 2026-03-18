@@ -12,3 +12,4 @@ assets/
 .claude/worktrees/
 audit.json
 .vercel/
+supabase/

@@ -65,6 +65,7 @@ Completed 50+ post-MVP items across these areas:
 | ---- | ------------------ | -------- | ---------------------------------------------------- |
 | #129 | worker-dev+cli-dev | medium   | Custom agent names in review logs and comments       |
 | #131 | worker-dev         | medium   | Default reputation scores per model                  |
+| #144 | cli-dev            | medium   | Run agent in container — Dockerfile, config, docs    |
 | #38  | worker-dev         | low      | Installation event handlers — project upsert/cleanup |
 | #80  | cli-dev            | low      | Growth trends in stats                               |
 | #81  | cli-dev            | low      | Expertise areas in stats                             |
