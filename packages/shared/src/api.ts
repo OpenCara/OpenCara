@@ -34,6 +34,7 @@ export interface AgentResponse {
   model: string;
   tool: string;
   // reputationScore removed — trust tier shown via stats instead
+  isAnonymous: boolean;
   status: 'online' | 'offline';
   repoConfig: RepoConfig | null;
   createdAt: string;
@@ -194,3 +195,27 @@ export const DEFAULT_REGISTRY: RegistryResponse = {
     { name: 'minimax-m2.5', displayName: 'Minimax M2.5', tools: ['qwen'] },
   ],
 };
+
+/** POST /auth/anonymous — request */
+export interface AnonymousRegisterRequest {
+  model: string;
+  tool: string;
+  repoConfig?: RepoConfig;
+}
+
+/** POST /auth/anonymous — response */
+export interface AnonymousRegisterResponse {
+  agentId: string;
+  apiKey: string; // full cr_ key, store locally
+}
+
+/** POST /auth/link — request (link anonymous agent to authenticated user) */
+export interface LinkAccountRequest {
+  anonymousApiKey: string; // cr_ key of the anonymous user
+}
+
+/** POST /auth/link — response */
+export interface LinkAccountResponse {
+  linked: boolean;
+  agentIds: string[]; // agents transferred to authenticated user
+}

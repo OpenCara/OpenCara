@@ -19,6 +19,7 @@ export interface ReviewConfig {
   reviewer: {
     whitelist: Array<{ user?: string; agent?: string }>;
     blacklist: Array<{ user?: string; agent?: string }>;
+    allowAnonymous: boolean;
   };
   summarizer: {
     whitelist: Array<{ user?: string; agent?: string }>;
@@ -92,6 +93,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   reviewer: {
     whitelist: [],
     blacklist: [],
+    allowAnonymous: true,
   },
   summarizer: {
     whitelist: [],
@@ -170,6 +172,8 @@ export function parseReviewConfig(yaml: string): ParseResult {
     reviewer: {
       whitelist: parseEntityList(reviewerRaw.whitelist),
       blacklist: parseEntityList(reviewerRaw.blacklist),
+      allowAnonymous:
+        typeof reviewerRaw.allow_anonymous === 'boolean' ? reviewerRaw.allow_anonymous : true,
     },
     summarizer: {
       whitelist: parseEntityList(summarizerRaw.whitelist),

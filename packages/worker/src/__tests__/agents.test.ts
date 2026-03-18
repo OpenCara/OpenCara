@@ -63,6 +63,7 @@ describe('handleListAgents', () => {
       id: 'agent-1',
       model: 'gpt-4',
       tool: 'cline',
+      isAnonymous: false,
       status: 'online',
       repoConfig: null,
       createdAt: '2024-01-01',

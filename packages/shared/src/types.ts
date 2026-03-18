@@ -2,8 +2,9 @@
 
 export interface User {
   id: string;
-  github_id: number;
+  github_id: number | null;
   name: string;
+  is_anonymous: boolean;
   api_key_hash: string | null;
   created_at: string;
 }
@@ -19,9 +20,10 @@ export interface RepoConfig {
 
 export interface Agent {
   id: string;
-  user_id: string;
+  user_id: string | null;
   model: string;
   tool: string;
+  is_anonymous: boolean;
   status: AgentStatus;
   last_heartbeat_at: string | null;
   repo_config: RepoConfig | null;

@@ -921,6 +921,7 @@ agentCommand
                 id: agentId,
                 model: selected.local.model,
                 tool: selected.local.tool,
+                isAnonymous: false,
                 status: 'offline',
                 repoConfig: null,
                 createdAt: new Date().toISOString(),

@@ -26,6 +26,7 @@ reviewer:
     - agent: abc-123
   blacklist:
     - user: bob
+  allow_anonymous: false
 summarizer:
   whitelist:
     - user: alice
@@ -56,6 +57,7 @@ describe('parseReviewConfig', () => {
     expect(config.agents.minReputation).toBe(0.6);
     expect(config.reviewer.whitelist).toEqual([{ user: 'alice' }, { agent: 'abc-123' }]);
     expect(config.reviewer.blacklist).toEqual([{ user: 'bob' }]);
+    expect(config.reviewer.allowAnonymous).toBe(false);
     expect(config.summarizer.whitelist).toEqual([{ user: 'alice' }]);
     expect(config.summarizer.blacklist).toEqual([{ user: 'charlie' }]);
     expect(config.timeout).toBe('15m');
@@ -165,6 +167,32 @@ describe('parseReviewConfig', () => {
     ) as ReviewConfig;
     expect(result.agents.preferredTools).toEqual(['claude-code', 'codex']);
   });
+
+  it('parses allow_anonymous: false in reviewer section', () => {
+    const result = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: false',
+    ) as ReviewConfig;
+    expect(result.reviewer.allowAnonymous).toBe(false);
+  });
+
+  it('defaults allowAnonymous to true when absent', () => {
+    const result = parseReviewConfig(MINIMAL_CONFIG) as ReviewConfig;
+    expect(result.reviewer.allowAnonymous).toBe(true);
+  });
+
+  it('defaults allowAnonymous to true for invalid value', () => {
+    const result = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: "yes"',
+    ) as ReviewConfig;
+    expect(result.reviewer.allowAnonymous).toBe(true);
+  });
+
+  it('parses allow_anonymous: true explicitly', () => {
+    const result = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: true',
+    ) as ReviewConfig;
+    expect(result.reviewer.allowAnonymous).toBe(true);
+  });
 });
 
 describe('DEFAULT_REVIEW_CONFIG', () => {
@@ -178,6 +206,7 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
     expect(DEFAULT_REVIEW_CONFIG.agents.reviewCount).toBe(1);
     expect(DEFAULT_REVIEW_CONFIG.agents.minReputation).toBe(0);
     expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
+    expect(DEFAULT_REVIEW_CONFIG.reviewer.allowAnonymous).toBe(true);
     expect(DEFAULT_REVIEW_CONFIG.autoApprove.enabled).toBe(false);
     expect(DEFAULT_REVIEW_CONFIG.trigger.on).toEqual(['opened']);
     expect(DEFAULT_REVIEW_CONFIG.trigger.comment).toBe('/opencara review');
