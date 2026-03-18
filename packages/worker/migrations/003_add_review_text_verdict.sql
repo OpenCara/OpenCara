@@ -9,4 +9,4 @@ ALTER TABLE review_results ADD COLUMN IF NOT EXISTS verdict TEXT CHECK (verdict 
 ALTER TABLE review_tasks ADD COLUMN IF NOT EXISTS config_json JSONB;
 
 -- Also add completed_at to review_results for stats queries
-ALTER TABLE review_results ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE review_results ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;

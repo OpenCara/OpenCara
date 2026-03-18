@@ -275,8 +275,9 @@ export async function distributeTask(
   let reviewers = selected;
   let synthesizerAgentId: string | undefined;
 
-  if (config.agents.reviewCount > 1 && selected.length > 1) {
-    // Sort by reputation descending — highest-rep agent becomes synthesizer
+  if (config.agents.reviewCount > 1 && selected.length > config.agents.reviewCount) {
+    // Only reserve a synthesizer when we have MORE agents than the requested reviewer count.
+    // If selected.length == reviewCount, all agents become reviewers (no synthesizer).
     const sorted = [...selected].sort((a, b) => b.reputationScore - a.reputationScore);
     const synthesizer = sorted[0];
     synthesizerAgentId = synthesizer.id;
@@ -323,7 +324,7 @@ export async function distributeTask(
             // reviewCount is the number of REVIEWERS (excluding synthesizer)
             reviewCount: reviewers.length,
             installationId,
-            reviewMode: config.agents.reviewCount > 1 ? 'compact' : 'full',
+            reviewMode: reviewers.length > 1 ? 'compact' : 'full',
             synthesizerAgentId,
           }),
         }),

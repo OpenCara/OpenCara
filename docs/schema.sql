@@ -46,6 +46,7 @@ CREATE TABLE review_tasks (
   pr_url TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'reviewing', 'summarizing', 'completed', 'failed', 'timeout', 'cancelled')),
+  config_json JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   timeout_at TIMESTAMPTZ
 );
@@ -64,7 +65,7 @@ CREATE TABLE review_results (
   verdict TEXT CHECK (verdict IN ('approve', 'request_changes', 'comment')),
   comment_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  completed_at TIMESTAMPTZ DEFAULT NOW()
+  completed_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_review_results_task_id ON review_results(review_task_id);
