@@ -120,7 +120,8 @@ export async function fetchCompletedReviews(
 }
 
 /**
- * Select a summary agent: highest-reputation online agent not involved in this review.
+ * Select a summary agent: weighted random among online agents not involved in this review.
+ * Higher-reputation agents have a higher probability but lower-rep agents can still be picked.
  */
 export async function selectSummaryAgent(
   supabase: SupabaseClient,
@@ -128,15 +129,29 @@ export async function selectSummaryAgent(
 ): Promise<string | null> {
   const { data } = await supabase
     .from('agents')
-    .select('id')
+    .select('id, reputation_score')
     .eq('status', 'online')
-    .gte('reputation_score', 0)
-    .order('reputation_score', { ascending: false });
+    .gte('reputation_score', 0);
 
-  if (!data) return null;
+  if (!data || data.length === 0) return null;
 
-  const candidate = (data as { id: string }[]).find((a) => !excludeAgentIds.includes(a.id));
-  return candidate?.id ?? null;
+  const candidates = (data as { id: string; reputation_score: number }[]).filter(
+    (a) => !excludeAgentIds.includes(a.id),
+  );
+
+  if (candidates.length === 0) return null;
+
+  // Weighted random selection: weight = max(0.1, reputation + 1)
+  const weights = candidates.map((a) => Math.max(0.1, a.reputation_score + 1));
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  let r = Math.random() * totalWeight;
+
+  for (let i = 0; i < candidates.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return candidates[i].id;
+  }
+
+  return candidates[candidates.length - 1].id;
 }
 
 /**

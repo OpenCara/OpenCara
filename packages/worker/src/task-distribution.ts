@@ -93,44 +93,128 @@ export function filterByAccessList(
 export const MAX_AGENTS_PER_TASK = 10;
 
 /**
+ * Compute a weight for weighted random selection.
+ * Ensures all agents have a positive weight so even zero-reputation agents get selected.
+ */
+export function agentWeight(reputationScore: number): number {
+  return Math.max(0.1, reputationScore + 1);
+}
+
+/**
+ * Weighted reservoir sampling: select `count` items from `agents` using reputation as weight.
+ * For each agent, compute `random() ^ (1/weight)` and pick the top `count` by this key.
+ * This gives higher-weight agents a higher probability of selection without starving lower-weight ones.
+ *
+ * Accepts an optional `rng` function (returns [0,1)) for deterministic testing.
+ */
+export function weightedRandomSelect(
+  agents: EligibleAgent[],
+  count: number,
+  rng: () => number = Math.random,
+): EligibleAgent[] {
+  if (agents.length <= count) return [...agents];
+
+  const keyed = agents.map((agent) => ({
+    agent,
+    key: Math.pow(rng(), 1 / agentWeight(agent.reputationScore)),
+  }));
+
+  keyed.sort((a, b) => b.key - a.key);
+  return keyed.slice(0, count).map((k) => k.agent);
+}
+
+/**
  * Select up to `reviewCount` agents for a review.
- * Priority: preferred models > preferred tools > others, sorted by reputation within each group.
+ * Priority: preferred models > preferred tools > others.
+ * Within each tier, uses weighted random selection based on reputation
+ * (higher reputation = higher probability, but lower-rep agents still get selected).
  * Returns empty only if no agents are available at all.
+ *
+ * Accepts an optional `rng` function for deterministic testing.
  */
 export function selectAgents(
   agents: EligibleAgent[],
   reviewCount: number,
   preferredModels: string[],
   preferredTools: string[],
+  rng: () => number = Math.random,
 ): EligibleAgent[] {
   if (agents.length === 0) return [];
 
   const count = Math.min(reviewCount, agents.length);
-  const byReputation = (a: EligibleAgent, b: EligibleAgent) =>
-    b.reputationScore - a.reputationScore;
 
   const hasModelPref = preferredModels.length > 0;
   const hasToolPref = preferredTools.length > 0;
 
   if (!hasModelPref && !hasToolPref) {
-    return [...agents].sort(byReputation).slice(0, count);
+    return weightedRandomSelect(agents, count, rng);
   }
 
-  const modelMatch = hasModelPref
-    ? agents.filter((a) => preferredModels.includes(a.model)).sort(byReputation)
-    : [];
+  const modelMatch = hasModelPref ? agents.filter((a) => preferredModels.includes(a.model)) : [];
   const modelMatchIds = new Set(modelMatch.map((a) => a.id));
 
   const toolMatch = hasToolPref
-    ? agents
-        .filter((a) => preferredTools.includes(a.tool) && !modelMatchIds.has(a.id))
-        .sort(byReputation)
+    ? agents.filter((a) => preferredTools.includes(a.tool) && !modelMatchIds.has(a.id))
     : [];
   const matchedIds = new Set([...modelMatchIds, ...toolMatch.map((a) => a.id)]);
 
-  const others = agents.filter((a) => !matchedIds.has(a.id)).sort(byReputation);
+  const others = agents.filter((a) => !matchedIds.has(a.id));
 
-  return [...modelMatch, ...toolMatch, ...others].slice(0, count);
+  // Fill from each tier in priority order using weighted random
+  const selected: EligibleAgent[] = [];
+  const remaining = count;
+
+  for (const tier of [modelMatch, toolMatch, others]) {
+    if (selected.length >= remaining) break;
+    const needed = remaining - selected.length;
+    selected.push(...weightedRandomSelect(tier, needed, rng));
+  }
+
+  return selected;
+}
+
+/** Maximum in-flight tasks before an agent is considered overloaded. */
+export const MAX_IN_FLIGHT_THRESHOLD = 2;
+
+/**
+ * Query each agent's Durable Object for in-flight task count.
+ * Partition agents into low-load (< MAX_IN_FLIGHT_THRESHOLD) and overflow pools.
+ * If a DO query fails, the agent is placed in the low-load pool (fail-open).
+ */
+export async function partitionByLoad(
+  env: Env,
+  agents: EligibleAgent[],
+): Promise<{ lowLoad: EligibleAgent[]; overflow: EligibleAgent[] }> {
+  if (agents.length === 0) return { lowLoad: [], overflow: [] };
+
+  const results = await Promise.allSettled(
+    agents.map(async (agent) => {
+      const doId = env.AGENT_CONNECTION.idFromName(agent.id);
+      const stub = env.AGENT_CONNECTION.get(doId);
+      const resp = await stub.fetch(new Request('https://internal/status'));
+      const status = (await resp.json()) as { inFlightTaskIds?: string[] };
+      return { agent, inFlight: status.inFlightTaskIds?.length ?? 0 };
+    }),
+  );
+
+  const lowLoad: EligibleAgent[] = [];
+  const overflow: EligibleAgent[] = [];
+
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      if (result.value.inFlight >= MAX_IN_FLIGHT_THRESHOLD) {
+        overflow.push(result.value.agent);
+      } else {
+        lowLoad.push(result.value.agent);
+      }
+    } else {
+      // Fail-open: if we can't query status, assume low load
+      const idx = results.indexOf(result);
+      lowLoad.push(agents[idx]);
+    }
+  }
+
+  return { lowLoad, overflow };
 }
 
 /**
@@ -247,22 +331,38 @@ export async function distributeTask(
     console.error(`Failed to set task timeout for ${taskId}:`, err);
   }
 
-  // 4. Find eligible agents
+  // 4. Find eligible agents and partition by in-flight load
   const allAgents = await findEligibleAgents(supabase, config.agents.minReputation);
   const filtered = filterByAccessList(
     allAgents,
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
+
+  // Query each candidate's DO for in-flight task count; partition into low-load / overflow
+  const { lowLoad, overflow } = await partitionByLoad(env, filtered);
+
   // For multi-agent: select reviewCount + 1 so we can reserve one as synthesizer
   const selectionCount =
     config.agents.reviewCount > 1 ? config.agents.reviewCount + 1 : config.agents.reviewCount;
-  const selected = selectAgents(
-    filtered,
+
+  // Prefer low-load agents; fall back to overflow only if not enough
+  let selected = selectAgents(
+    lowLoad,
     selectionCount,
     config.agents.preferredModels,
     config.agents.preferredTools,
   );
+  if (selected.length < selectionCount && overflow.length > 0) {
+    const remaining = selectionCount - selected.length;
+    const overflowSelected = selectAgents(
+      overflow,
+      remaining,
+      config.agents.preferredModels,
+      config.agents.preferredTools,
+    );
+    selected = [...selected, ...overflowSelected];
+  }
 
   if (selected.length === 0) {
     console.log(`No eligible agents found for task ${taskId} — stays pending for pickup`);
