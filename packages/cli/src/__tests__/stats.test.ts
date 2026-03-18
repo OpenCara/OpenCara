@@ -3,14 +3,44 @@ import type { AgentResponse, AgentStatsResponse } from '@opencara/shared';
 
 const mockGet = vi.hoisted(() => vi.fn());
 
-vi.mock('../config.js', () => ({
-  loadConfig: vi.fn(() => ({
-    apiKey: 'cr_testkey',
+const mockLoadConfig = vi.hoisted(() =>
+  vi.fn(() => ({
+    apiKey: 'cr_testkey' as string | null,
     platformUrl: 'https://test.api.dev',
     limits: null,
     agents: null,
+    anonymousAgents: [] as Array<{
+      agentId: string;
+      apiKey: string;
+      model: string;
+      tool: string;
+      repoConfig?: { mode: string; list?: string[] } | null;
+    }>,
   })),
-  requireApiKey: vi.fn((config: { apiKey: string }) => config.apiKey),
+);
+
+vi.mock('../config.js', () => ({
+  loadConfig: mockLoadConfig,
+  requireApiKey: vi.fn((config: { apiKey: string | null }) => {
+    if (!config.apiKey) {
+      console.error('Not authenticated. Run `opencara login` first.');
+      process.exit(1);
+    }
+    return config.apiKey;
+  }),
+  findAnonymousAgent: vi.fn(
+    (
+      config: {
+        anonymousAgents: Array<{
+          agentId: string;
+          apiKey: string;
+          model: string;
+          tool: string;
+        }>;
+      },
+      agentId: string,
+    ) => config.anonymousAgents.find((a: { agentId: string }) => a.agentId === agentId) ?? null,
+  ),
 }));
 
 vi.mock('../http.js', () => ({
@@ -314,6 +344,42 @@ describe('stats command', () => {
       await expect(statsCommand.parseAsync([], { from: 'user' })).rejects.toThrow('process.exit');
 
       expect(errorSpy).toHaveBeenCalledWith('Failed to list agents:', 'raw error');
+    });
+
+    it('shows anonymous agent stats for specific anonymous agent', async () => {
+      mockLoadConfig.mockReturnValue({
+        apiKey: 'cr_testkey',
+        platformUrl: 'https://test.api.dev',
+        limits: null,
+        agents: null,
+        anonymousAgents: [
+          { agentId: 'anon-1', apiKey: 'cr_anon', model: 'claude-sonnet-4-6', tool: 'claude' },
+        ],
+      });
+
+      mockGet.mockResolvedValueOnce(makeAgentStats()); // /api/stats/:agentId via anon client
+
+      await statsCommand.parseAsync(['--agent', 'anon-1'], { from: 'user' });
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Agent: anon-1'));
+    });
+
+    it('shows anonymous agent stats when unauthenticated', async () => {
+      mockLoadConfig.mockReturnValue({
+        apiKey: null,
+        platformUrl: 'https://test.api.dev',
+        limits: null,
+        agents: null,
+        anonymousAgents: [
+          { agentId: 'anon-1', apiKey: 'cr_anon', model: 'claude-sonnet-4-6', tool: 'claude' },
+        ],
+      });
+
+      mockGet.mockResolvedValueOnce(makeAgentStats());
+
+      await statsCommand.parseAsync([], { from: 'user' });
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Agent: anon-1'));
     });
   });
 });

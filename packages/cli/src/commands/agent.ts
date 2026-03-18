@@ -8,6 +8,8 @@ import {
   type ListAgentsResponse,
   type AgentResponse,
   type AgentStatsResponse,
+  type AnonymousRegisterRequest,
+  type AnonymousRegisterResponse,
   type RegistryResponse,
   type PlatformMessage,
   type ReviewRequestMessage,
@@ -21,6 +23,7 @@ import {
   resolveAgentLimits,
   type ConsumptionLimits,
   type LocalAgentConfig,
+  type AnonymousAgentEntry,
 } from '../config.js';
 import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
@@ -599,7 +602,6 @@ agentCommand
 
       try {
         // Loop: select tool → select model → check duplicate → if dup, restart
-        // eslint-disable-next-line no-constant-condition
         while (true) {
           // Step 1: Select tool
           tool = await search({
@@ -804,10 +806,61 @@ agentCommand
     formatTable(res.agents, trustLabels);
   });
 
+/** Register or reuse an anonymous agent, returning credentials and command template */
+async function resolveAnonymousAgent(
+  config: ReturnType<typeof loadConfig>,
+  model: string,
+  tool: string,
+): Promise<{ entry: AnonymousAgentEntry; command: string }> {
+  // Check for stored anonymous agent with matching model+tool
+  const existing = config.anonymousAgents.find((a) => a.model === model && a.tool === tool);
+  if (existing) {
+    console.log(`Reusing stored anonymous agent ${existing.agentId} (${model} / ${tool})`);
+    const command = resolveCommandTemplate(
+      DEFAULT_REGISTRY.tools
+        .find((t) => t.name === tool)
+        ?.commandTemplate.replaceAll('${MODEL}', model) ?? null,
+    );
+    return { entry: existing, command };
+  }
+
+  // Register new anonymous agent
+  console.log('Registering anonymous agent...');
+  const client = new ApiClient(config.platformUrl);
+  const body: AnonymousRegisterRequest = { model, tool };
+  const res = await client.post<AnonymousRegisterResponse>('/api/agents/anonymous', body);
+
+  const entry: AnonymousAgentEntry = {
+    agentId: res.agentId,
+    apiKey: res.apiKey,
+    model,
+    tool,
+  };
+
+  // Store in config
+  config.anonymousAgents.push(entry);
+  saveConfig(config);
+
+  console.log(`Agent registered: ${res.agentId} (${model} / ${tool})`);
+  console.log('Credentials saved to ~/.opencara/config.yml');
+
+  const command = resolveCommandTemplate(
+    DEFAULT_REGISTRY.tools
+      .find((t) => t.name === tool)
+      ?.commandTemplate.replaceAll('${MODEL}', model) ?? null,
+  );
+  return { entry, command };
+}
+
+export { resolveAnonymousAgent };
+
 agentCommand
   .command('start [agentIdOrModel]')
   .description('Connect agent to platform via WebSocket')
   .option('--all', 'Start all agents from local config concurrently')
+  .option('-a, --anonymous', 'Start an anonymous agent (no login required)')
+  .option('--model <model>', 'AI model name (used with --anonymous)')
+  .option('--tool <tool>', 'Review tool name (used with --anonymous)')
   .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
   .option(
     '--stability-threshold <ms>',
@@ -816,7 +869,14 @@ agentCommand
   .action(
     async (
       agentIdOrModel: string | undefined,
-      opts: { all?: boolean; verbose?: boolean; stabilityThreshold?: string },
+      opts: {
+        all?: boolean;
+        anonymous?: boolean;
+        model?: string;
+        tool?: string;
+        verbose?: boolean;
+        stabilityThreshold?: string;
+      },
     ) => {
       let stabilityThresholdMs: number | undefined;
       if (opts.stabilityThreshold !== undefined) {
@@ -835,8 +895,50 @@ agentCommand
       }
 
       const config = loadConfig();
-      const apiKey = requireApiKey(config);
-      const client = new ApiClient(config.platformUrl, apiKey);
+
+      // === Path C: Anonymous mode ===
+      if (opts.anonymous) {
+        if (!opts.model || !opts.tool) {
+          console.error('Both --model and --tool are required with --anonymous.');
+          process.exit(1);
+        }
+
+        let resolved: { entry: AnonymousAgentEntry; command: string };
+        try {
+          resolved = await resolveAnonymousAgent(config, opts.model, opts.tool);
+        } catch (err) {
+          console.error(
+            'Failed to register anonymous agent:',
+            err instanceof Error ? err.message : err,
+          );
+          process.exit(1);
+        }
+
+        const { entry, command } = resolved;
+
+        let reviewDeps: ReviewExecutorDeps | undefined;
+        if (validateCommandBinary(command)) {
+          reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
+        } else {
+          console.warn(
+            `Warning: binary "${command.split(' ')[0]}" not found. Reviews will be rejected.`,
+          );
+        }
+
+        const consumptionDeps: ConsumptionDeps = {
+          agentId: entry.agentId,
+          limits: config.limits,
+          session: createSessionTracker(),
+        };
+
+        console.log(`Starting anonymous agent ${entry.agentId}...`);
+        startAgent(entry.agentId, config.platformUrl, entry.apiKey, reviewDeps, consumptionDeps, {
+          verbose: opts.verbose,
+          stabilityThresholdMs,
+          repoConfig: entry.repoConfig,
+        });
+        return;
+      }
 
       // === Path B: Local-config mode (agents section exists) ===
       if (config.agents !== null) {
@@ -861,15 +963,19 @@ agentCommand
           validAgents.push({ local, command: cmd });
         }
 
-        if (validAgents.length === 0) {
+        if (validAgents.length === 0 && config.anonymousAgents.length === 0) {
           console.error('No valid agents in config. Check that tool binaries are installed.');
           process.exit(1);
         }
 
         // Determine which agents to start
         let agentsToStart: Array<{ local: LocalAgentConfig; command: string }>;
+        const anonAgentsToStart: AnonymousAgentEntry[] = [];
+
         if (opts.all) {
           agentsToStart = validAgents;
+          // Also include anonymous agents when --all is used
+          anonAgentsToStart.push(...config.anonymousAgents);
         } else if (agentIdOrModel) {
           const match = validAgents.find((a) => a.local.model === agentIdOrModel);
           if (!match) {
@@ -884,6 +990,9 @@ agentCommand
         } else if (validAgents.length === 1) {
           agentsToStart = [validAgents[0]];
           console.log(`Using agent ${validAgents[0].local.model} (${validAgents[0].local.tool})`);
+        } else if (validAgents.length === 0) {
+          console.error('No valid authenticated agents in config. Use --anonymous or --all.');
+          process.exit(1);
         } else {
           console.error('Multiple agents in config. Specify a model name or use --all:');
           for (const a of validAgents) {
@@ -892,32 +1001,38 @@ agentCommand
           process.exit(1);
         }
 
-        // Sync all agents to server
-        let serverAgents: AgentResponse[];
-        try {
-          const res = await client.get<ListAgentsResponse>('/api/agents');
-          serverAgents = res.agents;
-        } catch (err) {
-          console.error('Failed to fetch agents:', err instanceof Error ? err.message : err);
-          process.exit(1);
-        }
-
         // Increase listener limit when starting multiple agents
-        if (agentsToStart.length > 1) {
-          process.setMaxListeners(process.getMaxListeners() + agentsToStart.length * 2);
+        const totalAgents = agentsToStart.length + anonAgentsToStart.length;
+        if (totalAgents > 1) {
+          process.setMaxListeners(process.getMaxListeners() + totalAgents * 2);
         }
 
-        // Start each agent
+        // Start each authenticated agent (requires login)
         let startedCount = 0;
+        let apiKey: string | undefined;
+        let client: ApiClient | undefined;
+        let serverAgents: AgentResponse[] | undefined;
+        if (agentsToStart.length > 0) {
+          apiKey = requireApiKey(config);
+          client = new ApiClient(config.platformUrl, apiKey);
+          try {
+            const res = await client.get<ListAgentsResponse>('/api/agents');
+            serverAgents = res.agents;
+          } catch (err) {
+            console.error('Failed to fetch agents:', err instanceof Error ? err.message : err);
+            process.exit(1);
+          }
+        }
+
         for (const selected of agentsToStart) {
           let agentId: string;
           try {
-            const sync = await syncAgentToServer(client, serverAgents, selected.local);
+            const sync = await syncAgentToServer(client!, serverAgents!, selected.local);
             agentId = sync.agentId;
             if (sync.created) {
               console.log(`Registered new agent ${agentId} on platform`);
               // Update snapshot to prevent duplicate registrations
-              serverAgents.push({
+              serverAgents!.push({
                 id: agentId,
                 model: selected.local.model,
                 tool: selected.local.tool,
@@ -947,10 +1062,50 @@ agentCommand
           };
 
           console.log(`Starting agent ${selected.local.model} (${agentId})...`);
-          startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
+          startAgent(agentId, config.platformUrl, apiKey!, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
             repoConfig: selected.local.repos,
+          });
+          startedCount++;
+        }
+
+        // Start anonymous agents (for --all)
+        for (const anon of anonAgentsToStart) {
+          let command: string;
+          try {
+            command = resolveCommandTemplate(
+              DEFAULT_REGISTRY.tools
+                .find((t) => t.name === anon.tool)
+                ?.commandTemplate.replaceAll('${MODEL}', anon.model) ?? null,
+            );
+          } catch {
+            console.warn(
+              `Skipping anonymous agent ${anon.agentId}: no command template for tool "${anon.tool}"`,
+            );
+            continue;
+          }
+
+          let reviewDeps: ReviewExecutorDeps | undefined;
+          if (validateCommandBinary(command)) {
+            reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
+          } else {
+            console.warn(
+              `Warning: binary "${command.split(' ')[0]}" not found for anonymous agent ${anon.agentId}. Reviews will be rejected.`,
+            );
+          }
+
+          const consumptionDeps: ConsumptionDeps = {
+            agentId: anon.agentId,
+            limits: config.limits,
+            session: createSessionTracker(),
+          };
+
+          console.log(`Starting anonymous agent ${anon.model} (${anon.agentId})...`);
+          startAgent(anon.agentId, config.platformUrl, anon.apiKey, reviewDeps, consumptionDeps, {
+            verbose: opts.verbose,
+            stabilityThresholdMs,
+            repoConfig: anon.repoConfig,
           });
           startedCount++;
         }
@@ -963,6 +1118,9 @@ agentCommand
       }
 
       // === Path A: Old server-side behavior (no agents section) ===
+      const apiKey = requireApiKey(config);
+      const client = new ApiClient(config.platformUrl, apiKey);
+
       console.log(
         'Hint: No agents in local config. Run `opencara agent init` to import, or `opencara agent create` to add agents.',
       );

@@ -18,6 +18,14 @@ export interface LocalAgentConfig {
   repos?: RepoConfig;
 }
 
+export interface AnonymousAgentEntry {
+  agentId: string;
+  apiKey: string; // cr_ key
+  model: string;
+  tool: string;
+  repoConfig?: RepoConfig;
+}
+
 export interface CliConfig {
   apiKey: string | null;
   platformUrl: string;
@@ -25,6 +33,7 @@ export interface CliConfig {
   limits: ConsumptionLimits | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
+  anonymousAgents: AnonymousAgentEntry[];
 }
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencara.dev';
@@ -100,6 +109,50 @@ function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfi
   return config;
 }
 
+function parseAnonymousAgents(data: Record<string, unknown>): AnonymousAgentEntry[] {
+  const raw = data.anonymous_agents;
+  if (!Array.isArray(raw)) return [];
+
+  const entries: AnonymousAgentEntry[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const entry = raw[i];
+    if (!entry || typeof entry !== 'object') {
+      console.warn(`Warning: anonymous_agents[${i}] is not an object, skipping`);
+      continue;
+    }
+    const obj = entry as Record<string, unknown>;
+    if (
+      typeof obj.agent_id !== 'string' ||
+      typeof obj.api_key !== 'string' ||
+      typeof obj.model !== 'string' ||
+      typeof obj.tool !== 'string'
+    ) {
+      console.warn(
+        `Warning: anonymous_agents[${i}] missing required agent_id/api_key/model/tool fields, skipping`,
+      );
+      continue;
+    }
+    const anon: AnonymousAgentEntry = {
+      agentId: obj.agent_id,
+      apiKey: obj.api_key,
+      model: obj.model,
+      tool: obj.tool,
+    };
+    if (obj.repo_config && typeof obj.repo_config === 'object') {
+      const rc = obj.repo_config as Record<string, unknown>;
+      if (typeof rc.mode === 'string' && VALID_REPO_MODES.includes(rc.mode as RepoFilterMode)) {
+        const repoConfig: RepoConfig = { mode: rc.mode as RepoFilterMode };
+        if (Array.isArray(rc.list)) {
+          repoConfig.list = rc.list.filter((v): v is string => typeof v === 'string');
+        }
+        anon.repoConfig = repoConfig;
+      }
+    }
+    entries.push(anon);
+  }
+  return entries;
+}
+
 function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
   if (!('agents' in data)) return null;
   const raw = data.agents;
@@ -136,6 +189,7 @@ export function loadConfig(): CliConfig {
     limits: null,
     agentCommand: null,
     agents: null,
+    anonymousAgents: [],
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -157,6 +211,7 @@ export function loadConfig(): CliConfig {
     limits: parseLimits(data),
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
+    anonymousAgents: parseAnonymousAgents(data),
   };
 }
 
@@ -180,6 +235,20 @@ export function saveConfig(config: CliConfig): void {
   if (config.agents !== null) {
     data.agents = config.agents;
   }
+  if (config.anonymousAgents.length > 0) {
+    data.anonymous_agents = config.anonymousAgents.map((a) => {
+      const entry: Record<string, unknown> = {
+        agent_id: a.agentId,
+        api_key: a.apiKey,
+        model: a.model,
+        tool: a.tool,
+      };
+      if (a.repoConfig) {
+        entry.repo_config = a.repoConfig;
+      }
+      return entry;
+    });
+  }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }
 
@@ -196,6 +265,14 @@ export function resolveAgentLimits(
   if (!globalLimits) return agentLimits;
   const merged: ConsumptionLimits = { ...globalLimits, ...agentLimits };
   return Object.keys(merged).length === 0 ? null : merged;
+}
+
+export function findAnonymousAgent(config: CliConfig, agentId: string): AnonymousAgentEntry | null {
+  return config.anonymousAgents.find((a) => a.agentId === agentId) ?? null;
+}
+
+export function removeAnonymousAgent(config: CliConfig, agentId: string): void {
+  config.anonymousAgents = config.anonymousAgents.filter((a) => a.agentId !== agentId);
 }
 
 export function requireApiKey(config: CliConfig): string {

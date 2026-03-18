@@ -6,7 +6,7 @@ import type {
   TrustTierInfo,
   RepoConfig,
 } from '@opencara/shared';
-import { loadConfig, requireApiKey } from '../config.js';
+import { loadConfig, requireApiKey, findAnonymousAgent } from '../config.js';
 import { ApiClient } from '../http.js';
 
 function formatTrustTier(tier: TrustTierInfo): string {
@@ -81,6 +81,55 @@ export const statsCommand = new Command('stats')
   .option('--agent <agentId>', 'Show stats for a specific agent')
   .action(async (opts: { agent?: string }) => {
     const config = loadConfig();
+
+    // Check if the requested agent is an anonymous one
+    if (opts.agent) {
+      const anonEntry = findAnonymousAgent(config, opts.agent);
+      if (anonEntry) {
+        // Use the anonymous agent's own API key for auth
+        const anonClient = new ApiClient(config.platformUrl, anonEntry.apiKey);
+        const agent: AgentResponse = {
+          id: anonEntry.agentId,
+          model: anonEntry.model,
+          tool: anonEntry.tool,
+          isAnonymous: true,
+          status: 'offline',
+          repoConfig: anonEntry.repoConfig ?? null,
+          createdAt: '',
+        };
+        const agentStats = await fetchAgentStats(anonClient, anonEntry.agentId);
+        console.log(formatAgentStats(agent, agentStats));
+        return;
+      }
+    }
+
+    // If not authenticated but has anonymous agents, show their stats
+    if (!config.apiKey && config.anonymousAgents.length > 0 && !opts.agent) {
+      const outputs: string[] = [];
+      for (const anon of config.anonymousAgents) {
+        const anonClient = new ApiClient(config.platformUrl, anon.apiKey);
+        const agent: AgentResponse = {
+          id: anon.agentId,
+          model: anon.model,
+          tool: anon.tool,
+          isAnonymous: true,
+          status: 'offline',
+          repoConfig: anon.repoConfig ?? null,
+          createdAt: '',
+        };
+        try {
+          const agentStats = await fetchAgentStats(anonClient, anon.agentId);
+          outputs.push(formatAgentStats(agent, agentStats));
+        } catch (err) {
+          outputs.push(
+            `Agent: ${anon.agentId} (${anon.model} / ${anon.tool})\n  Error: ${err instanceof Error ? err.message : 'Failed to fetch stats'}`,
+          );
+        }
+      }
+      console.log(outputs.join('\n\n'));
+      return;
+    }
+
     const apiKey = requireApiKey(config);
     const client = new ApiClient(config.platformUrl, apiKey);
 
@@ -122,7 +171,7 @@ export const statsCommand = new Command('stats')
       process.exit(1);
     }
 
-    if (agentsRes.agents.length === 0) {
+    if (agentsRes.agents.length === 0 && config.anonymousAgents.length === 0) {
       console.log('No agents registered. Run `opencara agent create` to register one.');
       return;
     }
@@ -135,6 +184,28 @@ export const statsCommand = new Command('stats')
       } catch (err) {
         outputs.push(
           `Agent: ${agent.id} (${agent.model} / ${agent.tool})\n  Error: ${err instanceof Error ? err.message : 'Failed to fetch stats'}`,
+        );
+      }
+    }
+
+    // Also show anonymous agent stats for authenticated users
+    for (const anon of config.anonymousAgents) {
+      const anonClient = new ApiClient(config.platformUrl, anon.apiKey);
+      const agent: AgentResponse = {
+        id: anon.agentId,
+        model: anon.model,
+        tool: anon.tool,
+        isAnonymous: true,
+        status: 'offline',
+        repoConfig: anon.repoConfig ?? null,
+        createdAt: '',
+      };
+      try {
+        const agentStats = await fetchAgentStats(anonClient, anon.agentId);
+        outputs.push(formatAgentStats(agent, agentStats));
+      } catch (err) {
+        outputs.push(
+          `Agent: ${anon.agentId} (${anon.model} / ${anon.tool})\n  Error: ${err instanceof Error ? err.message : 'Failed to fetch stats'}`,
         );
       }
     }
