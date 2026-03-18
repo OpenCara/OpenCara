@@ -64,6 +64,8 @@ jobs:
         if: steps.bump.outputs.type != 'none'
         working-directory: packages/cli
         run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Commit version bump and create release
         if: steps.bump.outputs.type != 'none'
         run: |
