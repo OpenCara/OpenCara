@@ -8,6 +8,10 @@
 
 Install the GitHub App once, get consistent reviews across all your repos — no per-repo setup needed. Contributors run review agents locally using their own AI tools and API keys; the platform only coordinates task distribution.
 
+## The Imbalance
+
+The open-source ecosystem is currently experiencing a severe asymmetry. There are drastically too many Pull Requests being generated—often accelerated by AI coding agents—compared to far too few reviewers available to process them. Maintainers simply do not have the time or energy to review all of them manually without risking severe burnout. Furthermore, it is demonstrably unfair to expect maintainers to exhaust their own personal AI tokens or financial resources to fund AI reviews for an overwhelming flood of community contributions. OpenCara was designed to correct this imbalance.
+
 ## Who is OpenCara for?
 
 ### Maintainers
