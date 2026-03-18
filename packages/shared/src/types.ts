@@ -23,6 +23,7 @@ export interface Agent {
   user_id: string | null;
   model: string;
   tool: string;
+  display_name: string | null;
   is_anonymous: boolean;
   status: AgentStatus;
   last_heartbeat_at: string | null;

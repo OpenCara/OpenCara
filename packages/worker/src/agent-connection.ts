@@ -28,12 +28,25 @@ const HEARTBEAT_TIMEOUT_MS = 90_000;
 const MAX_REVIEW_ATTEMPTS = 3;
 const MIN_REMAINING_SECONDS_FOR_PICKUP = 30;
 const CONNECT_DEBOUNCE_MS = 5_000;
+const MAX_DISPLAY_NAME_LENGTH = 100;
 
 const VERDICT_LABELS: Record<ReviewVerdict, string> = {
   approve: '\u2705 Approve',
   request_changes: '\u274C Changes Requested',
   comment: '\uD83D\uDCAC Comment',
 };
+
+/** Escape markdown special characters to prevent injection. */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}[\]()#+\-.!|~>]/g, '\\$&');
+}
+
+/** Normalize displayName: trim, enforce max length, empty → null. */
+export function sanitizeDisplayName(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
+  return trimmed || null;
+}
 
 export function formatReviewComment(
   verdict: ReviewVerdict,
@@ -42,8 +55,12 @@ export function formatReviewComment(
   review: string,
   contributorName?: string,
   isAnonymous?: boolean,
+  displayName?: string,
 ): string {
   const verdictLabel = VERDICT_LABELS[verdict];
+  const agentLabel = displayName
+    ? `${escapeMarkdown(displayName)} (\`${model}\` / \`${tool}\`)`
+    : `\`${model}\` / \`${tool}\``;
   let contributorLine = '';
   if (isAnonymous) {
     contributorLine = '**Contributor**: Anonymous contributor';
@@ -54,7 +71,7 @@ export function formatReviewComment(
     '## \uD83D\uDD0D OpenCara Review',
     '',
     `**Verdict**: ${verdictLabel}`,
-    `**Agent**: \`${model}\` / \`${tool}\``,
+    `**Agent**: ${agentLabel}`,
     ...(contributorLine ? [contributorLine] : []),
     '',
     '---',
@@ -432,16 +449,21 @@ export class AgentConnection implements DurableObject {
     }
 
     const supabase = createSupabaseClient(this.env);
-    const { error } = await supabase
-      .from('agents')
-      .update({ repo_config: msg.repoConfig })
-      .eq('id', agentId);
+    const updateData: Record<string, unknown> = { repo_config: msg.repoConfig };
+    if (msg.displayName !== undefined) {
+      updateData.display_name = sanitizeDisplayName(msg.displayName);
+    }
+
+    const { error } = await supabase.from('agents').update(updateData).eq('id', agentId);
 
     if (error) {
-      console.error(`Failed to update repo_config for agent ${agentId}:`, error);
-      this.sendError(5000, 'Failed to save repo preferences');
+      console.error(`Failed to update preferences for agent ${agentId}:`, error);
+      this.sendError(5000, 'Failed to save agent preferences');
     } else {
-      console.log(`Updated repo_config for agent ${agentId}: mode=${msg.repoConfig.mode}`);
+      console.log(
+        `Updated preferences for agent ${agentId}: mode=${msg.repoConfig.mode}` +
+          (msg.displayName ? `, displayName=${msg.displayName}` : ''),
+      );
     }
   }
 
@@ -617,12 +639,13 @@ export class AgentConnection implements DurableObject {
     // Look up agent model/tool for comment formatting
     const { data: agentData } = await supabase
       .from('agents')
-      .select('model, tool, users!inner(name, is_anonymous)')
+      .select('model, tool, display_name, users!inner(name, is_anonymous)')
       .eq('id', agentId)
       .single();
 
     const model = agentData?.model ?? 'unknown';
     const tool = agentData?.tool ?? 'unknown';
+    const displayName = (agentData?.display_name as string | null) ?? undefined;
     const usersData = agentData?.users as unknown as Record<string, unknown> | undefined;
     const contributorName = usersData?.name as string | undefined;
     const isAnonymous = (usersData?.is_anonymous as boolean) ?? false;
@@ -653,6 +676,7 @@ export class AgentConnection implements DurableObject {
       reviewBody,
       contributorName,
       isAnonymous,
+      displayName,
     );
 
     try {
@@ -808,7 +832,7 @@ export class AgentConnection implements DurableObject {
     // Find another eligible online agent
     const { data: candidates } = await supabase
       .from('agents')
-      .select('id, user_id, model, tool, repo_config, users!inner(name)')
+      .select('id, user_id, model, tool, display_name, repo_config, users!inner(name)')
       .eq('status', 'online');
 
     const allCandidates: EligibleAgent[] = ((candidates ?? []) as Record<string, unknown>[])
@@ -819,6 +843,7 @@ export class AgentConnection implements DurableObject {
         userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
         model: row.model as string,
         tool: row.tool as string,
+        ...((row.display_name as string | null) ? { displayName: row.display_name as string } : {}),
         isAnonymous: ((row.users as Record<string, unknown>)?.is_anonymous as boolean) ?? false,
         repoConfig: (row.repo_config as EligibleAgent['repoConfig']) ?? null,
       }));
