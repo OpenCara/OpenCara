@@ -80,28 +80,44 @@ describe('E2E: Review Rejection & Redistribution', () => {
       .find((m) => m.type === 'review_request');
   }
 
+  /** Find which agent received the review_request (weighted random makes order non-deterministic). */
+  function findAgentWithReviewRequest(agents: ConnectedAgent[]) {
+    for (const agent of agents) {
+      const req = findReviewRequest(agent.pair);
+      if (req) return { agent, req };
+    }
+    return undefined;
+  }
+
+  /** Find the other agent that did NOT receive the initial review. */
+  function findOtherAgent(agents: ConnectedAgent[], excludeId: string) {
+    return agents.find((a) => a.agentId !== excludeId)!;
+  }
+
   it('review_rejected → redistributed to next agent', async () => {
     const agents = await setupMultipleAgents(2);
 
     await sendPRWebhook();
 
-    // First agent receives the task
-    const reviewReq = findReviewRequest(agents[0].pair);
-    expect(reviewReq).toBeDefined();
+    // Find which agent received the task (non-deterministic with weighted random)
+    const firstResult = findAgentWithReviewRequest(agents);
+    expect(firstResult).toBeDefined();
+    const { agent: firstAgent, req: reviewReq } = firstResult!;
 
     // First agent rejects
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    await ctx.simulateAgentMessage(firstAgent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: reviewReq!.taskId,
+      taskId: reviewReq.taskId,
       reason: 'Not my area of expertise',
     });
 
-    // Second agent should receive the redistributed task
-    const redistributedReq = findReviewRequest(agents[1].pair);
+    // Other agent should receive the redistributed task
+    const otherAgent = findOtherAgent(agents, firstAgent.agentId);
+    const redistributedReq = findReviewRequest(otherAgent.pair);
     expect(redistributedReq).toBeDefined();
-    expect(redistributedReq!.taskId).toBe(reviewReq!.taskId);
+    expect(redistributedReq!.taskId).toBe(reviewReq.taskId);
   });
 
   it('review_error → redistributed to next agent', async () => {
@@ -109,22 +125,24 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
     await sendPRWebhook();
 
-    const reviewReq = findReviewRequest(agents[0].pair);
-    expect(reviewReq).toBeDefined();
+    const firstResult = findAgentWithReviewRequest(agents);
+    expect(firstResult).toBeDefined();
+    const { agent: firstAgent, req: reviewReq } = firstResult!;
 
     // First agent errors
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    await ctx.simulateAgentMessage(firstAgent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_error',
-      taskId: reviewReq!.taskId,
+      taskId: reviewReq.taskId,
       error: 'API rate limited',
     });
 
-    // Second agent should receive the redistributed task
-    const redistributedReq = findReviewRequest(agents[1].pair);
+    // Other agent should receive the redistributed task
+    const otherAgent = findOtherAgent(agents, firstAgent.agentId);
+    const redistributedReq = findReviewRequest(otherAgent.pair);
     expect(redistributedReq).toBeDefined();
-    expect(redistributedReq!.taskId).toBe(reviewReq!.taskId);
+    expect(redistributedReq!.taskId).toBe(reviewReq.taskId);
   });
 
   it('3 failures → task status=failed', async () => {
@@ -132,41 +150,52 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
     await sendPRWebhook();
 
+    // Find the agent that received the first review request
+    const first = findAgentWithReviewRequest(agents);
+    expect(first).toBeDefined();
+    const taskId = first!.req.taskId;
+
     // Agent 1 rejects
-    const req1 = findReviewRequest(agents[0].pair);
-    expect(req1).toBeDefined();
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    await ctx.simulateAgentMessage(first!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req1!.taskId,
+      taskId,
       reason: 'Rejected',
     });
+
+    // Find the agent that received the redistributed task
+    const remainingAfterFirst = agents.filter((a) => a.agentId !== first!.agent.agentId);
+    const second = findAgentWithReviewRequest(remainingAfterFirst);
+    expect(second).toBeDefined();
 
     // Agent 2 rejects
-    const req2 = findReviewRequest(agents[1].pair);
-    expect(req2).toBeDefined();
-    await ctx.simulateAgentMessage(agents[1].agentId, {
+    await ctx.simulateAgentMessage(second!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req2!.taskId,
+      taskId,
       reason: 'Rejected',
     });
 
+    // Find the last remaining agent
+    const remainingAfterSecond = remainingAfterFirst.filter(
+      (a) => a.agentId !== second!.agent.agentId,
+    );
+    const third = findAgentWithReviewRequest(remainingAfterSecond);
+    expect(third).toBeDefined();
+
     // Agent 3 rejects
-    const req3 = findReviewRequest(agents[2].pair);
-    expect(req3).toBeDefined();
-    await ctx.simulateAgentMessage(agents[2].agentId, {
+    await ctx.simulateAgentMessage(third!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req3!.taskId,
+      taskId,
       reason: 'Rejected',
     });
 
     const tasks = ctx.supabase.getTable('review_tasks');
-    const task = tasks.find((t) => t.id === req1!.taskId);
+    const task = tasks.find((t) => t.id === taskId);
     expect(task).toBeDefined();
     expect(task!.status).toBe('failed');
   });
@@ -176,24 +205,28 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
     await sendPRWebhook();
 
-    // First agent receives and rejects
-    const req1 = findReviewRequest(agents[0].pair);
-    expect(req1).toBeDefined();
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    // Find which agent received the task
+    const firstResult = findAgentWithReviewRequest(agents);
+    expect(firstResult).toBeDefined();
+    const { agent: firstAgent, req: req1 } = firstResult!;
+
+    // First agent rejects
+    await ctx.simulateAgentMessage(firstAgent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req1!.taskId,
+      taskId: req1.taskId,
       reason: 'Rejected',
     });
 
-    // Second agent gets the redistribution (not the first agent again)
-    const req2 = findReviewRequest(agents[1].pair);
+    // Other agent gets the redistribution (not the first agent again)
+    const otherAgent = findOtherAgent(agents, firstAgent.agentId);
+    const req2 = findReviewRequest(otherAgent.pair);
     expect(req2).toBeDefined();
-    expect(req2!.taskId).toBe(req1!.taskId);
+    expect(req2!.taskId).toBe(req1.taskId);
 
     // First agent should NOT have received a second review_request
-    const firstAgentRequests = agents[0].pair.client
+    const firstAgentRequests = firstAgent.pair.client
       .getReceivedParsed<{ type: string }>()
       .filter((m) => m.type === 'review_request');
     expect(firstAgentRequests.length).toBe(1);
@@ -205,19 +238,19 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
     await sendPRWebhook();
 
-    const req1 = findReviewRequest(agents[0].pair);
-    expect(req1).toBeDefined();
+    const firstResult = findAgentWithReviewRequest(agents);
+    expect(firstResult).toBeDefined();
 
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    await ctx.simulateAgentMessage(firstResult!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req1!.taskId,
+      taskId: firstResult!.req.taskId,
       reason: 'Rejected',
     });
 
     const tasks = ctx.supabase.getTable('review_tasks');
-    const task = tasks.find((t) => t.id === req1!.taskId);
+    const task = tasks.find((t) => t.id === firstResult!.req.taskId);
     expect(task).toBeDefined();
     expect(task!.status).toBe('failed');
   });
@@ -227,21 +260,25 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
     await sendPRWebhook();
 
-    // Agent 1 rejects
-    const req1 = findReviewRequest(agents[0].pair);
-    expect(req1).toBeDefined();
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    // Find which agent got the task first
+    const firstResult = findAgentWithReviewRequest(agents);
+    expect(firstResult).toBeDefined();
+    const { agent: firstAgent, req: req1 } = firstResult!;
+
+    // First agent rejects
+    await ctx.simulateAgentMessage(firstAgent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req1!.taskId,
+      taskId: req1.taskId,
       reason: 'Rejected',
     });
 
-    // Agent 2 completes
-    const req2 = findReviewRequest(agents[1].pair);
+    // Other agent completes
+    const otherAgent = findOtherAgent(agents, firstAgent.agentId);
+    const req2 = findReviewRequest(otherAgent.pair);
     expect(req2).toBeDefined();
-    await ctx.simulateAgentMessage(agents[1].agentId, {
+    await ctx.simulateAgentMessage(otherAgent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_complete',
@@ -252,7 +289,7 @@ describe('E2E: Review Rejection & Redistribution', () => {
     });
 
     const results = ctx.supabase.getTable('review_results');
-    const taskResults = results.filter((r) => r.review_task_id === req1!.taskId);
+    const taskResults = results.filter((r) => r.review_task_id === req1.taskId);
     // 1 rejected + 1 completed = 2 rows
     expect(taskResults.length).toBe(2);
     expect(taskResults.some((r) => r.status === 'rejected')).toBe(true);
@@ -264,41 +301,52 @@ describe('E2E: Review Rejection & Redistribution', () => {
 
     await sendPRWebhook();
 
+    // Find the agent that received the first review request
+    const first = findAgentWithReviewRequest(agents);
+    expect(first).toBeDefined();
+    const taskId = first!.req.taskId;
+
     // Agent 1 rejects
-    const req1 = findReviewRequest(agents[0].pair);
-    expect(req1).toBeDefined();
-    await ctx.simulateAgentMessage(agents[0].agentId, {
+    await ctx.simulateAgentMessage(first!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_rejected',
-      taskId: req1!.taskId,
+      taskId,
       reason: 'Not my area',
     });
 
+    // Find the agent that received the redistributed task
+    const remainingAfterFirst = agents.filter((a) => a.agentId !== first!.agent.agentId);
+    const second = findAgentWithReviewRequest(remainingAfterFirst);
+    expect(second).toBeDefined();
+
     // Agent 2 errors
-    const req2 = findReviewRequest(agents[1].pair);
-    expect(req2).toBeDefined();
-    await ctx.simulateAgentMessage(agents[1].agentId, {
+    await ctx.simulateAgentMessage(second!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_error',
-      taskId: req2!.taskId,
+      taskId,
       error: 'API rate limited',
     });
 
+    // Find the last remaining agent
+    const remainingAfterSecond = remainingAfterFirst.filter(
+      (a) => a.agentId !== second!.agent.agentId,
+    );
+    const third = findAgentWithReviewRequest(remainingAfterSecond);
+    expect(third).toBeDefined();
+
     // Agent 3 errors
-    const req3 = findReviewRequest(agents[2].pair);
-    expect(req3).toBeDefined();
-    await ctx.simulateAgentMessage(agents[2].agentId, {
+    await ctx.simulateAgentMessage(third!.agent.agentId, {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       type: 'review_error',
-      taskId: req3!.taskId,
+      taskId,
       error: 'Timeout',
     });
 
     const tasks = ctx.supabase.getTable('review_tasks');
-    const task = tasks.find((t) => t.id === req1!.taskId);
+    const task = tasks.find((t) => t.id === taskId);
     expect(task).toBeDefined();
     expect(task!.status).toBe('failed');
   });

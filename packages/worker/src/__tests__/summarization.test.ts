@@ -217,20 +217,26 @@ describe('summarization', () => {
   });
 
   describe('selectSummaryAgent', () => {
-    it('selects highest reputation agent not in exclude list', async () => {
+    it('selects an agent not in exclude list', async () => {
       const mockSupa = createMockSupabase();
       mockSupa._setSelectResult({
-        data: [{ id: 'agent-1' }, { id: 'agent-2' }, { id: 'agent-3' }],
+        data: [
+          { id: 'agent-1', reputation_score: 0.9 },
+          { id: 'agent-2', reputation_score: 0.5 },
+          { id: 'agent-3', reputation_score: 0.3 },
+        ],
       });
 
       const agentId = await selectSummaryAgent(mockSupa as never, ['agent-1']);
-      expect(agentId).toBe('agent-2');
+      // Should select one of agent-2 or agent-3 (not agent-1)
+      expect(agentId).not.toBe('agent-1');
+      expect(['agent-2', 'agent-3']).toContain(agentId);
     });
 
     it('returns null when all agents excluded', async () => {
       const mockSupa = createMockSupabase();
       mockSupa._setSelectResult({
-        data: [{ id: 'agent-1' }],
+        data: [{ id: 'agent-1', reputation_score: 0.5 }],
       });
 
       const agentId = await selectSummaryAgent(mockSupa as never, ['agent-1']);
@@ -243,6 +249,27 @@ describe('summarization', () => {
 
       const agentId = await selectSummaryAgent(mockSupa as never, []);
       expect(agentId).toBeNull();
+    });
+
+    it('returns null when data is empty array', async () => {
+      const mockSupa = createMockSupabase();
+      mockSupa._setSelectResult({ data: [] });
+
+      const agentId = await selectSummaryAgent(mockSupa as never, []);
+      expect(agentId).toBeNull();
+    });
+
+    it('returns the only eligible agent when just one candidate', async () => {
+      const mockSupa = createMockSupabase();
+      mockSupa._setSelectResult({
+        data: [
+          { id: 'agent-1', reputation_score: 0.9 },
+          { id: 'agent-2', reputation_score: 0.5 },
+        ],
+      });
+
+      const agentId = await selectSummaryAgent(mockSupa as never, ['agent-1']);
+      expect(agentId).toBe('agent-2');
     });
   });
 
