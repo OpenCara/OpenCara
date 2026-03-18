@@ -156,16 +156,41 @@ All 10 milestones (M0-M9) are DONE. The MVP acceptance criteria are met:
 - #61 [cli-dev, DONE] CLI WebSocket disconnects — diagnostics + reconnect stability — PR #68 merged
 - #62 [cli-dev, DONE] Tool executor stdin delivery + stderr capture — PR #68 merged
 - #63 [cli-dev, DONE] Configurable agent tool command via template string — PR #76 merged
-- #64 [breakdown] Dashboard redesign: CLI-first personal stats + public web project stats
+- #64 [breakdown, DONE] Dashboard redesign: CLI-first personal stats + public web project stats
   - #69 [architect, DONE] Shared types: remove leaderboard, add trust tier + project stats — PR #74 merged
   - #70 [worker-dev, DONE] Worker: project stats API + trust tier — PR #75 merged
-  - #71 [web-dev, IN PROGRESS] Web: landing + public community page, no auth
-  - #72 [cli-dev, IN PROGRESS] CLI: enrich stats with trust tier + quality
+  - #71 [web-dev, DONE] Web: landing + public community page, no auth — PR #77 merged
+  - #72 [cli-dev, DONE] CLI: enrich stats with trust tier + quality — PR #78 merged
+- #73 [cli-dev, DONE] Configurable stability threshold for agent start — PR #79 merged
+- #82 [worker-dev, DONE] Use GitHub PR Review API instead of issue comments — PR #93 merged
+- #83 [worker-dev, DONE] Always synthesize reviews, even in single-agent mode — PR #93 merged
+- #84 [worker-dev, DONE] Add preferred_models support to .review.yml — PR #104 merged
+- #85 [cli-dev, DONE] Add --all flag to start all agents concurrently — PR #109 merged
+- #86 [cli-dev, DONE] Local-config-driven agent management — PR #89 merged
+- #87 [cli-dev, DONE] Fix token counting + per-agent limits — PR #94 merged
+- #88 [worker-dev, DONE] Post timeout comment on PR + /review retry — PR #108 merged
+- #91 [direct, DONE] Rebrand OpenCrust → OpenCara — PR #91 merged
+- #92 [direct, DONE] Post-rebrand fixes: template interpolation + CLI auth — PR #92 merged
+- #95 [worker-dev, DONE] Use accurate reviewCount, pick exact reviewer count — PR #97 merged
+- #96 [worker-dev, DONE] Single-agent PR Review API with inline comments — PR #97 merged
+- #99 [worker-dev, DONE] Add trigger control for reviews — PR #103 merged
+- #100 [worker-dev, DONE] Don't store diff_content in database — PR #107 merged
+- #101 [worker-dev, DONE] Show contributor GitHub profile in reviews — PR #106 merged
+- #102 [cli-dev, DONE] Fix periodic WebSocket disconnect (code=1006) — PR #105 merged
+- #110 [direct, DONE] E2E test suite + multi-agent review redesign with synthesizer — PR #110 merged
 
 ## Backlog
 
 - #35 [worker-dev, DONE] Optimize leaderboard endpoint — resolved by PR #75 (endpoint removed)
 - #38 [worker-dev, priority:low] Implement installation event handlers — project upsert and cleanup
+- #80 [cli-dev, priority:low] Add growth trends to opencrust stats
+- #81 [cli-dev, priority:low] Add expertise areas to opencrust stats
+- #90 [worker-dev, priority:low] Dynamic tool/model registry — admin API + database storage
+- #111 [worker-dev, DONE] Evenly distribute review tasks across agents (load balancing) — PR #117 merged
+- #112 [breakdown] Allow agents to configure target repos for review
+  - #113 [architect, DONE] Shared types: repo config + protocol extension — PR #116 merged
+  - #114 [worker-dev, IN PROGRESS] Filter agents by repo preferences
+  - #115 [cli-dev, blocked by #114] Parse and send repo config preferences
 
 ## Dependency Graph
 
@@ -177,36 +202,53 @@ M0 → M2 → M4       M5 → M9
 
 ## Merged PRs
 
-| PR  | Issue  | Agent      | Date       | Description                                                     |
-| --- | ------ | ---------- | ---------- | --------------------------------------------------------------- |
-| #2  | #1     | architect  | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup                         |
-| #6  | #5     | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints                             |
-| #7  | #4     | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint                                |
-| #10 | #8     | cli-dev    | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket               |
-| #12 | #9     | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
-| #15 | #11    | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
-| #16 | #14    | cli-dev    | 2026-03-16 | M5-C CLI AI-powered review execution engine                     |
-| #17 | #13    | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution     |
-| #21 | #18    | architect  | 2026-03-16 | Fix pre-existing typecheck and formatting issues                |
-| #22 | #20    | cli-dev    | 2026-03-16 | M6-C CLI Summary Execution Engine                               |
-| #23 | #19    | worker-dev | 2026-03-16 | M6-W Multi-Agent Dispatch + Summarization Trigger               |
-| #28 | #26    | worker-dev | 2026-03-16 | M9-W Consumption Stats API Endpoint                             |
-| #29 | #25    | worker-dev | 2026-03-16 | M7 Reputation System — Wilson Scoring + Leaderboard             |
-| #30 | #27    | cli-dev    | 2026-03-16 | M9-C CLI Stats Command + Local Consumption Limits               |
-| #36 | #33    | worker-dev | 2026-03-16 | M8-WK Web OAuth Callback Endpoint                               |
-| #37 | #31,32 | web-dev    | 2026-03-16 | M8 Landing Page, Layout, Leaderboard                            |
-| #39 | #34    | web-dev    | 2026-03-16 | M8 Dashboard — Personal Stats + Consumption                     |
-| #42 | #40    | architect  | 2026-03-16 | Deployment guide + rating uniqueness constraint                 |
-| #44 | #41    | web-dev    | 2026-03-16 | Fix dashboard quality — hydration, errors, AbortController      |
-| #45 | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                   |
-| #49 | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API     |
-| #50 | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                |
-| #52 | #51    | worker-dev | 2026-03-16 | Fix WebSocket disconnect on authentication                      |
-| #54 | #53    | worker-dev | 2026-03-16 | Fix WebSocket reconnect loop — stale close guard + code 4002    |
-| #56 | #55    | worker-dev | 2026-03-16 | Fix WebSocket re-entrance: debounce + skip pickup on reconnect  |
-| #59 | #57,46 | worker-dev | 2026-03-17 | Fix E2E review loop — default config, reconnect pickup          |
-| #60 | #58    | architect  | 2026-03-17 | Migrate from npm to pnpm with global virtual store              |
-| #68 | #61,62 | cli-dev    | 2026-03-17 | WebSocket diagnostics + tool executor stdin delivery            |
-| #74 | #69    | architect  | 2026-03-17 | Remove leaderboard types, add trust tier + project stats        |
-| #75 | #70,35 | worker-dev | 2026-03-17 | Replace leaderboard with project stats + trust tier API         |
-| #76 | #63    | cli-dev    | 2026-03-17 | Configurable agent tool command via template strings            |
+| PR   | Issue  | Agent      | Date       | Description                                                     |
+| ---- | ------ | ---------- | ---------- | --------------------------------------------------------------- |
+| #2   | #1     | architect  | 2026-03-16 | M0 Project Scaffolding — Monorepo Setup                         |
+| #6   | #5     | worker-dev | 2026-03-16 | M2 Database Schema + Auth Endpoints                             |
+| #7   | #4     | worker-dev | 2026-03-16 | M1 GitHub App + Webhook Endpoint                                |
+| #10  | #8     | cli-dev    | 2026-03-16 | M3 Agent CLI — Login, Agent Management, WebSocket               |
+| #12  | #9     | worker-dev | 2026-03-16 | M4 Durable Objects — Agent WebSocket & Task Distribution        |
+| #15  | #11    | architect  | 2026-03-16 | Test coverage to near 100% (245 tests, 100% statement coverage) |
+| #16  | #14    | cli-dev    | 2026-03-16 | M5-C CLI AI-powered review execution engine                     |
+| #17  | #13    | worker-dev | 2026-03-16 | M5-W Review result posting, task lifecycle & redistribution     |
+| #21  | #18    | architect  | 2026-03-16 | Fix pre-existing typecheck and formatting issues                |
+| #22  | #20    | cli-dev    | 2026-03-16 | M6-C CLI Summary Execution Engine                               |
+| #23  | #19    | worker-dev | 2026-03-16 | M6-W Multi-Agent Dispatch + Summarization Trigger               |
+| #28  | #26    | worker-dev | 2026-03-16 | M9-W Consumption Stats API Endpoint                             |
+| #29  | #25    | worker-dev | 2026-03-16 | M7 Reputation System — Wilson Scoring + Leaderboard             |
+| #30  | #27    | cli-dev    | 2026-03-16 | M9-C CLI Stats Command + Local Consumption Limits               |
+| #36  | #33    | worker-dev | 2026-03-16 | M8-WK Web OAuth Callback Endpoint                               |
+| #37  | #31,32 | web-dev    | 2026-03-16 | M8 Landing Page, Layout, Leaderboard                            |
+| #39  | #34    | web-dev    | 2026-03-16 | M8 Dashboard — Personal Stats + Consumption                     |
+| #42  | #40    | architect  | 2026-03-16 | Deployment guide + rating uniqueness constraint                 |
+| #44  | #41    | web-dev    | 2026-03-16 | Fix dashboard quality — hydration, errors, AbortController      |
+| #45  | #43    | worker-dev | 2026-03-16 | Fix CORS origin validation + security headers                   |
+| #49  | #47    | cli-dev    | 2026-03-16 | Refactor CLI to invoke local tools instead of Anthropic API     |
+| #50  | #48    | worker-dev | 2026-03-16 | Distribute pending tasks when agent comes online                |
+| #52  | #51    | worker-dev | 2026-03-16 | Fix WebSocket disconnect on authentication                      |
+| #54  | #53    | worker-dev | 2026-03-16 | Fix WebSocket reconnect loop — stale close guard + code 4002    |
+| #56  | #55    | worker-dev | 2026-03-16 | Fix WebSocket re-entrance: debounce + skip pickup on reconnect  |
+| #59  | #57,46 | worker-dev | 2026-03-17 | Fix E2E review loop — default config, reconnect pickup          |
+| #60  | #58    | architect  | 2026-03-17 | Migrate from npm to pnpm with global virtual store              |
+| #68  | #61,62 | cli-dev    | 2026-03-17 | WebSocket diagnostics + tool executor stdin delivery            |
+| #74  | #69    | architect  | 2026-03-17 | Remove leaderboard types, add trust tier + project stats        |
+| #75  | #70,35 | worker-dev | 2026-03-17 | Replace leaderboard with project stats + trust tier API         |
+| #76  | #63    | cli-dev    | 2026-03-17 | Configurable agent tool command via template strings            |
+| #77  | #71    | web-dev    | 2026-03-17 | Strip to landing page + public community stats                  |
+| #78  | #72    | cli-dev    | 2026-03-17 | Enrich opencrust stats with trust tier + review quality         |
+| #79  | #73    | cli-dev    | 2026-03-17 | Configurable stability threshold for agent start                |
+| #89  | #86    | cli-dev    | 2026-03-17 | Local-config-driven agent management                            |
+| #91  | —      | direct     | 2026-03-17 | Rebrand OpenCrust → OpenCara                                    |
+| #92  | —      | direct     | 2026-03-17 | Post-rebrand fixes: template interpolation + CLI auth           |
+| #93  | #82,83 | direct     | 2026-03-17 | Use GitHub PR Review API + revised review pipeline              |
+| #94  | #87    | direct     | 2026-03-17 | Fix token counting + per-agent limits                           |
+| #97  | #95,96 | direct     | 2026-03-17 | reviewCount + inline PR review comments                         |
+| #103 | #99    | direct     | 2026-03-17 | Add trigger control for reviews                                 |
+| #104 | #84    | direct     | 2026-03-17 | Add preferred_models support to .review.yml                     |
+| #105 | #102   | direct     | 2026-03-17 | RFC 6455 WebSocket ping frames to prevent disconnects           |
+| #106 | #101   | direct     | 2026-03-17 | Show contributor GitHub profile in reviews                      |
+| #107 | #100   | direct     | 2026-03-17 | Don't store diff_content in database — fetch on demand          |
+| #108 | #88    | direct     | 2026-03-17 | Post timeout comment on PR when review times out                |
+| #109 | #85    | direct     | 2026-03-17 | Add --all flag to start all agents concurrently                 |
+| #110 | —      | direct     | 2026-03-18 | E2E test suite + multi-agent review redesign with synthesizer   |
