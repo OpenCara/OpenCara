@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   parseTimeoutMs,
   filterByAccessList,
+  filterByRepoConfig,
+  isValidRepoConfig,
   selectAgents,
   agentWeight,
   weightedRandomSelect,
@@ -18,6 +20,7 @@ function makeAgent(overrides: Partial<EligibleAgent> = {}): EligibleAgent {
     model: 'gpt-4',
     tool: 'cursor',
     reputationScore: 0.8,
+    repoConfig: null,
     ...overrides,
   };
 }
@@ -400,5 +403,216 @@ describe('partitionByLoad', () => {
 
   it('MAX_IN_FLIGHT_THRESHOLD is 2', () => {
     expect(MAX_IN_FLIGHT_THRESHOLD).toBe(2);
+  });
+});
+
+describe('filterByRepoConfig', () => {
+  it('includes agents with null repoConfig (default = accept all)', () => {
+    const agents = [
+      makeAgent({ id: 'a1', repoConfig: null }),
+      makeAgent({ id: 'a2', repoConfig: null }),
+    ];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(2);
+  });
+
+  it('includes agents with mode: all', () => {
+    const agents = [makeAgent({ id: 'a1', repoConfig: { mode: 'all' } })];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(1);
+  });
+
+  it('mode: own — includes agent when owner matches userName', () => {
+    const agents = [makeAgent({ id: 'a1', userName: 'alice', repoConfig: { mode: 'own' } })];
+    const result = filterByRepoConfig(agents, 'alice', 'my-repo');
+    expect(result).toHaveLength(1);
+  });
+
+  it('mode: own — excludes agent when owner does not match userName', () => {
+    const agents = [makeAgent({ id: 'a1', userName: 'alice', repoConfig: { mode: 'own' } })];
+    const result = filterByRepoConfig(agents, 'bob', 'some-repo');
+    expect(result).toHaveLength(0);
+  });
+
+  it('mode: whitelist — includes agent when repo is in list', () => {
+    const agents = [
+      makeAgent({
+        id: 'a1',
+        repoConfig: { mode: 'whitelist', list: ['OpenCara/OpenCara', 'myorg/my-project'] },
+      }),
+    ];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(1);
+  });
+
+  it('mode: whitelist — excludes agent when repo is not in list', () => {
+    const agents = [
+      makeAgent({
+        id: 'a1',
+        repoConfig: { mode: 'whitelist', list: ['OpenCara/OpenCara'] },
+      }),
+    ];
+    const result = filterByRepoConfig(agents, 'other-org', 'other-repo');
+    expect(result).toHaveLength(0);
+  });
+
+  it('mode: whitelist — excludes agent when list is empty', () => {
+    const agents = [makeAgent({ id: 'a1', repoConfig: { mode: 'whitelist', list: [] } })];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(0);
+  });
+
+  it('mode: whitelist — excludes agent when list is undefined', () => {
+    const agents = [makeAgent({ id: 'a1', repoConfig: { mode: 'whitelist' } })];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(0);
+  });
+
+  it('mode: blacklist — excludes agent when repo is in list', () => {
+    const agents = [
+      makeAgent({
+        id: 'a1',
+        repoConfig: { mode: 'blacklist', list: ['spam-org/spam-repo'] },
+      }),
+    ];
+    const result = filterByRepoConfig(agents, 'spam-org', 'spam-repo');
+    expect(result).toHaveLength(0);
+  });
+
+  it('mode: blacklist — includes agent when repo is not in list', () => {
+    const agents = [
+      makeAgent({
+        id: 'a1',
+        repoConfig: { mode: 'blacklist', list: ['spam-org/spam-repo'] },
+      }),
+    ];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(1);
+  });
+
+  it('mode: blacklist — includes agent when list is empty', () => {
+    const agents = [makeAgent({ id: 'a1', repoConfig: { mode: 'blacklist', list: [] } })];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(1);
+  });
+
+  it('mode: blacklist — includes agent when list is undefined', () => {
+    const agents = [makeAgent({ id: 'a1', repoConfig: { mode: 'blacklist' } })];
+    const result = filterByRepoConfig(agents, 'OpenCara', 'OpenCara');
+    expect(result).toHaveLength(1);
+  });
+
+  it('mixed modes — filters correctly across multiple agents', () => {
+    const agents = [
+      makeAgent({ id: 'a1', userName: 'alice', repoConfig: null }), // accept all
+      makeAgent({ id: 'a2', userName: 'bob', repoConfig: { mode: 'own' } }), // bob != alice
+      makeAgent({
+        id: 'a3',
+        userName: 'charlie',
+        repoConfig: { mode: 'whitelist', list: ['alice/my-repo'] },
+      }), // match
+      makeAgent({
+        id: 'a4',
+        userName: 'dave',
+        repoConfig: { mode: 'blacklist', list: ['alice/my-repo'] },
+      }), // excluded
+      makeAgent({ id: 'a5', userName: 'eve', repoConfig: { mode: 'all' } }), // accept all
+    ];
+    const result = filterByRepoConfig(agents, 'alice', 'my-repo');
+    expect(result.map((a) => a.id)).toEqual(['a1', 'a3', 'a5']);
+  });
+
+  it('returns empty array when no agents match', () => {
+    const agents = [
+      makeAgent({ id: 'a1', repoConfig: { mode: 'whitelist', list: ['other/repo'] } }),
+      makeAgent({ id: 'a2', repoConfig: { mode: 'own' }, userName: 'bob' }),
+    ];
+    const result = filterByRepoConfig(agents, 'alice', 'my-repo');
+    expect(result).toHaveLength(0);
+  });
+
+  it('returns all agents when all have null config', () => {
+    const agents = [
+      makeAgent({ id: 'a1', repoConfig: null }),
+      makeAgent({ id: 'a2', repoConfig: null }),
+      makeAgent({ id: 'a3', repoConfig: null }),
+    ];
+    const result = filterByRepoConfig(agents, 'any', 'repo');
+    expect(result).toHaveLength(3);
+  });
+
+  it('handles empty agents array', () => {
+    const result = filterByRepoConfig([], 'owner', 'repo');
+    expect(result).toEqual([]);
+  });
+
+  it('logs warning for unknown mode values', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const agents = [
+      makeAgent({
+        id: 'a1',
+        repoConfig: { mode: 'unknown' as 'all' },
+      }),
+    ];
+    const result = filterByRepoConfig(agents, 'owner', 'repo');
+    expect(result).toHaveLength(1); // default: return true
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown repoConfig mode'));
+    warnSpy.mockRestore();
+  });
+});
+
+describe('isValidRepoConfig', () => {
+  it('returns true for valid mode: all', () => {
+    expect(isValidRepoConfig({ mode: 'all' })).toBe(true);
+  });
+
+  it('returns true for valid mode: own', () => {
+    expect(isValidRepoConfig({ mode: 'own' })).toBe(true);
+  });
+
+  it('returns true for valid mode: whitelist with list', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist', list: ['org/repo'] })).toBe(true);
+  });
+
+  it('returns true for valid mode: blacklist with list', () => {
+    expect(isValidRepoConfig({ mode: 'blacklist', list: ['org/repo'] })).toBe(true);
+  });
+
+  it('returns true for valid mode with undefined list', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist' })).toBe(true);
+  });
+
+  it('returns true for valid mode with empty list', () => {
+    expect(isValidRepoConfig({ mode: 'all', list: [] })).toBe(true);
+  });
+
+  it('returns false for null', () => {
+    expect(isValidRepoConfig(null)).toBe(false);
+  });
+
+  it('returns false for non-object', () => {
+    expect(isValidRepoConfig('all')).toBe(false);
+    expect(isValidRepoConfig(42)).toBe(false);
+    expect(isValidRepoConfig(true)).toBe(false);
+  });
+
+  it('returns false for missing mode', () => {
+    expect(isValidRepoConfig({})).toBe(false);
+    expect(isValidRepoConfig({ list: ['org/repo'] })).toBe(false);
+  });
+
+  it('returns false for invalid mode', () => {
+    expect(isValidRepoConfig({ mode: 'invalid' })).toBe(false);
+    expect(isValidRepoConfig({ mode: 123 })).toBe(false);
+  });
+
+  it('returns false for non-array list', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist', list: 'org/repo' })).toBe(false);
+    expect(isValidRepoConfig({ mode: 'whitelist', list: 42 })).toBe(false);
+  });
+
+  it('returns false for list with non-string items', () => {
+    expect(isValidRepoConfig({ mode: 'whitelist', list: [42, 'org/repo'] })).toBe(false);
+    expect(isValidRepoConfig({ mode: 'whitelist', list: [null] })).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import type { ReviewConfig } from '@opencara/shared';
+import type { RepoConfig, ReviewConfig } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
 
@@ -9,6 +9,7 @@ export interface EligibleAgent {
   model: string;
   tool: string;
   reputationScore: number;
+  repoConfig: RepoConfig | null;
 }
 
 export interface DistributeTaskParams {
@@ -38,7 +39,7 @@ export async function findEligibleAgents(
 ): Promise<EligibleAgent[]> {
   const { data, error } = await supabase
     .from('agents')
-    .select('id, user_id, model, tool, reputation_score, users!inner(name)')
+    .select('id, user_id, model, tool, reputation_score, repo_config, users!inner(name)')
     .eq('status', 'online')
     .gte('reputation_score', minReputation)
     .order('created_at', { ascending: true });
@@ -51,10 +52,11 @@ export async function findEligibleAgents(
   return (data as Record<string, unknown>[]).map((row) => ({
     id: row.id as string,
     userId: row.user_id as string,
-    userName: (row.users as Record<string, unknown>).name as string,
+    userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
     model: row.model as string,
     tool: row.tool as string,
     reputationScore: row.reputation_score as number,
+    repoConfig: (row.repo_config as RepoConfig | null) ?? null,
   }));
 }
 
@@ -88,6 +90,46 @@ export function filterByAccessList(
   }
 
   return filtered;
+}
+
+/** Filter agents by their repo preferences against the target repo. */
+export function filterByRepoConfig(
+  agents: EligibleAgent[],
+  targetOwner: string,
+  targetRepo: string,
+): EligibleAgent[] {
+  return agents.filter((agent) => {
+    if (!agent.repoConfig) return true; // null = accept all
+    const fullRepo = `${targetOwner}/${targetRepo}`;
+    switch (agent.repoConfig.mode) {
+      case 'all':
+        return true;
+      case 'own':
+        return agent.userName === targetOwner;
+      case 'whitelist':
+        return (agent.repoConfig.list ?? []).includes(fullRepo);
+      case 'blacklist':
+        return !(agent.repoConfig.list ?? []).includes(fullRepo);
+      default:
+        console.warn(
+          `Agent ${agent.id} has unknown repoConfig mode: ${String(agent.repoConfig.mode)}`,
+        );
+        return true;
+    }
+  });
+}
+
+/** Validate that a value is a valid RepoConfig structure. */
+export function isValidRepoConfig(value: unknown): value is RepoConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  const validModes = ['all', 'own', 'whitelist', 'blacklist'];
+  if (typeof obj.mode !== 'string' || !validModes.includes(obj.mode)) return false;
+  if ('list' in obj && obj.list !== undefined) {
+    if (!Array.isArray(obj.list)) return false;
+    if (!obj.list.every((item: unknown) => typeof item === 'string')) return false;
+  }
+  return true;
 }
 
 export const MAX_AGENTS_PER_TASK = 10;
@@ -332,15 +374,15 @@ export async function distributeTask(
 
   // 4. Find eligible agents and partition by in-flight load
   const allAgents = await findEligibleAgents(supabase, config.agents.minReputation);
-  const filtered = filterByAccessList(
+  const accessFiltered = filterByAccessList(
     allAgents,
     config.reviewer.whitelist,
     config.reviewer.blacklist,
   );
+  const filtered = filterByRepoConfig(accessFiltered, owner, repo);
 
   // Query each candidate's DO for in-flight task count; partition into low-load / overflow
   const { lowLoad, overflow } = await partitionByLoad(env, filtered);
-
   // For multi-agent: select reviewCount + 1 so we can reserve one as synthesizer
   const selectionCount =
     config.agents.reviewCount > 1 ? config.agents.reviewCount + 1 : config.agents.reviewCount;

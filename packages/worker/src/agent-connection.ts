@@ -1,4 +1,5 @@
 import type {
+  AgentPreferencesMessage,
   ReviewCompleteMessage,
   ReviewRejectedMessage,
   ReviewErrorMessage,
@@ -19,6 +20,7 @@ import {
   fetchCompletedReviews,
   fetchReviewContributors,
 } from './summarization.js';
+import { filterByRepoConfig, isValidRepoConfig, type EligibleAgent } from './task-distribution.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
@@ -187,6 +189,9 @@ export class AgentConnection implements DurableObject {
       case 'heartbeat_pong':
         await this.state.storage.put('lastHeartbeatAt', new Date().toISOString());
         break;
+      case 'agent_preferences':
+        await this.handleAgentPreferences(msg as unknown as AgentPreferencesMessage);
+        break;
       case 'review_complete':
         await this.handleReviewComplete(msg as unknown as ReviewCompleteMessage);
         break;
@@ -274,6 +279,17 @@ export class AgentConnection implements DurableObject {
     agentId: string,
     supabase: ReturnType<typeof createSupabaseClient>,
   ): Promise<void> {
+    // Look up agent's repo preferences for filtering
+    const { data: agentData } = await supabase
+      .from('agents')
+      .select('repo_config, users!inner(name)')
+      .eq('id', agentId)
+      .single();
+
+    const agentRepoConfig = (agentData?.repo_config as EligibleAgent['repoConfig']) ?? null;
+    const agentUserName =
+      ((agentData?.users as unknown as Record<string, unknown>)?.name as string) ?? '';
+
     // Query review_tasks with status='pending' that haven't expired
     const { data: pendingTasks } = await supabase
       .from('review_tasks')
@@ -296,6 +312,24 @@ export class AgentConnection implements DurableObject {
 
       if (remainingSeconds <= MIN_REMAINING_SECONDS_FOR_PICKUP) continue;
 
+      // Check repo config filter before claiming the task
+      const project = task.projects as unknown as {
+        owner: string;
+        repo: string;
+        github_installation_id: number;
+      };
+
+      const dummyAgent: EligibleAgent = {
+        id: agentId,
+        userId: '',
+        userName: agentUserName,
+        model: '',
+        tool: '',
+        reputationScore: 0,
+        repoConfig: agentRepoConfig,
+      };
+      if (filterByRepoConfig([dummyAgent], project.owner, project.repo).length === 0) continue;
+
       // CAS transition: pending -> reviewing (prevents race with other agents)
       const { error } = await supabase
         .from('review_tasks')
@@ -304,12 +338,6 @@ export class AgentConnection implements DurableObject {
         .eq('status', 'pending');
 
       if (error) continue; // Another agent got it first
-
-      const project = task.projects as unknown as {
-        owner: string;
-        repo: string;
-        github_installation_id: number;
-      };
       const config = (task.config_json as Record<string, unknown>) ?? {};
       const installationId = (config.installationId as number) ?? project.github_installation_id;
 
@@ -393,6 +421,44 @@ export class AgentConnection implements DurableObject {
         break; // WebSocket likely broken, stop processing
       }
     }
+  }
+
+  private async handleAgentPreferences(msg: AgentPreferencesMessage): Promise<void> {
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
+    if (!agentId) return;
+
+    if (!isValidRepoConfig(msg.repoConfig)) {
+      console.warn(`Invalid repoConfig from agent ${agentId}:`, msg.repoConfig);
+      this.sendError(4100, 'Invalid repoConfig: must have a valid mode and optional string[] list');
+      return;
+    }
+
+    const supabase = createSupabaseClient(this.env);
+    const { error } = await supabase
+      .from('agents')
+      .update({ repo_config: msg.repoConfig })
+      .eq('id', agentId);
+
+    if (error) {
+      console.error(`Failed to update repo_config for agent ${agentId}:`, error);
+      this.sendError(5000, 'Failed to save repo preferences');
+    } else {
+      console.log(`Updated repo_config for agent ${agentId}: mode=${msg.repoConfig.mode}`);
+    }
+  }
+
+  private sendError(code: number, message: string): void {
+    const websockets = this.state.getWebSockets();
+    if (websockets.length === 0) return;
+    websockets[0].send(
+      JSON.stringify({
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        type: 'error',
+        code,
+        message,
+      }),
+    );
   }
 
   private async handlePushTask(request: Request): Promise<Response> {
@@ -750,23 +816,6 @@ export class AgentConnection implements DurableObject {
 
     const excludedAgentIds = (previousAttempts ?? []).map((r: { agent_id: string }) => r.agent_id);
 
-    // Find another eligible online agent with reputation >= 0
-    const { data: candidates } = await supabase
-      .from('agents')
-      .select('id')
-      .eq('status', 'online')
-      .gte('reputation_score', 0);
-
-    const eligible = (candidates ?? []).filter(
-      (a: { id: string }) => !excludedAgentIds.includes(a.id),
-    );
-
-    if (eligible.length === 0) {
-      await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
-      console.log(`Task ${taskId} failed: no eligible agents remaining`);
-      return;
-    }
-
     // Look up task info for redistribution (including stored diff and config)
     const { data: taskData } = await supabase
       .from('review_tasks')
@@ -787,6 +836,33 @@ export class AgentConnection implements DurableObject {
       github_installation_id: number;
     };
 
+    // Find another eligible online agent with reputation >= 0
+    const { data: candidates } = await supabase
+      .from('agents')
+      .select('id, user_id, model, tool, reputation_score, repo_config, users!inner(name)')
+      .eq('status', 'online')
+      .gte('reputation_score', 0);
+
+    const allCandidates: EligibleAgent[] = ((candidates ?? []) as Record<string, unknown>[])
+      .filter((a) => !excludedAgentIds.includes(a.id as string))
+      .map((row) => ({
+        id: row.id as string,
+        userId: row.user_id as string,
+        userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
+        model: row.model as string,
+        tool: row.tool as string,
+        reputationScore: row.reputation_score as number,
+        repoConfig: (row.repo_config as EligibleAgent['repoConfig']) ?? null,
+      }));
+
+    const eligible = filterByRepoConfig(allCandidates, project.owner, project.repo);
+
+    if (eligible.length === 0) {
+      await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
+      console.log(`Task ${taskId} failed: no eligible agents remaining`);
+      return;
+    }
+
     const config = (taskData.config_json as Record<string, unknown>) ?? {};
     const timeoutAt = new Date(taskData.timeout_at as string).getTime();
     const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
@@ -806,7 +882,7 @@ export class AgentConnection implements DurableObject {
     }
 
     // Push task to the next eligible agent's DO
-    const nextAgentId = (eligible[0] as { id: string }).id;
+    const nextAgentId = eligible[0].id;
     try {
       const doId = this.env.AGENT_CONNECTION.idFromName(nextAgentId);
       const stub = this.env.AGENT_CONNECTION.get(doId);

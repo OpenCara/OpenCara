@@ -11,7 +11,9 @@ describe('E2E: Web OAuth Flow', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -32,9 +34,7 @@ describe('E2E: Web OAuth Flow', () => {
     expect(url.hostname).toBe('github.com');
     expect(url.pathname).toBe('/login/oauth/authorize');
     expect(url.searchParams.get('client_id')).toBe('test-client-id');
-    expect(url.searchParams.get('redirect_uri')).toBe(
-      'https://api.opencara.dev/auth/callback',
-    );
+    expect(url.searchParams.get('redirect_uri')).toBe('https://api.opencara.dev/auth/callback');
     expect(url.searchParams.get('scope')).toBe('read:user');
     expect(url.searchParams.get('state')).toBeTruthy();
   });
@@ -94,19 +94,16 @@ describe('E2E: Web OAuth Flow', () => {
     };
 
     // Login to get state
-    const loginRes = await ctx.workerFetch(
-      new Request('https://api.opencara.dev/auth/login'),
-    );
+    const loginRes = await ctx.workerFetch(new Request('https://api.opencara.dev/auth/login'));
     const location = loginRes.headers.get('Location')!;
     const state = new URL(location).searchParams.get('state')!;
     const stateCookie = loginRes.headers.get('Set-Cookie')!.split(';')[0];
 
     // Callback
     const callbackRes = await ctx.workerFetch(
-      new Request(
-        `https://api.opencara.dev/auth/callback?code=test-code&state=${state}`,
-        { headers: { Cookie: stateCookie } },
-      ),
+      new Request(`https://api.opencara.dev/auth/callback?code=test-code&state=${state}`, {
+        headers: { Cookie: stateCookie },
+      }),
     );
 
     // Check that Set-Cookie contains opencara_session
@@ -132,16 +129,12 @@ describe('E2E: Web OAuth Flow', () => {
     expect(res1.status).toBe(400);
 
     // Missing state
-    const req2 = new Request(
-      'https://api.opencara.dev/auth/callback?code=test-code',
-    );
+    const req2 = new Request('https://api.opencara.dev/auth/callback?code=test-code');
     const res2 = await ctx.workerFetch(req2);
     expect(res2.status).toBe(400);
 
     // Missing code
-    const req3 = new Request(
-      'https://api.opencara.dev/auth/callback?state=test-state',
-    );
+    const req3 = new Request('https://api.opencara.dev/auth/callback?state=test-state');
     const res3 = await ctx.workerFetch(req3);
     expect(res3.status).toBe(400);
   });

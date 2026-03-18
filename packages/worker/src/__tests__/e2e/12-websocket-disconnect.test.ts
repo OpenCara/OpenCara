@@ -11,7 +11,9 @@ describe('E2E: WebSocket Disconnect', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -24,10 +26,9 @@ describe('E2E: WebSocket Disconnect', () => {
     const agent = await ctx.createAgent(user.id as string, { status: 'online' });
     const agentId = agent.id as string;
 
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     const response = await ctx.workerFetch(wsReq);
     expect(response.status).toBe(101);
 
@@ -41,7 +42,9 @@ describe('E2E: WebSocket Disconnect', () => {
     const state = ctx.agentConnectionNS.getState(agentId)!;
     const ws = state.getWebSockets()[0];
 
-    await (instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>).webSocketClose(ws, 1000, 'normal', true);
+    await (
+      instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+    ).webSocketClose(ws, 1000, 'normal', true);
 
     const agents = ctx.supabase.getTable('agents');
     const dbAgent = agents.find((a) => a.id === agentId);
@@ -61,7 +64,9 @@ describe('E2E: WebSocket Disconnect', () => {
     const instance = ctx.agentConnectionNS.getInstance(agentId)!;
     const ws = state.getWebSockets()[0];
 
-    await (instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>).webSocketClose(ws, 1000, 'normal', true);
+    await (
+      instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+    ).webSocketClose(ws, 1000, 'normal', true);
 
     // Verify error result was inserted for the in-flight task
     const results = ctx.supabase.getTable('review_results');
@@ -84,7 +89,9 @@ describe('E2E: WebSocket Disconnect', () => {
     const instance = ctx.agentConnectionNS.getInstance(agentId)!;
     const ws = state.getWebSockets()[0];
 
-    await (instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>).webSocketClose(ws, 1000, 'normal', true);
+    await (
+      instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+    ).webSocketClose(ws, 1000, 'normal', true);
 
     // Alarm should be deleted after disconnect
     const alarmAfter = await state.storage.getAlarm();
@@ -104,7 +111,9 @@ describe('E2E: WebSocket Disconnect', () => {
     const ws = state.getWebSockets()[0];
 
     // Close with code 4002 (replaced) — should skip cleanup
-    await (instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>).webSocketClose(ws, 4002, 'replaced', true);
+    await (
+      instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+    ).webSocketClose(ws, 4002, 'replaced', true);
 
     // Agent should still be online
     const agentsAfter = ctx.supabase.getTable('agents');
@@ -123,7 +132,9 @@ describe('E2E: WebSocket Disconnect', () => {
     const state = ctx.agentConnectionNS.getState(agentId)!;
     const ws = state.getWebSockets()[0];
 
-    await (instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>).webSocketError(ws, new Error('test'));
+    await (
+      instance as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+    ).webSocketError(ws, new Error('test'));
 
     // webSocketError calls ws.close(4004, 'websocket_error')
     expect(ws.closeCode).toBe(4004);

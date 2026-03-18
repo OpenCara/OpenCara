@@ -11,7 +11,9 @@ describe('E2E: WebSocket Connection (S14, S16)', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -26,10 +28,9 @@ describe('E2E: WebSocket Connection (S14, S16)', () => {
   }
 
   async function wsConnect(agentId: string, apiKey: string) {
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     return ctx.workerFetch(wsReq);
   }
 
@@ -52,11 +53,13 @@ describe('E2E: WebSocket Connection (S14, S16)', () => {
     await wsConnect(agent.id as string, apiKey);
 
     const pair = ctx.getLastWSPair();
-    const connectedMsg = pair!.client.getReceivedParsed<{
-      type: string;
-      agentId: string;
-      version: number;
-    }>().find((m) => m.type === 'connected');
+    const connectedMsg = pair!.client
+      .getReceivedParsed<{
+        type: string;
+        agentId: string;
+        version: number;
+      }>()
+      .find((m) => m.type === 'connected');
 
     expect(connectedMsg).toBeDefined();
     expect(connectedMsg!.agentId).toBe(agent.id);

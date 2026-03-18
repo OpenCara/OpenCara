@@ -11,7 +11,9 @@ describe('E2E: Reputation System & Rating Collection', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -65,8 +67,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
       status: 'completed',
       review_text: 'Test review',
       verdict: 'approve',
-      comment_url:
-        'https://github.com/test-owner/test-repo/pull/1#issuecomment-12345',
+      comment_url: 'https://github.com/test-owner/test-repo/pull/1#issuecomment-12345',
       created_at: new Date().toISOString(),
     });
 
@@ -78,9 +79,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
 
     // Set up GitHub reactions mock
     ctx.github.options.reactions = {
-      'test-owner/test-repo/12345': [
-        { content: '+1', user: { id: 100, login: 'rater1' } },
-      ],
+      'test-owner/test-repo/12345': [{ content: '+1', user: { id: 100, login: 'rater1' } }],
     };
 
     const req = ctx.authedRequest(`/api/tasks/${taskId}/collect-ratings`, apiKey, {
@@ -97,9 +96,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
     const { apiKey, taskId, resultId } = await setupCompletedReview();
 
     ctx.github.options.reactions = {
-      'test-owner/test-repo/12345': [
-        { content: '+1', user: { id: 200, login: 'positive-rater' } },
-      ],
+      'test-owner/test-repo/12345': [{ content: '+1', user: { id: 200, login: 'positive-rater' } }],
     };
 
     const req = ctx.authedRequest(`/api/tasks/${taskId}/collect-ratings`, apiKey, {
@@ -119,9 +116,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
     const { apiKey, taskId, resultId } = await setupCompletedReview();
 
     ctx.github.options.reactions = {
-      'test-owner/test-repo/12345': [
-        { content: '-1', user: { id: 300, login: 'negative-rater' } },
-      ],
+      'test-owner/test-repo/12345': [{ content: '-1', user: { id: 300, login: 'negative-rater' } }],
     };
 
     const req = ctx.authedRequest(`/api/tasks/${taskId}/collect-ratings`, apiKey, {
@@ -173,9 +168,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
 
     // Use initial score of 0.5, positive ratings will change it
     ctx.github.options.reactions = {
-      'test-owner/test-repo/12345': [
-        { content: '+1', user: { id: 500, login: 'rater-x' } },
-      ],
+      'test-owner/test-repo/12345': [{ content: '+1', user: { id: 500, login: 'rater-x' } }],
     };
 
     const req = ctx.authedRequest(`/api/tasks/${taskId}/collect-ratings`, apiKey, {
@@ -195,9 +188,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
     const { apiKey, taskId, resultId } = await setupCompletedReview();
 
     ctx.github.options.reactions = {
-      'test-owner/test-repo/12345': [
-        { content: '+1', user: { id: 600, login: 'repeat-rater' } },
-      ],
+      'test-owner/test-repo/12345': [{ content: '+1', user: { id: 600, login: 'repeat-rater' } }],
     };
 
     // Collect ratings twice
@@ -222,11 +213,9 @@ describe('E2E: Reputation System & Rating Collection', () => {
   it('task not found returns 404', async () => {
     const { apiKey } = await setupCompletedReview();
 
-    const req = ctx.authedRequest(
-      '/api/tasks/non-existent-task-id/collect-ratings',
-      apiKey,
-      { method: 'POST' },
-    );
+    const req = ctx.authedRequest('/api/tasks/non-existent-task-id/collect-ratings', apiKey, {
+      method: 'POST',
+    });
     const res = await ctx.workerFetch(req);
     expect(res.status).toBe(404);
   });
@@ -240,11 +229,9 @@ describe('E2E: Reputation System & Rating Collection', () => {
       github_id: 999999,
     });
 
-    const req = ctx.authedRequest(
-      `/api/tasks/${taskId}/collect-ratings`,
-      otherApiKey,
-      { method: 'POST' },
-    );
+    const req = ctx.authedRequest(`/api/tasks/${taskId}/collect-ratings`, otherApiKey, {
+      method: 'POST',
+    });
     const res = await ctx.workerFetch(req);
     expect(res.status).toBe(404);
   });

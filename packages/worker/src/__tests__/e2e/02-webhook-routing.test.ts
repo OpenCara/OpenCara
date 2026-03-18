@@ -93,7 +93,11 @@ describe('Webhook Event Routing (E2E)', () => {
 
   it('issue_comment "/opencara review" from OWNER on PR triggers review task', async () => {
     // Setup: project in DB so distributeTask can find/create it
-    await ctx.createProject({ owner: 'test-owner', repo: 'test-repo', github_installation_id: 12345 });
+    await ctx.createProject({
+      owner: 'test-owner',
+      repo: 'test-repo',
+      github_installation_id: 12345,
+    });
 
     const payload = buildIssueCommentPayload({
       commentBody: '/opencara review',

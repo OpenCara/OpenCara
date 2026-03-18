@@ -30,15 +30,18 @@ export interface GitHubMockOptions {
   installationToken?: string;
   diffs?: Record<string, string>; // "owner/repo/prNumber" → diff
   reviewConfigs?: Record<string, string | null>; // "owner/repo" → YAML or null (404)
-  prDetails?: Record<string, {
-    number: number;
-    html_url: string;
-    diff_url: string;
-    base: { ref: string };
-    head: { ref: string };
-    draft?: boolean;
-    labels?: Array<{ name: string }>;
-  }>;
+  prDetails?: Record<
+    string,
+    {
+      number: number;
+      html_url: string;
+      diff_url: string;
+      base: { ref: string };
+      head: { ref: string };
+      draft?: boolean;
+      labels?: Array<{ name: string }>;
+    }
+  >;
   deviceCode?: {
     device_code: string;
     user_code: string;
@@ -67,7 +70,8 @@ export function createGitHubMock(options: GitHubMockOptions = {}): GitHubMock {
     options,
 
     interceptFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> | null {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       const method = init?.method?.toUpperCase() ?? 'GET';
       const headers = new Headers(init?.headers);
 
@@ -111,7 +115,10 @@ export function createGitHubMock(options: GitHubMockOptions = {}): GitHubMock {
       }
 
       // --- Installation tokens ---
-      if (url.match(/api\.github\.com\/app\/installations\/\d+\/access_tokens/) && method === 'POST') {
+      if (
+        url.match(/api\.github\.com\/app\/installations\/\d+\/access_tokens/) &&
+        method === 'POST'
+      ) {
         return jsonResponse({ token: options.installationToken ?? 'ghs_test_installation_token' });
       }
 
@@ -120,7 +127,11 @@ export function createGitHubMock(options: GitHubMockOptions = {}): GitHubMock {
         if (options.githubUser) {
           return jsonResponse(options.githubUser);
         }
-        return jsonResponse({ id: 12345, login: 'testuser', avatar_url: 'https://example.com/avatar.png' });
+        return jsonResponse({
+          id: 12345,
+          login: 'testuser',
+          avatar_url: 'https://example.com/avatar.png',
+        });
       }
 
       // --- PR diff ---
@@ -131,7 +142,9 @@ export function createGitHubMock(options: GitHubMockOptions = {}): GitHubMock {
 
         if (accept.includes('application/vnd.github.diff')) {
           const key = `${owner}/${repo}/${prNum}`;
-          const diff = options.diffs?.[key] ?? `diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-old line\n+new line`;
+          const diff =
+            options.diffs?.[key] ??
+            `diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-old line\n+new line`;
           return Promise.resolve(new Response(diff, { status: 200 }));
         }
 

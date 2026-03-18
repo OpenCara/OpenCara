@@ -11,7 +11,9 @@ describe('E2E: Stats Endpoints', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -178,7 +180,11 @@ describe('E2E: Stats Endpoints', () => {
     // Seed some data: agents, completed review results with proper join chain
     const { user } = await ctx.createUser({ name: 'contributor1', github_id: 20001 });
     const agent = await ctx.createAgent(user.id as string);
-    const statsProject = await ctx.createProject({ owner: 'stat-owner', repo: 'stat-repo', repo_full_name: 'stat-owner/stat-repo' });
+    const statsProject = await ctx.createProject({
+      owner: 'stat-owner',
+      repo: 'stat-repo',
+      repo_full_name: 'stat-owner/stat-repo',
+    });
     const taskId = crypto.randomUUID();
 
     ctx.supabase.getTable('review_tasks').push({

@@ -21,7 +21,11 @@ describe('Webhook Signature Validation (E2E)', () => {
     vi.restoreAllMocks();
   });
 
-  function buildSignedRequest(body: string, signature: string | null, event = 'pull_request'): Request {
+  function buildSignedRequest(
+    body: string,
+    signature: string | null,
+    event = 'pull_request',
+  ): Request {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-GitHub-Event': event,
@@ -49,7 +53,12 @@ describe('Webhook Signature Validation (E2E)', () => {
     const payload = buildPullRequestPayload();
     const body = JSON.stringify(payload);
 
-    const res = await ctx.workerFetch(buildSignedRequest(body, 'sha256=0000000000000000000000000000000000000000000000000000000000000000'));
+    const res = await ctx.workerFetch(
+      buildSignedRequest(
+        body,
+        'sha256=0000000000000000000000000000000000000000000000000000000000000000',
+      ),
+    );
     expect(res.status).toBe(401);
   });
 

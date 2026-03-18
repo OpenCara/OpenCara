@@ -12,7 +12,9 @@ describe('E2E: Single-Agent Review Loop', () => {
 
   beforeEach(() => {
     ctx = createE2EContext();
-    vi.mocked(createSupabaseClient).mockReturnValue(ctx.supabase.client as ReturnType<typeof createSupabaseClient>);
+    vi.mocked(createSupabaseClient).mockReturnValue(
+      ctx.supabase.client as ReturnType<typeof createSupabaseClient>,
+    );
   });
 
   afterEach(() => {
@@ -48,10 +50,9 @@ describe('E2E: Single-Agent Review Loop', () => {
     });
 
     const agentId = agent.id as string;
-    const wsReq = new Request(
-      `https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`,
-      { headers: { Upgrade: 'websocket' } },
-    );
+    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
+      headers: { Upgrade: 'websocket' },
+    });
     await ctx.workerFetch(wsReq);
 
     const pair = ctx.getLastWSPair()!;
@@ -129,9 +130,7 @@ describe('E2E: Single-Agent Review Loop', () => {
     const taskId = await fullReviewFlow(agentId, pair);
 
     const results = ctx.supabase.getTable('review_results');
-    const result = results.find(
-      (r) => r.review_task_id === taskId && r.status === 'completed',
-    );
+    const result = results.find((r) => r.review_task_id === taskId && r.status === 'completed');
     expect(result).toBeDefined();
     expect(result!.comment_url).toBeDefined();
     expect(typeof result!.comment_url).toBe('string');
@@ -154,9 +153,7 @@ describe('E2E: Single-Agent Review Loop', () => {
     const taskId = await fullReviewFlow(agentId, pair);
 
     const logs = ctx.supabase.getTable('consumption_logs');
-    const log = logs.find(
-      (l) => l.review_task_id === taskId && l.agent_id === agentId,
-    );
+    const log = logs.find((l) => l.review_task_id === taskId && l.agent_id === agentId);
     expect(log).toBeDefined();
     expect(log!.tokens_used).toBe(1500);
   });

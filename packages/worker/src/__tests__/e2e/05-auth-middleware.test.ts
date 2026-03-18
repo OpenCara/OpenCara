@@ -31,9 +31,7 @@ describe('Auth Middleware (E2E)', () => {
   });
 
   it('GET /api/agents without auth returns 401', async () => {
-    const res = await ctx.workerFetch(
-      new Request('https://api.opencara.dev/api/agents'),
-    );
+    const res = await ctx.workerFetch(new Request('https://api.opencara.dev/api/agents'));
     expect(res.status).toBe(401);
   });
 
@@ -63,9 +61,7 @@ describe('Auth Middleware (E2E)', () => {
   });
 
   it('GET /api/stats/{agentId} without auth returns 401', async () => {
-    const res = await ctx.workerFetch(
-      new Request(`https://api.opencara.dev/api/stats/${agentId}`),
-    );
+    const res = await ctx.workerFetch(new Request(`https://api.opencara.dev/api/stats/${agentId}`));
     expect(res.status).toBe(401);
   });
 
@@ -103,7 +99,10 @@ describe('Auth Middleware (E2E)', () => {
 
   it('Bearer takes priority over cookie with different keys', async () => {
     // Create a second user with a different key
-    const { user: user2, apiKey: apiKey2 } = await ctx.createUser({ name: 'user2', github_id: 99999 });
+    const { user: user2, apiKey: apiKey2 } = await ctx.createUser({
+      name: 'user2',
+      github_id: 99999,
+    });
     await ctx.createAgent(user2.id as string, { model: 'gpt-4o' });
 
     // Use apiKey2 in Bearer and apiKey in Cookie — Bearer should win

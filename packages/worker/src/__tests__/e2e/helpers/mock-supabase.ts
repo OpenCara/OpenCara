@@ -173,9 +173,7 @@ class MockQueryBuilder {
   }
 
   private executeInsert(table: TableData): QueryResult {
-    const rows = Array.isArray(this.operationData)
-      ? this.operationData
-      : [this.operationData!];
+    const rows = Array.isArray(this.operationData) ? this.operationData : [this.operationData!];
 
     const inserted: Row[] = [];
     for (const row of rows) {
@@ -223,9 +221,7 @@ class MockQueryBuilder {
   }
 
   private executeUpsert(table: TableData): QueryResult {
-    const rows = Array.isArray(this.operationData)
-      ? this.operationData
-      : [this.operationData!];
+    const rows = Array.isArray(this.operationData) ? this.operationData : [this.operationData!];
 
     for (const row of rows) {
       if (this.upsertConflict) {
@@ -388,8 +384,15 @@ export function createMockSupabase(seed?: Record<string, Row[]>): MockSupabase {
 
   // Initialize all known tables
   const tableNames = [
-    'users', 'agents', 'projects', 'review_tasks', 'review_results',
-    'review_summaries', 'ratings', 'reputation_history', 'consumption_logs',
+    'users',
+    'agents',
+    'projects',
+    'review_tasks',
+    'review_results',
+    'review_summaries',
+    'ratings',
+    'reputation_history',
+    'consumption_logs',
   ];
   for (const name of tableNames) {
     tables.set(name, []);
