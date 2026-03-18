@@ -26,9 +26,7 @@ describe('E2E: Task Timeout DO Alarm', () => {
     const taskId = (overrides?.id as string) ?? crypto.randomUUID();
     const task: Record<string, unknown> = {
       id: taskId,
-      project_id: 'proj-1',
       pr_number: 1,
-      pr_url: 'https://github.com/test-owner/test-repo/pull/1',
       status: 'pending',
       timeout_at: new Date(Date.now() + 600_000).toISOString(),
       config_json: {},
@@ -113,7 +111,6 @@ describe('E2E: Task Timeout DO Alarm', () => {
       review_task_id: taskId,
       agent_id: reviewerAgentId,
       status: 'completed',
-      review_text: 'Looks good',
       verdict: 'approve',
       created_at: new Date().toISOString(),
     });

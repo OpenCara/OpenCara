@@ -29,7 +29,6 @@ import { executeSummary, InputTooLargeError } from '../summary.js';
 import { resolveCommandTemplate, validateCommandBinary } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
-  fetchConsumptionStats,
   createSessionTracker,
   recordSessionUsage,
   formatPostReviewStats,
@@ -37,7 +36,6 @@ import {
 } from '../consumption.js';
 
 export interface ConsumptionDeps {
-  client: ApiClient;
   agentId: string;
   limits: ConsumptionLimits | null;
   session: SessionStats;
@@ -284,14 +282,6 @@ async function logPostReviewStats(
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
 
-  let dailyStats: { tokens: number; reviews: number } | undefined;
-  try {
-    const stats = await fetchConsumptionStats(consumptionDeps.client, consumptionDeps.agentId);
-    dailyStats = stats.period.last24h;
-  } catch {
-    // Graceful degradation — skip daily stats display
-  }
-
   if (verdict) {
     console.log(
       `${type} complete: ${verdict} (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
@@ -301,9 +291,7 @@ async function logPostReviewStats(
       `${type} complete (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
     );
   }
-  console.log(
-    formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits, dailyStats),
-  );
+  console.log(formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits));
 }
 
 export function handleMessage(
@@ -358,7 +346,6 @@ export function handleMessage(
         // Check consumption limits before executing
         if (consumptionDeps) {
           const limitResult = await checkConsumptionLimits(
-            consumptionDeps.client,
             consumptionDeps.agentId,
             consumptionDeps.limits,
           );
@@ -450,7 +437,6 @@ export function handleMessage(
         // Check consumption limits before executing
         if (consumptionDeps) {
           const limitResult = await checkConsumptionLimits(
-            consumptionDeps.client,
             consumptionDeps.agentId,
             consumptionDeps.limits,
           );
@@ -954,7 +940,6 @@ agentCommand
           };
 
           const consumptionDeps: ConsumptionDeps = {
-            client,
             agentId,
             limits: resolveAgentLimits(selected.local.limits, config.limits),
             session: createSessionTracker(),
@@ -1024,7 +1009,6 @@ agentCommand
       }
 
       const consumptionDeps: ConsumptionDeps = {
-        client,
         agentId,
         limits: config.limits,
         session: createSessionTracker(),

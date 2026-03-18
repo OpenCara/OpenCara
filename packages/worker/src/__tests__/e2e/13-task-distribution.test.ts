@@ -46,11 +46,6 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
       status: 'online',
       ...agentOverrides,
     });
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
 
     const agentId = agent.id as string;
     const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
@@ -83,23 +78,17 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     expect(task!.status).toBe('reviewing');
   });
 
-  it('project created via findOrCreateProject if not existing', async () => {
-    // Do NOT call ctx.createProject() — let the webhook handler create it
-    const { user, apiKey } = await ctx.createUser();
-    const agent = await ctx.createAgent(user.id as string, { status: 'online' });
-    const agentId = agent.id as string;
-
-    const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
-      headers: { Upgrade: 'websocket' },
-    });
-    await ctx.workerFetch(wsReq);
+  it('review_tasks has inlined project fields (github_installation_id, owner, repo)', async () => {
+    await setupConnectedAgent();
 
     await sendPRWebhook({ action: 'opened' });
 
-    const projects = ctx.supabase.getTable('projects');
-    const project = projects.find((p) => p.owner === 'test-owner' && p.repo === 'test-repo');
-    expect(project).toBeDefined();
-    expect(project!.github_installation_id).toBe(12345);
+    const tasks = ctx.supabase.getTable('review_tasks');
+    const task = tasks.find((t) => t.pr_number === 1);
+    expect(task).toBeDefined();
+    expect(task!.github_installation_id).toBe(12345);
+    expect(task!.owner).toBe('test-owner');
+    expect(task!.repo).toBe('test-repo');
   });
 
   it('agent DO receives push-task → review_request on WS', async () => {
@@ -142,12 +131,7 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
   });
 
   it('no eligible agents → task stays pending', async () => {
-    // Create project but no online agents
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
+    // No online agents
 
     await sendPRWebhook({ action: 'opened' });
 
@@ -157,17 +141,12 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     expect(task!.status).toBe('pending');
   });
 
-  it('minReputation filtering excludes low-reputation agents', async () => {
-    // Agent with low reputation
+  it('min_reputation config is ignored (reputation_score removed from agents)', async () => {
+    // With reputation_score dropped from agents table, min_reputation in config
+    // no longer filters agents — all online agents are eligible regardless
     const { user, apiKey } = await ctx.createUser();
     const agent = await ctx.createAgent(user.id as string, {
       status: 'online',
-      reputation_score: 0.1,
-    });
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
     });
 
     const agentId = agent.id as string;
@@ -191,18 +170,14 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
     const tasks = ctx.supabase.getTable('review_tasks');
     const task = tasks.find((t) => t.pr_number === 1);
     expect(task).toBeDefined();
-    // Agent has reputation 0.1 < minReputation 0.5, so task stays pending
-    expect(task!.status).toBe('pending');
+    // Agent is assigned the task even though min_reputation is set —
+    // reputation_score no longer exists on agents table
+    expect(task!.status).toBe('reviewing');
   });
 
   it('blacklist filtering excludes blacklisted agent user', async () => {
     const { user, apiKey } = await ctx.createUser({ name: 'blocked-user' });
     const agent = await ctx.createAgent(user.id as string, { status: 'online' });
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
 
     const agentId = agent.id as string;
     const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
@@ -232,11 +207,6 @@ describe('E2E: Task Distribution (PR webhook → task → agent)', () => {
   it('reviewCount=3 reserves 1 synthesizer and distributes to 3 reviewers (needs 4 agents)', async () => {
     // Create 4 online agents: 1 will be reserved as synthesizer, 3 will review
     const agents: Array<{ agentId: string; pair: ReturnType<typeof ctx.getLastWSPair> }> = [];
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
 
     for (let i = 0; i < 4; i++) {
       const { user, apiKey } = await ctx.createUser({ name: `user${i}` });

@@ -264,9 +264,9 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 42,
-              pr_url: 'https://github.com/org/repo/pull/42',
-              project_id: 'proj-1',
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -301,23 +301,15 @@ describe('AgentConnection', () => {
       // Task removed from in-flight
       expect(storage.store.get('inFlightTaskIds')).toEqual(['task-2']);
 
-      // Review result inserted with review_text and verdict
+      // Review result inserted with type and verdict
       expect(mockSupa._calls.insert).toContainEqual({
         table: 'review_results',
         data: expect.objectContaining({
           review_task_id: 'task-1',
           status: 'completed',
-          review_text: 'LGTM',
           verdict: 'approve',
         }),
       });
-
-      // Consumption log inserted
-      expect(mockSupa._calls.insert).toContainEqual({
-        table: 'consumption_logs',
-        data: expect.objectContaining({ tokens_used: 100 }),
-      });
-
       // GitHub PR review posted
       expect(mockedGetInstallationToken).toHaveBeenCalledWith(99, expect.anything());
       expect(mockedPostPrReview).toHaveBeenCalledWith(
@@ -329,13 +321,6 @@ describe('AgentConnection', () => {
         'test-token',
         undefined,
       );
-
-      // Comment URL stored
-      expect(mockSupa._calls.update).toContainEqual({
-        table: 'review_results',
-        data: { comment_url: 'https://github.com/org/repo/pull/42#pullrequestreview-1' },
-      });
-
       // Task transitioned to completed
       expect(mockSupa._calls.update).toContainEqual({
         table: 'review_tasks',
@@ -343,15 +328,15 @@ describe('AgentConnection', () => {
       });
     });
 
-    it('handles review_complete with consumption log even when tokensUsed is 0', async () => {
+    it('handles review_complete when tokensUsed is 0', async () => {
       mockSupa = createSupabaseMock({
         singleResults: {
           review_tasks: {
             data: {
               pr_number: 42,
-              pr_url: 'url',
-              project_id: 'proj-1',
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -380,8 +365,6 @@ describe('AgentConnection', () => {
 
       const insertTables = mockSupa._calls.insert.map((c) => c.table);
       expect(insertTables).toContain('review_results');
-      // Consumption log always inserted, even with tokensUsed=0
-      expect(insertTables).toContain('consumption_logs');
     });
 
     it('handles review_complete when task lookup fails', async () => {
@@ -411,9 +394,9 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 42,
-              pr_url: 'url',
-              project_id: 'proj-1',
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -450,9 +433,9 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 42,
-              pr_url: 'url',
-              project_id: 'proj-1',
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -506,7 +489,6 @@ describe('AgentConnection', () => {
                 user_id: 'user-2',
                 model: 'gpt-4',
                 tool: 'cursor',
-                reputation_score: 0.8,
                 repo_config: null,
                 users: { name: 'bob' },
               },
@@ -517,9 +499,10 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 10,
-              pr_url: 'https://github.com/org/repo/pull/10',
               timeout_at: new Date(Date.now() + 300_000).toISOString(),
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -562,7 +545,6 @@ describe('AgentConnection', () => {
                 user_id: 'user-3',
                 model: 'gpt-4',
                 tool: 'cursor',
-                reputation_score: 0.8,
                 repo_config: null,
                 users: { name: 'charlie' },
               },
@@ -573,9 +555,10 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 5,
-              pr_url: 'https://github.com/org/repo/pull/5',
               timeout_at: new Date(Date.now() + 600_000).toISOString(),
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -644,9 +627,10 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 10,
-              pr_url: 'url',
               timeout_at: new Date(Date.now() + 300_000).toISOString(),
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -690,7 +674,6 @@ describe('AgentConnection', () => {
                 user_id: 'user-2',
                 model: 'gpt-4',
                 tool: 'cursor',
-                reputation_score: 0.8,
                 repo_config: null,
                 users: { name: 'bob' },
               },
@@ -736,7 +719,6 @@ describe('AgentConnection', () => {
                 user_id: 'user-2',
                 model: 'gpt-4',
                 tool: 'cursor',
-                reputation_score: 0.8,
                 repo_config: null,
                 users: { name: 'bob' },
               },
@@ -747,9 +729,10 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 10,
-              pr_url: 'url',
               timeout_at: new Date(Date.now() + 300_000).toISOString(),
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -782,9 +765,9 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 42,
-              pr_url: 'https://github.com/org/repo/pull/42',
-              project_id: 'proj-1',
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -794,7 +777,6 @@ describe('AgentConnection', () => {
             data: [
               {
                 agent_id: 'agent-2',
-                review_text: 'LGTM',
                 verdict: 'approve',
                 agents: { model: 'gpt-4', tool: 'cursor' },
               },
@@ -855,9 +837,9 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 42,
-              pr_url: 'url',
-              project_id: 'proj-1',
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -867,7 +849,6 @@ describe('AgentConnection', () => {
             data: [
               {
                 agent_id: 'agent-2',
-                review_text: 'LGTM',
                 verdict: 'approve',
                 agents: { model: 'gpt-4', tool: 'cursor' },
               },
@@ -913,7 +894,6 @@ describe('AgentConnection', () => {
                 user_id: 'user-2',
                 model: 'gpt-4',
                 tool: 'cursor',
-                reputation_score: 0.8,
                 repo_config: null,
                 users: { name: 'bob' },
               },
@@ -924,9 +904,10 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 10,
-              pr_url: 'url',
               timeout_at: new Date(Date.now() + 300_000).toISOString(),
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },
@@ -1287,7 +1268,6 @@ describe('AgentConnection', () => {
               {
                 id: 'pending-task-1',
                 pr_number: 10,
-                pr_url: 'https://github.com/org/repo/pull/10',
                 timeout_at: futureTimeout,
                 diff_content: 'diff --git a/file.ts\n+hello',
                 config_json: {
@@ -1299,8 +1279,9 @@ describe('AgentConnection', () => {
                   headRef: 'feature',
                   installationId: 99,
                 },
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
           },
@@ -1357,12 +1338,12 @@ describe('AgentConnection', () => {
               {
                 id: 'expiring-task',
                 pr_number: 5,
-                pr_url: 'https://github.com/org/repo/pull/5',
                 timeout_at: nearTimeout,
                 diff_content: 'diff',
                 config_json: {},
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
           },
@@ -1450,12 +1431,12 @@ describe('AgentConnection', () => {
               {
                 id: 'contested-task',
                 pr_number: 10,
-                pr_url: 'url',
                 timeout_at: futureTimeout,
                 diff_content: 'diff',
                 config_json: {},
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
             error: { message: 'CAS conflict' },
@@ -1494,12 +1475,12 @@ describe('AgentConnection', () => {
               {
                 id: 'task-no-config',
                 pr_number: 5,
-                pr_url: 'https://github.com/org/repo/pull/5',
                 timeout_at: futureTimeout,
                 diff_content: null,
                 config_json: null,
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
           },
@@ -1537,12 +1518,12 @@ describe('AgentConnection', () => {
               {
                 id: 'task-1',
                 pr_number: 10,
-                pr_url: 'url',
                 timeout_at: futureTimeout,
                 diff_content: 'diff',
                 config_json: {},
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
           },
@@ -1584,12 +1565,12 @@ describe('AgentConnection', () => {
               {
                 id: 'send-fail-task',
                 pr_number: 10,
-                pr_url: 'url',
                 timeout_at: futureTimeout,
                 diff_content: 'diff',
                 config_json: {},
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
           },
@@ -1748,12 +1729,12 @@ describe('AgentConnection', () => {
               {
                 id: 'pending-task-1',
                 pr_number: 10,
-                pr_url: 'https://github.com/org/repo/pull/10',
                 timeout_at: new Date(Date.now() + 300_000).toISOString(),
                 diff_content: 'diff',
                 config_json: { prompt: 'Review', reviewCount: 1 },
-                project_id: 'proj-1',
-                projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+                github_installation_id: 99,
+                owner: 'org',
+                repo: 'repo',
               },
             ],
           },
@@ -1963,7 +1944,6 @@ describe('AgentConnection', () => {
                 user_id: 'user-2',
                 model: 'gpt-4',
                 tool: 'cursor',
-                reputation_score: 0.8,
                 repo_config: null,
                 users: { name: 'bob' },
               },
@@ -1974,7 +1954,6 @@ describe('AgentConnection', () => {
           review_tasks: {
             data: {
               pr_number: 10,
-              pr_url: 'https://github.com/org/repo/pull/10',
               timeout_at: new Date(Date.now() + 300_000).toISOString(),
               diff_content: 'stored diff content',
               config_json: {
@@ -1983,7 +1962,9 @@ describe('AgentConnection', () => {
                 baseRef: 'main',
                 headRef: 'feature-branch',
               },
-              projects: { owner: 'org', repo: 'repo', github_installation_id: 99 },
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
             },
             error: null,
           },

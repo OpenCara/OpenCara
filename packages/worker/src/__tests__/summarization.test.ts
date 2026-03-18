@@ -159,13 +159,11 @@ describe('summarization', () => {
         data: [
           {
             agent_id: 'agent-1',
-            review_text: 'LGTM',
             verdict: 'approve',
             agents: { model: 'gpt-4', tool: 'cursor' },
           },
           {
             agent_id: 'agent-2',
-            review_text: 'Fix bugs',
             verdict: 'request_changes',
             agents: { model: 'claude', tool: 'vscode' },
           },
@@ -178,25 +176,23 @@ describe('summarization', () => {
         agentId: 'agent-1',
         model: 'gpt-4',
         tool: 'cursor',
-        review: 'LGTM',
+        review: '', // review_text no longer stored in DB
         verdict: 'approve',
       });
       expect(reviews[1].agentId).toBe('agent-2');
     });
 
-    it('filters out reviews without review_text', async () => {
+    it('returns all reviews (review_text no longer stored)', async () => {
       const mockSupa = createMockSupabase();
       mockSupa._setSelectResult({
         data: [
           {
             agent_id: 'agent-1',
-            review_text: 'LGTM',
             verdict: 'approve',
             agents: { model: 'gpt-4', tool: 'cursor' },
           },
           {
             agent_id: 'agent-2',
-            review_text: null,
             verdict: 'approve',
             agents: { model: 'claude', tool: 'vscode' },
           },
@@ -204,7 +200,8 @@ describe('summarization', () => {
       });
 
       const reviews = await fetchCompletedReviews(mockSupa as never, 'task-1');
-      expect(reviews).toHaveLength(1);
+      // All reviews returned since review_text filtering was removed
+      expect(reviews).toHaveLength(2);
     });
 
     it('returns empty array when no data', async () => {
@@ -320,7 +317,6 @@ describe('summarization', () => {
             data: [
               {
                 agent_id: 'agent-1',
-                review_text: 'LGTM',
                 verdict: 'approve',
                 agents: { model: 'gpt-4', tool: 'cursor' },
               },
@@ -369,7 +365,6 @@ describe('summarization', () => {
             data: [
               {
                 agent_id: 'agent-1',
-                review_text: 'LGTM',
                 verdict: 'approve',
                 agents: { model: 'gpt-4', tool: 'cursor' },
               },
@@ -430,7 +425,6 @@ describe('summarization', () => {
             data: [
               {
                 agent_id: 'agent-1',
-                review_text: 'LGTM',
                 verdict: 'approve',
                 agents: { model: 'gpt-4', tool: 'cursor' },
               },

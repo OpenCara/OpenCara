@@ -11,23 +11,13 @@ type TableData = Row[];
 /** Foreign key relationships for nested select joins */
 const FK_MAP: Record<string, Record<string, { table: string; fk: string }>> = {
   agents: { users: { table: 'users', fk: 'user_id' } },
-  review_tasks: { projects: { table: 'projects', fk: 'project_id' } },
   review_results: {
     review_tasks: { table: 'review_tasks', fk: 'review_task_id' },
     agents: { table: 'agents', fk: 'agent_id' },
   },
-  review_summaries: {
-    review_tasks: { table: 'review_tasks', fk: 'review_task_id' },
-    agents: { table: 'agents', fk: 'agent_id' },
-  },
   ratings: { review_results: { table: 'review_results', fk: 'review_result_id' } },
-  consumption_logs: {
-    agents: { table: 'agents', fk: 'agent_id' },
-    review_tasks: { table: 'review_tasks', fk: 'review_task_id' },
-  },
   reputation_history: {
     agents: { table: 'agents', fk: 'agent_id' },
-    users: { table: 'users', fk: 'user_id' },
   },
 };
 
@@ -311,7 +301,7 @@ class MockQueryBuilder {
 
     for (const part of parts) {
       if (part.includes('(')) {
-        // Nested join: "agents!inner(model, tool)" or "projects!inner(owner, repo)"
+        // Nested join: "agents!inner(model, tool)"
         this.resolveJoin(row, part, result);
       } else {
         result[part.trim()] = row[part.trim()];
@@ -386,13 +376,10 @@ export function createMockSupabase(seed?: Record<string, Row[]>): MockSupabase {
   const tableNames = [
     'users',
     'agents',
-    'projects',
     'review_tasks',
     'review_results',
-    'review_summaries',
     'ratings',
     'reputation_history',
-    'consumption_logs',
   ];
   for (const name of tableNames) {
     tables.set(name, []);

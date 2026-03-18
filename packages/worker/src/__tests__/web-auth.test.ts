@@ -329,9 +329,7 @@ describe('handleWebCallback', () => {
       expect.objectContaining({
         github_id: 99,
         name: 'octocat',
-        avatar: 'https://avatars.com/99',
         api_key_hash: expect.any(String),
-        updated_at: expect.any(String),
       }),
       { onConflict: 'github_id' },
     );

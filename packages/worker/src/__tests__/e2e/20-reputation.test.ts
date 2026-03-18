@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createE2EContext, type E2EContext } from './helpers/mock-env.js';
 import { createSupabaseClient } from '../../db.js';
+import { computeRaterHash } from '@opencara/shared';
 
 vi.mock('../../db.js', () => ({
   createSupabaseClient: vi.fn(),
@@ -22,56 +23,49 @@ describe('E2E: Reputation System & Rating Collection', () => {
   });
 
   /**
-   * Set up a completed review scenario with a review_result that has a comment_url.
-   * The collect-ratings handler joins review_tasks -> projects!inner(user_id),
-   * so projects must have user_id to satisfy the ownership check.
+   * Set up a completed review scenario with a review_result.
+   * Ownership check is now agent-based: user owns agents → agents have review_results.
+   * Task has inlined fields (github_installation_id, owner, repo) and config_json.
    */
   async function setupCompletedReview() {
     const { user, apiKey } = await ctx.createUser({ name: 'owner-user' });
     const userId = user.id as string;
 
     const agent = await ctx.createAgent(userId, {
-      reputation_score: 0.5,
       model: 'test-model',
       tool: 'test-tool',
     });
     const agentId = agent.id as string;
 
-    // Project needs user_id for the ownership check in collect-ratings handler
-    const project = await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-      user_id: userId,
-    });
-    const projectId = project.id as string;
-
-    // Create a completed review task
+    // Create a completed review task with inlined fields and config_json for comment URL
     const taskId = crypto.randomUUID();
     ctx.supabase.getTable('review_tasks').push({
       id: taskId,
-      project_id: projectId,
       pr_number: 1,
-      pr_url: 'https://github.com/test-owner/test-repo/pull/1',
       status: 'completed',
+      github_installation_id: 12345,
+      owner: 'test-owner',
+      repo: 'test-repo',
+      config_json: {
+        commentUrl: 'https://github.com/test-owner/test-repo/pull/1#issuecomment-12345',
+      },
       timeout_at: new Date(Date.now() + 600_000).toISOString(),
       created_at: new Date().toISOString(),
     });
 
-    // Create a review result with comment_url containing a parseable comment ID
+    // Create a review result
     const resultId = crypto.randomUUID();
     ctx.supabase.getTable('review_results').push({
       id: resultId,
       review_task_id: taskId,
       agent_id: agentId,
       status: 'completed',
-      review_text: 'Test review',
+      type: 'review',
       verdict: 'approve',
-      comment_url: 'https://github.com/test-owner/test-repo/pull/1#issuecomment-12345',
       created_at: new Date().toISOString(),
     });
 
-    return { user, apiKey, userId, agent, agentId, project, projectId, taskId, resultId };
+    return { user, apiKey, userId, agent, agentId, taskId, resultId };
   }
 
   it('collect-ratings fetches GitHub reactions and returns collected count', async () => {
@@ -92,7 +86,7 @@ describe('E2E: Reputation System & Rating Collection', () => {
     expect(body.collected).toBeGreaterThanOrEqual(1);
   });
 
-  it('+1 reaction creates rating with emoji=thumbs_up', async () => {
+  it('+1 reaction creates rating with emoji=thumbs_up and rater_hash', async () => {
     const { apiKey, taskId, resultId } = await setupCompletedReview();
 
     ctx.github.options.reactions = {
@@ -105,8 +99,9 @@ describe('E2E: Reputation System & Rating Collection', () => {
     await ctx.workerFetch(req);
 
     const ratings = ctx.supabase.getTable('ratings');
+    const expectedHash = await computeRaterHash(resultId, 200);
     const rating = ratings.find(
-      (r) => r.review_result_id === resultId && r.rater_github_id === 200,
+      (r) => r.review_result_id === resultId && r.rater_hash === expectedHash,
     );
     expect(rating).toBeDefined();
     expect(rating!.emoji).toBe('thumbs_up');
@@ -125,8 +120,9 @@ describe('E2E: Reputation System & Rating Collection', () => {
     await ctx.workerFetch(req);
 
     const ratings = ctx.supabase.getTable('ratings');
+    const expectedHash = await computeRaterHash(resultId, 300);
     const rating = ratings.find(
-      (r) => r.review_result_id === resultId && r.rater_github_id === 300,
+      (r) => r.review_result_id === resultId && r.rater_hash === expectedHash,
     );
     expect(rating).toBeDefined();
     expect(rating!.emoji).toBe('thumbs_down');
@@ -156,17 +152,16 @@ describe('E2E: Reputation System & Rating Collection', () => {
     expect(agentRating!.newScore).toBeGreaterThan(0);
     expect(agentRating!.thumbsUp).toBe(2);
 
-    // Verify agent's reputation_score was updated in DB
-    const agents = ctx.supabase.getTable('agents');
-    const dbAgent = agents.find((a) => a.id === agentId);
-    expect(dbAgent).toBeDefined();
-    expect(dbAgent!.reputation_score).toBeGreaterThan(0);
+    // Reputation is now tracked in reputation_history, not agents.reputation_score
+    const history = ctx.supabase.getTable('reputation_history');
+    const entry = history.find((h) => h.agent_id === agentId);
+    expect(entry).toBeDefined();
+    expect(typeof entry!.score_change).toBe('number');
   });
 
   it('reputation_history entry created on score change', async () => {
     const { apiKey, taskId, agentId } = await setupCompletedReview();
 
-    // Use initial score of 0.5, positive ratings will change it
     ctx.github.options.reactions = {
       'test-owner/test-repo/12345': [{ content: '+1', user: { id: 500, login: 'rater-x' } }],
     };
@@ -204,8 +199,9 @@ describe('E2E: Reputation System & Rating Collection', () => {
 
     // Should have exactly 1 rating row for this rater, not 2
     const ratings = ctx.supabase.getTable('ratings');
+    const expectedHash = await computeRaterHash(resultId, 600);
     const matchingRatings = ratings.filter(
-      (r) => r.review_result_id === resultId && r.rater_github_id === 600,
+      (r) => r.review_result_id === resultId && r.rater_hash === expectedHash,
     );
     expect(matchingRatings.length).toBe(1);
   });

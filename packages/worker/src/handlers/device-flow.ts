@@ -127,14 +127,12 @@ export async function handleDeviceToken(
   const apiKey = await generateApiKey();
   const apiKeyHash = await hashApiKey(apiKey);
 
-  // Upsert user
+  // Upsert user (avatar and updated_at dropped in schema simplification)
   const { error: upsertError } = await supabase.from('users').upsert(
     {
       github_id: githubUser.id,
       name: githubUser.login,
-      avatar: githubUser.avatar_url,
       api_key_hash: apiKeyHash,
-      updated_at: new Date().toISOString(),
     },
     { onConflict: 'github_id' },
   );
@@ -156,7 +154,7 @@ export async function handleRevokeKey(user: User, supabase: SupabaseClient): Pro
 
   const { error } = await supabase
     .from('users')
-    .update({ api_key_hash: newHash, updated_at: new Date().toISOString() })
+    .update({ api_key_hash: newHash })
     .eq('id', user.id);
 
   if (error) {

@@ -41,7 +41,7 @@ describe('E2E: Stats Endpoints', () => {
     });
     const agentId = agent.id as string;
 
-    // Create completed review results
+    // Create completed review results with type='review'
     const resultIds: string[] = [];
     for (let i = 0; i < completedCount; i++) {
       const resultId = crypto.randomUUID();
@@ -50,44 +50,50 @@ describe('E2E: Stats Endpoints', () => {
         review_task_id: crypto.randomUUID(),
         agent_id: agentId,
         status: 'completed',
-        review_text: `Review ${i}`,
+        type: 'review',
         verdict: 'approve',
         created_at: new Date().toISOString(),
       });
       resultIds.push(resultId);
     }
 
-    // Create ratings (distribute among the first result IDs)
+    // Create ratings with rater_hash (privacy-preserving)
     let raterIdCounter = 1;
     for (let i = 0; i < thumbsUp && i < resultIds.length; i++) {
+      const raterHash = `hash_up_${raterIdCounter}`;
       ctx.supabase.getTable('ratings').push({
         id: crypto.randomUUID(),
         review_result_id: resultIds[i],
-        rater_github_id: raterIdCounter++,
+        rater_hash: raterHash,
         emoji: 'thumbs_up',
         created_at: new Date().toISOString(),
       });
+      raterIdCounter++;
     }
     // If more thumbs up than results, add extra to the first result
     for (let i = resultIds.length; i < thumbsUp; i++) {
+      const raterHash = `hash_up_${raterIdCounter}`;
       ctx.supabase.getTable('ratings').push({
         id: crypto.randomUUID(),
         review_result_id: resultIds[0],
-        rater_github_id: raterIdCounter++,
+        rater_hash: raterHash,
         emoji: 'thumbs_up',
         created_at: new Date().toISOString(),
       });
+      raterIdCounter++;
     }
 
     for (let i = 0; i < thumbsDown; i++) {
       const targetResult = resultIds[i % resultIds.length];
+      const raterHash = `hash_down_${raterIdCounter}`;
       ctx.supabase.getTable('ratings').push({
         id: crypto.randomUUID(),
         review_result_id: targetResult,
-        rater_github_id: raterIdCounter++,
+        rater_hash: raterHash,
         emoji: 'thumbs_down',
         created_at: new Date().toISOString(),
       });
+      raterIdCounter++;
     }
 
     return { user, apiKey, userId, agent, agentId, resultIds };
@@ -177,22 +183,18 @@ describe('E2E: Stats Endpoints', () => {
   });
 
   it('GET /api/projects/stats returns aggregate statistics (public, no auth)', async () => {
-    // Seed some data: agents, completed review results with proper join chain
+    // Seed data: agents, completed review results with inlined task fields
     const { user } = await ctx.createUser({ name: 'contributor1', github_id: 20001 });
     const agent = await ctx.createAgent(user.id as string);
-    const statsProject = await ctx.createProject({
-      owner: 'stat-owner',
-      repo: 'stat-repo',
-      repo_full_name: 'stat-owner/stat-repo',
-    });
-    const taskId = crypto.randomUUID();
 
+    const taskId = crypto.randomUUID();
     ctx.supabase.getTable('review_tasks').push({
       id: taskId,
-      project_id: statsProject.id,
       pr_number: 10,
-      pr_url: 'https://github.com/stat-owner/stat-repo/pull/10',
       status: 'completed',
+      owner: 'stat-owner',
+      repo: 'stat-repo',
+      github_installation_id: 12345,
       created_at: new Date().toISOString(),
     });
 
@@ -201,7 +203,7 @@ describe('E2E: Stats Endpoints', () => {
       review_task_id: taskId,
       agent_id: agent.id,
       status: 'completed',
-      completed_at: new Date().toISOString(),
+      type: 'review',
       created_at: new Date().toISOString(),
     });
 
@@ -223,39 +225,22 @@ describe('E2E: Stats Endpoints', () => {
     expect(Array.isArray(body.recentActivity)).toBe(true);
   });
 
-  it('stats include token consumption totals', async () => {
+  it('stats do not include tokensUsed (consumption_logs dropped)', async () => {
     const { apiKey, agentId } = await createAgentWithReviews(2, 1, 0, {
-      name: 'consumption-test',
+      name: 'no-consumption-test',
       github_id: 30001,
     });
-
-    // Add consumption logs
-    ctx.supabase.getTable('consumption_logs').push(
-      {
-        id: crypto.randomUUID(),
-        agent_id: agentId,
-        review_task_id: crypto.randomUUID(),
-        tokens_used: 1500,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: crypto.randomUUID(),
-        agent_id: agentId,
-        review_task_id: crypto.randomUUID(),
-        tokens_used: 2500,
-        created_at: new Date().toISOString(),
-      },
-    );
 
     const req = ctx.authedRequest(`/api/stats/${agentId}`, apiKey);
     const res = await ctx.workerFetch(req);
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as {
-      stats: { tokensUsed: number };
+      stats: Record<string, unknown>;
     };
 
-    expect(body.stats.tokensUsed).toBe(4000);
+    // tokensUsed should not be present in the response
+    expect(body.stats).not.toHaveProperty('tokensUsed');
   });
 
   it('agent not found returns 404', async () => {

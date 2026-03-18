@@ -9,7 +9,6 @@ const mockUser: User = {
   name: 'testuser',
   avatar: null,
   api_key_hash: 'hash',
-  reputation_score: 0,
   created_at: '2024-01-01',
   updated_at: '2024-01-01',
 };
@@ -40,7 +39,6 @@ describe('handleListAgents', () => {
         user_id: 'user-123',
         model: 'gpt-4',
         tool: 'cline',
-        reputation_score: 4.5,
         status: 'online',
         last_heartbeat_at: '2024-01-01',
         created_at: '2024-01-01',
@@ -115,7 +113,6 @@ describe('handleCreateAgent', () => {
                 id: 'agent-new',
                 model: 'claude-3',
                 tool: 'cursor',
-                reputation_score: 0,
                 status: 'offline',
                 created_at: '2024-01-01',
               },

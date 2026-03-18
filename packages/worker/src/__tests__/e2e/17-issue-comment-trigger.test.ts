@@ -43,12 +43,6 @@ describe('E2E: Issue Comment Trigger (/opencara review)', () => {
   async function setupWithAgent() {
     const { user, apiKey } = await ctx.createUser();
     const agent = await ctx.createAgent(user.id as string, { status: 'online' });
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     const agentId = agent.id as string;
     const wsReq = new Request(`https://api.opencara.dev/ws/agent/${agentId}?token=${apiKey}`, {
       headers: { Upgrade: 'websocket' },

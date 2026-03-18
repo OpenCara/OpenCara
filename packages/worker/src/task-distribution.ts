@@ -8,7 +8,6 @@ export interface EligibleAgent {
   userName: string;
   model: string;
   tool: string;
-  reputationScore: number;
   repoConfig: RepoConfig | null;
 }
 
@@ -17,7 +16,6 @@ export interface DistributeTaskParams {
   owner: string;
   repo: string;
   prNumber: number;
-  prUrl: string;
   diffUrl: string;
   baseRef: string;
   headRef: string;
@@ -35,13 +33,12 @@ export function parseTimeoutMs(timeout: string): number {
 /** Query eligible online agents from Supabase. */
 export async function findEligibleAgents(
   supabase: SupabaseClient,
-  minReputation: number,
+  _minReputation: number,
 ): Promise<EligibleAgent[]> {
   const { data, error } = await supabase
     .from('agents')
-    .select('id, user_id, model, tool, reputation_score, repo_config, users!inner(name)')
+    .select('id, user_id, model, tool, repo_config, users!inner(name)')
     .eq('status', 'online')
-    .gte('reputation_score', minReputation)
     .order('created_at', { ascending: true });
 
   if (error || !data) {
@@ -55,7 +52,6 @@ export async function findEligibleAgents(
     userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
     model: row.model as string,
     tool: row.tool as string,
-    reputationScore: row.reputation_score as number,
     repoConfig: (row.repo_config as RepoConfig | null) ?? null,
   }));
 }
@@ -136,17 +132,16 @@ export const MAX_AGENTS_PER_TASK = 10;
 
 /**
  * Compute a weight for weighted random selection.
- * Ensures all agents have a positive weight so even zero-reputation agents get selected.
+ * With reputation_score removed from agents table, all agents get equal weight.
+ * This can be enhanced later with computed reputation from reputation_history.
  */
-export function agentWeight(reputationScore: number): number {
-  return Math.max(0.1, reputationScore + 1);
+export function agentWeight(_reputationScore?: number): number {
+  return 1;
 }
 
 /**
- * Weighted reservoir sampling: select `count` items from `agents` using reputation as weight.
- * For each agent, compute `random() ^ (1/weight)` and pick the top `count` by this key.
- * This gives higher-weight agents a higher probability of selection without starving lower-weight ones.
- *
+ * Weighted reservoir sampling: select `count` items from `agents`.
+ * Currently uses equal weights since reputation_score was removed from agents table.
  * Accepts an optional `rng` function (returns [0,1)) for deterministic testing.
  */
 export function weightedRandomSelect(
@@ -158,7 +153,7 @@ export function weightedRandomSelect(
 
   const keyed = agents.map((agent) => ({
     agent,
-    key: Math.pow(rng(), 1 / agentWeight(agent.reputationScore)),
+    key: Math.pow(rng(), 1 / agentWeight()),
   }));
 
   keyed.sort((a, b) => b.key - a.key);
@@ -168,8 +163,7 @@ export function weightedRandomSelect(
 /**
  * Select up to `reviewCount` agents for a review.
  * Priority: preferred models > preferred tools > others.
- * Within each tier, uses weighted random selection based on reputation
- * (higher reputation = higher probability, but lower-rep agents still get selected).
+ * Within each tier, uses weighted random selection.
  * Returns empty only if no agents are available at all.
  *
  * Accepts an optional `rng` function for deterministic testing.
@@ -259,38 +253,6 @@ export async function partitionByLoad(
 }
 
 /**
- * Find or create a project record for the given repository.
- */
-async function findOrCreateProject(
-  supabase: SupabaseClient,
-  installationId: number,
-  owner: string,
-  repo: string,
-): Promise<string | null> {
-  const { data: existing } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('owner', owner)
-    .eq('repo', repo)
-    .single();
-
-  if (existing) return existing.id as string;
-
-  const { data: created, error } = await supabase
-    .from('projects')
-    .insert({ github_installation_id: installationId, owner, repo })
-    .select('id')
-    .single();
-
-  if (error || !created) {
-    console.error('Failed to create project:', error);
-    return null;
-  }
-
-  return created.id as string;
-}
-
-/**
  * Distribute a review task to eligible agents.
  * Creates the task, finds agents, pushes to DOs, sets timeout.
  * Returns the created task ID or null on failure.
@@ -300,25 +262,12 @@ export async function distributeTask(
   supabase: SupabaseClient,
   params: DistributeTaskParams,
 ): Promise<string | null> {
-  const {
-    installationId,
-    config,
-    owner,
-    repo,
-    prNumber,
-    prUrl,
-    diffUrl,
-    baseRef,
-    headRef,
-    diffContent,
-  } = params;
+  const { installationId, config, owner, repo, prNumber, diffUrl, baseRef, headRef, diffContent } =
+    params;
   const timeoutMs = parseTimeoutMs(config.timeout);
+  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
 
-  // 1. Find or create project
-  const projectId = await findOrCreateProject(supabase, installationId, owner, repo);
-  if (!projectId) return null;
-
-  // 2. Create review_task with config_json for pending pickup (diff fetched on demand)
+  // 1. Create review_task with inlined project fields
   const configJson = {
     prompt: config.prompt,
     reviewCount: config.agents.reviewCount,
@@ -332,9 +281,10 @@ export async function distributeTask(
   const { data: task, error: taskError } = await supabase
     .from('review_tasks')
     .insert({
-      project_id: projectId,
+      github_installation_id: installationId,
+      owner,
+      repo,
       pr_number: prNumber,
-      pr_url: prUrl,
       status: 'pending',
       timeout_at: new Date(Date.now() + timeoutMs).toISOString(),
       config_json: configJson,
@@ -349,7 +299,7 @@ export async function distributeTask(
 
   const taskId = task.id as string;
 
-  // 3. Set up task timeout BEFORE agent selection (pending tasks also need expiry)
+  // 2. Set up task timeout BEFORE agent selection (pending tasks also need expiry)
   try {
     const timeoutDoId = env.TASK_TIMEOUT.idFromName(taskId);
     const timeoutStub = env.TASK_TIMEOUT.get(timeoutDoId);
@@ -372,7 +322,7 @@ export async function distributeTask(
     console.error(`Failed to set task timeout for ${taskId}:`, err);
   }
 
-  // 4. Find eligible agents and partition by in-flight load
+  // 3. Find eligible agents and partition by in-flight load
   const allAgents = await findEligibleAgents(supabase, config.agents.minReputation);
   const accessFiltered = filterByAccessList(
     allAgents,
@@ -411,21 +361,20 @@ export async function distributeTask(
     return taskId;
   }
 
-  // 5. For multi-agent reviews: reserve the highest-rep agent as synthesizer FIRST,
+  // 4. For multi-agent reviews: reserve an agent as synthesizer FIRST,
   //    then distribute review_request only to the remaining agents.
   let reviewers = selected;
   let synthesizerAgentId: string | undefined;
 
   if (config.agents.reviewCount > 1 && selected.length > config.agents.reviewCount) {
     // Only reserve a synthesizer when we have MORE agents than the requested reviewer count.
-    // If selected.length == reviewCount, all agents become reviewers (no synthesizer).
-    const sorted = [...selected].sort((a, b) => b.reputationScore - a.reputationScore);
-    const synthesizer = sorted[0];
+    // Pick the first agent as synthesizer (all have equal weight now).
+    const synthesizer = selected[0];
     synthesizerAgentId = synthesizer.id;
-    reviewers = sorted.slice(1);
+    reviewers = selected.slice(1);
 
     console.log(
-      `Task ${taskId}: reserved agent ${synthesizerAgentId} (rep: ${synthesizer.reputationScore}) as synthesizer, ` +
+      `Task ${taskId}: reserved agent ${synthesizerAgentId} as synthesizer, ` +
         `${reviewers.length} reviewer(s)`,
     );
 
@@ -438,10 +387,10 @@ export async function distributeTask(
       .eq('id', taskId);
   }
 
-  // 6. Update task status to reviewing before distributing (avoid race with timeout alarm)
+  // 5. Update task status to reviewing before distributing (avoid race with timeout alarm)
   await supabase.from('review_tasks').update({ status: 'reviewing' }).eq('id', taskId);
 
-  // 7. Push task to each reviewer's DO (NOT the synthesizer)
+  // 6. Push task to each reviewer's DO (NOT the synthesizer)
   const remainingSeconds = Math.floor(timeoutMs / 1000);
   for (const agent of reviewers) {
     try {

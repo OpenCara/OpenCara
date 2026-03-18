@@ -22,15 +22,8 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     vi.restoreAllMocks();
   });
 
-  /** Set up project, 4 users+agents (3 reviewers + 1 summary), all WS-connected. */
+  /** Set up 4 users+agents (3 reviewers + 1 summary), all WS-connected. */
   async function setupMultiAgentEnv() {
-    // Create project with matching installation id
-    const project = await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     // Set review config with reviewCount: 3
     ctx.github.options.reviewConfigs = {
       'test-owner/test-repo': [
@@ -65,7 +58,6 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       });
       const agent = await ctx.createAgent(user.id as string, {
         status: 'online',
-        reputation_score: 0.5 + i * 0.1, // 0.5, 0.6, 0.7, 0.8
         model: `model-${i}`,
         tool: `tool-${i}`,
       });
@@ -87,7 +79,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       expect(res.status).toBe(101);
     }
 
-    return { project, agents };
+    return { agents };
   }
 
   /** Send a PR webhook and return the created task ID. */
@@ -180,13 +172,12 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     expect(task!.status).toBe('summarizing');
   });
 
-  it('highest-rep agent is pre-selected as synthesizer and receives summary_request', async () => {
+  it('synthesizer is pre-selected and receives summary_request after all reviews complete', async () => {
     const { agents } = await setupMultiAgentEnv();
     const taskId = await sendWebhook();
 
-    // Agents have reputation: 0.5, 0.6, 0.7, 0.8
-    // Highest-rep agent (agents[3], rep=0.8) should be reserved as synthesizer
-    // The other 3 should be reviewers
+    // All agents have equal weight now (reputation_score removed)
+    // The first selected agent is the synthesizer
     const reviewerAgentIds: string[] = [];
     for (const a of agents) {
       const state = ctx.agentConnectionNS.getState(a.agentId);
@@ -209,17 +200,19 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       });
     }
 
-    // The highest-rep agent should be the synthesizer
-    const synthesizerAgent = agents[3]; // rep=0.8 (highest)
-    expect(reviewerAgentIds).not.toContain(synthesizerAgent.agentId);
+    // The synthesizer should NOT be one of the reviewers
+    const synthesizerAgentId = agents.find((a) => !reviewerAgentIds.includes(a.agentId))?.agentId;
+    expect(synthesizerAgentId).toBeDefined();
 
-    // Check review_summaries table
-    const summaries = ctx.supabase.getTable('review_summaries');
-    expect(summaries.length).toBe(1);
-    expect(summaries[0].agent_id).toBe(synthesizerAgent.agentId);
+    // Check review_results table for type='summary' entry
+    const results = ctx.supabase.getTable('review_results');
+    const summaryResult = results.find(
+      (r) => r.type === 'summary' && r.agent_id === synthesizerAgentId,
+    );
+    expect(summaryResult).toBeDefined();
 
     // Synthesizer's DO should have a summary_request in-flight
-    const summaryState = ctx.agentConnectionNS.getState(synthesizerAgent.agentId);
+    const summaryState = ctx.agentConnectionNS.getState(synthesizerAgentId!);
     const summaryInFlight = await summaryState!.storage.get<string[]>('inFlightTaskIds');
     expect(summaryInFlight).toContain(taskId);
   });
@@ -250,9 +243,11 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       });
     }
 
-    // Identify summary agent
-    const summaries = ctx.supabase.getTable('review_summaries');
-    const summaryAgentId = summaries[0].agent_id as string;
+    // Identify summary agent from review_results (type='summary')
+    const results = ctx.supabase.getTable('review_results');
+    const summaryResult = results.find((r) => r.type === 'summary');
+    expect(summaryResult).toBeDefined();
+    const summaryAgentId = summaryResult!.agent_id as string;
 
     // Simulate summary_complete
     await ctx.simulateAgentMessage(summaryAgentId, {
@@ -297,8 +292,10 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       });
     }
 
-    const summaries = ctx.supabase.getTable('review_summaries');
-    const summaryAgentId = summaries[0].agent_id as string;
+    const results = ctx.supabase.getTable('review_results');
+    const summaryResult = results.find((r) => r.type === 'summary');
+    expect(summaryResult).toBeDefined();
+    const summaryAgentId = summaryResult!.agent_id as string;
 
     await ctx.simulateAgentMessage(summaryAgentId, {
       type: 'summary_complete',
@@ -313,13 +310,6 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
   });
 
   it('with only 1 agent available, falls back to single-agent mode (no multi-agent)', async () => {
-    // Only create 1 agent — can't do multi-agent review
-    await ctx.createProject({
-      owner: 'test-owner',
-      repo: 'test-repo',
-      github_installation_id: 12345,
-    });
-
     ctx.github.options.reviewConfigs = {
       'test-owner/test-repo': [
         'version: 1',
@@ -341,7 +331,6 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     const { user, apiKey } = await ctx.createUser({ name: 'solo', github_id: 2000 });
     const agent = await ctx.createAgent(user.id as string, {
       status: 'online',
-      reputation_score: 0.5,
     });
     const agentId = agent.id as string;
 
@@ -374,7 +363,7 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
     expect(task!.status).toBe('completed');
   });
 
-  it('consumption logs created for all reviewing agents', async () => {
+  it('review_results created for all reviewing agents', async () => {
     const { agents } = await setupMultiAgentEnv();
     const taskId = await sendWebhook();
 
@@ -400,12 +389,14 @@ describe('E2E: Multi-Agent Review with Summarization', () => {
       });
     }
 
-    // Check consumption_logs for each reviewer
-    const logs = ctx.supabase.getTable('consumption_logs');
+    // Check review_results for each reviewer (consumption_logs table was dropped)
+    const results = ctx.supabase.getTable('review_results');
     for (const agentId of reviewerAgentIds) {
-      const agentLogs = logs.filter((l) => l.agent_id === agentId && l.review_task_id === taskId);
-      expect(agentLogs.length).toBe(1);
-      expect(agentLogs[0].tokens_used).toBe(250);
+      const agentResults = results.filter(
+        (r) => r.agent_id === agentId && r.review_task_id === taskId && r.type === 'review',
+      );
+      expect(agentResults.length).toBe(1);
+      expect(agentResults[0].status).toBe('completed');
     }
   });
 });

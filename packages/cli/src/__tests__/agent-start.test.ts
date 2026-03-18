@@ -440,7 +440,6 @@ describe('handleMessage', () => {
     const { handleMessage: hm } = await import('../commands/agent.js');
 
     const consumptionDeps: ConsumptionDeps = {
-      client: { get: vi.fn() } as unknown as ApiClient,
       agentId: 'agent-1',
       limits: { tokens_per_day: 50_000 },
       session: createSessionTracker(),
@@ -493,7 +492,6 @@ describe('handleMessage', () => {
     const { handleMessage: hm } = await import('../commands/agent.js');
 
     const consumptionDeps: ConsumptionDeps = {
-      client: { get: vi.fn() } as unknown as ApiClient,
       agentId: 'agent-1',
       limits: { reviews_per_day: 20 },
       session: createSessionTracker(),
@@ -542,10 +540,6 @@ describe('handleMessage', () => {
     const checkSpy = vi.spyOn(consumptionModule, 'checkConsumptionLimits').mockResolvedValue({
       allowed: true,
     });
-    const fetchSpy = vi
-      .spyOn(consumptionModule, 'fetchConsumptionStats')
-      .mockRejectedValue(new Error('API unavailable'));
-
     const reviewModule = await import('../review.js');
     const executeSpy = vi.spyOn(reviewModule, 'executeReview').mockResolvedValue({
       review: 'Looks good!',
@@ -557,7 +551,6 @@ describe('handleMessage', () => {
     const { handleMessage: hm } = await import('../commands/agent.js');
 
     const consumptionDeps: ConsumptionDeps = {
-      client: { get: vi.fn() } as unknown as ApiClient,
       agentId: 'agent-1',
       limits: { tokens_per_day: 50_000 },
       session: createSessionTracker(),
@@ -591,7 +584,6 @@ describe('handleMessage', () => {
     expect(consumptionDeps.session.reviews).toBe(1);
 
     checkSpy.mockRestore();
-    fetchSpy.mockRestore();
     executeSpy.mockRestore();
   });
 

@@ -291,11 +291,10 @@ export class AgentConnection implements DurableObject {
       ((agentData?.users as unknown as Record<string, unknown>)?.name as string) ?? '';
 
     // Query review_tasks with status='pending' that haven't expired
+    // Fields are now inlined on review_tasks (no projects join needed)
     const { data: pendingTasks } = await supabase
       .from('review_tasks')
-      .select(
-        'id, pr_number, pr_url, timeout_at, config_json, project_id, projects!inner(owner, repo, github_installation_id)',
-      )
+      .select('id, pr_number, timeout_at, config_json, github_installation_id, owner, repo')
       .eq('status', 'pending')
       .gt('timeout_at', new Date().toISOString())
       .order('created_at', { ascending: true });
@@ -312,12 +311,9 @@ export class AgentConnection implements DurableObject {
 
       if (remainingSeconds <= MIN_REMAINING_SECONDS_FOR_PICKUP) continue;
 
-      // Check repo config filter before claiming the task
-      const project = task.projects as unknown as {
-        owner: string;
-        repo: string;
-        github_installation_id: number;
-      };
+      const taskOwner = task.owner as string;
+      const taskRepo = task.repo as string;
+      const taskInstallationId = task.github_installation_id as number;
 
       const dummyAgent: EligibleAgent = {
         id: agentId,
@@ -325,10 +321,9 @@ export class AgentConnection implements DurableObject {
         userName: agentUserName,
         model: '',
         tool: '',
-        reputationScore: 0,
         repoConfig: agentRepoConfig,
       };
-      if (filterByRepoConfig([dummyAgent], project.owner, project.repo).length === 0) continue;
+      if (filterByRepoConfig([dummyAgent], taskOwner, taskRepo).length === 0) continue;
 
       // CAS transition: pending -> reviewing (prevents race with other agents)
       const { error } = await supabase
@@ -339,18 +334,13 @@ export class AgentConnection implements DurableObject {
 
       if (error) continue; // Another agent got it first
       const config = (task.config_json as Record<string, unknown>) ?? {};
-      const installationId = (config.installationId as number) ?? project.github_installation_id;
+      const installationId = (config.installationId as number) ?? taskInstallationId;
 
       // Fetch diff from GitHub API (not stored in DB)
       let diffContent: string;
       try {
         const token = await getInstallationToken(installationId, this.env);
-        diffContent = await fetchPrDiff(
-          project.owner,
-          project.repo,
-          task.pr_number as number,
-          token,
-        );
+        diffContent = await fetchPrDiff(taskOwner, taskRepo, task.pr_number as number, token);
       } catch (err) {
         console.error(`Failed to fetch diff for task ${task.id}, reverting to pending:`, err);
         await supabase
@@ -361,6 +351,8 @@ export class AgentConnection implements DurableObject {
         continue;
       }
 
+      const prUrl = `https://github.com/${taskOwner}/${taskRepo}/pull/${task.pr_number}`;
+
       try {
         const message: ReviewRequestMessage = {
           id: crypto.randomUUID(),
@@ -368,17 +360,17 @@ export class AgentConnection implements DurableObject {
           type: 'review_request',
           taskId: task.id as string,
           pr: {
-            url: task.pr_url as string,
+            url: prUrl,
             number: task.pr_number as number,
             diffUrl:
               (config.diffUrl as string) ??
-              `https://github.com/${project.owner}/${project.repo}/pull/${task.pr_number}.diff`,
+              `https://github.com/${taskOwner}/${taskRepo}/pull/${task.pr_number}.diff`,
             base: (config.baseRef as string) ?? 'main',
             head: (config.headRef as string) ?? 'unknown',
           },
           project: {
-            owner: project.owner,
-            repo: project.repo,
+            owner: taskOwner,
+            repo: taskRepo,
             prompt: (config.prompt as string) ?? '',
           },
           timeout: remainingSeconds,
@@ -396,9 +388,9 @@ export class AgentConnection implements DurableObject {
         const reviewCount = (config.reviewCount as number) ?? 1;
         const taskMeta: InFlightTaskMeta = {
           reviewCount,
-          installationId: (config.installationId as number) ?? project.github_installation_id,
-          owner: project.owner,
-          repo: project.repo,
+          installationId: (config.installationId as number) ?? taskInstallationId,
+          owner: taskOwner,
+          repo: taskRepo,
           prNumber: task.pr_number as number,
           prompt: (config.prompt as string) ?? '',
         };
@@ -569,29 +561,19 @@ export class AgentConnection implements DurableObject {
     const taskMeta = await this.state.storage.get<InFlightTaskMeta>(`taskMeta:${msg.taskId}`);
     const reviewCount = taskMeta?.reviewCount ?? 1;
 
-    // Insert result with review_text and verdict
+    // Insert result (review_text and comment_url dropped from schema)
     const { error } = await supabase.from('review_results').insert({
       review_task_id: msg.taskId,
       agent_id: agentId,
       status: 'completed',
-      review_text: msg.review,
       verdict: msg.verdict,
+      type: 'review',
     });
     if (error) {
       console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
     }
 
     await this.removeInFlightTask(msg.taskId);
-
-    // Always log consumption — even with 0 tokens, the row counts for reviews_per_day
-    const { error: logError } = await supabase.from('consumption_logs').insert({
-      agent_id: agentId,
-      review_task_id: msg.taskId,
-      tokens_used: msg.tokensUsed,
-    });
-    if (logError) {
-      console.error(`Failed to insert consumption log for task ${msg.taskId}:`, logError);
-    }
 
     if (reviewCount === 1) {
       // Single-agent mode: post review immediately (M5 backward compatible)
@@ -610,10 +592,10 @@ export class AgentConnection implements DurableObject {
     agentId: string,
     supabase: ReturnType<typeof createSupabaseClient>,
   ): Promise<void> {
-    // Look up task + project info for posting the review
+    // Look up task info for posting the review (fields inlined on review_tasks)
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
+      .select('pr_number, github_installation_id, owner, repo')
       .eq('id', msg.taskId)
       .single();
 
@@ -622,11 +604,9 @@ export class AgentConnection implements DurableObject {
       return;
     }
 
-    const project = taskData.projects as unknown as {
-      owner: string;
-      repo: string;
-      github_installation_id: number;
-    };
+    const taskOwner = taskData.owner as string;
+    const taskRepo = taskData.repo as string;
+    const taskInstallationId = taskData.github_installation_id as number;
 
     // Look up agent model/tool for comment formatting
     const { data: agentData } = await supabase
@@ -646,13 +626,8 @@ export class AgentConnection implements DurableObject {
     // Fetch diff from GitHub for inline comment validation
     let diffContent = '';
     try {
-      const diffToken = await getInstallationToken(project.github_installation_id, this.env);
-      diffContent = await fetchPrDiff(
-        project.owner,
-        project.repo,
-        taskData.pr_number as number,
-        diffToken,
-      );
+      const diffToken = await getInstallationToken(taskInstallationId, this.env);
+      diffContent = await fetchPrDiff(taskOwner, taskRepo, taskData.pr_number as number, diffToken);
     } catch {
       // Diff fetch failed — inline comments will be skipped
     }
@@ -675,17 +650,14 @@ export class AgentConnection implements DurableObject {
 
     try {
       console.log(
-        `Posting review for task ${msg.taskId} to ${project.owner}/${project.repo}#${taskData.pr_number}` +
-          ` (installation ${project.github_installation_id}, ${inlineComments.length} inline comments)`,
+        `Posting review for task ${msg.taskId} to ${taskOwner}/${taskRepo}#${taskData.pr_number}` +
+          ` (installation ${taskInstallationId}, ${inlineComments.length} inline comments)`,
       );
 
-      const installationToken = await getInstallationToken(
-        project.github_installation_id,
-        this.env,
-      );
-      const commentUrl = await postPrReview(
-        project.owner,
-        project.repo,
+      const installationToken = await getInstallationToken(taskInstallationId, this.env);
+      await postPrReview(
+        taskOwner,
+        taskRepo,
         taskData.pr_number as number,
         formattedReview,
         verdictToReviewEvent(effectiveVerdict),
@@ -693,14 +665,7 @@ export class AgentConnection implements DurableObject {
         inlineComments.length > 0 ? inlineComments : undefined,
       );
 
-      console.log(`Review posted for task ${msg.taskId}: ${commentUrl}`);
-
-      // Update review_results with comment_url
-      await supabase
-        .from('review_results')
-        .update({ comment_url: commentUrl })
-        .eq('review_task_id', msg.taskId)
-        .eq('agent_id', agentId);
+      console.log(`Review posted for task ${msg.taskId}`);
 
       // Transition task to completed
       await supabase
@@ -727,7 +692,8 @@ export class AgentConnection implements DurableObject {
       .from('review_results')
       .select('id', { count: 'exact', head: true })
       .eq('review_task_id', taskId)
-      .eq('status', 'completed');
+      .eq('status', 'completed')
+      .eq('type', 'review');
 
     const completedCount = count ?? 0;
 
@@ -816,12 +782,10 @@ export class AgentConnection implements DurableObject {
 
     const excludedAgentIds = (previousAttempts ?? []).map((r: { agent_id: string }) => r.agent_id);
 
-    // Look up task info for redistribution (including stored diff and config)
+    // Look up task info for redistribution (fields inlined on review_tasks)
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select(
-        'pr_number, pr_url, timeout_at, config_json, projects!inner(owner, repo, github_installation_id)',
-      )
+      .select('pr_number, timeout_at, config_json, github_installation_id, owner, repo')
       .eq('id', taskId)
       .single();
 
@@ -830,18 +794,15 @@ export class AgentConnection implements DurableObject {
       return;
     }
 
-    const project = taskData.projects as unknown as {
-      owner: string;
-      repo: string;
-      github_installation_id: number;
-    };
+    const taskOwner = taskData.owner as string;
+    const taskRepo = taskData.repo as string;
+    const taskInstallationId = taskData.github_installation_id as number;
 
-    // Find another eligible online agent with reputation >= 0
+    // Find another eligible online agent
     const { data: candidates } = await supabase
       .from('agents')
-      .select('id, user_id, model, tool, reputation_score, repo_config, users!inner(name)')
-      .eq('status', 'online')
-      .gte('reputation_score', 0);
+      .select('id, user_id, model, tool, repo_config, users!inner(name)')
+      .eq('status', 'online');
 
     const allCandidates: EligibleAgent[] = ((candidates ?? []) as Record<string, unknown>[])
       .filter((a) => !excludedAgentIds.includes(a.id as string))
@@ -851,11 +812,10 @@ export class AgentConnection implements DurableObject {
         userName: ((row.users as Record<string, unknown>)?.name as string) ?? '',
         model: row.model as string,
         tool: row.tool as string,
-        reputationScore: row.reputation_score as number,
         repoConfig: (row.repo_config as EligibleAgent['repoConfig']) ?? null,
       }));
 
-    const eligible = filterByRepoConfig(allCandidates, project.owner, project.repo);
+    const eligible = filterByRepoConfig(allCandidates, taskOwner, taskRepo);
 
     if (eligible.length === 0) {
       await supabase.from('review_tasks').update({ status: 'failed' }).eq('id', taskId);
@@ -866,14 +826,15 @@ export class AgentConnection implements DurableObject {
     const config = (taskData.config_json as Record<string, unknown>) ?? {};
     const timeoutAt = new Date(taskData.timeout_at as string).getTime();
     const remainingSeconds = Math.max(0, Math.floor((timeoutAt - Date.now()) / 1000));
+    const prUrl = `https://github.com/${taskOwner}/${taskRepo}/pull/${taskData.pr_number}`;
 
     // Fetch diff for redistribution
     let redistDiff = '';
     try {
-      const redistToken = await getInstallationToken(project.github_installation_id, this.env);
+      const redistToken = await getInstallationToken(taskInstallationId, this.env);
       redistDiff = await fetchPrDiff(
-        project.owner,
-        project.repo,
+        taskOwner,
+        taskRepo,
         taskData.pr_number as number,
         redistToken,
       );
@@ -892,23 +853,23 @@ export class AgentConnection implements DurableObject {
           body: JSON.stringify({
             taskId,
             pr: {
-              url: taskData.pr_url,
+              url: prUrl,
               number: taskData.pr_number,
               diffUrl:
                 (config.diffUrl as string) ??
-                `https://github.com/${project.owner}/${project.repo}/pull/${taskData.pr_number}.diff`,
+                `https://github.com/${taskOwner}/${taskRepo}/pull/${taskData.pr_number}.diff`,
               base: (config.baseRef as string) ?? 'main',
               head: (config.headRef as string) ?? 'unknown',
             },
             project: {
-              owner: project.owner,
-              repo: project.repo,
+              owner: taskOwner,
+              repo: taskRepo,
               prompt: (config.prompt as string) ?? '',
             },
             timeout: remainingSeconds,
             diffContent: redistDiff,
             reviewCount: (config.reviewCount as number) ?? 1,
-            installationId: project.github_installation_id,
+            installationId: taskInstallationId,
             reviewMode: ((config.reviewCount as number) ?? 1) > 1 ? 'compact' : 'full',
           }),
         }),
@@ -920,28 +881,15 @@ export class AgentConnection implements DurableObject {
   }
 
   private async handleSummaryComplete(msg: SummaryCompleteMessage): Promise<void> {
-    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
+    const _agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
     await this.removeInFlightTask(msg.taskId);
 
-    // Always log consumption for the summary agent
-    const { error: summaryLogError } = await supabase.from('consumption_logs').insert({
-      agent_id: agentId,
-      review_task_id: msg.taskId,
-      tokens_used: msg.tokensUsed,
-    });
-    if (summaryLogError) {
-      console.error(
-        `Failed to insert consumption log for summary task ${msg.taskId}:`,
-        summaryLogError,
-      );
-    }
-
-    // Look up task + project info
+    // Look up task info (fields inlined on review_tasks)
     const { data: taskData } = await supabase
       .from('review_tasks')
-      .select('pr_number, pr_url, project_id, projects!inner(owner, repo, github_installation_id)')
+      .select('pr_number, github_installation_id, owner, repo')
       .eq('id', msg.taskId)
       .single();
 
@@ -950,34 +898,30 @@ export class AgentConnection implements DurableObject {
       return;
     }
 
-    const project = taskData.projects as unknown as {
-      owner: string;
-      repo: string;
-      github_installation_id: number;
-    };
+    const taskOwner = taskData.owner as string;
+    const taskRepo = taskData.repo as string;
+    const taskInstallationId = taskData.github_installation_id as number;
 
     try {
-      const installationToken = await getInstallationToken(
-        project.github_installation_id,
-        this.env,
-      );
+      const installationToken = await getInstallationToken(taskInstallationId, this.env);
 
       // Get the number of contributing reviews for the summary header
       const { count: reviewCountResult } = await supabase
         .from('review_results')
         .select('id', { count: 'exact', head: true })
         .eq('review_task_id', msg.taskId)
-        .eq('status', 'completed');
+        .eq('status', 'completed')
+        .eq('type', 'review');
 
       // Parse structured review for inline comments
       const parsed = parseStructuredReview(msg.summary);
       // Fetch diff from GitHub for inline comment validation
       let diffContent = '';
       try {
-        const diffToken = await getInstallationToken(project.github_installation_id, this.env);
+        const diffToken = await getInstallationToken(taskInstallationId, this.env);
         diffContent = await fetchPrDiff(
-          project.owner,
-          project.repo,
+          taskOwner,
+          taskRepo,
           taskData.pr_number as number,
           diffToken,
         );
@@ -999,22 +943,15 @@ export class AgentConnection implements DurableObject {
         contributorNames,
       );
       const event = parsed.verdict ? verdictToReviewEvent(parsed.verdict) : 'COMMENT';
-      const summaryUrl = await postPrReview(
-        project.owner,
-        project.repo,
+      await postPrReview(
+        taskOwner,
+        taskRepo,
         taskData.pr_number as number,
         summaryBody,
         event,
         installationToken,
         inlineComments.length > 0 ? inlineComments : undefined,
       );
-
-      // Update review_summaries with comment_url
-      await supabase
-        .from('review_summaries')
-        .update({ comment_url: summaryUrl })
-        .eq('review_task_id', msg.taskId)
-        .eq('agent_id', agentId);
 
       // Transition task to completed
       await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', msg.taskId);
@@ -1027,9 +964,9 @@ export class AgentConnection implements DurableObject {
       const reviews = await fetchCompletedReviews(supabase, msg.taskId);
       const meta: InFlightTaskMeta = {
         reviewCount: 0,
-        installationId: project.github_installation_id,
-        owner: project.owner,
-        repo: project.repo,
+        installationId: taskInstallationId,
+        owner: taskOwner,
+        repo: taskRepo,
         prNumber: taskData.pr_number as number,
         prompt: '',
       };

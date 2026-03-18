@@ -296,7 +296,6 @@ describe('handleRevokeKey', () => {
       name: 'testuser',
       avatar: null,
       api_key_hash: 'oldhash',
-      reputation_score: 0,
       created_at: '2024-01-01',
       updated_at: '2024-01-01',
     };
@@ -322,7 +321,6 @@ describe('handleRevokeKey', () => {
       name: 'testuser',
       avatar: null,
       api_key_hash: 'oldhash',
-      reputation_score: 0,
       created_at: '2024-01-01',
       updated_at: '2024-01-01',
     };

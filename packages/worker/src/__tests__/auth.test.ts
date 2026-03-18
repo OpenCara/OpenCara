@@ -126,7 +126,6 @@ describe('authenticateRequest', () => {
       name: 'testuser',
       avatar: null,
       api_key_hash: 'somehash',
-      reputation_score: 0,
       created_at: '2024-01-01',
       updated_at: '2024-01-01',
     };
@@ -146,7 +145,6 @@ describe('authenticateRequest', () => {
       name: 'testuser',
       avatar: null,
       api_key_hash: 'somehash',
-      reputation_score: 0,
       created_at: '2024-01-01',
       updated_at: '2024-01-01',
     };
@@ -165,7 +163,6 @@ describe('authenticateRequest', () => {
       name: 'testuser',
       avatar: null,
       api_key_hash: 'somehash',
-      reputation_score: 0,
       created_at: '2024-01-01',
       updated_at: '2024-01-01',
     };
@@ -209,7 +206,6 @@ describe('authenticateRequest', () => {
       name: 'testuser',
       avatar: null,
       api_key_hash: 'somehash',
-      reputation_score: 0,
       created_at: '2024-01-01',
       updated_at: '2024-01-01',
     };
