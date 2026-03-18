@@ -1,11 +1,13 @@
 {
   "name": "opencara",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
   "bin": {
     "opencara": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build",
     "dev": "tsx src/index.ts",
