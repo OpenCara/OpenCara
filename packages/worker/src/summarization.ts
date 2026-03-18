@@ -2,6 +2,7 @@ import type { SummaryReview, ReviewVerdict } from '@opencara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Env } from './env.js';
 import { getInstallationToken, fetchPrDiff, postPrReview, verdictToReviewEvent } from './github.js';
+import { agentWeight } from './task-distribution.js';
 
 export interface InFlightTaskMeta {
   reviewCount: number;
@@ -141,8 +142,8 @@ export async function selectSummaryAgent(
 
   if (candidates.length === 0) return null;
 
-  // Weighted random selection: weight = max(0.1, reputation + 1)
-  const weights = candidates.map((a) => Math.max(0.1, a.reputation_score + 1));
+  // Weighted random selection using shared weight formula
+  const weights = candidates.map((a) => agentWeight(a.reputation_score));
   const totalWeight = weights.reduce((sum, w) => sum + w, 0);
   let r = Math.random() * totalWeight;
 

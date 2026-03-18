@@ -162,11 +162,10 @@ export function selectAgents(
 
   // Fill from each tier in priority order using weighted random
   const selected: EligibleAgent[] = [];
-  const remaining = count;
 
   for (const tier of [modelMatch, toolMatch, others]) {
-    if (selected.length >= remaining) break;
-    const needed = remaining - selected.length;
+    if (selected.length >= count) break;
+    const needed = count - selected.length;
     selected.push(...weightedRandomSelect(tier, needed, rng));
   }
 
@@ -200,7 +199,8 @@ export async function partitionByLoad(
   const lowLoad: EligibleAgent[] = [];
   const overflow: EligibleAgent[] = [];
 
-  for (const result of results) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
     if (result.status === 'fulfilled') {
       if (result.value.inFlight >= MAX_IN_FLIGHT_THRESHOLD) {
         overflow.push(result.value.agent);
@@ -209,8 +209,7 @@ export async function partitionByLoad(
       }
     } else {
       // Fail-open: if we can't query status, assume low load
-      const idx = results.indexOf(result);
-      lowLoad.push(agents[idx]);
+      lowLoad.push(agents[i]);
     }
   }
 
