@@ -54,23 +54,11 @@ jobs:
           npm version ${{ steps.bump.outputs.type }} --no-git-tag-version
           VERSION=$(node -p "require('./package.json').version")
           echo "new=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Bump shared version to match
-        if: steps.bump.outputs.type != 'none'
-        working-directory: packages/shared
-        run: npm version ${{ steps.bump.outputs.type }} --no-git-tag-version
-      - name: Publish @opencara/shared
-        if: steps.bump.outputs.type != 'none'
-        working-directory: packages/shared
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Resolve workspace dependency
+      - name: Remove workspace dependency before publish
         if: steps.bump.outputs.type != 'none'
         run: |
-          set -eo pipefail
-          SHARED_VERSION=$(jq -r .version packages/shared/package.json)
           cd packages/cli
-          jq --arg v "^$SHARED_VERSION" '.dependencies["@opencara/shared"] = $v' package.json > package.json.tmp
+          jq 'del(.dependencies["@opencara/shared"])' package.json > package.json.tmp
           mv package.json.tmp package.json
       - name: Publish opencara CLI
         if: steps.bump.outputs.type != 'none'
@@ -83,7 +71,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/cli/package.json packages/shared/package.json
+          git add packages/cli/package.json
           git commit -m "Bump version to ${{ steps.version.outputs.new }}"
           git push
           gh release create "v${{ steps.version.outputs.new }}" --generate-notes
