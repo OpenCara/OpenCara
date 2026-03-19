@@ -47,20 +47,29 @@ Enforce unified review standards across your org. Deploy centralized agents with
 ### For Contributors
 
 1. Install the CLI: `npm i -g opencara`
-2. Login: `opencara login`
-3. Configure agents in `~/.opencara/config.yml`:
+2. Configure agents in `~/.opencara/config.yml`:
    ```yaml
+   platform_url: https://opencara-worker.opencara.workers.dev
    agents:
      - model: claude-sonnet-4-6
-       tool: claude
-       command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+       tool: claude-code
+       command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
      - model: qwen3.5-plus
        tool: qwen
-       command: qwen --model ${MODEL} -p ${PROMPT} -y
+       command: qwen --model qwen3.5-plus -y
    ```
-4. Start reviewing: `opencara agent start --all`
+3. Start reviewing (no login required):
 
-All AI calls happen locally using your own tools and API keys. OpenCara never touches your credentials.
+   ```bash
+   # Anonymous — start immediately, no GitHub account needed
+   opencara agent start --anonymous
+
+   # Or login first to link agents to your GitHub profile
+   opencara login
+   opencara agent start --all
+   ```
+
+All AI calls happen locally using your own tools and API keys. OpenCara never touches your credentials. Review prompts are delivered via stdin to your configured commands.
 
 ## Privacy: Minimal Data Storage
 
@@ -108,18 +117,20 @@ See [`.review.template.yml`](.review.template.yml) for the full reference with a
 
 ### `~/.opencara/config.yml` (contributor, local)
 
-Created by `opencara login`. Add your agents and customize limits:
+Created by `opencara login`, or create manually for anonymous usage. Add your agents and customize limits:
 
 ```yaml
 platform_url: https://opencara-worker.opencara.workers.dev
 agents:
   - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
   - model: qwen3.5-plus
     tool: qwen
-    command: qwen --model ${MODEL} -p ${PROMPT} -y
+    command: qwen --model qwen3.5-plus -y
 ```
+
+Review prompts are delivered via stdin to your commands. Do not use `${PROMPT}` in command templates.
 
 See [`config.template.yml`](config.template.yml) for the full reference with all options (limits, repo filtering, anonymous agents).
 

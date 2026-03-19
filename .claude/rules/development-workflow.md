@@ -12,7 +12,7 @@ All dev agents (architect, worker-dev, cli-dev, web-dev) follow this standard li
 6. Write tests for new code
 7. Build and test: `pnpm build && pnpm test`
 8. Commit, push, and create a PR (referencing the issue)
-9. **Self-review**: run multi-AI review → fix findings → re-review (max 3 iterations)
+9. **Self-review**: wait for OpenCara bot review → fix findings → re-review (max 3 iterations)
 10. When clean → merge the PR
 11. Shut down
 
@@ -51,31 +51,22 @@ gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --bod
 
 ## Self-Review Phase
 
-After creating the PR, review your own changes using the `/multi-agents:review-pr` skill.
+After creating the PR, the OpenCara GitHub App (our own product) automatically reviews it. Wait for the bot review, then self-review combining its findings with your own analysis.
 
-### Step 1: Run Multi-AI Review
+### Step 1: Wait for OpenCara Bot Review
 
-Use the `/multi-agents:review-pr` skill to run a comprehensive multi-agent review:
+The OpenCara GitHub App is installed on this repo with `.review.yml` configured (review_count: 3). When you push and create a PR, the bot automatically dispatches review agents.
 
-```
-/multi-agents:review-pr <PR_NUMBER>
-```
-
-This skill automatically:
-
-- Fetches PR diff and metadata
-- Launches all configured AI agents (Codex, Gemini, Qwen variants) in parallel
-- Deduplicates and categorizes findings by severity (critical/major/minor)
-- Posts structured inline review comments via `gh pr-review` (threaded on specific file+line locations)
-- Falls back to a single synthesized comment if inline review is unavailable
-
-**CRITICAL**: You MUST wait for ALL review agents to complete before proceeding. Do NOT move on after the first agent (typically Codex) finishes. Collect results from every agent via `TaskOutput` one at a time. If an agent times out after 600s, note it as "did not complete" and proceed with the rest — but never skip waiting. Killing background review tasks prematurely is a workflow violation.
+1. After creating the PR, wait for the OpenCara bot review to appear (check with `gh pr reviews <PR_NUMBER>` or `gh pr view <PR_NUMBER> --comments`)
+2. If no review appears within 5 minutes, proceed with self-review only — do not block indefinitely
 
 ### Step 2: Fix & Re-review (max 3 iterations)
 
-1. Read the review findings posted on the PR
-2. If no critical/major issues → proceed to merge
-3. Otherwise: fix issues, run tests, commit, push, and re-review the changes yourself (agent-only review — do NOT re-run `/multi-agents:review-pr` on subsequent iterations)
+1. Read the bot review findings posted on the PR
+2. Perform your own review of the diff, combining bot findings with your analysis
+3. Fix all valid issues found (critical, major, minor — not just critical/major)
+4. Run tests, commit, push, and re-review until clean
+5. If no remaining issues → proceed to merge
 
 ### Step 3: Pre-merge Verification
 
