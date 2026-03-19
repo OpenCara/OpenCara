@@ -40,10 +40,14 @@ export interface CliConfig {
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencara.dev';
 export const CONFIG_DIR = path.join(os.homedir(), '.opencara');
-export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yml');
+export const CONFIG_FILE =
+  process.env.OPENCARA_CONFIG && process.env.OPENCARA_CONFIG.trim()
+    ? path.resolve(process.env.OPENCARA_CONFIG)
+    : path.join(CONFIG_DIR, 'config.yml');
 
 export function ensureConfigDir(): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const dir = path.dirname(CONFIG_FILE);
+  fs.mkdirSync(dir, { recursive: true });
 }
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
