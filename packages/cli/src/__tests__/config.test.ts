@@ -589,6 +589,36 @@ anonymous_agents:
     });
   });
 
+  describe('agent router config', () => {
+    it('parses router: true from agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    router: true
+  - model: glm-5
+    tool: qwen
+`);
+      const config = loadConfig();
+      expect(config.agents).toHaveLength(2);
+      expect(config.agents![0].router).toBe(true);
+      expect(config.agents![1].router).toBeUndefined();
+    });
+
+    it('ignores router: false', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    router: false
+`);
+      const config = loadConfig();
+      expect(config.agents![0].router).toBeUndefined();
+    });
+  });
+
   describe('per-agent limits in config', () => {
     it('parses per-agent limits from YAML', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);

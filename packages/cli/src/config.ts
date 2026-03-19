@@ -15,6 +15,7 @@ export interface LocalAgentConfig {
   tool: string;
   name?: string;
   command?: string;
+  router?: boolean;
   limits?: ConsumptionLimits;
   repos?: RepoConfig;
 }
@@ -180,6 +181,7 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
     if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
+    if (obj.router === true) agent.router = true;
     const agentLimits = parseLimits(obj);
     if (agentLimits) agent.limits = agentLimits;
     const repoConfig = parseRepoConfig(obj, i);

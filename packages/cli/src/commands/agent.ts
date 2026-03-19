@@ -30,6 +30,8 @@ import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.j
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
 import { resolveCommandTemplate, validateCommandBinary } from '../tool-executor.js';
+import { RouterRelay, RouterTimeoutError } from '../router.js';
+import { estimateTokens } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   createSessionTracker,
@@ -99,6 +101,7 @@ export interface StartAgentOptions {
   repoConfig?: RepoConfig;
   displayName?: string;
   label?: string;
+  routerRelay?: RouterRelay;
 }
 
 /** Interval for sending RFC 6455 WebSocket ping frames to keep the proxy layer alive */
@@ -116,6 +119,7 @@ export function startAgent(
   const stabilityThreshold = options?.stabilityThresholdMs ?? CONNECTION_STABILITY_THRESHOLD_MS;
   const repoConfig = options?.repoConfig;
   const displayName = options?.displayName;
+  const routerRelay = options?.routerRelay;
   const prefix = options?.label ? `[${options.label}]` : '';
   const log = (...args: unknown[]) => console.log(...(prefix ? [prefix, ...args] : args));
   const logError = (...args: unknown[]) => console.error(...(prefix ? [prefix, ...args] : args));
@@ -225,6 +229,7 @@ export function startAgent(
         repoConfig,
         displayName,
         prefix,
+        routerRelay,
       );
     });
 
@@ -336,6 +341,7 @@ export function handleMessage(
   repoConfig?: RepoConfig,
   displayName?: string,
   logPrefix?: string,
+  routerRelay?: RouterRelay,
 ): void {
   const pfx = logPrefix ? `${logPrefix} ` : '';
   switch (msg.type) {
@@ -349,6 +355,9 @@ export function handleMessage(
         ...(displayName ? { displayName } : {}),
         repoConfig: repoConfig ?? { mode: 'all' },
       });
+      if (routerRelay) {
+        routerRelay.writeMessage({ type: 'idle', message: 'Waiting for review requests...' });
+      }
       break;
 
     case 'heartbeat_ping':
@@ -366,6 +375,85 @@ export function handleMessage(
       console.log(
         `${pfx}Review request: task ${request.taskId} for ${request.project.owner}/${request.project.repo}#${request.pr.number}`,
       );
+
+      // Router mode: relay to external agent via stdin/stdout
+      if (routerRelay) {
+        void (async () => {
+          // Check consumption limits before relaying
+          if (consumptionDeps) {
+            const limitResult = await checkConsumptionLimits(
+              consumptionDeps.agentId,
+              consumptionDeps.limits,
+            );
+            if (!limitResult.allowed) {
+              trySend(ws, {
+                type: 'review_rejected',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: request.taskId,
+                reason: limitResult.reason ?? 'consumption_limit_exceeded',
+              });
+              console.log(`${pfx}Review rejected: ${limitResult.reason}`);
+              return;
+            }
+          }
+
+          try {
+            const prompt = routerRelay.buildReviewPrompt({
+              owner: request.project.owner,
+              repo: request.project.repo,
+              reviewMode: request.reviewMode ?? 'full',
+              prompt: request.project.prompt,
+              diffContent: request.diffContent,
+            });
+            const response = await routerRelay.sendPrompt(
+              'review_request',
+              request.taskId,
+              prompt,
+              request.timeout,
+            );
+            const { verdict, review } = routerRelay.parseReviewResponse(response);
+            const tokensUsed = estimateTokens(prompt) + estimateTokens(response);
+            trySend(ws, {
+              type: 'review_complete',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: request.taskId,
+              review,
+              verdict,
+              tokensUsed,
+            });
+            await logPostReviewStats(
+              'Review',
+              verdict,
+              tokensUsed,
+              true,
+              consumptionDeps,
+              logPrefix,
+            );
+          } catch (err: unknown) {
+            if (err instanceof RouterTimeoutError) {
+              trySend(ws, {
+                type: 'review_error',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: request.taskId,
+                error: err.message,
+              });
+            } else {
+              trySend(ws, {
+                type: 'review_error',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: request.taskId,
+                error: err instanceof Error ? err.message : 'Unknown error',
+              });
+            }
+            console.error(`${pfx}Review failed:`, err);
+          }
+        })();
+        break;
+      }
 
       if (!reviewDeps) {
         ws.send(
@@ -460,6 +548,83 @@ export function handleMessage(
       console.log(
         `${pfx}Summary request: task ${summaryRequest.taskId} for ${summaryRequest.project.owner}/${summaryRequest.project.repo}#${summaryRequest.pr.number} (${summaryRequest.reviews.length} reviews)`,
       );
+
+      // Router mode: relay to external agent via stdin/stdout
+      if (routerRelay) {
+        void (async () => {
+          // Check consumption limits before relaying
+          if (consumptionDeps) {
+            const limitResult = await checkConsumptionLimits(
+              consumptionDeps.agentId,
+              consumptionDeps.limits,
+            );
+            if (!limitResult.allowed) {
+              trySend(ws, {
+                type: 'review_rejected',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: summaryRequest.taskId,
+                reason: limitResult.reason ?? 'consumption_limit_exceeded',
+              });
+              console.log(`${pfx}Summary rejected: ${limitResult.reason}`);
+              return;
+            }
+          }
+
+          try {
+            const prompt = routerRelay.buildSummaryPrompt({
+              owner: summaryRequest.project.owner,
+              repo: summaryRequest.project.repo,
+              prompt: summaryRequest.project.prompt,
+              reviews: summaryRequest.reviews,
+              diffContent: summaryRequest.diffContent ?? '',
+            });
+            const response = await routerRelay.sendPrompt(
+              'summary_request',
+              summaryRequest.taskId,
+              prompt,
+              summaryRequest.timeout,
+            );
+            const tokensUsed = estimateTokens(prompt) + estimateTokens(response);
+            trySend(ws, {
+              type: 'summary_complete',
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              taskId: summaryRequest.taskId,
+              summary: response,
+              tokensUsed,
+            });
+            await logPostReviewStats(
+              'Summary',
+              undefined,
+              tokensUsed,
+              true,
+              consumptionDeps,
+              logPrefix,
+            );
+          } catch (err: unknown) {
+            if (err instanceof RouterTimeoutError) {
+              trySend(ws, {
+                type: 'review_error',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: summaryRequest.taskId,
+                error: err.message,
+              });
+            } else {
+              trySend(ws, {
+                type: 'review_error',
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                taskId: summaryRequest.taskId,
+                error: err instanceof Error ? err.message : 'Summary failed',
+              });
+            }
+            console.error(`${pfx}Summary failed:`, err);
+          }
+        })();
+        break;
+      }
 
       if (!reviewDeps) {
         trySend(ws, {
@@ -902,6 +1067,7 @@ agentCommand
   .option('--model <model>', 'AI model name (used with --anonymous)')
   .option('--tool <tool>', 'Review tool name (used with --anonymous)')
   .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
+  .option('--router', 'Router mode: relay prompts to stdout, read responses from stdin')
   .option(
     '--stability-threshold <ms>',
     `Connection stability threshold in ms (${STABILITY_THRESHOLD_MIN_MS}–${STABILITY_THRESHOLD_MAX_MS}, default: ${CONNECTION_STABILITY_THRESHOLD_MS})`,
@@ -915,6 +1081,7 @@ agentCommand
         model?: string;
         tool?: string;
         verbose?: boolean;
+        router?: boolean;
         stabilityThreshold?: string;
       },
     ) => {
@@ -957,12 +1124,19 @@ agentCommand
         const { entry, command } = resolved;
 
         let reviewDeps: ReviewExecutorDeps | undefined;
-        if (validateCommandBinary(command)) {
-          reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
+        let relay: RouterRelay | undefined;
+
+        if (opts.router) {
+          relay = new RouterRelay();
+          relay.start();
         } else {
-          console.warn(
-            `Warning: binary "${command.split(' ')[0]}" not found. Reviews will be rejected.`,
-          );
+          if (validateCommandBinary(command)) {
+            reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
+          } else {
+            console.warn(
+              `Warning: binary "${command.split(' ')[0]}" not found. Reviews will be rejected.`,
+            );
+          }
         }
 
         const consumptionDeps: ConsumptionDeps = {
@@ -977,15 +1151,24 @@ agentCommand
           stabilityThresholdMs,
           displayName: entry.name,
           repoConfig: entry.repoConfig,
+          routerRelay: relay,
         });
         return;
       }
 
       // === Path B: Local-config mode (agents section exists) ===
       if (config.agents !== null) {
-        // Validate and filter agents by binary availability
+        // Separate router agents from command-based agents
+        const routerAgents: LocalAgentConfig[] = [];
         const validAgents: Array<{ local: LocalAgentConfig; command: string }> = [];
+
         for (const local of config.agents) {
+          // Agent uses router mode if --router flag is set or config has router: true
+          if (opts.router || local.router) {
+            routerAgents.push(local);
+            continue;
+          }
+
           let cmd: string;
           try {
             cmd = resolveLocalAgentCommand(local, config.agentCommand);
@@ -1004,34 +1187,49 @@ agentCommand
           validAgents.push({ local, command: cmd });
         }
 
-        if (validAgents.length === 0 && config.anonymousAgents.length === 0) {
+        const totalValid = validAgents.length + routerAgents.length;
+        if (totalValid === 0 && config.anonymousAgents.length === 0) {
           console.error('No valid agents in config. Check that tool binaries are installed.');
           process.exit(1);
         }
 
         // Determine which agents to start
         let agentsToStart: Array<{ local: LocalAgentConfig; command: string }>;
+        let routerAgentsToStart: LocalAgentConfig[];
         const anonAgentsToStart: AnonymousAgentEntry[] = [];
 
         if (opts.all) {
           agentsToStart = validAgents;
+          routerAgentsToStart = routerAgents;
           // Also include anonymous agents when --all is used
           anonAgentsToStart.push(...config.anonymousAgents);
         } else if (agentIdOrModel) {
-          const match = validAgents.find((a) => a.local.model === agentIdOrModel);
-          if (!match) {
+          const cmdMatch = validAgents.find((a) => a.local.model === agentIdOrModel);
+          const routerMatch = routerAgents.find((a) => a.model === agentIdOrModel);
+          if (!cmdMatch && !routerMatch) {
             console.error(`No agent with model "${agentIdOrModel}" found in local config.`);
             console.error('Available agents:');
             for (const a of validAgents) {
               console.error(`  ${a.local.model}  (${a.local.tool})`);
             }
+            for (const a of routerAgents) {
+              console.error(`  ${a.model}  (${a.tool}) [router]`);
+            }
             process.exit(1);
           }
-          agentsToStart = [match];
-        } else if (validAgents.length === 1) {
-          agentsToStart = [validAgents[0]];
-          console.log(`Using agent ${validAgents[0].local.model} (${validAgents[0].local.tool})`);
-        } else if (validAgents.length === 0) {
+          agentsToStart = cmdMatch ? [cmdMatch] : [];
+          routerAgentsToStart = routerMatch ? [routerMatch] : [];
+        } else if (totalValid === 1) {
+          if (validAgents.length === 1) {
+            agentsToStart = [validAgents[0]];
+            routerAgentsToStart = [];
+            console.log(`Using agent ${validAgents[0].local.model} (${validAgents[0].local.tool})`);
+          } else {
+            agentsToStart = [];
+            routerAgentsToStart = [routerAgents[0]];
+            console.log(`Using router agent ${routerAgents[0].model} (${routerAgents[0].tool})`);
+          }
+        } else if (totalValid === 0) {
           console.error('No valid authenticated agents in config. Use --anonymous or --all.');
           process.exit(1);
         } else {
@@ -1039,11 +1237,15 @@ agentCommand
           for (const a of validAgents) {
             console.error(`  ${a.local.model}  (${a.local.tool})`);
           }
+          for (const a of routerAgents) {
+            console.error(`  ${a.model}  (${a.tool}) [router]`);
+          }
           process.exit(1);
         }
 
         // Increase listener limit when starting multiple agents
-        const totalAgents = agentsToStart.length + anonAgentsToStart.length;
+        const totalAgents =
+          agentsToStart.length + routerAgentsToStart.length + anonAgentsToStart.length;
         if (totalAgents > 1) {
           process.setMaxListeners(process.getMaxListeners() + totalAgents * 2);
         }
@@ -1053,7 +1255,7 @@ agentCommand
         let apiKey: string | undefined;
         let client: ApiClient | undefined;
         let serverAgents: AgentResponse[] | undefined;
-        if (agentsToStart.length > 0) {
+        if (agentsToStart.length > 0 || routerAgentsToStart.length > 0) {
           apiKey = requireApiKey(config);
           client = new ApiClient(config.platformUrl, apiKey);
           try {
@@ -1065,6 +1267,7 @@ agentCommand
           }
         }
 
+        // Start command-based agents
         for (const selected of agentsToStart) {
           let agentId: string;
           try {
@@ -1109,6 +1312,53 @@ agentCommand
             stabilityThresholdMs,
             repoConfig: selected.local.repos,
             label,
+          });
+          startedCount++;
+        }
+
+        // Start router-mode agents
+        for (const local of routerAgentsToStart) {
+          let agentId: string;
+          try {
+            const sync = await syncAgentToServer(client!, serverAgents!, local);
+            agentId = sync.agentId;
+            if (sync.created) {
+              console.log(`Registered new agent ${agentId} on platform`);
+              serverAgents!.push({
+                id: agentId,
+                model: local.model,
+                tool: local.tool,
+                isAnonymous: false,
+                status: 'offline',
+                repoConfig: null,
+                createdAt: new Date().toISOString(),
+              });
+            }
+          } catch (err) {
+            console.error(
+              `Failed to sync router agent ${local.model} to server:`,
+              err instanceof Error ? err.message : err,
+            );
+            continue;
+          }
+
+          const relay = new RouterRelay();
+          relay.start();
+
+          const consumptionDeps: ConsumptionDeps = {
+            agentId,
+            limits: resolveAgentLimits(local.limits, config.limits),
+            session: createSessionTracker(),
+          };
+
+          const label = local.name || local.model || 'unnamed';
+          console.log(`Starting router agent ${label} (${agentId})...`);
+          startAgent(agentId, config.platformUrl, apiKey!, undefined, consumptionDeps, {
+            verbose: opts.verbose,
+            stabilityThresholdMs,
+            repoConfig: local.repos,
+            label,
+            routerRelay: relay,
           });
           startedCount++;
         }
@@ -1200,17 +1450,24 @@ agentCommand
       }
 
       let reviewDeps: ReviewExecutorDeps | undefined;
-      try {
-        const commandTemplate = resolveCommandTemplate(config.agentCommand);
-        reviewDeps = {
-          commandTemplate,
-          maxDiffSizeKb: config.maxDiffSizeKb,
-        };
-      } catch (err) {
-        console.warn(
-          `Warning: ${err instanceof Error ? err.message : 'Could not determine agent command.'}` +
-            ' Reviews will be rejected.',
-        );
+      let relay: RouterRelay | undefined;
+
+      if (opts.router) {
+        relay = new RouterRelay();
+        relay.start();
+      } else {
+        try {
+          const commandTemplate = resolveCommandTemplate(config.agentCommand);
+          reviewDeps = {
+            commandTemplate,
+            maxDiffSizeKb: config.maxDiffSizeKb,
+          };
+        } catch (err) {
+          console.warn(
+            `Warning: ${err instanceof Error ? err.message : 'Could not determine agent command.'}` +
+              ' Reviews will be rejected.',
+          );
+        }
       }
 
       const consumptionDeps: ConsumptionDeps = {
@@ -1224,6 +1481,7 @@ agentCommand
         verbose: opts.verbose,
         stabilityThresholdMs,
         label: agentId,
+        routerRelay: relay,
       });
     },
   );
