@@ -117,10 +117,8 @@ export function startAgent(
   const repoConfig = options?.repoConfig;
   const displayName = options?.displayName;
   const prefix = options?.label ? `[${options.label}]` : '';
-  const log = (...args: unknown[]) =>
-    console.log(...(prefix ? [prefix, ...args] : args));
-  const logError = (...args: unknown[]) =>
-    console.error(...(prefix ? [prefix, ...args] : args));
+  const log = (...args: unknown[]) => console.log(...(prefix ? [prefix, ...args] : args));
+  const logError = (...args: unknown[]) => console.error(...(prefix ? [prefix, ...args] : args));
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -323,7 +321,9 @@ async function logPostReviewStats(
       `${pfx}${type} complete (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
     );
   }
-  console.log(`${pfx}${formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits)}`);
+  console.log(
+    `${pfx}${formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits)}`,
+  );
 }
 
 export function handleMessage(
@@ -354,7 +354,9 @@ export function handleMessage(
     case 'heartbeat_ping':
       ws.send(JSON.stringify({ type: 'heartbeat_pong', timestamp: Date.now() }));
       if (verbose) {
-        console.log(`${pfx}[verbose] Heartbeat ping received, pong sent at ${new Date().toISOString()}`);
+        console.log(
+          `${pfx}[verbose] Heartbeat ping received, pong sent at ${new Date().toISOString()}`,
+        );
       }
       if (resetHeartbeat) resetHeartbeat();
       break;
@@ -427,6 +429,7 @@ export function handleMessage(
             result.tokensUsed,
             result.tokensEstimated,
             consumptionDeps,
+            logPrefix,
           );
         } catch (err: unknown) {
           if (err instanceof DiffTooLargeError) {
@@ -446,7 +449,7 @@ export function handleMessage(
               error: err instanceof Error ? err.message : 'Unknown error',
             });
           }
-          console.error(`${pfx} Review failed:`, err);
+          console.error(`${pfx}Review failed:`, err);
         }
       })();
       break;
@@ -517,6 +520,7 @@ export function handleMessage(
             result.tokensUsed,
             result.tokensEstimated,
             consumptionDeps,
+            logPrefix,
           );
         } catch (err: unknown) {
           if (err instanceof InputTooLargeError) {
@@ -536,7 +540,7 @@ export function handleMessage(
               error: err instanceof Error ? err.message : 'Summary failed',
             });
           }
-          console.error(`${pfx} Summary failed:`, err);
+          console.error(`${pfx}Summary failed:`, err);
         }
       })();
       break;
