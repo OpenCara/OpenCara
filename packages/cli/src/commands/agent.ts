@@ -29,9 +29,8 @@ import { ApiClient } from '../http.js';
 import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
-import { resolveCommandTemplate, validateCommandBinary } from '../tool-executor.js';
+import { resolveCommandTemplate, validateCommandBinary, estimateTokens } from '../tool-executor.js';
 import { RouterRelay, RouterTimeoutError } from '../router.js';
-import { estimateTokens } from '../tool-executor.js';
 import {
   checkConsumptionLimits,
   createSessionTracker,

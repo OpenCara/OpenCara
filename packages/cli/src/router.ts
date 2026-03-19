@@ -1,6 +1,10 @@
 import * as readline from 'node:readline';
-import { extractVerdict } from './review.js';
-import { buildSystemPrompt, buildUserMessage, type ReviewRequest } from './review.js';
+import {
+  extractVerdict,
+  buildSystemPrompt,
+  buildUserMessage,
+  type ReviewRequest,
+} from './review.js';
 import {
   buildSummarySystemPrompt,
   buildSummaryUserMessage,
