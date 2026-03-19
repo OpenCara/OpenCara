@@ -5,6 +5,14 @@ vi.mock('../db.js', () => ({
   createSupabaseClient: vi.fn(),
 }));
 
+vi.mock('../summarization.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../summarization.js')>();
+  return {
+    ...actual,
+    retrySummarization: vi.fn().mockResolvedValue(true),
+  };
+});
+
 vi.mock('../github.js', () => ({
   getInstallationToken: vi.fn(),
   fetchPrDiff: vi.fn(),
@@ -22,11 +30,13 @@ vi.mock('../github.js', () => ({
 
 import { createSupabaseClient } from '../db.js';
 import { getInstallationToken, fetchPrDiff, postPrReview } from '../github.js';
+import { retrySummarization } from '../summarization.js';
 
 const mockedCreateSupabase = vi.mocked(createSupabaseClient);
 const mockedGetInstallationToken = vi.mocked(getInstallationToken);
 const mockedFetchPrDiff = vi.mocked(fetchPrDiff);
 const mockedPostPrReview = vi.mocked(postPrReview);
+const mockedRetrySummarization = vi.mocked(retrySummarization);
 
 function createMockStorage() {
   const store = new Map<string, unknown>();
@@ -829,6 +839,317 @@ describe('AgentConnection', () => {
 
       // Should not throw
       expect(mockEnv.AGENT_CONNECTION.idFromName).toHaveBeenCalledWith('agent-2');
+    });
+
+    it('routes review_error to retrySummarization when task is summarizing', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      // Store task meta for summarizing task
+      storage.store.set('taskMeta:task-1', {
+        reviewCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: { status: 'summarizing' },
+            error: null,
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_error',
+          taskId: 'task-1',
+          error: 'Summary generation failed',
+        }),
+      );
+
+      // Should call retrySummarization, NOT redistributeTask
+      expect(mockedRetrySummarization).toHaveBeenCalledWith(
+        expect.anything(), // env
+        expect.anything(), // supabase
+        'task-1',
+        expect.objectContaining({ reviewCount: 3, owner: 'org', repo: 'repo' }),
+        'agent-1', // the agentId from storage
+      );
+      // Should NOT redistribute (no push-task call)
+      expect(mockEnv.AGENT_CONNECTION.idFromName).not.toHaveBeenCalled();
+    });
+
+    it('routes review_rejected to retrySummarization when task is summarizing', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      storage.store.set('taskMeta:task-1', {
+        reviewCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: { status: 'summarizing' },
+            error: null,
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_rejected',
+          taskId: 'task-1',
+          reason: 'Input too large',
+        }),
+      );
+
+      expect(mockedRetrySummarization).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'task-1',
+        expect.objectContaining({ reviewCount: 3 }),
+        'agent-1',
+      );
+      expect(mockEnv.AGENT_CONNECTION.idFromName).not.toHaveBeenCalled();
+    });
+
+    it('routes review_error to redistributeTask when task is reviewing (not summarizing)', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockSupa = createSupabaseMock({
+        countResults: {
+          review_results: { count: 1 },
+        },
+        selectResults: {
+          review_results: { data: [{ agent_id: 'agent-1' }] },
+          agents: {
+            data: [
+              {
+                id: 'agent-2',
+                user_id: 'user-2',
+                model: 'gpt-4',
+                tool: 'cursor',
+                repo_config: null,
+                users: { name: 'bob' },
+              },
+            ],
+          },
+        },
+        singleResults: {
+          review_tasks: {
+            data: {
+              status: 'reviewing',
+              pr_number: 10,
+              timeout_at: new Date(Date.now() + 300_000).toISOString(),
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
+            },
+            error: null,
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_error',
+          taskId: 'task-1',
+          error: 'Something went wrong',
+        }),
+      );
+
+      // Should NOT call retrySummarization
+      expect(mockedRetrySummarization).not.toHaveBeenCalled();
+      // Should redistribute (review error behavior)
+      expect(mockEnv.AGENT_CONNECTION.idFromName).toHaveBeenCalledWith('agent-2');
+    });
+
+    it('updates pending summary row to error status when summarizing task has error', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      storage.store.set('taskMeta:task-1', {
+        reviewCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: { status: 'summarizing' },
+            error: null,
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_error',
+          taskId: 'task-1',
+          error: 'Failed',
+        }),
+      );
+
+      // Should update (not insert) the review_results row
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_results',
+        data: { status: 'error' },
+      });
+      // Should NOT insert a new review_results row for error
+      const errorInserts = mockSupa._calls.insert.filter(
+        (c) =>
+          c.table === 'review_results' && (c.data as Record<string, unknown>).status === 'error',
+      );
+      expect(errorInserts).toHaveLength(0);
+    });
+
+    it('updates pending summary row to rejected status when summarizing task is rejected', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      storage.store.set('taskMeta:task-1', {
+        reviewCount: 3,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: { status: 'summarizing' },
+            error: null,
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'review_rejected',
+          taskId: 'task-1',
+          reason: 'Input too large',
+        }),
+      );
+
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_results',
+        data: { status: 'rejected' },
+      });
+      const rejectedInserts = mockSupa._calls.insert.filter(
+        (c) =>
+          c.table === 'review_results' && (c.data as Record<string, unknown>).status === 'rejected',
+      );
+      expect(rejectedInserts).toHaveLength(0);
+    });
+
+    it('handles summary_complete updates pending summary row to completed', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockSupa = createSupabaseMock({
+        singleResults: {
+          review_tasks: {
+            data: {
+              pr_number: 42,
+              github_installation_id: 99,
+              owner: 'org',
+              repo: 'repo',
+            },
+            error: null,
+          },
+        },
+        selectResults: {
+          review_results: {
+            data: [
+              {
+                type: 'review',
+                agent_id: 'agent-2',
+                verdict: 'approve',
+                agents: {
+                  model: 'gpt-4',
+                  tool: 'cursor',
+                  users: { name: 'alice', is_anonymous: false },
+                },
+              },
+              {
+                type: 'summary',
+                agent_id: 'agent-1',
+                verdict: null,
+                agents: {
+                  model: 'claude',
+                  tool: 'vscode',
+                  users: { name: 'bob', is_anonymous: false },
+                },
+              },
+            ],
+          },
+        },
+      });
+      mockedCreateSupabase.mockReturnValue(
+        mockSupa as unknown as ReturnType<typeof createSupabaseClient>,
+      );
+      mockedGetInstallationToken.mockResolvedValue('test-token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockWs = createMockWebSocket();
+      await connection.webSocketMessage(
+        mockWs as unknown as WebSocket,
+        JSON.stringify({
+          id: '1',
+          timestamp: Date.now(),
+          type: 'summary_complete',
+          taskId: 'task-1',
+          summary: 'Great code',
+          tokensUsed: 100,
+        }),
+      );
+
+      // Should update review_results to completed
+      expect(mockSupa._calls.update).toContainEqual({
+        table: 'review_results',
+        data: { status: 'completed' },
+      });
     });
 
     it('handles summary_complete with GitHub posting', async () => {
