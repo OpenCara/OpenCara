@@ -409,7 +409,7 @@ describe('agent commands', () => {
       const ws = mockWsInstances[0];
       ws.emit('open');
 
-      expect(logSpy).toHaveBeenCalledWith('Connected to platform.');
+      expect(logSpy).toHaveBeenCalledWith('[a1]', 'Connected to platform.');
     });
 
     it('handles WebSocket message with handleMessage', async () => {
@@ -419,7 +419,7 @@ describe('agent commands', () => {
       ws.emit('open');
       ws.emit('message', Buffer.from(JSON.stringify({ type: 'connected', version: '1' })));
 
-      expect(logSpy).toHaveBeenCalledWith('Authenticated. Protocol v1');
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Authenticated. Protocol v1'));
     });
 
     it('ignores invalid JSON messages', async () => {
@@ -436,7 +436,7 @@ describe('agent commands', () => {
       const ws = mockWsInstances[0];
       ws.emit('error', new Error('Connection refused'));
 
-      expect(errorSpy).toHaveBeenCalledWith('WebSocket error: Connection refused');
+      expect(errorSpy).toHaveBeenCalledWith('[a1]', 'WebSocket error: Connection refused');
     });
 
     it('reconnects on unintentional close', async () => {
@@ -445,12 +445,12 @@ describe('agent commands', () => {
       const ws = mockWsInstances[0];
       ws.emit('close', 1006, Buffer.from('Abnormal'));
 
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Disconnected'));
+      expect(logSpy).toHaveBeenCalledWith('[a1]', expect.stringContaining('Disconnected'));
 
       // Wait for async reconnect
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Reconnecting'));
+      expect(logSpy).toHaveBeenCalledWith('[a1]', expect.stringContaining('Reconnecting'));
       // A new WebSocket should be created after reconnect
       expect(mockWsInstances.length).toBeGreaterThanOrEqual(2);
     });
@@ -462,8 +462,8 @@ describe('agent commands', () => {
       ws.emit('open'); // Sets heartbeat timer via resetHeartbeatTimer
       ws.emit('close', 1000, Buffer.from('Normal')); // Clears heartbeat timer
 
-      expect(logSpy).toHaveBeenCalledWith('Connected to platform.');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Disconnected'));
+      expect(logSpy).toHaveBeenCalledWith('[a1]', 'Connected to platform.');
+      expect(logSpy).toHaveBeenCalledWith('[a1]', expect.stringContaining('Disconnected'));
     });
 
     it('terminates connection on heartbeat timeout', async () => {
@@ -476,7 +476,7 @@ describe('agent commands', () => {
 
       vi.advanceTimersByTime(90_000); // Trigger heartbeat timeout
 
-      expect(logSpy).toHaveBeenCalledWith('No heartbeat received in 90s. Reconnecting...');
+      expect(logSpy).toHaveBeenCalledWith('[a1]', 'No heartbeat received in 90s. Reconnecting...');
       expect(ws.terminate).toHaveBeenCalled();
 
       vi.useRealTimers();
@@ -544,7 +544,7 @@ describe('agent commands', () => {
       expect(() => shutdown()).toThrow('process.exit');
 
       expect(ws.close).toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith('Disconnected.');
+      expect(logSpy).toHaveBeenCalledWith('[a1]', 'Disconnected.');
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
   });

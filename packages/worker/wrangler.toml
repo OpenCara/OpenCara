@@ -26,3 +26,21 @@ id = "TBD_RATE_LIMIT_KV_ID"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentConnection", "TaskTimeout"]
+
+# ── Dev environment ──────────────────────────────────────────────
+[env.dev]
+name = "opencara-worker-dev"
+
+[env.dev.vars]
+WEB_URL = "https://dev.opencara.com"
+WORKER_URL = "https://opencara-worker-dev.opencara.workers.dev"
+
+[env.dev.durable_objects]
+bindings = [
+  { name = "AGENT_CONNECTION", class_name = "AgentConnection" },
+  { name = "TASK_TIMEOUT", class_name = "TaskTimeout" }
+]
+
+[[env.dev.kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "98488948567340099887f541ba94e3c8"

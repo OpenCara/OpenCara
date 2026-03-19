@@ -28,6 +28,7 @@ No **Organization permissions** or **Account permissions** are needed.
 Enable these webhook events:
 
 - **Pull request** — triggers review when PRs are opened or updated
+- **Issue comment** — enables `/opencara review` manual trigger on PRs
 - **Installation** — tracks when the app is installed/uninstalled on repos
 
 ## Post-Creation Setup
