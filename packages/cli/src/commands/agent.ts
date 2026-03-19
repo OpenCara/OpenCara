@@ -1087,7 +1087,7 @@ agentCommand
             session: createSessionTracker(),
           };
 
-          const label = selected.local.name || selected.local.model;
+          const label = selected.local.name || selected.local.model || 'unnamed';
           console.log(`Starting agent ${label} (${agentId})...`);
           startAgent(agentId, config.platformUrl, apiKey!, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,

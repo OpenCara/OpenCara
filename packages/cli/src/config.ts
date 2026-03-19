@@ -40,7 +40,10 @@ export interface CliConfig {
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencara.dev';
 export const CONFIG_DIR = path.join(os.homedir(), '.opencara');
-export const CONFIG_FILE = process.env.OPENCARA_CONFIG || path.join(CONFIG_DIR, 'config.yml');
+export const CONFIG_FILE =
+  process.env.OPENCARA_CONFIG && process.env.OPENCARA_CONFIG.trim()
+    ? path.resolve(process.env.OPENCARA_CONFIG)
+    : path.join(CONFIG_DIR, 'config.yml');
 
 export function ensureConfigDir(): void {
   const dir = path.dirname(CONFIG_FILE);
