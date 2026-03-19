@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { PassThrough } from 'node:stream';
 import {
   buildWsUrl,
   handleMessage,
@@ -10,6 +11,7 @@ import type { ReviewExecutorDeps } from '../review.js';
 import type { AgentResponse } from '@opencara/shared';
 import { createSessionTracker } from '../consumption.js';
 import { ApiClient } from '../http.js';
+import { RouterRelay } from '../router.js';
 
 describe('buildWsUrl', () => {
   it('converts https to wss', () => {
@@ -862,5 +864,261 @@ describe('resolveAnonymousAgent', () => {
 
     globalThis.fetch = originalFetch;
     logSpy.mockRestore();
+  });
+});
+
+describe('handleMessage with routerRelay', () => {
+  function createTestRelay(): {
+    relay: RouterRelay;
+    stdin: PassThrough;
+    getOutput: () => string[];
+  } {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const chunks: string[] = [];
+    stdout.on('data', (chunk: Buffer) => {
+      const lines = chunk.toString().split('\n').filter(Boolean);
+      chunks.push(...lines);
+    });
+    const relay = new RouterRelay({ stdin, stdout });
+    relay.start();
+    return { relay, stdin, getOutput: () => chunks };
+  }
+
+  it('outputs idle message on connected when in router mode', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+    const { relay, getOutput } = createTestRelay();
+
+    handleMessage(
+      ws,
+      { type: 'connected', version: '1' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      relay,
+    );
+
+    // Should have sent agent_preferences via WS
+    const wsSent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(wsSent.type).toBe('agent_preferences');
+
+    // Should have written idle message to stdout
+    const output = getOutput();
+    expect(output.length).toBeGreaterThanOrEqual(1);
+    const idleMsg = JSON.parse(output[output.length - 1]);
+    expect(idleMsg.type).toBe('idle');
+    expect(idleMsg.message).toBe('Waiting for review requests...');
+
+    relay.stop();
+    consoleSpy.mockRestore();
+  });
+
+  it('routes review_request through router relay', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+    const { relay, stdin, getOutput } = createTestRelay();
+
+    handleMessage(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: '+ new line',
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review this' },
+        pr: { url: '', number: 42, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+        reviewMode: 'full',
+      } as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      relay,
+    );
+
+    // Wait for prompt to be written
+    await vi.waitFor(() => {
+      expect(getOutput().length).toBeGreaterThan(0);
+    });
+
+    // Verify prompt written to stdout
+    const output = getOutput();
+    const prompt = JSON.parse(output[0]);
+    expect(prompt.type).toBe('review_request');
+    expect(prompt.taskId).toBe('task-1');
+    expect(prompt.prompt).toContain('acme/widgets');
+    expect(prompt.prompt).toContain('+ new line');
+
+    // Send response via stdin
+    stdin.write(
+      JSON.stringify({
+        taskId: 'task-1',
+        response: '## Summary\nLGTM\n\n## Findings\nNo issues.\n\n## Verdict\nAPPROVE',
+      }) + '\n',
+    );
+
+    // Wait for WS send
+    await vi.waitFor(() => {
+      expect(ws.send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_complete');
+    expect(sent.taskId).toBe('task-1');
+    expect(sent.verdict).toBe('approve');
+    expect(sent.review).toContain('LGTM');
+    expect(sent.tokensUsed).toBeGreaterThan(0);
+
+    relay.stop();
+    consoleSpy.mockRestore();
+  });
+
+  it('routes summary_request through router relay', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+    const { relay, stdin, getOutput } = createTestRelay();
+
+    handleMessage(
+      ws,
+      {
+        type: 'summary_request',
+        taskId: 'task-2',
+        pr: { url: '', number: 5 },
+        project: { owner: 'acme', repo: 'widgets', prompt: 'Review' },
+        reviews: [
+          { agentId: 'a1', model: 'claude', tool: 'code', review: 'LGTM', verdict: 'approve' },
+        ],
+        timeout: 300,
+        diffContent: 'diff content',
+      } as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      relay,
+    );
+
+    await vi.waitFor(() => {
+      expect(getOutput().length).toBeGreaterThan(0);
+    });
+
+    const output = getOutput();
+    const prompt = JSON.parse(output[0]);
+    expect(prompt.type).toBe('summary_request');
+    expect(prompt.taskId).toBe('task-2');
+
+    // Send summary response
+    stdin.write(
+      JSON.stringify({
+        taskId: 'task-2',
+        response: 'All reviews agree the code is good.',
+      }) + '\n',
+    );
+
+    await vi.waitFor(() => {
+      expect(ws.send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('summary_complete');
+    expect(sent.taskId).toBe('task-2');
+    expect(sent.summary).toBe('All reviews agree the code is good.');
+    expect(sent.tokensUsed).toBeGreaterThan(0);
+
+    relay.stop();
+    consoleSpy.mockRestore();
+  });
+
+  it('sends review_error on router timeout', async () => {
+    vi.useFakeTimers();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+    const { relay } = createTestRelay();
+
+    handleMessage(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'diff',
+        project: { owner: 'a', repo: 'b', prompt: 'p' },
+        pr: { url: '', number: 1, diffUrl: '', base: '', head: '' },
+        timeout: 5,
+        reviewMode: 'full',
+      } as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      relay,
+    );
+
+    // Advance past timeout
+    vi.advanceTimersByTime(5001);
+
+    await vi.waitFor(() => {
+      expect(ws.send).toHaveBeenCalled();
+    });
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0]);
+    expect(sent.type).toBe('review_error');
+    expect(sent.taskId).toBe('task-1');
+    expect(sent.error).toContain('timeout');
+
+    relay.stop();
+    vi.useRealTimers();
+    consoleSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('does not require reviewDeps when router relay is provided', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ws = { send: vi.fn() };
+    const { relay } = createTestRelay();
+
+    // Without routerRelay and without reviewDeps, it would send review_rejected
+    // With routerRelay, it should relay through the router instead
+    handleMessage(
+      ws,
+      {
+        type: 'review_request',
+        taskId: 'task-1',
+        diffContent: 'diff',
+        project: { owner: 'a', repo: 'b', prompt: 'p' },
+        pr: { url: '', number: 1, diffUrl: '', base: '', head: '' },
+        timeout: 300,
+        reviewMode: 'full',
+      } as never,
+      undefined,
+      undefined, // no reviewDeps
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      relay,
+    );
+
+    // Should NOT have sent review_rejected
+    // (ws.send is only called synchronously for rejected, router path is async)
+    expect(ws.send).not.toHaveBeenCalled();
+
+    relay.stop();
+    consoleSpy.mockRestore();
   });
 });
