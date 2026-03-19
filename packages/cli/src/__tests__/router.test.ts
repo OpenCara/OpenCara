@@ -138,6 +138,20 @@ describe('RouterRelay', () => {
       expect(result).toBe('line 1\nline 2\nline 3');
     });
 
+    it('does not truncate when delimiter appears as substring in content', async () => {
+      relay.start();
+
+      const responsePromise = relay.sendPrompt('review_request', 'task-1', 'prompt', 300);
+
+      stdin.write('The marker <<<OPENCARA_END_RESPONSE>>> should not trigger mid-line\n');
+      stdin.write('More content\n');
+      stdin.write(END_OF_RESPONSE + '\n');
+
+      const result = await responsePromise;
+      expect(result).toContain('<<<OPENCARA_END_RESPONSE>>> should not trigger mid-line');
+      expect(result).toContain('More content');
+    });
+
     it('ignores lines when no prompt is pending', () => {
       relay.start();
 

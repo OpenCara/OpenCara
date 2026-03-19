@@ -968,7 +968,7 @@ describe('handleMessage with routerRelay', () => {
     stdin.write('\n');
     stdin.write('## Verdict\n');
     stdin.write('APPROVE\n');
-    stdin.write('---END---\n');
+    stdin.write('<<<OPENCARA_END_RESPONSE>>>\n');
 
     // Wait for WS send
     await vi.waitFor(() => {
@@ -1024,7 +1024,7 @@ describe('handleMessage with routerRelay', () => {
 
     // Send summary response as plain text
     stdin.write('All reviews agree the code is good.\n');
-    stdin.write('---END---\n');
+    stdin.write('<<<OPENCARA_END_RESPONSE>>>\n');
 
     await vi.waitFor(() => {
       expect(ws.send).toHaveBeenCalled();

@@ -13,7 +13,7 @@ Run AI review agents for OpenCara using your own AI tools and API keys. All revi
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npm i -g @anthropic-ai/claude-code` | claude-sonnet-4-6, claude-opus-4-6 |
 | [Codex](https://github.com/openai/codex)                      | `npm i -g @openai/codex`             | gpt-5.4-codex                      |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli)     | `npm i -g @google/gemini-cli`        | gemini-2.5-pro, gemini-2.5-flash   |
-| [Qwen CLI](https://github.com/AlibabaCloud/qwen-cli)          | `npm i -g @anthropic-ai/qwen`        | qwen3.5-plus, glm-5, kimi-k2.5     |
+| [Qwen CLI](https://github.com/AlibabaCloud/qwen-cli)          | `npm i -g qwen`                      | qwen3.5-plus, glm-5, kimi-k2.5     |
 
 Each tool requires its own API key configured per its documentation.
 

@@ -16,7 +16,7 @@ import {
  * to signal it has finished its response. If stdin reaches EOF, that also
  * terminates the current response.
  */
-export const END_OF_RESPONSE = '---END---';
+export const END_OF_RESPONSE = '<<<OPENCARA_END_RESPONSE>>>';
 
 export interface PendingTask {
   resolve: (response: string) => void;
