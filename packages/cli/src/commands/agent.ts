@@ -98,6 +98,7 @@ export interface StartAgentOptions {
   stabilityThresholdMs?: number;
   repoConfig?: RepoConfig;
   displayName?: string;
+  label?: string;
 }
 
 /** Interval for sending RFC 6455 WebSocket ping frames to keep the proxy layer alive */
@@ -115,6 +116,9 @@ export function startAgent(
   const stabilityThreshold = options?.stabilityThresholdMs ?? CONNECTION_STABILITY_THRESHOLD_MS;
   const repoConfig = options?.repoConfig;
   const displayName = options?.displayName;
+  const prefix = options?.label ? `[${options.label}]` : '';
+  const log = (...args: unknown[]) => console.log(...(prefix ? [prefix, ...args] : args));
+  const logError = (...args: unknown[]) => console.error(...(prefix ? [prefix, ...args] : args));
   let attempt = 0;
   let intentionalClose = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -150,7 +154,7 @@ export function startAgent(
     clearStabilityTimer();
     clearWsPingTimer();
     if (currentWs) currentWs.close();
-    console.log('Disconnected.');
+    log('Disconnected.');
     process.exit(0);
   }
 
@@ -165,14 +169,14 @@ export function startAgent(
     function resetHeartbeatTimer(): void {
       clearHeartbeatTimer();
       heartbeatTimer = setTimeout(() => {
-        console.log('No heartbeat received in 90s. Reconnecting...');
+        log('No heartbeat received in 90s. Reconnecting...');
         ws.terminate();
       }, HEARTBEAT_TIMEOUT_MS);
     }
 
     ws.on('open', () => {
       connectionOpenedAt = Date.now();
-      console.log('Connected to platform.');
+      log('Connected to platform.');
       resetHeartbeatTimer();
 
       // Send RFC 6455 WebSocket ping frames to keep the Cloudflare proxy layer alive
@@ -188,14 +192,14 @@ export function startAgent(
       }, WS_PING_INTERVAL_MS);
 
       if (verbose) {
-        console.log(`[verbose] Connection opened at ${new Date(connectionOpenedAt).toISOString()}`);
+        log(`[verbose] Connection opened at ${new Date(connectionOpenedAt).toISOString()}`);
       }
 
       // Deferred attempt reset: only reset after connection is stable
       clearStabilityTimer();
       stabilityTimer = setTimeout(() => {
         if (verbose) {
-          console.log(
+          log(
             `[verbose] Connection stable for ${stabilityThreshold / 1000}s — resetting reconnect counter`,
           );
         }
@@ -220,6 +224,7 @@ export function startAgent(
         verbose,
         repoConfig,
         displayName,
+        prefix,
       );
     });
 
@@ -235,15 +240,15 @@ export function startAgent(
       if (connectionOpenedAt) {
         const lifetimeMs = Date.now() - connectionOpenedAt;
         const lifetimeSec = (lifetimeMs / 1000).toFixed(1);
-        console.log(
+        log(
           `Disconnected (code=${code}, reason=${reason.toString()}). Connection was alive for ${lifetimeSec}s.`,
         );
       } else {
-        console.log(`Disconnected (code=${code}, reason=${reason.toString()}).`);
+        log(`Disconnected (code=${code}, reason=${reason.toString()}).`);
       }
 
       if (code === 4002) {
-        console.log('Connection replaced by server — not reconnecting.');
+        log('Connection replaced by server — not reconnecting.');
         return;
       }
 
@@ -253,12 +258,12 @@ export function startAgent(
 
     ws.on('pong', () => {
       if (verbose) {
-        console.log(`[verbose] WS pong received at ${new Date().toISOString()}`);
+        log(`[verbose] WS pong received at ${new Date().toISOString()}`);
       }
     });
 
     ws.on('error', (err) => {
-      console.error(`WebSocket error: ${err.message}`);
+      logError(`WebSocket error: ${err.message}`);
     });
   }
 
@@ -266,7 +271,7 @@ export function startAgent(
     const delay = calculateDelay(attempt, DEFAULT_RECONNECT_OPTIONS);
     const delaySec = (delay / 1000).toFixed(1);
     attempt++;
-    console.log(`Reconnecting in ${delaySec}s... (attempt ${attempt})`);
+    log(`Reconnecting in ${delaySec}s... (attempt ${attempt})`);
     await sleep(delay);
     connect();
   }
@@ -288,16 +293,18 @@ async function logPostReviewStats(
   tokensUsed: number,
   tokensEstimated: boolean,
   consumptionDeps?: ConsumptionDeps,
+  logPrefix?: string,
 ): Promise<void> {
+  const pfx = logPrefix ? `${logPrefix} ` : '';
   const estimateTag = tokensEstimated ? ' ~' : ' ';
   if (!consumptionDeps) {
     if (verdict) {
       console.log(
-        `${type} complete: ${verdict} (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
+        `${pfx}${type} complete: ${verdict} (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
       );
     } else {
       console.log(
-        `${type} complete (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
+        `${pfx}${type} complete (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
       );
     }
     return;
@@ -307,14 +314,16 @@ async function logPostReviewStats(
 
   if (verdict) {
     console.log(
-      `${type} complete: ${verdict} (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
+      `${pfx}${type} complete: ${verdict} (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
     );
   } else {
     console.log(
-      `${type} complete (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
+      `${pfx}${type} complete (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
     );
   }
-  console.log(formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits));
+  console.log(
+    `${pfx}${formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits)}`,
+  );
 }
 
 export function handleMessage(
@@ -326,10 +335,12 @@ export function handleMessage(
   verbose?: boolean,
   repoConfig?: RepoConfig,
   displayName?: string,
+  logPrefix?: string,
 ): void {
+  const pfx = logPrefix ? `${logPrefix} ` : '';
   switch (msg.type) {
     case 'connected':
-      console.log(`Authenticated. Protocol v${msg.version ?? 'unknown'}`);
+      console.log(`${pfx}Authenticated. Protocol v${msg.version ?? 'unknown'}`);
       // Send agent preferences to the platform
       trySend(ws, {
         type: 'agent_preferences',
@@ -343,7 +354,9 @@ export function handleMessage(
     case 'heartbeat_ping':
       ws.send(JSON.stringify({ type: 'heartbeat_pong', timestamp: Date.now() }));
       if (verbose) {
-        console.log(`[verbose] Heartbeat ping received, pong sent at ${new Date().toISOString()}`);
+        console.log(
+          `${pfx}[verbose] Heartbeat ping received, pong sent at ${new Date().toISOString()}`,
+        );
       }
       if (resetHeartbeat) resetHeartbeat();
       break;
@@ -351,7 +364,7 @@ export function handleMessage(
     case 'review_request': {
       const request = msg as unknown as ReviewRequestMessage;
       console.log(
-        `Review request: task ${request.taskId} for ${request.project.owner}/${request.project.repo}#${request.pr.number}`,
+        `${pfx}Review request: task ${request.taskId} for ${request.project.owner}/${request.project.repo}#${request.pr.number}`,
       );
 
       if (!reviewDeps) {
@@ -382,7 +395,7 @@ export function handleMessage(
               taskId: request.taskId,
               reason: limitResult.reason ?? 'consumption_limit_exceeded',
             });
-            console.log(`Review rejected: ${limitResult.reason}`);
+            console.log(`${pfx}Review rejected: ${limitResult.reason}`);
             return;
           }
         }
@@ -416,6 +429,7 @@ export function handleMessage(
             result.tokensUsed,
             result.tokensEstimated,
             consumptionDeps,
+            logPrefix,
           );
         } catch (err: unknown) {
           if (err instanceof DiffTooLargeError) {
@@ -435,7 +449,7 @@ export function handleMessage(
               error: err instanceof Error ? err.message : 'Unknown error',
             });
           }
-          console.error('Review failed:', err);
+          console.error(`${pfx}Review failed:`, err);
         }
       })();
       break;
@@ -444,7 +458,7 @@ export function handleMessage(
     case 'summary_request': {
       const summaryRequest = msg as unknown as SummaryRequestMessage;
       console.log(
-        `Summary request: task ${summaryRequest.taskId} for ${summaryRequest.project.owner}/${summaryRequest.project.repo}#${summaryRequest.pr.number} (${summaryRequest.reviews.length} reviews)`,
+        `${pfx}Summary request: task ${summaryRequest.taskId} for ${summaryRequest.project.owner}/${summaryRequest.project.repo}#${summaryRequest.pr.number} (${summaryRequest.reviews.length} reviews)`,
       );
 
       if (!reviewDeps) {
@@ -473,7 +487,7 @@ export function handleMessage(
               taskId: summaryRequest.taskId,
               reason: limitResult.reason ?? 'consumption_limit_exceeded',
             });
-            console.log(`Summary rejected: ${limitResult.reason}`);
+            console.log(`${pfx}Summary rejected: ${limitResult.reason}`);
             return;
           }
         }
@@ -506,6 +520,7 @@ export function handleMessage(
             result.tokensUsed,
             result.tokensEstimated,
             consumptionDeps,
+            logPrefix,
           );
         } catch (err: unknown) {
           if (err instanceof InputTooLargeError) {
@@ -525,14 +540,14 @@ export function handleMessage(
               error: err instanceof Error ? err.message : 'Summary failed',
             });
           }
-          console.error('Summary failed:', err);
+          console.error(`${pfx}Summary failed:`, err);
         }
       })();
       break;
     }
 
     case 'error':
-      console.error(`Platform error: ${msg.code ?? 'unknown'}`);
+      console.error(`${pfx}Platform error: ${msg.code ?? 'unknown'}`);
       if (msg.code === 'auth_revoked') process.exit(1);
       break;
 
@@ -1093,6 +1108,7 @@ agentCommand
             verbose: opts.verbose,
             stabilityThresholdMs,
             repoConfig: selected.local.repos,
+            label,
           });
           startedCount++;
         }
@@ -1128,12 +1144,14 @@ agentCommand
             session: createSessionTracker(),
           };
 
-          console.log(`Starting anonymous agent ${anon.model} (${anon.agentId})...`);
+          const anonLabel = anon.name || anon.model || 'anonymous';
+          console.log(`Starting anonymous agent ${anonLabel} (${anon.agentId})...`);
           startAgent(anon.agentId, config.platformUrl, anon.apiKey, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
             displayName: anon.name,
             repoConfig: anon.repoConfig,
+            label: anonLabel,
           });
           startedCount++;
         }
@@ -1205,6 +1223,7 @@ agentCommand
       startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
         verbose: opts.verbose,
         stabilityThresholdMs,
+        label: agentId,
       });
     },
   );

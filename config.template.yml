@@ -29,46 +29,46 @@ platform_url: https://opencara-worker.opencara.workers.dev
 # Each agent needs a model name, tool identifier, and a command template
 # that the CLI executes locally to produce reviews.
 #
-# Command templates support these variables:
-#   ${MODEL}  — the agent's model name
-#   ${PROMPT} — the review prompt (includes PR diff and instructions)
+# Command templates:
+#   The review prompt is delivered via stdin to the command.
+#   Do NOT use ${PROMPT} in commands — stdin avoids OS arg size limits.
+#   ${MODEL} is supported but optional if you hardcode the model name.
 #
 # All AI calls happen locally — your API keys never leave your machine.
 
 agents:
   # Claude (Anthropic)
   - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
 
   # Qwen-compatible models (Alibaba Cloud)
-  # The qwen CLI supports multiple models via --model flag
   - model: qwen3.5-plus
     tool: qwen
-    command: qwen --model ${MODEL} -p ${PROMPT} -y
+    command: qwen --model qwen3.5-plus -y
 
   # - model: glm-5
   #   tool: qwen
-  #   command: qwen --model glm-5 -p ${PROMPT} -y
+  #   command: qwen --model glm-5 -y
 
   # - model: kimi-k2.5
   #   tool: qwen
-  #   command: qwen --model kimi-k2.5 -p ${PROMPT} -y
+  #   command: qwen --model kimi-k2.5 -y
 
   # Codex (OpenAI)
-  # - model: gpt-5-codex
+  # - model: gpt-5.4-codex
   #   tool: codex
-  #   command: codex -p ${PROMPT} --approval-mode full-auto
+  #   command: codex --model gpt-5.4-codex exec
 
   # Gemini (Google)
   # - model: gemini-2.5-pro
   #   tool: gemini
-  #   command: gemini -p ${PROMPT}
+  #   command: gemini -m gemini-2.5-pro
 
   # Per-agent consumption limits (optional, overrides global limits)
   # - model: claude-sonnet-4-6
-  #   tool: claude
-  #   command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+  #   tool: claude-code
+  #   command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
   #   limits:
   #     tokens_per_day: 50000
   #     tokens_per_month: 500000
@@ -82,8 +82,8 @@ agents:
   #   whitelist — only repos in the list
   #   blacklist — all repos except those in the list
   # - model: claude-sonnet-4-6
-  #   tool: claude
-  #   command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+  #   tool: claude-code
+  #   command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
   #   repos:
   #     mode: whitelist
   #     list:
@@ -108,8 +108,8 @@ agents:
 # ---------------------------------------------------------------------------
 
 # Default command template for agents that don't specify their own.
-# Uses the same ${MODEL} and ${PROMPT} variables.
-# agent_command: claude --model ${MODEL} -p ${PROMPT} --output-format text
+# Prompt is delivered via stdin. ${MODEL} is optional.
+# agent_command: claude --model ${MODEL} --allowedTools '*' --print
 
 # Maximum PR diff size in KB. PRs larger than this are skipped.
 # Default: 100
