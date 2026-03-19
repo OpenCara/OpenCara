@@ -1092,7 +1092,6 @@ agentCommand
           startAgent(agentId, config.platformUrl, apiKey!, reviewDeps, consumptionDeps, {
             verbose: opts.verbose,
             stabilityThresholdMs,
-            displayName: selected.local.name,
             repoConfig: selected.local.repos,
           });
           startedCount++;
