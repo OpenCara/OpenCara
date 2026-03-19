@@ -15,9 +15,7 @@
 
 ## Open Issues
 
-- #155 [pm, medium] Replace multi-AI self-review with OpenCara dogfood review — **DONE** (development-workflow.md updated)
 - #156 [pm, medium] Auto-deploy dev worker on merge to main (CI/CD)
-- #157 [pm, medium] GitHub webhook receiver for event-driven PM — **DONE** (scripts/github-webhook.py created, needs team lead to set up tunnel + settings.local.json)
 - #154 [worker-dev+cli-dev, medium] Move diff fetching from worker to agent CLI
 - #38 [worker-dev, low] Installation event handlers — project upsert and cleanup
 - #80 [cli-dev, low] Growth trends in stats
@@ -28,6 +26,8 @@
 - #144 [design, low] Container-based agent execution
 - #162 [design, low] Local Docker dev environment (blocked by #133)
 - #164 [worker-dev, medium] Log error codes with agent ID + reduce priority on repeated failures
+- #165 [cli-dev+worker-dev, medium] Add review_only config to exclude agent from synthesis
+- #170 [worker-dev+cli-dev, medium] Simplify review pipeline — remove worker-side formatting, post as-is
 
 ## Closed Issues (processed)
 
@@ -37,7 +37,7 @@
 #80, #81, #82, #83, #84, #85, #86, #87, #88, #90, #95, #96, #99, #100,
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
-#145, #146, #147, #148, #159, #160
+#145, #146, #147, #148, #155, #157, #159, #160, #166, #167
 
 ## Merged PRs (processed)
 
@@ -46,4 +46,4 @@
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169

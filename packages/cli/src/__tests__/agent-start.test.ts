@@ -871,24 +871,31 @@ describe('handleMessage with routerRelay', () => {
   function createTestRelay(): {
     relay: RouterRelay;
     stdin: PassThrough;
-    getOutput: () => string[];
+    getStdout: () => string[];
+    getStderr: () => string[];
   } {
     const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const chunks: string[] = [];
-    stdout.on('data', (chunk: Buffer) => {
-      const lines = chunk.toString().split('\n').filter(Boolean);
-      chunks.push(...lines);
-    });
-    const relay = new RouterRelay({ stdin, stdout });
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const stdout = {
+      write: (data: string) => {
+        stdoutChunks.push(data);
+      },
+    };
+    const stderr = {
+      write: (data: string) => {
+        stderrChunks.push(data);
+      },
+    };
+    const relay = new RouterRelay({ stdin, stdout, stderr });
     relay.start();
-    return { relay, stdin, getOutput: () => chunks };
+    return { relay, stdin, getStdout: () => stdoutChunks, getStderr: () => stderrChunks };
   }
 
   it('outputs idle message on connected when in router mode', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const ws = { send: vi.fn() };
-    const { relay, getOutput } = createTestRelay();
+    const { relay, getStderr } = createTestRelay();
 
     handleMessage(
       ws,
@@ -907,12 +914,10 @@ describe('handleMessage with routerRelay', () => {
     const wsSent = JSON.parse(ws.send.mock.calls[0][0]);
     expect(wsSent.type).toBe('agent_preferences');
 
-    // Should have written idle message to stdout
-    const output = getOutput();
-    expect(output.length).toBeGreaterThanOrEqual(1);
-    const idleMsg = JSON.parse(output[output.length - 1]);
-    expect(idleMsg.type).toBe('idle');
-    expect(idleMsg.message).toBe('Waiting for review requests...');
+    // Should have written idle message to stderr
+    const stderrOutput = getStderr();
+    expect(stderrOutput.length).toBeGreaterThanOrEqual(1);
+    expect(stderrOutput[stderrOutput.length - 1]).toContain('Waiting for review requests...');
 
     relay.stop();
     consoleSpy.mockRestore();
@@ -921,7 +926,7 @@ describe('handleMessage with routerRelay', () => {
   it('routes review_request through router relay', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const ws = { send: vi.fn() };
-    const { relay, stdin, getOutput } = createTestRelay();
+    const { relay, stdin, getStdout } = createTestRelay();
 
     handleMessage(
       ws,
@@ -944,26 +949,26 @@ describe('handleMessage with routerRelay', () => {
       relay,
     );
 
-    // Wait for prompt to be written
+    // Wait for prompt to be written to stdout as plain text
     await vi.waitFor(() => {
-      expect(getOutput().length).toBeGreaterThan(0);
+      expect(getStdout().length).toBeGreaterThan(0);
     });
 
-    // Verify prompt written to stdout
-    const output = getOutput();
-    const prompt = JSON.parse(output[0]);
-    expect(prompt.type).toBe('review_request');
-    expect(prompt.taskId).toBe('task-1');
-    expect(prompt.prompt).toContain('acme/widgets');
-    expect(prompt.prompt).toContain('+ new line');
+    // Verify prompt is plain text containing the review context
+    const output = getStdout().join('');
+    expect(output).toContain('acme/widgets');
+    expect(output).toContain('+ new line');
 
-    // Send response via stdin
-    stdin.write(
-      JSON.stringify({
-        taskId: 'task-1',
-        response: '## Summary\nLGTM\n\n## Findings\nNo issues.\n\n## Verdict\nAPPROVE',
-      }) + '\n',
-    );
+    // Send response via stdin as plain text, terminated by END_OF_RESPONSE
+    stdin.write('## Summary\n');
+    stdin.write('LGTM\n');
+    stdin.write('\n');
+    stdin.write('## Findings\n');
+    stdin.write('No issues.\n');
+    stdin.write('\n');
+    stdin.write('## Verdict\n');
+    stdin.write('APPROVE\n');
+    stdin.write('<<<OPENCARA_END_RESPONSE>>>\n');
 
     // Wait for WS send
     await vi.waitFor(() => {
@@ -984,7 +989,7 @@ describe('handleMessage with routerRelay', () => {
   it('routes summary_request through router relay', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const ws = { send: vi.fn() };
-    const { relay, stdin, getOutput } = createTestRelay();
+    const { relay, stdin, getStdout } = createTestRelay();
 
     handleMessage(
       ws,
@@ -1010,21 +1015,16 @@ describe('handleMessage with routerRelay', () => {
     );
 
     await vi.waitFor(() => {
-      expect(getOutput().length).toBeGreaterThan(0);
+      expect(getStdout().length).toBeGreaterThan(0);
     });
 
-    const output = getOutput();
-    const prompt = JSON.parse(output[0]);
-    expect(prompt.type).toBe('summary_request');
-    expect(prompt.taskId).toBe('task-2');
+    // Verify prompt is plain text
+    const output = getStdout().join('');
+    expect(output).toContain('acme/widgets');
 
-    // Send summary response
-    stdin.write(
-      JSON.stringify({
-        taskId: 'task-2',
-        response: 'All reviews agree the code is good.',
-      }) + '\n',
-    );
+    // Send summary response as plain text
+    stdin.write('All reviews agree the code is good.\n');
+    stdin.write('<<<OPENCARA_END_RESPONSE>>>\n');
 
     await vi.waitFor(() => {
       expect(ws.send).toHaveBeenCalled();

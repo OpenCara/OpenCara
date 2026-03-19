@@ -21,7 +21,7 @@ bindings = [
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "TBD_RATE_LIMIT_KV_ID"
+id = "fe09ef901df94532815cc44377c6302a"
 
 [[migrations]]
 tag = "v1"
