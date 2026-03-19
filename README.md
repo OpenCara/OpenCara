@@ -145,6 +145,7 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 
 ## Documentation
 
+- [Agent Setup Guide](docs/agent-guide.md) — Install, configure, and run review agents
 - [Product Design](docs/product.md) — Trust model, incentives, reputation, contributor experience
 - [Architecture](docs/architecture.md) — Tech stack, database schema, API design, security
 - [Project Plan](docs/PLAN.md) — Milestone tracking, merged PRs, backlog

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
+const mockStartAgentRouter = vi.hoisted(() => vi.fn());
+
 const mockProgram = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const obj: Record<string, any> = {};
@@ -7,6 +9,7 @@ const mockProgram = vi.hoisted(() => {
   obj.description = vi.fn(() => obj);
   obj.version = vi.fn(() => obj);
   obj.addCommand = vi.fn(() => obj);
+  obj.action = vi.fn(() => obj);
   obj.parse = vi.fn();
   return obj;
 });
@@ -21,6 +24,7 @@ vi.mock('../commands/login.js', () => ({
 
 vi.mock('../commands/agent.js', () => ({
   agentCommand: { _name: 'agent' },
+  startAgentRouter: mockStartAgentRouter,
 }));
 
 vi.mock('../commands/stats.js', () => ({
@@ -48,6 +52,14 @@ describe('CLI entry point', () => {
     expect(mockProgram.addCommand).toHaveBeenCalledWith({ _name: 'login' });
     expect(mockProgram.addCommand).toHaveBeenCalledWith({ _name: 'agent' });
     expect(mockProgram.addCommand).toHaveBeenCalledWith({ _name: 'stats' });
+  });
+
+  it('registers a default action for router mode', () => {
+    expect(mockProgram.action).toHaveBeenCalledOnce();
+    // Invoke the registered action and verify it calls startAgentRouter
+    const actionFn = mockProgram.action.mock.calls[0][0];
+    actionFn();
+    expect(mockStartAgentRouter).toHaveBeenCalledOnce();
   });
 
   it('calls parse', () => {

@@ -57,8 +57,22 @@ After creating the PR, the OpenCara GitHub App (our own product) automatically r
 
 The OpenCara GitHub App is installed on this repo with `.review.yml` configured (review_count: 3). When you push and create a PR, the bot automatically dispatches review agents.
 
-1. After creating the PR, wait for the OpenCara bot review to appear (check with `gh pr reviews <PR_NUMBER>` or `gh pr view <PR_NUMBER> --comments`)
-2. If no review appears within 5 minutes, proceed with self-review only — do not block indefinitely
+1. After creating the PR, wait for the OpenCara bot review to appear:
+   ```bash
+   # Poll for bot review (check every 30s, up to 5 minutes)
+   for i in $(seq 1 10); do
+     REVIEWS=$(gh api repos/OpenCara/OpenCara/pulls/<PR_NUMBER>/reviews --jq '[.[] | select(.user.login == "opencara[bot]")] | length')
+     if [ "$REVIEWS" -gt 0 ]; then echo "Bot review found"; break; fi
+     echo "Waiting for bot review... ($i/10)"
+     sleep 30
+   done
+   ```
+2. If no review after 5 minutes, trigger manually with `/opencara review` and wait another 2 minutes:
+   ```bash
+   gh pr comment <PR_NUMBER> --body "/opencara review"
+   sleep 120
+   ```
+3. **NEVER merge without at least checking for the bot review.** If the bot truly cannot review (no agents online), document this in the PR and proceed with self-review only.
 
 ### Step 2: Fix & Re-review (max 3 iterations)
 

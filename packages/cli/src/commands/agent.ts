@@ -355,7 +355,7 @@ export function handleMessage(
         repoConfig: repoConfig ?? { mode: 'all' },
       });
       if (routerRelay) {
-        routerRelay.writeMessage({ type: 'idle', message: 'Waiting for review requests...' });
+        routerRelay.writeStatus('Waiting for review requests...');
       }
       break;
 
@@ -755,6 +755,16 @@ function resolveLocalAgentCommand(
 
 export { syncAgentToServer, resolveLocalAgentCommand };
 
+/** Start agent in router mode (used as default action for bare `opencara` command) */
+export function startAgentRouter(): void {
+  // Delegate to `agent start --router --anonymous` — no configured agent needed,
+  // the external agent IS the reviewer; CLI is just a relay
+  void agentCommand.parseAsync(
+    ['start', '--router', '--anonymous', '--model', 'router', '--tool', 'opencara'],
+    { from: 'user' },
+  );
+}
+
 export const agentCommand = new Command('agent').description('Manage review agents');
 
 agentCommand
@@ -1109,26 +1119,53 @@ agentCommand
           process.exit(1);
         }
 
-        let resolved: { entry: AnonymousAgentEntry; command: string };
-        try {
-          resolved = await resolveAnonymousAgent(config, opts.model, opts.tool);
-        } catch (err) {
-          console.error(
-            'Failed to register anonymous agent:',
-            err instanceof Error ? err.message : err,
-          );
-          process.exit(1);
-        }
-
-        const { entry, command } = resolved;
-
+        // Register/reuse anonymous agent (skip command resolution in router mode)
+        let entry: AnonymousAgentEntry;
         let reviewDeps: ReviewExecutorDeps | undefined;
         let relay: RouterRelay | undefined;
 
         if (opts.router) {
+          // Router mode: register agent but don't need a command
+          const existing = config.anonymousAgents.find(
+            (a) => a.model === opts.model && a.tool === opts.tool,
+          );
+          if (existing) {
+            console.log(
+              `Reusing stored anonymous agent ${existing.agentId} (${opts.model} / ${opts.tool})`,
+            );
+            entry = existing;
+          } else {
+            console.log('Registering anonymous agent...');
+            const client = new ApiClient(config.platformUrl);
+            const res = await client.post<AnonymousRegisterResponse>('/api/agents/anonymous', {
+              model: opts.model,
+              tool: opts.tool,
+            } as AnonymousRegisterRequest);
+            entry = {
+              agentId: res.agentId,
+              apiKey: res.apiKey,
+              model: opts.model,
+              tool: opts.tool,
+            };
+            config.anonymousAgents.push(entry);
+            saveConfig(config);
+            console.log(`Agent registered: ${res.agentId} (${opts.model} / ${opts.tool})`);
+          }
           relay = new RouterRelay();
           relay.start();
         } else {
+          let resolved: { entry: AnonymousAgentEntry; command: string };
+          try {
+            resolved = await resolveAnonymousAgent(config, opts.model, opts.tool);
+          } catch (err) {
+            console.error(
+              'Failed to register anonymous agent:',
+              err instanceof Error ? err.message : err,
+            );
+            process.exit(1);
+          }
+          entry = resolved.entry;
+          const command = resolved.command;
           if (validateCommandBinary(command)) {
             reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
           } else {
