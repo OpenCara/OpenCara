@@ -730,6 +730,8 @@ describe('summarization', () => {
      */
     function createRetryMockSupabase(config: {
       summaryCount: number;
+      countError?: { message: string } | null;
+      summaryQueryError?: { message: string } | null;
       completedReviews: Record<string, unknown>[];
       failedSummaries: { agent_id: string }[];
       onlineAgents: Record<string, unknown>[];
@@ -754,7 +756,10 @@ describe('summarization', () => {
             const countChain: Record<string, unknown> = {};
             countChain.eq = vi.fn().mockReturnValue(countChain);
             countChain.then = (resolve: (v: unknown) => void) =>
-              Promise.resolve({ count: config.summaryCount }).then(resolve);
+              Promise.resolve({
+                count: config.countError ? null : config.summaryCount,
+                error: config.countError ?? null,
+              }).then(resolve);
             return countChain;
           }
           return chain;
@@ -796,8 +801,11 @@ describe('summarization', () => {
             return Promise.resolve({ data: config.completedReviews }).then(resolve);
           }
           if (callIdx === 2) {
-            // failed summaries select
-            return Promise.resolve({ data: config.failedSummaries }).then(resolve);
+            // previous summaries select
+            return Promise.resolve({
+              data: config.summaryQueryError ? null : config.failedSummaries,
+              error: config.summaryQueryError ?? null,
+            }).then(resolve);
           }
           if (callIdx === 3) {
             // selectSummaryAgent (agents online)
@@ -974,6 +982,84 @@ describe('summarization', () => {
       expect(result).toBe(true);
       // Should dispatch to new-agent (not reviewer-1 or failed-synth-1)
       expect(mockEnv.AGENT_CONNECTION.idFromName).toHaveBeenCalledWith('new-agent');
+    });
+
+    it('falls back to individual reviews when count query fails', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 0,
+        countError: { message: 'database connection failed' },
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [],
+        onlineAgents: [],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockedPostPrReview).toHaveBeenCalled();
+    });
+
+    it('falls back to individual reviews when summary query fails', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 1,
+        summaryQueryError: { message: 'database connection failed' },
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [],
+        onlineAgents: [],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockedPostPrReview).toHaveBeenCalled();
     });
   });
 });

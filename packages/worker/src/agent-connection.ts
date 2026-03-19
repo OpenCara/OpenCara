@@ -768,13 +768,16 @@ export class AgentConnection implements DurableObject {
 
     if (isSummarizing) {
       // Update the pending summary review_results row to 'rejected'
-      await supabase
+      const { error: updateError } = await supabase
         .from('review_results')
         .update({ status: 'rejected' })
         .eq('review_task_id', msg.taskId)
         .eq('agent_id', agentId)
         .eq('type', 'summary')
         .eq('status', 'pending');
+      if (updateError) {
+        console.error(`Failed to update summary status for task ${msg.taskId}:`, updateError);
+      }
     } else {
       // Insert a new result row for the rejected review
       const { error } = await supabase.from('review_results').insert({
@@ -816,13 +819,16 @@ export class AgentConnection implements DurableObject {
 
     if (isSummarizing) {
       // Update the pending summary review_results row to 'error'
-      await supabase
+      const { error: updateError } = await supabase
         .from('review_results')
         .update({ status: 'error' })
         .eq('review_task_id', msg.taskId)
         .eq('agent_id', agentId)
         .eq('type', 'summary')
         .eq('status', 'pending');
+      if (updateError) {
+        console.error(`Failed to update summary status for task ${msg.taskId}:`, updateError);
+      }
     } else {
       // Insert a new result row for the errored review
       const { error } = await supabase.from('review_results').insert({

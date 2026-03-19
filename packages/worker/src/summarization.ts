@@ -353,11 +353,18 @@ export async function retrySummarization(
   failedAgentId: string,
 ): Promise<boolean> {
   // Count existing summary attempts for this task
-  const { count } = await supabase
+  const { count, error: countError } = await supabase
     .from('review_results')
     .select('id', { count: 'exact', head: true })
     .eq('review_task_id', taskId)
     .eq('type', 'summary');
+
+  if (countError) {
+    console.error(`Task ${taskId}: failed to count summary attempts`, countError);
+    const reviews = await fetchCompletedReviews(supabase, taskId);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
 
   if ((count ?? 0) >= MAX_SUMMARY_ATTEMPTS) {
     console.log(
@@ -372,15 +379,21 @@ export async function retrySummarization(
   const reviews = await fetchCompletedReviews(supabase, taskId);
   const reviewerAgentIds = reviews.map((r) => r.agentId);
 
-  // Get all failed synthesizer IDs to exclude
-  const { data: failedSummaries } = await supabase
+  // Get all previous synthesizer IDs to exclude (any status — avoid re-assigning)
+  const { data: previousSummaries, error: summaryError } = await supabase
     .from('review_results')
     .select('agent_id')
     .eq('review_task_id', taskId)
     .eq('type', 'summary');
 
-  const failedSynthIds = (failedSummaries ?? []).map((r: { agent_id: string }) => r.agent_id);
-  const excludeIds = [...new Set([...reviewerAgentIds, ...failedSynthIds, failedAgentId])];
+  if (summaryError) {
+    console.error(`Task ${taskId}: failed to fetch previous summaries`, summaryError);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
+
+  const previousSynthIds = (previousSummaries ?? []).map((r: { agent_id: string }) => r.agent_id);
+  const excludeIds = [...new Set([...reviewerAgentIds, ...previousSynthIds, failedAgentId])];
 
   // Select a new synthesizer agent
   const newSynthId = await selectSummaryAgent(supabase, excludeIds);
@@ -412,12 +425,17 @@ async function dispatchSummaryToAgent(
   summaryAgentId: string,
 ): Promise<boolean> {
   // Store summary agent in review_results with type='summary' (pending until summary_complete)
-  await supabase.from('review_results').insert({
+  const { error: insertError } = await supabase.from('review_results').insert({
     review_task_id: taskId,
     agent_id: summaryAgentId,
     status: 'pending',
     type: 'summary',
   });
+  if (insertError) {
+    console.error(`Failed to insert summary result for task ${taskId}:`, insertError);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
 
   // Calculate remaining timeout
   const { data: taskData } = await supabase
