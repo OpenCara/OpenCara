@@ -701,7 +701,7 @@ agentCommand
         const toolEntry = registry.tools.find((t) => t.name === tool);
         const defaultCommand = toolEntry
           ? toolEntry.commandTemplate.replaceAll('${MODEL}', model)
-          : `${tool} --model ${model} -p \${PROMPT}`;
+          : `${tool} --model ${model}`;
 
         command = await input({
           message: 'Command:',
