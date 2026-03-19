@@ -15,6 +15,7 @@ import { parseStructuredReview, parseDiffFiles, filterValidComments } from './re
 import {
   type InFlightTaskMeta,
   triggerSummarization,
+  retrySummarization,
   formatSummaryComment,
   postIndividualReviewsFallback,
   fetchCompletedReviews,
@@ -756,36 +757,102 @@ export class AgentConnection implements DurableObject {
     const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    // Insert result before removing from in-flight for crash safety
-    const { error } = await supabase.from('review_results').insert({
-      review_task_id: msg.taskId,
-      agent_id: agentId,
-      status: 'rejected',
-    });
-    if (error) {
-      console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+    // Check if this task is in summarizing state (summary rejection vs review rejection)
+    const { data: taskData } = await supabase
+      .from('review_tasks')
+      .select('status')
+      .eq('id', msg.taskId)
+      .single();
+
+    const isSummarizing = taskData?.status === 'summarizing';
+
+    if (isSummarizing) {
+      // Update the pending summary review_results row to 'rejected'
+      const { error: updateError } = await supabase
+        .from('review_results')
+        .update({ status: 'rejected' })
+        .eq('review_task_id', msg.taskId)
+        .eq('agent_id', agentId)
+        .eq('type', 'summary')
+        .eq('status', 'pending');
+      if (updateError) {
+        console.error(`Failed to update summary status for task ${msg.taskId}:`, updateError);
+      }
+    } else {
+      // Insert a new result row for the rejected review
+      const { error } = await supabase.from('review_results').insert({
+        review_task_id: msg.taskId,
+        agent_id: agentId,
+        status: 'rejected',
+      });
+      if (error) {
+        console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+      }
     }
 
     await this.removeInFlightTask(msg.taskId);
-    await this.redistributeTask(msg.taskId, supabase);
+
+    if (isSummarizing) {
+      const meta = await this.state.storage.get<InFlightTaskMeta>(`taskMeta:${msg.taskId}`);
+      if (meta) {
+        await retrySummarization(this.env, supabase, msg.taskId, meta, agentId);
+      } else {
+        console.error(`No task meta for summarizing task ${msg.taskId}, cannot retry`);
+      }
+    } else {
+      await this.redistributeTask(msg.taskId, supabase);
+    }
   }
 
   private async handleReviewError(msg: ReviewErrorMessage): Promise<void> {
     const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
 
-    // Insert result before removing from in-flight for crash safety
-    const { error } = await supabase.from('review_results').insert({
-      review_task_id: msg.taskId,
-      agent_id: agentId,
-      status: 'error',
-    });
-    if (error) {
-      console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+    // Check if this task is in summarizing state (summary error vs review error)
+    const { data: taskData } = await supabase
+      .from('review_tasks')
+      .select('status')
+      .eq('id', msg.taskId)
+      .single();
+
+    const isSummarizing = taskData?.status === 'summarizing';
+
+    if (isSummarizing) {
+      // Update the pending summary review_results row to 'error'
+      const { error: updateError } = await supabase
+        .from('review_results')
+        .update({ status: 'error' })
+        .eq('review_task_id', msg.taskId)
+        .eq('agent_id', agentId)
+        .eq('type', 'summary')
+        .eq('status', 'pending');
+      if (updateError) {
+        console.error(`Failed to update summary status for task ${msg.taskId}:`, updateError);
+      }
+    } else {
+      // Insert a new result row for the errored review
+      const { error } = await supabase.from('review_results').insert({
+        review_task_id: msg.taskId,
+        agent_id: agentId,
+        status: 'error',
+      });
+      if (error) {
+        console.error(`Failed to insert review result for task ${msg.taskId}:`, error);
+      }
     }
 
     await this.removeInFlightTask(msg.taskId);
-    await this.redistributeTask(msg.taskId, supabase);
+
+    if (isSummarizing) {
+      const meta = await this.state.storage.get<InFlightTaskMeta>(`taskMeta:${msg.taskId}`);
+      if (meta) {
+        await retrySummarization(this.env, supabase, msg.taskId, meta, agentId);
+      } else {
+        console.error(`No task meta for summarizing task ${msg.taskId}, cannot retry`);
+      }
+    } else {
+      await this.redistributeTask(msg.taskId, supabase);
+    }
   }
 
   private async redistributeTask(
@@ -914,8 +981,17 @@ export class AgentConnection implements DurableObject {
   }
 
   private async handleSummaryComplete(msg: SummaryCompleteMessage): Promise<void> {
-    const _agentId = (await this.state.storage.get<string>('agentId')) ?? '';
+    const agentId = (await this.state.storage.get<string>('agentId')) ?? '';
     const supabase = createSupabaseClient(this.env);
+
+    // Mark the pending summary review_results row as completed
+    await supabase
+      .from('review_results')
+      .update({ status: 'completed' })
+      .eq('review_task_id', msg.taskId)
+      .eq('agent_id', agentId)
+      .eq('type', 'summary')
+      .eq('status', 'pending');
 
     await this.removeInFlightTask(msg.taskId);
 

@@ -7,7 +7,9 @@ import {
   selectSummaryAgent,
   pushSummaryToAgent,
   triggerSummarization,
+  retrySummarization,
   postIndividualReviewsFallback,
+  MAX_SUMMARY_ATTEMPTS,
   type ReviewAgentInfo,
 } from '../summarization.js';
 import type { SummaryReview } from '@opencara/shared';
@@ -18,6 +20,7 @@ vi.mock('../db.js', () => ({
 
 vi.mock('../github.js', () => ({
   getInstallationToken: vi.fn(),
+  fetchPrDiff: vi.fn(),
   postPrComment: vi.fn(),
   postPrReview: vi.fn(),
   verdictToReviewEvent: vi.fn((v: string) => {
@@ -31,9 +34,11 @@ vi.mock('../github.js', () => ({
 }));
 
 import { getInstallationToken, postPrReview } from '../github.js';
+import { fetchPrDiff } from '../github.js';
 
 const mockedGetInstallationToken = vi.mocked(getInstallationToken);
 const mockedPostPrReview = vi.mocked(postPrReview);
+const mockedFetchPrDiff = vi.mocked(fetchPrDiff);
 
 function createMockSupabase() {
   const calls = {
@@ -657,6 +662,404 @@ describe('summarization', () => {
 
       // Should not throw
       expect(mockedPostPrReview).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('MAX_SUMMARY_ATTEMPTS', () => {
+    it('is exported and equals 2', () => {
+      expect(MAX_SUMMARY_ATTEMPTS).toBe(2);
+    });
+  });
+
+  describe('dispatchSummaryToAgent inserts pending status', () => {
+    it('inserts review_results with pending status via triggerSummarization', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const mockSupa = createMockSupabase();
+
+      let selectCallCount = 0;
+      (mockSupa.then as unknown) = (resolve: (v: unknown) => void) => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          // fetchCompletedReviews
+          return Promise.resolve({
+            data: [
+              {
+                agent_id: 'agent-1',
+                verdict: 'approve',
+                agents: { model: 'gpt-4', tool: 'cursor' },
+              },
+            ],
+          }).then(resolve);
+        }
+        if (selectCallCount === 2) {
+          // selectSummaryAgent
+          return Promise.resolve({
+            data: [{ id: 'summary-agent' }],
+          }).then(resolve);
+        }
+        return Promise.resolve({ data: null }).then(resolve);
+      };
+
+      (mockSupa.single as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: { timeout_at: new Date(Date.now() + 300_000).toISOString() },
+      });
+
+      await triggerSummarization(mockEnv as never, mockSupa as never, 'task-1', {
+        reviewCount: 1,
+        installationId: 99,
+        owner: 'org',
+        repo: 'repo',
+        prNumber: 42,
+        prompt: 'Review',
+      });
+
+      // Verify insert was called with status: 'pending' (not 'completed')
+      const summaryInsert = mockSupa._calls.insert.find(
+        (c) =>
+          c.table === 'review_results' && (c.data as Record<string, unknown>).type === 'summary',
+      );
+      expect(summaryInsert).toBeDefined();
+      expect((summaryInsert!.data as Record<string, unknown>).status).toBe('pending');
+    });
+  });
+
+  describe('retrySummarization', () => {
+    /**
+     * Creates a mock supabase for retrySummarization tests.
+     * Supports configuring count results, select results per call order, and single results.
+     */
+    function createRetryMockSupabase(config: {
+      summaryCount: number;
+      countError?: { message: string } | null;
+      summaryQueryError?: { message: string } | null;
+      completedReviews: Record<string, unknown>[];
+      failedSummaries: { agent_id: string }[];
+      onlineAgents: Record<string, unknown>[];
+      timeoutAt?: string;
+    }) {
+      const calls = {
+        from: [] as string[],
+        insert: [] as { table: string; data: unknown }[],
+        update: [] as { table: string; data: unknown }[],
+      };
+
+      let fromCallIndex = 0;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      function makeChain(callIdx: number): Record<string, any> {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const chain: Record<string, any> = {};
+
+        chain.select = vi.fn((_cols?: string, opts?: { count?: string; head?: boolean }) => {
+          if (opts?.count === 'exact') {
+            // Count query -- first from call is the count for summary attempts
+            const countChain: Record<string, unknown> = {};
+            countChain.eq = vi.fn().mockReturnValue(countChain);
+            countChain.then = (resolve: (v: unknown) => void) =>
+              Promise.resolve({
+                count: config.countError ? null : config.summaryCount,
+                error: config.countError ?? null,
+              }).then(resolve);
+            return countChain;
+          }
+          return chain;
+        });
+
+        chain.insert = vi.fn((data: unknown) => {
+          const table = calls.from[calls.from.length - 1];
+          calls.insert.push({ table, data });
+          return Promise.resolve({ data: null, error: null });
+        });
+
+        chain.update = vi.fn((data: unknown) => {
+          const table = calls.from[calls.from.length - 1];
+          calls.update.push({ table, data });
+          return chain;
+        });
+
+        chain.eq = vi.fn().mockReturnValue(chain);
+        chain.in = vi.fn().mockReturnValue(chain);
+
+        chain.single = vi.fn(() => {
+          return Promise.resolve({
+            data: { timeout_at: config.timeoutAt ?? new Date(Date.now() + 300_000).toISOString() },
+          });
+        });
+
+        // The thenable result depends on which from() call this is.
+        // Call pattern for retrySummarization (when count < max):
+        //   1. review_results count (handled by select with count option)
+        //   2. review_results (fetchCompletedReviews)
+        //   3. review_results (failed summaries)
+        //   4. agents (selectSummaryAgent)
+        //   5. review_results insert (dispatchSummaryToAgent)
+        //   6. review_tasks single (dispatchSummaryToAgent timeout)
+        chain.then = (resolve: (v: unknown) => void) => {
+          // Determine which query this is based on the call index
+          if (callIdx === 1) {
+            // fetchCompletedReviews
+            return Promise.resolve({ data: config.completedReviews }).then(resolve);
+          }
+          if (callIdx === 2) {
+            // previous summaries select
+            return Promise.resolve({
+              data: config.summaryQueryError ? null : config.failedSummaries,
+              error: config.summaryQueryError ?? null,
+            }).then(resolve);
+          }
+          if (callIdx === 3) {
+            // selectSummaryAgent (agents online)
+            return Promise.resolve({ data: config.onlineAgents }).then(resolve);
+          }
+          return Promise.resolve({ data: null }).then(resolve);
+        };
+
+        return chain;
+      }
+
+      const mock = {
+        from: vi.fn((_table: string) => {
+          calls.from.push(_table);
+          const idx = fromCallIndex++;
+          return makeChain(idx);
+        }),
+        _calls: calls,
+      };
+
+      return mock;
+    }
+
+    it('retries with a different agent when under max attempts', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedFetchPrDiff.mockResolvedValue('diff content');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 1, // 1 attempt so far (under MAX_SUMMARY_ATTEMPTS=2)
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [{ agent_id: 'failed-synth-1' }],
+        onlineAgents: [{ id: 'new-synth', model: 'claude', users: { is_anonymous: false } }],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(true);
+      expect(mockDoFetch).toHaveBeenCalled();
+    });
+
+    it('falls back to individual reviews after max attempts', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 2, // Already at MAX_SUMMARY_ATTEMPTS
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [],
+        onlineAgents: [],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(false);
+      // Individual reviews should be posted
+      expect(mockedPostPrReview).toHaveBeenCalled();
+    });
+
+    it('falls back when no alternative synthesizer is available', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 1,
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [{ agent_id: 'failed-synth-1' }],
+        onlineAgents: [], // No agents available
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockedPostPrReview).toHaveBeenCalled();
+    });
+
+    it('excludes reviewer and failed synthesizer IDs from retry selection', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedFetchPrDiff.mockResolvedValue('diff');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 1,
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [{ agent_id: 'failed-synth-1' }],
+        // Only agent that isn't excluded
+        onlineAgents: [
+          { id: 'reviewer-1', model: 'gpt-4', users: { is_anonymous: false } },
+          { id: 'failed-synth-1', model: 'claude', users: { is_anonymous: false } },
+          { id: 'new-agent', model: 'gemini', users: { is_anonymous: false } },
+        ],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(true);
+      // Should dispatch to new-agent (not reviewer-1 or failed-synth-1)
+      expect(mockEnv.AGENT_CONNECTION.idFromName).toHaveBeenCalledWith('new-agent');
+    });
+
+    it('falls back to individual reviews when count query fails', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 0,
+        countError: { message: 'database connection failed' },
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [],
+        onlineAgents: [],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockedPostPrReview).toHaveBeenCalled();
+    });
+
+    it('falls back to individual reviews when summary query fails', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedGetInstallationToken.mockResolvedValue('token');
+      mockedPostPrReview.mockResolvedValue('https://github.com/comment');
+
+      const mockSupa = createRetryMockSupabase({
+        summaryCount: 1,
+        summaryQueryError: { message: 'database connection failed' },
+        completedReviews: [
+          {
+            agent_id: 'reviewer-1',
+            verdict: 'approve',
+            agents: { model: 'gpt-4', tool: 'cursor' },
+          },
+        ],
+        failedSummaries: [],
+        onlineAgents: [],
+      });
+
+      const result = await retrySummarization(
+        mockEnv as never,
+        mockSupa as never,
+        'task-1',
+        {
+          reviewCount: 2,
+          installationId: 99,
+          owner: 'org',
+          repo: 'repo',
+          prNumber: 42,
+          prompt: 'Review',
+        },
+        'failed-synth-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockedPostPrReview).toHaveBeenCalled();
     });
   });
 });

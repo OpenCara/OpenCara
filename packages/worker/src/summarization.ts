@@ -15,6 +15,8 @@ export interface InFlightTaskMeta {
   synthesizerAgentId?: string;
 }
 
+export const MAX_SUMMARY_ATTEMPTS = 2;
+
 /** Agent info displayed in the synthesized review header. */
 export interface ReviewAgentInfo {
   model: string;
@@ -338,6 +340,79 @@ export async function triggerSummarization(
 }
 
 /**
+ * Retry summarization after a synthesizer failure. Picks a different agent
+ * (excluding all reviewers and previously failed synthesizers) and re-dispatches.
+ * Falls back to individual reviews after MAX_SUMMARY_ATTEMPTS.
+ * Returns true if a retry was dispatched, false if fell back.
+ */
+export async function retrySummarization(
+  env: Env,
+  supabase: SupabaseClient,
+  taskId: string,
+  meta: InFlightTaskMeta,
+  failedAgentId: string,
+): Promise<boolean> {
+  // Count existing summary attempts for this task
+  const { count, error: countError } = await supabase
+    .from('review_results')
+    .select('id', { count: 'exact', head: true })
+    .eq('review_task_id', taskId)
+    .eq('type', 'summary');
+
+  if (countError) {
+    console.error(`Task ${taskId}: failed to count summary attempts`, countError);
+    const reviews = await fetchCompletedReviews(supabase, taskId);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
+
+  if ((count ?? 0) >= MAX_SUMMARY_ATTEMPTS) {
+    console.log(
+      `Task ${taskId}: max summary attempts (${MAX_SUMMARY_ATTEMPTS}) reached, falling back to individual reviews`,
+    );
+    const reviews = await fetchCompletedReviews(supabase, taskId);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
+
+  // Get reviewer agent IDs to exclude from synthesizer selection
+  const reviews = await fetchCompletedReviews(supabase, taskId);
+  const reviewerAgentIds = reviews.map((r) => r.agentId);
+
+  // Get all previous synthesizer IDs to exclude (any status — avoid re-assigning)
+  const { data: previousSummaries, error: summaryError } = await supabase
+    .from('review_results')
+    .select('agent_id')
+    .eq('review_task_id', taskId)
+    .eq('type', 'summary');
+
+  if (summaryError) {
+    console.error(`Task ${taskId}: failed to fetch previous summaries`, summaryError);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
+
+  const previousSynthIds = (previousSummaries ?? []).map((r: { agent_id: string }) => r.agent_id);
+  const excludeIds = [...new Set([...reviewerAgentIds, ...previousSynthIds, failedAgentId])];
+
+  // Select a new synthesizer agent
+  const newSynthId = await selectSummaryAgent(supabase, excludeIds);
+
+  if (!newSynthId) {
+    console.log(
+      `Task ${taskId}: no alternative synthesizer available, falling back to individual reviews`,
+    );
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
+
+  console.log(
+    `Task ${taskId}: retrying summarization with agent ${newSynthId} (failed: ${failedAgentId})`,
+  );
+  return await dispatchSummaryToAgent(env, supabase, taskId, meta, reviews, newSynthId);
+}
+
+/**
  * Dispatch summary to a specific agent. Shared by both the normal path
  * (uninvolved agent) and the fallback path (reusing a reviewer).
  */
@@ -349,13 +424,18 @@ async function dispatchSummaryToAgent(
   reviews: SummaryReview[],
   summaryAgentId: string,
 ): Promise<boolean> {
-  // Store summary agent in review_results with type='summary'
-  await supabase.from('review_results').insert({
+  // Store summary agent in review_results with type='summary' (pending until summary_complete)
+  const { error: insertError } = await supabase.from('review_results').insert({
     review_task_id: taskId,
     agent_id: summaryAgentId,
-    status: 'completed',
+    status: 'pending',
     type: 'summary',
   });
+  if (insertError) {
+    console.error(`Failed to insert summary result for task ${taskId}:`, insertError);
+    await postIndividualReviewsFallback(env, supabase, taskId, meta, reviews);
+    return false;
+  }
 
   // Calculate remaining timeout
   const { data: taskData } = await supabase
