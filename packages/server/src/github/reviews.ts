@@ -10,7 +10,8 @@ const VERDICT_TO_EVENT: Record<ReviewVerdict, ReviewEvent> = {
 };
 
 export function verdictToReviewEvent(verdict: ReviewVerdict): ReviewEvent {
-  return VERDICT_TO_EVENT[verdict];
+  const normalized = verdict.toLowerCase() as ReviewVerdict;
+  return VERDICT_TO_EVENT[normalized];
 }
 
 export interface ReviewComment {

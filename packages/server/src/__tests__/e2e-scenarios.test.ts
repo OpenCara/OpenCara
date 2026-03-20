@@ -607,6 +607,58 @@ describe('E2E Scenarios', () => {
   });
 
   // ═══════════════════════════════════════════════════════════
+  // Verdict Case Normalization (issue #201)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('Verdict Case Normalization', () => {
+    it('uppercase verdict from agent results in published review (not PENDING draft)', async () => {
+      const taskId = await injectPR();
+      const a = agent('agent-uppercase');
+
+      await a.claim(taskId, 'summary');
+
+      // Agent sends uppercase verdict — this is what the CLI does
+      const result = await a.submitResult(
+        taskId,
+        'summary',
+        '## Summary\nLooks good.\n\n## Verdict\nAPPROVE',
+        'APPROVE' as never, // uppercase — the bug
+        1000,
+      );
+      expect(result.status).toBe(200);
+
+      // GitHub review should have been posted with event: 'APPROVE', not undefined
+      const reviewPost = github.calls.find(
+        (c) => c.url.includes('/reviews') && c.method === 'POST',
+      );
+      expect(reviewPost).toBeDefined();
+      expect((reviewPost!.body as { event?: string }).event).toBe('APPROVE');
+    });
+
+    it('mixed-case verdict is normalized to valid review event', async () => {
+      const taskId = await injectPR({ prNumber: 2 });
+      const a = agent('agent-mixed');
+
+      await a.claim(taskId, 'summary');
+
+      const result = await a.submitResult(
+        taskId,
+        'summary',
+        '## Summary\nNeeds changes.\n\n## Verdict\nrequest_changes',
+        'Request_Changes' as never,
+        800,
+      );
+      expect(result.status).toBe(200);
+
+      const reviewPost = github.calls.find(
+        (c) => c.url.includes('/pulls/2/reviews') && c.method === 'POST',
+      );
+      expect(reviewPost).toBeDefined();
+      expect((reviewPost!.body as { event?: string }).event).toBe('REQUEST_CHANGES');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
   // K. State Machine
   // ═══════════════════════════════════════════════════════════
 
