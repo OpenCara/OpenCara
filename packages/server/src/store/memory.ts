@@ -83,4 +83,11 @@ export class MemoryTaskStore implements TaskStore {
   async getAgentLastSeen(agentId: string): Promise<number | null> {
     return this.agentLastSeen.get(agentId) ?? null;
   }
+
+  /** Clear all data. Test-only — not on the TaskStore interface. */
+  reset(): void {
+    this.tasks.clear();
+    this.claims.clear();
+    this.agentLastSeen.clear();
+  }
 }
