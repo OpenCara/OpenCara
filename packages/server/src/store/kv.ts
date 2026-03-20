@@ -7,6 +7,22 @@ const CLAIM_PREFIX = 'claim:';
 const AGENT_PREFIX = 'agent:';
 const TASK_INDEX_KEY = 'task_index';
 
+/** TTL for terminal KV entries: 7 days in seconds */
+const TERMINAL_TTL = 7 * 24 * 60 * 60;
+
+const TERMINAL_TASK_STATES = ['completed', 'timeout', 'failed'];
+const TERMINAL_CLAIM_STATUSES = ['completed', 'rejected', 'error'];
+
+/** Safely parse JSON, returning fallback on malformed input. */
+export function safeParseJson<T>(raw: string, fallback: T | null = null): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn('KV: corrupted JSON entry, returning fallback');
+    return fallback;
+  }
+}
+
 /**
  * Cloudflare Workers KV-backed TaskStore.
  *
@@ -32,7 +48,7 @@ export class KVTaskStore implements TaskStore {
   async getTask(id: string): Promise<ReviewTask | null> {
     const raw = await this.kv.get(`${TASK_PREFIX}${id}`);
     if (!raw) return null;
-    return JSON.parse(raw) as ReviewTask;
+    return safeParseJson<ReviewTask>(raw);
   }
 
   async listTasks(filter?: TaskFilter): Promise<ReviewTask[]> {
@@ -60,11 +76,14 @@ export class KVTaskStore implements TaskStore {
     const task = await this.getTask(id);
     if (!task) return false;
     const updated = { ...task, ...updates };
-    await this.kv.put(`${TASK_PREFIX}${id}`, JSON.stringify(updated));
+
+    const options = TERMINAL_TASK_STATES.includes(updated.status)
+      ? { expirationTtl: TERMINAL_TTL }
+      : undefined;
+    await this.kv.put(`${TASK_PREFIX}${id}`, JSON.stringify(updated), options);
 
     // Remove from index when reaching terminal state to prevent unbounded growth
-    const terminalStates = ['completed', 'timeout', 'failed'];
-    if (updates.status && terminalStates.includes(updates.status)) {
+    if (updates.status && TERMINAL_TASK_STATES.includes(updates.status)) {
       const index = await this.getTaskIndex();
       const filtered = index.filter((tid) => tid !== id);
       await this.kv.put(TASK_INDEX_KEY, JSON.stringify(filtered));
@@ -96,7 +115,7 @@ export class KVTaskStore implements TaskStore {
   async getClaim(claimId: string): Promise<TaskClaim | null> {
     const raw = await this.kv.get(`${CLAIM_PREFIX}${claimId}`);
     if (!raw) return null;
-    return JSON.parse(raw) as TaskClaim;
+    return safeParseJson<TaskClaim>(raw);
   }
 
   async getClaims(taskId: string): Promise<TaskClaim[]> {
@@ -106,7 +125,12 @@ export class KVTaskStore implements TaskStore {
     for (const key of claimList.keys) {
       const raw = await this.kv.get(key.name);
       if (raw) {
-        claims.push(JSON.parse(raw) as TaskClaim);
+        const claim = safeParseJson<TaskClaim>(raw);
+        if (claim) {
+          claims.push(claim);
+        } else {
+          console.warn(`KV: skipping corrupted claim entry at ${key.name}`);
+        }
       }
     }
 
@@ -118,9 +142,17 @@ export class KVTaskStore implements TaskStore {
     const key = `${CLAIM_PREFIX}${claimId}`;
     const raw = await this.kv.get(key);
     if (!raw) return;
-    const claim = JSON.parse(raw) as TaskClaim;
+    const claim = safeParseJson<TaskClaim>(raw);
+    if (!claim) {
+      console.warn(`KV: corrupted claim entry ${key}, skipping update`);
+      return;
+    }
     const updated = { ...claim, ...updates };
-    await this.kv.put(key, JSON.stringify(updated));
+
+    const options = TERMINAL_CLAIM_STATUSES.includes(updated.status)
+      ? { expirationTtl: TERMINAL_TTL }
+      : undefined;
+    await this.kv.put(key, JSON.stringify(updated), options);
   }
 
   // ── Agent last-seen ────────────────────────────────────────────
@@ -140,6 +172,6 @@ export class KVTaskStore implements TaskStore {
   private async getTaskIndex(): Promise<string[]> {
     const raw = await this.kv.get(TASK_INDEX_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as string[];
+    return safeParseJson<string[]>(raw, []) ?? [];
   }
 }
