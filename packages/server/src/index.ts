@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import type { Env } from './types.js';
+import type { Env, AppVariables } from './types.js';
 import { MemoryTaskStore } from './store/memory.js';
 import { KVTaskStore } from './store/kv.js';
 import type { TaskStore } from './store/interface.js';
@@ -8,12 +8,20 @@ import { webhookRoutes } from './routes/webhook.js';
 import { taskRoutes } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
 
+type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
+
 /**
- * Create the Hono app with the appropriate store.
- * Exported for testing (pass a MemoryTaskStore).
+ * Build the Hono app with store injected via middleware.
+ * The storeProvider callback is called per-request to produce a TaskStore.
  */
-export function createApp(store: TaskStore) {
-  const app = new Hono<{ Bindings: Env }>();
+function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
+  const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
+
+  // Inject store into every request's context
+  app.use('*', async (c, next) => {
+    c.set('store', storeProvider(c.env));
+    await next();
+  });
 
   // CORS
   app.use(
@@ -28,9 +36,9 @@ export function createApp(store: TaskStore) {
   // Health check
   app.get('/', (c) => c.json({ status: 'ok', service: 'opencara-server' }));
 
-  // Routes
-  app.route('/', webhookRoutes(store));
-  app.route('/', taskRoutes(store));
+  // Routes (store comes from c.get('store'))
+  app.route('/', webhookRoutes());
+  app.route('/', taskRoutes());
   app.route('/', registryRoutes());
 
   // 404
@@ -45,14 +53,17 @@ export function createApp(store: TaskStore) {
   return app;
 }
 
-// Cloudflare Workers entrypoint — uses KV store
-const workerApp = new Hono<{ Bindings: Env }>();
+/**
+ * Create the Hono app with a specific store.
+ * Used by tests (pass a MemoryTaskStore).
+ */
+export function createApp(store: TaskStore): HonoApp {
+  return buildApp(() => store);
+}
 
-// We need to create the store per-request since KV binding is on the env
-workerApp.all('*', async (c) => {
-  const store = c.env.TASK_STORE ? new KVTaskStore(c.env.TASK_STORE) : new MemoryTaskStore();
-  const app = createApp(store);
-  return app.fetch(c.req.raw, c.env, c.executionCtx);
-});
+// Cloudflare Workers entrypoint — app created once at module level
+const workerApp = buildApp((env) =>
+  env.TASK_STORE ? new KVTaskStore(env.TASK_STORE) : new MemoryTaskStore(),
+);
 
 export default workerApp;

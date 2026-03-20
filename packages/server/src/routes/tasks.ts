@@ -13,7 +13,7 @@ import type {
   ReviewVerdict,
   ReviewTask,
 } from '@opencara/shared';
-import type { Env } from '../types.js';
+import type { Env, AppVariables } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
 import { getInstallationToken } from '../github/app.js';
 import { githubFetch } from '../github/fetch.js';
@@ -48,6 +48,26 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
   if (completedReviews >= reviewSlots && !summaryClaimed) return 'summary';
 
   return null;
+}
+
+/**
+ * Throttle timeout checks to avoid O(n) KV scans on every poll request.
+ * In Workers, global state persists within an isolate but not across isolates.
+ * Worst case: multiple isolates each check once per interval — still far better than every poll.
+ */
+let lastTimeoutCheck = 0;
+const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
+
+/** Exported for testing — reset the throttle state. */
+export function resetTimeoutThrottle(): void {
+  lastTimeoutCheck = 0;
+}
+
+async function maybeCheckTimeouts(store: TaskStore, env: Env): Promise<void> {
+  const now = Date.now();
+  if (now - lastTimeoutCheck < TIMEOUT_CHECK_INTERVAL_MS) return;
+  lastTimeoutCheck = now;
+  await checkTimeouts(store, env);
 }
 
 /**
@@ -204,12 +224,13 @@ async function postFinalReview(
   }
 }
 
-export function taskRoutes(store: TaskStore) {
-  const app = new Hono<{ Bindings: Env }>();
+export function taskRoutes() {
+  const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // ── Poll ─────────────────────────────────────────────────────
 
   app.post('/api/tasks/poll', async (c) => {
+    const store = c.get('store');
     const body = await c.req.json<PollRequest>();
     const { agent_id } = body;
 
@@ -220,8 +241,8 @@ export function taskRoutes(store: TaskStore) {
     // Update last-seen
     await store.setAgentLastSeen(agent_id, Date.now());
 
-    // Check timeouts lazily
-    await checkTimeouts(store, c.env);
+    // Check timeouts lazily (throttled to every 30s per isolate)
+    await maybeCheckTimeouts(store, c.env);
 
     // Find available tasks
     const tasks = await store.listTasks({ status: ['pending', 'reviewing'] });
@@ -252,6 +273,7 @@ export function taskRoutes(store: TaskStore) {
   // ── Claim ────────────────────────────────────────────────────
 
   app.post('/api/tasks/:taskId/claim', async (c) => {
+    const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ClaimRequest>();
     const { agent_id, role, model, tool } = body;
@@ -331,6 +353,7 @@ export function taskRoutes(store: TaskStore) {
   // ── Result ───────────────────────────────────────────────────
 
   app.post('/api/tasks/:taskId/result', async (c) => {
+    const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ResultRequest>();
     const { agent_id, type, review_text, verdict, tokens_used } = body;
@@ -393,6 +416,7 @@ export function taskRoutes(store: TaskStore) {
   // ── Reject ───────────────────────────────────────────────────
 
   app.post('/api/tasks/:taskId/reject', async (c) => {
+    const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<RejectRequest>();
     const { agent_id, reason } = body;
@@ -435,6 +459,7 @@ export function taskRoutes(store: TaskStore) {
   // ── Error ────────────────────────────────────────────────────
 
   app.post('/api/tasks/:taskId/error', async (c) => {
+    const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ErrorRequest>();
     const { agent_id, error } = body;

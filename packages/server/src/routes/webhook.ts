@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { ReviewConfig } from '@opencara/shared';
-import type { Env } from '../types.js';
+import type { Env, AppVariables } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
 import { getInstallationToken } from '../github/app.js';
 import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
@@ -137,10 +137,11 @@ async function createTaskForPR(
   return taskId;
 }
 
-export function webhookRoutes(store: TaskStore) {
-  const app = new Hono<{ Bindings: Env }>();
+export function webhookRoutes() {
+  const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   app.post('/webhook/github', async (c) => {
+    const store = c.get('store');
     const body = await c.req.text();
     const signature = c.req.header('X-Hub-Signature-256') ?? null;
 
