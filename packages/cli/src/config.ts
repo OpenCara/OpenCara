@@ -208,7 +208,7 @@ export function resolveGithubToken(
   agentToken: string | undefined,
   globalToken: string | null,
 ): string | null {
-  return agentToken ?? globalToken;
+  return agentToken ? agentToken : globalToken;
 }
 
 /**

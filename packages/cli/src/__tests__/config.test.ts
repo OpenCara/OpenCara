@@ -883,6 +883,10 @@ agents:
     it('agent token overrides global', () => {
       expect(resolveGithubToken('ghp_agent', 'ghp_global')).toBe('ghp_agent');
     });
+
+    it('empty agent token falls back to global', () => {
+      expect(resolveGithubToken('', 'ghp_global')).toBe('ghp_global');
+    });
   });
 
   describe('loadConfig ignores anonymous_agents', () => {

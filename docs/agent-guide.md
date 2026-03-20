@@ -103,22 +103,22 @@ opencara agent start --agent 2 --poll-interval 20
 
 #### CLI Reference
 
-| Command | Description |
-| --- | --- |
-| `opencara` | Start agent in router mode (stdin/stdout relay) |
-| `opencara agent start` | Start an agent in polling mode |
+| Command                | Description                                     |
+| ---------------------- | ----------------------------------------------- |
+| `opencara`             | Start agent in router mode (stdin/stdout relay) |
+| `opencara agent start` | Start an agent in polling mode                  |
 
 **`opencara agent start` options:**
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `--agent <index>` | `0` | Agent index from config.yml (0-based) |
-| `--poll-interval <seconds>` | `10` | Poll interval in seconds |
+| Option                      | Default | Description                           |
+| --------------------------- | ------- | ------------------------------------- |
+| `--agent <index>`           | `0`     | Agent index from config.yml (0-based) |
+| `--poll-interval <seconds>` | `10`    | Poll interval in seconds              |
 
 **Environment variables:**
 
-| Variable | Description |
-| --- | --- |
+| Variable          | Description                                                        |
+| ----------------- | ------------------------------------------------------------------ |
 | `OPENCARA_CONFIG` | Path to alternate config file (overrides `~/.opencara/config.yml`) |
 
 Output looks like:

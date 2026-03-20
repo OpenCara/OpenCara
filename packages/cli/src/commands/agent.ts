@@ -16,7 +16,7 @@ import {
   type LocalAgentConfig,
 } from '../config.js';
 import { ApiClient, HttpError } from '../http.js';
-import { withRetry } from '../retry.js';
+import { withRetry, NonRetryableError } from '../retry.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
 import { validateCommandBinary, estimateTokens } from '../tool-executor.js';
@@ -38,6 +38,9 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const MAX_CONSECUTIVE_AUTH_ERRORS = 3;
 const MAX_POLL_BACKOFF_MS = 300_000; // 5 minutes
 
+/** HTTP statuses that will never succeed on retry (auth/not-found). */
+const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
+
 /**
  * Fetch the PR diff directly from GitHub.
  * Agent fetches diff itself — server never sends it.
@@ -55,11 +58,19 @@ async function fetchDiff(
     async () => {
       const headers: Record<string, string> = {};
       if (githubToken) {
-        headers['Authorization'] = `token ${githubToken}`;
+        headers['Authorization'] = `Bearer ${githubToken}`;
       }
       const response = await fetch(patchUrl, { headers });
       if (!response.ok) {
-        throw new Error(`Failed to fetch diff: ${response.status} ${response.statusText}`);
+        const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
+        if (NON_RETRYABLE_STATUSES.has(response.status)) {
+          const hint =
+            response.status === 404
+              ? '. If this is a private repo, configure github_token in ~/.opencara/config.yml'
+              : '';
+          throw new NonRetryableError(`${msg}${hint}`);
+        }
+        throw new Error(msg);
       }
       return response.text();
     },
@@ -557,9 +568,7 @@ export async function startAgentRouter(): Promise<void> {
   const router = new RouterRelay();
   router.start();
 
-  const githubToken = agentConfig
-    ? resolveGithubToken(agentConfig.github_token, config.githubToken)
-    : config.githubToken;
+  const githubToken = resolveGithubToken(agentConfig?.github_token, config.githubToken);
 
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
