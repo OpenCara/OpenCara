@@ -84,6 +84,9 @@ function hexToBytes(hex: string): Uint8Array | null {
 /**
  * Create a task in the store for a PR. No diff fetching, no agent selection —
  * agents will poll and fetch diffs themselves.
+ *
+ * Returns null if an active (pending/reviewing) task already exists for this PR
+ * (idempotency guard against webhook redeliveries and rapid PR events).
  */
 async function createTaskForPR(
   store: TaskStore,
@@ -96,7 +99,19 @@ async function createTaskForPR(
   baseRef: string,
   headRef: string,
   config: ReviewConfig,
-): Promise<string> {
+): Promise<string | null> {
+  // Check for existing active task on this PR (dedup guard)
+  const activeTasks = await store.listTasks({ status: ['pending', 'reviewing'] });
+  const duplicate = activeTasks.find(
+    (t) => t.owner === owner && t.repo === repo && t.pr_number === prNumber,
+  );
+  if (duplicate) {
+    console.log(
+      `Task ${duplicate.id} already exists for PR #${prNumber} on ${owner}/${repo} — skipping`,
+    );
+    return null;
+  }
+
   const taskId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(config.timeout);
 
