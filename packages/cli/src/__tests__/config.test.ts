@@ -589,6 +589,36 @@ anonymous_agents:
     });
   });
 
+  describe('agent review_only config', () => {
+    it('parses review_only: true from agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: gpt-5-codex
+    tool: codex
+    review_only: true
+  - model: claude-sonnet-4-6
+    tool: claude-code
+`);
+      const config = loadConfig();
+      expect(config.agents).toHaveLength(2);
+      expect(config.agents![0].review_only).toBe(true);
+      expect(config.agents![1].review_only).toBeUndefined();
+    });
+
+    it('ignores review_only: false', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    review_only: false
+`);
+      const config = loadConfig();
+      expect(config.agents![0].review_only).toBeUndefined();
+    });
+  });
+
   describe('agent router config', () => {
     it('parses router: true from agent entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);

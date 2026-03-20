@@ -249,6 +249,84 @@ describe('agent poll loop', () => {
     });
   });
 
+  it('sends review_only in poll request when option is set', async () => {
+    let pollBody: Record<string, unknown> | null = null;
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : String(url);
+
+      if (urlStr.includes('/api/tasks/poll')) {
+        pollBody = JSON.parse(init?.body as string);
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: 'Unauthorized' }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100, reviewOnly: true },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(pollBody).not.toBeNull();
+    expect(pollBody!.review_only).toBe(true);
+  });
+
+  it('does not send review_only when option is not set', async () => {
+    let pollBody: Record<string, unknown> | null = null;
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : String(url);
+
+      if (urlStr.includes('/api/tasks/poll')) {
+        pollBody = JSON.parse(init?.body as string);
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: 'Unauthorized' }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(pollBody).not.toBeNull();
+    expect(pollBody!.review_only).toBeUndefined();
+  });
+
   it('resets auth counter on successful poll', async () => {
     let callCount = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
