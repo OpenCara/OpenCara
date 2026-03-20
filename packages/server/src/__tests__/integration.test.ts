@@ -996,7 +996,203 @@ APPROVE`;
   });
 
   // ═══════════════════════════════════════════════════════════
-  // 12. Full E2E: webhook → poll → claim → result → GitHub
+  // 12. Webhook idempotency (PR identity dedup)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('webhook idempotency', () => {
+    /** Helper: send a signed PR webhook for a given PR number. */
+    async function sendPRWebhook(prNumber: number, action = 'opened') {
+      const payload = {
+        action,
+        installation: { id: 999 },
+        repository: { owner: { login: 'acme' }, name: 'widget' },
+        pull_request: {
+          number: prNumber,
+          html_url: `https://github.com/acme/widget/pull/${prNumber}`,
+          diff_url: `https://github.com/acme/widget/pull/${prNumber}.diff`,
+          base: { ref: 'main' },
+          head: { ref: 'feat/branch' },
+          draft: false,
+          labels: [],
+        },
+      };
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+      return app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+    }
+
+    /** Helper: send a signed issue_comment webhook (trigger command). */
+    async function sendCommentWebhook(prNumber: number, commentBody: string) {
+      const payload = {
+        action: 'created',
+        installation: { id: 999 },
+        repository: { owner: { login: 'acme' }, name: 'widget' },
+        issue: {
+          number: prNumber,
+          pull_request: { url: `https://api.github.com/repos/acme/widget/pulls/${prNumber}` },
+        },
+        comment: {
+          body: commentBody,
+          user: { login: 'maintainer' },
+          author_association: 'OWNER',
+        },
+      };
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+      return app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'issue_comment',
+          },
+          body,
+        },
+        mockEnv,
+      );
+    }
+
+    it('duplicate PR webhook does not create a second task', async () => {
+      // First webhook — creates a task
+      await sendPRWebhook(50);
+      const tasksAfterFirst = await store.listTasks();
+      expect(tasksAfterFirst).toHaveLength(1);
+
+      // Second webhook (redelivery) — no new task
+      await sendPRWebhook(50);
+      const tasksAfterSecond = await store.listTasks();
+      expect(tasksAfterSecond).toHaveLength(1);
+    });
+
+    it('rapid duplicate opened events for same PR creates only one task', async () => {
+      await sendPRWebhook(51, 'opened');
+      await sendPRWebhook(51, 'opened');
+      await sendPRWebhook(51, 'opened');
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].pr_number).toBe(51);
+    });
+
+    it('different PRs create separate tasks', async () => {
+      await sendPRWebhook(60);
+      await sendPRWebhook(61);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+      const prNumbers = tasks.map((t) => t.pr_number).sort();
+      expect(prNumbers).toEqual([60, 61]);
+    });
+
+    it('new task allowed after previous task reached terminal state (completed)', async () => {
+      // Create and complete a task
+      await sendPRWebhook(70);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      await store.updateTask(tasks[0].id, { status: 'completed' });
+
+      // New webhook for same PR — should create a new task
+      await sendPRWebhook(70);
+      const allTasks = await store.listTasks();
+      // listTasks with no filter returns all tasks; active filter check is in createTaskForPR
+      const activeTasks = allTasks.filter(
+        (t) => t.status === 'pending' || t.status === 'reviewing',
+      );
+      expect(activeTasks).toHaveLength(1);
+    });
+
+    it('new task allowed after previous task timed out', async () => {
+      await sendPRWebhook(71);
+      const tasks = await store.listTasks();
+      await store.updateTask(tasks[0].id, { status: 'timeout' });
+
+      await sendPRWebhook(71);
+      const allTasks = await store.listTasks();
+      const activeTasks = allTasks.filter(
+        (t) => t.status === 'pending' || t.status === 'reviewing',
+      );
+      expect(activeTasks).toHaveLength(1);
+    });
+
+    it('new task allowed after previous task failed', async () => {
+      await sendPRWebhook(72);
+      const tasks = await store.listTasks();
+      await store.updateTask(tasks[0].id, { status: 'failed' });
+
+      await sendPRWebhook(72);
+      const allTasks = await store.listTasks();
+      const activeTasks = allTasks.filter(
+        (t) => t.status === 'pending' || t.status === 'reviewing',
+      );
+      expect(activeTasks).toHaveLength(1);
+    });
+
+    it('/opencara review comment skips when active task exists', async () => {
+      // Create active task via PR webhook
+      await sendPRWebhook(80);
+      const tasksBefore = await store.listTasks();
+      expect(tasksBefore).toHaveLength(1);
+
+      // Comment trigger — should not create duplicate
+      await sendCommentWebhook(80, '/opencara review');
+      const tasksAfter = await store.listTasks();
+      expect(tasksAfter).toHaveLength(1);
+    });
+
+    it('/opencara review comment creates task when no active task exists', async () => {
+      // No prior task — comment trigger should create one
+      await sendCommentWebhook(81, '/opencara review');
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].pr_number).toBe(81);
+    });
+
+    it('/opencara review comment creates task after previous task completed', async () => {
+      // Create and complete a task
+      await sendPRWebhook(82);
+      const tasks = await store.listTasks();
+      await store.updateTask(tasks[0].id, { status: 'completed' });
+
+      // Comment trigger — should create new task (previous is terminal)
+      await sendCommentWebhook(82, '/opencara review');
+      const allTasks = await store.listTasks();
+      const activeTasks = allTasks.filter(
+        (t) => t.status === 'pending' || t.status === 'reviewing',
+      );
+      expect(activeTasks).toHaveLength(1);
+    });
+
+    it('dedup is scoped to owner/repo — same PR number on different repos creates tasks', async () => {
+      // Create task for acme/widget PR #90
+      await sendPRWebhook(90);
+
+      // Manually create a task for a different repo with same PR number
+      await store.createTask(
+        makeTask({ id: 'other-repo-task', owner: 'other', repo: 'project', pr_number: 90 }),
+      );
+
+      // Both should exist
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 13. Full E2E: webhook → poll → claim → result → GitHub
   // ═══════════════════════════════════════════════════════════
 
   describe('full E2E: webhook → poll → claim → result → posted', () => {
