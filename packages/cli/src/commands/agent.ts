@@ -498,11 +498,13 @@ agentCommand
         'No command configured. Set agent_command or agents[].command in ~/.opencara/config.yml',
       );
       process.exit(1);
+      return; // unreachable, helps TypeScript narrow
     }
 
     if (!validateCommandBinary(commandTemplate)) {
       console.error(`Command binary not found: ${commandTemplate.split(' ')[0]}`);
       process.exit(1);
+      return;
     }
 
     const reviewDeps: ReviewExecutorDeps = {

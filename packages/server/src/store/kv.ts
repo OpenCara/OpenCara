@@ -61,6 +61,15 @@ export class KVTaskStore implements TaskStore {
     if (!task) return false;
     const updated = { ...task, ...updates };
     await this.kv.put(`${TASK_PREFIX}${id}`, JSON.stringify(updated));
+
+    // Remove from index when reaching terminal state to prevent unbounded growth
+    const terminalStates = ['completed', 'timeout', 'failed'];
+    if (updates.status && terminalStates.includes(updates.status)) {
+      const index = await this.getTaskIndex();
+      const filtered = index.filter((tid) => tid !== id);
+      await this.kv.put(TASK_INDEX_KEY, JSON.stringify(filtered));
+    }
+
     return true;
   }
 

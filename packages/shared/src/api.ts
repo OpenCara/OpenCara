@@ -30,6 +30,8 @@ export interface PollResponse {
 export interface ClaimRequest {
   agent_id: string;
   role: ClaimRole;
+  model?: string;
+  tool?: string;
 }
 
 /** Review text returned to summary claimers */

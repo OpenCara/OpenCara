@@ -45,6 +45,8 @@ export interface TaskClaim {
   agent_id: string;
   role: ClaimRole;
   status: ClaimStatus;
+  model?: string; // agent's model name (self-reported)
+  tool?: string; // agent's tool name (self-reported)
   review_text?: string; // filled on completion
   verdict?: ReviewVerdict; // filled on completion (review only)
   tokens_used?: number;

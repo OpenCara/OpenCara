@@ -130,13 +130,16 @@ async function postFinalReview(store: TaskStore, env: Env, taskId: string): Prom
     // Parse the review for inline comments
     const parsed = parseStructuredReview(summaryClaim.review_text);
 
-    // Build agent info for the header
+    // Build agent info from claims
     const reviewClaims = claims.filter((c) => c.role === 'review' && c.status === 'completed');
-    const reviewerAgents: ReviewAgentInfo[] = reviewClaims.map(() => ({
-      model: 'agent',
-      tool: 'unknown',
+    const reviewerAgents: ReviewAgentInfo[] = reviewClaims.map((c) => ({
+      model: c.model ?? 'unknown',
+      tool: c.tool ?? 'unknown',
     }));
-    const synthAgent: ReviewAgentInfo = { model: 'agent', tool: 'unknown' };
+    const synthAgent: ReviewAgentInfo = {
+      model: summaryClaim.model ?? 'unknown',
+      tool: summaryClaim.tool ?? 'unknown',
+    };
 
     // Format the body
     let body: string;
@@ -231,7 +234,7 @@ export function taskRoutes(store: TaskStore) {
         repo: task.repo,
         pr_number: task.pr_number,
         diff_url: task.diff_url,
-        timeout_seconds: Math.floor(remainingMs / 1000),
+        timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
         prompt: task.prompt,
         role,
       });
@@ -245,7 +248,7 @@ export function taskRoutes(store: TaskStore) {
   app.post('/api/tasks/:taskId/claim', async (c) => {
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ClaimRequest>();
-    const { agent_id, role } = body;
+    const { agent_id, role, model, tool } = body;
 
     if (!agent_id || !role) {
       return c.json({ error: 'agent_id and role are required' }, 400);
@@ -282,6 +285,8 @@ export function taskRoutes(store: TaskStore) {
       agent_id,
       role,
       status: 'pending',
+      model,
+      tool,
       created_at: Date.now(),
     });
 
