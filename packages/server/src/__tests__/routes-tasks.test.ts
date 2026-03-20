@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, type ReviewTask } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createApp } from '../index.js';
@@ -663,6 +663,134 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-delayed');
       // Task stays pending because GitHub posting fails, but checkTimeouts DID run
       expect(task).toBeDefined();
+    });
+  });
+
+  // ── Structured error logging ────────────────────────────
+
+  describe('structured error logging', () => {
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+    });
+
+    it('reject endpoint logs structured error with agent ID', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 1,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'Cannot access diff',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[agent:agent-1] task=task-1 action=reject role=review reason=Cannot access diff',
+      );
+    });
+
+    it('error endpoint logs structured error with agent ID', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 1,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'agent-1',
+        error: 'Tool crashed',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[agent:agent-1] task=task-1 action=error role=review error=Tool crashed',
+      );
+    });
+
+    it('result endpoint logs on no claim found', async () => {
+      await store.createTask(makeTask());
+
+      await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-unknown',
+        type: 'review',
+        review_text: 'test',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[agent:agent-unknown] task=task-1 action=result_rejected reason=no_claim',
+      );
+    });
+
+    it('result endpoint logs on already-completed claim', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'completed',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-1',
+        type: 'summary',
+        review_text: 'test',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[agent:agent-1] task=task-1 action=result_rejected reason=claim_completed',
+      );
+    });
+
+    it('result endpoint logs on role mismatch', async () => {
+      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-1',
+        type: 'summary',
+        review_text: 'Synthesized review',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[agent:agent-1] task=task-1 action=result_rejected reason=role_mismatch claim_role=review submission_type=summary',
+      );
     });
   });
 

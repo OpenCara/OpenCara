@@ -85,6 +85,11 @@ async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
 
     // Post fallback: any completed reviews as individual comments
     const claims = await store.getClaims(task.id);
+
+    // Log structured errors for each pending claim that timed out
+    for (const claim of claims.filter((c) => c.status === 'pending')) {
+      console.error(`[agent:${claim.agent_id}] task=${task.id} action=timeout role=${claim.role}`);
+    }
     const completedReviews = claims.filter(
       (c) => c.role === 'review' && c.status === 'completed' && c.review_text,
     );
@@ -123,7 +128,9 @@ async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
       // leave task in current state so next checkTimeouts() retries.
       await store.updateTask(task.id, { status: 'timeout' });
     } catch (err) {
-      console.error(`Failed to post timeout for task ${task.id}, will retry on next check:`, err);
+      console.error(
+        `[task:${task.id}] action=timeout_post_failed error=${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }
@@ -196,13 +203,12 @@ async function postFinalReview(
         validComments = filterValidComments(parsed.comments, diffFiles);
       } else {
         console.warn(
-          `Failed to fetch diff for task ${taskId} (${diffResponse.status}) — skipping comment path validation`,
+          `[agent:${summaryAgentId}] task=${taskId} action=diff_fetch_failed status=${diffResponse.status}`,
         );
       }
     } catch (err) {
       console.warn(
-        `Failed to fetch diff for task ${taskId} — skipping comment path validation:`,
-        err,
+        `[agent:${summaryAgentId}] task=${taskId} action=diff_fetch_failed error=${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
@@ -219,7 +225,9 @@ async function postFinalReview(
     await store.updateTask(taskId, { status: 'completed' });
     console.log(`Task ${taskId}: review posted to GitHub`);
   } catch (err) {
-    console.error(`Failed to post review for task ${taskId}:`, err);
+    console.error(
+      `[agent:${summaryAgentId}] task=${taskId} action=post_review_failed error=${err instanceof Error ? err.message : String(err)}`,
+    );
     await store.updateTask(taskId, { status: 'failed' });
   }
 }
@@ -367,14 +375,21 @@ export function taskRoutes() {
     const claim = await store.getClaim(claimId);
 
     if (!claim) {
+      console.error(`[agent:${agent_id}] task=${taskId} action=result_rejected reason=no_claim`);
       return c.json({ error: 'No claim found for this agent on this task' }, 404);
     }
 
     if (claim.status !== 'pending') {
+      console.error(
+        `[agent:${agent_id}] task=${taskId} action=result_rejected reason=claim_${claim.status}`,
+      );
       return c.json({ error: `Claim already ${claim.status}` }, 409);
     }
 
     if (claim.role !== type) {
+      console.error(
+        `[agent:${agent_id}] task=${taskId} action=result_rejected reason=role_mismatch claim_role=${claim.role} submission_type=${type}`,
+      );
       return c.json(
         { error: `Claim role '${claim.role}' does not match submission type '${type}'` },
         400,
@@ -453,7 +468,9 @@ export function taskRoutes() {
       await store.updateTask(taskId, updates);
     }
 
-    console.log(`Task ${taskId}: agent ${agent_id} rejected — ${reason}`);
+    console.error(
+      `[agent:${agent_id}] task=${taskId} action=reject role=${claim.role} reason=${reason ?? 'none'}`,
+    );
     return c.json({ success: true });
   });
 
@@ -496,7 +513,9 @@ export function taskRoutes() {
       await store.updateTask(taskId, updates);
     }
 
-    console.error(`Task ${taskId}: agent ${agent_id} error — ${error}`);
+    console.error(
+      `[agent:${agent_id}] task=${taskId} action=error role=${claim.role} error=${error ?? 'unknown'}`,
+    );
     return c.json({ success: true });
   });
 
