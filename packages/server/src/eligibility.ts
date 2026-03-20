@@ -35,6 +35,7 @@ function matchGlob(pattern: string, text: string): boolean {
     const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
     return new RegExp('^' + escaped + '$').test(text);
   } catch {
+    console.warn(`Invalid glob pattern in skip config: "${pattern}"`);
     return false;
   }
 }

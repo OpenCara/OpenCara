@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { shouldSkipReview, parseTimeoutMs, isRepoAllowed } from '../eligibility.js';
 
@@ -40,6 +40,34 @@ describe('shouldSkipReview', () => {
       trigger: { ...DEFAULT_REVIEW_CONFIG.trigger, skip: ['branch:release/*'] },
     };
     expect(shouldSkipReview(config, { headRef: 'feature/new-thing' })).toBeNull();
+  });
+
+  it('logs warning and does not skip for invalid glob pattern', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Force RegExp constructor to throw for the glob-derived pattern
+    const OrigRegExp = globalThis.RegExp;
+    globalThis.RegExp = class extends OrigRegExp {
+      constructor(pattern: string, flags?: string) {
+        if (typeof pattern === 'string' && pattern.startsWith('^')) {
+          throw new SyntaxError('Invalid regular expression');
+        }
+        super(pattern, flags);
+      }
+    } as typeof RegExp;
+
+    try {
+      const config = {
+        ...DEFAULT_REVIEW_CONFIG,
+        trigger: { ...DEFAULT_REVIEW_CONFIG.trigger, skip: ['branch:test-*'] },
+      };
+      expect(shouldSkipReview(config, { headRef: 'test-branch' })).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid glob pattern in skip config'),
+      );
+    } finally {
+      globalThis.RegExp = OrigRegExp;
+      warnSpy.mockRestore();
+    }
   });
 });
 

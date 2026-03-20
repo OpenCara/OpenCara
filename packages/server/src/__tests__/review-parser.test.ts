@@ -38,6 +38,66 @@ REQUEST_CHANGES`;
     expect(result.verdict).toBe('request_changes');
   });
 
+  it('skips findings with line number 0', () => {
+    const text = `## Summary
+Zero line.
+
+## Findings
+- **[minor]** \`src/index.ts:0\` — invalid line
+
+## Verdict
+APPROVE`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(0);
+  });
+
+  it('skips findings with negative line numbers', () => {
+    const text = `## Summary
+Negative line.
+
+## Findings
+- **[minor]** \`src/index.ts:-5\` — negative line
+
+## Verdict
+APPROVE`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(0);
+  });
+
+  it('skips synthesizer findings with line number 0', () => {
+    const text = `## Summary
+Zero line heading.
+
+## Findings
+
+### [major] \`app.ts:0\` — Invalid line
+Should be skipped.
+
+## Verdict
+COMMENT`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(0);
+  });
+
+  it('skips synthesizer findings with negative line numbers', () => {
+    const text = `## Summary
+Negative line heading.
+
+## Findings
+
+### [major] \`app.ts:-3\` — Negative line
+Should be skipped.
+
+## Verdict
+COMMENT`;
+
+    const result = parseStructuredReview(text);
+    expect(result.comments).toHaveLength(0);
+  });
+
   it('parses synthesizer format (### headings)', () => {
     const text = `## Summary
 Overview here.

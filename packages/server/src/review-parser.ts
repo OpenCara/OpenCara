@@ -55,7 +55,7 @@ export function parseStructuredReview(text: string): ParsedReview {
       const path = match[2];
       const line = parseInt(match[3], 10);
       const description = match[4].trim();
-      if (isNaN(line)) continue;
+      if (isNaN(line) || line <= 0) continue;
       comments.push({
         path,
         line,
@@ -87,7 +87,7 @@ export function parseStructuredReview(text: string): ParsedReview {
     }
     for (let i = 0; i < headings.length; i++) {
       const h = headings[i];
-      if (isNaN(h.line)) continue;
+      if (isNaN(h.line) || h.line <= 0) continue;
       if (comments.some((c) => c.path === h.path && c.line === h.line)) continue;
       const nextStart = i + 1 < headings.length ? headings[i + 1].startIdx : findingsBlock.length;
       const bodyAfterTitle = findingsBlock.slice(h.endIdx, nextStart).trim();
