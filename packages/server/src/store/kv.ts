@@ -93,6 +93,12 @@ export class KVTaskStore implements TaskStore {
     await this.kv.put(`${CLAIM_PREFIX}${claim.task_id}:${claim.agent_id}`, JSON.stringify(claim));
   }
 
+  async getClaim(claimId: string): Promise<TaskClaim | null> {
+    const raw = await this.kv.get(`${CLAIM_PREFIX}${claimId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as TaskClaim;
+  }
+
   async getClaims(taskId: string): Promise<TaskClaim[]> {
     const claimList = await this.kv.list({ prefix: `${CLAIM_PREFIX}${taskId}:` });
     const claims: TaskClaim[] = [];

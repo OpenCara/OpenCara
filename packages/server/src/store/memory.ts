@@ -58,6 +58,11 @@ export class MemoryTaskStore implements TaskStore {
     this.claims.set(claim.id, { ...claim });
   }
 
+  async getClaim(claimId: string): Promise<TaskClaim | null> {
+    const claim = this.claims.get(claimId);
+    return claim ? { ...claim } : null;
+  }
+
   async getClaims(taskId: string): Promise<TaskClaim[]> {
     return [...this.claims.values()].filter((c) => c.task_id === taskId).map((c) => ({ ...c }));
   }

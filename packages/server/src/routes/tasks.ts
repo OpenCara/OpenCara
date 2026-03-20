@@ -322,8 +322,7 @@ export function taskRoutes(store: TaskStore) {
     }
 
     const claimId = `${taskId}:${agent_id}`;
-    const claims = await store.getClaims(taskId);
-    const claim = claims.find((cl) => cl.id === claimId);
+    const claim = await store.getClaim(claimId);
 
     if (!claim) {
       return c.json({ error: 'No claim found for this agent on this task' }, 404);

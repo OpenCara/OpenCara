@@ -15,6 +15,7 @@ export interface TaskStore {
 
   // Claims
   createClaim(claim: TaskClaim): Promise<void>;
+  getClaim(claimId: string): Promise<TaskClaim | null>;
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 

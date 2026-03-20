@@ -12,12 +12,7 @@ WEB_URL = "https://opencara.com"
 
 [[kv_namespaces]]
 binding = "TASK_STORE"
-id = "fe09ef901df94532815cc44377c6302a"
-
-# DO deletion migration (remove old DOs from worker)
-[[migrations]]
-tag = "v2"
-deleted_classes = ["AgentConnection", "TaskTimeout"]
+id = "b6cb6efb2960419ea5a7c6a5a51b4345"
 
 # ── Dev environment ──────────────────────────────────────────────
 [env.dev]
@@ -28,4 +23,4 @@ WEB_URL = "https://dev.opencara.com"
 
 [[env.dev.kv_namespaces]]
 binding = "TASK_STORE"
-id = "98488948567340099887f541ba94e3c8"
+id = "8b056c1e0a884c48a63111a583d7a50f"
