@@ -1,4 +1,5 @@
 import type { ReviewVerdict } from '@opencara/shared';
+import { githubFetch } from './fetch.js';
 
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 
@@ -38,17 +39,11 @@ export async function postPrReview(
     payload.comments = comments;
   }
 
-  const response = await fetch(
+  const response = await githubFetch(
     `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
     {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'OpenCara-Server',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
-      },
+      token,
       body: JSON.stringify(payload),
     },
   );
@@ -72,17 +67,11 @@ export async function postPrComment(
   body: string,
   token: string,
 ): Promise<string> {
-  const response = await fetch(
+  const response = await githubFetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
     {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'OpenCara-Server',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
-      },
+      token,
       body: JSON.stringify({ body }),
     },
   );

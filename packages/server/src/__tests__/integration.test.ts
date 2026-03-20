@@ -471,6 +471,37 @@ APPROVE`;
       expect(res.reason).toContain('timed out');
     });
 
+    it('leaves task in current state when GitHub posting fails during timeout', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'task-fail-timeout',
+          timeout_at: Date.now() - 1000, // already expired
+          status: 'pending',
+        }),
+      );
+
+      // Override fetch to fail on installation token request with 401 (not retried)
+      const failingFetch = vi.fn(async (input: string | URL | Request) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+        // Fail on installation token request — simulates auth failure
+        if (url.includes('/access_tokens')) {
+          return new Response('Unauthorized', { status: 401 });
+        }
+
+        return new Response('Not Found', { status: 404 });
+      }) as typeof fetch;
+      globalThis.fetch = failingFetch;
+
+      // Trigger timeout check via poll
+      await poll('any-agent');
+
+      // Task should NOT be marked timeout — GitHub posting failed
+      const task = await store.getTask('task-fail-timeout');
+      expect(task?.status).toBe('pending');
+    });
+
     it('completed tasks are not affected by timeout checks', async () => {
       await store.createTask(
         makeTask({
