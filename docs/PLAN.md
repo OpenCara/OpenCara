@@ -2,9 +2,24 @@
 
 ## Overview
 
-Distributed AI code review service. Contributors run review agents locally, the platform coordinates multi-agent reviews on GitHub PRs, and a reputation system ranks agents.
+Distributed AI code review service. Contributors run review agents locally, the platform coordinates multi-agent reviews on GitHub PRs via stateless REST polling.
 
-## MVP Milestones [ALL DONE]
+## Architecture (v1.0 — PR #172)
+
+Stateless REST-only service. No WebSocket, no Durable Objects, no database.
+
+| Package           | Stack                    | Purpose                         |
+| ----------------- | ------------------------ | ------------------------------- |
+| `packages/server` | Hono + CF Workers KV     | Webhook receiver, task REST API |
+| `packages/cli`    | Commander + HTTP polling | Agent runtime, review executor  |
+| `packages/shared` | Pure TypeScript types    | REST API contracts, config      |
+
+**Flow**: GitHub webhook → server creates task in KV → agent polls `/api/tasks/poll` → claims → fetches diff from GitHub → reviews locally → submits result → server posts to GitHub
+
+## MVP Milestones [ALL DONE — superseded by v1.0 rewrite]
+
+<details>
+<summary>Historical milestones (M0–M9)</summary>
 
 ### M0: Project Scaffolding — #1 -> PR #2
 
@@ -46,9 +61,12 @@ Landing page, public leaderboard, personal stats dashboard (later redesigned to 
 
 Server-side consumption stats API. CLI `opencara stats` command with local limits and enforcement.
 
-## Post-MVP [DONE]
+</details>
 
-Completed 50+ post-MVP items across these areas:
+## Post-MVP [DONE — superseded by v1.0 rewrite]
+
+<details>
+<summary>Historical post-MVP work (50+ items)</summary>
 
 - **Stability**: WebSocket fixes (#51-57,#61,#62,#102), reconnect, ping frames
 - **Review quality**: PR Review API (#82,#83,#96), inline comments (#136), synthesizer redesign (#110)
@@ -59,18 +77,41 @@ Completed 50+ post-MVP items across these areas:
 - **CLI**: local tools (#47), token counting (#87), stats enrichment (#72), contributor profiles (#101)
 - **Rebrand**: OpenCrust -> OpenCara (#91,#92)
 
+</details>
+
+## v1.0 Rewrite (PR #172)
+
+Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, Supabase, auth, reputation, ratings, leaderboard, web dashboard. 307 tests passing.
+
+## M10: Hardening [DONE — 2026-03-20]
+
+5 high-priority hardening issues completed:
+
+| PR   | Issue | Agent      | Description                                     |
+| ---- | ----- | ---------- | ----------------------------------------------- |
+| #186 | #175  | server-dev | Reject/error free claim slots + state machine   |
+| #187 | #176  | cli-dev    | Retry logic and error recovery in agent loop    |
+| #188 | #173  | server-dev | KV hardening: safe JSON parse + TTL on terminal |
+| #189 | #174  | server-dev | GitHub API retry logic                          |
+| #190 | #182  | server-dev | Webhook idempotency via PR identity dedup       |
+
 ## Open Issues
 
-| #    | Agent              | Priority | Description                                          |
-| ---- | ------------------ | -------- | ---------------------------------------------------- |
-| #129 | worker-dev+cli-dev | medium   | Custom agent names in review logs and comments       |
-| #131 | worker-dev         | medium   | Default reputation scores per model                  |
-| #38  | worker-dev         | low      | Installation event handlers — project upsert/cleanup |
-| #80  | cli-dev            | low      | Growth trends in stats                               |
-| #81  | cli-dev            | low      | Expertise areas in stats                             |
-| #90  | worker-dev         | low      | Dynamic tool/model registry                          |
-| #130 | cli-dev            | low      | Clickable PR links in agent logs                     |
-| #133 | design             | low      | Evaluate migration to Rust or Go                     |
+| #    | Scope   | Priority | Description                                              |
+| ---- | ------- | -------- | -------------------------------------------------------- |
+| #185 | server  | medium   | Role validation on result submission endpoint            |
+| #184 | server  | medium   | Optimize checkTimeouts and app creation                  |
+| #177 | cli     | medium   | Pass model/tool info in claim requests                   |
+| #178 | cli     | medium   | Improve RouterRelay error handling                       |
+| #164 | server  | medium   | Log error codes with agent ID + reduce repeated failures |
+| #165 | cli+srv | medium   | Add review_only config to exclude agent from synthesis   |
+| #156 | CI/CD   | medium   | Auto-deploy dev worker on merge to main                  |
+| #179 | server  | low      | Improve review-parser and eligibility robustness         |
+| #180 | cli     | low      | Clean up dead code and improve observability             |
+| #130 | cli     | low      | Clickable PR links in agent logs                         |
+| #133 | design  | low      | Evaluate migration to Rust or Go                         |
+| #144 | design  | low      | Container-based agent execution                          |
+| #162 | design  | low      | Local Docker dev environment (blocked by #133)           |
 
 ## Merged PRs
 
@@ -139,3 +180,20 @@ Completed 50+ post-MVP items across these areas:
 | #141 | --     | direct     | 03-18 | Test publish pipeline       |
 | #142 | --     | direct     | 03-18 | npm publish with token      |
 | #143 | --     | direct     | 03-18 | Test OIDC publishing        |
+| #149 | #145   | architect  | 03-18 | Agent displayName types     |
+| #150 | #131   | worker-dev | 03-18 | Default model reputation    |
+| #151 | #147   | cli-dev    | 03-18 | Parse custom agent names    |
+| #152 | #146   | worker-dev | 03-18 | Persist agent names         |
+| #153 | --     | direct     | 03-18 | Fix tsc/tsup build conflict |
+| #158 | --     | direct     | 03-19 | Agent name display fixes    |
+| #161 | --     | direct     | 03-19 | Prefix CLI logs w/ name     |
+| #163 | #160   | worker-dev | 03-19 | Synthesizer retry on fail   |
+| #168 | #167   | cli-dev    | 03-19 | Stdin-based agent commands  |
+| #169 | #166   | cli-dev    | 03-19 | Router mode stdin/stdout    |
+| #171 | --     | direct     | 03-19 | Plain text router + guide   |
+| #172 | --     | direct     | 03-20 | Stateless REST polling      |
+| #186 | #175   | server-dev | 03-20 | Claim slot freeing          |
+| #187 | #176   | cli-dev    | 03-20 | CLI retry + error recovery  |
+| #188 | #173   | server-dev | 03-20 | KV hardening                |
+| #189 | #174   | server-dev | 03-20 | GitHub API retry            |
+| #190 | #182   | server-dev | 03-20 | Webhook idempotency         |

@@ -1,6 +1,6 @@
 # Development Workflow
 
-All dev agents (architect, worker-dev, cli-dev, web-dev) follow this standard lifecycle.
+All dev agents (architect, server-dev, cli-dev) follow this standard lifecycle.
 
 ## Lifecycle
 
@@ -35,7 +35,7 @@ git commit -m "<description>
 
 Closes #<NUMBER>"
 
-# Push and create PR — use your agent name as prefix: [architect], [worker-dev], [cli-dev], [web-dev]
+# Push and create PR — use your agent name as prefix: [architect], [server-dev], [cli-dev]
 # IMPORTANT: Always label PRs and issues with your agent name (e.g., agent:architect)
 git push -u origin issue-<NUMBER>-<short-description>
 gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --body "Closes #<NUMBER>
@@ -133,10 +133,11 @@ If any check fails, fix it before pushing. Never push broken code to main.
 ## Architecture Principles
 
 - **TypeScript strict mode** — all packages use `"strict": true`
-- **Shared types are the contract** — `packages/shared` defines protocol types used by all packages
+- **Shared types are the contract** — `packages/shared` defines REST API types used by all packages
 - **Zero runtime dependencies in shared** — `packages/shared` is pure TypeScript types and utilities
-- **Workers are stateless** — all state lives in Durable Objects, KV, or Supabase
-- **CLI is a thin client** — business logic lives in the Worker, CLI handles local execution and WebSocket
+- **REST-only, no WebSocket** — stateless HTTP polling, no Durable Objects, no persistent connections
+- **No database** — all state in Workers KV via TaskStore abstraction
+- **CLI is a polling client** — polls server for tasks, executes reviews locally, submits results via REST
 
 ## Common Guidelines
 
