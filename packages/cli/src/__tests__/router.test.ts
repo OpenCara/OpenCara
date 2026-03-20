@@ -81,16 +81,33 @@ describe('RouterRelay', () => {
       expect(relay.pendingCount).toBe(0);
     });
 
-    it('resolves on stdin EOF', async () => {
+    it('resolves on stdin EOF with substantial response (>=100 chars) and warns', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       relay.start();
 
       const responsePromise = relay.sendPrompt('review_request', 'task-1', 'Review this', 300);
 
-      stdin.write('Review text\n');
+      const longResponse = 'A'.repeat(120);
+      stdin.write(longResponse + '\n');
       stdin.end();
 
       const result = await responsePromise;
-      expect(result).toBe('Review text');
+      expect(result).toBe(longResponse);
+      expect(warnSpy).toHaveBeenCalledWith('Router stdin closed — accepting partial response');
+      warnSpy.mockRestore();
+    });
+
+    it('rejects on stdin EOF with insufficient response (<100 chars)', async () => {
+      relay.start();
+
+      const responsePromise = relay.sendPrompt('review_request', 'task-1', 'Review this', 300);
+
+      stdin.write('Short response\n');
+      stdin.end();
+
+      await expect(responsePromise).rejects.toThrow(
+        'Router process died (stdin closed with insufficient response)',
+      );
     });
 
     it('rejects with RouterTimeoutError on timeout', async () => {
@@ -117,8 +134,8 @@ describe('RouterRelay', () => {
         'Another prompt is already pending',
       );
 
-      // Clean up first prompt
-      stdin.write('done\n');
+      // Clean up first prompt (must be >=10 chars to pass validation)
+      stdin.write('Cleanup response text\n');
       stdin.write(END_OF_RESPONSE + '\n');
     });
   });
@@ -169,7 +186,90 @@ describe('RouterRelay', () => {
 
       stdin.end();
 
-      await expect(responsePromise).rejects.toThrow('stdin closed with no response');
+      await expect(responsePromise).rejects.toThrow(
+        'Router process died (stdin closed with insufficient response)',
+      );
+    });
+  });
+
+  describe('response validation', () => {
+    it('rejects empty response from router', async () => {
+      relay.start();
+
+      const responsePromise = relay.sendPrompt('review_request', 'task-1', 'prompt', 300);
+
+      // Send only the end marker with no content
+      stdin.write(END_OF_RESPONSE + '\n');
+
+      await expect(responsePromise).rejects.toThrow(
+        'Router returned empty or trivially short response',
+      );
+    });
+
+    it('rejects trivially short response from router', async () => {
+      relay.start();
+
+      const responsePromise = relay.sendPrompt('review_request', 'task-1', 'prompt', 300);
+
+      stdin.write('LGTM\n');
+      stdin.write(END_OF_RESPONSE + '\n');
+
+      await expect(responsePromise).rejects.toThrow(
+        'Router returned empty or trivially short response',
+      );
+    });
+
+    it('accepts response with 10+ characters', async () => {
+      relay.start();
+
+      const responsePromise = relay.sendPrompt('review_request', 'task-1', 'prompt', 300);
+
+      stdin.write('1234567890\n');
+      stdin.write(END_OF_RESPONSE + '\n');
+
+      const result = await responsePromise;
+      expect(result).toBe('1234567890');
+    });
+  });
+
+  describe('stdout write failure', () => {
+    it('throws immediately when stdout.write fails', () => {
+      const brokenStdout = {
+        write: () => {
+          throw new Error('EPIPE');
+        },
+      };
+      const brokenRelay = new RouterRelay({
+        stdin: new PassThrough(),
+        stdout: brokenStdout,
+        stderr: { write: () => {} },
+      });
+
+      expect(() => brokenRelay.writePrompt('test')).toThrow('Failed to write to router: EPIPE');
+    });
+
+    it('sendPrompt rejects when stdout.write fails', async () => {
+      const brokenStdin = new PassThrough();
+      const brokenStdout = {
+        write: () => {
+          throw new Error('EPIPE');
+        },
+      };
+      const brokenRelay = new RouterRelay({
+        stdin: brokenStdin,
+        stdout: brokenStdout,
+        stderr: { write: () => {} },
+      });
+      brokenRelay.start();
+
+      // sendPrompt calls writePrompt internally; the thrown error causes the promise
+      // executor to throw, which rejects the promise
+      await expect(brokenRelay.sendPrompt('review_request', 'task-1', 'test', 300)).rejects.toThrow(
+        'Failed to write to router: EPIPE',
+      );
+
+      brokenRelay.stop();
+      brokenStdin.destroy();
     });
   });
 

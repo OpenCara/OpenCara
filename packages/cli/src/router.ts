@@ -59,17 +59,20 @@ export class RouterRelay {
 
     this.rl.on('close', () => {
       if (this.stopped) return;
-      // EOF on stdin — resolve pending task with whatever we have
+      // EOF on stdin — router process likely died
       if (this.pending) {
-        const response = this.responseLines.join('\n');
+        const response = this.responseLines.join('\n').trim();
         this.responseLines = [];
         clearTimeout(this.pending.timer);
         const task = this.pending;
         this.pending = null;
-        if (response.trim()) {
+
+        // Only accept if we have substantial content (>=100 chars)
+        if (response.length >= 100) {
+          console.warn('Router stdin closed — accepting partial response');
           task.resolve(response);
         } else {
-          task.reject(new Error('stdin closed with no response'));
+          task.reject(new Error('Router process died (stdin closed with insufficient response)'));
         }
       }
     });
@@ -92,7 +95,11 @@ export class RouterRelay {
 
   /** Write the prompt as plain text to stdout */
   writePrompt(prompt: string): void {
-    this.stdout.write(prompt + '\n');
+    try {
+      this.stdout.write(prompt + '\n');
+    } catch (err) {
+      throw new Error(`Failed to write to router: ${(err as Error).message}`);
+    }
   }
 
   /** Write a status message to stderr (doesn't interfere with prompt/response on stdout/stdin) */
@@ -178,11 +185,17 @@ export class RouterRelay {
 
     // Check for end-of-response marker
     if (line.trim() === END_OF_RESPONSE) {
-      const response = this.responseLines.join('\n');
+      const response = this.responseLines.join('\n').trim();
       this.responseLines = [];
       clearTimeout(this.pending.timer);
       const task = this.pending;
       this.pending = null;
+
+      if (!response || response.length < 10) {
+        task.reject(new Error('Router returned empty or trivially short response'));
+        return;
+      }
+
       task.resolve(response);
       return;
     }
