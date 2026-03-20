@@ -182,10 +182,13 @@ async function postFinalReview(
       body = formatSummaryComment(summaryClaim.review_text, reviewerAgents, synthAgent);
     }
 
-    // Determine verdict and inline comments (normalize to lowercase — CLI may send uppercase)
+    // Determine verdict and inline comments
+    // Normalize to lowercase — agents may submit uppercase verdicts (e.g. "APPROVE")
     const rawVerdict =
       parsed.verdict ?? (summaryClaim.verdict as ReviewVerdict | undefined) ?? 'comment';
-    const verdict = rawVerdict.toLowerCase() as ReviewVerdict;
+    const verdict = (
+      typeof rawVerdict === 'string' ? rawVerdict.toLowerCase() : rawVerdict
+    ) as ReviewVerdict;
 
     // Try to fetch diff for comment validation (best effort)
     let validComments = parsed.comments;

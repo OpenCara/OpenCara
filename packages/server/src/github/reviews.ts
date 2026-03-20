@@ -50,8 +50,10 @@ export async function postPrReview(
   );
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`GitHub API error ${response.status}: ${body}`);
+    const errorBody = await response.text();
+    throw new Error(
+      `Failed to post PR review: ${response.status} ${response.statusText} — ${errorBody.slice(0, 200)}`,
+    );
   }
 
   const data = (await response.json()) as { html_url: string };
