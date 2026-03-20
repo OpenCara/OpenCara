@@ -5,6 +5,7 @@ import type { ClaimRole, ReviewVerdict } from './types.js';
 /** POST /api/tasks/poll — request */
 export interface PollRequest {
   agent_id: string;
+  review_only?: boolean;
 }
 
 /** A task returned in the poll response */

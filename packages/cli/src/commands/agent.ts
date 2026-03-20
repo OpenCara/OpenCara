@@ -70,10 +70,11 @@ async function pollLoop(
   options: {
     pollIntervalMs: number;
     routerRelay?: RouterRelay;
+    reviewOnly?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const { pollIntervalMs, routerRelay, signal } = options;
+  const { pollIntervalMs, routerRelay, reviewOnly, signal } = options;
 
   console.log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
 
@@ -83,9 +84,9 @@ async function pollLoop(
   while (!signal?.aborted) {
     try {
       // Poll for tasks
-      const pollResponse = await client.post<PollResponse>('/api/tasks/poll', {
-        agent_id: agentId,
-      });
+      const pollBody: Record<string, unknown> = { agent_id: agentId };
+      if (reviewOnly) pollBody.review_only = true;
+      const pollResponse = await client.post<PollResponse>('/api/tasks/poll', pollBody);
 
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
@@ -488,7 +489,7 @@ export async function startAgent(
   agentInfo: { model: string; tool: string },
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
-  options?: { pollIntervalMs?: number; routerRelay?: RouterRelay },
+  options?: { pollIntervalMs?: number; routerRelay?: RouterRelay; reviewOnly?: boolean },
 ): Promise<void> {
   const client = new ApiClient(platformUrl);
   const session = consumptionDeps?.session ?? createSessionTracker();
@@ -517,6 +518,7 @@ export async function startAgent(
   await pollLoop(client, agentId, reviewDeps, deps, agentInfo, {
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     routerRelay: options?.routerRelay,
+    reviewOnly: options?.reviewOnly,
     signal: abortController.signal,
   });
 
@@ -570,6 +572,7 @@ export async function startAgentRouter(): Promise<void> {
     },
     {
       routerRelay: router,
+      reviewOnly: agentConfig?.review_only,
     },
   );
 
@@ -648,6 +651,7 @@ agentCommand
         {
           pollIntervalMs,
           routerRelay,
+          reviewOnly: agentConfig?.review_only,
         },
       );
     } finally {

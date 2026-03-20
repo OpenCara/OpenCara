@@ -232,7 +232,7 @@ export function taskRoutes() {
   app.post('/api/tasks/poll', async (c) => {
     const store = c.get('store');
     const body = await c.req.json<PollRequest>();
-    const { agent_id } = body;
+    const { agent_id, review_only } = body;
 
     if (!agent_id) {
       return c.json({ error: 'agent_id is required' }, 400);
@@ -251,6 +251,7 @@ export function taskRoutes() {
     for (const task of tasks) {
       const role = availableRole(task, agent_id);
       if (!role) continue;
+      if (review_only && role === 'summary') continue;
 
       const remainingMs = task.timeout_at - Date.now();
       if (remainingMs <= 0) continue;

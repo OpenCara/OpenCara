@@ -100,6 +100,50 @@ describe('Task Routes', () => {
       const res = await request('POST', '/api/tasks/poll', {});
       expect(res.status).toBe(400);
     });
+
+    it('skips summary tasks when review_only is true', async () => {
+      // review_count=1 → only summary role available
+      await store.createTask(makeTask());
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        review_only: true,
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('returns review tasks when review_only is true', async () => {
+      // review_count=3 → review role available
+      await store.createTask(makeTask({ review_count: 3 }));
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        review_only: true,
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('review');
+    });
+
+    it('returns both review and summary when review_only is not set', async () => {
+      await store.createTask(makeTask({ id: 'task-review', review_count: 3 }));
+      await store.createTask(makeTask({ id: 'task-summary', review_count: 1 }));
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+      const roles = body.tasks.map((t: { role: string }) => t.role).sort();
+      expect(roles).toEqual(['review', 'summary']);
+    });
+
+    it('returns summary tasks when review_only is false', async () => {
+      await store.createTask(makeTask());
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        review_only: false,
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('summary');
+    });
   });
 
   // ── Claim ────────────────────────────────────────────────
