@@ -14,7 +14,8 @@ import {
   type ConsumptionLimits,
   type LocalAgentConfig,
 } from '../config.js';
-import { ApiClient } from '../http.js';
+import { ApiClient, HttpError } from '../http.js';
+import { withRetry } from '../retry.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
 import { validateCommandBinary, estimateTokens } from '../tool-executor.js';
@@ -33,21 +34,28 @@ export interface ConsumptionDeps {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
+const MAX_CONSECUTIVE_AUTH_ERRORS = 3;
+const MAX_POLL_BACKOFF_MS = 300_000; // 5 minutes
 
 /**
  * Fetch the PR diff directly from GitHub (public URL).
  * Agent fetches diff itself — server never sends it.
  */
-async function fetchDiff(diffUrl: string): Promise<string> {
+async function fetchDiff(diffUrl: string, signal?: AbortSignal): Promise<string> {
   // Append .diff if not already present for GitHub's raw diff format
   const patchUrl = diffUrl.endsWith('.diff') ? diffUrl : `${diffUrl}.diff`;
-  const response = await fetch(patchUrl);
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch diff: ${response.status} ${response.statusText}`);
-  }
-
-  return response.text();
+  return withRetry(
+    async () => {
+      const response = await fetch(patchUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch diff: ${response.status} ${response.statusText}`);
+      }
+      return response.text();
+    },
+    { maxAttempts: 2 },
+    signal,
+  );
 }
 
 /**
@@ -68,6 +76,9 @@ async function pollLoop(
 
   console.log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
 
+  let consecutiveAuthErrors = 0;
+  let consecutiveErrors = 0;
+
   while (!signal?.aborted) {
     try {
       // Poll for tasks
@@ -75,13 +86,46 @@ async function pollLoop(
         agent_id: agentId,
       });
 
+      consecutiveAuthErrors = 0;
+      consecutiveErrors = 0;
+
       if (pollResponse.tasks.length > 0) {
         const task = pollResponse.tasks[0]; // Take first available task
-        await handleTask(client, agentId, task, reviewDeps, consumptionDeps, routerRelay);
+        await handleTask(client, agentId, task, reviewDeps, consumptionDeps, routerRelay, signal);
       }
     } catch (err) {
       if (signal?.aborted) break;
-      console.error('Poll error:', (err as Error).message);
+
+      if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
+        consecutiveAuthErrors++;
+        consecutiveErrors++;
+        console.error(
+          `Auth error (${err.status}): ${err.message} [${consecutiveAuthErrors}/${MAX_CONSECUTIVE_AUTH_ERRORS}]`,
+        );
+        if (consecutiveAuthErrors >= MAX_CONSECUTIVE_AUTH_ERRORS) {
+          console.error('Authentication failed repeatedly. Exiting.');
+          break;
+        }
+      } else {
+        consecutiveAuthErrors = 0;
+        consecutiveErrors++;
+        console.error(`Poll error: ${(err as Error).message}`);
+      }
+
+      // Exponential backoff on consecutive failures
+      if (consecutiveErrors > 0) {
+        const backoff = Math.min(
+          pollIntervalMs * Math.pow(2, consecutiveErrors - 1),
+          MAX_POLL_BACKOFF_MS,
+        );
+        const extraDelay = backoff - pollIntervalMs;
+        if (extraDelay > 0) {
+          console.warn(
+            `Poll failed (${consecutiveErrors} consecutive). Next poll in ${Math.round(backoff / 1000)}s`,
+          );
+          await sleep(extraDelay, signal);
+        }
+      }
     }
 
     // Wait before next poll
@@ -99,20 +143,27 @@ async function handleTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   routerRelay?: RouterRelay,
+  signal?: AbortSignal,
 ): Promise<void> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
 
   console.log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
 
-  // Claim the task
+  // Claim the task (retry once — slot may be taken)
   let claimResponse: ClaimResponse;
   try {
-    claimResponse = await client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, {
-      agent_id: agentId,
-      role,
-    });
+    claimResponse = await withRetry(
+      () =>
+        client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, {
+          agent_id: agentId,
+          role,
+        }),
+      { maxAttempts: 2 },
+      signal,
+    );
   } catch (err) {
-    console.error(`  Failed to claim: ${(err as Error).message}`);
+    const status = err instanceof HttpError ? ` (${err.status})` : '';
+    console.error(`  Failed to claim task ${task_id}${status}: ${(err as Error).message}`);
     return;
   }
 
@@ -123,17 +174,14 @@ async function handleTask(
 
   console.log(`  Claimed as ${role}`);
 
-  // Fetch diff
+  // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
   try {
-    diffContent = await fetchDiff(diff_url);
+    diffContent = await fetchDiff(diff_url, signal);
     console.log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
-    console.error(`  Failed to fetch diff: ${(err as Error).message}`);
-    await client.post(`/api/tasks/${task_id}/reject`, {
-      agent_id: agentId,
-      reason: `Cannot access diff: ${(err as Error).message}`,
-    });
+    console.error(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
+    await safeReject(client, task_id, agentId, `Cannot access diff: ${(err as Error).message}`);
     return;
   }
 
@@ -154,6 +202,7 @@ async function handleTask(
         reviewDeps,
         consumptionDeps,
         routerRelay,
+        signal,
       );
     } else {
       await executeReviewTask(
@@ -169,28 +218,58 @@ async function handleTask(
         reviewDeps,
         consumptionDeps,
         routerRelay,
+        signal,
       );
     }
   } catch (err) {
-    if (err instanceof DiffTooLargeError) {
+    if (err instanceof DiffTooLargeError || err instanceof InputTooLargeError) {
       console.error(`  ${err.message}`);
-      await client.post(`/api/tasks/${task_id}/reject`, {
-        agent_id: agentId,
-        reason: err.message,
-      });
-    } else if (err instanceof InputTooLargeError) {
-      console.error(`  ${err.message}`);
-      await client.post(`/api/tasks/${task_id}/reject`, {
-        agent_id: agentId,
-        reason: err.message,
-      });
+      await safeReject(client, task_id, agentId, err.message);
     } else {
-      console.error(`  Error: ${(err as Error).message}`);
-      await client.post(`/api/tasks/${task_id}/error`, {
-        agent_id: agentId,
-        error: (err as Error).message,
-      });
+      console.error(`  Error on task ${task_id}: ${(err as Error).message}`);
+      await safeError(client, task_id, agentId, (err as Error).message);
     }
+  }
+}
+
+/**
+ * Report a task rejection to the server. Retry once, then log locally.
+ */
+async function safeReject(
+  client: ApiClient,
+  taskId: string,
+  agentId: string,
+  reason: string,
+): Promise<void> {
+  try {
+    await withRetry(
+      () => client.post(`/api/tasks/${taskId}/reject`, { agent_id: agentId, reason }),
+      { maxAttempts: 2 },
+    );
+  } catch (err) {
+    console.error(
+      `  Failed to report rejection for task ${taskId}: ${(err as Error).message} (logged locally)`,
+    );
+  }
+}
+
+/**
+ * Report a task error to the server. Retry once, then log locally.
+ */
+async function safeError(
+  client: ApiClient,
+  taskId: string,
+  agentId: string,
+  error: string,
+): Promise<void> {
+  try {
+    await withRetry(() => client.post(`/api/tasks/${taskId}/error`, { agent_id: agentId, error }), {
+      maxAttempts: 2,
+    });
+  } catch (err) {
+    console.error(
+      `  Failed to report error for task ${taskId}: ${(err as Error).message} (logged locally)`,
+    );
   }
 }
 
@@ -207,6 +286,7 @@ async function executeReviewTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   routerRelay?: RouterRelay,
+  signal?: AbortSignal,
 ): Promise<void> {
   let reviewText: string;
   let verdict: ReviewVerdict;
@@ -251,14 +331,19 @@ async function executeReviewTask(
     tokensUsed = result.tokensUsed;
   }
 
-  // Submit result
-  await client.post(`/api/tasks/${taskId}/result`, {
-    agent_id: agentId,
-    type: 'review' as ClaimRole,
-    review_text: reviewText,
-    verdict,
-    tokens_used: tokensUsed,
-  });
+  // Submit result — retry up to 3 times (highest-risk operation)
+  await withRetry(
+    () =>
+      client.post(`/api/tasks/${taskId}/result`, {
+        agent_id: agentId,
+        type: 'review' as ClaimRole,
+        review_text: reviewText,
+        verdict,
+        tokens_used: tokensUsed,
+      }),
+    { maxAttempts: 3 },
+    signal,
+  );
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
   console.log(`  Review submitted (${tokensUsed.toLocaleString()} tokens)`);
@@ -279,6 +364,7 @@ async function executeSummaryTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   routerRelay?: RouterRelay,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (reviews.length === 0) {
     // Single-agent mode: this IS the review, just run it as a regular review
@@ -295,6 +381,7 @@ async function executeSummaryTask(
       reviewDeps,
       consumptionDeps,
       routerRelay,
+      signal,
     );
   }
 
@@ -343,12 +430,18 @@ async function executeSummaryTask(
     tokensUsed = result.tokensUsed;
   }
 
-  await client.post(`/api/tasks/${taskId}/result`, {
-    agent_id: agentId,
-    type: 'summary' as ClaimRole,
-    review_text: summaryText,
-    tokens_used: tokensUsed,
-  });
+  // Submit result — retry up to 3 times (highest-risk operation)
+  await withRetry(
+    () =>
+      client.post(`/api/tasks/${taskId}/result`, {
+        agent_id: agentId,
+        type: 'summary' as ClaimRole,
+        review_text: summaryText,
+        tokens_used: tokensUsed,
+      }),
+    { maxAttempts: 3 },
+    signal,
+  );
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
   console.log(`  Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
