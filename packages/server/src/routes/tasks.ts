@@ -16,6 +16,7 @@ import type {
 import type { Env } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
 import { getInstallationToken } from '../github/app.js';
+import { githubFetch } from '../github/fetch.js';
 import { postPrReview, postPrComment, verdictToReviewEvent } from '../github/reviews.js';
 import { parseStructuredReview, parseDiffFiles, filterValidComments } from '../review-parser.js';
 import {
@@ -97,11 +98,13 @@ async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
         `**OpenCara**: Review timed out after ${Math.round((task.timeout_at - task.created_at) / 60000)} minutes.${completedReviews.length > 0 ? ` ${completedReviews.length} partial review(s) posted above.` : ''}`,
         token,
       );
-    } catch (err) {
-      console.error(`Failed to post timeout comment for task ${task.id}:`, err);
-    }
 
-    await store.updateTask(task.id, { status: 'timeout' });
+      // Only mark timeout AFTER posting succeeds — if posting fails,
+      // leave task in current state so next checkTimeouts() retries.
+      await store.updateTask(task.id, { status: 'timeout' });
+    } catch (err) {
+      console.error(`Failed to post timeout for task ${task.id}, will retry on next check:`, err);
+    }
   }
 }
 
@@ -160,24 +163,27 @@ async function postFinalReview(
     let validComments = parsed.comments;
     try {
       // Fetch diff from GitHub for comment path validation
-      const diffResponse = await fetch(
+      const diffResponse = await githubFetch(
         `https://api.github.com/repos/${task.owner}/${task.repo}/pulls/${task.pr_number}`,
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/vnd.github.diff',
-            'User-Agent': 'OpenCara-Server',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
+          token,
+          accept: 'application/vnd.github.diff',
         },
       );
       if (diffResponse.ok) {
         const diffContent = await diffResponse.text();
         const diffFiles = parseDiffFiles(diffContent);
         validComments = filterValidComments(parsed.comments, diffFiles);
+      } else {
+        console.warn(
+          `Failed to fetch diff for task ${taskId} (${diffResponse.status}) — skipping comment path validation`,
+        );
       }
-    } catch {
-      // Skip comment filtering if diff fetch fails
+    } catch (err) {
+      console.warn(
+        `Failed to fetch diff for task ${taskId} — skipping comment path validation:`,
+        err,
+      );
     }
 
     await postPrReview(

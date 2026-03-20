@@ -1,4 +1,5 @@
 import type { Env } from '../types.js';
+import { githubFetch } from './fetch.js';
 
 /**
  * Generate a JWT for GitHub App authentication.
@@ -58,16 +59,11 @@ function base64url(data: Uint8Array): string {
  */
 export async function getInstallationToken(installationId: number, env: Env): Promise<string> {
   const jwt = await generateAppJwt(env);
-  const response = await fetch(
+  const response = await githubFetch(
     `https://api.github.com/app/installations/${installationId}/access_tokens`,
     {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'OpenCara-Server',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
+      token: jwt,
     },
   );
 

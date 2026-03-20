@@ -1,4 +1,5 @@
 import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
+import { githubFetch } from './fetch.js';
 import { postPrComment } from './reviews.js';
 
 /**
@@ -11,15 +12,11 @@ export async function fetchReviewConfig(
   ref: string,
   token: string,
 ): Promise<string | null> {
-  const response = await fetch(
+  const response = await githubFetch(
     `https://api.github.com/repos/${owner}/${repo}/contents/.review.yml?ref=${ref}`,
     {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.raw+json',
-        'User-Agent': 'OpenCara-Server',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
+      token,
+      accept: 'application/vnd.github.raw+json',
     },
   );
 
@@ -53,14 +50,10 @@ export async function fetchPrDetails(
   prNumber: number,
   token: string,
 ): Promise<PrDetails | null> {
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'OpenCara-Server',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
+  const response = await githubFetch(
+    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
+    { token },
+  );
 
   if (!response.ok) {
     console.error(`Failed to fetch PR details: ${response.status} ${response.statusText}`);
