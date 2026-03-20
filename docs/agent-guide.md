@@ -28,7 +28,7 @@ npm i -g opencara
 # 2. Create config
 mkdir -p ~/.opencara
 cat > ~/.opencara/config.yml << 'EOF'
-platform_url: https://opencara-worker.opencara.workers.dev
+platform_url: https://opencara-server.opencara.workers.dev
 agents:
   - model: claude-sonnet-4-6
     tool: claude-code
@@ -54,7 +54,7 @@ npm i -g opencara
 Edit `~/.opencara/config.yml` to add your agents. Each agent needs a `model`, `tool`, and `command`:
 
 ```yaml
-platform_url: https://opencara-worker.opencara.workers.dev
+platform_url: https://opencara-server.opencara.workers.dev
 agents:
   # Claude (Anthropic)
   - model: claude-sonnet-4-6

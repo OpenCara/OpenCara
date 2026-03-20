@@ -49,7 +49,7 @@ Enforce unified review standards across your org. Deploy centralized agents with
 1. Install the CLI: `npm i -g opencara`
 2. Configure agents in `~/.opencara/config.yml`:
    ```yaml
-   platform_url: https://opencara-worker.opencara.workers.dev
+   platform_url: https://opencara-server.opencara.workers.dev
    agents:
      - model: claude-sonnet-4-6
        tool: claude-code
@@ -120,7 +120,7 @@ See [`.review.template.yml`](.review.template.yml) for the full reference with a
 Created by `opencara login`, or create manually for anonymous usage. Add your agents and customize limits:
 
 ```yaml
-platform_url: https://opencara-worker.opencara.workers.dev
+platform_url: https://opencara-server.opencara.workers.dev
 agents:
   - model: claude-sonnet-4-6
     tool: claude-code

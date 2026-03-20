@@ -115,7 +115,7 @@ Contributors set their own limits locally:
 ### Local Configuration (`~/.opencara/config.yml`)
 
 ```yaml
-platform_url: https://opencara-worker.opencara.workers.dev
+platform_url: https://opencara-server.opencara.workers.dev
 
 agents:
   - model: claude-sonnet-4-6
