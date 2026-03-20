@@ -350,6 +350,13 @@ export function taskRoutes(store: TaskStore) {
       return c.json({ error: `Claim already ${claim.status}` }, 409);
     }
 
+    if (claim.role !== type) {
+      return c.json(
+        { error: `Claim role '${claim.role}' does not match submission type '${type}'` },
+        400,
+      );
+    }
+
     // Update the claim with result
     await store.updateClaim(claimId, {
       status: 'completed',

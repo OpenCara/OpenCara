@@ -232,6 +232,48 @@ describe('Task Routes', () => {
       expect(res.status).toBe(404);
     });
 
+    it('rejects result when submission type does not match claim role (review claim, summary submission)', async () => {
+      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-1',
+        type: 'summary',
+        review_text: 'Synthesized review',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toContain("Claim role 'review' does not match submission type 'summary'");
+    });
+
+    it('rejects result when submission type does not match claim role (summary claim, review submission)', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-1',
+        type: 'review',
+        review_text: 'Individual review',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toContain("Claim role 'summary' does not match submission type 'review'");
+    });
+
     it('rejects result for already completed claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim({
