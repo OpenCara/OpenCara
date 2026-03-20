@@ -116,13 +116,21 @@ async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
  * Post the final review to GitHub when a task is complete.
  * For summary role: post the synthesized/single review with inline comments.
  */
-async function postFinalReview(store: TaskStore, env: Env, taskId: string): Promise<void> {
+async function postFinalReview(
+  store: TaskStore,
+  env: Env,
+  taskId: string,
+  summaryAgentId: string,
+): Promise<void> {
   const task = await store.getTask(taskId);
   if (!task) return;
 
-  const claims = await store.getClaims(taskId);
-  const summaryClaim = claims.find((c) => c.role === 'summary' && c.status === 'completed');
+  // Use direct getClaim (KV get) instead of getClaims (KV list) to avoid
+  // eventual consistency issues — the claim was just updated moments ago.
+  const summaryClaim = await store.getClaim(`${taskId}:${summaryAgentId}`);
   if (!summaryClaim?.review_text) return;
+
+  const claims = await store.getClaims(taskId);
 
   try {
     const token = await getInstallationToken(task.github_installation_id, env);
@@ -348,7 +356,7 @@ export function taskRoutes(store: TaskStore) {
 
     if (type === 'summary') {
       // Summary submitted — post the final review to GitHub
-      await postFinalReview(store, c.env, taskId);
+      await postFinalReview(store, c.env, taskId, agent_id);
     } else {
       // Review submitted — check if summary slot just became available
       const updatedClaims = await store.getClaims(taskId);
