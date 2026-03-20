@@ -14,3 +14,4 @@ audit.json
 .vercel/
 .claude/github-events.jsonl
 scripts/github-webhook.env
+supabase/.temp/

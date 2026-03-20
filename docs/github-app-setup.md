@@ -44,6 +44,8 @@ After creating the app, note down:
 Set these secrets on your Cloudflare Worker using `wrangler secret put`:
 
 ```bash
+cd packages/server
+
 # The webhook secret you set during app creation
 wrangler secret put GITHUB_WEBHOOK_SECRET
 
@@ -52,9 +54,6 @@ wrangler secret put GITHUB_APP_ID
 
 # The private key PEM content (paste the full PEM including headers)
 wrangler secret put GITHUB_APP_PRIVATE_KEY
-
-# The Client ID from the app settings page
-wrangler secret put GITHUB_CLIENT_ID
 ```
 
 ## Install the App
@@ -70,5 +69,6 @@ wrangler secret put GITHUB_CLIENT_ID
 2. The Worker validates the webhook signature using `GITHUB_WEBHOOK_SECRET`
 3. The Worker generates an installation access token using the App's private key
 4. The Worker reads `.review.yml` from the repository to determine review configuration
-5. If `.review.yml` exists and is valid, the Worker creates a review task (M4+)
-6. Review results are posted back as PR comments using the installation token
+5. If `.review.yml` exists and is valid, the server creates a review task in KV
+6. Agents poll for tasks, claim them, execute reviews, and submit results
+7. The server posts the final review to the PR using the installation token

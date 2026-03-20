@@ -1,5 +1,9 @@
 # Product Design
 
+## Core Concept
+
+OpenCara is a distributed AI code review service. Maintainers install a GitHub App on their repos, contributors run review agents locally using their own AI tools and API keys. The platform coordinates multi-agent reviews and posts consolidated results to GitHub PRs.
+
 ## Trust Model
 
 ### Decision Authority
@@ -7,195 +11,132 @@
 - AI agents are **advisors**, not decision-makers
 - Default behavior: agents provide review opinions + pass/fail rating
 - Maintainers make the final call based on AI recommendations
-- Maintainers can progressively grant more authority via configuration (e.g., auto-approve lint-only PRs)
 
-### Reputation System
+### Self-Hosted Runner Model
 
-Two-tier reputation scoring:
+- Platform never touches contributor API keys
+- Contributors run agents locally or on their own servers
+- Agents poll the platform for tasks, fetch diffs from GitHub, execute reviews locally, and submit results
+- Platform only coordinates tasks and posts results to GitHub
 
-- **Agent-level**: Each model + tool combination has its own independent score. Different agents under the same user do not affect each other
-- **User-level**: Contributor's aggregate score reflecting overall performance across all their agents
+## Review Flow
 
-Scoring mechanics:
+```
+1. GitHub Webhook → New PR
+    ↓
+2. Server creates task in KV, waits for agents to poll
+    ↓
+3. Agent polls, claims task, fetches diff from GitHub
+    ↓
+4. Agent executes review locally using configured AI tool
+    ↓
+5. Agent submits result to server
+    ↓
+6. For multi-agent: another agent claims summary slot, synthesizes reviews
+    ↓
+7. Server posts final review to GitHub PR
+```
 
-- Maintainers rate reviews via emoji reactions (👍 +1, 👎 -1)
-- Low-scoring agents are progressively down-weighted
-- Trust is built gradually, mirroring how real-world trust in new contributors develops
+### Single vs Multi-Agent
 
-#### Agent-Level Reputation
+- **Single agent** (`review_count: 1`): one agent reviews and posts directly
+- **Multi-agent** (`review_count: 2+`): N-1 agents review, then one agent synthesizes all reviews into a consolidated result
 
-- Initial score: 0
-- Ranked using Wilson confidence interval — agents with few ratings naturally rank lower, preventing new agents from being selected for summarization
-- No time decay in MVP (too little data for decay to be meaningful)
-
-#### User-Level Reputation
-
-- Weighted average of all agent reputations
-- Weight = number of reviews by that agent
-- Active, high-quality agents contribute more to user reputation
-
-### Anti-Abuse
-
-- Reputation system naturally filters low-quality reviews
-- Report mechanism as a supplement
-- Malicious reviews affect both agent and user reputation when reported
-
-## Incentives
-
-Keep it simple early on:
-
-- **Leaderboard + Badges**: Drive early community contributors
-- **Reciprocity**: Contributing reviews to others' projects earns higher review priority for your own projects
-- **Future monetization**: If enterprise customers pay (B2B), revenue can be shared with contributors
-
-Same motivations as open source contributions: reputation + reciprocity. Monetization is a later concern.
-
-## Standardization
-
-### Project-Level Configuration
-
-- Each project defines review standards via `.review.yml`
-- Maintainers specify review dimensions they care about (code style, test coverage, architecture, etc.)
-- Review prompt is solely defined by the project — contributors do not customize prompts
-
-### Code Context
-
-- Agents are not limited to reviewing diffs
-- When necessary, agents can clone the repository (fully or partially) for context
-- Note: cloning increases token consumption, factored into scheduling decisions
+## Project Configuration
 
 ### `.review.yml` Format
+
+Each repository configures review standards via `.review.yml` in the repo root:
 
 ```yaml
 version: 1
 
-# Review standards
+# Review prompt — what agents should focus on
 prompt: |
   Focus on code quality, security, and test coverage.
   This project uses TypeScript + React, following ESLint standards.
 
 # Agent requirements
 agents:
-  min_count: 2 # Minimum number of agents to review
-  preferred_tools: # Preferred agent tool types
-    - claude-code
-    - codex
-  min_reputation: 0.6 # Minimum reputation threshold
-
-# Reviewer allow/deny list
-reviewer:
-  whitelist:
-    - user: alice
-    - agent: abc-123
-  blacklist:
-    - user: bob
-    - agent: def-456
-
-# Summarizer allow/deny list
-summarizer:
-  whitelist:
-    - user: alice
-    - agent: abc-123
-  blacklist:
-    - user: charlie
-    - agent: def-456
+  review_count: 2 # Total agents (reviewers + synthesizer)
 
 # Timeout
-timeout: 10m
+timeout: 10m # Range: 1m-30m
 
-# Permissions
-auto_approve:
-  enabled: false
-  conditions:
-    - type: lint_only
+# Trigger control
+trigger:
+  on: [opened, synchronize] # PR events that trigger review
+  comment: '/opencara review' # Manual trigger command
+  skip_drafts: true # Skip draft PRs
+  skip_labels: [skip-review] # Skip PRs with these labels
+  skip_branches: [] # Skip PRs targeting these branches
 ```
 
-When both whitelist and blacklist exist, whitelist takes priority (if a whitelist is present, blacklist is ignored).
+### Configuration Defaults
+
+| Field                 | Default                    |
+| --------------------- | -------------------------- |
+| `prompt`              | Generic code review prompt |
+| `agents.review_count` | 2                          |
+| `timeout`             | 10m                        |
+| `trigger.on`          | [opened, synchronize]      |
+| `trigger.comment`     | /opencara review           |
+| `trigger.skip_drafts` | true                       |
+| `trigger.skip_labels` | [skip-review]              |
 
 ## Contributor Experience
 
-### Architecture Model
+### Setup
 
-Uses a **self-hosted runner** model:
+1. `npm i -g opencara` — install the CLI
+2. Edit `~/.opencara/config.yml` — configure agents (model, tool, command)
+3. `opencara agent start --all` — start polling for review tasks
 
-- Platform never touches contributor API keys
-- Contributors run agents locally or on their own servers
-- Agents pull review tasks from the platform, execute reviews using the contributor's own tools and keys, and push results back
-- Platform only handles task distribution and result aggregation
+### How It Works
 
-### Registration & Startup
-
-1. `opencara login` — Initiates GitHub OAuth device flow: CLI displays a URL + code, user authorizes in browser, platform confirms identity and issues an API key to the CLI
-2. `opencara agent create` — Register a new agent (select model + tool)
-3. `opencara agent start` — Connect to platform, start receiving tasks
-4. All AI calls happen in the contributor's local environment
+- Agent polls the platform every 10 seconds for available tasks
+- When a task is available, agent claims it, fetches the PR diff, and runs the review
+- All AI calls happen in the contributor's local environment using their own tools and API keys
+- Platform posts the review result to the GitHub PR
 
 ### Data Visibility
 
-- **CLI**: `opencara stats` — View review history, ratings, token consumption
-- **Web**: Public leaderboard, personal dashboard
+After each review, the CLI shows tokens used and review verdict locally.
 
 ### Consumption Control
 
-Contributors set their own multi-dimensional limits locally:
+Contributors set their own limits locally:
 
 - Token budget + reset period (e.g., 100k tokens/month)
 - Per-project limits
 - Review count caps
-
-Key principle: **Make consumption transparent**. After each review, notify the contributor of tokens used, cumulative usage, and remaining budget.
+- Max diff size to skip oversized PRs
 
 ### Local Configuration (`~/.opencara/config.yml`)
 
 ```yaml
-# Platform authentication
-api_key: cr_xxxxxxxxxxxx
+platform_url: https://opencara-worker.opencara.workers.dev
 
-# Agent scope — controls which repos each agent will review
 agents:
-  - id: abc-123
-    scope: all # Review any PR (default)
-  - id: def-456
-    scope: own # Only review PRs on contributor's own repos
-  - id: ghi-789
-    scope: # Only review PRs on selected repos
-      - org/repo-a
-      - org/repo-b
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    name: My Claude Agent
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+    repos:
+      mode: all # all | own | whitelist | blacklist
 
-# Consumption limits
 limits:
-  tokens_per_month: 100000
+  tokens_per_day: 100000
   reviews_per_day: 20
-  projects:
-    - repo: org/repo-a
-      max_reviews: 10
+
+max_diff_size_kb: 200
 ```
 
-### How It Works
+## Future Considerations
 
-- Authentication: GitHub OAuth device flow — CLI initiates, user authorizes in browser, platform verifies and issues API key
-- Agent invocation: Directly calls locally configured CLI tools (e.g., `claude`, `codex`) — no AI API key management
-- Platform connection: Maintains WebSocket long connection for task push notifications
+These features were part of the original MVP but are not yet implemented in the current REST-only architecture. They may be re-added incrementally:
 
-## Multi-Agent Review Flow
-
-```
-1. GitHub Webhook → New PR
-    ↓
-2. Worker matches available agents, pushes review tasks
-    ↓
-3. Each agent executes review locally, pushes results back to platform
-    ↓
-4. Platform waits (10 min timeout, or until maintainer-configured minimum agent count is met)
-    ↓
-5. Platform selects a high-reputation agent, sends all individual reviews for summarization
-    ↓
-6. Summary agent returns consolidated review
-    ↓
-7. Posted to GitHub PR:
-   - Review thread body = summary
-   - Thread comments = individual agent reviews
-```
-
-- Summary task is also pushed to a contributor's agent (platform bears no token cost)
-- All AI calls happen in contributors' local environments
+- **Reputation system**: Emoji ratings on reviews, Wilson confidence interval scoring
+- **User accounts**: GitHub OAuth login, agent registration
+- **Web dashboard**: Leaderboard, personal stats
+- **Consumption tracking**: Server-side token usage tracking

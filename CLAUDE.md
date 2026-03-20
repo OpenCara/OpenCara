@@ -4,25 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenCara is a distributed AI code review service. Contributors run review agents locally (using their own API keys), the platform coordinates multi-agent reviews on GitHub PRs, and a reputation system ranks agents via emoji ratings.
+OpenCara is a distributed AI code review service. Contributors run review agents locally (using their own API keys), the platform coordinates multi-agent reviews on GitHub PRs via stateless REST polling. No accounts, no database — just webhook + KV + agents.
 
 ## Tech Stack
 
-- **Backend**: Cloudflare Workers + Durable Objects (TypeScript)
-- **Database**: PostgreSQL via Supabase + Supabase Auth (GitHub OAuth)
-- **Cache/Storage**: Cloudflare Workers KV + R2
-- **Frontend**: Next.js on Vercel
-- **CLI**: npm package (TypeScript)
+- **Backend**: Hono server on Cloudflare Workers (TypeScript)
+- **Storage**: Cloudflare Workers KV (TaskStore abstraction)
+- **CLI**: npm package (TypeScript) — HTTP polling agent runtime
+- **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces
 
-## Planned Monorepo Structure
+## Monorepo Structure
 
 ```
 packages/
-  worker/    — Cloudflare Workers backend (webhook, REST API, Durable Objects)
-  cli/       — Agent CLI (login, agent management, WebSocket client)
-  web/       — Next.js dashboard (leaderboard, stats)
-  shared/    — Shared types and WebSocket protocol definitions
+  server/    — Hono server (webhook receiver, REST task API, GitHub integration)
+  cli/       — Agent CLI (HTTP polling, local review execution, router mode)
+  shared/    — Shared types (REST API contracts, review config parser)
 ```
 
 ## Architecture
@@ -30,32 +28,51 @@ packages/
 ### Core Data Flow
 
 ```
-GitHub PR Webhook → Cloudflare Worker → Supabase (match agents)
-  → Durable Objects (filter online) → FIFO distribute to agents
-  → Agents review locally → Results back to platform → GitHub PR comment
+GitHub PR Webhook → Server creates task in KV
+  → Agent polls /api/tasks/poll → Claims task → Fetches diff from GitHub
+  → Reviews locally using contributor's AI tool → Submits result
+  → Server posts review to GitHub PR
 ```
 
-### Key Protocols
+### REST API (no WebSocket)
 
-- **WebSocket** between platform and agent CLI: `review_request`, `summary_request`, `heartbeat_ping` (platform→agent); `review_complete`, `summary_complete`, `review_rejected`, `review_error`, `heartbeat_pong` (agent→platform)
-- **REST API**: `/webhook/github`, `/api/agents`, `/api/tasks`, `/api/stats/:agentId`, `/api/leaderboard`
+| Method | Path                    | Description                     |
+| ------ | ----------------------- | ------------------------------- |
+| POST   | `/webhook/github`       | Receive GitHub webhook          |
+| POST   | `/api/tasks/poll`       | Agent polls for available tasks |
+| POST   | `/api/tasks/:id/claim`  | Agent claims a task             |
+| POST   | `/api/tasks/:id/result` | Agent submits review result     |
+| POST   | `/api/tasks/:id/reject` | Agent rejects a task            |
+| POST   | `/api/tasks/:id/error`  | Agent reports an error          |
+| GET    | `/api/registry`         | Tool/model registry             |
 
-### Database Schema (9 tables)
+### TaskStore Abstraction
 
-`users`, `agents`, `projects`, `review_tasks`, `review_results`, `review_summaries`, `ratings`, `reputation_history`, `consumption_logs` — full schema in `docs/architecture.md`.
+- **KVTaskStore** — Cloudflare Workers KV (production)
+- **MemoryTaskStore** — In-memory (dev/test)
+- Interface: `packages/server/src/store/interface.ts`
 
-### Trust & Reputation
+### Key Types (packages/shared)
 
-- Two-tier: agent-level (per model+tool config) and user-level (aggregate)
-- Wilson confidence interval for reputation scoring
-- Emoji reactions on reviews drive ratings (👍 +1, 👎 -1)
-- Self-hosted runner model: platform never touches contributor API keys
+- `ReviewTask`, `TaskClaim` — core data types
+- `PollRequest/Response`, `ClaimRequest/Response`, `ResultRequest/Response` — REST API contracts
+- `ReviewConfig`, `TriggerConfig` — `.review.yml` parsing
+- `DEFAULT_REGISTRY` — tool/model registry with default reputations
+
+### Self-Hosted Runner Model
+
+- Platform never touches contributor API keys
+- Agents run locally, fetch diffs directly from GitHub
+- Agents execute reviews using their own AI tools (claude, codex, gemini, qwen)
+- Platform only coordinates tasks and posts results to GitHub
 
 ## Design Documents
 
-- `docs/product.md` — Product design, UX flows, `.review.yml` config spec
-- `docs/architecture.md` — Full technical architecture, DB schema, API contracts
-- `docs/mvp.md` — MVP milestone plan (M0–M9) with acceptance criteria
+- `docs/architecture.md` — Technical architecture, REST API, TaskStore
+- `docs/product.md` — Product design, `.review.yml` config spec
+- `docs/deployment.md` — Deployment guide (CF Workers + KV)
+- `docs/agent-guide.md` — Agent setup and configuration guide
+- `docs/github-app-setup.md` — GitHub App creation and permissions
 
 ## Build & Test Commands
 
@@ -72,9 +89,8 @@ pnpm run format:check    # Check formatting
 Package-specific:
 
 ```bash
-cd packages/worker && pnpm dev             # Local Worker dev server
-cd packages/web && pnpm dev                # Local Next.js dev server
-cd packages/cli && pnpm dev                # CLI development mode
+cd packages/server && pnpm dev            # Local Worker dev server
+cd packages/cli && pnpm dev               # CLI development mode
 ```
 
 ## Code Style
@@ -90,10 +106,9 @@ Event-driven, PM-centric multi-agent workflow. All agents defined in `.claude/ag
 | Agent          | Role                                               | Lifecycle            |
 | -------------- | -------------------------------------------------- | -------------------- |
 | **pm**         | Coordinator — triages, designs, dispatches, tracks | Long-running         |
-| **architect**  | Shared types, protocol, infrastructure             | Ephemeral (worktree) |
-| **worker-dev** | Cloudflare Workers backend                         | Ephemeral (worktree) |
+| **architect**  | Shared types, infrastructure, cross-package        | Ephemeral (worktree) |
+| **server-dev** | Hono server backend                                | Ephemeral (worktree) |
 | **cli-dev**    | CLI npm package                                    | Ephemeral (worktree) |
-| **web-dev**    | Next.js dashboard                                  | Ephemeral (worktree) |
 | **qa**         | Post-merge verification                            | Ephemeral (worktree) |
 | **clarifier**  | Multi-AI issue analysis                            | Ephemeral            |
 
@@ -123,18 +138,3 @@ All agents inherit their model and context window from the team lead.
 
 - `.claude/rules/agent-workflow.md` — agent roster, flow, design decisions
 - `.claude/rules/development-workflow.md` — dev agent lifecycle, self-review, merge process
-
-## Development Status
-
-Project is in design phase. MVP milestones in order:
-
-1. **M0**: Monorepo scaffolding
-2. **M1**: GitHub App + webhook endpoint
-3. **M2**: Database schema + auth
-4. **M3**: Agent CLI (login, create, start, WebSocket)
-5. **M4**: Durable Objects for task distribution
-6. **M5**: Single-agent review loop (key milestone)
-7. **M6**: Multi-agent + summarization
-8. **M7**: Reputation system + ratings
-9. **M8**: Web dashboard
-10. **M9**: Consumption tracking
