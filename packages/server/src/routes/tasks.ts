@@ -290,7 +290,10 @@ export function taskRoutes(store: TaskStore) {
     });
 
     // Update task counters atomically (avoids KV list consistency issues)
-    const claimedAgents = [...(task.claimed_agents ?? []), agent_id];
+    const claimedAgents = task.claimed_agents ?? [];
+    if (!claimedAgents.includes(agent_id)) {
+      claimedAgents.push(agent_id);
+    }
     const taskUpdates: Partial<ReviewTask> = {
       claimed_agents: claimedAgents,
       status: task.status === 'pending' ? 'reviewing' : task.status,
@@ -382,9 +385,37 @@ export function taskRoutes(store: TaskStore) {
     const { agent_id, reason } = body;
 
     const claimId = `${taskId}:${agent_id}`;
-    await store.updateClaim(claimId, { status: 'rejected' });
-    console.log(`Task ${taskId}: agent ${agent_id} rejected — ${reason}`);
+    const claim = await store.getClaim(claimId);
 
+    if (!claim) {
+      return c.json({ error: 'Claim not found' }, 404);
+    }
+
+    if (claim.status !== 'pending') {
+      // Idempotent: already rejected → return 200
+      if (claim.status === 'rejected') {
+        return c.json({ success: true });
+      }
+      return c.json({ error: `Claim is ${claim.status}, expected pending` }, 409);
+    }
+
+    await store.updateClaim(claimId, { status: 'rejected' });
+
+    // Free the slot so another agent can claim it
+    const task = await store.getTask(taskId);
+    if (task) {
+      const updates: Partial<ReviewTask> = {
+        claimed_agents: (task.claimed_agents ?? []).filter((id) => id !== agent_id),
+      };
+      if (claim.role === 'review') {
+        updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
+      } else if (claim.role === 'summary') {
+        updates.summary_claimed = false;
+      }
+      await store.updateTask(taskId, updates);
+    }
+
+    console.log(`Task ${taskId}: agent ${agent_id} rejected — ${reason}`);
     return c.json({ success: true });
   });
 
@@ -396,9 +427,37 @@ export function taskRoutes(store: TaskStore) {
     const { agent_id, error } = body;
 
     const claimId = `${taskId}:${agent_id}`;
-    await store.updateClaim(claimId, { status: 'error' });
-    console.error(`Task ${taskId}: agent ${agent_id} error — ${error}`);
+    const claim = await store.getClaim(claimId);
 
+    if (!claim) {
+      return c.json({ error: 'Claim not found' }, 404);
+    }
+
+    if (claim.status !== 'pending') {
+      // Idempotent: already errored → return 200
+      if (claim.status === 'error') {
+        return c.json({ success: true });
+      }
+      return c.json({ error: `Claim is ${claim.status}, expected pending` }, 409);
+    }
+
+    await store.updateClaim(claimId, { status: 'error' });
+
+    // Free the slot so another agent can claim it
+    const task = await store.getTask(taskId);
+    if (task) {
+      const updates: Partial<ReviewTask> = {
+        claimed_agents: (task.claimed_agents ?? []).filter((id) => id !== agent_id),
+      };
+      if (claim.role === 'review') {
+        updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
+      } else if (claim.role === 'summary') {
+        updates.summary_claimed = false;
+      }
+      await store.updateTask(taskId, updates);
+    }
+
+    console.error(`Task ${taskId}: agent ${agent_id} error — ${error}`);
     return c.json({ success: true });
   });
 
