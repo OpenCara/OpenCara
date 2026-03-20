@@ -165,7 +165,14 @@ export class RouterRelay {
       this.pending = { resolve, reject, timer };
 
       // Write prompt as plain text to stdout
-      this.writePrompt(prompt);
+      try {
+        this.writePrompt(prompt);
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending = null;
+        this.responseLines = [];
+        reject(err as Error);
+      }
     });
   }
 
