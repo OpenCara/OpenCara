@@ -51,12 +51,21 @@ importers:
         specifier: ^2.7.0
         version: 2.8.2
     devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20250214.0
+        version: 4.20260317.1
+      '@opencara/server':
+        specifier: workspace:*
+        version: link:../server
       '@opencara/shared':
         specifier: workspace:*
         version: link:../shared
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
+      hono:
+        specifier: ^4.7.0
+        version: 4.12.8
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)

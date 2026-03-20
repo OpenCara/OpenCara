@@ -24,6 +24,9 @@
   },
   "devDependencies": {
     "@opencara/shared": "workspace:*",
+    "@opencara/server": "workspace:*",
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "hono": "^4.7.0",
     "@types/node": "^22.0.0",
     "tsup": "^8.5.1",
     "tsx": "^4.0.0"
