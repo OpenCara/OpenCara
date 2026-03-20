@@ -17,6 +17,7 @@ export interface LocalAgentConfig {
   command?: string;
   router?: boolean;
   review_only?: boolean;
+  github_token?: string;
   limits?: ConsumptionLimits;
   repos?: RepoConfig;
 }
@@ -25,6 +26,7 @@ export interface CliConfig {
   apiKey: string | null;
   platformUrl: string;
   maxDiffSizeKb: number;
+  githubToken: string | null;
   limits: ConsumptionLimits | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
@@ -129,6 +131,7 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;
     if (obj.review_only === true) agent.review_only = true;
+    if (typeof obj.github_token === 'string') agent.github_token = obj.github_token;
     const agentLimits = parseLimits(obj);
     if (agentLimits) agent.limits = agentLimits;
     const repoConfig = parseRepoConfig(obj, i);
@@ -143,6 +146,7 @@ export function loadConfig(): CliConfig {
     apiKey: null,
     platformUrl: DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+    githubToken: null,
     limits: null,
     agentCommand: null,
     agents: null,
@@ -164,6 +168,7 @@ export function loadConfig(): CliConfig {
     platformUrl: typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL,
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
+    githubToken: typeof data.github_token === 'string' ? data.github_token : null,
     limits: parseLimits(data),
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
@@ -178,6 +183,9 @@ export function saveConfig(config: CliConfig): void {
   if (config.apiKey) {
     data.api_key = config.apiKey;
   }
+  if (config.githubToken) {
+    data.github_token = config.githubToken;
+  }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
   }
@@ -191,6 +199,16 @@ export function saveConfig(config: CliConfig): void {
     data.agents = config.agents;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
+}
+
+/**
+ * Resolve GitHub token: per-agent overrides global.
+ */
+export function resolveGithubToken(
+  agentToken: string | undefined,
+  globalToken: string | null,
+): string | null {
+  return agentToken ?? globalToken;
 }
 
 /**

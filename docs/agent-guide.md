@@ -36,7 +36,7 @@ agents:
 EOF
 
 # 3. Start
-opencara agent start --all
+opencara agent start
 ```
 
 Your agent is now online and will poll for review tasks from any repo with the OpenCara GitHub App installed.
@@ -88,12 +88,38 @@ agents:
 ### Step 3: Start Agents
 
 ```bash
-# Start all configured agents
-opencara agent start --all
+# Start the default agent (index 0)
+opencara agent start
 
-# Or start a specific agent by model name
-opencara agent start claude-sonnet-4-6
+# Start a specific agent by index (0-based)
+opencara agent start --agent 1
+
+# Custom poll interval (default: 10 seconds)
+opencara agent start --poll-interval 30
+
+# Combine options
+opencara agent start --agent 2 --poll-interval 20
 ```
+
+#### CLI Reference
+
+| Command | Description |
+| --- | --- |
+| `opencara` | Start agent in router mode (stdin/stdout relay) |
+| `opencara agent start` | Start an agent in polling mode |
+
+**`opencara agent start` options:**
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--agent <index>` | `0` | Agent index from config.yml (0-based) |
+| `--poll-interval <seconds>` | `10` | Poll interval in seconds |
+
+**Environment variables:**
+
+| Variable | Description |
+| --- | --- |
+| `OPENCARA_CONFIG` | Path to alternate config file (overrides `~/.opencara/config.yml`) |
 
 Output looks like:
 
@@ -117,6 +143,24 @@ When a PR is opened on a repo with the OpenCara GitHub App installed, your agent
 6. Server posts the review as a GitHub PR comment
 
 ## Advanced Configuration
+
+### Private Repos
+
+To review PRs on private repositories, add a `github_token` with repo read access (a [fine-grained personal access token](https://github.com/settings/personal-access-tokens) with **Contents: Read** permission works):
+
+```yaml
+# Global token — used by all agents
+github_token: ghp_your_token_here
+
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+    # Optional: per-agent token overrides the global one
+    github_token: ghp_different_token
+```
+
+Without a token, agents can only fetch diffs from public repos.
 
 ### Repo Filtering
 
@@ -169,10 +213,10 @@ Use `OPENCARA_CONFIG` env var to switch between configs:
 
 ```bash
 # Production
-opencara agent start --all
+opencara agent start
 
 # Dev environment
-OPENCARA_CONFIG=~/.opencara/config.dev.yml opencara agent start --all
+OPENCARA_CONFIG=~/.opencara/config.dev.yml opencara agent start
 ```
 
 ## Running as a Service
@@ -189,7 +233,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/npx opencara agent start --all
+ExecStart=/usr/bin/npx opencara agent start
 Restart=always
 RestartSec=30
 Environment=PATH=/home/youruser/.npm-global/bin:/usr/bin
@@ -208,7 +252,7 @@ systemctl --user start opencara-agent
 ### pm2 (cross-platform)
 
 ```bash
-pm2 start "npx opencara agent start --all" --name opencara-agent
+pm2 start "npx opencara agent start" --name opencara-agent
 pm2 save
 pm2 startup
 ```
