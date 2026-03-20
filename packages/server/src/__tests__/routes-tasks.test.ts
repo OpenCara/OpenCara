@@ -256,6 +256,14 @@ describe('Task Routes', () => {
 
   describe('POST /api/tasks/:taskId/reject', () => {
     it('marks claim as rejected', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 1,
+          status: 'reviewing',
+        }),
+      );
       await store.createClaim({
         id: 'task-1:agent-1',
         task_id: 'task-1',
@@ -274,10 +282,158 @@ describe('Task Routes', () => {
       const claims = await store.getClaims('task-1');
       expect(claims[0].status).toBe('rejected');
     });
+
+    it('returns 404 for missing claim', async () => {
+      const res = await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'nonexistent',
+        reason: 'test',
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 409 if claim is completed', async () => {
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'completed',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'test',
+      });
+      expect(res.status).toBe(409);
+    });
+
+    it('is idempotent — double reject returns 200', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 1,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // First reject
+      const res1 = await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'test',
+      });
+      expect(res1.status).toBe(200);
+
+      // Second reject — idempotent
+      const res2 = await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'test again',
+      });
+      expect(res2.status).toBe(200);
+    });
+
+    it('frees review slot (review_claims decremented, agent removed from claimed_agents)', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1', 'agent-2'],
+          review_claims: 2,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'Cannot access diff',
+      });
+
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+      expect(task?.claimed_agents).toEqual(['agent-2']);
+    });
+
+    it('frees summary slot', async () => {
+      await store.createTask(
+        makeTask({
+          claimed_agents: ['agent-1'],
+          summary_claimed: true,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'test',
+      });
+
+      const task = await store.getTask('task-1');
+      expect(task?.summary_claimed).toBe(false);
+      expect(task?.claimed_agents).toEqual([]);
+    });
+
+    it('counter underflow protection — reject when review_claims is already 0', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 0, // already 0 (edge case)
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-1',
+        reason: 'test',
+      });
+
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(0); // Math.max(0, -1) = 0
+    });
   });
 
   describe('POST /api/tasks/:taskId/error', () => {
     it('marks claim as error', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 1,
+          status: 'reviewing',
+        }),
+      );
       await store.createClaim({
         id: 'task-1:agent-1',
         task_id: 'task-1',
@@ -295,6 +451,84 @@ describe('Task Routes', () => {
 
       const claims = await store.getClaims('task-1');
       expect(claims[0].status).toBe('error');
+    });
+
+    it('returns 404 for missing claim', async () => {
+      const res = await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'nonexistent',
+        error: 'test',
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 409 if claim is completed', async () => {
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'completed',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'agent-1',
+        error: 'test',
+      });
+      expect(res.status).toBe(409);
+    });
+
+    it('is idempotent — double error returns 200', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          claimed_agents: ['agent-1'],
+          review_claims: 1,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/error', { agent_id: 'agent-1', error: 'crash' });
+      const res2 = await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'agent-1',
+        error: 'crash again',
+      });
+      expect(res2.status).toBe(200);
+    });
+
+    it('frees summary slot on error', async () => {
+      await store.createTask(
+        makeTask({
+          claimed_agents: ['agent-1'],
+          summary_claimed: true,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'agent-1',
+        error: 'crash',
+      });
+
+      const task = await store.getTask('task-1');
+      expect(task?.summary_claimed).toBe(false);
+      expect(task?.claimed_agents).toEqual([]);
     });
   });
 

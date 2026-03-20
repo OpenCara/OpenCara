@@ -508,12 +508,59 @@ APPROVE`;
       const rejectedClaim = claims.find((c) => c.agent_id === 'agent-1');
       expect(rejectedClaim?.status).toBe('rejected');
 
-      // Agent 1 already has a claim, so polling again shouldn't show it
-      const poll1 = await poll('agent-1');
-      expect(poll1.tasks).toHaveLength(0);
+      // Task slot should be freed — agent 2 can now claim it
+      const poll2 = await poll('agent-2');
+      expect(poll2.tasks).toHaveLength(1);
+      expect(poll2.tasks[0].role).toBe('summary');
 
-      // But agent 2 won't see it either because there's already a claim (rejected but present)
-      // This is correct behavior — rejected claims occupy the slot to prevent infinite retries
+      // Agent 2 claims and completes
+      const claimRes = await claim('task-reject', 'agent-2', 'summary');
+      expect(claimRes.claimed).toBe(true);
+    });
+
+    it('agent rejects → new agent claims freed slot → completes review', async () => {
+      await store.createTask(makeTask({ id: 'task-reject-e2e', review_count: 2 }));
+
+      // Agent 1 claims review, then rejects
+      await claim('task-reject-e2e', 'agent-1', 'review');
+      await api('POST', '/api/tasks/task-reject-e2e/reject', {
+        agent_id: 'agent-1',
+        reason: 'Diff too large',
+      });
+
+      // Agent 2 claims the freed review slot
+      const poll2 = await poll('agent-2');
+      expect(poll2.tasks).toHaveLength(1);
+      expect(poll2.tasks[0].role).toBe('review');
+
+      const claimRes = await claim('task-reject-e2e', 'agent-2', 'review');
+      expect(claimRes.claimed).toBe(true);
+
+      // Agent 2 completes the review
+      await submitResult('task-reject-e2e', 'agent-2', 'review', 'Looks good', 'approve');
+
+      // Summary slot now available
+      const pollSynth = await poll('agent-3');
+      expect(pollSynth.tasks).toHaveLength(1);
+      expect(pollSynth.tasks[0].role).toBe('summary');
+    });
+
+    it('same agent can re-claim after rejection', async () => {
+      await store.createTask(makeTask({ id: 'task-reclaim' }));
+
+      // Agent claims then rejects
+      await claim('task-reclaim', 'agent-1', 'summary');
+      await api('POST', '/api/tasks/task-reclaim/reject', {
+        agent_id: 'agent-1',
+        reason: 'Transient error',
+      });
+
+      // Same agent can re-claim (removed from claimed_agents)
+      const pollRes = await poll('agent-1');
+      expect(pollRes.tasks).toHaveLength(1);
+
+      const claimRes = await claim('task-reclaim', 'agent-1', 'summary');
+      expect(claimRes.claimed).toBe(true);
     });
   });
 
@@ -522,7 +569,7 @@ APPROVE`;
   // ═══════════════════════════════════════════════════════════
 
   describe('error flow', () => {
-    it('error claim is recorded correctly', async () => {
+    it('error claim is recorded correctly and frees slot', async () => {
       await store.createTask(makeTask({ id: 'task-error', review_count: 3 }));
 
       await claim('task-error', 'agent-crash', 'review');
@@ -534,6 +581,33 @@ APPROVE`;
       const claims = await store.getClaims('task-error');
       const errClaim = claims.find((c) => c.agent_id === 'agent-crash');
       expect(errClaim?.status).toBe('error');
+
+      // Slot should be freed — task counters updated
+      const task = await store.getTask('task-error');
+      expect(task?.review_claims).toBe(0);
+      expect(task?.claimed_agents).toEqual([]);
+
+      // Another agent can now claim the freed slot
+      const pollRes = await poll('agent-replacement');
+      expect(pollRes.tasks).toHaveLength(1);
+      expect(pollRes.tasks[0].role).toBe('review');
+
+      const claimRes = await claim('task-error', 'agent-replacement', 'review');
+      expect(claimRes.claimed).toBe(true);
+    });
+
+    it('error on reject/error endpoints returns 404 for missing claims', async () => {
+      const rejectRes = await api('POST', '/api/tasks/task-missing/reject', {
+        agent_id: 'ghost',
+        reason: 'test',
+      });
+      expect(rejectRes.status).toBe(404);
+
+      const errorRes = await api('POST', '/api/tasks/task-missing/error', {
+        agent_id: 'ghost',
+        error: 'test',
+      });
+      expect(errorRes.status).toBe(404);
     });
   });
 
