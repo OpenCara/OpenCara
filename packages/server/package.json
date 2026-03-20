@@ -1,0 +1,21 @@
+{
+  "name": "@opencara/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@opencara/shared": "workspace:*",
+    "hono": "^4.7.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "wrangler": "^4.74.0"
+  }
+}

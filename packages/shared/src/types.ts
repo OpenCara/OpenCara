@@ -1,82 +1,55 @@
-/** Database entity types — mirrors the PostgreSQL schema */
+/** ReviewVerdict — the agent's conclusion on a PR */
+export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
-export interface User {
-  id: string;
-  github_id: number | null;
-  name: string;
-  is_anonymous: boolean;
-  api_key_hash: string | null;
-  created_at: string;
-}
+/** Task status lifecycle */
+export type TaskStatus = 'pending' | 'reviewing' | 'completed' | 'timeout' | 'failed';
 
-export type AgentStatus = 'online' | 'offline';
+/** Claim status lifecycle */
+export type ClaimStatus = 'pending' | 'completed' | 'rejected' | 'error';
 
+/** Claim role — review or summary (synthesizer) */
+export type ClaimRole = 'review' | 'summary';
+
+/** Repo filter mode for agent preferences */
 export type RepoFilterMode = 'all' | 'own' | 'whitelist' | 'blacklist';
 
+/** Agent repo filter config */
 export interface RepoConfig {
   mode: RepoFilterMode;
   list?: string[]; // owner/repo entries for whitelist/blacklist modes
 }
 
-export interface Agent {
-  id: string;
-  user_id: string | null;
-  model: string;
-  tool: string;
-  display_name: string | null;
-  is_anonymous: boolean;
-  status: AgentStatus;
-  last_heartbeat_at: string | null;
-  repo_config: RepoConfig | null;
-  created_at: string;
-}
-
-export type ReviewTaskStatus =
-  | 'pending'
-  | 'reviewing'
-  | 'summarizing'
-  | 'completed'
-  | 'failed'
-  | 'timeout'
-  | 'cancelled';
-
+/** A review task in the store */
 export interface ReviewTask {
   id: string;
-  github_installation_id: number;
   owner: string;
   repo: string;
   pr_number: number;
-  status: ReviewTaskStatus;
-  config_json: Record<string, unknown> | null;
-  created_at: string;
-  timeout_at: string | null;
+  pr_url: string;
+  diff_url: string;
+  base_ref: string;
+  head_ref: string;
+  review_count: number; // total agents (reviewers + synthesizer)
+  prompt: string;
+  timeout_at: number; // unix ms
+  status: TaskStatus;
+  github_installation_id: number;
+  config: import('./review-config.js').ReviewConfig; // parsed .review.yml
+  created_at: number;
 }
 
-export type ReviewResultStatus = 'completed' | 'rejected' | 'error';
-export type ReviewResultType = 'review' | 'summary';
-
-export interface ReviewResult {
+/** A claim on a task (review_result equivalent) */
+export interface TaskClaim {
   id: string;
-  review_task_id: string;
+  task_id: string;
   agent_id: string;
-  status: ReviewResultStatus;
-  verdict: string | null;
-  type: ReviewResultType;
-  created_at: string;
+  role: ClaimRole;
+  status: ClaimStatus;
+  review_text?: string; // filled on completion
+  verdict?: ReviewVerdict; // filled on completion (review only)
+  tokens_used?: number;
+  created_at: number;
 }
 
-export interface Rating {
-  id: string;
-  review_result_id: string;
-  rater_hash: string;
-  emoji: string;
-  created_at: string;
-}
-
-export interface ReputationHistory {
-  id: string;
-  agent_id: string | null;
-  score_change: number;
-  reason: string;
-  created_at: string;
-}
+// Re-export ReviewConfig from review-config.ts
+export type { ReviewConfig, TriggerConfig } from './review-config.js';

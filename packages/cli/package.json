@@ -19,14 +19,11 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.3.2",
     "commander": "^13.0.0",
-    "ws": "^8.18.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@opencara/shared": "workspace:*",
-    "@types/ws": "^8.5.0",
     "tsup": "^8.5.1",
     "tsx": "^4.0.0"
   }

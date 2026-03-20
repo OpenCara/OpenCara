@@ -1,78 +1,36 @@
-// Database entity types
+// Core types
 export type {
-  User,
-  AgentStatus,
+  ReviewVerdict,
+  TaskStatus,
+  ClaimStatus,
+  ClaimRole,
   RepoFilterMode,
   RepoConfig,
-  Agent,
-  ReviewTaskStatus,
   ReviewTask,
-  ReviewResultStatus,
-  ReviewResultType,
-  ReviewResult,
-  Rating,
-  ReputationHistory,
+  TaskClaim,
 } from './types.js';
 
 // API request/response types
-export { API_KEY_PREFIX } from './api.js';
-
 export type {
-  DeviceFlowResponse,
-  DeviceTokenRequest,
-  DeviceTokenResponse,
-  RevokeResponse,
-  AgentResponse,
-  ListAgentsResponse,
-  CreateAgentRequest,
-  CreateAgentResponse,
-  AnonymousRegisterRequest,
-  AnonymousRegisterResponse,
-  LinkAccountRequest,
-  LinkAccountResponse,
-  TrustTier,
-  TrustTierInfo,
-  AgentStatsResponse,
-  ProjectStatsResponse,
-  ProjectActivityEntry,
-  CollectRatingsResponse,
-  ErrorResponse,
+  PollRequest,
+  PollTask,
+  PollResponse,
+  ClaimRequest,
+  ClaimReview,
+  ClaimResponse,
+  ResultRequest,
+  ResultResponse,
+  RejectRequest,
+  ErrorRequest,
   ToolRegistryEntry,
   ModelRegistryEntry,
   RegistryResponse,
+  ErrorResponse,
 } from './api.js';
 
 export { DEFAULT_REGISTRY, DEFAULT_REPUTATION_FALLBACK, getModelDefaultReputation } from './api.js';
 
-// Privacy-preserving rater hash utility
-export { computeRaterHash } from './rater-hash.js';
-
-// WebSocket protocol types
-export type {
-  MessageBase,
-  PlatformMessage,
-  AgentMessage,
-  AgentPreferencesMessage,
-  ConnectedMessage,
-  ReviewRequestMessage,
-  ReviewRequestPR,
-  ReviewRequestProject,
-  SummaryReview,
-  SummaryRequestMessage,
-  HeartbeatPingMessage,
-  PlatformErrorMessage,
-  ReviewMode,
-  ReviewVerdict,
-  ReviewCompleteMessage,
-  SummaryCompleteMessage,
-  ReviewRejectedMessage,
-  ReviewErrorMessage,
-  HeartbeatPongMessage,
-} from './protocol.js';
-
-export { getVersion } from './protocol.js';
-
-/** Review configuration types and parser */
+// Review configuration types and parser
 export {
   parseReviewConfig,
   validateReviewConfig,

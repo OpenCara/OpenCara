@@ -1,126 +1,80 @@
-import type { RepoConfig } from './types.js';
+import type { ClaimRole, ReviewVerdict } from './types.js';
 
-/** API key prefix for OpenCara API keys */
-export const API_KEY_PREFIX = 'cr_';
+// ── Poll ───────────────────────────────────────────────────────
 
-/** POST /auth/device — response */
-export interface DeviceFlowResponse {
-  userCode: string;
-  verificationUri: string;
-  expiresIn: number;
-  interval: number;
-  deviceCode: string;
+/** POST /api/tasks/poll — request */
+export interface PollRequest {
+  agent_id: string;
 }
 
-/** POST /auth/device/token — request */
-export interface DeviceTokenRequest {
-  deviceCode: string;
+/** A task returned in the poll response */
+export interface PollTask {
+  task_id: string;
+  owner: string;
+  repo: string;
+  pr_number: number;
+  diff_url: string;
+  timeout_seconds: number;
+  prompt: string;
+  role: ClaimRole;
 }
 
-/** POST /auth/device/token — response variants */
-export type DeviceTokenResponse =
-  | { status: 'pending' }
-  | { status: 'expired' }
-  | { status: 'complete'; apiKey: string };
-
-/** POST /auth/revoke — response */
-export interface RevokeResponse {
-  apiKey: string;
+/** POST /api/tasks/poll — response */
+export interface PollResponse {
+  tasks: PollTask[];
 }
 
-/** Agent representation in API responses (camelCase) */
-export interface AgentResponse {
-  id: string;
-  model: string;
-  tool: string;
-  // reputationScore removed — trust tier shown via stats instead
-  isAnonymous: boolean;
-  displayName?: string;
-  status: 'online' | 'offline';
-  repoConfig: RepoConfig | null;
-  createdAt: string;
+// ── Claim ──────────────────────────────────────────────────────
+
+/** POST /api/tasks/{taskId}/claim — request */
+export interface ClaimRequest {
+  agent_id: string;
+  role: ClaimRole;
 }
 
-/** GET /api/agents — response */
-export interface ListAgentsResponse {
-  agents: AgentResponse[];
+/** Review text returned to summary claimers */
+export interface ClaimReview {
+  agent_id: string;
+  review_text: string;
+  verdict: ReviewVerdict;
 }
 
-/** POST /api/agents — request */
-export interface CreateAgentRequest {
-  model: string;
-  tool: string;
-  displayName?: string;
-  repoConfig?: RepoConfig;
+/** POST /api/tasks/{taskId}/claim — response */
+export type ClaimResponse =
+  | { claimed: true; reviews?: ClaimReview[] }
+  | { claimed: false; reason: string };
+
+// ── Result ─────────────────────────────────────────────────────
+
+/** POST /api/tasks/{taskId}/result — request */
+export interface ResultRequest {
+  agent_id: string;
+  type: ClaimRole;
+  review_text: string;
+  verdict?: ReviewVerdict;
+  tokens_used?: number;
 }
 
-/** POST /api/agents — response */
-export type CreateAgentResponse = AgentResponse;
-
-/** Trust tier — quality-based, not competitive ranking */
-export type TrustTier = 'newcomer' | 'trusted' | 'expert';
-
-/** Trust tier info for display */
-export interface TrustTierInfo {
-  tier: TrustTier;
-  label: string; // "Newcomer", "Trusted", "Expert"
-  reviewCount: number;
-  positiveRate: number; // 0-1
-  nextTier: TrustTier | null;
-  progressToNext: number; // 0-1
+/** POST /api/tasks/{taskId}/result — response */
+export interface ResultResponse {
+  success: true;
 }
 
-/** GET /api/stats/:agentId — response */
-export interface AgentStatsResponse {
-  agent: {
-    id: string;
-    model: string;
-    tool: string;
-    status: 'online' | 'offline';
-    trustTier: TrustTierInfo; // replaces reputationScore
-  };
-  stats: {
-    totalReviews: number;
-    totalSummaries: number;
-    totalRatings: number;
-    thumbsUp: number;
-    thumbsDown: number;
-  };
+// ── Reject / Error ─────────────────────────────────────────────
+
+/** POST /api/tasks/{taskId}/reject — request */
+export interface RejectRequest {
+  agent_id: string;
+  reason: string;
 }
 
-/** GET /api/projects/stats — public response (no auth) */
-export interface ProjectStatsResponse {
-  totalReviews: number;
-  totalContributors: number;
-  activeContributorsThisWeek: number;
-  averagePositiveRate: number;
-  recentActivity: ProjectActivityEntry[];
-}
-
-/** A single entry in the project activity feed */
-export interface ProjectActivityEntry {
-  type: 'review_completed';
-  repo: string; // "owner/repo"
-  prNumber: number;
-  agentModel: string;
-  completedAt: string;
-}
-
-/** POST /api/tasks/:taskId/collect-ratings — response */
-export interface CollectRatingsResponse {
-  collected: number;
-  ratings: Array<{
-    agentId: string;
-    thumbsUp: number;
-    thumbsDown: number;
-    newScore: number;
-  }>;
-}
-
-/** Standard error response */
-export interface ErrorResponse {
+/** POST /api/tasks/{taskId}/error — request */
+export interface ErrorRequest {
+  agent_id: string;
   error: string;
 }
+
+// ── Registry ───────────────────────────────────────────────────
 
 /** Tool entry in the platform registry */
 export interface ToolRegistryEntry {
@@ -145,7 +99,7 @@ export interface RegistryResponse {
   models: ModelRegistryEntry[];
 }
 
-/** Default registry data — single source of truth for worker + CLI fallback */
+/** Default registry data — single source of truth for server + CLI fallback */
 export const DEFAULT_REGISTRY: RegistryResponse = {
   tools: [
     {
@@ -240,27 +194,9 @@ export function getModelDefaultReputation(modelName: string): number {
   return entry?.defaultReputation ?? DEFAULT_REPUTATION_FALLBACK;
 }
 
-/** POST /auth/anonymous — request */
-export interface AnonymousRegisterRequest {
-  model: string;
-  tool: string;
-  displayName?: string;
-  repoConfig?: RepoConfig;
-}
+// ── Common ─────────────────────────────────────────────────────
 
-/** POST /auth/anonymous — response */
-export interface AnonymousRegisterResponse {
-  agentId: string;
-  apiKey: string; // full cr_ key, store locally
-}
-
-/** POST /auth/link — request (link anonymous agent to authenticated user) */
-export interface LinkAccountRequest {
-  anonymousApiKey: string; // cr_ key of the anonymous user
-}
-
-/** POST /auth/link — response */
-export interface LinkAccountResponse {
-  linked: boolean;
-  agentIds: string[]; // agents transferred to authenticated user
+/** Standard error response */
+export interface ErrorResponse {
+  error: string;
 }

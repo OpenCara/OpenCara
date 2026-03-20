@@ -1,0 +1,31 @@
+name = "opencara-server"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+# Secrets (set via `wrangler secret put <NAME>`):
+# - GITHUB_WEBHOOK_SECRET: GitHub App webhook secret
+# - GITHUB_APP_ID: GitHub App ID
+# - GITHUB_APP_PRIVATE_KEY: GitHub App private key (PEM)
+
+[vars]
+WEB_URL = "https://opencara.com"
+
+[[kv_namespaces]]
+binding = "TASK_STORE"
+id = "fe09ef901df94532815cc44377c6302a"
+
+# DO deletion migration (remove old DOs from worker)
+[[migrations]]
+tag = "v2"
+deleted_classes = ["AgentConnection", "TaskTimeout"]
+
+# ── Dev environment ──────────────────────────────────────────────
+[env.dev]
+name = "opencara-server-dev"
+
+[env.dev.vars]
+WEB_URL = "https://dev.opencara.com"
+
+[[env.dev.kv_namespaces]]
+binding = "TASK_STORE"
+id = "98488948567340099887f541ba94e3c8"

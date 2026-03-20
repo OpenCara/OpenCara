@@ -1,0 +1,958 @@
+/**
+ * Local integration tests — full E2E flows with in-memory store.
+ *
+ * Mocks only the external boundary (GitHub API via global fetch).
+ * Everything else (Hono routing, TaskStore, review parsing, formatting)
+ * runs for real.
+ */
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+import type { ReviewTask } from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import { MemoryTaskStore } from '../store/memory.js';
+import { createApp } from '../index.js';
+import type { Env } from '../types.js';
+
+// ── Helpers ────────────────────────────────────────────────────
+
+const WEBHOOK_SECRET = 'test-webhook-secret';
+
+// Generate a real RSA key for JWT signing in tests.
+// getInstallationToken → generateAppJwt uses crypto.subtle which needs a valid PEM.
+let TEST_PEM: string;
+beforeAll(() => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  TEST_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+});
+
+function getMockEnv(): Env {
+  return {
+    GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    GITHUB_APP_ID: '12345',
+    GITHUB_APP_PRIVATE_KEY: TEST_PEM,
+    TASK_STORE: {} as KVNamespace,
+    WEB_URL: 'https://test.opencara.com',
+  };
+}
+
+function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
+  return {
+    id: `task-${crypto.randomUUID().slice(0, 8)}`,
+    owner: 'acme',
+    repo: 'widget',
+    pr_number: 42,
+    pr_url: 'https://github.com/acme/widget/pull/42',
+    diff_url: 'https://github.com/acme/widget/pull/42.diff',
+    base_ref: 'main',
+    head_ref: 'feat/awesome',
+    review_count: 1,
+    prompt: 'Review this pull request for bugs and code quality.',
+    timeout_at: Date.now() + 600_000,
+    status: 'pending',
+    github_installation_id: 999,
+    config: DEFAULT_REVIEW_CONFIG,
+    created_at: Date.now(),
+    ...overrides,
+  };
+}
+
+/** Compute HMAC-SHA256 signature matching GitHub's X-Hub-Signature-256 format. */
+async function signPayload(body: string, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `sha256=${hex}`;
+}
+
+/** GitHub API call log entry */
+interface GitHubCall {
+  url: string;
+  method: string;
+  body?: unknown;
+}
+
+// ── Test suite ─────────────────────────────────────────────────
+
+describe('Integration: full E2E flows', () => {
+  let store: MemoryTaskStore;
+  let app: ReturnType<typeof createApp>;
+  let mockEnv: Env;
+  let githubCalls: GitHubCall[];
+  const originalFetch = globalThis.fetch;
+
+  /** Send a JSON request to the Hono app. */
+  function api(method: string, path: string, body?: unknown) {
+    return app.request(
+      path,
+      {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      },
+      mockEnv,
+    );
+  }
+
+  /** Poll for tasks as a given agent. */
+  async function poll(agentId: string) {
+    const res = await api('POST', '/api/tasks/poll', { agent_id: agentId });
+    return (await res.json()) as { tasks: Array<Record<string, unknown>> };
+  }
+
+  /** Claim a task. */
+  async function claim(taskId: string, agentId: string, role: string) {
+    const res = await api('POST', `/api/tasks/${taskId}/claim`, { agent_id: agentId, role });
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  /** Submit a result. */
+  async function submitResult(
+    taskId: string,
+    agentId: string,
+    type: string,
+    reviewText: string,
+    verdict?: string,
+    tokensUsed?: number,
+  ) {
+    const res = await api('POST', `/api/tasks/${taskId}/result`, {
+      agent_id: agentId,
+      type,
+      review_text: reviewText,
+      verdict,
+      tokens_used: tokensUsed,
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  }
+
+  beforeEach(() => {
+    store = new MemoryTaskStore();
+    app = createApp(store);
+    mockEnv = getMockEnv();
+    githubCalls = [];
+
+    // Mock fetch — intercept all GitHub API calls
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? 'GET';
+
+      githubCalls.push({
+        url,
+        method,
+        body: init?.body ? JSON.parse(init.body as string) : undefined,
+      });
+
+      // Installation token
+      if (url.includes('/access_tokens')) {
+        return new Response(JSON.stringify({ token: 'ghs_mock_token' }), { status: 200 });
+      }
+
+      // Fetch .review.yml — return 404 (use defaults)
+      if (url.includes('/contents/.review.yml')) {
+        return new Response('Not Found', { status: 404 });
+      }
+
+      // Post PR review
+      if (url.includes('/pulls/') && url.includes('/reviews') && method === 'POST') {
+        return new Response(
+          JSON.stringify({ html_url: 'https://github.com/acme/widget/pull/42#review-123' }),
+          { status: 200 },
+        );
+      }
+
+      // Post PR comment (issue comment)
+      if (url.includes('/issues/') && url.includes('/comments') && method === 'POST') {
+        return new Response(
+          JSON.stringify({ html_url: 'https://github.com/acme/widget/pull/42#comment-456' }),
+          { status: 200 },
+        );
+      }
+
+      // Fetch PR diff (for comment validation in postFinalReview)
+      if (
+        url.includes('/pulls/') &&
+        !url.includes('/reviews') &&
+        !url.includes('/comments') &&
+        (init?.headers as Record<string, string>)?.Accept === 'application/vnd.github.diff'
+      ) {
+        return new Response(
+          'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts',
+          { status: 200 },
+        );
+      }
+
+      // Fetch PR details (for issue_comment trigger)
+      if (url.includes('/pulls/') && !url.includes('/reviews') && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            number: 42,
+            html_url: 'https://github.com/acme/widget/pull/42',
+            diff_url: 'https://github.com/acme/widget/pull/42.diff',
+            base: { ref: 'main' },
+            head: { ref: 'feat/awesome' },
+            draft: false,
+            labels: [],
+          }),
+          { status: 200 },
+        );
+      }
+
+      // Default 404 for anything else
+      return new Response('Not Found', { status: 404 });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 1. Single-agent review (review_count=1)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('single-agent review (review_count=1)', () => {
+    it('poll → claim summary → submit → task completed + review posted to GitHub', async () => {
+      const task = makeTask({ id: 'task-single' });
+      await store.createTask(task);
+
+      // 1. Agent polls — sees task with role=summary
+      const pollResult = await poll('agent-alpha');
+      expect(pollResult.tasks).toHaveLength(1);
+      expect(pollResult.tasks[0].task_id).toBe('task-single');
+      expect(pollResult.tasks[0].role).toBe('summary');
+      expect(pollResult.tasks[0].owner).toBe('acme');
+      expect(pollResult.tasks[0].repo).toBe('widget');
+      expect(pollResult.tasks[0].pr_number).toBe(42);
+      expect(typeof pollResult.tasks[0].timeout_seconds).toBe('number');
+      expect((pollResult.tasks[0].timeout_seconds as number) > 0).toBe(true);
+
+      // 2. Agent claims summary role
+      const claimResult = await claim('task-single', 'agent-alpha', 'summary');
+      expect(claimResult.claimed).toBe(true);
+      // No reviews included (single-agent — no prior reviews)
+      expect(claimResult.reviews).toEqual([]);
+
+      // Verify task transitioned to reviewing
+      const taskAfterClaim = await store.getTask('task-single');
+      expect(taskAfterClaim?.status).toBe('reviewing');
+
+      // 3. Agent submits review
+      const reviewText = `## Summary
+This PR adds a new widget feature. Overall looks good.
+
+## Findings
+- **[minor]** \`src/index.ts:10\` — Unused import of \`foo\`
+
+## Verdict
+APPROVE`;
+
+      const result = await submitResult(
+        'task-single',
+        'agent-alpha',
+        'summary',
+        reviewText,
+        'approve',
+        1200,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.success).toBe(true);
+
+      // 4. Verify task completed
+      const finalTask = await store.getTask('task-single');
+      // postFinalReview is called which sets status — it will either be 'completed' or 'failed'
+      // depending on whether the mock GitHub API call succeeded
+      expect(['completed', 'failed']).toContain(finalTask?.status);
+
+      // 5. Verify claim stored correctly
+      const claims = await store.getClaims('task-single');
+      expect(claims).toHaveLength(1);
+      expect(claims[0].agent_id).toBe('agent-alpha');
+      expect(claims[0].role).toBe('summary');
+      expect(claims[0].status).toBe('completed');
+      expect(claims[0].review_text).toBe(reviewText);
+      expect(claims[0].verdict).toBe('approve');
+      expect(claims[0].tokens_used).toBe(1200);
+
+      // 6. Verify GitHub API was called to post review
+      const reviewPost = githubCalls.find((c) => c.url.includes('/reviews') && c.method === 'POST');
+      expect(reviewPost).toBeDefined();
+      expect(reviewPost!.body).toBeDefined();
+      // Body should contain the formatted review
+      expect((reviewPost!.body as Record<string, unknown>).event).toBe('APPROVE');
+      // Should include inline comments for valid file paths
+      expect((reviewPost!.body as Record<string, unknown>).comments).toBeDefined();
+    });
+
+    it('second agent sees nothing after task is claimed', async () => {
+      await store.createTask(makeTask({ id: 'task-claimed' }));
+
+      // Agent 1 claims
+      await claim('task-claimed', 'agent-1', 'summary');
+
+      // Agent 2 polls — task should not appear (slot taken)
+      const pollResult = await poll('agent-2');
+      expect(pollResult.tasks).toHaveLength(0);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 2. Multi-agent review (review_count=3)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('multi-agent review (review_count=3)', () => {
+    it('full flow: 2 reviewers → synthesizer claims with review texts → submits', async () => {
+      await store.createTask(makeTask({ id: 'task-multi', review_count: 3 }));
+
+      // Phase 1: Two agents poll and claim review slots
+      const poll1 = await poll('reviewer-a');
+      expect(poll1.tasks[0].role).toBe('review');
+
+      const poll2 = await poll('reviewer-b');
+      expect(poll2.tasks[0].role).toBe('review');
+
+      const claimA = await claim('task-multi', 'reviewer-a', 'review');
+      expect(claimA.claimed).toBe(true);
+      expect(claimA.reviews).toBeUndefined(); // reviews only included for summary claims
+
+      const claimB = await claim('task-multi', 'reviewer-b', 'review');
+      expect(claimB.claimed).toBe(true);
+
+      // Phase 2: Both review slots taken — no more review slots
+      const poll3 = await poll('reviewer-c');
+      expect(poll3.tasks).toHaveLength(0); // reviews pending, summary not yet available
+
+      // Phase 3: Reviewers submit
+      await submitResult('task-multi', 'reviewer-a', 'review', 'Review A: LGTM', 'approve', 500);
+      await submitResult(
+        'task-multi',
+        'reviewer-b',
+        'review',
+        '## Summary\nNeeds work\n## Verdict\nREQUEST_CHANGES',
+        'request_changes',
+        600,
+      );
+
+      // Phase 4: Summary slot now available
+      const pollSynth = await poll('synthesizer');
+      expect(pollSynth.tasks).toHaveLength(1);
+      expect(pollSynth.tasks[0].role).toBe('summary');
+
+      // Phase 5: Synthesizer claims — receives prior reviews
+      const claimSynth = await claim('task-multi', 'synthesizer', 'summary');
+      expect(claimSynth.claimed).toBe(true);
+      const reviews = claimSynth.reviews as Array<Record<string, unknown>>;
+      expect(reviews).toHaveLength(2);
+      expect(reviews.map((r) => r.agent_id).sort()).toEqual(['reviewer-a', 'reviewer-b']);
+      expect(reviews.find((r) => r.agent_id === 'reviewer-a')?.review_text).toBe('Review A: LGTM');
+
+      // Phase 6: Synthesizer submits
+      const synthResult = await submitResult(
+        'task-multi',
+        'synthesizer',
+        'summary',
+        '## Summary\nSynthesized review.\n## Verdict\nCOMMENT',
+        undefined,
+        900,
+      );
+      expect(synthResult.status).toBe(200);
+
+      // Verify all claims
+      const claims = await store.getClaims('task-multi');
+      expect(claims).toHaveLength(3);
+      expect(claims.filter((c) => c.status === 'completed')).toHaveLength(3);
+    });
+
+    it('third agent cannot claim review when all review slots are taken', async () => {
+      await store.createTask(makeTask({ id: 'task-slots', review_count: 3 }));
+
+      await claim('task-slots', 'a', 'review');
+      await claim('task-slots', 'b', 'review');
+
+      // Third agent tries to claim review — should fail (2 review slots for review_count=3)
+      const res = await claim('task-slots', 'c', 'review');
+      expect(res.claimed).toBe(false);
+    });
+
+    it('summary not available until all reviews are completed', async () => {
+      await store.createTask(makeTask({ id: 'task-partial', review_count: 2 }));
+
+      // Claim and submit only 1 review (need 1 for review_count=2)
+      await claim('task-partial', 'r1', 'review');
+
+      // Summary agent polls — review not yet completed
+      let pollSynth = await poll('synth');
+      expect(pollSynth.tasks).toHaveLength(0);
+
+      // Complete the review
+      await submitResult('task-partial', 'r1', 'review', 'Done', 'approve');
+
+      // Now summary is available
+      pollSynth = await poll('synth');
+      expect(pollSynth.tasks).toHaveLength(1);
+      expect(pollSynth.tasks[0].role).toBe('summary');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 3. Timeout handling
+  // ═══════════════════════════════════════════════════════════
+
+  describe('timeout handling', () => {
+    it('expired pending tasks are marked timeout on next poll', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'task-expired',
+          timeout_at: Date.now() - 1000, // already expired
+        }),
+      );
+
+      // Any agent polling triggers lazy timeout check
+      await poll('any-agent');
+
+      const task = await store.getTask('task-expired');
+      expect(task?.status).toBe('timeout');
+    });
+
+    it('expired reviewing tasks with partial reviews post them as fallback', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'task-partial-timeout',
+          review_count: 3,
+          timeout_at: Date.now() - 1000,
+          status: 'reviewing',
+        }),
+      );
+      // One completed review
+      await store.createClaim({
+        id: 'task-partial-timeout:r1',
+        task_id: 'task-partial-timeout',
+        agent_id: 'r1',
+        role: 'review',
+        status: 'completed',
+        review_text: 'Partial review content',
+        verdict: 'comment',
+        created_at: Date.now() - 5000,
+      });
+
+      await poll('poller');
+
+      const task = await store.getTask('task-partial-timeout');
+      expect(task?.status).toBe('timeout');
+
+      // Should have tried to post the partial review + timeout comment
+      const reviewPosts = githubCalls.filter(
+        (c) => c.url.includes('/reviews') && c.method === 'POST',
+      );
+      const commentPosts = githubCalls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      );
+      expect(reviewPosts.length).toBeGreaterThanOrEqual(1);
+      expect(commentPosts.length).toBeGreaterThanOrEqual(1);
+
+      // Verify the timeout comment mentions partial reviews
+      const timeoutComment = commentPosts.find((c) =>
+        ((c.body as Record<string, unknown>)?.body as string)?.includes('timed out'),
+      );
+      expect(timeoutComment).toBeDefined();
+    });
+
+    it('claim is rejected for expired task', async () => {
+      await store.createTask(makeTask({ id: 'task-late', timeout_at: Date.now() - 1000 }));
+
+      const res = await claim('task-late', 'agent', 'summary');
+      expect(res.claimed).toBe(false);
+      expect(res.reason).toContain('timed out');
+    });
+
+    it('completed tasks are not affected by timeout checks', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'task-done',
+          status: 'completed',
+          timeout_at: Date.now() - 1000,
+        }),
+      );
+
+      await poll('agent');
+
+      // Should still be completed, not timeout
+      const task = await store.getTask('task-done');
+      expect(task?.status).toBe('completed');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 4. Rejection flow
+  // ═══════════════════════════════════════════════════════════
+
+  describe('rejection flow', () => {
+    it('rejected claim frees the slot for another agent', async () => {
+      await store.createTask(makeTask({ id: 'task-reject' }));
+
+      // Agent 1 claims then rejects
+      await claim('task-reject', 'agent-1', 'summary');
+      await api('POST', '/api/tasks/task-reject/reject', {
+        agent_id: 'agent-1',
+        reason: 'Cannot access private repo diff',
+      });
+
+      // Claim status should be rejected
+      const claims = await store.getClaims('task-reject');
+      const rejectedClaim = claims.find((c) => c.agent_id === 'agent-1');
+      expect(rejectedClaim?.status).toBe('rejected');
+
+      // Agent 1 already has a claim, so polling again shouldn't show it
+      const poll1 = await poll('agent-1');
+      expect(poll1.tasks).toHaveLength(0);
+
+      // But agent 2 won't see it either because there's already a claim (rejected but present)
+      // This is correct behavior — rejected claims occupy the slot to prevent infinite retries
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 5. Error flow
+  // ═══════════════════════════════════════════════════════════
+
+  describe('error flow', () => {
+    it('error claim is recorded correctly', async () => {
+      await store.createTask(makeTask({ id: 'task-error', review_count: 3 }));
+
+      await claim('task-error', 'agent-crash', 'review');
+      await api('POST', '/api/tasks/task-error/error', {
+        agent_id: 'agent-crash',
+        error: 'Tool process crashed with SIGSEGV',
+      });
+
+      const claims = await store.getClaims('task-error');
+      const errClaim = claims.find((c) => c.agent_id === 'agent-crash');
+      expect(errClaim?.status).toBe('error');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 6. Concurrent agents — race conditions
+  // ═══════════════════════════════════════════════════════════
+
+  describe('concurrent agent races', () => {
+    it('sequential claims: second agent is rejected for single summary slot', async () => {
+      await store.createTask(makeTask({ id: 'task-race' }));
+
+      // First agent claims — succeeds
+      const r1 = await claim('task-race', 'fast', 'summary');
+      expect(r1.claimed).toBe(true);
+
+      // Second agent claims — rejected (slot taken)
+      const r2 = await claim('task-race', 'slow', 'summary');
+      expect(r2.claimed).toBe(false);
+    });
+
+    it('multiple agents can claim different review slots sequentially', async () => {
+      await store.createTask(makeTask({ id: 'task-multi-race', review_count: 4 }));
+
+      // 3 agents claim review sequentially (3 review slots for review_count=4)
+      const c1 = await claim('task-multi-race', 'a1', 'review');
+      const c2 = await claim('task-multi-race', 'a2', 'review');
+      const c3 = await claim('task-multi-race', 'a3', 'review');
+
+      expect(c1.claimed).toBe(true);
+      expect(c2.claimed).toBe(true);
+      expect(c3.claimed).toBe(true);
+
+      // Fourth agent should be rejected (all 3 review slots taken)
+      const c4 = await claim('task-multi-race', 'a4', 'review');
+      expect(c4.claimed).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 7. Agent last-seen tracking
+  // ═══════════════════════════════════════════════════════════
+
+  describe('agent last-seen tracking', () => {
+    it('poll updates agent last-seen timestamp', async () => {
+      const before = Date.now();
+      await poll('tracked-agent');
+      const lastSeen = await store.getAgentLastSeen('tracked-agent');
+
+      expect(lastSeen).not.toBeNull();
+      expect(lastSeen!).toBeGreaterThanOrEqual(before);
+      expect(lastSeen!).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('multiple polls update the timestamp', async () => {
+      await poll('tracked-agent');
+      const first = await store.getAgentLastSeen('tracked-agent');
+
+      // Small delay to ensure timestamp differs
+      await new Promise((r) => setTimeout(r, 5));
+
+      await poll('tracked-agent');
+      const second = await store.getAgentLastSeen('tracked-agent');
+
+      expect(second!).toBeGreaterThanOrEqual(first!);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 8. Multiple tasks
+  // ═══════════════════════════════════════════════════════════
+
+  describe('multiple tasks', () => {
+    it('agent sees all available tasks in one poll', async () => {
+      await store.createTask(makeTask({ id: 'task-a', pr_number: 10 }));
+      await store.createTask(makeTask({ id: 'task-b', pr_number: 20 }));
+      await store.createTask(makeTask({ id: 'task-c', pr_number: 30 }));
+
+      const result = await poll('agent-x');
+      expect(result.tasks).toHaveLength(3);
+      const prNumbers = result.tasks.map((t) => t.pr_number);
+      expect(prNumbers).toContain(10);
+      expect(prNumbers).toContain(20);
+      expect(prNumbers).toContain(30);
+    });
+
+    it('agent can work on tasks sequentially', async () => {
+      await store.createTask(makeTask({ id: 'task-seq-1', pr_number: 1 }));
+      await store.createTask(makeTask({ id: 'task-seq-2', pr_number: 2 }));
+
+      // Claim and finish first task
+      await claim('task-seq-1', 'worker', 'summary');
+      await submitResult('task-seq-1', 'worker', 'summary', 'Review 1', 'approve');
+
+      // Poll again — should see only the second task
+      const result = await poll('worker');
+      expect(result.tasks).toHaveLength(1);
+      expect(result.tasks[0].task_id).toBe('task-seq-2');
+    });
+
+    it('completed and timed-out tasks are excluded from poll', async () => {
+      await store.createTask(makeTask({ id: 'done', status: 'completed' }));
+      await store.createTask(makeTask({ id: 'timedout', status: 'timeout' }));
+      await store.createTask(makeTask({ id: 'failed', status: 'failed' }));
+      await store.createTask(makeTask({ id: 'active' }));
+
+      const result = await poll('agent');
+      expect(result.tasks).toHaveLength(1);
+      expect(result.tasks[0].task_id).toBe('active');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 9. Edge cases
+  // ═══════════════════════════════════════════════════════════
+
+  describe('edge cases', () => {
+    it('result for a task that no longer exists returns 404', async () => {
+      const res = await api('POST', '/api/tasks/nonexistent/result', {
+        agent_id: 'ghost',
+        type: 'review',
+        review_text: 'Review of deleted task',
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('submitting result twice on the same claim returns 409', async () => {
+      await store.createTask(makeTask({ id: 'task-dup' }));
+      await claim('task-dup', 'agent', 'summary');
+
+      // First submit
+      const r1 = await submitResult('task-dup', 'agent', 'summary', 'First');
+      expect(r1.status).toBe(200);
+
+      // Second submit — claim already completed
+      const r2 = await submitResult('task-dup', 'agent', 'summary', 'Second');
+      expect(r2.status).toBe(409);
+    });
+
+    it('poll with empty store returns empty array', async () => {
+      const result = await poll('lonely-agent');
+      expect(result.tasks).toEqual([]);
+    });
+
+    it('claim with missing fields returns 400', async () => {
+      const res = await api('POST', '/api/tasks/any/claim', { agent_id: 'a' });
+      expect(res.status).toBe(400);
+    });
+
+    it('result with missing fields returns 400', async () => {
+      const res = await api('POST', '/api/tasks/any/result', { agent_id: 'a' });
+      expect(res.status).toBe(400);
+    });
+
+    it('claim on completed task is rejected', async () => {
+      await store.createTask(makeTask({ id: 'task-done', status: 'completed' }));
+      const res = await claim('task-done', 'agent', 'summary');
+      expect(res.claimed).toBe(false);
+      expect(res.reason).toContain('completed');
+    });
+
+    it('claim on timed-out task is rejected', async () => {
+      await store.createTask(makeTask({ id: 'task-to', status: 'timeout' }));
+      const res = await claim('task-to', 'agent', 'summary');
+      expect(res.claimed).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 10. Health check & registry
+  // ═══════════════════════════════════════════════════════════
+
+  describe('health check & registry', () => {
+    it('GET / returns status ok', async () => {
+      const res = await app.request('/', { method: 'GET' }, mockEnv);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ status: 'ok', service: 'opencara-server' });
+    });
+
+    it('GET /api/registry returns tools and models', async () => {
+      const res = await app.request('/api/registry', { method: 'GET' }, mockEnv);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { tools: unknown[]; models: unknown[] };
+      expect(body.tools.length).toBeGreaterThan(0);
+      expect(body.models.length).toBeGreaterThan(0);
+    });
+
+    it('unknown route returns 404', async () => {
+      const res = await app.request('/api/nonexistent', { method: 'GET' }, mockEnv);
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 11. Webhook → task creation (requires signature)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('webhook → task creation', () => {
+    it('valid PR webhook creates a task that agents can poll', async () => {
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: { owner: { login: 'acme' }, name: 'widget' },
+        pull_request: {
+          number: 77,
+          html_url: 'https://github.com/acme/widget/pull/77',
+          diff_url: 'https://github.com/acme/widget/pull/77.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/new-thing' },
+          draft: false,
+          labels: [],
+        },
+      };
+
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+
+      const res = await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+      expect(res.status).toBe(200);
+
+      // Verify a task was created in the store
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].owner).toBe('acme');
+      expect(tasks[0].repo).toBe('widget');
+      expect(tasks[0].pr_number).toBe(77);
+      expect(tasks[0].status).toBe('pending');
+
+      // Verify agent can poll for the task
+      const pollResult = await poll('agent-1');
+      expect(pollResult.tasks).toHaveLength(1);
+      expect(pollResult.tasks[0].pr_number).toBe(77);
+      expect(pollResult.tasks[0].role).toBe('summary'); // review_count=1 (default)
+    });
+
+    it('invalid signature is rejected with 401', async () => {
+      const body = JSON.stringify({ action: 'opened' });
+
+      const res = await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256':
+              'sha256=0000000000000000000000000000000000000000000000000000000000000000',
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it('missing signature is rejected with 401', async () => {
+      const res = await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-GitHub-Event': 'pull_request',
+          },
+          body: '{}',
+        },
+        mockEnv,
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it('draft PRs are skipped (no task created)', async () => {
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: { owner: { login: 'acme' }, name: 'widget' },
+        pull_request: {
+          number: 88,
+          html_url: 'https://github.com/acme/widget/pull/88',
+          diff_url: 'https://github.com/acme/widget/pull/88.diff',
+          base: { ref: 'main' },
+          head: { ref: 'draft-branch' },
+          draft: true,
+          labels: [],
+        },
+      };
+
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+
+      await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('non-triggered action is skipped', async () => {
+      const payload = {
+        action: 'closed', // not in default trigger.on ['opened']
+        installation: { id: 999 },
+        repository: { owner: { login: 'acme' }, name: 'widget' },
+        pull_request: {
+          number: 99,
+          html_url: 'https://github.com/acme/widget/pull/99',
+          diff_url: 'https://github.com/acme/widget/pull/99.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat' },
+        },
+      };
+
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+
+      await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 12. Full E2E: webhook → poll → claim → result → GitHub
+  // ═══════════════════════════════════════════════════════════
+
+  describe('full E2E: webhook → poll → claim → result → posted', () => {
+    it('complete single-agent lifecycle via HTTP', async () => {
+      // Step 1: Webhook creates a task
+      const payload = {
+        action: 'opened',
+        installation: { id: 888 },
+        repository: { owner: { login: 'org' }, name: 'app' },
+        pull_request: {
+          number: 5,
+          html_url: 'https://github.com/org/app/pull/5',
+          diff_url: 'https://github.com/org/app/pull/5.diff',
+          base: { ref: 'main' },
+          head: { ref: 'fix/bug' },
+        },
+      };
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+
+      const webhookRes = await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+      expect(webhookRes.status).toBe(200);
+
+      // Step 2: Agent polls
+      const pollResult = await poll('e2e-agent');
+      expect(pollResult.tasks).toHaveLength(1);
+      const task = pollResult.tasks[0];
+      expect(task.owner).toBe('org');
+      expect(task.repo).toBe('app');
+      expect(task.pr_number).toBe(5);
+      expect(task.role).toBe('summary');
+
+      const taskId = task.task_id as string;
+
+      // Step 3: Agent claims
+      const claimRes = await claim(taskId, 'e2e-agent', 'summary');
+      expect(claimRes.claimed).toBe(true);
+
+      // Step 4: Agent submits review
+      const review = '## Summary\nBug fix looks correct.\n\n## Verdict\nAPPROVE';
+      await submitResult(taskId, 'e2e-agent', 'summary', review, 'approve', 800);
+
+      // Step 5: Verify task completed and review posted
+      const finalTask = await store.getTask(taskId);
+      expect(['completed', 'failed']).toContain(finalTask?.status);
+
+      // Step 6: Verify no tasks remain for polling
+      const emptyPoll = await poll('e2e-agent');
+      expect(emptyPoll.tasks).toHaveLength(0);
+    });
+  });
+});

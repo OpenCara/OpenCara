@@ -1,0 +1,115 @@
+import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
+import { postPrComment } from './reviews.js';
+
+/**
+ * Fetch the .review.yml file from a repository at a specific ref.
+ * Returns null if the file doesn't exist.
+ */
+export async function fetchReviewConfig(
+  owner: string,
+  repo: string,
+  ref: string,
+  token: string,
+): Promise<string | null> {
+  const response = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/contents/.review.yml?ref=${ref}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.raw+json',
+        'User-Agent': 'OpenCara-Server',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  );
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch .review.yml: ${response.status} ${response.statusText}`);
+  }
+
+  return response.text();
+}
+
+export interface PrDetails {
+  number: number;
+  html_url: string;
+  diff_url: string;
+  base: { ref: string };
+  head: { ref: string };
+  draft: boolean;
+  labels: Array<{ name: string }>;
+}
+
+/**
+ * Fetch PR details from the GitHub API.
+ */
+export async function fetchPrDetails(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string,
+): Promise<PrDetails | null> {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'OpenCara-Server',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!response.ok) {
+    console.error(`Failed to fetch PR details: ${response.status} ${response.statusText}`);
+    return null;
+  }
+
+  return (await response.json()) as PrDetails;
+}
+
+/**
+ * Fetch .review.yml and parse config. Returns DEFAULT_REVIEW_CONFIG on error/missing.
+ * Posts a PR comment if the YAML is malformed.
+ */
+export async function loadReviewConfig(
+  owner: string,
+  repo: string,
+  headRef: string,
+  prNumber: number,
+  token: string,
+): Promise<{ config: ReviewConfig; parseError: boolean }> {
+  let configYaml: string | null;
+  try {
+    configYaml = await fetchReviewConfig(owner, repo, headRef, token);
+  } catch (err) {
+    console.error('Failed to fetch .review.yml:', err);
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+  }
+
+  if (configYaml === null) {
+    console.log(`No .review.yml found in ${owner}/${repo} — using default review config`);
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+  }
+
+  const parsed = parseReviewConfig(configYaml);
+  if ('error' in parsed) {
+    console.log(`.review.yml parse error: ${parsed.error}`);
+    try {
+      await postPrComment(
+        owner,
+        repo,
+        prNumber,
+        `**OpenCara**: Failed to parse \`.review.yml\`: ${parsed.error}`,
+        token,
+      );
+    } catch (err) {
+      console.error('Failed to post error comment:', err);
+    }
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+  }
+
+  return { config: parsed, parseError: false };
+}
