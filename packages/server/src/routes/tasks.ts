@@ -9,9 +9,9 @@ import type {
   ResultResponse,
   RejectRequest,
   ErrorRequest,
-  ReviewVerdict,
-  ReviewTask,
   ClaimRole,
+  ReviewVerdict,
+  TaskClaim,
 } from '@opencara/shared';
 import type { Env } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
@@ -26,25 +26,32 @@ import {
 
 /**
  * Determine the available role for an agent on a task.
- * Uses task-level counters (not claim list queries) to avoid KV eventual consistency issues.
  * Returns null if no role is available.
  */
-function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
-  const claimedAgents = task.claimed_agents ?? [];
-  if (claimedAgents.includes(agentId)) return null;
+function availableRole(
+  reviewCount: number,
+  claims: TaskClaim[],
+  agentId: string,
+): ClaimRole | null {
+  // Agent already has a claim on this task
+  if (claims.some((c) => c.agent_id === agentId)) return null;
 
-  const reviewClaims = task.review_claims ?? 0;
-  const completedReviews = task.completed_reviews ?? 0;
-  const summaryClaimed = task.summary_claimed ?? false;
+  const reviewClaims = claims.filter((c) => c.role === 'review');
+  const summaryClaims = claims.filter((c) => c.role === 'summary');
 
-  if (task.review_count === 1) {
-    if (!summaryClaimed) return 'summary';
+  if (reviewCount === 1) {
+    // Single-agent: one summary slot only
+    if (summaryClaims.length === 0) return 'summary';
     return null;
   }
 
-  const reviewSlots = task.review_count - 1;
-  if (reviewClaims < reviewSlots) return 'review';
-  if (completedReviews >= reviewSlots && !summaryClaimed) return 'summary';
+  // Multi-agent: reviewCount-1 review slots, then 1 summary slot
+  const reviewSlots = reviewCount - 1;
+  if (reviewClaims.length < reviewSlots) return 'review';
+
+  // Summary available only after all reviews are completed
+  const completedReviews = reviewClaims.filter((c) => c.status === 'completed');
+  if (completedReviews.length >= reviewSlots && summaryClaims.length === 0) return 'summary';
 
   return null;
 }
@@ -222,7 +229,8 @@ export function taskRoutes(store: TaskStore) {
     const available: PollTask[] = [];
 
     for (const task of tasks) {
-      const role = availableRole(task, agent_id);
+      const claims = await store.getClaims(task.id);
+      const role = availableRole(task.review_count, claims, agent_id);
       if (!role) continue;
 
       const remainingMs = task.timeout_at - Date.now();
@@ -267,7 +275,8 @@ export function taskRoutes(store: TaskStore) {
       return c.json<ClaimResponse>({ claimed: false, reason: 'Task has timed out' });
     }
 
-    const actualRole = availableRole(task, agent_id);
+    const claims = await store.getClaims(taskId);
+    const actualRole = availableRole(task.review_count, claims, agent_id);
 
     if (!actualRole || actualRole !== role) {
       return c.json<ClaimResponse>({
@@ -289,23 +298,13 @@ export function taskRoutes(store: TaskStore) {
       created_at: Date.now(),
     });
 
-    // Update task counters atomically (avoids KV list consistency issues)
-    const claimedAgents = [...(task.claimed_agents ?? []), agent_id];
-    const taskUpdates: Partial<ReviewTask> = {
-      claimed_agents: claimedAgents,
-      status: task.status === 'pending' ? 'reviewing' : task.status,
-    };
-    if (role === 'review') {
-      taskUpdates.review_claims = (task.review_claims ?? 0) + 1;
-    } else {
-      taskUpdates.summary_claimed = true;
+    // Update task status to reviewing
+    if (task.status === 'pending') {
+      await store.updateTask(taskId, { status: 'reviewing' });
     }
-    await store.updateTask(taskId, taskUpdates);
 
-    // If summary role, include completed review texts (use getClaims here — OK since
-    // reviews were completed in prior requests, KV has had time to propagate)
+    // If summary role, include completed review texts
     if (role === 'summary') {
-      const claims = await store.getClaims(taskId);
       const completedReviews = claims
         .filter((c) => c.role === 'review' && c.status === 'completed' && c.review_text)
         .map((c) => ({
@@ -359,12 +358,20 @@ export function taskRoutes(store: TaskStore) {
       // Summary submitted — post the final review to GitHub
       await postFinalReview(store, c.env, taskId, agent_id);
     } else {
-      // Review submitted — increment completed_reviews counter on task
-      const newCompleted = (task.completed_reviews ?? 0) + 1;
-      await store.updateTask(taskId, { completed_reviews: newCompleted });
-
+      // Review submitted — check if summary slot just became available
+      const updatedClaims = await store.getClaims(taskId);
       const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
-      if (reviewSlots > 0 && newCompleted >= reviewSlots) {
+      const completedReviews = updatedClaims.filter(
+        (cl) => cl.role === 'review' && cl.status === 'completed',
+      );
+
+      if (task.review_count === 1 && completedReviews.length === 0) {
+        // Single-agent mode doesn't have review claims, only summary
+      }
+
+      // If all review slots are filled, the summary slot is now available
+      // (agents will pick it up on next poll)
+      if (reviewSlots > 0 && completedReviews.length >= reviewSlots) {
         console.log(
           `Task ${taskId}: all ${reviewSlots} reviews complete, summary slot now available`,
         );
