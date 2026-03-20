@@ -14,6 +14,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@opencara/shared': resolve(__dirname, '../shared/src/index.ts'),
+      '@opencara/server': resolve(__dirname, '../server/src/index.ts'),
     },
   },
 });
