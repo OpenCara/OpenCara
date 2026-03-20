@@ -2,520 +2,215 @@
 
 ## Tech Stack
 
-### Infrastructure (Zero-Cost Plan)
-
-| Component             | Service                         | Role                                                | Free Tier            |
-| --------------------- | ------------------------------- | --------------------------------------------------- | -------------------- |
-| API Backend           | Cloudflare Workers (TypeScript) | Webhook handling, task matching & distribution      | 100k requests/day    |
-| Connection Management | Cloudflare Durable Objects      | Agent WebSocket connections, one instance per agent | SQLite backend free  |
-| Cache                 | Workers KV                      | Leaderboard, agent status, hot data                 | 100k reads/day       |
-| Object Storage        | Cloudflare R2                   | Review snapshots, code context (on demand)          | 10GB, zero egress    |
-| Database              | Supabase (PostgreSQL)           | Users, agent reputation, review records             | 500MB                |
-| Authentication        | Supabase Auth                   | GitHub OAuth login                                  | Free                 |
-| Frontend              | Vercel (Next.js)                | Dashboard, leaderboard                              | Generous free tier   |
-| DNS + CDN             | Cloudflare                      | Domain resolution, static asset acceleration        | Free                 |
-| CI/CD                 | GitHub Actions                  | Build, test, deploy                                 | Free for open source |
-| GitHub Integration    | GitHub App                      | Receive PR webhooks, post review comments           | —                    |
+| Component    | Service                   | Role                                          |
+| ------------ | ------------------------- | --------------------------------------------- |
+| API Backend  | Cloudflare Workers (Hono) | Webhook handling, task REST API               |
+| Storage      | Workers KV                | Task and claim persistence (TaskStore)        |
+| CLI          | Node.js npm package       | Agent runtime, HTTP polling, review execution |
+| Shared Types | Pure TypeScript           | REST API contracts, review config parser      |
+| CI/CD        | GitHub Actions            | Build, test, deploy                           |
+| GitHub App   | GitHub Integration        | Receive PR webhooks, post review comments     |
 
 ### Rationale
 
-- **Cloudflare Workers**: Global edge deployment, fast webhook response, lightweight task matching logic (mostly I/O), 10ms CPU limit is sufficient
-- **Durable Objects**: Only way to maintain WebSocket long connections in the Workers ecosystem, naturally suited for agent connection management
-- **Supabase**: PostgreSQL better suited than D1 (SQLite) for relational data (users, agents, reviews have many associations), built-in Auth saves OAuth development
-- **Vercel**: Native Next.js support, best frontend development experience
-- **TypeScript across stack**: Workers runtime has best TS support, frontend and backend can share types
+- **Hono on Workers**: Portable across Workers, Node, Deno, Bun. Fast webhook response, minimal overhead.
+- **Workers KV**: Simple key-value storage for tasks and claims. No database needed at current scale.
+- **HTTP polling over WebSocket**: Simpler, stateless, no Durable Objects needed. Agents poll every 10s.
+- **No database**: Tasks are ephemeral (KV TTL). No user accounts, no auth, no reputation tracking (yet).
+- **TypeScript across stack**: Server, CLI, and shared types all in TypeScript.
 
 ### Core Flow
 
 ```
 GitHub (PR Webhook)
     ↓
-Cloudflare Worker receives
+Hono server validates signature, reads .review.yml
     ↓
-Query Supabase: match agents with access, quota, and reputation
+Creates task in KV (TaskStore)
     ↓
-Query Durable Objects: filter currently online agents
+Agent polls /api/tasks/poll → sees available task
     ↓
-FIFO sort, select agents
+Agent claims task via /api/tasks/:id/claim
     ↓
-Push task to agents via Durable Object → WebSocket
+Agent fetches diff from GitHub (public URL)
     ↓
-Agent executes review locally (using own API key)
+Agent executes review locally (using own AI tool + API key)
     ↓
-Results pushed back to Worker → written to Supabase → posted as GitHub comment
+Agent submits result via /api/tasks/:id/result
+    ↓
+Server posts review to GitHub PR (installation token)
 ```
 
 ### Agent CLI
 
-- Language: TypeScript (shares type definitions and protocol code with backend)
+- Language: TypeScript
 - Distribution: npm (`npm i -g opencara`)
-- Maintains WebSocket long connection with platform Durable Object
+- Connection: HTTP polling (10s interval) — no WebSocket
+- Review execution: stdin-based command invocation (claude, codex, gemini, qwen)
+- Router mode: acts as an AI tool that relays prompts via stdin/stdout
 
-## Database Schema
+## REST API
 
-### users
+| Method | Path                    | Auth | Description                     |
+| ------ | ----------------------- | ---- | ------------------------------- |
+| POST   | `/webhook/github`       | HMAC | Receive GitHub webhook events   |
+| POST   | `/api/tasks/poll`       | None | Agent polls for available tasks |
+| POST   | `/api/tasks/:id/claim`  | None | Agent claims a task slot        |
+| POST   | `/api/tasks/:id/result` | None | Agent submits review result     |
+| POST   | `/api/tasks/:id/reject` | None | Agent rejects a claimed task    |
+| POST   | `/api/tasks/:id/error`  | None | Agent reports execution error   |
+| GET    | `/api/registry`         | None | Tool/model registry             |
+| GET    | `/`                     | None | Health check                    |
 
-| Column           | Type      | Description                                 |
-| ---------------- | --------- | ------------------------------------------- |
-| id               | uuid      | Primary key                                 |
-| github_id        | bigint    | GitHub user ID (unique)                     |
-| name             | text      | GitHub username                             |
-| avatar           | text      | Avatar URL                                  |
-| api_key_hash     | text      | SHA-256 hash of platform API key (unique)   |
-| reputation_score | float     | User-level aggregate reputation (default 0) |
-| created_at       | timestamp |                                             |
-| updated_at       | timestamp |                                             |
-
-### agents
-
-| Column            | Type      | Description                                        |
-| ----------------- | --------- | -------------------------------------------------- |
-| id                | uuid      | Primary key                                        |
-| user_id           | uuid      | FK → users                                         |
-| model             | text      | Model identifier (claude-sonnet-4-6, gpt-4o, etc.) |
-| tool              | text      | Agent tool (claude-code, codex, etc.)              |
-| reputation_score  | float     | Agent-level reputation (default 0)                 |
-| status            | text      | online/offline                                     |
-| last_heartbeat_at | timestamp | Last heartbeat received (nullable)                 |
-| created_at        | timestamp |                                                    |
-
-### projects
-
-| Column                 | Type      | Description                         |
-| ---------------------- | --------- | ----------------------------------- |
-| id                     | uuid      | Primary key                         |
-| github_installation_id | bigint    | GitHub App installation ID (unique) |
-| owner                  | text      | GitHub user/org                     |
-| repo                   | text      | Repository name                     |
-| created_at             | timestamp |                                     |
-
-Review configuration is not stored in the database — read from `.review.yml` in the repo each time. Project join/leave is managed automatically via GitHub App installation events.
-
-### review_tasks
-
-| Column     | Type      | Description                                                      |
-| ---------- | --------- | ---------------------------------------------------------------- |
-| id         | uuid      | Primary key                                                      |
-| project_id | uuid      | FK → projects                                                    |
-| pr_number  | int       | PR number                                                        |
-| pr_url     | text      | PR URL                                                           |
-| status     | text      | pending/reviewing/summarizing/completed/failed/timeout/cancelled |
-| created_at | timestamp |                                                                  |
-| timeout_at | timestamp | Timeout deadline                                                 |
-
-### review_results
-
-| Column         | Type      | Description                                |
-| -------------- | --------- | ------------------------------------------ |
-| id             | uuid      | Primary key                                |
-| review_task_id | uuid      | FK → review_tasks                          |
-| agent_id       | uuid      | FK → agents                                |
-| status         | text      | completed/rejected/error                   |
-| comment_url    | text      | GitHub comment URL (nullable, set on post) |
-| created_at     | timestamp |                                            |
-
-Does not store review content — only retains the GitHub comment URL. Used for subsequent emoji rating statistics.
-
-### review_summaries
-
-| Column         | Type      | Description                     |
-| -------------- | --------- | ------------------------------- |
-| id             | uuid      | Primary key                     |
-| review_task_id | uuid      | FK → review_tasks               |
-| agent_id       | uuid      | FK → agents (summarizing agent) |
-| comment_url    | text      | GitHub comment URL              |
-| created_at     | timestamp |                                 |
-
-### ratings
-
-| Column           | Type      | Description         |
-| ---------------- | --------- | ------------------- |
-| id               | uuid      | Primary key         |
-| review_result_id | uuid      | FK → review_results |
-| rater_github_id  | bigint    | Rater's GitHub ID   |
-| emoji            | text      | Emoji type          |
-| created_at       | timestamp |                     |
-
-### reputation_history
-
-| Column       | Type      | Description            |
-| ------------ | --------- | ---------------------- |
-| id           | uuid      | Primary key            |
-| agent_id     | uuid      | FK → agents (nullable) |
-| user_id      | uuid      | FK → users (nullable)  |
-| score_change | float     | Score delta            |
-| reason       | text      | Reason for change      |
-| created_at   | timestamp |                        |
-
-### consumption_logs
-
-| Column         | Type      | Description       |
-| -------------- | --------- | ----------------- |
-| id             | uuid      | Primary key       |
-| agent_id       | uuid      | FK → agents       |
-| review_task_id | uuid      | FK → review_tasks |
-| tokens_used    | int       | Tokens consumed   |
-| created_at     | timestamp |                   |
-
-Consumption limits are stored in the contributor's local Agent CLI configuration, not managed by the platform.
-
-### Key Constraints & Indexes
-
-- `users.github_id` — unique
-- `users.api_key_hash` — unique
-- `projects.github_installation_id` — unique
-- `agents.user_id` → FK `users.id`
-- `review_tasks.project_id` → FK `projects.id`
-- `review_results.review_task_id` → FK `review_tasks.id`
-- `review_results.agent_id` → FK `agents.id`
-- `review_summaries.review_task_id` → FK `review_tasks.id`
-- `review_summaries.agent_id` → FK `agents.id`
-- `ratings.review_result_id` → FK `review_results.id`
-- `consumption_logs.agent_id` → FK `agents.id`
-- `consumption_logs.review_task_id` → FK `review_tasks.id`
-- Indexes on: `agents.status`, `review_tasks.status`, `review_tasks.timeout_at`, `ratings.created_at`
-
-## Authentication
-
-### API Key
-
-- **Format**: `cr_` + 40 random hex chars (160 bits of entropy). Example: `cr_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2`
-- **Generation**: `crypto.getRandomValues(new Uint8Array(20))` → hex encode → prefix `cr_`
-- **Scope**: one API key per user (not per agent). Agents are identified separately by agent UUID.
-- **Storage**: platform stores `SHA-256(api_key)` in `users.api_key_hash`. CLI stores plaintext in `~/.opencara/config.yml`.
-- **Lookup**: hash the incoming token and query `users WHERE api_key_hash = SHA-256(token)`.
-- **Revocation**: `POST /auth/revoke` (authenticated) generates a new key, updates hash, returns new key. Old key immediately invalid.
-
-### OAuth Device Flow (RFC 8628)
-
-CLI authenticates users via GitHub OAuth device flow. The platform mediates between CLI and GitHub.
-
-**Endpoints**:
-
-- `POST /auth/device` — initiate device flow
-- `POST /auth/device/token` — poll for authorization result
-
-**Flow**:
+### Poll Flow
 
 ```
-CLI                         Worker                      GitHub
- |                            |                            |
- |-- POST /auth/device ------>|                            |
- |                            |-- POST /login/device ------>|
- |                            |<-- device_code, user_code --|
- |<-- user_code, verify_url --|                            |
- |                            |                            |
- | (user opens URL, enters code, authorizes)               |
- |                            |                            |
- |-- POST /auth/device/token ->|                            |
- |                            |-- POST /login/oauth/access_token -->|
- |                            |<-- access_token ------------|
- |                            | (fetch user profile, upsert user,  |
- |                            |  generate API key, store hash)     |
- |<-- { api_key: "cr_xxx" } --|                            |
+POST /api/tasks/poll
+  Body: { agent_id: "uuid" }
+  Response: { tasks: [{ task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role }] }
 ```
 
-**Parameters**:
+Agent receives a list of available tasks. Each task has a `role` field indicating whether the agent should do a `review` or `summary`.
 
-- Code expiry: 15 minutes (GitHub default)
-- Poll interval: 5 seconds (per RFC 8628)
-- Poll responses: `{ status: "pending" }`, `{ status: "expired" }`, `{ status: "complete", apiKey: "cr_xxx" }`
+### Claim Flow
 
-**Secrets**: GitHub OAuth App client ID and secret stored as Cloudflare Workers secrets (`wrangler secret put GITHUB_CLIENT_ID`, `wrangler secret put GITHUB_CLIENT_SECRET`). Accessed at runtime via `env.GITHUB_CLIENT_ID` and `env.GITHUB_CLIENT_SECRET`.
+```
+POST /api/tasks/:taskId/claim
+  Body: { agent_id, role, model?, tool? }
+  Response: { claimed: true, reviews?: [...] } | { claimed: false, reason: "..." }
+```
 
-## API Design
+For summary claims, the response includes completed review texts from other agents.
 
-### WebSocket Connection & Authentication
+### Result Flow
 
-**URL**: `wss://<host>/ws/agent/{agentId}?token=cr_xxxx`
+```
+POST /api/tasks/:taskId/result
+  Body: { agent_id, type: "review"|"summary", review_text, verdict?, tokens_used? }
+  Response: { success: true }
+```
 
-The agent ID is in the URL path so the Worker routes to the correct Durable Object. The API key is passed as a query parameter for simplicity — our client is a Node.js CLI (which could use headers), but query params keep the protocol straightforward and avoid needing different code paths.
+When a summary result is submitted, the server posts the final review to GitHub.
 
-> **Security note**: Tokens in URLs may appear in server access logs and proxy logs. In the Cloudflare Workers environment this is a minimal risk (Workers don't have traditional access logs), but operators deploying behind reverse proxies should be aware. API keys are long-lived and can be revoked via `POST /auth/revoke` if compromised.
+## TaskStore
 
-**Auth flow**:
-
-1. CLI opens WebSocket to `wss://<host>/ws/agent/{agentId}?token=cr_xxxx`
-2. Worker validates token against Supabase (`users.api_key_hash`), verifies agent belongs to user
-3. On success: upgrade to WebSocket, DO sends `{ type: "connected", version: 1, agentId: "..." }`
-4. On failure: return HTTP 401 before upgrade, with JSON error body `{ error: "invalid_token" }`
-5. On token revoked mid-session: DO sends `{ type: "error", code: "auth_revoked" }` and closes with WebSocket close code `4001`
-6. On duplicate connection (same agent reconnects while old is alive): old connection closed with code `4002` ("replaced")
-
-No token refresh mechanism — API keys are long-lived. Revocation requires re-login via device flow.
-
-### WebSocket Message Envelope
-
-All WebSocket messages use a standard JSON envelope with discriminated union pattern:
+Abstracted storage interface for tasks, claims, and agent heartbeats.
 
 ```typescript
-interface MessageEnvelope {
-  type: string; // discriminator (e.g., "review_request")
-  id: string; // nanoid/UUID for request-response correlation
-  timestamp: string; // ISO 8601
+interface TaskStore {
+  // Tasks
+  createTask(task: ReviewTask): Promise<void>;
+  getTask(id: string): Promise<ReviewTask | null>;
+  listTasks(filter?: TaskFilter): Promise<ReviewTask[]>;
+  updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean>;
+  deleteTask(id: string): Promise<void>;
+
+  // Claims
+  createClaim(claim: TaskClaim): Promise<void>;
+  getClaim(claimId: string): Promise<TaskClaim | null>;
+  getClaims(taskId: string): Promise<TaskClaim[]>;
+  updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
+
+  // Agent last-seen
+  setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;
+  getAgentLastSeen(agentId: string): Promise<number | null>;
 }
 ```
 
-Responses to a request reuse the same `id` value for correlation. Heartbeat messages still carry an `id` but correlation is optional.
+Implementations:
 
-**Protocol version**: sent once in the `connected` handshake response (`version: 1`), not in every message. Unknown message types are silently ignored by both sides — this allows forward compatibility without version negotiation.
+- **KVTaskStore** (`packages/server/src/store/kv.ts`) — Workers KV for production
+- **MemoryTaskStore** (`packages/server/src/store/memory.ts`) — In-memory for dev/test
 
-### WebSocket Message Types
+### KV Key Schema
 
-**Platform → Agent:**
+Tasks are stored with prefix `task:`, claims with prefix `claim:`, and agent heartbeats with prefix `agent:`. Task counters (claimed_agents, review_claims, completed_reviews, summary_claimed) are stored on the task object itself to avoid KV eventual consistency issues with list operations.
 
-| Message Type      | Description                                         |
-| ----------------- | --------------------------------------------------- |
-| `connected`       | Handshake success (includes protocol version)       |
-| `review_request`  | Push review task (includes PR info, project prompt) |
-| `summary_request` | Push summary task (includes all individual reviews) |
-| `heartbeat_ping`  | Heartbeat check                                     |
-| `error`           | Platform-initiated error (auth revoked, etc.)       |
-
-**Agent → Platform:**
-
-| Message Type       | Description                                           |
-| ------------------ | ----------------------------------------------------- |
-| `review_complete`  | Review result submission                              |
-| `summary_complete` | Summary result submission                             |
-| `review_rejected`  | Task rejected (quota exceeded, no access, etc.)       |
-| `review_error`     | Execution failed (CLI error, model API failure, etc.) |
-| `heartbeat_pong`   | Heartbeat response                                    |
-
-**Key message payloads:**
-
-```typescript
-// Platform → Agent
-interface ReviewRequestPayload {
-  taskId: string;
-  pr: {
-    url: string;
-    number: number;
-    diffUrl: string;
-    base: string; // base branch/ref
-    head: string; // head branch/ref
-  };
-  project: {
-    owner: string;
-    repo: string;
-    prompt: string; // from .review.yml
-  };
-  timeout: number; // seconds remaining for this review
-}
-
-interface SummaryRequestPayload {
-  taskId: string;
-  pr: {
-    url: string;
-    number: number;
-  };
-  project: {
-    owner: string;
-    repo: string;
-    prompt: string;
-  };
-  reviews: Array<{
-    agentId: string;
-    review: string; // markdown text
-    verdict: 'approve' | 'request_changes' | 'comment';
-  }>;
-}
-
-// Agent → Platform
-interface ReviewCompletePayload {
-  taskId: string;
-  review: string; // markdown text
-  verdict: 'approve' | 'request_changes' | 'comment';
-  tokensUsed: number;
-}
-
-interface SummaryCompletePayload {
-  taskId: string;
-  summary: string; // markdown text
-  tokensUsed: number;
-}
-
-interface ReviewRejectedPayload {
-  taskId: string;
-  reason: string; // human-readable reason
-}
-
-interface ReviewErrorPayload {
-  taskId: string;
-  error: string; // error description
-}
-```
-
-### REST API
-
-| Method | Path                  | Description                     |
-| ------ | --------------------- | ------------------------------- |
-| POST   | `/webhook/github`     | Receive GitHub Webhook          |
-| POST   | `/auth/device`        | Initiate OAuth device flow      |
-| POST   | `/auth/device/token`  | Poll for device flow completion |
-| POST   | `/auth/revoke`        | Revoke current API key          |
-| GET    | `/api/agents`         | Query agent list/status         |
-| POST   | `/api/agents`         | Register a new agent            |
-| GET    | `/api/tasks`          | Query review tasks              |
-| GET    | `/api/stats/:agentId` | Agent statistics                |
-| GET    | `/api/leaderboard`    | Leaderboard                     |
-
-## Review Task State Machine
+## Review Task Lifecycle
 
 ```
-                    ┌── cancelled (PR closed)
-                    │
-pending ──→ reviewing ──→ summarizing ──→ completed
-                │              │
-                ├── failed     └── completed (summary failed,
-                │                   fallback to individual comments)
-                └── timeout
+pending ──→ reviewing ──→ completed
+               │
+               ├── timeout (alarm-based, with partial review fallback)
+               └── failed (all agents errored)
 ```
 
-| Status        | Meaning                                           |
-| ------------- | ------------------------------------------------- |
-| `pending`     | Task created, agents not yet notified             |
-| `reviewing`   | Agents notified, waiting for results              |
-| `summarizing` | Enough results collected, summary agent working   |
-| `completed`   | Final result posted to GitHub                     |
-| `failed`      | All agents rejected/errored, no usable results    |
-| `timeout`     | Alarm fired, min_count not met, no usable results |
-| `cancelled`   | PR closed/merged before review completed          |
+| Status      | Meaning                                  |
+| ----------- | ---------------------------------------- |
+| `pending`   | Task created, no agents have claimed yet |
+| `reviewing` | At least one agent has claimed the task  |
+| `completed` | Final review posted to GitHub            |
+| `timeout`   | Timed out, partial results posted        |
+| `failed`    | All agents failed/errored                |
 
-**Valid transitions**:
+### Multi-Agent Flow
 
-- `pending → reviewing` — agents dispatched
-- `pending → cancelled` — PR closed before dispatch
-- `reviewing → summarizing` — min_count met, or timeout with enough results
-- `reviewing → completed` — single-agent mode (M5), no summary needed
-- `reviewing → failed` — all agents rejected/errored
-- `reviewing → timeout` — alarm fires, min_count not met, zero usable results
-- `reviewing → cancelled` — PR closed mid-review
-- `summarizing → completed` — summary posted, or fallback to individual comments
-- `summarizing → cancelled` — PR closed mid-summary
+For `review_count > 1` in `.review.yml`:
 
-**No backward transitions.** If summary agent fails, fallback is posting individual reviews as standalone comments — the task still transitions to `completed`.
+1. `review_count - 1` agents claim as `review` role
+2. After all reviews complete, one agent claims as `summary` role
+3. Summary agent receives all completed review texts
+4. Summary agent synthesizes and submits final review
+5. Server posts synthesized review to GitHub
 
-## Durable Object Lifecycle
+For `review_count = 1` (single agent):
 
-Each registered agent has a corresponding Durable Object instance.
+1. One agent claims as `summary` role directly
+2. Agent reviews and submits
+3. Server posts review to GitHub
 
-- **DO ID = agent UUID** — one DO per registered agent
-- **On reconnect**: same agent UUID resolves to the same DO instance. New WebSocket replaces the old one. If the old connection is still alive, it is closed with code `4002` ("replaced").
-- **Persisted state** (in DO SQLite storage):
-  - `status: "online" | "offline"`
-  - `connectedAt: string | null` (ISO 8601)
-  - `lastHeartbeatAt: string | null`
-  - `inFlightTaskIds: string[]` (currently assigned tasks)
-- **Offline persistence**: DO state persists indefinitely in SQLite. Cloudflare evicts the in-memory DO instance after ~30s of inactivity, but storage survives eviction.
-- **Agent deletion**: when an agent is deleted via API, the Worker calls the DO to clean up. Any in-flight tasks are marked `failed` and redistributed.
+## `.review.yml` Configuration
 
-## `.review.yml` Validation
+Read from the repository's head branch on each PR webhook.
 
-Review configuration is read from `.review.yml` in the repository root on each PR webhook.
+| Scenario          | Behavior                           |
+| ----------------- | ---------------------------------- |
+| File not found    | Skip review — repo hasn't opted in |
+| Malformed YAML    | Skip review, log error             |
+| Missing `version` | Use defaults                       |
+| Missing `prompt`  | Use default prompt                 |
 
-| Scenario          | Behavior                                                                  |
-| ----------------- | ------------------------------------------------------------------------- |
-| File not found    | Skip review entirely — repo hasn't opted in                               |
-| Malformed YAML    | Skip review, post PR comment: "OpenCara: `.review.yml` has syntax errors" |
-| Missing `version` | Reject — `version` is required (must be `1`)                              |
-| Missing `prompt`  | Reject — `prompt` is required (non-empty string)                          |
-
-**Defaults for optional fields**:
+### Defaults
 
 ```yaml
+version: 1
+prompt: 'Review this pull request for code quality, bugs, and improvements.'
 agents:
-  min_count: 1 # at least 1 agent must complete (range: 1-10)
-  preferred_tools: [] # no preference (any string, validated at runtime)
-  min_reputation: 0.0 # accept any agent (range: 0.0-1.0)
-reviewer:
-  whitelist: [] # everyone allowed
-  blacklist: [] # nobody blocked
-summarizer:
-  whitelist: []
-  blacklist: []
-timeout: '10m' # range: 1m-30m
-auto_approve:
-  enabled: false
+  review_count: 2
+timeout: '10m'
+trigger:
+  on: ['opened', 'synchronize']
+  comment: '/opencara review'
+  skip_drafts: true
+  skip_labels: ['skip-review']
+  skip_branches: []
 ```
-
-**Whitelist/blacklist logic**: if a whitelist is non-empty, ONLY whitelisted agents/users may participate (blacklist is ignored). If whitelist is empty and blacklist is non-empty, everyone except blacklisted may participate.
-
-## Shared Protocol Types
-
-`packages/shared` defines the WebSocket protocol and API types used by all packages.
-
-**Design principles**:
-
-- **TypeScript discriminated unions** for all message types — the `type` field is the discriminator
-- **Zero runtime dependencies** — exports only TypeScript types and pure utility functions
-- **Type guard functions** for runtime message validation (e.g., `isReviewRequest(msg): msg is ReviewRequestMessage`)
-- **No runtime validation library** — zod or similar stays in consuming packages (worker, cli) if they need runtime validation. Shared is pure types.
-- **Protocol version constant** — `PROTOCOL_VERSION = 1`, exported from shared, included in connection handshake
-- **Forward compatibility** — unknown message types are silently ignored by both sides. New types can be added without breaking old agents.
-- **Breaking changes** — bump `PROTOCOL_VERSION`. Platform supports current and previous version simultaneously during migration window.
 
 ## Security
 
-| Layer                       | Approach                                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------------------- |
-| GitHub Webhook verification | Validate `X-Hub-Signature-256` to ensure requests originate from GitHub                     |
-| Agent authentication        | API key (`cr_xxx`) validated via SHA-256 hash lookup during WebSocket upgrade               |
-| Agent authorization         | Trust contributors — code access happens locally, access failures reported back to platform |
-| Review content moderation   | No moderation — rely on reputation system + report mechanism                                |
-| Rate limiting               | Basic rate limiting at Workers layer to prevent abuse by individual agents/users            |
+| Layer                       | Approach                                                     |
+| --------------------------- | ------------------------------------------------------------ |
+| GitHub Webhook verification | HMAC-SHA256 signature validation (`X-Hub-Signature-256`)     |
+| Agent authentication        | None (open polling) — agents self-identify by UUID           |
+| Review content              | Posted as-is from agent — no server-side moderation          |
+| GitHub API access           | Installation tokens (short-lived, scoped to installed repos) |
 
 ## Error Handling
 
-### Agent Disconnection
+### Agent Failure
 
-- Durable Object detects WebSocket disconnect
-- In-progress tasks for that agent are marked as failed and redistributed to other online agents
-- After 3 different agents fail the same task, task is abandoned (status → `failed`)
-
-### Agent Review Failure
-
-- Local CLI error (model API down, repo clone failed, etc.)
-- Agent sends `review_error` with error description back to platform
-- Platform redistributes to another agent
+- Agent sends `/api/tasks/:id/error` or `/api/tasks/:id/reject`
+- Task remains in `reviewing` — other agents can still claim available slots
+- If all slots fail, task stays in `reviewing` until timeout
 
 ### Timeout
 
-- Durable Object alarm fires at `timeout_at` (default 10 minutes, configurable per `.review.yml`, range 1m-30m)
-- If minimum agent count is met → trigger summarization normally (status → `summarizing`)
-- If not met but some results exist → use available results for summarization
-- If zero results → mark task as `timeout`
-
-### Summary Agent Failure
-
-- Select the next highest-reputation agent for summarization
-- After retries exhausted → skip summary, post individual reviews as standalone comments on the PR (status → `completed`)
+- Checked lazily on each poll request
+- If reviews exist: post partial results as individual comments, then timeout comment
+- If no reviews: post timeout-only comment
+- Task status → `timeout`
 
 ### GitHub API Failure
 
-- Comment post failure → retry 3 times with exponential backoff
-- Final failure → log the error, review results preserved on platform, viewable in dashboard
-
-## MVP Scope
-
-- GitHub only (no GitLab)
-- Both user roles: Maintainer (onboard repo) + Contributor (run agent)
-- Multi-agent review + summarization
-- Reputation system (emoji ratings)
-- Web Dashboard (leaderboard, personal stats, review history)
-- Consumption tracking (basic limits)
-
-### Development Priority
-
-1. Project scaffolding — monorepo (Workers backend + CLI + Next.js frontend), TypeScript config, shared types
-2. GitHub App + Webhook — core entry point, receive PR events
-3. Supabase database — create tables, run migrations
-4. Agent CLI basics — `login`, `agent create`, `agent start`, WebSocket connection
-5. Durable Objects — agent connection management, task push
-6. Single agent review loop — PR arrives → one agent reviews → result posted to GitHub
-7. Multi-agent + summarization — parallel reviews, timeout/min-count control, summary flow
-8. Reputation system — emoji rating collection, reputation calculation
-9. Web Dashboard — leaderboard, personal data
-10. Consumption tracking — token usage recording and display
-
-Step 6 is the key milestone — completing the single-agent loop validates the entire architecture.
+- Comment post failure → task marked `failed`
+- Installation token failure → webhook returns 200 (silent skip)

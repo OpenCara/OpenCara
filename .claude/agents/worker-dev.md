@@ -2,11 +2,11 @@
 model: sonnet[1m]
 ---
 
-# worker-dev — Cloudflare Workers Developer
+# server-dev — Hono Server Developer
 
 ## Role
 
-Implement the backend API using Cloudflare Workers, Durable Objects, and Workers KV. Ephemeral — spawned by PM, implements → reviews → merges in one session.
+Implement the backend API using Hono on Cloudflare Workers with KV storage. Ephemeral — spawned by PM, implements → reviews → merges in one session.
 
 Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
@@ -14,35 +14,34 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
 - **Runtime**: Cloudflare Workers (V8 isolates)
 - **Language**: TypeScript (strict mode)
-- **Durable Objects**: Agent WebSocket connection management
-- **Workers KV**: Leaderboard cache, agent status
-- **R2**: Review snapshots, code context storage
-- **Database**: Supabase PostgreSQL (via REST API or client library)
-- **Testing**: Vitest + Miniflare
+- **Framework**: Hono
+- **Storage**: Workers KV (TaskStore abstraction)
+- **Testing**: Vitest
 
 ## Scope
 
-Backend API and task distribution:
+Backend API and task coordination:
 
 - GitHub webhook endpoint (`POST /webhook/github`)
 - Webhook signature validation (`X-Hub-Signature-256`)
-- REST API endpoints (`/api/agents`, `/api/tasks`, `/api/stats`, `/api/leaderboard`)
-- Durable Objects for agent WebSocket connections
-- Task matching and distribution logic
-- Timeout and retry handling
-- GitHub API integration (posting review comments)
-- Workers KV caching for leaderboard and status
+- REST API endpoints (`/api/tasks/poll`, `/api/tasks/:id/claim`, `/api/tasks/:id/result`, etc.)
+- TaskStore implementations (KV and memory)
+- Timeout handling (lazy check on poll)
+- GitHub API integration (posting review comments, installation tokens)
+- Review parsing and formatting
+- Eligibility filtering (skip drafts, labels, branches)
 
 ## Guidelines
 
-- All game logic comes from shared `packages/shared` — worker is a coordination layer
-- Respect the 10ms CPU limit for Workers — offload heavy work to Durable Objects
-- Use Durable Object alarms for timeout management
+- All shared types come from `packages/shared` — server is a coordination layer
+- No WebSocket, no Durable Objects — REST only
+- No database — all state in Workers KV via TaskStore
 - Webhook signature validation is security-critical — never skip it
-- Handle agent disconnection gracefully — redistribute in-progress tasks
+- Task counters stored on task object to avoid KV eventual consistency issues
 
 ## Key File Paths
 
-- Worker source: `packages/worker/`
+- Server source: `packages/server/`
 - Shared types: `packages/shared/`
-- Wrangler config: `packages/worker/wrangler.toml`
+- Wrangler config: `packages/server/wrangler.toml`
+- Store interface: `packages/server/src/store/interface.ts`

@@ -13,25 +13,21 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 ## Tech Stack
 
 - **Language**: TypeScript (strict mode)
-- **Backend**: Cloudflare Workers + Durable Objects
+- **Backend**: Hono on Cloudflare Workers + KV
 - **CLI**: Node.js (npm package)
-- **Frontend**: Next.js (React)
-- **Database**: PostgreSQL via Supabase
 - **Monorepo**: pnpm workspaces
 
 ## Scope
 
-- Shared types and protocol definitions (`packages/shared`)
-- WebSocket message schemas and validation
+- Shared types and REST API contracts (`packages/shared`)
 - Cross-package infrastructure (CI/CD, TypeScript config, build scripts)
-- Database schema design and migrations
+- TaskStore interface design
 - API contract definitions
 - Refactoring and migration work that spans multiple packages
 - Design docs in `docs/`
 
 ## Guidelines
 
-- Validate that shared types work across all packages (worker, cli, web)
+- Validate that shared types work across all packages (server, cli)
 - Keep `packages/shared` as a pure TypeScript package with zero runtime dependencies
-- Database migrations must be idempotent and reversible
-- WebSocket protocol changes require coordinated updates across worker, cli, and shared packages
+- REST API changes require coordinated updates across server, cli, and shared packages

@@ -17,9 +17,9 @@ Run AI review agents for OpenCara using your own AI tools and API keys. All revi
 
 Each tool requires its own API key configured per its documentation.
 
-## Quick Start (Anonymous)
+## Quick Start
 
-No GitHub account required. Start reviewing in 2 minutes:
+Start reviewing in 2 minutes:
 
 ```bash
 # 1. Install
@@ -36,12 +36,12 @@ agents:
 EOF
 
 # 3. Start
-opencara agent start --anonymous
+opencara agent start --all
 ```
 
-Your agent is now online and will receive review tasks from any repo with the OpenCara GitHub App installed.
+Your agent is now online and will poll for review tasks from any repo with the OpenCara GitHub App installed.
 
-## Full Setup
+## Configuration
 
 ### Step 1: Install the CLI
 
@@ -49,17 +49,7 @@ Your agent is now online and will receive review tasks from any repo with the Op
 npm i -g opencara
 ```
 
-### Step 2: Login (optional)
-
-Login links your agents to your GitHub profile, which builds your reputation score over time.
-
-```bash
-opencara login
-```
-
-This opens a browser for GitHub OAuth. Your API key is saved to `~/.opencara/config.yml`.
-
-### Step 3: Configure Agents
+### Step 2: Configure Agents
 
 Edit `~/.opencara/config.yml` to add your agents. Each agent needs a `model`, `tool`, and `command`:
 
@@ -89,23 +79,13 @@ agents:
     tool: qwen
     name: Qwen 3.5+
     command: qwen --model qwen3.5-plus -y
-
-  - model: glm-5
-    tool: qwen
-    name: GLM-5
-    command: qwen --model glm-5 -y
-
-  - model: kimi-k2.5
-    tool: qwen
-    name: Kimi K2.5
-    command: qwen --model kimi-k2.5 -y
 ```
 
 **How commands work**: The review prompt is delivered via **stdin** to your command. The command should read stdin, process it with the AI model, and write the review to stdout. Do NOT use `${PROMPT}` in commands.
 
 **Agent names**: The optional `name` field is displayed in your CLI output (e.g., `[My Claude Agent] Review complete`). It is not sent to the server or shown in GitHub reviews.
 
-### Step 4: Start Agents
+### Step 3: Start Agents
 
 ```bash
 # Start all configured agents
@@ -118,29 +98,23 @@ opencara agent start claude-sonnet-4-6
 Output looks like:
 
 ```
-Starting agent My Claude Agent (abc123-def456)...
-[My Claude Agent] Connected to platform.
-[My Claude Agent] Authenticated. Protocol v1
-Starting agent Qwen 3.5+ (ghi789-jkl012)...
-[Qwen 3.5+] Connected to platform.
-[Qwen 3.5+] Authenticated. Protocol v1
+Agent abc123 polling every 10s...
+[My Claude Agent] Review request: task xyz for org/repo#42
+[My Claude Agent] Review complete: approve (~1500 tokens)
 ```
 
-Leave the process running. Agents will receive review tasks automatically via WebSocket.
+Leave the process running. Agents poll for review tasks via HTTP every 10 seconds.
 
-### Step 5: Verify
+### Step 4: Verify
 
 When a PR is opened on a repo with the OpenCara GitHub App installed, your agent will:
 
-1. Receive a `review_request` with the PR diff
-2. Execute your configured command with the prompt via stdin
-3. Send the review back to the platform
-4. Platform posts the review as a GitHub PR comment
-
-```
-[My Claude Agent] Review request: task abc123 for org/repo#42
-[My Claude Agent] Review complete: approve (~1500 tokens)
-```
+1. Poll the server and see the available task
+2. Claim the task
+3. Fetch the PR diff directly from GitHub
+4. Execute your configured command with the review prompt via stdin
+5. Submit the review result to the server
+6. Server posts the review as a GitHub PR comment
 
 ## Advanced Configuration
 
@@ -241,13 +215,14 @@ pm2 startup
 
 ## Troubleshooting
 
-### Agent disconnects frequently
+### Agent not receiving tasks
 
-The CLI auto-reconnects with exponential backoff. If disconnects are constant:
+The CLI polls the platform every 10 seconds. If no tasks appear:
 
 - Check your internet connection
-- Verify `platform_url` is correct
-- Try `--verbose` flag for detailed WebSocket logs: `opencara agent start --all --verbose`
+- Verify `platform_url` is correct in your config
+- Ensure a `.review.yml` exists in the target repo
+- Check that the GitHub App is installed on the repo
 
 ### "No command configured" error
 
@@ -270,27 +245,18 @@ max_diff_size_kb: 500
 
 ### Token limit exceeded
 
-Your agent hit its consumption limit. Check current usage:
-
-```bash
-opencara stats
-```
-
-Adjust limits in your config or wait for the daily/monthly reset.
+Your agent hit its consumption limit. Adjust limits in your config or wait for the daily/monthly reset.
 
 ## FAQ
 
 **Q: Does OpenCara store my API keys?**
 No. All AI calls happen locally on your machine. Your API keys never leave your system.
 
-**Q: Can I run agents without a GitHub account?**
-Yes. Use `opencara agent start --anonymous` to start reviewing immediately. You can link your GitHub account later with `opencara login`.
-
-**Q: How are agents selected for reviews?**
-The platform uses reputation-weighted random selection with load balancing. Agents with higher reputation scores (from maintainer emoji ratings) are selected more often.
+**Q: How does the agent connect to the platform?**
+Via HTTP polling. The agent sends `POST /api/tasks/poll` every 10 seconds to check for available tasks. No WebSocket or persistent connections needed.
 
 **Q: What happens if my agent crashes during a review?**
-The platform detects the disconnection and redistributes the task to another available agent (up to 3 attempts).
+The task remains available for other agents to claim. Timed-out tasks get a timeout comment posted to the PR.
 
 **Q: Can I review only specific repos?**
 Yes. Use the `repos` config with `whitelist` or `blacklist` mode. See [Repo Filtering](#repo-filtering).
