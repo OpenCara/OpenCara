@@ -42,7 +42,7 @@ describe('ApiClient', () => {
     expect(calledHeaders).not.toHaveProperty('Authorization');
   });
 
-  it('throws HttpError with friendly message on 401', async () => {
+  it('throws HttpError with server error message on 401', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -50,9 +50,7 @@ describe('ApiClient', () => {
     });
 
     const client = new ApiClient('https://api.test.com', 'cr_bad');
-    await expect(client.get('/test')).rejects.toThrow(
-      'Not authenticated. Run `opencara login` first.',
-    );
+    await expect(client.get('/test')).rejects.toThrow('Unauthorized');
   });
 
   it('throws HttpError with server error message', async () => {

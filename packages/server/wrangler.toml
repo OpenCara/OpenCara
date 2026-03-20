@@ -1,0 +1,26 @@
+name = "opencara-server"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+# Secrets (set via `wrangler secret put <NAME>`):
+# - GITHUB_WEBHOOK_SECRET: GitHub App webhook secret
+# - GITHUB_APP_ID: GitHub App ID
+# - GITHUB_APP_PRIVATE_KEY: GitHub App private key (PEM)
+
+[vars]
+WEB_URL = "https://opencara.com"
+
+[[kv_namespaces]]
+binding = "TASK_STORE"
+id = "b6cb6efb2960419ea5a7c6a5a51b4345"
+
+# ── Dev environment ──────────────────────────────────────────────
+[env.dev]
+name = "opencara-server-dev"
+
+[env.dev.vars]
+WEB_URL = "https://dev.opencara.com"
+
+[[env.dev.kv_namespaces]]
+binding = "TASK_STORE"
+id = "8b056c1e0a884c48a63111a583d7a50f"

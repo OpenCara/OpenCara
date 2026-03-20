@@ -1,5 +1,7 @@
-import type { ReviewMode, ReviewVerdict } from '@opencara/shared';
+import type { ReviewVerdict } from '@opencara/shared';
 import { executeTool, estimateTokens, type ToolExecutorResult } from './tool-executor.js';
+
+export type ReviewMode = 'full' | 'compact';
 
 export interface ReviewRequest {
   taskId: string;

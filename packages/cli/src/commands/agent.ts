@@ -1,38 +1,25 @@
 import { Command } from 'commander';
-import WebSocket from 'ws';
 import crypto from 'node:crypto';
-import {
-  DEFAULT_REGISTRY,
-  type CreateAgentRequest,
-  type CreateAgentResponse,
-  type ListAgentsResponse,
-  type AgentResponse,
-  type AgentStatsResponse,
-  type AnonymousRegisterRequest,
-  type AnonymousRegisterResponse,
-  type RegistryResponse,
-  type PlatformMessage,
-  type ReviewRequestMessage,
-  type SummaryRequestMessage,
-  type RepoConfig,
+import type {
+  PollResponse,
+  PollTask,
+  ClaimResponse,
+  ClaimReview,
+  ReviewVerdict,
+  ClaimRole,
 } from '@opencara/shared';
 import {
   loadConfig,
-  saveConfig,
-  requireApiKey,
   resolveAgentLimits,
   type ConsumptionLimits,
   type LocalAgentConfig,
-  type AnonymousAgentEntry,
 } from '../config.js';
 import { ApiClient } from '../http.js';
-import { calculateDelay, sleep, DEFAULT_RECONNECT_OPTIONS } from '../reconnect.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
-import { resolveCommandTemplate, validateCommandBinary, estimateTokens } from '../tool-executor.js';
-import { RouterRelay, RouterTimeoutError } from '../router.js';
+import { validateCommandBinary, estimateTokens } from '../tool-executor.js';
+import { RouterRelay } from '../router.js';
 import {
-  checkConsumptionLimits,
   createSessionTracker,
   recordSessionUsage,
   formatPostReviewStats,
@@ -45,1479 +32,512 @@ export interface ConsumptionDeps {
   session: SessionStats;
 }
 
-/** Minimum time (ms) a connection must be alive before we reset the attempt counter */
-const CONNECTION_STABILITY_THRESHOLD_MS = 30_000;
+const DEFAULT_POLL_INTERVAL_MS = 10_000;
 
-function formatTable(agents: AgentResponse[], trustLabels?: Map<string, string>): void {
-  if (agents.length === 0) {
-    console.log('No agents registered. Run `opencara agent create` to register one.');
+/**
+ * Fetch the PR diff directly from GitHub (public URL).
+ * Agent fetches diff itself — server never sends it.
+ */
+async function fetchDiff(diffUrl: string): Promise<string> {
+  // Append .diff if not already present for GitHub's raw diff format
+  const patchUrl = diffUrl.endsWith('.diff') ? diffUrl : `${diffUrl}.diff`;
+  const response = await fetch(patchUrl);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch diff: ${response.status} ${response.statusText}`);
+  }
+
+  return response.text();
+}
+
+/**
+ * Poll → Claim → Review → Submit loop for a single agent.
+ */
+async function pollLoop(
+  client: ApiClient,
+  agentId: string,
+  reviewDeps: ReviewExecutorDeps,
+  consumptionDeps: ConsumptionDeps,
+  options: {
+    pollIntervalMs: number;
+    routerRelay?: RouterRelay;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const { pollIntervalMs, routerRelay, signal } = options;
+
+  console.log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
+
+  while (!signal?.aborted) {
+    try {
+      // Poll for tasks
+      const pollResponse = await client.post<PollResponse>('/api/tasks/poll', {
+        agent_id: agentId,
+      });
+
+      if (pollResponse.tasks.length > 0) {
+        const task = pollResponse.tasks[0]; // Take first available task
+        await handleTask(client, agentId, task, reviewDeps, consumptionDeps, routerRelay);
+      }
+    } catch (err) {
+      if (signal?.aborted) break;
+      console.error('Poll error:', (err as Error).message);
+    }
+
+    // Wait before next poll
+    await sleep(pollIntervalMs, signal);
+  }
+}
+
+/**
+ * Handle a single task: claim → fetch diff → review → submit
+ */
+async function handleTask(
+  client: ApiClient,
+  agentId: string,
+  task: PollTask,
+  reviewDeps: ReviewExecutorDeps,
+  consumptionDeps: ConsumptionDeps,
+  routerRelay?: RouterRelay,
+): Promise<void> {
+  const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
+
+  console.log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
+
+  // Claim the task
+  let claimResponse: ClaimResponse;
+  try {
+    claimResponse = await client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, {
+      agent_id: agentId,
+      role,
+    });
+  } catch (err) {
+    console.error(`  Failed to claim: ${(err as Error).message}`);
     return;
   }
 
-  const header = [
-    'ID'.padEnd(38),
-    'Name'.padEnd(20),
-    'Model'.padEnd(22),
-    'Tool'.padEnd(16),
-    'Status'.padEnd(10),
-    'Trust',
-  ].join('');
-  console.log(header);
-
-  for (const a of agents) {
-    const trust = trustLabels?.get(a.id) ?? '--';
-    const name = a.displayName ?? '--';
-    console.log(
-      [
-        a.id.padEnd(38),
-        name.padEnd(20),
-        a.model.padEnd(22),
-        a.tool.padEnd(16),
-        a.status.padEnd(10),
-        trust,
-      ].join(''),
-    );
-  }
-}
-
-function buildWsUrl(platformUrl: string, agentId: string, apiKey: string): string {
-  return (
-    platformUrl.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://') +
-    `/ws/agent/${agentId}?token=${encodeURIComponent(apiKey)}`
-  );
-}
-
-export { buildWsUrl };
-
-const HEARTBEAT_TIMEOUT_MS = 90_000;
-
-export const STABILITY_THRESHOLD_MIN_MS = 5_000;
-export const STABILITY_THRESHOLD_MAX_MS = 300_000;
-
-export interface StartAgentOptions {
-  verbose?: boolean;
-  stabilityThresholdMs?: number;
-  repoConfig?: RepoConfig;
-  displayName?: string;
-  label?: string;
-  routerRelay?: RouterRelay;
-}
-
-/** Interval for sending RFC 6455 WebSocket ping frames to keep the proxy layer alive */
-const WS_PING_INTERVAL_MS = 20_000;
-
-export function startAgent(
-  agentId: string,
-  platformUrl: string,
-  apiKey: string,
-  reviewDeps?: ReviewExecutorDeps,
-  consumptionDeps?: ConsumptionDeps,
-  options?: StartAgentOptions,
-): void {
-  const verbose = options?.verbose ?? false;
-  const stabilityThreshold = options?.stabilityThresholdMs ?? CONNECTION_STABILITY_THRESHOLD_MS;
-  const repoConfig = options?.repoConfig;
-  const displayName = options?.displayName;
-  const routerRelay = options?.routerRelay;
-  const prefix = options?.label ? `[${options.label}]` : '';
-  const log = (...args: unknown[]) => console.log(...(prefix ? [prefix, ...args] : args));
-  const logError = (...args: unknown[]) => console.error(...(prefix ? [prefix, ...args] : args));
-  let attempt = 0;
-  let intentionalClose = false;
-  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
-  let wsPingTimer: ReturnType<typeof setInterval> | null = null;
-  let currentWs: WebSocket | null = null;
-  let connectionOpenedAt: number | null = null;
-  let stabilityTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function clearHeartbeatTimer(): void {
-    if (heartbeatTimer) {
-      clearTimeout(heartbeatTimer);
-      heartbeatTimer = null;
-    }
+  if (!claimResponse.claimed) {
+    console.log(`  Claim rejected: ${(claimResponse as { reason: string }).reason}`);
+    return;
   }
 
-  function clearStabilityTimer(): void {
-    if (stabilityTimer) {
-      clearTimeout(stabilityTimer);
-      stabilityTimer = null;
-    }
-  }
+  console.log(`  Claimed as ${role}`);
 
-  function clearWsPingTimer(): void {
-    if (wsPingTimer) {
-      clearInterval(wsPingTimer);
-      wsPingTimer = null;
-    }
-  }
-
-  function shutdown(): void {
-    intentionalClose = true;
-    clearHeartbeatTimer();
-    clearStabilityTimer();
-    clearWsPingTimer();
-    if (currentWs) currentWs.close();
-    log('Disconnected.');
-    process.exit(0);
-  }
-
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
-
-  function connect(): void {
-    const url = buildWsUrl(platformUrl, agentId, apiKey);
-    const ws = new WebSocket(url);
-    currentWs = ws;
-
-    function resetHeartbeatTimer(): void {
-      clearHeartbeatTimer();
-      heartbeatTimer = setTimeout(() => {
-        log('No heartbeat received in 90s. Reconnecting...');
-        ws.terminate();
-      }, HEARTBEAT_TIMEOUT_MS);
-    }
-
-    ws.on('open', () => {
-      connectionOpenedAt = Date.now();
-      log('Connected to platform.');
-      resetHeartbeatTimer();
-
-      // Send RFC 6455 WebSocket ping frames to keep the Cloudflare proxy layer alive
-      clearWsPingTimer();
-      wsPingTimer = setInterval(() => {
-        try {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.ping();
-          }
-        } catch {
-          // Swallow ping errors — socket may be closing
-        }
-      }, WS_PING_INTERVAL_MS);
-
-      if (verbose) {
-        log(`[verbose] Connection opened at ${new Date(connectionOpenedAt).toISOString()}`);
-      }
-
-      // Deferred attempt reset: only reset after connection is stable
-      clearStabilityTimer();
-      stabilityTimer = setTimeout(() => {
-        if (verbose) {
-          log(
-            `[verbose] Connection stable for ${stabilityThreshold / 1000}s — resetting reconnect counter`,
-          );
-        }
-        attempt = 0;
-      }, stabilityThreshold);
+  // Fetch diff
+  let diffContent: string;
+  try {
+    diffContent = await fetchDiff(diff_url);
+    console.log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
+  } catch (err) {
+    console.error(`  Failed to fetch diff: ${(err as Error).message}`);
+    await client.post(`/api/tasks/${task_id}/reject`, {
+      agent_id: agentId,
+      reason: `Cannot access diff: ${(err as Error).message}`,
     });
+    return;
+  }
 
-    ws.on('message', (data: WebSocket.Data) => {
-      let msg: PlatformMessage & { type: string; version?: string; code?: string };
-      try {
-        msg = JSON.parse(data.toString());
-      } catch {
-        return;
-      }
-
-      handleMessage(
-        ws,
-        msg,
-        resetHeartbeatTimer,
+  // Execute review or summary
+  try {
+    if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
+      await executeSummaryTask(
+        client,
+        agentId,
+        task_id,
+        owner,
+        repo,
+        pr_number,
+        diffContent,
+        prompt,
+        timeout_seconds,
+        claimResponse.reviews,
         reviewDeps,
         consumptionDeps,
-        verbose,
-        repoConfig,
-        displayName,
-        prefix,
         routerRelay,
       );
-    });
-
-    ws.on('close', (code, reason) => {
-      if (intentionalClose) return;
-      if (ws !== currentWs) return; // Stale WS — don't clear active timers
-
-      clearHeartbeatTimer();
-      clearStabilityTimer();
-      clearWsPingTimer();
-
-      // Log connection lifetime
-      if (connectionOpenedAt) {
-        const lifetimeMs = Date.now() - connectionOpenedAt;
-        const lifetimeSec = (lifetimeMs / 1000).toFixed(1);
-        log(
-          `Disconnected (code=${code}, reason=${reason.toString()}). Connection was alive for ${lifetimeSec}s.`,
-        );
-      } else {
-        log(`Disconnected (code=${code}, reason=${reason.toString()}).`);
-      }
-
-      if (code === 4002) {
-        log('Connection replaced by server — not reconnecting.');
-        return;
-      }
-
-      connectionOpenedAt = null;
-      reconnect();
-    });
-
-    ws.on('pong', () => {
-      if (verbose) {
-        log(`[verbose] WS pong received at ${new Date().toISOString()}`);
-      }
-    });
-
-    ws.on('error', (err) => {
-      logError(`WebSocket error: ${err.message}`);
-    });
-  }
-
-  async function reconnect(): Promise<void> {
-    const delay = calculateDelay(attempt, DEFAULT_RECONNECT_OPTIONS);
-    const delaySec = (delay / 1000).toFixed(1);
-    attempt++;
-    log(`Reconnecting in ${delaySec}s... (attempt ${attempt})`);
-    await sleep(delay);
-    connect();
-  }
-
-  connect();
-}
-
-function trySend(ws: { send: (data: string) => void }, data: Record<string, unknown>): void {
-  try {
-    ws.send(JSON.stringify(data));
-  } catch {
-    console.error('Failed to send message — WebSocket may be closed');
-  }
-}
-
-async function logPostReviewStats(
-  type: 'Review' | 'Summary',
-  verdict: string | undefined,
-  tokensUsed: number,
-  tokensEstimated: boolean,
-  consumptionDeps?: ConsumptionDeps,
-  logPrefix?: string,
-): Promise<void> {
-  const pfx = logPrefix ? `${logPrefix} ` : '';
-  const estimateTag = tokensEstimated ? ' ~' : ' ';
-  if (!consumptionDeps) {
-    if (verdict) {
-      console.log(
-        `${pfx}${type} complete: ${verdict} (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
-      );
     } else {
-      console.log(
-        `${pfx}${type} complete (${estimateTag}${tokensUsed} tokens${tokensEstimated ? ', estimated' : ''})`,
+      await executeReviewTask(
+        client,
+        agentId,
+        task_id,
+        owner,
+        repo,
+        pr_number,
+        diffContent,
+        prompt,
+        timeout_seconds,
+        reviewDeps,
+        consumptionDeps,
+        routerRelay,
       );
     }
+  } catch (err) {
+    if (err instanceof DiffTooLargeError) {
+      console.error(`  ${err.message}`);
+      await client.post(`/api/tasks/${task_id}/reject`, {
+        agent_id: agentId,
+        reason: err.message,
+      });
+    } else if (err instanceof InputTooLargeError) {
+      console.error(`  ${err.message}`);
+      await client.post(`/api/tasks/${task_id}/reject`, {
+        agent_id: agentId,
+        reason: err.message,
+      });
+    } else {
+      console.error(`  Error: ${(err as Error).message}`);
+      await client.post(`/api/tasks/${task_id}/error`, {
+        agent_id: agentId,
+        error: (err as Error).message,
+      });
+    }
+  }
+}
+
+async function executeReviewTask(
+  client: ApiClient,
+  agentId: string,
+  taskId: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  diffContent: string,
+  prompt: string,
+  timeoutSeconds: number,
+  reviewDeps: ReviewExecutorDeps,
+  consumptionDeps: ConsumptionDeps,
+  routerRelay?: RouterRelay,
+): Promise<void> {
+  let reviewText: string;
+  let verdict: ReviewVerdict;
+  let tokensUsed: number;
+
+  if (routerRelay) {
+    // Router mode: relay to external agent
+    const fullPrompt = routerRelay.buildReviewPrompt({
+      owner,
+      repo,
+      reviewMode: 'full',
+      prompt,
+      diffContent,
+    });
+    const response = await routerRelay.sendPrompt(
+      'review_request',
+      taskId,
+      fullPrompt,
+      timeoutSeconds,
+    );
+    const parsed = routerRelay.parseReviewResponse(response);
+    reviewText = parsed.review;
+    verdict = parsed.verdict as ReviewVerdict;
+    tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
+  } else {
+    // Direct mode: execute tool locally
+    const result = await executeReview(
+      {
+        taskId,
+        diffContent,
+        prompt,
+        owner,
+        repo,
+        prNumber,
+        timeout: timeoutSeconds,
+        reviewMode: 'full',
+      },
+      reviewDeps,
+    );
+    reviewText = result.review;
+    verdict = result.verdict;
+    tokensUsed = result.tokensUsed;
+  }
+
+  // Submit result
+  await client.post(`/api/tasks/${taskId}/result`, {
+    agent_id: agentId,
+    type: 'review' as ClaimRole,
+    review_text: reviewText,
+    verdict,
+    tokens_used: tokensUsed,
+  });
+
+  recordSessionUsage(consumptionDeps.session, tokensUsed);
+  console.log(`  Review submitted (${tokensUsed.toLocaleString()} tokens)`);
+  console.log(formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits));
+}
+
+async function executeSummaryTask(
+  client: ApiClient,
+  agentId: string,
+  taskId: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  diffContent: string,
+  prompt: string,
+  timeoutSeconds: number,
+  reviews: ClaimReview[],
+  reviewDeps: ReviewExecutorDeps,
+  consumptionDeps: ConsumptionDeps,
+  routerRelay?: RouterRelay,
+): Promise<void> {
+  if (reviews.length === 0) {
+    // Single-agent mode: this IS the review, just run it as a regular review
+    return executeReviewTask(
+      client,
+      agentId,
+      taskId,
+      owner,
+      repo,
+      prNumber,
+      diffContent,
+      prompt,
+      timeoutSeconds,
+      reviewDeps,
+      consumptionDeps,
+      routerRelay,
+    );
+  }
+
+  const summaryReviews = reviews.map((r) => ({
+    agentId: r.agent_id,
+    model: 'unknown',
+    tool: 'unknown',
+    review: r.review_text,
+    verdict: r.verdict as string,
+  }));
+
+  let summaryText: string;
+  let tokensUsed: number;
+
+  if (routerRelay) {
+    const fullPrompt = routerRelay.buildSummaryPrompt({
+      owner,
+      repo,
+      prompt,
+      reviews: summaryReviews,
+      diffContent,
+    });
+    const response = await routerRelay.sendPrompt(
+      'summary_request',
+      taskId,
+      fullPrompt,
+      timeoutSeconds,
+    );
+    summaryText = response;
+    tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
+  } else {
+    const result = await executeSummary(
+      {
+        taskId,
+        reviews: summaryReviews,
+        prompt,
+        owner,
+        repo,
+        prNumber,
+        timeout: timeoutSeconds,
+        diffContent,
+      },
+      reviewDeps,
+    );
+    summaryText = result.summary;
+    tokensUsed = result.tokensUsed;
+  }
+
+  await client.post(`/api/tasks/${taskId}/result`, {
+    agent_id: agentId,
+    type: 'summary' as ClaimRole,
+    review_text: summaryText,
+    tokens_used: tokensUsed,
+  });
+
+  recordSessionUsage(consumptionDeps.session, tokensUsed);
+  console.log(`  Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
+  console.log(formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits));
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * Start an agent in polling mode.
+ */
+export async function startAgent(
+  agentId: string,
+  platformUrl: string,
+  _apiKey: string | null,
+  reviewDeps?: ReviewExecutorDeps,
+  consumptionDeps?: ConsumptionDeps,
+  options?: { pollIntervalMs?: number; routerRelay?: RouterRelay },
+): Promise<void> {
+  const client = new ApiClient(platformUrl);
+  const session = consumptionDeps?.session ?? createSessionTracker();
+  const deps = consumptionDeps ?? { agentId, limits: null, session };
+
+  console.log(`Agent ${agentId} starting...`);
+  console.log(`Platform: ${platformUrl}`);
+
+  if (!reviewDeps) {
+    console.error('No review command configured. Set command in config.yml');
     return;
   }
 
-  recordSessionUsage(consumptionDeps.session, tokensUsed);
+  const abortController = new AbortController();
 
-  if (verdict) {
-    console.log(
-      `${pfx}${type} complete: ${verdict} (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
-    );
+  // Handle graceful shutdown
+  process.on('SIGINT', () => {
+    console.log('\nShutting down...');
+    abortController.abort();
+  });
+  process.on('SIGTERM', () => {
+    abortController.abort();
+  });
+
+  await pollLoop(client, agentId, reviewDeps, deps, {
+    pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+    routerRelay: options?.routerRelay,
+    signal: abortController.signal,
+  });
+
+  console.log('Agent stopped.');
+}
+
+/**
+ * Start agent in router mode (stdin/stdout relay).
+ * Default action when running `opencara` with no subcommand.
+ */
+export async function startAgentRouter(): Promise<void> {
+  const config = loadConfig();
+  const agentId = crypto.randomUUID();
+
+  // Build agent config from the first local agent or defaults
+  let commandTemplate: string | undefined;
+  let agentConfig: LocalAgentConfig | undefined;
+
+  if (config.agents && config.agents.length > 0) {
+    agentConfig = config.agents.find((a) => a.router) ?? config.agents[0];
+    commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
   } else {
-    console.log(
-      `${pfx}${type} complete (${estimateTag}${tokensUsed.toLocaleString()} tokens${tokensEstimated ? ', estimated' : ''})`,
-    );
+    commandTemplate = config.agentCommand ?? undefined;
   }
-  console.log(
-    `${pfx}${formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits)}`,
+
+  const router = new RouterRelay();
+  router.start();
+
+  const reviewDeps: ReviewExecutorDeps = {
+    commandTemplate: commandTemplate ?? '',
+    maxDiffSizeKb: config.maxDiffSizeKb,
+  };
+
+  const session = createSessionTracker();
+  const limits = agentConfig
+    ? resolveAgentLimits(agentConfig.limits, config.limits)
+    : config.limits;
+
+  await startAgent(
+    agentId,
+    config.platformUrl,
+    null,
+    reviewDeps,
+    {
+      agentId,
+      limits,
+      session,
+    },
+    {
+      routerRelay: router,
+    },
   );
+
+  router.stop();
 }
 
-export function handleMessage(
-  ws: { send: (data: string) => void },
-  msg: { type: string; version?: string; code?: string; taskId?: string; timestamp?: number },
-  resetHeartbeat?: () => void,
-  reviewDeps?: ReviewExecutorDeps,
-  consumptionDeps?: ConsumptionDeps,
-  verbose?: boolean,
-  repoConfig?: RepoConfig,
-  displayName?: string,
-  logPrefix?: string,
-  routerRelay?: RouterRelay,
-): void {
-  const pfx = logPrefix ? `${logPrefix} ` : '';
-  switch (msg.type) {
-    case 'connected':
-      console.log(`${pfx}Authenticated. Protocol v${msg.version ?? 'unknown'}`);
-      // Send agent preferences to the platform
-      trySend(ws, {
-        type: 'agent_preferences',
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        ...(displayName ? { displayName } : {}),
-        repoConfig: repoConfig ?? { mode: 'all' },
-      });
-      if (routerRelay) {
-        routerRelay.writeStatus('Waiting for review requests...');
-      }
-      break;
-
-    case 'heartbeat_ping':
-      ws.send(JSON.stringify({ type: 'heartbeat_pong', timestamp: Date.now() }));
-      if (verbose) {
-        console.log(
-          `${pfx}[verbose] Heartbeat ping received, pong sent at ${new Date().toISOString()}`,
-        );
-      }
-      if (resetHeartbeat) resetHeartbeat();
-      break;
-
-    case 'review_request': {
-      const request = msg as unknown as ReviewRequestMessage;
-      console.log(
-        `${pfx}Review request: task ${request.taskId} for ${request.project.owner}/${request.project.repo}#${request.pr.number}`,
-      );
-
-      // Router mode: relay to external agent via stdin/stdout
-      if (routerRelay) {
-        void (async () => {
-          // Check consumption limits before relaying
-          if (consumptionDeps) {
-            const limitResult = await checkConsumptionLimits(
-              consumptionDeps.agentId,
-              consumptionDeps.limits,
-            );
-            if (!limitResult.allowed) {
-              trySend(ws, {
-                type: 'review_rejected',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: request.taskId,
-                reason: limitResult.reason ?? 'consumption_limit_exceeded',
-              });
-              console.log(`${pfx}Review rejected: ${limitResult.reason}`);
-              return;
-            }
-          }
-
-          try {
-            const prompt = routerRelay.buildReviewPrompt({
-              owner: request.project.owner,
-              repo: request.project.repo,
-              reviewMode: request.reviewMode ?? 'full',
-              prompt: request.project.prompt,
-              diffContent: request.diffContent,
-            });
-            const response = await routerRelay.sendPrompt(
-              'review_request',
-              request.taskId,
-              prompt,
-              request.timeout,
-            );
-            const { verdict, review } = routerRelay.parseReviewResponse(response);
-            const tokensUsed = estimateTokens(prompt) + estimateTokens(response);
-            trySend(ws, {
-              type: 'review_complete',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: request.taskId,
-              review,
-              verdict,
-              tokensUsed,
-            });
-            await logPostReviewStats(
-              'Review',
-              verdict,
-              tokensUsed,
-              true,
-              consumptionDeps,
-              logPrefix,
-            );
-          } catch (err: unknown) {
-            if (err instanceof RouterTimeoutError) {
-              trySend(ws, {
-                type: 'review_error',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: request.taskId,
-                error: err.message,
-              });
-            } else {
-              trySend(ws, {
-                type: 'review_error',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: request.taskId,
-                error: err instanceof Error ? err.message : 'Unknown error',
-              });
-            }
-            console.error(`${pfx}Review failed:`, err);
-          }
-        })();
-        break;
-      }
-
-      if (!reviewDeps) {
-        ws.send(
-          JSON.stringify({
-            type: 'review_rejected',
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-            taskId: request.taskId,
-            reason: 'Review execution not configured',
-          }),
-        );
-        break;
-      }
-
-      void (async () => {
-        // Check consumption limits before executing
-        if (consumptionDeps) {
-          const limitResult = await checkConsumptionLimits(
-            consumptionDeps.agentId,
-            consumptionDeps.limits,
-          );
-          if (!limitResult.allowed) {
-            trySend(ws, {
-              type: 'review_rejected',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: request.taskId,
-              reason: limitResult.reason ?? 'consumption_limit_exceeded',
-            });
-            console.log(`${pfx}Review rejected: ${limitResult.reason}`);
-            return;
-          }
-        }
-
-        try {
-          const result = await executeReview(
-            {
-              taskId: request.taskId,
-              diffContent: request.diffContent,
-              prompt: request.project.prompt,
-              owner: request.project.owner,
-              repo: request.project.repo,
-              prNumber: request.pr.number,
-              timeout: request.timeout,
-              reviewMode: request.reviewMode ?? 'full',
-            },
-            reviewDeps,
-          );
-          trySend(ws, {
-            type: 'review_complete',
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-            taskId: request.taskId,
-            review: result.review,
-            verdict: result.verdict,
-            tokensUsed: result.tokensUsed,
-          });
-          await logPostReviewStats(
-            'Review',
-            result.verdict,
-            result.tokensUsed,
-            result.tokensEstimated,
-            consumptionDeps,
-            logPrefix,
-          );
-        } catch (err: unknown) {
-          if (err instanceof DiffTooLargeError) {
-            trySend(ws, {
-              type: 'review_rejected',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: request.taskId,
-              reason: err.message,
-            });
-          } else {
-            trySend(ws, {
-              type: 'review_error',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: request.taskId,
-              error: err instanceof Error ? err.message : 'Unknown error',
-            });
-          }
-          console.error(`${pfx}Review failed:`, err);
-        }
-      })();
-      break;
-    }
-
-    case 'summary_request': {
-      const summaryRequest = msg as unknown as SummaryRequestMessage;
-      console.log(
-        `${pfx}Summary request: task ${summaryRequest.taskId} for ${summaryRequest.project.owner}/${summaryRequest.project.repo}#${summaryRequest.pr.number} (${summaryRequest.reviews.length} reviews)`,
-      );
-
-      // Router mode: relay to external agent via stdin/stdout
-      if (routerRelay) {
-        void (async () => {
-          // Check consumption limits before relaying
-          if (consumptionDeps) {
-            const limitResult = await checkConsumptionLimits(
-              consumptionDeps.agentId,
-              consumptionDeps.limits,
-            );
-            if (!limitResult.allowed) {
-              trySend(ws, {
-                type: 'review_rejected',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: summaryRequest.taskId,
-                reason: limitResult.reason ?? 'consumption_limit_exceeded',
-              });
-              console.log(`${pfx}Summary rejected: ${limitResult.reason}`);
-              return;
-            }
-          }
-
-          try {
-            const prompt = routerRelay.buildSummaryPrompt({
-              owner: summaryRequest.project.owner,
-              repo: summaryRequest.project.repo,
-              prompt: summaryRequest.project.prompt,
-              reviews: summaryRequest.reviews,
-              diffContent: summaryRequest.diffContent ?? '',
-            });
-            const response = await routerRelay.sendPrompt(
-              'summary_request',
-              summaryRequest.taskId,
-              prompt,
-              summaryRequest.timeout,
-            );
-            const tokensUsed = estimateTokens(prompt) + estimateTokens(response);
-            trySend(ws, {
-              type: 'summary_complete',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: summaryRequest.taskId,
-              summary: response,
-              tokensUsed,
-            });
-            await logPostReviewStats(
-              'Summary',
-              undefined,
-              tokensUsed,
-              true,
-              consumptionDeps,
-              logPrefix,
-            );
-          } catch (err: unknown) {
-            if (err instanceof RouterTimeoutError) {
-              trySend(ws, {
-                type: 'review_error',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: summaryRequest.taskId,
-                error: err.message,
-              });
-            } else {
-              trySend(ws, {
-                type: 'review_error',
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                taskId: summaryRequest.taskId,
-                error: err instanceof Error ? err.message : 'Summary failed',
-              });
-            }
-            console.error(`${pfx}Summary failed:`, err);
-          }
-        })();
-        break;
-      }
-
-      if (!reviewDeps) {
-        trySend(ws, {
-          type: 'review_rejected',
-          id: crypto.randomUUID(),
-          timestamp: Date.now(),
-          taskId: summaryRequest.taskId,
-          reason: 'Review tool not configured',
-        });
-        break;
-      }
-
-      void (async () => {
-        // Check consumption limits before executing
-        if (consumptionDeps) {
-          const limitResult = await checkConsumptionLimits(
-            consumptionDeps.agentId,
-            consumptionDeps.limits,
-          );
-          if (!limitResult.allowed) {
-            trySend(ws, {
-              type: 'review_rejected',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: summaryRequest.taskId,
-              reason: limitResult.reason ?? 'consumption_limit_exceeded',
-            });
-            console.log(`${pfx}Summary rejected: ${limitResult.reason}`);
-            return;
-          }
-        }
-
-        try {
-          const result = await executeSummary(
-            {
-              taskId: summaryRequest.taskId,
-              reviews: summaryRequest.reviews,
-              prompt: summaryRequest.project.prompt,
-              owner: summaryRequest.project.owner,
-              repo: summaryRequest.project.repo,
-              prNumber: summaryRequest.pr.number,
-              timeout: summaryRequest.timeout,
-              diffContent: summaryRequest.diffContent ?? '',
-            },
-            reviewDeps,
-          );
-          trySend(ws, {
-            type: 'summary_complete',
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-            taskId: summaryRequest.taskId,
-            summary: result.summary,
-            tokensUsed: result.tokensUsed,
-          });
-          await logPostReviewStats(
-            'Summary',
-            undefined,
-            result.tokensUsed,
-            result.tokensEstimated,
-            consumptionDeps,
-            logPrefix,
-          );
-        } catch (err: unknown) {
-          if (err instanceof InputTooLargeError) {
-            trySend(ws, {
-              type: 'review_rejected',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: summaryRequest.taskId,
-              reason: err.message,
-            });
-          } else {
-            trySend(ws, {
-              type: 'review_error',
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              taskId: summaryRequest.taskId,
-              error: err instanceof Error ? err.message : 'Summary failed',
-            });
-          }
-          console.error(`${pfx}Summary failed:`, err);
-        }
-      })();
-      break;
-    }
-
-    case 'error':
-      console.error(`${pfx}Platform error: ${msg.code ?? 'unknown'}`);
-      if (msg.code === 'auth_revoked') process.exit(1);
-      break;
-
-    default:
-      break;
-  }
-}
-
-/** Sync a local agent to the server: find existing by model+tool or create new */
-async function syncAgentToServer(
-  client: ApiClient,
-  serverAgents: AgentResponse[],
-  localAgent: LocalAgentConfig,
-): Promise<{ agentId: string; created: boolean }> {
-  const existing = serverAgents.find(
-    (a) => a.model === localAgent.model && a.tool === localAgent.tool,
-  );
-  if (existing) {
-    return { agentId: existing.id, created: false };
-  }
-
-  const body: CreateAgentRequest = { model: localAgent.model, tool: localAgent.tool };
-  if (localAgent.name) {
-    body.displayName = localAgent.name;
-  }
-  if (localAgent.repos) {
-    body.repoConfig = localAgent.repos;
-  }
-  const created = await client.post<CreateAgentResponse>('/api/agents', body);
-  return { agentId: created.id, created: true };
-}
-
-/** Resolve the effective command template for a local agent */
-function resolveLocalAgentCommand(
-  localAgent: LocalAgentConfig,
-  globalAgentCommand: string | null,
-): string {
-  const effectiveCommand = localAgent.command ?? globalAgentCommand;
-  return resolveCommandTemplate(effectiveCommand);
-}
-
-export { syncAgentToServer, resolveLocalAgentCommand };
-
-/** Start agent in router mode (used as default action for bare `opencara` command) */
-export function startAgentRouter(): void {
-  // Delegate to `agent start --router --anonymous` — no configured agent needed,
-  // the external agent IS the reviewer; CLI is just a relay
-  void agentCommand.parseAsync(
-    ['start', '--router', '--anonymous', '--model', 'router', '--tool', 'opencara'],
-    { from: 'user' },
-  );
-}
+// ── CLI Commands ─────────────────────────────────────────────
 
 export const agentCommand = new Command('agent').description('Manage review agents');
 
 agentCommand
-  .command('create')
-  .description('Add an agent to local config (interactive or via flags)')
-  .option('--model <model>', 'AI model name (e.g., claude-opus-4-6)')
-  .option('--tool <tool>', 'Review tool name (e.g., claude-code)')
-  .option('--command <cmd>', 'Custom command template (bypasses registry lookup)')
-  .action(async (opts: { model?: string; tool?: string; command?: string }) => {
+  .command('start')
+  .description('Start an agent in polling mode')
+  .option('--poll-interval <seconds>', 'Poll interval in seconds', '10')
+  .option('--agent <index>', 'Agent index from config.yml (0-based)', '0')
+  .action(async (opts: { pollInterval: string; agent: string }) => {
     const config = loadConfig();
-    requireApiKey(config);
+    const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
+    const agentIndex = parseInt(opts.agent, 10);
 
-    let model: string;
-    let tool: string;
-    let command: string | undefined = opts.command;
+    const agentId = crypto.randomUUID();
+    let commandTemplate: string | undefined;
+    let limits: ConsumptionLimits | null = config.limits;
+    let agentConfig: LocalAgentConfig | undefined;
 
-    if (opts.model && opts.tool) {
-      // Non-interactive mode
-      model = opts.model;
-      tool = opts.tool;
-    } else if (opts.model || opts.tool) {
-      console.error('Both --model and --tool are required in non-interactive mode.');
-      process.exit(1);
+    if (config.agents && config.agents.length > agentIndex) {
+      agentConfig = config.agents[agentIndex];
+      commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
+      limits = resolveAgentLimits(agentConfig.limits, config.limits);
     } else {
-      // Interactive mode: fetch registry and prompt
-      const client = new ApiClient(config.platformUrl, config.apiKey!);
-      let registry: RegistryResponse;
-      try {
-        registry = await client.get<RegistryResponse>('/api/registry');
-      } catch {
-        console.warn('Could not fetch registry from server. Using built-in defaults.');
-        registry = DEFAULT_REGISTRY;
-      }
-
-      const { search, input } = await import('@inquirer/prompts');
-
-      const searchTheme = {
-        style: {
-          keysHelpTip: (keys: Array<[string, string]>) =>
-            keys.map(([key, action]) => `${key} ${action}`).join(', ') + ', ^C exit',
-        },
-      };
-
-      const existingAgents = config.agents ?? [];
-      const toolChoices = registry.tools.map((t) => ({
-        name: t.displayName,
-        value: t.name,
-      }));
-
-      try {
-        // Loop: select tool → select model → check duplicate → if dup, restart
-        while (true) {
-          // Step 1: Select tool
-          tool = await search({
-            message: 'Select a tool:',
-            theme: searchTheme,
-            source: (term) => {
-              const q = (term ?? '').toLowerCase();
-              return toolChoices.filter(
-                (c) => c.name.toLowerCase().includes(q) || c.value.toLowerCase().includes(q),
-              );
-            },
-          });
-
-          // Step 2: Select model — compatible first, others dimmed
-          const compatible = registry.models.filter((m) => m.tools.includes(tool));
-          const incompatible = registry.models.filter((m) => !m.tools.includes(tool));
-
-          const modelChoices = [
-            ...compatible.map((m) => ({
-              name: m.displayName,
-              value: m.name,
-            })),
-            ...incompatible.map((m) => ({
-              name: `\x1b[38;5;249m${m.displayName}\x1b[0m`,
-              value: m.name,
-            })),
-          ];
-
-          model = await search({
-            message: 'Select a model:',
-            theme: searchTheme,
-            source: (term) => {
-              const q = (term ?? '').toLowerCase();
-              return modelChoices.filter(
-                (c) => c.value.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
-              );
-            },
-          });
-
-          // Check duplicate before proceeding
-          const isDup = existingAgents.some((a) => a.model === model && a.tool === tool);
-          if (isDup) {
-            console.warn(`"${model}" / "${tool}" already exists in config. Choose again.`);
-            continue;
-          }
-
-          // Warn if model isn't compatible with selected tool
-          const modelEntry = registry.models.find((m) => m.name === model);
-          if (modelEntry && !modelEntry.tools.includes(tool)) {
-            console.warn(`Warning: "${model}" is not listed as compatible with "${tool}".`);
-          }
-
-          break;
-        }
-
-        // Step 3: Resolve default command and let user edit it
-        const toolEntry = registry.tools.find((t) => t.name === tool);
-        const defaultCommand = toolEntry
-          ? toolEntry.commandTemplate.replaceAll('${MODEL}', model)
-          : `${tool} --model ${model}`;
-
-        command = await input({
-          message: 'Command:',
-          default: defaultCommand,
-          prefill: 'editable',
-        });
-      } catch (err) {
-        if (err && typeof err === 'object' && 'name' in err && err.name === 'ExitPromptError') {
-          console.log('Cancelled.');
-          return;
-        }
-        throw err;
-      }
+      commandTemplate = config.agentCommand ?? undefined;
     }
 
-    // Resolve command from registry if not set (non-interactive mode)
-    if (!command) {
-      const toolEntry = DEFAULT_REGISTRY.tools.find((t) => t.name === tool);
-      if (toolEntry) {
-        command = toolEntry.commandTemplate.replaceAll('${MODEL}', model);
-      } else {
-        console.error(`No command template for tool "${tool}". Use --command to specify one.`);
-        process.exit(1);
-      }
-    }
-
-    // Validate binary
-    if (validateCommandBinary(command)) {
-      console.log(`Verifying... binary found.`);
-    } else {
-      console.warn(
-        `Warning: binary for command "${command.split(' ')[0]}" not found on this machine.`,
+    if (!commandTemplate) {
+      console.error(
+        'No command configured. Set agent_command or agents[].command in ~/.opencara/config.yml',
       );
-    }
-
-    // Write to local config
-    const newAgent: LocalAgentConfig = { model, tool, command };
-    if (config.agents === null) {
-      config.agents = [];
-    }
-
-    const isDuplicate = config.agents.some((a) => a.model === model && a.tool === tool);
-    if (isDuplicate) {
-      console.error(`Agent with model "${model}" and tool "${tool}" already exists in config.`);
       process.exit(1);
+      return; // unreachable, helps TypeScript narrow
     }
 
-    config.agents.push(newAgent);
-    saveConfig(config);
-
-    console.log('Agent added to config:');
-    console.log(`  Model:   ${model}`);
-    console.log(`  Tool:    ${tool}`);
-    console.log(`  Command: ${command}`);
-  });
-
-agentCommand
-  .command('init')
-  .description('Import server-side agents into local config')
-  .action(async () => {
-    const config = loadConfig();
-    const apiKey = requireApiKey(config);
-    const client = new ApiClient(config.platformUrl, apiKey);
-
-    let res: ListAgentsResponse;
-    try {
-      res = await client.get<ListAgentsResponse>('/api/agents');
-    } catch (err) {
-      console.error('Failed to list agents:', err instanceof Error ? err.message : err);
+    if (!validateCommandBinary(commandTemplate)) {
+      console.error(`Command binary not found: ${commandTemplate.split(' ')[0]}`);
       process.exit(1);
-    }
-
-    if (res.agents.length === 0) {
-      console.log('No server-side agents found. Use `opencara agent create` to add one.');
       return;
     }
 
-    // Fetch registry for command templates
-    let registry: RegistryResponse;
+    const reviewDeps: ReviewExecutorDeps = {
+      commandTemplate,
+      maxDiffSizeKb: config.maxDiffSizeKb,
+    };
+
+    const isRouter = agentConfig?.router === true;
+    let routerRelay: RouterRelay | undefined;
+    if (isRouter) {
+      routerRelay = new RouterRelay();
+      routerRelay.start();
+    }
+
+    const session = createSessionTracker();
+
     try {
-      registry = await client.get<RegistryResponse>('/api/registry');
-    } catch {
-      registry = DEFAULT_REGISTRY;
-    }
-    const toolCommands = new Map(registry.tools.map((t) => [t.name, t.commandTemplate]));
-
-    const existing = config.agents ?? [];
-    let imported = 0;
-
-    for (const agent of res.agents) {
-      const isDuplicate = existing.some((e) => e.model === agent.model && e.tool === agent.tool);
-      if (isDuplicate) continue;
-
-      let command = toolCommands.get(agent.tool);
-      if (command) {
-        command = command.replaceAll('${MODEL}', agent.model);
-      } else {
-        console.warn(
-          `Warning: no command template for ${agent.model}/${agent.tool} — set command manually in config`,
-        );
-      }
-      existing.push({ model: agent.model, tool: agent.tool, command });
-      imported++;
-    }
-
-    config.agents = existing;
-    saveConfig(config);
-
-    console.log(`Imported ${imported} agent(s) to local config.`);
-    if (imported > 0) {
-      console.log('Edit ~/.opencara/config.yml to adjust commands for your system.');
-    }
-  });
-
-agentCommand
-  .command('list')
-  .description('List registered agents')
-  .action(async () => {
-    const config = loadConfig();
-    const apiKey = requireApiKey(config);
-    const client = new ApiClient(config.platformUrl, apiKey);
-
-    let res: ListAgentsResponse;
-    try {
-      res = await client.get<ListAgentsResponse>('/api/agents');
-    } catch (err) {
-      console.error('Failed to list agents:', err instanceof Error ? err.message : err);
-      process.exit(1);
-    }
-
-    // Fetch trust tier labels for each agent
-    const trustLabels = new Map<string, string>();
-    for (const agent of res.agents) {
-      try {
-        const stats = await client.get<AgentStatsResponse>(`/api/stats/${agent.id}`);
-        trustLabels.set(agent.id, stats.agent.trustTier.label);
-      } catch {
-        // Leave as '--' if stats unavailable
-      }
-    }
-
-    formatTable(res.agents, trustLabels);
-  });
-
-/** Register or reuse an anonymous agent, returning credentials and command template */
-async function resolveAnonymousAgent(
-  config: ReturnType<typeof loadConfig>,
-  model: string,
-  tool: string,
-): Promise<{ entry: AnonymousAgentEntry; command: string }> {
-  // Check for stored anonymous agent with matching model+tool
-  const existing = config.anonymousAgents.find((a) => a.model === model && a.tool === tool);
-  if (existing) {
-    console.log(`Reusing stored anonymous agent ${existing.agentId} (${model} / ${tool})`);
-    const command = resolveCommandTemplate(
-      DEFAULT_REGISTRY.tools
-        .find((t) => t.name === tool)
-        ?.commandTemplate.replaceAll('${MODEL}', model) ?? null,
-    );
-    return { entry: existing, command };
-  }
-
-  // Register new anonymous agent
-  console.log('Registering anonymous agent...');
-  const client = new ApiClient(config.platformUrl);
-  const body: AnonymousRegisterRequest = { model, tool };
-  const res = await client.post<AnonymousRegisterResponse>('/api/agents/anonymous', body);
-
-  const entry: AnonymousAgentEntry = {
-    agentId: res.agentId,
-    apiKey: res.apiKey,
-    model,
-    tool,
-  };
-
-  // Store in config
-  config.anonymousAgents.push(entry);
-  saveConfig(config);
-
-  console.log(`Agent registered: ${res.agentId} (${model} / ${tool})`);
-  console.log('Credentials saved to ~/.opencara/config.yml');
-
-  const command = resolveCommandTemplate(
-    DEFAULT_REGISTRY.tools
-      .find((t) => t.name === tool)
-      ?.commandTemplate.replaceAll('${MODEL}', model) ?? null,
-  );
-  return { entry, command };
-}
-
-export { resolveAnonymousAgent };
-
-agentCommand
-  .command('start [agentIdOrModel]')
-  .description('Connect agent to platform via WebSocket')
-  .option('--all', 'Start all agents from local config concurrently')
-  .option('-a, --anonymous', 'Start an anonymous agent (no login required)')
-  .option('--model <model>', 'AI model name (used with --anonymous)')
-  .option('--tool <tool>', 'Review tool name (used with --anonymous)')
-  .option('--verbose', 'Enable detailed WebSocket diagnostic logging')
-  .option('--router', 'Router mode: relay prompts to stdout, read responses from stdin')
-  .option(
-    '--stability-threshold <ms>',
-    `Connection stability threshold in ms (${STABILITY_THRESHOLD_MIN_MS}–${STABILITY_THRESHOLD_MAX_MS}, default: ${CONNECTION_STABILITY_THRESHOLD_MS})`,
-  )
-  .action(
-    async (
-      agentIdOrModel: string | undefined,
-      opts: {
-        all?: boolean;
-        anonymous?: boolean;
-        model?: string;
-        tool?: string;
-        verbose?: boolean;
-        router?: boolean;
-        stabilityThreshold?: string;
-      },
-    ) => {
-      let stabilityThresholdMs: number | undefined;
-      if (opts.stabilityThreshold !== undefined) {
-        const val = Number(opts.stabilityThreshold);
-        if (
-          !Number.isInteger(val) ||
-          val < STABILITY_THRESHOLD_MIN_MS ||
-          val > STABILITY_THRESHOLD_MAX_MS
-        ) {
-          console.error(
-            `Invalid --stability-threshold: must be an integer between ${STABILITY_THRESHOLD_MIN_MS} and ${STABILITY_THRESHOLD_MAX_MS}`,
-          );
-          process.exit(1);
-        }
-        stabilityThresholdMs = val;
-      }
-
-      const config = loadConfig();
-
-      // === Path C: Anonymous mode ===
-      if (opts.anonymous) {
-        if (!opts.model || !opts.tool) {
-          console.error('Both --model and --tool are required with --anonymous.');
-          process.exit(1);
-        }
-
-        // Register/reuse anonymous agent (skip command resolution in router mode)
-        let entry: AnonymousAgentEntry;
-        let reviewDeps: ReviewExecutorDeps | undefined;
-        let relay: RouterRelay | undefined;
-
-        if (opts.router) {
-          // Router mode: register agent but don't need a command
-          const existing = config.anonymousAgents.find(
-            (a) => a.model === opts.model && a.tool === opts.tool,
-          );
-          if (existing) {
-            console.log(
-              `Reusing stored anonymous agent ${existing.agentId} (${opts.model} / ${opts.tool})`,
-            );
-            entry = existing;
-          } else {
-            console.log('Registering anonymous agent...');
-            const client = new ApiClient(config.platformUrl);
-            const res = await client.post<AnonymousRegisterResponse>('/api/agents/anonymous', {
-              model: opts.model,
-              tool: opts.tool,
-            } as AnonymousRegisterRequest);
-            entry = {
-              agentId: res.agentId,
-              apiKey: res.apiKey,
-              model: opts.model,
-              tool: opts.tool,
-            };
-            config.anonymousAgents.push(entry);
-            saveConfig(config);
-            console.log(`Agent registered: ${res.agentId} (${opts.model} / ${opts.tool})`);
-          }
-          relay = new RouterRelay();
-          relay.start();
-        } else {
-          let resolved: { entry: AnonymousAgentEntry; command: string };
-          try {
-            resolved = await resolveAnonymousAgent(config, opts.model, opts.tool);
-          } catch (err) {
-            console.error(
-              'Failed to register anonymous agent:',
-              err instanceof Error ? err.message : err,
-            );
-            process.exit(1);
-          }
-          entry = resolved.entry;
-          const command = resolved.command;
-          if (validateCommandBinary(command)) {
-            reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
-          } else {
-            console.warn(
-              `Warning: binary "${command.split(' ')[0]}" not found. Reviews will be rejected.`,
-            );
-          }
-        }
-
-        const consumptionDeps: ConsumptionDeps = {
-          agentId: entry.agentId,
-          limits: config.limits,
-          session: createSessionTracker(),
-        };
-
-        console.log(`Starting anonymous agent ${entry.agentId}...`);
-        startAgent(entry.agentId, config.platformUrl, entry.apiKey, reviewDeps, consumptionDeps, {
-          verbose: opts.verbose,
-          stabilityThresholdMs,
-          displayName: entry.name,
-          repoConfig: entry.repoConfig,
-          routerRelay: relay,
-        });
-        return;
-      }
-
-      // === Path B: Local-config mode (agents section exists) ===
-      if (config.agents !== null) {
-        // Separate router agents from command-based agents
-        const routerAgents: LocalAgentConfig[] = [];
-        const validAgents: Array<{ local: LocalAgentConfig; command: string }> = [];
-
-        for (const local of config.agents) {
-          // Agent uses router mode if --router flag is set or config has router: true
-          if (opts.router || local.router) {
-            routerAgents.push(local);
-            continue;
-          }
-
-          let cmd: string;
-          try {
-            cmd = resolveLocalAgentCommand(local, config.agentCommand);
-          } catch (err) {
-            console.warn(
-              `Skipping ${local.model}/${local.tool}: ${err instanceof Error ? err.message : 'no command template available'}`,
-            );
-            continue;
-          }
-          if (!validateCommandBinary(cmd)) {
-            console.warn(
-              `Skipping ${local.model}/${local.tool}: binary "${cmd.split(' ')[0]}" not found`,
-            );
-            continue;
-          }
-          validAgents.push({ local, command: cmd });
-        }
-
-        const totalValid = validAgents.length + routerAgents.length;
-        if (totalValid === 0 && config.anonymousAgents.length === 0) {
-          console.error('No valid agents in config. Check that tool binaries are installed.');
-          process.exit(1);
-        }
-
-        // Determine which agents to start
-        let agentsToStart: Array<{ local: LocalAgentConfig; command: string }>;
-        let routerAgentsToStart: LocalAgentConfig[];
-        const anonAgentsToStart: AnonymousAgentEntry[] = [];
-
-        if (opts.all) {
-          agentsToStart = validAgents;
-          routerAgentsToStart = routerAgents;
-          // Also include anonymous agents when --all is used
-          anonAgentsToStart.push(...config.anonymousAgents);
-        } else if (agentIdOrModel) {
-          const cmdMatch = validAgents.find((a) => a.local.model === agentIdOrModel);
-          const routerMatch = routerAgents.find((a) => a.model === agentIdOrModel);
-          if (!cmdMatch && !routerMatch) {
-            console.error(`No agent with model "${agentIdOrModel}" found in local config.`);
-            console.error('Available agents:');
-            for (const a of validAgents) {
-              console.error(`  ${a.local.model}  (${a.local.tool})`);
-            }
-            for (const a of routerAgents) {
-              console.error(`  ${a.model}  (${a.tool}) [router]`);
-            }
-            process.exit(1);
-          }
-          agentsToStart = cmdMatch ? [cmdMatch] : [];
-          routerAgentsToStart = routerMatch ? [routerMatch] : [];
-        } else if (totalValid === 1) {
-          if (validAgents.length === 1) {
-            agentsToStart = [validAgents[0]];
-            routerAgentsToStart = [];
-            console.log(`Using agent ${validAgents[0].local.model} (${validAgents[0].local.tool})`);
-          } else {
-            agentsToStart = [];
-            routerAgentsToStart = [routerAgents[0]];
-            console.log(`Using router agent ${routerAgents[0].model} (${routerAgents[0].tool})`);
-          }
-        } else if (totalValid === 0) {
-          console.error('No valid authenticated agents in config. Use --anonymous or --all.');
-          process.exit(1);
-        } else {
-          console.error('Multiple agents in config. Specify a model name or use --all:');
-          for (const a of validAgents) {
-            console.error(`  ${a.local.model}  (${a.local.tool})`);
-          }
-          for (const a of routerAgents) {
-            console.error(`  ${a.model}  (${a.tool}) [router]`);
-          }
-          process.exit(1);
-        }
-
-        // Increase listener limit when starting multiple agents
-        const totalAgents =
-          agentsToStart.length + routerAgentsToStart.length + anonAgentsToStart.length;
-        if (totalAgents > 1) {
-          process.setMaxListeners(process.getMaxListeners() + totalAgents * 2);
-        }
-
-        // Start each authenticated agent (requires login)
-        let startedCount = 0;
-        let apiKey: string | undefined;
-        let client: ApiClient | undefined;
-        let serverAgents: AgentResponse[] | undefined;
-        if (agentsToStart.length > 0 || routerAgentsToStart.length > 0) {
-          apiKey = requireApiKey(config);
-          client = new ApiClient(config.platformUrl, apiKey);
-          try {
-            const res = await client.get<ListAgentsResponse>('/api/agents');
-            serverAgents = res.agents;
-          } catch (err) {
-            console.error('Failed to fetch agents:', err instanceof Error ? err.message : err);
-            process.exit(1);
-          }
-        }
-
-        // Start command-based agents
-        for (const selected of agentsToStart) {
-          let agentId: string;
-          try {
-            const sync = await syncAgentToServer(client!, serverAgents!, selected.local);
-            agentId = sync.agentId;
-            if (sync.created) {
-              console.log(`Registered new agent ${agentId} on platform`);
-              // Update snapshot to prevent duplicate registrations
-              serverAgents!.push({
-                id: agentId,
-                model: selected.local.model,
-                tool: selected.local.tool,
-                isAnonymous: false,
-                status: 'offline',
-                repoConfig: null,
-                createdAt: new Date().toISOString(),
-              });
-            }
-          } catch (err) {
-            console.error(
-              `Failed to sync agent ${selected.local.model} to server:`,
-              err instanceof Error ? err.message : err,
-            );
-            continue;
-          }
-
-          const reviewDeps: ReviewExecutorDeps = {
-            commandTemplate: selected.command,
-            maxDiffSizeKb: config.maxDiffSizeKb,
-          };
-
-          const consumptionDeps: ConsumptionDeps = {
-            agentId,
-            limits: resolveAgentLimits(selected.local.limits, config.limits),
-            session: createSessionTracker(),
-          };
-
-          const label = selected.local.name || selected.local.model || 'unnamed';
-          console.log(`Starting agent ${label} (${agentId})...`);
-          startAgent(agentId, config.platformUrl, apiKey!, reviewDeps, consumptionDeps, {
-            verbose: opts.verbose,
-            stabilityThresholdMs,
-            repoConfig: selected.local.repos,
-            label,
-          });
-          startedCount++;
-        }
-
-        // Start router-mode agents
-        for (const local of routerAgentsToStart) {
-          let agentId: string;
-          try {
-            const sync = await syncAgentToServer(client!, serverAgents!, local);
-            agentId = sync.agentId;
-            if (sync.created) {
-              console.log(`Registered new agent ${agentId} on platform`);
-              serverAgents!.push({
-                id: agentId,
-                model: local.model,
-                tool: local.tool,
-                isAnonymous: false,
-                status: 'offline',
-                repoConfig: null,
-                createdAt: new Date().toISOString(),
-              });
-            }
-          } catch (err) {
-            console.error(
-              `Failed to sync router agent ${local.model} to server:`,
-              err instanceof Error ? err.message : err,
-            );
-            continue;
-          }
-
-          const relay = new RouterRelay();
-          relay.start();
-
-          const consumptionDeps: ConsumptionDeps = {
-            agentId,
-            limits: resolveAgentLimits(local.limits, config.limits),
-            session: createSessionTracker(),
-          };
-
-          const label = local.name || local.model || 'unnamed';
-          console.log(`Starting router agent ${label} (${agentId})...`);
-          startAgent(agentId, config.platformUrl, apiKey!, undefined, consumptionDeps, {
-            verbose: opts.verbose,
-            stabilityThresholdMs,
-            repoConfig: local.repos,
-            label,
-            routerRelay: relay,
-          });
-          startedCount++;
-        }
-
-        // Start anonymous agents (for --all)
-        for (const anon of anonAgentsToStart) {
-          let command: string;
-          try {
-            command = resolveCommandTemplate(
-              DEFAULT_REGISTRY.tools
-                .find((t) => t.name === anon.tool)
-                ?.commandTemplate.replaceAll('${MODEL}', anon.model) ?? null,
-            );
-          } catch {
-            console.warn(
-              `Skipping anonymous agent ${anon.agentId}: no command template for tool "${anon.tool}"`,
-            );
-            continue;
-          }
-
-          let reviewDeps: ReviewExecutorDeps | undefined;
-          if (validateCommandBinary(command)) {
-            reviewDeps = { commandTemplate: command, maxDiffSizeKb: config.maxDiffSizeKb };
-          } else {
-            console.warn(
-              `Warning: binary "${command.split(' ')[0]}" not found for anonymous agent ${anon.agentId}. Reviews will be rejected.`,
-            );
-          }
-
-          const consumptionDeps: ConsumptionDeps = {
-            agentId: anon.agentId,
-            limits: config.limits,
-            session: createSessionTracker(),
-          };
-
-          const anonLabel = anon.name || anon.model || 'anonymous';
-          console.log(`Starting anonymous agent ${anonLabel} (${anon.agentId})...`);
-          startAgent(anon.agentId, config.platformUrl, anon.apiKey, reviewDeps, consumptionDeps, {
-            verbose: opts.verbose,
-            stabilityThresholdMs,
-            displayName: anon.name,
-            repoConfig: anon.repoConfig,
-            label: anonLabel,
-          });
-          startedCount++;
-        }
-
-        if (startedCount === 0) {
-          console.error('No agents could be started.');
-          process.exit(1);
-        }
-        return;
-      }
-
-      // === Path A: Old server-side behavior (no agents section) ===
-      const apiKey = requireApiKey(config);
-      const client = new ApiClient(config.platformUrl, apiKey);
-
-      console.log(
-        'Hint: No agents in local config. Run `opencara agent init` to import, or `opencara agent create` to add agents.',
-      );
-
-      let agentId = agentIdOrModel;
-
-      if (!agentId) {
-        let res: ListAgentsResponse;
-        try {
-          res = await client.get<ListAgentsResponse>('/api/agents');
-        } catch (err) {
-          console.error('Failed to list agents:', err instanceof Error ? err.message : err);
-          process.exit(1);
-        }
-
-        if (res.agents.length === 0) {
-          console.error('No agents registered. Run `opencara agent create` first.');
-          process.exit(1);
-        }
-
-        if (res.agents.length === 1) {
-          agentId = res.agents[0].id;
-          console.log(`Using agent ${agentId}`);
-        } else {
-          console.error('Multiple agents found. Please specify an agent ID:');
-          for (const a of res.agents) {
-            console.error(`  ${a.id}  ${a.model} / ${a.tool}`);
-          }
-          process.exit(1);
-        }
-      }
-
-      let reviewDeps: ReviewExecutorDeps | undefined;
-      let relay: RouterRelay | undefined;
-
-      if (opts.router) {
-        relay = new RouterRelay();
-        relay.start();
-      } else {
-        try {
-          const commandTemplate = resolveCommandTemplate(config.agentCommand);
-          reviewDeps = {
-            commandTemplate,
-            maxDiffSizeKb: config.maxDiffSizeKb,
-          };
-        } catch (err) {
-          console.warn(
-            `Warning: ${err instanceof Error ? err.message : 'Could not determine agent command.'}` +
-              ' Reviews will be rejected.',
-          );
-        }
-      }
-
-      const consumptionDeps: ConsumptionDeps = {
+      await startAgent(
         agentId,
-        limits: config.limits,
-        session: createSessionTracker(),
-      };
-
-      console.log(`Starting agent ${agentId}...`);
-      startAgent(agentId, config.platformUrl, apiKey, reviewDeps, consumptionDeps, {
-        verbose: opts.verbose,
-        stabilityThresholdMs,
-        label: agentId,
-        routerRelay: relay,
-      });
-    },
-  );
+        config.platformUrl,
+        null,
+        reviewDeps,
+        {
+          agentId,
+          limits,
+          session,
+        },
+        {
+          pollIntervalMs,
+          routerRelay,
+        },
+      );
+    } finally {
+      routerRelay?.stop();
+    }
+  });

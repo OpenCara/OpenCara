@@ -45,9 +45,6 @@ export class ApiClient {
 
   private async handleResponse<T>(res: Response): Promise<T> {
     if (!res.ok) {
-      if (res.status === 401) {
-        throw new HttpError(401, 'Not authenticated. Run `opencara login` first.');
-      }
       let message = `HTTP ${res.status}`;
       try {
         const body = (await res.json()) as ErrorResponse;
