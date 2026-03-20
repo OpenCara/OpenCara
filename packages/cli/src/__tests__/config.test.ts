@@ -16,10 +16,7 @@ import {
   loadConfig,
   saveConfig,
   ensureConfigDir,
-  requireApiKey,
   resolveAgentLimits,
-  findAnonymousAgent,
-  removeAnonymousAgent,
   RepoConfigError,
   CONFIG_DIR,
   CONFIG_FILE,
@@ -255,7 +252,6 @@ describe('config', () => {
       limits: null as import('../config.js').ConsumptionLimits | null,
       agentCommand: null as string | null,
       agents: null as import('../config.js').LocalAgentConfig[] | null,
-      anonymousAgents: [] as import('../config.js').AnonymousAgentEntry[],
     };
 
     it('saves config with API key', () => {
@@ -339,46 +335,6 @@ describe('config', () => {
     });
   });
 
-  describe('requireApiKey', () => {
-    it('returns API key when present', () => {
-      const key = requireApiKey({
-        apiKey: 'cr_test',
-        platformUrl: 'test',
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        limits: null,
-        agentCommand: null,
-        agents: null,
-        anonymousAgents: [],
-      });
-      expect(key).toBe('cr_test');
-    });
-
-    it('exits when API key is missing', () => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
-        throw new Error('process.exit');
-      }) as never);
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-      expect(() =>
-        requireApiKey({
-          apiKey: null,
-          platformUrl: 'test',
-          maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-          limits: null,
-          agentCommand: null,
-          agents: null,
-          anonymousAgents: [],
-        }),
-      ).toThrow('process.exit');
-
-      expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Not authenticated'));
-
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
-    });
-  });
-
   describe('agents parsing', () => {
     it('returns null when agents key is absent', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -439,7 +395,6 @@ describe('config', () => {
         limits: null,
         agentCommand: null,
         agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
-        anonymousAgents: [],
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
@@ -455,7 +410,6 @@ describe('config', () => {
         limits: null,
         agentCommand: null,
         agents: null,
-        anonymousAgents: [],
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
@@ -523,69 +477,10 @@ agents:
         limits: null,
         agentCommand: null,
         agents: [{ model: 'claude-sonnet-4-6', tool: 'claude-code', name: 'MyBot' }],
-        anonymousAgents: [],
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(written).toContain('name: MyBot');
-    });
-
-    it('parses name from anonymous agent entries', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "a1b2"
-    api_key: "cr_key"
-    model: "claude-sonnet-4-6"
-    tool: "claude"
-    name: "AnonBot"
-`);
-      const config = loadConfig();
-      expect(config.anonymousAgents[0].name).toBe('AnonBot');
-    });
-
-    it('saves name on anonymous agents', () => {
-      saveConfig({
-        apiKey: null,
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        limits: null,
-        agentCommand: null,
-        agents: null,
-        anonymousAgents: [
-          {
-            agentId: 'a1',
-            apiKey: 'cr_key',
-            model: 'claude-sonnet-4-6',
-            tool: 'claude',
-            name: 'AnonBot',
-          },
-        ],
-      });
-
-      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(written).toContain('name: AnonBot');
-    });
-
-    it('omits name on anonymous agents when not set', () => {
-      saveConfig({
-        apiKey: null,
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        limits: null,
-        agentCommand: null,
-        agents: null,
-        anonymousAgents: [
-          { agentId: 'a1', apiKey: 'cr_key', model: 'claude-sonnet-4-6', tool: 'claude' },
-        ],
-      });
-
-      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      // Should not contain 'name:' as a key for anonymous agents
-      // But it does contain the section keys. Let's check no 'name' key in the anonymous_agents section
-      const lines = written.split('\n');
-      const anonSection = lines.slice(lines.findIndex((l) => l.includes('anonymous_agents')));
-      expect(anonSection.some((l) => l.trim().startsWith('name:'))).toBe(false);
     });
   });
 
@@ -885,7 +780,6 @@ agents:
             repos: { mode: 'whitelist', list: ['org/repo'] },
           },
         ],
-        anonymousAgents: [],
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
@@ -895,16 +789,8 @@ agents:
     });
   });
 
-  describe('anonymous agents', () => {
-    it('returns empty array when anonymous_agents key is absent', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
-
-      const config = loadConfig();
-      expect(config.anonymousAgents).toEqual([]);
-    });
-
-    it('parses anonymous_agents from YAML', () => {
+  describe('loadConfig ignores anonymous_agents', () => {
+    it('does not include anonymousAgents in config', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 anonymous_agents:
@@ -914,170 +800,7 @@ anonymous_agents:
     tool: "claude"
 `);
       const config = loadConfig();
-      expect(config.anonymousAgents).toEqual([
-        {
-          agentId: 'a1b2c3d4',
-          apiKey: 'cr_abc123',
-          model: 'claude-sonnet-4-6',
-          tool: 'claude',
-        },
-      ]);
-    });
-
-    it('parses anonymous_agents with repo_config', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "a1b2c3d4"
-    api_key: "cr_abc123"
-    model: "claude-sonnet-4-6"
-    tool: "claude"
-    repo_config:
-      mode: whitelist
-      list:
-        - org/repo
-`);
-      const config = loadConfig();
-      expect(config.anonymousAgents[0].repoConfig).toEqual({
-        mode: 'whitelist',
-        list: ['org/repo'],
-      });
-    });
-
-    it('skips invalid anonymous agent entries and warns', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "valid"
-    api_key: "cr_key"
-    model: "m"
-    tool: "t"
-  - broken: true
-`);
-      const config = loadConfig();
-      expect(config.anonymousAgents).toHaveLength(1);
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('anonymous_agents[1]'));
-      warnSpy.mockRestore();
-    });
-
-    it('saveConfig writes anonymous_agents when non-empty', () => {
-      saveConfig({
-        apiKey: null,
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        limits: null,
-        agentCommand: null,
-        agents: null,
-        anonymousAgents: [
-          { agentId: 'a1', apiKey: 'cr_key', model: 'claude-sonnet-4-6', tool: 'claude' },
-        ],
-      });
-
-      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(written).toContain('anonymous_agents');
-      expect(written).toContain('agent_id: a1');
-      expect(written).toContain('api_key: cr_key');
-    });
-
-    it('saveConfig omits anonymous_agents when empty', () => {
-      saveConfig({
-        apiKey: null,
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        limits: null,
-        agentCommand: null,
-        agents: null,
-        anonymousAgents: [],
-      });
-
-      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(written).not.toContain('anonymous_agents');
-    });
-
-    it('saveConfig writes repo_config on anonymous agents', () => {
-      saveConfig({
-        apiKey: null,
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        limits: null,
-        agentCommand: null,
-        agents: null,
-        anonymousAgents: [
-          {
-            agentId: 'a1',
-            apiKey: 'cr_key',
-            model: 'claude-sonnet-4-6',
-            tool: 'claude',
-            repoConfig: { mode: 'whitelist', list: ['org/repo'] },
-          },
-        ],
-      });
-
-      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(written).toContain('repo_config');
-      expect(written).toContain('whitelist');
-    });
-  });
-
-  describe('findAnonymousAgent', () => {
-    it('returns matching anonymous agent', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "a1b2"
-    api_key: "cr_key"
-    model: "m"
-    tool: "t"
-`);
-      const config = loadConfig();
-      const found = findAnonymousAgent(config, 'a1b2');
-      expect(found).not.toBeNull();
-      expect(found!.agentId).toBe('a1b2');
-    });
-
-    it('returns null when not found', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('');
-      const config = loadConfig();
-      expect(findAnonymousAgent(config, 'nonexistent')).toBeNull();
-    });
-  });
-
-  describe('removeAnonymousAgent', () => {
-    it('removes matching anonymous agent', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "a1"
-    api_key: "cr_k1"
-    model: "m1"
-    tool: "t1"
-  - agent_id: "a2"
-    api_key: "cr_k2"
-    model: "m2"
-    tool: "t2"
-`);
-      const config = loadConfig();
-      expect(config.anonymousAgents).toHaveLength(2);
-
-      removeAnonymousAgent(config, 'a1');
-      expect(config.anonymousAgents).toHaveLength(1);
-      expect(config.anonymousAgents[0].agentId).toBe('a2');
-    });
-
-    it('no-op when agent not found', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "a1"
-    api_key: "cr_k1"
-    model: "m1"
-    tool: "t1"
-`);
-      const config = loadConfig();
-      removeAnonymousAgent(config, 'nonexistent');
-      expect(config.anonymousAgents).toHaveLength(1);
+      expect(config).not.toHaveProperty('anonymousAgents');
     });
   });
 });

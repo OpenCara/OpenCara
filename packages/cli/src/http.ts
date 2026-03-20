@@ -11,10 +11,19 @@ export class HttpError extends Error {
 }
 
 export class ApiClient {
+  private readonly debug: boolean;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string | null = null,
-  ) {}
+    debug?: boolean,
+  ) {
+    this.debug = debug ?? process.env.OPENCARA_DEBUG === '1';
+  }
+
+  private log(msg: string): void {
+    if (this.debug) console.debug(`[ApiClient] ${msg}`);
+  }
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = {
@@ -27,23 +36,25 @@ export class ApiClient {
   }
 
   async get<T>(path: string): Promise<T> {
+    this.log(`GET ${path}`);
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'GET',
       headers: this.headers(),
     });
-    return this.handleResponse<T>(res);
+    return this.handleResponse<T>(res, path);
   }
 
   async post<T>(path: string, body?: unknown): Promise<T> {
+    this.log(`POST ${path}`);
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: this.headers(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    return this.handleResponse<T>(res);
+    return this.handleResponse<T>(res, path);
   }
 
-  private async handleResponse<T>(res: Response): Promise<T> {
+  private async handleResponse<T>(res: Response, path: string): Promise<T> {
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
       try {
@@ -52,8 +63,10 @@ export class ApiClient {
       } catch {
         // ignore parse errors
       }
+      this.log(`${res.status} ${message} (${path})`);
       throw new HttpError(res.status, message);
     }
+    this.log(`${res.status} OK (${path})`);
     return (await res.json()) as T;
   }
 }
