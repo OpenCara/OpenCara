@@ -88,7 +88,7 @@ function hexToBytes(hex: string): Uint8Array | null {
  * Returns null if an active (pending/reviewing) task already exists for this PR
  * (idempotency guard against webhook redeliveries and rapid PR events).
  */
-async function createTaskForPR(
+export async function createTaskForPR(
   store: TaskStore,
   installationId: number,
   owner: string,

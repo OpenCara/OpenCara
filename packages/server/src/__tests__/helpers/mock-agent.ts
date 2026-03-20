@@ -1,0 +1,147 @@
+/**
+ * MockAgent — simulates a CLI agent's HTTP interactions with the server.
+ *
+ * Wraps Hono's app.request() calls into agent-like methods:
+ * poll, claim, submitResult, reject, reportError, pollAndClaim.
+ */
+import type { Hono } from 'hono';
+import type {
+  PollResponse,
+  PollTask,
+  ClaimResponse,
+  ClaimRole,
+  ReviewVerdict,
+} from '@opencara/shared';
+import type { Env, AppVariables } from '../../types.js';
+
+type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
+
+export class MockAgent {
+  constructor(
+    public readonly agentId: string,
+    private app: HonoApp,
+    private env: Env,
+  ) {}
+
+  private request(method: string, path: string, body?: unknown) {
+    return this.app.request(
+      path,
+      {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      },
+      this.env,
+    );
+  }
+
+  /** Poll for available tasks. */
+  async poll(opts?: { reviewOnly?: boolean }): Promise<PollTask[]> {
+    const res = await this.request('POST', '/api/tasks/poll', {
+      agent_id: this.agentId,
+      review_only: opts?.reviewOnly,
+    });
+    const body = (await res.json()) as PollResponse;
+    return body.tasks;
+  }
+
+  /** Claim a task with a specific role. */
+  async claim(
+    taskId: string,
+    role: ClaimRole,
+    opts?: { model?: string; tool?: string },
+  ): Promise<ClaimResponse> {
+    const res = await this.request('POST', `/api/tasks/${taskId}/claim`, {
+      agent_id: this.agentId,
+      role,
+      model: opts?.model,
+      tool: opts?.tool,
+    });
+    return (await res.json()) as ClaimResponse;
+  }
+
+  /** Submit a review result. Returns status and parsed body. */
+  async submitResult(
+    taskId: string,
+    type: ClaimRole,
+    reviewText: string,
+    verdict?: ReviewVerdict,
+    tokensUsed?: number,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await this.request('POST', `/api/tasks/${taskId}/result`, {
+      agent_id: this.agentId,
+      type,
+      review_text: reviewText,
+      verdict,
+      tokens_used: tokensUsed,
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  }
+
+  /** Reject a claimed task. */
+  async reject(taskId: string, reason: string): Promise<{ status: number }> {
+    const res = await this.request('POST', `/api/tasks/${taskId}/reject`, {
+      agent_id: this.agentId,
+      reason,
+    });
+    return { status: res.status };
+  }
+
+  /** Report an error on a claimed task. */
+  async reportError(taskId: string, error: string): Promise<{ status: number }> {
+    const res = await this.request('POST', `/api/tasks/${taskId}/error`, {
+      agent_id: this.agentId,
+      error,
+    });
+    return { status: res.status };
+  }
+
+  /**
+   * Convenience: poll and claim the first available task.
+   * Returns null if no tasks are available.
+   */
+  async pollAndClaim(
+    role?: ClaimRole,
+  ): Promise<{ taskId: string; claimResponse: ClaimResponse } | null> {
+    const tasks = await this.poll(role === 'review' ? { reviewOnly: true } : undefined);
+    if (tasks.length === 0) return null;
+
+    const task = tasks[0];
+    const taskRole = role ?? (task.role as ClaimRole);
+    const claimResponse = await this.claim(task.task_id, taskRole);
+    return { taskId: task.task_id, claimResponse };
+  }
+
+  /** Inject a PR event via test routes (bypasses webhook signature). */
+  async injectPR(opts?: {
+    owner?: string;
+    repo?: string;
+    prNumber?: number;
+    reviewCount?: number;
+    timeout?: string;
+  }): Promise<{ created: boolean; taskId?: string }> {
+    const config =
+      opts?.reviewCount || opts?.timeout
+        ? {
+            agents: {
+              ...{
+                reviewCount: opts.reviewCount ?? 1,
+                preferredModels: [],
+                preferredTools: [],
+                minReputation: 0,
+              },
+            },
+            ...(opts.timeout ? { timeout: opts.timeout } : {}),
+          }
+        : undefined;
+
+    const res = await this.request('POST', '/test/events/pr', {
+      owner: opts?.owner ?? 'test-org',
+      repo: opts?.repo ?? 'test-repo',
+      pr_number: opts?.prNumber ?? 1,
+      config,
+    });
+    const body = (await res.json()) as { created: boolean; task_id?: string };
+    return { created: body.created, taskId: body.task_id };
+  }
+}
