@@ -104,6 +104,7 @@ export function extractVerdict(text: string): { verdict: ReviewVerdict; review: 
 export interface ReviewExecutorDeps {
   commandTemplate: string;
   maxDiffSizeKb: number;
+  githubToken?: string | null;
 }
 
 export async function executeReview(

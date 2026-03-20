@@ -17,6 +17,7 @@ import {
   saveConfig,
   ensureConfigDir,
   resolveAgentLimits,
+  resolveGithubToken,
   RepoConfigError,
   CONFIG_DIR,
   CONFIG_FILE,
@@ -57,6 +58,7 @@ describe('config', () => {
       expect(config.apiKey).toBeNull();
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
+      expect(config.githubToken).toBeNull();
       expect(config.limits).toBeNull();
       expect(config.agentCommand).toBeNull();
     });
@@ -249,6 +251,7 @@ describe('config', () => {
       apiKey: null as string | null,
       platformUrl: 'https://api.dev',
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+      githubToken: null as string | null,
       limits: null as import('../config.js').ConsumptionLimits | null,
       agentCommand: null as string | null,
       agents: null as import('../config.js').LocalAgentConfig[] | null,
@@ -392,6 +395,7 @@ describe('config', () => {
         apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
         limits: null,
         agentCommand: null,
         agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
@@ -407,6 +411,7 @@ describe('config', () => {
         apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
         limits: null,
         agentCommand: null,
         agents: null,
@@ -474,6 +479,7 @@ agents:
         apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
         limits: null,
         agentCommand: null,
         agents: [{ model: 'claude-sonnet-4-6', tool: 'claude-code', name: 'MyBot' }],
@@ -771,6 +777,7 @@ agents:
         apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
         limits: null,
         agentCommand: null,
         agents: [
@@ -786,6 +793,99 @@ agents:
       expect(written).toContain('repos');
       expect(written).toContain('whitelist');
       expect(written).toContain('org/repo');
+    });
+  });
+
+  describe('github_token config', () => {
+    it('parses global github_token', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('github_token: ghp_abc123\n');
+
+      const config = loadConfig();
+      expect(config.githubToken).toBe('ghp_abc123');
+    });
+
+    it('returns null for non-string github_token', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('github_token: 123\n');
+
+      const config = loadConfig();
+      expect(config.githubToken).toBeNull();
+    });
+
+    it('returns null when github_token is absent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+
+      const config = loadConfig();
+      expect(config.githubToken).toBeNull();
+    });
+
+    it('saveConfig writes github_token when present', () => {
+      saveConfig({
+        apiKey: null,
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: 'ghp_xyz789',
+        limits: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('github_token: ghp_xyz789');
+    });
+
+    it('saveConfig omits github_token when null', () => {
+      saveConfig({
+        apiKey: null,
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
+        limits: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('github_token');
+    });
+
+    it('parses per-agent github_token', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    github_token: ghp_agent1
+  - model: glm-5
+    tool: qwen
+`);
+      const config = loadConfig();
+      expect(config.agents![0].github_token).toBe('ghp_agent1');
+      expect(config.agents![1].github_token).toBeUndefined();
+    });
+  });
+
+  describe('resolveGithubToken', () => {
+    it('returns null when both are null/undefined', () => {
+      expect(resolveGithubToken(undefined, null)).toBeNull();
+    });
+
+    it('returns global token when agent has none', () => {
+      expect(resolveGithubToken(undefined, 'ghp_global')).toBe('ghp_global');
+    });
+
+    it('returns agent token when global is null', () => {
+      expect(resolveGithubToken('ghp_agent', null)).toBe('ghp_agent');
+    });
+
+    it('agent token overrides global', () => {
+      expect(resolveGithubToken('ghp_agent', 'ghp_global')).toBe('ghp_agent');
+    });
+
+    it('empty agent token falls back to global', () => {
+      expect(resolveGithubToken('', 'ghp_global')).toBe('ghp_global');
     });
   });
 

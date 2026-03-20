@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { withRetry } from '../retry.js';
+import { withRetry, NonRetryableError } from '../retry.js';
 
 describe('withRetry', () => {
   afterEach(() => {
@@ -120,5 +120,25 @@ describe('withRetry', () => {
     // Only 1 delay (between attempt 0 and 1)
     expect(delays).toHaveLength(1);
     expect(delays[0]).toBe(1000);
+  });
+
+  it('does not retry NonRetryableError', async () => {
+    const fn = vi.fn().mockRejectedValue(new NonRetryableError('404 Not Found'));
+
+    await expect(withRetry(fn, { maxAttempts: 3, baseDelayMs: 1 })).rejects.toThrow(
+      '404 Not Found',
+    );
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves NonRetryableError type', async () => {
+    const fn = vi.fn().mockRejectedValue(new NonRetryableError('forbidden'));
+
+    try {
+      await withRetry(fn, { maxAttempts: 3, baseDelayMs: 1 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(NonRetryableError);
+    }
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

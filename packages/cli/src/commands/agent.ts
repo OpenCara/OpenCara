@@ -11,11 +11,12 @@ import type {
 import {
   loadConfig,
   resolveAgentLimits,
+  resolveGithubToken,
   type ConsumptionLimits,
   type LocalAgentConfig,
 } from '../config.js';
 import { ApiClient, HttpError } from '../http.js';
-import { withRetry } from '../retry.js';
+import { withRetry, NonRetryableError } from '../retry.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
 import { validateCommandBinary, estimateTokens } from '../tool-executor.js';
@@ -37,19 +38,39 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const MAX_CONSECUTIVE_AUTH_ERRORS = 3;
 const MAX_POLL_BACKOFF_MS = 300_000; // 5 minutes
 
+/** HTTP statuses that will never succeed on retry (auth/not-found). */
+const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
+
 /**
- * Fetch the PR diff directly from GitHub (public URL).
+ * Fetch the PR diff directly from GitHub.
  * Agent fetches diff itself — server never sends it.
+ * When githubToken is provided, sends Authorization header (required for private repos).
  */
-async function fetchDiff(diffUrl: string, signal?: AbortSignal): Promise<string> {
+async function fetchDiff(
+  diffUrl: string,
+  githubToken?: string | null,
+  signal?: AbortSignal,
+): Promise<string> {
   // Append .diff if not already present for GitHub's raw diff format
   const patchUrl = diffUrl.endsWith('.diff') ? diffUrl : `${diffUrl}.diff`;
 
   return withRetry(
     async () => {
-      const response = await fetch(patchUrl);
+      const headers: Record<string, string> = {};
+      if (githubToken) {
+        headers['Authorization'] = `Bearer ${githubToken}`;
+      }
+      const response = await fetch(patchUrl, { headers });
       if (!response.ok) {
-        throw new Error(`Failed to fetch diff: ${response.status} ${response.statusText}`);
+        const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
+        if (NON_RETRYABLE_STATUSES.has(response.status)) {
+          const hint =
+            response.status === 404
+              ? '. If this is a private repo, configure github_token in ~/.opencara/config.yml'
+              : '';
+          throw new NonRetryableError(`${msg}${hint}`);
+        }
+        throw new Error(msg);
       }
       return response.text();
     },
@@ -191,7 +212,7 @@ async function handleTask(
   // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
   try {
-    diffContent = await fetchDiff(diff_url, signal);
+    diffContent = await fetchDiff(diff_url, reviewDeps.githubToken, signal);
     console.log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
     console.error(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
@@ -547,9 +568,12 @@ export async function startAgentRouter(): Promise<void> {
   const router = new RouterRelay();
   router.start();
 
+  const githubToken = resolveGithubToken(agentConfig?.github_token, config.githubToken);
+
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
+    githubToken,
   };
 
   const session = createSessionTracker();
@@ -620,9 +644,14 @@ agentCommand
       return;
     }
 
+    const githubToken = agentConfig
+      ? resolveGithubToken(agentConfig.github_token, config.githubToken)
+      : config.githubToken;
+
     const reviewDeps: ReviewExecutorDeps = {
       commandTemplate,
       maxDiffSizeKb: config.maxDiffSizeKb,
+      githubToken,
     };
 
     const isRouter = agentConfig?.router === true;

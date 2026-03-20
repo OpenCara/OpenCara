@@ -1,3 +1,11 @@
+/** Throw this to abort retries immediately (e.g. 401/403/404). */
+export class NonRetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NonRetryableError';
+  }
+}
+
 export interface RetryOptions {
   maxAttempts: number;
   baseDelayMs: number;
@@ -23,6 +31,7 @@ export async function withRetry<T>(
     try {
       return await fn();
     } catch (err) {
+      if (err instanceof NonRetryableError) throw err;
       lastError = err as Error;
       if (attempt < opts.maxAttempts - 1) {
         const delay = Math.min(opts.baseDelayMs * Math.pow(2, attempt), opts.maxDelayMs);
