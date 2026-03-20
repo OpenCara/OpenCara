@@ -46,10 +46,22 @@ describe('extractVerdict', () => {
     expect(review).toBe('Some observations.');
   });
 
-  it('defaults to comment when no verdict found', () => {
+  it('defaults to comment when no verdict found and logs warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { verdict, review } = extractVerdict('Just a regular review text.');
     expect(verdict).toBe('comment');
     expect(review).toBe('Just a regular review text.');
+    expect(warnSpy).toHaveBeenCalledWith(
+      'No verdict found in review output, defaulting to COMMENT',
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when verdict is found', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    extractVerdict('VERDICT: APPROVE\nGreat code!');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it('handles verdict in middle of text', () => {

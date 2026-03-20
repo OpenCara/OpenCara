@@ -96,6 +96,8 @@ export function extractVerdict(text: string): { verdict: ReviewVerdict; review: 
     return { verdict: verdictStr, review };
   }
 
+  // No verdict found — warn and default
+  console.warn('No verdict found in review output, defaulting to COMMENT');
   return { verdict: 'comment', review: text };
 }
 

@@ -361,7 +361,7 @@ async function executeReviewTask(
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
   console.log(`  Review submitted (${tokensUsed.toLocaleString()} tokens)`);
-  console.log(formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits));
+  console.log(formatPostReviewStats(consumptionDeps.session));
 }
 
 async function executeSummaryTask(
@@ -459,7 +459,7 @@ async function executeSummaryTask(
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
   console.log(`  Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
-  console.log(formatPostReviewStats(tokensUsed, consumptionDeps.session, consumptionDeps.limits));
+  console.log(formatPostReviewStats(consumptionDeps.session));
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

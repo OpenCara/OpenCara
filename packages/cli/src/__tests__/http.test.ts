@@ -100,4 +100,51 @@ describe('ApiClient', () => {
     const client = new ApiClient('https://api.test.com', 'cr_key');
     await expect(client.get('/test')).rejects.toThrow('HTTP 502');
   });
+
+  it('logs requests in debug mode', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', null, true);
+    await client.post('/tasks/poll', { agent_id: 'a1' });
+
+    expect(debugSpy).toHaveBeenCalledWith('[ApiClient] POST /tasks/poll');
+    expect(debugSpy).toHaveBeenCalledWith('[ApiClient] 200 OK (/tasks/poll)');
+    debugSpy.mockRestore();
+  });
+
+  it('does not log when debug is disabled', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const client = new ApiClient('https://api.test.com', null, false);
+    await client.get('/test');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
+
+  it('logs error responses in debug mode', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ error: 'Not found' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', null, true);
+    await expect(client.get('/missing')).rejects.toThrow('Not found');
+
+    expect(debugSpy).toHaveBeenCalledWith('[ApiClient] GET /missing');
+    expect(debugSpy).toHaveBeenCalledWith('[ApiClient] 404 Not found (/missing)');
+    debugSpy.mockRestore();
+  });
 });
