@@ -66,6 +66,7 @@ async function pollLoop(
   agentId: string,
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
+  agentInfo: { model: string; tool: string },
   options: {
     pollIntervalMs: number;
     routerRelay?: RouterRelay;
@@ -91,7 +92,16 @@ async function pollLoop(
 
       if (pollResponse.tasks.length > 0) {
         const task = pollResponse.tasks[0]; // Take first available task
-        await handleTask(client, agentId, task, reviewDeps, consumptionDeps, routerRelay, signal);
+        await handleTask(
+          client,
+          agentId,
+          task,
+          reviewDeps,
+          consumptionDeps,
+          agentInfo,
+          routerRelay,
+          signal,
+        );
       }
     } catch (err) {
       if (signal?.aborted) break;
@@ -142,6 +152,7 @@ async function handleTask(
   task: PollTask,
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
+  agentInfo: { model: string; tool: string },
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -157,6 +168,8 @@ async function handleTask(
         client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, {
           agent_id: agentId,
           role,
+          model: agentInfo.model,
+          tool: agentInfo.tool,
         }),
       { maxAttempts: 2 },
       signal,
@@ -472,7 +485,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export async function startAgent(
   agentId: string,
   platformUrl: string,
-  _apiKey: string | null,
+  agentInfo: { model: string; tool: string },
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
   options?: { pollIntervalMs?: number; routerRelay?: RouterRelay },
@@ -483,6 +496,7 @@ export async function startAgent(
 
   console.log(`Agent ${agentId} starting...`);
   console.log(`Platform: ${platformUrl}`);
+  console.log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}`);
 
   if (!reviewDeps) {
     console.error('No review command configured. Set command in config.yml');
@@ -500,7 +514,7 @@ export async function startAgent(
     abortController.abort();
   });
 
-  await pollLoop(client, agentId, reviewDeps, deps, {
+  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, {
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     routerRelay: options?.routerRelay,
     signal: abortController.signal,
@@ -541,10 +555,13 @@ export async function startAgentRouter(): Promise<void> {
     ? resolveAgentLimits(agentConfig.limits, config.limits)
     : config.limits;
 
+  const model = agentConfig?.model ?? 'unknown';
+  const tool = agentConfig?.tool ?? 'unknown';
+
   await startAgent(
     agentId,
     config.platformUrl,
-    null,
+    { model, tool },
     reviewDeps,
     {
       agentId,
@@ -614,11 +631,14 @@ agentCommand
 
     const session = createSessionTracker();
 
+    const model = agentConfig?.model ?? 'unknown';
+    const tool = agentConfig?.tool ?? 'unknown';
+
     try {
       await startAgent(
         agentId,
         config.platformUrl,
-        null,
+        { model, tool },
         reviewDeps,
         {
           agentId,

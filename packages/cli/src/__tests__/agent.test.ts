@@ -44,7 +44,7 @@ describe('agent poll loop', () => {
     const promise = startAgent(
       'test-agent',
       'https://api.test.com',
-      null,
+      { model: 'test-model', tool: 'test-tool' },
       reviewDeps,
       consumptionDeps,
       {
@@ -82,9 +82,16 @@ describe('agent poll loop', () => {
     const { reviewDeps, consumptionDeps } = makeDeps();
 
     // Don't await — the loop runs until we advance timers
-    void startAgent('test-agent', 'https://api.test.com', null, reviewDeps, consumptionDeps, {
-      pollIntervalMs: 1000,
-    });
+    void startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 1000,
+      },
+    );
 
     // poll 1 fires immediately. error (consecutive=1), backoff=1000 → no extra delay
     // Then normal sleep 1000ms
@@ -128,9 +135,16 @@ describe('agent poll loop', () => {
 
     const { reviewDeps, consumptionDeps } = makeDeps();
 
-    void startAgent('test-agent', 'https://api.test.com', null, reviewDeps, consumptionDeps, {
-      pollIntervalMs: 100,
-    });
+    void startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+      },
+    );
 
     // Advance enough for 3 failures + backoff + 1 success
     await vi.advanceTimersByTimeAsync(10000);
@@ -139,6 +153,100 @@ describe('agent poll loop', () => {
     expect(console.error).not.toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
     // Agent is still running (callCount > 3 means it got past the errors)
     expect(callCount).toBeGreaterThan(3);
+  });
+
+  it('logs model and tool on startup', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      }),
+    );
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'claude-sonnet-4-6', tool: 'claude' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    // Let it fail out with auth errors
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(console.log).toHaveBeenCalledWith('Model: claude-sonnet-4-6 | Tool: claude');
+  });
+
+  it('includes model and tool in claim request body', async () => {
+    let claimBody: Record<string, unknown> | null = null;
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : String(url);
+
+      // First call: poll → return a task
+      if (urlStr.includes('/api/tasks/poll')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              tasks: [
+                {
+                  task_id: 'task-1',
+                  owner: 'test-owner',
+                  repo: 'test-repo',
+                  pr_number: 42,
+                  diff_url: 'https://github.com/test/repo/pull/42',
+                  timeout_seconds: 300,
+                  prompt: 'Review this PR',
+                  role: 'review',
+                },
+              ],
+            }),
+        });
+      }
+
+      // Claim call — capture the body
+      if (urlStr.includes('/claim')) {
+        claimBody = JSON.parse(init?.body as string);
+        // Return claimed: false so the loop doesn't try to fetch a diff
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ claimed: false, reason: 'test' }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    void startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'claude-sonnet-4-6', tool: 'claude' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    // Advance enough for poll + claim
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(claimBody).not.toBeNull();
+    expect(claimBody).toMatchObject({
+      agent_id: 'test-agent',
+      role: 'review',
+      model: 'claude-sonnet-4-6',
+      tool: 'claude',
+    });
   });
 
   it('resets auth counter on successful poll', async () => {
@@ -168,9 +276,16 @@ describe('agent poll loop', () => {
 
     const { reviewDeps, consumptionDeps } = makeDeps();
 
-    void startAgent('test-agent', 'https://api.test.com', null, reviewDeps, consumptionDeps, {
-      pollIntervalMs: 100,
-    });
+    void startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+      },
+    );
 
     // Advance enough for all 5+ polls
     await vi.advanceTimersByTimeAsync(20000);
