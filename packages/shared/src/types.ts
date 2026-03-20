@@ -36,6 +36,11 @@ export interface ReviewTask {
   github_installation_id: number;
   config: import('./review-config.js').ReviewConfig; // parsed .review.yml
   created_at: number;
+  // Claim counters — updated atomically on task to avoid KV list() consistency issues
+  claimed_agents?: string[]; // agent IDs that have claimed this task
+  review_claims?: number; // number of review claims
+  completed_reviews?: number; // number of completed review claims
+  summary_claimed?: boolean; // whether summary slot is claimed
 }
 
 /** A claim on a task (review_result equivalent) */

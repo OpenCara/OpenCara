@@ -73,15 +73,7 @@ describe('Task Routes', () => {
     });
 
     it('does not return tasks where agent already has a claim', async () => {
-      await store.createTask(makeTask());
-      await store.createClaim({
-        id: 'task-1:agent-1',
-        task_id: 'task-1',
-        agent_id: 'agent-1',
-        role: 'summary',
-        status: 'pending',
-        created_at: Date.now(),
-      });
+      await store.createTask(makeTask({ claimed_agents: ['agent-1'], summary_claimed: true }));
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
@@ -159,7 +151,14 @@ describe('Task Routes', () => {
     });
 
     it('includes reviews when claiming summary role', async () => {
-      await store.createTask(makeTask({ review_count: 2 }));
+      await store.createTask(
+        makeTask({
+          review_count: 2,
+          claimed_agents: ['reviewer'],
+          review_claims: 1,
+          completed_reviews: 1,
+        }),
+      );
       // Add a completed review
       await store.createClaim({
         id: 'task-1:reviewer',
