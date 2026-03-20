@@ -10,7 +10,8 @@ const VERDICT_TO_EVENT: Record<ReviewVerdict, ReviewEvent> = {
 };
 
 export function verdictToReviewEvent(verdict: ReviewVerdict): ReviewEvent {
-  return VERDICT_TO_EVENT[verdict];
+  const normalized = verdict.toLowerCase() as ReviewVerdict;
+  return VERDICT_TO_EVENT[normalized];
 }
 
 export interface ReviewComment {
@@ -49,7 +50,8 @@ export async function postPrReview(
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to post PR review: ${response.status} ${response.statusText}`);
+    const body = await response.text();
+    throw new Error(`GitHub API error ${response.status}: ${body}`);
   }
 
   const data = (await response.json()) as { html_url: string };
