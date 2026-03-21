@@ -60,22 +60,14 @@ export function isAgentEligibleForRole(
     }
   }
 
-  // Whitelist check — if non-empty, only listed agents are allowed
+  // Whitelist check — if non-empty, only agents with a matching agent entry are allowed
   if (whitelist.length > 0) {
     const agentEntries = whitelist.filter((entry) => entry.agent);
     const allowed = agentEntries.some((entry) => entry.agent === agentId);
     if (!allowed) {
-      // For reviewers, check allowAnonymous — if the agent isn't in the whitelist,
-      // they're blocked regardless of allowAnonymous (allowAnonymous controls
-      // agents without IDs, but all poll/claim requests require agent_id)
       return { eligible: false, reason: `Agent "${agentId}" is not in the ${role} whitelist` };
     }
   }
-
-  // For reviewers with allowAnonymous: false and a non-empty whitelist,
-  // the whitelist check above already handles it. When the whitelist is empty
-  // and allowAnonymous is false, we still allow agents with IDs (they're known agents).
-  // allowAnonymous only matters for future anonymous agent support.
 
   return { eligible: true };
 }
