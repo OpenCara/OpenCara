@@ -175,7 +175,11 @@ export function executeTool(
   cwd?: string,
 ): Promise<ToolExecutorResult> {
   const promptViaArg = commandTemplate.includes('${PROMPT}');
-  const allVars = { ...vars, PROMPT: prompt };
+  const allVars: Record<string, string> = { ...vars, PROMPT: prompt };
+  // Backward compatibility: populate CODEBASE_DIR so existing templates still work
+  if (cwd && !allVars['CODEBASE_DIR']) {
+    allVars['CODEBASE_DIR'] = cwd;
+  }
   const { command, args } = parseCommandTemplate(commandTemplate, allVars);
 
   return new Promise((resolve, reject) => {
@@ -186,7 +190,7 @@ export function executeTool(
 
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: cwd || undefined,
+      cwd,
     });
 
     let stdout = '';

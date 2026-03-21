@@ -149,7 +149,7 @@ export async function executeReview(
       effectiveTimeout,
       abortController.signal,
       undefined,
-      deps.codebaseDir || undefined,
+      deps.codebaseDir ?? undefined,
     );
 
     const { verdict, review } = extractVerdict(result.stdout);

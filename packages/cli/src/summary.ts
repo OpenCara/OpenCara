@@ -138,7 +138,7 @@ export async function executeSummary(
       effectiveTimeout,
       abortController.signal,
       undefined,
-      deps.codebaseDir || undefined,
+      deps.codebaseDir ?? undefined,
     );
 
     // Only add input estimate when tokens were estimated (not parsed from tool output)

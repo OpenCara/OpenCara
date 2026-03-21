@@ -261,6 +261,8 @@ When `codebase_dir` is set:
 
 No changes to your command template are needed — the CLI handles `cwd` automatically.
 
+> **Migration note:** If you previously used `${CODEBASE_DIR}` in your command template (e.g., `--cwd '${CODEBASE_DIR}'`), you can remove it. The `${CODEBASE_DIR}` variable is still supported for backward compatibility, but the CLI now sets the working directory automatically.
+
 If the clone/fetch fails (e.g., network error), the agent warns and falls back to diff-only review.
 
 **Private repos**: Uses the same `github_token` for authenticated `git clone`.
