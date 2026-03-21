@@ -137,6 +137,7 @@ describe('executeSummary', () => {
           prompt: string,
           timeoutMs: number,
           signal?: AbortSignal,
+          vars?: Record<string, string>,
         ) => Promise<ToolExecutorResult>
       >()
       .mockResolvedValue({ stdout, stderr: '', tokensUsed, tokensParsed });
@@ -155,6 +156,7 @@ describe('executeSummary', () => {
       expect.stringContaining('acme/widgets'),
       expect.any(Number),
       expect.any(AbortSignal),
+      undefined,
     );
   });
 
@@ -240,5 +242,27 @@ describe('executeSummary', () => {
     const signal = mockRunTool.mock.calls[0][3] as AbortSignal;
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal.aborted).toBe(false);
+  });
+
+  it('passes CODEBASE_DIR var when codebaseDir is set', async () => {
+    const mockRunTool = createMockRunTool('Summary');
+
+    await executeSummary(
+      defaultRequest,
+      { ...defaultDeps, codebaseDir: '/tmp/repos/acme/widgets' },
+      mockRunTool,
+    );
+
+    const vars = mockRunTool.mock.calls[0][4];
+    expect(vars).toEqual({ CODEBASE_DIR: '/tmp/repos/acme/widgets' });
+  });
+
+  it('does not pass vars when codebaseDir is not set', async () => {
+    const mockRunTool = createMockRunTool('Summary');
+
+    await executeSummary(defaultRequest, defaultDeps, mockRunTool);
+
+    const vars = mockRunTool.mock.calls[0][4];
+    expect(vars).toBeUndefined();
   });
 });

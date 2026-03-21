@@ -11,10 +11,12 @@ import type {
 import {
   loadConfig,
   resolveAgentLimits,
+  resolveCodebaseDir,
   resolveGithubToken as resolveConfigToken,
   type ConsumptionLimits,
   type LocalAgentConfig,
 } from '../config.js';
+import { cloneOrUpdate } from '../codebase.js';
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
 import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
@@ -200,7 +202,7 @@ async function handleTask(
   signal?: AbortSignal,
 ): Promise<void> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
-  const { log, logError } = logger;
+  const { log, logError, logWarn } = logger;
 
   log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
   log(`  ${diff_url}`);
@@ -249,6 +251,28 @@ async function handleTask(
     return;
   }
 
+  // Clone/update codebase if configured
+  let taskReviewDeps = reviewDeps;
+  if (reviewDeps.codebaseDir) {
+    try {
+      const result = cloneOrUpdate(
+        owner,
+        repo,
+        pr_number,
+        reviewDeps.codebaseDir,
+        reviewDeps.githubToken,
+      );
+      log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
+      // Pass the resolved local path as codebaseDir for this task
+      taskReviewDeps = { ...reviewDeps, codebaseDir: result.localPath };
+    } catch (err) {
+      logWarn(
+        `  Warning: codebase clone failed: ${(err as Error).message}. Continuing with diff-only review.`,
+      );
+      taskReviewDeps = { ...reviewDeps, codebaseDir: null };
+    }
+  }
+
   // Execute review or summary
   try {
     if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
@@ -263,7 +287,7 @@ async function handleTask(
         prompt,
         timeout_seconds,
         claimResponse.reviews,
-        reviewDeps,
+        taskReviewDeps,
         consumptionDeps,
         logger,
         routerRelay,
@@ -280,7 +304,7 @@ async function handleTask(
         diffContent,
         prompt,
         timeout_seconds,
-        reviewDeps,
+        taskReviewDeps,
         consumptionDeps,
         logger,
         routerRelay,
@@ -628,10 +652,12 @@ export async function startAgentRouter(): Promise<void> {
   const logger = createLogger(agentConfig?.name ?? 'agent[0]');
   logAuthMethod(auth.method, logger.log);
 
+  const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
     githubToken: auth.token,
+    codebaseDir,
   };
 
   const session = createSessionTracker();
@@ -719,10 +745,12 @@ function startAgentByIndex(
     githubToken = configToken;
   }
 
+  const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
     maxDiffSizeKb: config.maxDiffSizeKb,
     githubToken,
+    codebaseDir,
   };
 
   const isRouter = agentConfig?.router === true;

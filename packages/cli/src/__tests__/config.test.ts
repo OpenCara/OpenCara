@@ -17,6 +17,7 @@ import {
   saveConfig,
   ensureConfigDir,
   resolveAgentLimits,
+  resolveCodebaseDir,
   resolveGithubToken,
   RepoConfigError,
   CONFIG_DIR,
@@ -59,6 +60,7 @@ describe('config', () => {
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.githubToken).toBeNull();
+      expect(config.codebaseDir).toBeNull();
       expect(config.limits).toBeNull();
       expect(config.agentCommand).toBeNull();
     });
@@ -252,6 +254,7 @@ describe('config', () => {
       platformUrl: 'https://api.dev',
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       githubToken: null as string | null,
+      codebaseDir: null as string | null,
       limits: null as import('../config.js').ConsumptionLimits | null,
       agentCommand: null as string | null,
       agents: null as import('../config.js').LocalAgentConfig[] | null,
@@ -396,6 +399,7 @@ describe('config', () => {
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
+        codebaseDir: null,
         limits: null,
         agentCommand: null,
         agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
@@ -412,6 +416,7 @@ describe('config', () => {
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
+        codebaseDir: null,
         limits: null,
         agentCommand: null,
         agents: null,
@@ -480,6 +485,7 @@ agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
+        codebaseDir: null,
         limits: null,
         agentCommand: null,
         agents: [{ model: 'claude-sonnet-4-6', tool: 'claude-code', name: 'MyBot' }],
@@ -778,6 +784,7 @@ agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
+        codebaseDir: null,
         limits: null,
         agentCommand: null,
         agents: [
@@ -827,6 +834,7 @@ agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: 'ghp_xyz789',
+        codebaseDir: null,
         limits: null,
         agentCommand: null,
         agents: null,
@@ -842,6 +850,7 @@ agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
+        codebaseDir: null,
         limits: null,
         agentCommand: null,
         agents: null,
@@ -901,6 +910,115 @@ anonymous_agents:
 `);
       const config = loadConfig();
       expect(config).not.toHaveProperty('anonymousAgents');
+    });
+  });
+
+  describe('codebase_dir config', () => {
+    it('parses global codebase_dir', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('codebase_dir: ~/.opencara/repos\n');
+
+      const config = loadConfig();
+      expect(config.codebaseDir).toBe('~/.opencara/repos');
+    });
+
+    it('returns null for non-string codebase_dir', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('codebase_dir: 123\n');
+
+      const config = loadConfig();
+      expect(config.codebaseDir).toBeNull();
+    });
+
+    it('returns null when codebase_dir is absent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+
+      const config = loadConfig();
+      expect(config.codebaseDir).toBeNull();
+    });
+
+    it('saveConfig writes codebase_dir when present', () => {
+      saveConfig({
+        apiKey: null,
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
+        codebaseDir: '~/.opencara/repos',
+        limits: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('codebase_dir: ~/.opencara/repos');
+    });
+
+    it('saveConfig omits codebase_dir when null', () => {
+      saveConfig({
+        apiKey: null,
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        githubToken: null,
+        codebaseDir: null,
+        limits: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('codebase_dir');
+    });
+
+    it('parses per-agent codebase_dir', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+    codebase_dir: ~/repos
+  - model: glm-5
+    tool: qwen
+`);
+      const config = loadConfig();
+      expect(config.agents![0].codebase_dir).toBe('~/repos');
+      expect(config.agents![1].codebase_dir).toBeUndefined();
+    });
+  });
+
+  describe('resolveCodebaseDir', () => {
+    it('returns null when both are null/undefined', () => {
+      expect(resolveCodebaseDir(undefined, null)).toBeNull();
+    });
+
+    it('returns global dir when agent has none', () => {
+      const result = resolveCodebaseDir(undefined, '/tmp/repos');
+      expect(result).toBe('/tmp/repos');
+    });
+
+    it('returns agent dir when global is null', () => {
+      const result = resolveCodebaseDir('/tmp/agent-repos', null);
+      expect(result).toBe('/tmp/agent-repos');
+    });
+
+    it('agent dir overrides global', () => {
+      const result = resolveCodebaseDir('/tmp/agent', '/tmp/global');
+      expect(result).toBe('/tmp/agent');
+    });
+
+    it('expands ~ to home directory', () => {
+      const result = resolveCodebaseDir(undefined, '~/repos');
+      expect(result).not.toContain('~');
+      expect(result).toContain('repos');
+    });
+
+    it('expands ~ alone to home directory', () => {
+      const result = resolveCodebaseDir('~', null);
+      expect(result).not.toContain('~');
+    });
+
+    it('returns null for empty string agent dir with null global', () => {
+      expect(resolveCodebaseDir('', null)).toBeNull();
     });
   });
 });
