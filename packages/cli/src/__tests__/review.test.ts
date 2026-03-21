@@ -111,6 +111,7 @@ describe('executeReview', () => {
           timeoutMs: number,
           signal?: AbortSignal,
           vars?: Record<string, string>,
+          cwd?: string,
         ) => Promise<ToolExecutorResult>
       >()
       .mockResolvedValue({
@@ -131,6 +132,7 @@ describe('executeReview', () => {
       expect.stringContaining('acme/widgets'),
       expect.any(Number),
       expect.any(AbortSignal),
+      undefined,
       undefined,
     );
     // Prompt should contain both system and user content
@@ -236,7 +238,7 @@ describe('executeReview', () => {
     expect(mockRunTool.mock.calls[0][0]).toBe('codex exec');
   });
 
-  it('passes CODEBASE_DIR var when codebaseDir is set', async () => {
+  it('passes cwd when codebaseDir is set', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: APPROVE\nOK',
       stderr: '',
@@ -250,11 +252,11 @@ describe('executeReview', () => {
       mockRunTool,
     );
 
-    const vars = mockRunTool.mock.calls[0][4];
-    expect(vars).toEqual({ CODEBASE_DIR: '/tmp/repos/acme/widgets' });
+    const cwd = mockRunTool.mock.calls[0][5];
+    expect(cwd).toBe('/tmp/repos/acme/widgets');
   });
 
-  it('does not pass vars when codebaseDir is not set', async () => {
+  it('does not pass cwd or vars when codebaseDir is not set', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: APPROVE\nOK',
       stderr: '',
@@ -266,5 +268,7 @@ describe('executeReview', () => {
 
     const vars = mockRunTool.mock.calls[0][4];
     expect(vars).toBeUndefined();
+    const cwd = mockRunTool.mock.calls[0][5];
+    expect(cwd).toBeUndefined();
   });
 });

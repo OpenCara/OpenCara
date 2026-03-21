@@ -380,6 +380,70 @@ describe('executeTool', () => {
     await promise;
   });
 
+  it('populates CODEBASE_DIR from cwd for backward compatibility', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeTool(
+      'claude --cwd ${CODEBASE_DIR} --print',
+      'test',
+      60_000,
+      undefined,
+      undefined,
+      '/tmp/repos/acme/widgets',
+    );
+
+    // CODEBASE_DIR should be interpolated from the cwd value
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'claude',
+      ['--cwd', '/tmp/repos/acme/widgets', '--print'],
+      expect.objectContaining({ cwd: '/tmp/repos/acme/widgets' }),
+    );
+
+    emitOutput(child, { stdout: 'result', code: 0 });
+    await promise;
+  });
+
+  it('respects explicit CODEBASE_DIR in vars over cwd', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeTool(
+      'claude --cwd ${CODEBASE_DIR} --print',
+      'test',
+      60_000,
+      undefined,
+      { CODEBASE_DIR: '/explicit/path' },
+      '/tmp/repos/acme/widgets',
+    );
+
+    // Explicit vars CODEBASE_DIR should take precedence over cwd
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'claude',
+      ['--cwd', '/explicit/path', '--print'],
+      expect.objectContaining({ cwd: '/tmp/repos/acme/widgets' }),
+    );
+
+    emitOutput(child, { stdout: 'result', code: 0 });
+    await promise;
+  });
+
+  it('passes cwd to spawn options', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeTool('codex exec', 'test', 60_000, undefined, undefined, '/some/dir');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'codex',
+      ['exec'],
+      expect.objectContaining({ cwd: '/some/dir' }),
+    );
+
+    emitOutput(child, { stdout: 'result', code: 0 });
+    await promise;
+  });
+
   it('uses custom command templates', async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);

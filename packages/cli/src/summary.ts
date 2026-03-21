@@ -106,6 +106,7 @@ export async function executeSummary(
     timeoutMs: number,
     signal?: AbortSignal,
     vars?: Record<string, string>,
+    cwd?: string,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
   const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent);
@@ -131,17 +132,13 @@ export async function executeSummary(
     const userMessage = buildSummaryUserMessage(req.prompt, req.reviews, req.diffContent);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
-    const vars: Record<string, string> = {};
-    if (deps.codebaseDir) {
-      vars['CODEBASE_DIR'] = deps.codebaseDir;
-    }
-
     const result = await runTool(
       deps.commandTemplate,
       fullPrompt,
       effectiveTimeout,
       abortController.signal,
-      Object.keys(vars).length > 0 ? vars : undefined,
+      undefined,
+      deps.codebaseDir ?? undefined,
     );
 
     // Only add input estimate when tokens were estimated (not parsed from tool output)

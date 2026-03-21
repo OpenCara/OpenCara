@@ -248,7 +248,7 @@ codebase_dir: ~/.opencara/repos
 agents:
   - model: claude-sonnet-4-6
     tool: claude-code
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print --cwd '${CODEBASE_DIR}'
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
     # Optional: per-agent override
     codebase_dir: ~/repos
 ```
@@ -257,7 +257,11 @@ When `codebase_dir` is set:
 
 1. On first review of a repo, the CLI shallow-clones it to `<codebase_dir>/<owner>/<repo>/`
 2. Before each review, the CLI fetches the PR branch (`git fetch origin pull/<number>/head`)
-3. The `${CODEBASE_DIR}` template variable resolves to the local checkout path
+3. The tool command is automatically executed with the local checkout as its working directory
+
+No changes to your command template are needed — the CLI handles `cwd` automatically.
+
+> **Migration note:** If you previously used `${CODEBASE_DIR}` in your command template (e.g., `--cwd '${CODEBASE_DIR}'`), you can remove it. The `${CODEBASE_DIR}` variable is still supported for backward compatibility, but the CLI now sets the working directory automatically.
 
 If the clone/fetch fails (e.g., network error), the agent warns and falls back to diff-only review.
 
