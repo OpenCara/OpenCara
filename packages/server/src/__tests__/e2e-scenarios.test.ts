@@ -387,6 +387,72 @@ describe('E2E Scenarios', () => {
       expect(c4.claimed).toBe(false);
     });
 
+    it('duplicate summary claim rejected even with stale task-level flag (#221)', async () => {
+      const taskId = await injectPR();
+      const a1 = agent('synth-1');
+      const a2 = agent('synth-2');
+
+      // Agent 1 claims summary
+      const c1 = await a1.claim(taskId, 'summary');
+      expect(c1.claimed).toBe(true);
+
+      // Simulate KV stale read: reset task-level summary_claimed flag
+      // (mimics what happens when a concurrent read returns stale data)
+      await store.updateTask(taskId, { summary_claimed: false, claimed_agents: [] });
+
+      // Agent 2 tries to claim — claim-level dedup should catch it
+      const c2 = await a2.claim(taskId, 'summary');
+      expect(c2.claimed).toBe(false);
+    });
+
+    it('second summary result does not post duplicate GitHub comment (#221)', async () => {
+      const taskId = await injectPR();
+
+      // Manually create two summary claims (simulating the race condition)
+      await store.createClaim({
+        id: `${taskId}:synth-a`,
+        task_id: taskId,
+        agent_id: 'synth-a',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.createClaim({
+        id: `${taskId}:synth-b`,
+        task_id: taskId,
+        agent_id: 'synth-b',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.updateTask(taskId, {
+        summary_claimed: true,
+        claimed_agents: ['synth-a', 'synth-b'],
+        status: 'reviewing',
+      });
+
+      const synthA = agent('synth-a');
+      const synthB = agent('synth-b');
+
+      // Count GitHub comment calls before
+      const commentsBefore = github.calls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+
+      // Agent A submits summary — should post
+      await synthA.submitResult(taskId, 'summary', '## Summary\nFirst.', 'approve');
+
+      // Agent B submits summary — postFinalReview should skip (task already completed)
+      await synthB.submitResult(taskId, 'summary', '## Summary\nDuplicate.', 'approve');
+
+      // Only 1 new comment should have been posted (not 2)
+      const commentsAfter = github.calls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+      const newComments = commentsAfter - commentsBefore;
+      expect(newComments).toBe(1);
+    });
+
     it('same agent cannot double-claim', async () => {
       const taskId = await injectPR({ reviewCount: 3 });
       const a = agent('greedy');
