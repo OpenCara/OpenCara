@@ -30,6 +30,7 @@ vi.mock('../tool-executor.js', () => ({
   estimateTokens: (text: string) => Math.ceil(text.length / 4),
   validateCommandBinary: () => true,
   parseCommandTemplate: (cmd: string) => cmd.split(' '),
+  testCommand: vi.fn(async () => ({ ok: true, elapsedMs: 100 })),
 }));
 
 const mockedExecuteTool = vi.mocked(executeTool);

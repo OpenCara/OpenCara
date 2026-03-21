@@ -3,6 +3,16 @@ import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import { createSessionTracker } from '../consumption.js';
 
+vi.mock('../tool-executor.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    testCommand: vi.fn().mockResolvedValue({ ok: true, elapsedMs: 150 }),
+  };
+});
+
+import { testCommand } from '../tool-executor.js';
+
 const originalFetch = globalThis.fetch;
 
 function makeDeps(): { reviewDeps: ReviewExecutorDeps; consumptionDeps: ConsumptionDeps } {
@@ -22,6 +32,8 @@ describe('agent poll loop', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     // Prevent signal handlers from accumulating
     vi.spyOn(process, 'on').mockImplementation(() => process);
+    // Reset testCommand mock default (vi.restoreAllMocks clears it)
+    vi.mocked(testCommand).mockResolvedValue({ ok: true, elapsedMs: 150 });
   });
 
   afterEach(() => {
@@ -92,6 +104,9 @@ describe('agent poll loop', () => {
         pollIntervalMs: 1000,
       },
     );
+
+    // Flush microtasks so testCommand dry-run resolves and first poll fires
+    await vi.advanceTimersByTimeAsync(0);
 
     // poll 1 fires immediately. error (consecutive=1), backoff=1000 → no extra delay
     // Then normal sleep 1000ms
@@ -439,5 +454,103 @@ describe('agent poll loop', () => {
     // so it should NOT exit with repeated auth failure.
     expect(console.error).not.toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
     expect(callCount).toBeGreaterThanOrEqual(5);
+  });
+
+  it('runs command dry-run test on startup and logs ok', async () => {
+    vi.mocked(testCommand).mockResolvedValue({ ok: true, elapsedMs: 1200 });
+
+    globalThis.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      }),
+    );
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(testCommand).toHaveBeenCalledWith('echo test');
+    expect(console.log).toHaveBeenCalledWith('Testing command...');
+    expect(console.log).toHaveBeenCalledWith('Testing command... ok (1.2s)');
+  });
+
+  it('warns but continues when command dry-run fails', async () => {
+    vi.mocked(testCommand).mockResolvedValue({
+      ok: false,
+      elapsedMs: 500,
+      error: 'command exited with code 1',
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      }),
+    );
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(console.warn).toHaveBeenCalledWith(
+      'Testing command... failed (command exited with code 1)',
+    );
+    expect(console.warn).toHaveBeenCalledWith('Warning: command test failed. Reviews may fail.');
+    // Agent should still enter poll loop (auth errors prove it did)
+    expect(console.error).toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
+  });
+
+  it('skips command dry-run in router mode', async () => {
+    vi.mocked(testCommand).mockClear();
+
+    globalThis.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      }),
+    );
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    // Create a minimal router relay mock
+    const fakeRouter = { start: vi.fn(), stop: vi.fn() } as unknown;
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100, routerRelay: fakeRouter as import('../router.js').RouterRelay },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(testCommand).not.toHaveBeenCalled();
   });
 });

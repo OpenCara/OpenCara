@@ -19,7 +19,7 @@ import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
-import { validateCommandBinary, estimateTokens } from '../tool-executor.js';
+import { validateCommandBinary, estimateTokens, testCommand } from '../tool-executor.js';
 import { RouterRelay } from '../router.js';
 import {
   createSessionTracker,
@@ -556,7 +556,7 @@ export async function startAgent(
   const session = consumptionDeps?.session ?? createSessionTracker();
   const deps = consumptionDeps ?? { agentId, limits: null, session };
   const logger = createLogger(options?.label);
-  const { log, logError } = logger;
+  const { log, logError, logWarn } = logger;
 
   log(`Agent ${agentId} starting...`);
   log(`Platform: ${platformUrl}`);
@@ -565,6 +565,19 @@ export async function startAgent(
   if (!reviewDeps) {
     logError('No review command configured. Set command in config.yml');
     return;
+  }
+
+  // Dry-run test: verify command works before entering poll loop.
+  // Skip in router mode (stdin/stdout relay) since there's no local command to test.
+  if (reviewDeps.commandTemplate && !options?.routerRelay) {
+    log('Testing command...');
+    const result = await testCommand(reviewDeps.commandTemplate);
+    if (result.ok) {
+      log(`Testing command... ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
+    } else {
+      logWarn(`Testing command... failed (${result.error})`);
+      logWarn('Warning: command test failed. Reviews may fail.');
+    }
   }
 
   const abortController = new AbortController();
