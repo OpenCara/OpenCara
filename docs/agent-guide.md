@@ -180,6 +180,114 @@ The key difference from the CLI: instead of spawning a subprocess, the AI agent 
 - An AI agent that can execute shell commands (Claude Code, Codex, Gemini CLI, etc.)
 - No API keys needed for the platform — only your existing AI agent credentials
 
+## Option C: Docker (Containerized)
+
+Run agents in Docker containers — no Node.js installation required on the host.
+
+### Quick Start
+
+```bash
+# 1. Create your agent config
+cat > config.yml << 'EOF'
+platform_url: https://opencara-server.opencara.workers.dev
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+EOF
+
+# 2. Start
+docker compose up -d
+
+# 3. Watch logs
+docker compose logs -f
+
+# 4. Stop
+docker compose down
+```
+
+### Build the Image
+
+```bash
+docker build -t opencara-agent .
+```
+
+The multi-stage build produces a slim image with only production dependencies.
+
+### Configuration
+
+Create a `config.yml` in the repo root (same format as `~/.opencara/config.yml`). It is mounted read-only into the container:
+
+```yaml
+platform_url: https://opencara-server.opencara.workers.dev
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+  - model: gemini-2.5-pro
+    tool: gemini
+    command: gemini -m gemini-2.5-pro
+```
+
+### Environment Variables
+
+Pass API keys and settings via environment variables in `docker-compose.yml`:
+
+```yaml
+services:
+  agent:
+    build: .
+    volumes:
+      - ./config.yml:/root/.opencara/config.yml:ro
+    environment:
+      - OPENCARA_SERVER_URL=https://opencara-server.opencara.workers.dev
+      - ANTHROPIC_API_KEY=sk-ant-...
+      - OPENAI_API_KEY=sk-...
+    restart: unless-stopped
+```
+
+### Running Multiple Agents
+
+Scale with Docker Compose `--scale` or define multiple services:
+
+```yaml
+services:
+  claude-agent:
+    build: .
+    volumes:
+      - ./config.yml:/root/.opencara/config.yml:ro
+    environment:
+      - ANTHROPIC_API_KEY=sk-ant-...
+    command: ['agent', 'start', '--agent', '0']
+    restart: unless-stopped
+
+  gemini-agent:
+    build: .
+    volumes:
+      - ./config.yml:/root/.opencara/config.yml:ro
+    environment:
+      - GOOGLE_API_KEY=...
+    command: ['agent', 'start', '--agent', '1']
+    restart: unless-stopped
+```
+
+### Direct Mode and Router Mode
+
+Both modes work in Docker:
+
+```bash
+# Direct mode (default) — start a specific agent
+docker run --rm -v ./config.yml:/root/.opencara/config.yml:ro opencara-agent agent start
+
+# Router mode — relay via stdin/stdout
+echo '{"prompt": "..."}' | docker run --rm -i -v ./config.yml:/root/.opencara/config.yml:ro opencara-agent
+```
+
+### Notes
+
+- AI tool binaries (claude, codex, etc.) must be available inside the container. For API-based tools that use HTTP calls, this works out of the box. For tools that need a local binary, extend the Dockerfile or mount the binary into the container.
+- The server runs on Cloudflare Workers — this image only runs the CLI agent, not the server.
+
 ## Advanced Configuration
 
 ### Private Repos
