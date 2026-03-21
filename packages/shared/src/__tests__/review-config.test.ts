@@ -78,6 +78,7 @@ describe('parseReviewConfig', () => {
     expect(config.reviewer.blacklist).toEqual([]);
     expect(config.summarizer.whitelist).toEqual([]);
     expect(config.summarizer.blacklist).toEqual([]);
+    expect(config.summarizer.preferred).toEqual([]);
     expect(config.timeout).toBe('10m');
     expect(config.autoApprove.enabled).toBe(false);
     expect(config.autoApprove.conditions).toEqual([]);
@@ -247,6 +248,50 @@ describe('trigger config parsing', () => {
       expect(config.trigger.comment).toBe('/opencara review');
       expect(config.trigger.skip).toEqual(['draft']);
     }
+  });
+});
+
+describe('summarizer.preferred parsing', () => {
+  it('parses preferred agent list', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - agent: agent-def',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }, { agent: 'agent-def' }]);
+  });
+
+  it('defaults to empty array when preferred is not set', () => {
+    const config = parseReviewConfig(MINIMAL_CONFIG) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([]);
+  });
+
+  it('filters out entries without agent field', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - user: alice\n    - notanagent: true',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }]);
+  });
+
+  it('filters out non-object entries', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - just-a-string\n    - 123',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }]);
+  });
+
+  it('returns empty array when preferred is not an array', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  preferred: not-an-array',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([]);
+  });
+
+  it('parses full config with preferred alongside whitelist/blacklist', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  whitelist:\n    - agent: agent-a\n  blacklist:\n    - agent: agent-b\n  preferred:\n    - agent: agent-a',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-a' }]);
+    expect(config.summarizer.blacklist).toEqual([{ agent: 'agent-b' }]);
+    expect(config.summarizer.preferred).toEqual([{ agent: 'agent-a' }]);
   });
 });
 

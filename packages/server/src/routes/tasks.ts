@@ -24,6 +24,32 @@ import {
 } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 
+/** Default grace period (ms) for preferred synthesizer agents. */
+export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
+
+/**
+ * Check if a summary role is available for the given agent, considering
+ * the preferred synthesizer grace period.
+ *
+ * - If no preferred list is configured, summary is available immediately.
+ * - If the agent is in the preferred list, summary is available immediately.
+ * - If the agent is NOT preferred, summary is only available after the grace period
+ *   has elapsed since all reviews were completed.
+ */
+function isSummaryAvailableForAgent(task: ReviewTask, agentId: string): boolean {
+  const preferred = task.config?.summarizer?.preferred ?? [];
+  if (preferred.length === 0) return true;
+
+  const isPreferred = preferred.some((p) => p.agent === agentId);
+  if (isPreferred) return true;
+
+  // Non-preferred agent: check if grace period has elapsed
+  // For review_count=1 (no review phase), use task creation time as the baseline
+  const graceStart = task.reviews_completed_at ?? (task.review_count === 1 ? task.created_at : 0);
+  if (!graceStart) return false; // reviews not yet completed
+  return Date.now() - graceStart >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
+}
+
 /**
  * Determine the available role for an agent on a task.
  * Uses task-level counters (not claim list queries) to avoid KV eventual consistency issues.
@@ -40,7 +66,8 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
   if (task.review_count === 1) {
     if (!summaryClaimed) {
       const { eligible } = isAgentEligibleForRole(task.config, 'summary', agentId);
-      return eligible ? 'summary' : null;
+      if (!eligible) return null;
+      return isSummaryAvailableForAgent(task, agentId) ? 'summary' : null;
     }
     return null;
   }
@@ -52,7 +79,8 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
   }
   if (completedReviews >= reviewSlots && !summaryClaimed) {
     const { eligible } = isAgentEligibleForRole(task.config, 'summary', agentId);
-    if (eligible) return 'summary';
+    if (!eligible) return null;
+    return isSummaryAvailableForAgent(task, agentId) ? 'summary' : null;
   }
 
   return null;
@@ -413,14 +441,17 @@ export function taskRoutes() {
     } else {
       // Review submitted — increment completed_reviews counter on task
       const newCompleted = (task.completed_reviews ?? 0) + 1;
-      await store.updateTask(taskId, { completed_reviews: newCompleted });
+      const taskUpdates: Partial<ReviewTask> = { completed_reviews: newCompleted };
 
       const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
       if (reviewSlots > 0 && newCompleted >= reviewSlots) {
+        // Set reviews_completed_at for preferred synthesizer grace period
+        taskUpdates.reviews_completed_at = Date.now();
         console.log(
           `Task ${taskId}: all ${reviewSlots} reviews complete, summary slot now available`,
         );
       }
+      await store.updateTask(taskId, taskUpdates);
     }
 
     return c.json<ResultResponse>({ success: true });

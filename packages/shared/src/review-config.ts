@@ -24,6 +24,7 @@ export interface ReviewConfig {
   summarizer: {
     whitelist: Array<{ user?: string; agent?: string }>;
     blacklist: Array<{ user?: string; agent?: string }>;
+    preferred: Array<{ agent: string }>;
   };
   timeout: string;
   autoApprove: {
@@ -49,6 +50,14 @@ function parseEntityList(value: unknown): Array<{ user?: string; agent?: string 
       return entry;
     })
     .filter((entry) => entry.user || entry.agent);
+}
+
+function parsePreferredList(value: unknown): Array<{ agent: string }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isObject)
+    .filter((item) => typeof item.agent === 'string')
+    .map((item) => ({ agent: item.agent as string }));
 }
 
 function parseTimeout(value: unknown): string {
@@ -98,6 +107,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   summarizer: {
     whitelist: [],
     blacklist: [],
+    preferred: [],
   },
   timeout: '10m',
   autoApprove: {
@@ -178,6 +188,7 @@ export function parseReviewConfig(yaml: string): ParseResult {
     summarizer: {
       whitelist: parseEntityList(summarizerRaw.whitelist),
       blacklist: parseEntityList(summarizerRaw.blacklist),
+      preferred: parsePreferredList(summarizerRaw.preferred),
     },
     timeout: parseTimeout(raw.timeout),
     autoApprove: {
