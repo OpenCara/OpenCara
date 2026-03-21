@@ -1,7 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(),
+}));
+
+import { execSync } from 'node:child_process';
 import { resolveGithubToken, getGhCliToken, logAuthMethod } from '../github-auth.js';
 
 describe('github-auth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe('resolveGithubToken', () => {
     it('tier 1: GITHUB_TOKEN env var takes highest priority', () => {
       const result = resolveGithubToken('config-token', {
@@ -92,12 +102,46 @@ describe('github-auth', () => {
   });
 
   describe('getGhCliToken', () => {
-    it('is a function', () => {
-      expect(typeof getGhCliToken).toBe('function');
+    it('returns token when gh auth token succeeds', () => {
+      vi.mocked(execSync).mockReturnValue('gho_abc123\n');
+      expect(getGhCliToken()).toBe('gho_abc123');
+      expect(execSync).toHaveBeenCalledWith('gh auth token', {
+        timeout: 5000,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
     });
 
-    // getGhCliToken uses execSync which is hard to mock without module mocks.
-    // Integration behavior is tested through the resolveGithubToken deps injection.
+    it('trims whitespace from token', () => {
+      vi.mocked(execSync).mockReturnValue('  gho_token_with_spaces  \n');
+      expect(getGhCliToken()).toBe('gho_token_with_spaces');
+    });
+
+    it('returns null when gh is not installed', () => {
+      vi.mocked(execSync).mockImplementation(() => {
+        throw new Error('command not found: gh');
+      });
+      expect(getGhCliToken()).toBeNull();
+    });
+
+    it('returns null when gh auth token times out', () => {
+      vi.mocked(execSync).mockImplementation(() => {
+        throw new Error('TIMEOUT');
+      });
+      expect(getGhCliToken()).toBeNull();
+    });
+
+    it('returns null when gh auth token returns empty string', () => {
+      vi.mocked(execSync).mockReturnValue('  \n');
+      expect(getGhCliToken()).toBeNull();
+    });
+
+    it('returns null when gh is not authenticated', () => {
+      vi.mocked(execSync).mockImplementation(() => {
+        throw new Error('not logged in');
+      });
+      expect(getGhCliToken()).toBeNull();
+    });
   });
 
   describe('logAuthMethod', () => {
