@@ -16,9 +16,7 @@ import type {
 import type { Env, AppVariables } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
 import { getInstallationToken } from '../github/app.js';
-import { githubFetch } from '../github/fetch.js';
-import { postPrReview, postPrComment, verdictToReviewEvent } from '../github/reviews.js';
-import { parseStructuredReview, parseDiffFiles, filterValidComments } from '../review-parser.js';
+import { postPrComment } from '../github/reviews.js';
 import {
   formatSummaryComment,
   formatIndividualReviewComment,
@@ -115,14 +113,7 @@ async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
             (claim.verdict as ReviewVerdict) ?? 'comment',
             claim.review_text!,
           );
-          await postPrReview(
-            task.owner,
-            task.repo,
-            task.pr_number,
-            body,
-            verdictToReviewEvent((claim.verdict as ReviewVerdict) ?? 'comment'),
-            token,
-          );
+          await postPrComment(task.owner, task.repo, task.pr_number, body, token);
         }
       }
 
@@ -168,9 +159,6 @@ async function postFinalReview(
   try {
     const token = await getInstallationToken(task.github_installation_id, env);
 
-    // Parse the review for inline comments
-    const parsed = parseStructuredReview(summaryClaim.review_text);
-
     // Build agent info from claims
     const reviewClaims = claims.filter((c) => c.role === 'review' && c.status === 'completed');
     const reviewerAgents: ReviewAgentInfo[] = reviewClaims.map((c) => ({
@@ -192,49 +180,7 @@ async function postFinalReview(
       body = formatSummaryComment(summaryClaim.review_text, reviewerAgents, synthAgent);
     }
 
-    // Determine verdict and inline comments
-    // Normalize to lowercase — agents may submit uppercase verdicts (e.g. "APPROVE")
-    const rawVerdict =
-      parsed.verdict ?? (summaryClaim.verdict as ReviewVerdict | undefined) ?? 'comment';
-    const verdict = (
-      typeof rawVerdict === 'string' ? rawVerdict.toLowerCase() : rawVerdict
-    ) as ReviewVerdict;
-
-    // Try to fetch diff for comment validation (best effort)
-    let validComments = parsed.comments;
-    try {
-      // Fetch diff from GitHub for comment path validation
-      const diffResponse = await githubFetch(
-        `https://api.github.com/repos/${task.owner}/${task.repo}/pulls/${task.pr_number}`,
-        {
-          token,
-          accept: 'application/vnd.github.diff',
-        },
-      );
-      if (diffResponse.ok) {
-        const diffContent = await diffResponse.text();
-        const diffFiles = parseDiffFiles(diffContent);
-        validComments = filterValidComments(parsed.comments, diffFiles);
-      } else {
-        console.warn(
-          `[agent:${summaryAgentId}] task=${taskId} action=diff_fetch_failed status=${diffResponse.status}`,
-        );
-      }
-    } catch (err) {
-      console.warn(
-        `[agent:${summaryAgentId}] task=${taskId} action=diff_fetch_failed error=${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    await postPrReview(
-      task.owner,
-      task.repo,
-      task.pr_number,
-      body,
-      verdictToReviewEvent(verdict),
-      token,
-      validComments.length > 0 ? validComments : undefined,
-    );
+    await postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.updateTask(taskId, { status: 'completed' });
     console.log(`Task ${taskId}: review posted to GitHub`);

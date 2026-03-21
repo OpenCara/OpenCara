@@ -289,28 +289,28 @@ describe('githubFetch', () => {
   // ── Integration with callers ──────────────────────────────
 
   describe('caller integration', () => {
-    it('postPrReview succeeds after transient 502', async () => {
+    it('postPrComment succeeds after transient 502', async () => {
       fetchMock
         .mockResolvedValueOnce(new Response('Bad Gateway', { status: 502 }))
         .mockResolvedValueOnce(
           new Response(
-            JSON.stringify({ html_url: 'https://github.com/test/test/pull/1#review-1' }),
+            JSON.stringify({ html_url: 'https://github.com/test/test/pull/1#comment-1' }),
             { status: 200 },
           ),
         );
 
       const response = await fetchWithTimers(
-        'https://api.github.com/repos/test/test/pulls/1/reviews',
+        'https://api.github.com/repos/test/test/issues/1/comments',
         {
           method: 'POST',
           token: 'ghs_test',
-          body: JSON.stringify({ body: 'LGTM', event: 'APPROVE' }),
+          body: JSON.stringify({ body: 'LGTM' }),
         },
       );
 
       expect(response.ok).toBe(true);
       const data = (await response.json()) as { html_url: string };
-      expect(data.html_url).toBe('https://github.com/test/test/pull/1#review-1');
+      expect(data.html_url).toBe('https://github.com/test/test/pull/1#comment-1');
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
