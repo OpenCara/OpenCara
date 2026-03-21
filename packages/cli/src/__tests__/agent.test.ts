@@ -386,10 +386,10 @@ describe('agent poll loop', () => {
 
     expect(console.log).toHaveBeenCalledWith('Agent test-agent starting...');
     expect(console.log).toHaveBeenCalledWith('Agent stopped.');
-    // Verify no bracketed prefix
+    // Verify no label-style prefix (e.g. [My Agent] ...)
     const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
     const prefixedCalls = logCalls.filter(
-      (c: string[]) => typeof c[0] === 'string' && c[0].startsWith('['),
+      (c: string[]) => typeof c[0] === 'string' && /^\[[^\]]+\] /.test(c[0]),
     );
     expect(prefixedCalls).toHaveLength(0);
   });
