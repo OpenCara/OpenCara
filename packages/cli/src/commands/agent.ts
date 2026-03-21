@@ -11,10 +11,11 @@ import type {
 import {
   loadConfig,
   resolveAgentLimits,
-  resolveGithubToken,
+  resolveGithubToken as resolveConfigToken,
   type ConsumptionLimits,
   type LocalAgentConfig,
 } from '../config.js';
+import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
 import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
 import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
@@ -622,12 +623,15 @@ export async function startAgentRouter(): Promise<void> {
   const router = new RouterRelay();
   router.start();
 
-  const githubToken = resolveGithubToken(agentConfig?.github_token, config.githubToken);
+  const configToken = resolveConfigToken(agentConfig?.github_token, config.githubToken);
+  const auth = resolveGithubToken(configToken);
+  const logger = createLogger(agentConfig?.name ?? 'agent[0]');
+  logAuthMethod(auth.method, logger.log);
 
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
-    githubToken,
+    githubToken: auth.token,
   };
 
   const session = createSessionTracker();
@@ -665,11 +669,16 @@ export async function startAgentRouter(): Promise<void> {
  * Resolve and start a single agent by index from config.
  * Returns a promise that resolves when the agent stops.
  * Returns null (with error logged) if the agent cannot be started.
+ *
+ * @param auth — pre-resolved GitHub auth (env/gh-cli/config fallback chain).
+ *               When the auth method is 'config' or 'none', per-agent config
+ *               token overrides the global config token.
  */
 function startAgentByIndex(
   config: ReturnType<typeof loadConfig>,
   agentIndex: number,
   pollIntervalMs: number,
+  auth: GithubAuthResult,
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
   let commandTemplate: string | undefined;
@@ -698,9 +707,17 @@ function startAgentByIndex(
     return null;
   }
 
-  const githubToken = agentConfig
-    ? resolveGithubToken(agentConfig.github_token, config.githubToken)
-    : config.githubToken;
+  // If auth was resolved from env or gh-cli, use that token for all agents.
+  // Otherwise, re-resolve per-agent config token (per-agent overrides global).
+  let githubToken: string | null;
+  if (auth.method === 'env' || auth.method === 'gh-cli') {
+    githubToken = auth.token;
+  } else {
+    const configToken = agentConfig
+      ? resolveConfigToken(agentConfig.github_token, config.githubToken)
+      : config.githubToken;
+    githubToken = configToken;
+  }
 
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
@@ -750,6 +767,11 @@ agentCommand
     const config = loadConfig();
     const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
 
+    // Resolve GitHub auth once at startup (env → gh-cli → config → none)
+    const configToken = resolveConfigToken(undefined, config.githubToken);
+    const auth = resolveGithubToken(configToken);
+    logAuthMethod(auth.method, console.log.bind(console));
+
     if (opts.all) {
       // Start all agents concurrently
       if (!config.agents || config.agents.length === 0) {
@@ -763,7 +785,7 @@ agentCommand
       const promises: Promise<void>[] = [];
       let startFailed = false;
       for (let i = 0; i < config.agents.length; i++) {
-        const p = startAgentByIndex(config, i, pollIntervalMs);
+        const p = startAgentByIndex(config, i, pollIntervalMs, auth);
         if (p) {
           promises.push(p);
         } else {
@@ -807,7 +829,7 @@ agentCommand
         process.exit(1);
         return;
       }
-      const p = startAgentByIndex(config, agentIndex, pollIntervalMs);
+      const p = startAgentByIndex(config, agentIndex, pollIntervalMs, auth);
       if (!p) {
         // startAgentByIndex already logged the specific reason
         process.exit(1);
