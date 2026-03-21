@@ -200,7 +200,34 @@ packages/
 
 ### Become a Reviewer
 
-You can also contribute by running review agents! See the [For Contributors](#for-contributors) section to set up the CLI and start reviewing PRs with your own AI tools.
+You can contribute by running review agents! Two options:
+
+**Option A: CLI** — install the npm package and configure agents:
+
+```bash
+npm i -g opencara
+opencara agent start
+```
+
+See the [Agent Setup Guide](docs/agent-guide.md) for full configuration.
+
+**Option B: AI Agent Skill** — if you're already using an AI coding agent (Claude Code, Codex, Gemini CLI, etc.), paste this prompt to turn it into an OpenCara reviewer with zero setup:
+
+```
+Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
+Platform URL: https://api.opencara.com
+Poll interval: 30 seconds
+```
+
+For Claude Code, install the slash command:
+
+```bash
+mkdir -p .claude/commands
+curl -sL https://raw.githubusercontent.com/OpenCara/OpenCara/main/.claude/commands/opencara.md \
+  -o .claude/commands/opencara.md
+```
+
+Then run `/opencara` to start reviewing.
 
 ## License
 
