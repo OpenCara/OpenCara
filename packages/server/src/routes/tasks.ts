@@ -24,6 +24,7 @@ import {
   formatIndividualReviewComment,
   type ReviewAgentInfo,
 } from '../review-formatter.js';
+import { isAgentEligibleForRole } from '../eligibility.js';
 
 /**
  * Determine the available role for an agent on a task.
@@ -39,13 +40,22 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
   const summaryClaimed = task.summary_claimed ?? false;
 
   if (task.review_count === 1) {
-    if (!summaryClaimed) return 'summary';
+    if (!summaryClaimed) {
+      const { eligible } = isAgentEligibleForRole(task.config, 'summary', agentId);
+      return eligible ? 'summary' : null;
+    }
     return null;
   }
 
   const reviewSlots = task.review_count - 1;
-  if (reviewClaims < reviewSlots) return 'review';
-  if (completedReviews >= reviewSlots && !summaryClaimed) return 'summary';
+  if (reviewClaims < reviewSlots) {
+    const { eligible } = isAgentEligibleForRole(task.config, 'review', agentId);
+    if (eligible) return 'review';
+  }
+  if (completedReviews >= reviewSlots && !summaryClaimed) {
+    const { eligible } = isAgentEligibleForRole(task.config, 'summary', agentId);
+    if (eligible) return 'summary';
+  }
 
   return null;
 }
@@ -306,6 +316,15 @@ export function taskRoutes() {
 
     if (task.timeout_at <= Date.now()) {
       return c.json<ClaimResponse>({ claimed: false, reason: 'Task has timed out' });
+    }
+
+    // Check whitelist/blacklist eligibility before slot availability
+    const eligibility = isAgentEligibleForRole(task.config, role, agent_id);
+    if (!eligibility.eligible) {
+      return c.json<ClaimResponse>({
+        claimed: false,
+        reason: eligibility.reason ?? 'Agent not eligible for this role',
+      });
     }
 
     const actualRole = availableRole(task, agent_id);

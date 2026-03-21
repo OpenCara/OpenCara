@@ -794,6 +794,193 @@ describe('Task Routes', () => {
     });
   });
 
+  // ── Whitelist / Blacklist enforcement ────────────────────
+
+  describe('whitelist/blacklist enforcement', () => {
+    it('poll filters out tasks where agent is blacklisted for review', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              blacklist: [{ agent: 'agent-blocked' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-blocked' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('poll returns tasks for non-blacklisted agents', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              blacklist: [{ agent: 'agent-blocked' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-allowed' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('review');
+    });
+
+    it('poll filters out tasks where agent is not in reviewer whitelist', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              whitelist: [{ agent: 'agent-trusted' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-untrusted' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('poll returns tasks for whitelisted agents', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              whitelist: [{ agent: 'agent-trusted' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-trusted' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+    });
+
+    it('poll enforces summarizer whitelist for summary role', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 1,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              whitelist: [{ agent: 'agent-synth' }],
+              blacklist: [],
+            },
+          },
+        }),
+      );
+
+      // Non-whitelisted agent sees no tasks
+      const res1 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+      const body1 = await res1.json();
+      expect(body1.tasks).toHaveLength(0);
+
+      // Whitelisted agent sees the task
+      const res2 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-synth' });
+      const body2 = await res2.json();
+      expect(body2.tasks).toHaveLength(1);
+      expect(body2.tasks[0].role).toBe('summary');
+    });
+
+    it('claim rejects blacklisted agent with reason', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              blacklist: [{ agent: 'agent-blocked' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-blocked',
+        role: 'review',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(false);
+      expect(body.reason).toContain('blacklisted');
+    });
+
+    it('claim rejects non-whitelisted agent with reason', async () => {
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              whitelist: [{ agent: 'agent-synth' }],
+              blacklist: [],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-other',
+        role: 'summary',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(false);
+      expect(body.reason).toContain('not in the summary whitelist');
+    });
+
+    it('default config (empty lists) allows all agents — backward compatible', async () => {
+      await store.createTask(makeTask());
+
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'any-agent',
+        role: 'summary',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
+
+    it('blacklist takes priority over whitelist in claim', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              whitelist: [{ agent: 'agent-both' }],
+              blacklist: [{ agent: 'agent-both' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-both',
+        role: 'review',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(false);
+      expect(body.reason).toContain('blacklisted');
+    });
+  });
+
   // ── Multi-agent flow ─────────────────────────────────────
 
   describe('multi-agent review flow', () => {
