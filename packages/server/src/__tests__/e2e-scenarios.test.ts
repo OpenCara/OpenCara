@@ -135,11 +135,11 @@ describe('E2E Scenarios', () => {
       const finalTask = await store.getTask(taskId);
       expect(['completed', 'failed']).toContain(finalTask?.status);
 
-      // GitHub review was posted
-      const reviewPost = github.calls.find(
-        (c) => c.url.includes('/reviews') && c.method === 'POST',
+      // GitHub comment was posted
+      const commentPost = github.calls.find(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
       );
-      expect(reviewPost).toBeDefined();
+      expect(commentPost).toBeDefined();
 
       // No more tasks for polling
       const empty = await a.poll();
@@ -443,17 +443,12 @@ describe('E2E Scenarios', () => {
       const task = await store.getTask(taskId);
       expect(task?.status).toBe('timeout');
 
-      // Partial review should have been posted
-      const reviewPosts = github.calls.filter(
-        (c) => c.url.includes('/reviews') && c.method === 'POST',
-      );
-      expect(reviewPosts.length).toBeGreaterThanOrEqual(1);
-
-      // Timeout comment should have been posted
+      // Partial review + timeout comment should have been posted as issue comments
       const commentPosts = github.calls.filter(
         (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
       );
-      expect(commentPosts.length).toBeGreaterThanOrEqual(1);
+      // At least 2: one for the partial review, one for the timeout message
+      expect(commentPosts.length).toBeGreaterThanOrEqual(2);
     });
 
     it('claim rejected for expired task', async () => {
@@ -610,32 +605,32 @@ describe('E2E Scenarios', () => {
   // Verdict Case Normalization (issue #201)
   // ═══════════════════════════════════════════════════════════
 
-  describe('Verdict Case Normalization', () => {
-    it('uppercase verdict from agent results in published review (not PENDING draft)', async () => {
+  describe('Verdict in Comment Body', () => {
+    it('uppercase verdict from agent is included in comment body text', async () => {
       const taskId = await injectPR();
       const a = agent('agent-uppercase');
 
       await a.claim(taskId, 'summary');
 
-      // Agent sends uppercase verdict — this is what the CLI does
       const result = await a.submitResult(
         taskId,
         'summary',
         '## Summary\nLooks good.\n\n## Verdict\nAPPROVE',
-        'APPROVE' as never, // uppercase — the bug
+        'APPROVE' as never,
         1000,
       );
       expect(result.status).toBe(200);
 
-      // GitHub review should have been posted with event: 'APPROVE', not undefined
-      const reviewPost = github.calls.find(
-        (c) => c.url.includes('/reviews') && c.method === 'POST',
+      // GitHub comment should have been posted (not a review)
+      const commentPost = github.calls.find(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
       );
-      expect(reviewPost).toBeDefined();
-      expect((reviewPost!.body as { event?: string }).event).toBe('APPROVE');
+      expect(commentPost).toBeDefined();
+      // Verdict is in the comment body text
+      expect((commentPost!.body as { body?: string }).body).toContain('APPROVE');
     });
 
-    it('mixed-case verdict is normalized to valid review event', async () => {
+    it('mixed-case verdict is included in comment body text', async () => {
       const taskId = await injectPR({ prNumber: 2 });
       const a = agent('agent-mixed');
 
@@ -650,11 +645,11 @@ describe('E2E Scenarios', () => {
       );
       expect(result.status).toBe(200);
 
-      const reviewPost = github.calls.find(
-        (c) => c.url.includes('/pulls/2/reviews') && c.method === 'POST',
+      const commentPost = github.calls.find(
+        (c) => c.url.includes('/issues/2/comments') && c.method === 'POST',
       );
-      expect(reviewPost).toBeDefined();
-      expect((reviewPost!.body as { event?: string }).event).toBe('REQUEST_CHANGES');
+      expect(commentPost).toBeDefined();
+      expect((commentPost!.body as { body?: string }).body).toContain('request_changes');
     });
   });
 

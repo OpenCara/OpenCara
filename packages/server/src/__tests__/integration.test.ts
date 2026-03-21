@@ -160,31 +160,10 @@ describe('Integration: full E2E flows', () => {
         return new Response('Not Found', { status: 404 });
       }
 
-      // Post PR review
-      if (url.includes('/pulls/') && url.includes('/reviews') && method === 'POST') {
-        return new Response(
-          JSON.stringify({ html_url: 'https://github.com/acme/widget/pull/42#review-123' }),
-          { status: 200 },
-        );
-      }
-
       // Post PR comment (issue comment)
       if (url.includes('/issues/') && url.includes('/comments') && method === 'POST') {
         return new Response(
           JSON.stringify({ html_url: 'https://github.com/acme/widget/pull/42#comment-456' }),
-          { status: 200 },
-        );
-      }
-
-      // Fetch PR diff (for comment validation in postFinalReview)
-      if (
-        url.includes('/pulls/') &&
-        !url.includes('/reviews') &&
-        !url.includes('/comments') &&
-        (init?.headers as Record<string, string>)?.Accept === 'application/vnd.github.diff'
-      ) {
-        return new Response(
-          'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts',
           { status: 200 },
         );
       }
@@ -282,14 +261,14 @@ APPROVE`;
       expect(claims[0].verdict).toBe('approve');
       expect(claims[0].tokens_used).toBe(1200);
 
-      // 6. Verify GitHub API was called to post review
-      const reviewPost = githubCalls.find((c) => c.url.includes('/reviews') && c.method === 'POST');
-      expect(reviewPost).toBeDefined();
-      expect(reviewPost!.body).toBeDefined();
-      // Body should contain the formatted review
-      expect((reviewPost!.body as Record<string, unknown>).event).toBe('APPROVE');
-      // Should include inline comments for valid file paths
-      expect((reviewPost!.body as Record<string, unknown>).comments).toBeDefined();
+      // 6. Verify GitHub API was called to post comment
+      const commentPost = githubCalls.find(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      );
+      expect(commentPost).toBeDefined();
+      expect(commentPost!.body).toBeDefined();
+      // Body should contain the formatted review text with verdict
+      expect((commentPost!.body as Record<string, unknown>).body).toBeDefined();
     });
 
     it('second agent sees nothing after task is claimed', async () => {
@@ -448,15 +427,12 @@ APPROVE`;
       const task = await store.getTask('task-partial-timeout');
       expect(task?.status).toBe('timeout');
 
-      // Should have tried to post the partial review + timeout comment
-      const reviewPosts = githubCalls.filter(
-        (c) => c.url.includes('/reviews') && c.method === 'POST',
-      );
+      // Should have tried to post the partial review + timeout comment as issue comments
       const commentPosts = githubCalls.filter(
         (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
       );
-      expect(reviewPosts.length).toBeGreaterThanOrEqual(1);
-      expect(commentPosts.length).toBeGreaterThanOrEqual(1);
+      // At least 2: one for the partial review, one for the timeout message
+      expect(commentPosts.length).toBeGreaterThanOrEqual(2);
 
       // Verify the timeout comment mentions partial reviews
       const timeoutComment = commentPosts.find((c) =>

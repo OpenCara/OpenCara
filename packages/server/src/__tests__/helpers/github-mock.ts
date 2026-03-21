@@ -28,9 +28,7 @@ export interface GitHubMock {
  * Handles:
  * - Installation access tokens
  * - .review.yml fetch (returns 404 → defaults)
- * - PR review posting
  * - PR comment posting
- * - PR diff fetching
  * - PR details fetching
  */
 export function createGitHubMock(): GitHubMock {
@@ -66,31 +64,10 @@ export function createGitHubMock(): GitHubMock {
         return new Response('Not Found', { status: 404 });
       }
 
-      // Post PR review
-      if (url.includes('/pulls/') && url.includes('/reviews') && method === 'POST') {
-        return new Response(
-          JSON.stringify({ html_url: 'https://github.com/test/repo/pull/1#review-123' }),
-          { status: 200 },
-        );
-      }
-
       // Post PR comment (issue comment)
       if (url.includes('/issues/') && url.includes('/comments') && method === 'POST') {
         return new Response(
           JSON.stringify({ html_url: 'https://github.com/test/repo/pull/1#comment-456' }),
-          { status: 200 },
-        );
-      }
-
-      // Fetch PR diff (for comment validation in postFinalReview)
-      if (
-        url.includes('/pulls/') &&
-        !url.includes('/reviews') &&
-        !url.includes('/comments') &&
-        headers?.Accept === 'application/vnd.github.diff'
-      ) {
-        return new Response(
-          'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts',
           { status: 200 },
         );
       }
