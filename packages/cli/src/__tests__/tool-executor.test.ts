@@ -404,7 +404,7 @@ describe('executeTool', () => {
     await promise;
   });
 
-  it('does not override explicit CODEBASE_DIR in vars', async () => {
+  it('respects explicit CODEBASE_DIR in vars over cwd', async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 

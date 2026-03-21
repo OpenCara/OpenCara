@@ -176,7 +176,8 @@ export function executeTool(
 ): Promise<ToolExecutorResult> {
   const promptViaArg = commandTemplate.includes('${PROMPT}');
   const allVars: Record<string, string> = { ...vars, PROMPT: prompt };
-  // Backward compatibility: populate CODEBASE_DIR so existing templates still work
+  // Backward compatibility: populate CODEBASE_DIR so existing command templates
+  // that use ${CODEBASE_DIR} (e.g. --cwd '${CODEBASE_DIR}') continue to work
   if (cwd && !allVars['CODEBASE_DIR']) {
     allVars['CODEBASE_DIR'] = cwd;
   }
