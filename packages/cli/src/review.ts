@@ -105,6 +105,7 @@ export interface ReviewExecutorDeps {
   commandTemplate: string;
   maxDiffSizeKb: number;
   githubToken?: string | null;
+  codebaseDir?: string | null;
 }
 
 export async function executeReview(
@@ -115,6 +116,7 @@ export async function executeReview(
     prompt: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    vars?: Record<string, string>,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<ReviewResponse> {
   const diffSizeKb = Buffer.byteLength(req.diffContent, 'utf-8') / 1024;
@@ -140,11 +142,17 @@ export async function executeReview(
     const userMessage = buildUserMessage(req.prompt, req.diffContent);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
+    const vars: Record<string, string> = {};
+    if (deps.codebaseDir) {
+      vars['CODEBASE_DIR'] = deps.codebaseDir;
+    }
+
     const result = await runTool(
       deps.commandTemplate,
       fullPrompt,
       effectiveTimeout,
       abortController.signal,
+      Object.keys(vars).length > 0 ? vars : undefined,
     );
 
     const { verdict, review } = extractVerdict(result.stdout);

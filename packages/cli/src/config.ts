@@ -18,6 +18,7 @@ export interface LocalAgentConfig {
   router?: boolean;
   review_only?: boolean;
   github_token?: string;
+  codebase_dir?: string;
   limits?: ConsumptionLimits;
   repos?: RepoConfig;
 }
@@ -27,6 +28,7 @@ export interface CliConfig {
   platformUrl: string;
   maxDiffSizeKb: number;
   githubToken: string | null;
+  codebaseDir: string | null;
   limits: ConsumptionLimits | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
@@ -132,6 +134,7 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (obj.router === true) agent.router = true;
     if (obj.review_only === true) agent.review_only = true;
     if (typeof obj.github_token === 'string') agent.github_token = obj.github_token;
+    if (typeof obj.codebase_dir === 'string') agent.codebase_dir = obj.codebase_dir;
     const agentLimits = parseLimits(obj);
     if (agentLimits) agent.limits = agentLimits;
     const repoConfig = parseRepoConfig(obj, i);
@@ -147,6 +150,7 @@ export function loadConfig(): CliConfig {
     platformUrl: DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     githubToken: null,
+    codebaseDir: null,
     limits: null,
     agentCommand: null,
     agents: null,
@@ -169,6 +173,7 @@ export function loadConfig(): CliConfig {
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
+    codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     limits: parseLimits(data),
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
@@ -185,6 +190,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.githubToken) {
     data.github_token = config.githubToken;
+  }
+  if (config.codebaseDir) {
+    data.codebase_dir = config.codebaseDir;
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
@@ -209,6 +217,22 @@ export function resolveGithubToken(
   globalToken: string | null,
 ): string | null {
   return agentToken ? agentToken : globalToken;
+}
+
+/**
+ * Resolve codebase_dir: per-agent overrides global.
+ * Expands ~ to home directory.
+ */
+export function resolveCodebaseDir(
+  agentDir: string | undefined,
+  globalDir: string | null,
+): string | null {
+  const raw = agentDir || globalDir;
+  if (!raw) return null;
+  if (raw.startsWith('~/') || raw === '~') {
+    return path.join(os.homedir(), raw.slice(1));
+  }
+  return path.resolve(raw);
 }
 
 /**

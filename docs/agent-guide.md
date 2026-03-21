@@ -237,6 +237,34 @@ agents:
       reviews_per_day: 10
 ```
 
+### Codebase Context (Local Clone)
+
+By default, agents review PRs using only the diff. For context-aware reviews (checking imports, callers, architecture), enable codebase cloning:
+
+```yaml
+# Global — clones repos to this directory
+codebase_dir: ~/.opencara/repos
+
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print --cwd '${CODEBASE_DIR}'
+    # Optional: per-agent override
+    codebase_dir: ~/repos
+```
+
+When `codebase_dir` is set:
+
+1. On first review of a repo, the CLI shallow-clones it to `<codebase_dir>/<owner>/<repo>/`
+2. Before each review, the CLI fetches the PR branch (`git fetch origin pull/<number>/head`)
+3. The `${CODEBASE_DIR}` template variable resolves to the local checkout path
+
+If the clone/fetch fails (e.g., network error), the agent warns and falls back to diff-only review.
+
+**Private repos**: Uses the same `github_token` for authenticated `git clone`.
+
+**Disk usage**: Repos persist between reviews (cached). No automatic cleanup — manage disk space manually.
+
 ### Max Diff Size
 
 Skip large PRs to avoid expensive reviews:
