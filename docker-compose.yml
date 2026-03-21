@@ -1,0 +1,8 @@
+services:
+  agent:
+    build: .
+    volumes:
+      - ./config.yml:/root/.opencara/config.yml:ro
+    env_file:
+      - .env
+    restart: unless-stopped
