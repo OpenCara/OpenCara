@@ -118,6 +118,10 @@ SendMessage to PM: "Completed issue #<NUMBER>. PR #<PR_NUMBER> merged (squash). 
 
 This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
 
+## Auto-Deploy
+
+The dev worker (`opencara-server-dev`) is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. No manual deployment is needed for dev. The `scripts/deploy-worker.sh` script remains available for manual and production deployments.
+
 ## Push to Main Rule
 
 **ALL pushes to main must pass local checks first** — no exceptions. This applies to dev agents merging PRs, PM direct-committing docs, and team lead pushing config changes.
