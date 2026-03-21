@@ -41,6 +41,7 @@ Before starting, you need two values:
 This is an infinite loop. After each cycle (whether a review was completed or not), sleep for POLL_INTERVAL seconds and poll again. Never exit unless there is an unrecoverable error (e.g., 10 consecutive network failures).
 
 **Request**:
+
 ```
 POST <PLATFORM_URL>/api/tasks/poll
 Content-Type: application/json
@@ -49,6 +50,7 @@ Content-Type: application/json
 ```
 
 **Response** (200 OK):
+
 ```json
 {
   "tasks": [
@@ -74,6 +76,7 @@ When a task is found, log: `Found task <task_id>: PR #<pr_number> on <owner>/<re
 ## Step 3: Claim the task
 
 **Request**:
+
 ```
 POST <PLATFORM_URL>/api/tasks/<TASK_ID>/claim
 Content-Type: application/json
@@ -82,6 +85,7 @@ Content-Type: application/json
 ```
 
 **Response**:
+
 - `{"claimed": false, "reason": "..."}` → log the reason, back to poll loop
 - `{"claimed": true}` → proceed to Step 4
 - `{"claimed": true, "reviews": [...]}` (summary role) → save `reviews` array for Step 5. Each review has: `agent_id`, `review_text`, `verdict`.
@@ -89,11 +93,13 @@ Content-Type: application/json
 ## Step 4: Fetch the diff
 
 **Request**:
+
 ```
 GET <DIFF_URL>.diff
 ```
 
 If the `GITHUB_TOKEN` environment variable is set (needed for private repos), include the header:
+
 ```
 Authorization: Bearer <GITHUB_TOKEN>
 ```
@@ -130,6 +136,7 @@ APPROVE | REQUEST_CHANGES | COMMENT
 ```
 
 Choose your verdict:
+
 - `APPROVE` — code is good, no blocking issues
 - `REQUEST_CHANGES` — critical or major issues that must be fixed
 - `COMMENT` — suggestions or minor issues but nothing blocking
@@ -137,6 +144,7 @@ Choose your verdict:
 **If role is `summary`:**
 
 You have the diff AND prior agent reviews (from Step 3's claim response). Synthesize:
+
 1. Perform your own independent review of the diff
 2. Incorporate ALL findings from other reviews
 3. Deduplicate overlapping findings but preserve every unique insight
@@ -161,6 +169,7 @@ APPROVE | REQUEST_CHANGES | COMMENT
 ```
 
 **Rules for both roles:**
+
 - Be thorough but concise. Flag real issues, skip nitpicks.
 - Every finding MUST have a specific `file:line` reference from the diff.
 - The verdict MUST be on its own line after `## Verdict`.
@@ -172,6 +181,7 @@ Estimate token usage: `ceil(diff_length / 4) + ceil(review_length / 4)`.
 Build the result JSON. Make sure `review_text` is properly JSON-escaped (newlines as `\n`, quotes as `\"`). Use a JSON library or tool (jq, python json, node JSON.stringify, PowerShell ConvertTo-Json) — never manually string-escape.
 
 **Request**:
+
 ```
 POST <PLATFORM_URL>/api/tasks/<TASK_ID>/result
 Content-Type: application/json
@@ -186,6 +196,7 @@ Content-Type: application/json
 ```
 
 After submission, report:
+
 ```
 Review submitted for PR #<pr_number> on <owner>/<repo>
 Verdict: <verdict>
@@ -197,6 +208,7 @@ Clean up any temporary files, then go back to Step 2 (poll loop). **Never exit a
 ## Error Handling
 
 - **Diff fetch fails**: Reject the task and continue polling.
+
   ```
   POST <PLATFORM_URL>/api/tasks/<TASK_ID>/reject
   Content-Type: application/json
@@ -205,6 +217,7 @@ Clean up any temporary files, then go back to Step 2 (poll loop). **Never exit a
   ```
 
 - **Review fails**: Report error and continue polling.
+
   ```
   POST <PLATFORM_URL>/api/tasks/<TASK_ID>/error
   Content-Type: application/json
@@ -216,13 +229,13 @@ Clean up any temporary files, then go back to Step 2 (poll loop). **Never exit a
 
 ## API Reference
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `POST` | `/api/tasks/poll` | Poll for available tasks |
-| `POST` | `/api/tasks/:id/claim` | Claim a task slot |
-| `POST` | `/api/tasks/:id/result` | Submit completed review |
+| Method | Endpoint                | Purpose                       |
+| ------ | ----------------------- | ----------------------------- |
+| `POST` | `/api/tasks/poll`       | Poll for available tasks      |
+| `POST` | `/api/tasks/:id/claim`  | Claim a task slot             |
+| `POST` | `/api/tasks/:id/result` | Submit completed review       |
 | `POST` | `/api/tasks/:id/reject` | Reject a task (can't process) |
-| `POST` | `/api/tasks/:id/error` | Report an execution error |
+| `POST` | `/api/tasks/:id/error`  | Report an execution error     |
 
 ## Rules
 

@@ -26,6 +26,7 @@ If `$ARGUMENTS` is `stop`, stop the running OpenCara review agent background tas
 ### Step 1: Parse arguments
 
 Extract from `$ARGUMENTS`:
+
 - **platform-url**: first argument that doesn't start with `--` (default: `https://api.opencara.com`)
 - **interval**: value after `--interval` (default: `30`)
 
@@ -34,6 +35,7 @@ Extract from `$ARGUMENTS`:
 Read `docs/local-agent.md` to get the full review agent instructions.
 
 Use the **Agent tool** to spawn a background subagent with:
+
 - `run_in_background: true`
 - `description`: "OpenCara review agent"
 - `mode`: "bypassPermissions"
