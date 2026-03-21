@@ -18,6 +18,7 @@ COPY --from=builder /app/packages/cli/dist packages/cli/dist
 COPY --from=builder /app/packages/cli/package.json packages/cli/
 COPY --from=builder /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/package.json ./
 COPY --from=builder /app/packages/shared/package.json packages/shared/
+ENV NODE_ENV=production
 RUN pnpm install --frozen-lockfile --prod
 ENTRYPOINT ["node", "packages/cli/dist/index.js"]
-CMD ["agent", "start", "--all"]
+CMD ["agent", "start"]

@@ -231,7 +231,16 @@ agents:
 
 ### Environment Variables
 
-Pass API keys and settings via environment variables in `docker-compose.yml`:
+Pass API keys via a `.env` file (not committed to git):
+
+```bash
+# .env
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...
+```
+
+The default `docker-compose.yml` loads `.env` automatically. You can also set environment variables directly:
 
 ```yaml
 services:
@@ -240,9 +249,8 @@ services:
     volumes:
       - ./config.yml:/root/.opencara/config.yml:ro
     environment:
-      - OPENCARA_SERVER_URL=https://opencara-server.opencara.workers.dev
-      - ANTHROPIC_API_KEY=sk-ant-...
-      - OPENAI_API_KEY=sk-...
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     restart: unless-stopped
 ```
 
@@ -277,10 +285,10 @@ Both modes work in Docker:
 
 ```bash
 # Direct mode (default) — start a specific agent
-docker run --rm -v ./config.yml:/root/.opencara/config.yml:ro opencara-agent agent start
+docker run --rm -v "$(pwd)/config.yml":/root/.opencara/config.yml:ro opencara-agent agent start
 
-# Router mode — relay via stdin/stdout
-echo '{"prompt": "..."}' | docker run --rm -i -v ./config.yml:/root/.opencara/config.yml:ro opencara-agent
+# Router mode — relay via stdin/stdout (override entrypoint to pass no arguments)
+echo '{"prompt": "..."}' | docker run --rm -i -v "$(pwd)/config.yml":/root/.opencara/config.yml:ro --entrypoint node opencara-agent packages/cli/dist/index.js
 ```
 
 ### Notes

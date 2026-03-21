@@ -3,6 +3,6 @@ services:
     build: .
     volumes:
       - ./config.yml:/root/.opencara/config.yml:ro
-    environment:
-      - OPENCARA_SERVER_URL=https://opencara-server.opencara.workers.dev
+    env_file:
+      - .env
     restart: unless-stopped
