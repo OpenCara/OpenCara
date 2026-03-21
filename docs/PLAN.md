@@ -97,21 +97,7 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 
 ## Open Issues
 
-| #    | Scope   | Priority | Description                                              |
-| ---- | ------- | -------- | -------------------------------------------------------- |
-| #185 | server  | medium   | Role validation on result submission endpoint            |
-| #184 | server  | medium   | Optimize checkTimeouts and app creation                  |
-| #177 | cli     | medium   | Pass model/tool info in claim requests                   |
-| #178 | cli     | medium   | Improve RouterRelay error handling                       |
-| #164 | server  | medium   | Log error codes with agent ID + reduce repeated failures |
-| #165 | cli+srv | medium   | Add review_only config to exclude agent from synthesis   |
-| #156 | CI/CD   | medium   | Auto-deploy dev worker on merge to main                  |
-| #179 | server  | low      | Improve review-parser and eligibility robustness         |
-| #180 | cli     | low      | Clean up dead code and improve observability             |
-| #130 | cli     | low      | Clickable PR links in agent logs                         |
-| #133 | design  | low      | Evaluate migration to Rust or Go                         |
-| #144 | design  | low      | Container-based agent execution                          |
-| #162 | design  | low      | Local Docker dev environment (blocked by #133)           |
+No open issues. All tracked work completed.
 
 ## Merged PRs
 
@@ -197,3 +183,30 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 | #188 | #173   | server-dev | 03-20 | KV hardening                |
 | #189 | #174   | server-dev | 03-20 | GitHub API retry            |
 | #190 | #182   | server-dev | 03-20 | Webhook idempotency         |
+| #191 | #185   | server-dev | 03-20 | Role validation on results  |
+| #192 | #177   | cli-dev    | 03-20 | Model/tool info in claims   |
+| #193 | #178   | cli-dev    | 03-20 | RouterRelay error handling  |
+| #194 | #184   | server-dev | 03-20 | Optimize timeouts + app     |
+| #195 | #165   | cli-dev    | 03-20 | review_only config          |
+| #196 | --     | direct     | 03-20 | E2E test suite              |
+| #197 | #164   | server-dev | 03-20 | Structured error logging    |
+| #198 | --     | direct     | 03-20 | CLI E2E test suite          |
+| #199 | #179   | server-dev | 03-20 | Review-parser robustness    |
+| #200 | #180   | cli-dev    | 03-20 | Dead code cleanup           |
+| #202 | #201   | qa         | 03-20 | Verdict case fix (qa)       |
+| #203 | #201   | server-dev | 03-20 | Verdict case fix (server)   |
+| #204 | --     | direct     | 03-20 | github_token for private repos |
+| #205 | --     | direct     | 03-21 | --all flag for agent start  |
+| #206 | #130   | direct     | 03-21 | Clickable PR links in logs  |
+| #207 | #156   | architect  | 03-21 | CI/CD auto-deploy dev worker |
+| #208 | --     | cli-dev    | 03-21 | Agent name prefix in CLI logs |
+| #209 | --     | cli-dev    | 03-21 | Startup dry-run test command  |
+| #214 | #213   | server-dev | 03-21 | Whitelist/blacklist enforcement |
+| #215 | #212   | cli-dev    | 03-21 | Unified GitHub auth fallback   |
+| #218 | #217   | server-dev | 03-21 | Switch to issue comments       |
+| #219 | #210   | cli-dev    | 03-21 | Codebase clone for review      |
+| #220 | #210   | cli-dev    | 03-21 | cwd instead of CODEBASE_DIR    |
+| #222 | #221   | server-dev | 03-21 | Fix duplicate summary claims   |
+| #223 | #211   | cli-dev    | 03-21 | Dockerfile + docker-compose    |
+| #224 | #216   | server-dev | 03-21 | Preferred synthesizer config   |
+| #226 | #225   | cli-dev    | 03-21 | Fix Docker build: copy tsconfig |

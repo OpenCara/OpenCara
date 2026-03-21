@@ -9,7 +9,7 @@
 | CLI          | Node.js npm package       | Agent runtime, HTTP polling, review execution |
 | Shared Types | Pure TypeScript           | REST API contracts, review config parser      |
 | CI/CD        | GitHub Actions            | Build, test, deploy                           |
-| GitHub App   | GitHub Integration        | Receive PR webhooks, post review comments     |
+| GitHub App   | GitHub Integration        | Receive PR webhooks, post review as PR comments |
 
 ### Rationale
 
@@ -38,7 +38,7 @@ Agent executes review locally (using own AI tool + API key)
     ↓
 Agent submits result via /api/tasks/:id/result
     ↓
-Server posts review to GitHub PR (installation token)
+Server posts review as PR comment (installation token)
 ```
 
 ### Agent CLI
@@ -124,7 +124,7 @@ Implementations:
 
 ### KV Key Schema
 
-Tasks are stored with prefix `task:`, claims with prefix `claim:`, and agent heartbeats with prefix `agent:`. Task counters (claimed_agents, review_claims, completed_reviews, summary_claimed) are stored on the task object itself to avoid KV eventual consistency issues with list operations.
+Tasks are stored with prefix `task:`, claims with prefix `claim:`, and agent heartbeats with prefix `agent:`. Task counters (claimed_agents, review_claims, completed_reviews, summary_claimed, reviews_completed_at) are stored on the task object itself to avoid KV eventual consistency issues with list operations. Summary claims use defense-in-depth dedup (claim-time check + post-time check) to prevent duplicate synthesis.
 
 ## Review Task Lifecycle
 
@@ -149,9 +149,12 @@ For `review_count > 1` in `.review.yml`:
 
 1. `review_count - 1` agents claim as `review` role
 2. After all reviews complete, one agent claims as `summary` role
+   - If `summarizer.preferred` is set, preferred agents get the slot immediately
+   - Non-preferred agents are held for a 60-second grace period to give preferred agents a chance
+   - After the grace period, any eligible agent can claim the slot (first-come-first-served)
 3. Summary agent receives all completed review texts
 4. Summary agent synthesizes and submits final review
-5. Server posts synthesized review to GitHub
+5. Server posts synthesized review as a PR comment
 
 For `review_count = 1` (single agent):
 
@@ -167,23 +170,79 @@ Read from the repository's head branch on each PR webhook.
 | ----------------- | ---------------------------------- |
 | File not found    | Skip review — repo hasn't opted in |
 | Malformed YAML    | Skip review, log error             |
-| Missing `version` | Use defaults                       |
-| Missing `prompt`  | Use default prompt                 |
+| Missing `version` | Error (required field)             |
+| Missing `prompt`  | Error (required field)             |
+
+### Full Schema
+
+```yaml
+version: 1                          # Required
+prompt: |                            # Required — review instructions for agents
+  Review this PR for bugs and security issues.
+
+agents:
+  review_count: 3                    # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
+  preferred_models: []               # Preferred AI models (informational, not enforced)
+  preferred_tools: []                # Preferred AI tools (informational, not enforced)
+  min_reputation: 0                  # Minimum agent reputation score (0.0-1.0)
+
+timeout: 10m                         # Task timeout (1m-30m, default: 10m)
+
+trigger:
+  on: [opened]                       # PR events that trigger review (default: [opened])
+  comment: '/opencara review'        # Manual trigger comment (default: /opencara review)
+  skip: [draft]                      # Skip conditions: "draft", label names, branch names
+
+# Reviewer access control
+reviewer:
+  whitelist:                         # Only these agents/users can review (empty = all allowed)
+    - agent: agent-abc123
+    - user: alice
+  blacklist:                         # Block specific agents/users from reviewing
+    - agent: agent-spammy999
+  allow_anonymous: true              # Allow agents without accounts (default: true)
+
+# Summarizer (synthesizer) access control
+summarizer:
+  whitelist:                         # Only these agents/users can synthesize
+    - agent: agent-abc123
+  blacklist:                         # Block specific agents/users from synthesizing
+    - agent: agent-xyz789
+  preferred:                         # Ordered preference for synthesis role
+    - agent: agent-abc123            # Gets summary slot immediately
+    - agent: agent-def456            # Fallback if first is unavailable
+
+# Auto-approve (experimental, not yet enforced)
+auto_approve:
+  enabled: false
+  conditions:
+    - type: all_pass
+```
 
 ### Defaults
 
 ```yaml
 version: 1
-prompt: 'Review this pull request for code quality, bugs, and improvements.'
+prompt: 'Review this pull request for bugs, security issues, and code quality.'
 agents:
-  review_count: 2
+  review_count: 1
+  min_reputation: 0
 timeout: '10m'
 trigger:
-  on: ['opened', 'synchronize']
+  on: ['opened']
   comment: '/opencara review'
-  skip_drafts: true
-  skip_labels: ['skip-review']
-  skip_branches: []
+  skip: ['draft']
+reviewer:
+  whitelist: []
+  blacklist: []
+  allow_anonymous: true
+summarizer:
+  whitelist: []
+  blacklist: []
+  preferred: []
+auto_approve:
+  enabled: false
+  conditions: []
 ```
 
 ## Security

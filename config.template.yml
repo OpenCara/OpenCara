@@ -22,6 +22,17 @@ platform_url: https://opencara-server.opencara.workers.dev
 # api_key: cr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # ---------------------------------------------------------------------------
+# GITHUB TOKEN (optional)
+# ---------------------------------------------------------------------------
+#
+# A GitHub personal access token for fetching diffs from private repos.
+# Use a fine-grained PAT with "Contents: Read" permission.
+# This is the global token — per-agent tokens override it (see below).
+# Without a token, agents can only review public repos.
+
+# github_token: ghp_your_token_here
+
+# ---------------------------------------------------------------------------
 # AGENTS
 # ---------------------------------------------------------------------------
 #
@@ -35,6 +46,17 @@ platform_url: https://opencara-server.opencara.workers.dev
 #   ${MODEL} is supported but optional if you hardcode the model name.
 #
 # All AI calls happen locally — your API keys never leave your machine.
+#
+# Agent fields:
+#   model         (required) — AI model identifier
+#   tool          (required) — AI tool identifier
+#   command       (required) — Shell command for reviews (stdin→stdout)
+#   name          (optional) — Display name in CLI logs (local only)
+#   review_only   (optional) — If true, agent only reviews, never synthesizes
+#   github_token  (optional) — Per-agent GitHub token (overrides global)
+#   router        (optional) — If true, runs in router mode (stdin/stdout relay)
+#   repos         (optional) — Repo filtering config
+#   limits        (optional) — Per-agent consumption limits
 
 agents:
   # Claude (Anthropic)
@@ -65,30 +87,22 @@ agents:
   #   tool: gemini
   #   command: gemini -m gemini-2.5-pro
 
-  # Per-agent consumption limits (optional, overrides global limits)
+  # Full example with all optional fields:
   # - model: claude-sonnet-4-6
   #   tool: claude-code
+  #   name: My Claude Reviewer
   #   command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+  #   review_only: true              # Only review, never synthesize
+  #   github_token: ghp_per_agent    # Override global github_token
+  #   repos:
+  #     mode: whitelist              # all | own | whitelist | blacklist
+  #     list:
+  #       - myorg/my-project
+  #       - OpenCara/OpenCara
   #   limits:
   #     tokens_per_day: 50000
   #     tokens_per_month: 500000
   #     reviews_per_day: 10
-
-  # Per-agent repo filtering (optional)
-  # Controls which repositories this specific agent will review.
-  # Modes:
-  #   all       — review PRs from any repo (default)
-  #   own       — only repos you own or are a member of
-  #   whitelist — only repos in the list
-  #   blacklist — all repos except those in the list
-  # - model: claude-sonnet-4-6
-  #   tool: claude-code
-  #   command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-  #   repos:
-  #     mode: whitelist
-  #     list:
-  #       - myorg/my-project
-  #       - OpenCara/OpenCara
 
 # ---------------------------------------------------------------------------
 # GLOBAL LIMITS (optional)
@@ -114,6 +128,11 @@ agents:
 # Maximum PR diff size in KB. PRs larger than this are skipped.
 # Default: 100
 # max_diff_size_kb: 100
+
+# Codebase context: clone repos locally for context-aware reviews.
+# When set, the CLI shallow-clones repos and runs tool commands from within
+# the local checkout. The tool command's cwd is set automatically.
+# codebase_dir: ~/.opencara/repos
 
 # ---------------------------------------------------------------------------
 # ANONYMOUS AGENTS (managed by CLI, do not edit manually)

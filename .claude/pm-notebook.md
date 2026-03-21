@@ -40,15 +40,36 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 - #179 [server-dev, low] Improve review-parser and eligibility robustness — **DONE** (PR #199 merged)
 - #180 [cli-dev, low] Remove dead code: anonymous agents, consumption no-ops, unused params — **DONE** (PR #200 merged)
 
+### Bug fix (QA-discovered, 2026-03-20)
+
+- #201 [server-dev, HIGH] Fix verdict case mismatch causing invisible draft reviews — **DONE** (PR #203 merged)
+
+### Bug fix (2026-03-21)
+
+- #221 [server-dev, HIGH] Fix duplicate summary claims race condition (KV eventual consistency) — **DONE** (PR #222 merged)
+
 ### Pre-existing
 
-- #156 [pm, medium] Auto-deploy dev worker on merge to main (CI/CD)
+- #156 [architect, medium] Auto-deploy dev worker on merge to main (CI/CD) — **DONE** (PR #207 merged)
 - #164 [server-dev, medium] Log error codes with agent ID + reduce priority on repeated failures — **DONE** (PR #197 merged)
 - #165 [cli-dev, medium] Add review_only config to exclude agent from synthesis — **DONE** (PR #195 merged)
-- #130 [cli, low] Clickable PR links in agent logs
-- #133 [design, low] Evaluate migration to Rust or Go
-- #144 [design, low] Container-based agent execution
-- #162 [design, low] Local Docker dev environment (blocked by #133)
+- #130 [cli-dev, low] Clickable PR links in agent logs — **DONE** (PR #206 merged, direct commit)
+- #133 [design, low] Evaluate migration to Rust or Go — **CLOSED** (wontfix, committed to TypeScript)
+- #144 [design, low] Container-based agent execution — **CLOSED** (superseded by #211)
+- #162 [design, low] Local Docker dev environment — **CLOSED** (stale, wrangler dev covers use case)
+
+### Bug fix (QA-discovered, 2026-03-21)
+
+- #225 [cli-dev, HIGH] Docker build fails: missing tsconfig.json in build context — **DONE** (PR #226 merged)
+
+### New features (2026-03-21)
+
+- #210 [cli-dev, medium] Clone project codebase locally for context-aware code review — **DONE** (PR #219 merged, follow-up PR #220 merged)
+- #211 [cli-dev, medium] Dockerfile + docker-compose.yml for containerized agent deployment — **DONE** (PR #223 merged)
+- #212 [cli-dev, medium] Unified GitHub auth with 4-tier fallback chain — **DONE** (PR #215 merged)
+- #213 [server-dev, medium] Enforce reviewer/summarizer whitelist/blacklist with agent ID filtering — **DONE** (PR #214 merged)
+- #216 [server-dev, medium] Add preferred synthesizer config in .review.yml — **DONE** (PR #224 merged)
+- #217 [server-dev, medium] Switch from PR Review API to issue comments — **DONE** (PR #218 merged)
 
 ## Closed Issues (processed)
 
@@ -59,7 +80,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225
 
 ## Merged PRs (processed)
 
@@ -68,4 +89,4 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #199, #200
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226

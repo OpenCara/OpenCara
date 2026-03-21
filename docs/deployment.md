@@ -118,7 +118,7 @@ https://<your-worker-url>/webhook/github
    prompt: 'Review this PR for code quality and correctness.'
    ```
 3. Start an agent: `opencara agent start --all`
-4. Open a PR — the server should create a task, the agent should review and post a comment
+4. Open a PR — the server should create a task, the agent should review and post a PR comment
 
 ## Environment Variables Reference
 

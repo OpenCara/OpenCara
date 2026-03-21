@@ -32,9 +32,9 @@ OpenCara is a distributed AI code review service. Maintainers install a GitHub A
     ↓
 5. Agent submits result to server
     ↓
-6. For multi-agent: another agent claims summary slot, synthesizes reviews
+6. For multi-agent: another agent claims summary slot (preferred agents prioritized), synthesizes reviews
     ↓
-7. Server posts final review to GitHub PR
+7. Server posts final review as a PR comment
 ```
 
 ### Single vs Multi-Agent
@@ -58,31 +58,60 @@ prompt: |
 
 # Agent requirements
 agents:
-  review_count: 2 # Total agents (reviewers + synthesizer)
+  review_count: 3          # Total agents (reviewers + synthesizer)
+  preferred_models: []     # Preferred AI models (informational)
+  preferred_tools: []      # Preferred AI tools (informational)
+  min_reputation: 0        # Minimum agent reputation (0.0-1.0)
 
 # Timeout
-timeout: 10m # Range: 1m-30m
+timeout: 10m               # Range: 1m-30m
 
 # Trigger control
 trigger:
-  on: [opened, synchronize] # PR events that trigger review
-  comment: '/opencara review' # Manual trigger command
-  skip_drafts: true # Skip draft PRs
-  skip_labels: [skip-review] # Skip PRs with these labels
-  skip_branches: [] # Skip PRs targeting these branches
+  on: [opened, synchronize]    # PR events that trigger review
+  comment: '/opencara review'  # Manual trigger command
+  skip: [draft]                # Skip conditions: "draft", label names, branch names
+
+# Reviewer access control (enforced server-side)
+reviewer:
+  whitelist:
+    - agent: agent-abc123      # Only these agents can review
+  blacklist:
+    - agent: agent-spammy999   # Block specific agents
+  allow_anonymous: true        # Allow agents without accounts
+
+# Summarizer (synthesizer) access control
+summarizer:
+  whitelist:
+    - agent: agent-abc123      # Only these agents can synthesize
+  blacklist:
+    - agent: agent-spammy999   # Block specific agents
+  preferred:                   # Ordered preference for synthesis role
+    - agent: agent-abc123      # First choice synthesizer
+    - agent: agent-def456      # Fallback if first is unavailable
+
+# Auto-approve (experimental)
+# auto_approve:
+#   enabled: false
+#   conditions:
+#     - type: all_pass
 ```
 
 ### Configuration Defaults
 
-| Field                 | Default                    |
-| --------------------- | -------------------------- |
-| `prompt`              | Generic code review prompt |
-| `agents.review_count` | 2                          |
-| `timeout`             | 10m                        |
-| `trigger.on`          | [opened, synchronize]      |
-| `trigger.comment`     | /opencara review           |
-| `trigger.skip_drafts` | true                       |
-| `trigger.skip_labels` | [skip-review]              |
+| Field                    | Default                                              |
+| ------------------------ | ---------------------------------------------------- |
+| `prompt`                 | Generic code review prompt                           |
+| `agents.review_count`    | 1                                                    |
+| `agents.min_reputation`  | 0                                                    |
+| `timeout`                | 10m                                                  |
+| `trigger.on`             | [opened]                                             |
+| `trigger.comment`        | /opencara review                                     |
+| `trigger.skip`           | [draft]                                              |
+| `reviewer.allow_anonymous` | true                                               |
+| `reviewer.whitelist`     | [] (all agents allowed)                              |
+| `summarizer.whitelist`   | [] (all agents allowed)                              |
+| `summarizer.preferred`   | [] (first-come-first-served)                         |
 
 ## Contributor Experience
 
@@ -90,7 +119,7 @@ trigger:
 
 1. `npm i -g opencara` — install the CLI
 2. Edit `~/.opencara/config.yml` — configure agents (model, tool, command)
-3. `opencara agent start --all` — start polling for review tasks
+3. `opencara agent start` — start a single agent, or `--all` for all configured agents
 
 ### How It Works
 
@@ -117,11 +146,16 @@ Contributors set their own limits locally:
 ```yaml
 platform_url: https://opencara-server.opencara.workers.dev
 
+# GitHub token for private repo access (optional)
+# github_token: ghp_your_token_here
+
 agents:
   - model: claude-sonnet-4-6
     tool: claude-code
-    name: My Claude Agent
+    name: My Claude Agent                                     # Display name in CLI logs
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+    review_only: false                                        # true = skip synthesis role
+    # github_token: ghp_per_agent_token                       # Per-agent token (overrides global)
     repos:
       mode: all # all | own | whitelist | blacklist
 
@@ -130,6 +164,8 @@ limits:
   reviews_per_day: 20
 
 max_diff_size_kb: 200
+
+# agent_command: claude --model ${MODEL} --allowedTools '*' --print  # Default command template
 ```
 
 ## Future Considerations

@@ -87,6 +87,22 @@ agents:
 
 **Agent names**: The optional `name` field is displayed in your CLI output (e.g., `[My Claude Agent] Review complete`). It is not sent to the server or shown in GitHub reviews.
 
+### Agent Config Fields
+
+| Field          | Required | Default | Description                                              |
+| -------------- | -------- | ------- | -------------------------------------------------------- |
+| `model`        | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)         |
+| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude-code`, `codex`)       |
+| `command`      | Yes*     | —       | Shell command to execute reviews (stdin→stdout)          |
+| `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)|
+| `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes        |
+| `github_token` | No       | —       | Per-agent GitHub token for private repos (overrides global) |
+| `router`       | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)|
+| `repos`        | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
+| `limits`       | No       | —       | Per-agent consumption limits (overrides global)          |
+
+*Required unless `agent_command` is set globally.
+
 ### Step 3: Start Agents
 
 ```bash
@@ -95,6 +111,9 @@ opencara agent start
 
 # Start a specific agent by index (0-based)
 opencara agent start --agent 1
+
+# Start ALL configured agents concurrently
+opencara agent start --all
 
 # Custom poll interval (default: 10 seconds)
 opencara agent start --poll-interval 30
@@ -112,10 +131,11 @@ opencara agent start --agent 2 --poll-interval 20
 
 **`opencara agent start` options:**
 
-| Option                      | Default | Description                           |
-| --------------------------- | ------- | ------------------------------------- |
-| `--agent <index>`           | `0`     | Agent index from config.yml (0-based) |
-| `--poll-interval <seconds>` | `10`    | Poll interval in seconds              |
+| Option                      | Default | Description                                  |
+| --------------------------- | ------- | -------------------------------------------- |
+| `--agent <index>`           | `0`     | Agent index from config.yml (0-based)        |
+| `--all`                     | —       | Start all configured agents concurrently     |
+| `--poll-interval <seconds>` | `10`    | Poll interval in seconds                     |
 
 **Environment variables:**
 
@@ -300,7 +320,12 @@ echo '{"prompt": "..."}' | docker run --rm -i -v "$(pwd)/config.yml":/root/.open
 
 ### Private Repos
 
-To review PRs on private repositories, add a `github_token` with repo read access (a [fine-grained personal access token](https://github.com/settings/personal-access-tokens) with **Contents: Read** permission works):
+To review PRs on private repositories, provide a GitHub token. The CLI resolves tokens using a fallback chain (first match wins):
+
+1. **`GITHUB_TOKEN` environment variable** — standard for CI/CD
+2. **`gh auth token`** — if GitHub CLI (`gh`) is installed and authenticated
+3. **`github_token` in config.yml** — global or per-agent
+4. **No auth** — only public repos accessible
 
 ```yaml
 # Global token — used by all agents
@@ -314,7 +339,23 @@ agents:
     github_token: ghp_different_token
 ```
 
-Without a token, agents can only fetch diffs from public repos.
+Use a [fine-grained personal access token](https://github.com/settings/personal-access-tokens) with **Contents: Read** permission, or authenticate via `gh auth login` for automatic token management.
+
+Without any token, agents can only fetch diffs from public repos.
+
+### Review-Only Agents
+
+To exclude an agent from the synthesis (summarizer) role:
+
+```yaml
+agents:
+  - model: claude-sonnet-4-6
+    tool: claude-code
+    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+    review_only: true  # This agent will only review, never synthesize
+```
+
+Useful when you want a specific agent dedicated to individual reviews while another agent handles synthesis.
 
 ### Repo Filtering
 

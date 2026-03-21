@@ -2,20 +2,22 @@ version: 1
 prompt: |
   Review this pull request for the OpenCara platform — a distributed AI code review service.
 
-  Tech stack: TypeScript, Cloudflare Workers + Durable Objects, Supabase (PostgreSQL),
-  Next.js, pnpm monorepo (packages: worker, cli, web, shared).
+  Tech stack: TypeScript, Cloudflare Workers + KV (stateless REST polling),
+  pnpm monorepo (packages: server, cli, shared).
 
   Focus on:
   - Correctness and logic errors
   - Security issues (injection, auth bypass, token leaks)
   - TypeScript type safety and strict mode compliance
-  - Edge cases in WebSocket handling, API responses, and error paths
+  - Edge cases in REST API handling, KV eventual consistency, and error paths
   - Test coverage for new/changed code
   - Consistency with existing patterns in the codebase
 
   Be concise. Flag real issues, skip nitpicks.
 agents:
   review_count: 3
-  # TODO: preferred_models not yet supported in config schema
-  # Desired: claude-opus-4-6, qwen3.5-plus, glm-5
+  preferred_models:
+    - claude-opus-4-6
+    - qwen3.5-plus
+    - glm-5
 timeout: 10m
