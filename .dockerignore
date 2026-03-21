@@ -1,0 +1,10 @@
+node_modules
+.git
+.github
+.claude
+.vscode
+*.tsbuildinfo
+dist
+docs
+scripts
+packages/server
