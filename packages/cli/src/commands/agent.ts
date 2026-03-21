@@ -269,7 +269,7 @@ async function handleTask(
       logWarn(
         `  Warning: codebase clone failed: ${(err as Error).message}. Continuing with diff-only review.`,
       );
-      taskReviewDeps = { ...reviewDeps, codebaseDir: undefined };
+      taskReviewDeps = { ...reviewDeps, codebaseDir: null };
     }
   }
 

@@ -15,7 +15,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { cloneOrUpdate, buildCloneUrl } from '../codebase.js';
+import { cloneOrUpdate, buildCloneUrl, validatePathSegment } from '../codebase.js';
 
 describe('codebase', () => {
   beforeEach(() => {
@@ -35,6 +35,29 @@ describe('codebase', () => {
       expect(buildCloneUrl('acme', 'widgets', 'ghp_abc123')).toBe(
         'https://x-access-token:ghp_abc123@github.com/acme/widgets.git',
       );
+    });
+  });
+
+  describe('validatePathSegment', () => {
+    it('accepts valid owner/repo names', () => {
+      expect(() => validatePathSegment('acme', 'owner')).not.toThrow();
+      expect(() => validatePathSegment('my-org', 'owner')).not.toThrow();
+      expect(() => validatePathSegment('repo.js', 'repo')).not.toThrow();
+      expect(() => validatePathSegment('my_repo', 'repo')).not.toThrow();
+    });
+
+    it('rejects path traversal', () => {
+      expect(() => validatePathSegment('..', 'owner')).toThrow('disallowed characters');
+      expect(() => validatePathSegment('../etc', 'owner')).toThrow('disallowed characters');
+    });
+
+    it('rejects slashes', () => {
+      expect(() => validatePathSegment('org/repo', 'owner')).toThrow('disallowed characters');
+      expect(() => validatePathSegment('a\\b', 'repo')).toThrow('disallowed characters');
+    });
+
+    it('rejects empty string', () => {
+      expect(() => validatePathSegment('', 'owner')).toThrow('disallowed characters');
     });
   });
 
@@ -63,9 +86,10 @@ describe('codebase', () => {
       expect(calls[0][1]).toContain('--depth');
       expect(calls[0][1]).toContain('1');
 
-      // Fetch PR ref
+      // Fetch PR ref (with --force)
       expect(calls[1][0]).toBe('git');
       expect(calls[1][1]).toContain('fetch');
+      expect(calls[1][1]).toContain('--force');
       expect(calls[1][1]).toContain('pull/42/head');
 
       // Checkout FETCH_HEAD
@@ -117,6 +141,25 @@ describe('codebase', () => {
       expect(cloneArgs.some((a) => a.includes('github.com/acme/public-repo.git'))).toBe(true);
     });
 
+    it('sanitizes tokens from git error messages', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockImplementation(() => {
+        throw new Error(
+          'fatal: could not access https://x-access-token:ghp_secret123@github.com/acme/repo.git',
+        );
+      });
+
+      expect(() => cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123')).toThrow(
+        'x-access-token:***@',
+      );
+      // Should NOT contain the actual token
+      try {
+        cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123');
+      } catch (err) {
+        expect((err as Error).message).not.toContain('ghp_secret123');
+      }
+    });
+
     it('throws on git clone failure', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockImplementation(() => {
@@ -136,6 +179,18 @@ describe('codebase', () => {
 
       expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos')).toThrow(
         'fatal: could not read from remote',
+      );
+    });
+
+    it('rejects invalid owner name', () => {
+      expect(() => cloneOrUpdate('../etc', 'repo', 1, '/tmp/repos')).toThrow(
+        'disallowed characters',
+      );
+    });
+
+    it('rejects invalid repo name', () => {
+      expect(() => cloneOrUpdate('acme', '../../passwd', 1, '/tmp/repos')).toThrow(
+        'disallowed characters',
       );
     });
 
