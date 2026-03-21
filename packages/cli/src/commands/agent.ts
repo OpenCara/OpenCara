@@ -181,6 +181,7 @@ async function handleTask(
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
 
   console.log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
+  console.log(`  ${diff_url}`);
 
   // Claim the task (retry once — slot may be taken)
   let claimResponse: ClaimResponse;
