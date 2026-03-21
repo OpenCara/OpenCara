@@ -283,3 +283,35 @@ export function executeTool(
     });
   });
 }
+
+const TEST_COMMAND_PROMPT = 'Respond with: OK';
+const TEST_COMMAND_TIMEOUT_MS = 10_000;
+
+export interface TestCommandResult {
+  ok: boolean;
+  elapsedMs: number;
+  error?: string;
+}
+
+/**
+ * Dry-run a command template with a tiny test prompt to verify it works.
+ * Returns success/failure + elapsed time. Never throws.
+ */
+export async function testCommand(commandTemplate: string): Promise<TestCommandResult> {
+  const start = Date.now();
+  try {
+    await executeTool(commandTemplate, TEST_COMMAND_PROMPT, TEST_COMMAND_TIMEOUT_MS);
+    return { ok: true, elapsedMs: Date.now() - start };
+  } catch (err) {
+    const elapsed = Date.now() - start;
+    if (err instanceof ToolTimeoutError) {
+      return {
+        ok: false,
+        elapsedMs: elapsed,
+        error: `command timed out after ${TEST_COMMAND_TIMEOUT_MS / 1000}s`,
+      };
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, elapsedMs: elapsed, error: msg };
+  }
+}
