@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
+import type { RouterRelay } from '../router.js';
 import { createSessionTracker } from '../consumption.js';
 
 vi.mock('../tool-executor.js', async (importOriginal) => {
@@ -516,9 +517,8 @@ describe('agent poll loop', () => {
     await promise;
 
     expect(console.warn).toHaveBeenCalledWith(
-      'Testing command... failed (command exited with code 1)',
+      'Warning: command test failed (command exited with code 1). Reviews may fail.',
     );
-    expect(console.warn).toHaveBeenCalledWith('Warning: command test failed. Reviews may fail.');
     // Agent should still enter poll loop (auth errors prove it did)
     expect(console.error).toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
   });
@@ -545,7 +545,7 @@ describe('agent poll loop', () => {
       { model: 'test-model', tool: 'test-tool' },
       reviewDeps,
       consumptionDeps,
-      { pollIntervalMs: 100, routerRelay: fakeRouter as import('../router.js').RouterRelay },
+      { pollIntervalMs: 100, routerRelay: fakeRouter as RouterRelay },
     );
 
     await vi.advanceTimersByTimeAsync(1000);

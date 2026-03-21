@@ -575,8 +575,7 @@ export async function startAgent(
     if (result.ok) {
       log(`Testing command... ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
     } else {
-      logWarn(`Testing command... failed (${result.error})`);
-      logWarn('Warning: command test failed. Reviews may fail.');
+      logWarn(`Warning: command test failed (${result.error}). Reviews may fail.`);
     }
   }
 

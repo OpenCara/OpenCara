@@ -100,7 +100,7 @@ describe('testCommand', () => {
 
     const promise = testCommand('slow-tool');
 
-    // Simulate timeout kill
+    // executeTool maps SIGTERM close to ToolTimeoutError (its own timer sends SIGTERM)
     emitOutput(child, { code: null, signal: 'SIGTERM' });
 
     const result = await promise;

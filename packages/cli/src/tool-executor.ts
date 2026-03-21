@@ -305,7 +305,11 @@ export async function testCommand(commandTemplate: string): Promise<TestCommandR
   } catch (err) {
     const elapsed = Date.now() - start;
     if (err instanceof ToolTimeoutError) {
-      return { ok: false, elapsedMs: elapsed, error: 'command timed out after 10s' };
+      return {
+        ok: false,
+        elapsedMs: elapsed,
+        error: `command timed out after ${TEST_COMMAND_TIMEOUT_MS / 1000}s`,
+      };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, elapsedMs: elapsed, error: msg };
