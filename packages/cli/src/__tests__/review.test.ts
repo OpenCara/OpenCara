@@ -256,7 +256,7 @@ describe('executeReview', () => {
     expect(cwd).toBe('/tmp/repos/acme/widgets');
   });
 
-  it('does not pass cwd when codebaseDir is not set', async () => {
+  it('does not pass cwd or vars when codebaseDir is not set', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: APPROVE\nOK',
       stderr: '',
@@ -266,6 +266,8 @@ describe('executeReview', () => {
 
     await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
+    const vars = mockRunTool.mock.calls[0][4];
+    expect(vars).toBeUndefined();
     const cwd = mockRunTool.mock.calls[0][5];
     expect(cwd).toBeUndefined();
   });
