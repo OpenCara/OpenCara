@@ -61,25 +61,53 @@ function createLogger(label?: string): Logger {
 const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
 
 /**
+ * Convert a GitHub web diff URL to the API equivalent.
+ * e.g. https://github.com/owner/repo/pull/123.diff
+ *   → https://api.github.com/repos/owner/repo/pulls/123
+ *
+ * GitHub web URLs don't accept OAuth tokens (gho_) for private repos,
+ * but the API endpoint does when using Accept: application/vnd.github.v3.diff.
+ */
+function toApiDiffUrl(webUrl: string): string | null {
+  const match = webUrl.match(
+    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\.diff)?$/,
+  );
+  if (!match) return null;
+  const [, owner, repo, prNumber] = match;
+  return `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+}
+
+/**
  * Fetch the PR diff directly from GitHub.
  * Agent fetches diff itself — server never sends it.
- * When githubToken is provided, sends Authorization header (required for private repos).
+ *
+ * When githubToken is provided, uses the GitHub API with Accept header
+ * (required for private repos — web URLs don't accept OAuth tokens).
+ * Falls back to the web .diff URL for unauthenticated public repo access.
  */
 async function fetchDiff(
   diffUrl: string,
   githubToken?: string | null,
   signal?: AbortSignal,
 ): Promise<string> {
-  // Append .diff if not already present for GitHub's raw diff format
-  const patchUrl = diffUrl.endsWith('.diff') ? diffUrl : `${diffUrl}.diff`;
-
   return withRetry(
     async () => {
       const headers: Record<string, string> = {};
-      if (githubToken) {
+      let url: string;
+
+      const apiUrl = githubToken ? toApiDiffUrl(diffUrl) : null;
+      if (apiUrl && githubToken) {
+        url = apiUrl;
         headers['Authorization'] = `Bearer ${githubToken}`;
+        headers['Accept'] = 'application/vnd.github.v3.diff';
+      } else {
+        url = diffUrl.endsWith('.diff') ? diffUrl : `${diffUrl}.diff`;
+        if (githubToken) {
+          headers['Authorization'] = `Bearer ${githubToken}`;
+        }
       }
-      const response = await fetch(patchUrl, { headers });
+
+      const response = await fetch(url, { headers });
       if (!response.ok) {
         const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
         if (NON_RETRYABLE_STATUSES.has(response.status)) {
@@ -97,6 +125,9 @@ async function fetchDiff(
     signal,
   );
 }
+
+/** Max times an agent will attempt a task that fails diff fetch before skipping it. */
+const MAX_DIFF_FETCH_ATTEMPTS = 3;
 
 /**
  * Poll → Claim → Review → Submit loop for a single agent.
@@ -122,6 +153,8 @@ async function pollLoop(
 
   let consecutiveAuthErrors = 0;
   let consecutiveErrors = 0;
+  /** Tasks that repeatedly failed diff fetch — skip on future polls. */
+  const diffFailCounts = new Map<string, number>();
 
   while (!signal?.aborted) {
     try {
@@ -133,9 +166,13 @@ async function pollLoop(
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
 
-      if (pollResponse.tasks.length > 0) {
-        const task = pollResponse.tasks[0]; // Take first available task
-        await handleTask(
+      // Find first task not exhausted by diff fetch failures
+      const task = pollResponse.tasks.find(
+        (t) => (diffFailCounts.get(t.task_id) ?? 0) < MAX_DIFF_FETCH_ATTEMPTS,
+      );
+
+      if (task) {
+        const result = await handleTask(
           client,
           agentId,
           task,
@@ -146,6 +183,15 @@ async function pollLoop(
           routerRelay,
           signal,
         );
+        if (result.diffFetchFailed) {
+          const count = (diffFailCounts.get(task.task_id) ?? 0) + 1;
+          diffFailCounts.set(task.task_id, count);
+          if (count >= MAX_DIFF_FETCH_ATTEMPTS) {
+            logWarn(
+              `  Skipping task ${task.task_id} after ${count} diff fetch failures`,
+            );
+          }
+        }
       }
     } catch (err) {
       if (signal?.aborted) break;
@@ -187,6 +233,11 @@ async function pollLoop(
   }
 }
 
+/** Result from handleTask indicating what happened. */
+interface HandleTaskResult {
+  diffFetchFailed?: boolean;
+}
+
 /**
  * Handle a single task: claim → fetch diff → review → submit
  */
@@ -200,7 +251,7 @@ async function handleTask(
   logger: Logger,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<HandleTaskResult> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
 
@@ -224,12 +275,12 @@ async function handleTask(
   } catch (err) {
     const status = err instanceof HttpError ? ` (${err.status})` : '';
     logError(`  Failed to claim task ${task_id}${status}: ${(err as Error).message}`);
-    return;
+    return {};
   }
 
   if (!claimResponse.claimed) {
     log(`  Claim rejected: ${(claimResponse as { reason: string }).reason}`);
-    return;
+    return {};
   }
 
   log(`  Claimed as ${role}`);
@@ -248,7 +299,7 @@ async function handleTask(
       `Cannot access diff: ${(err as Error).message}`,
       logger,
     );
-    return;
+    return { diffFetchFailed: true };
   }
 
   // Clone/update codebase if configured
@@ -320,6 +371,7 @@ async function handleTask(
       await safeError(client, task_id, agentId, (err as Error).message, logger);
     }
   }
+  return {};
 }
 
 /**
@@ -461,23 +513,66 @@ async function executeSummaryTask(
   signal?: AbortSignal,
 ): Promise<void> {
   if (reviews.length === 0) {
-    // Single-agent mode: this IS the review, just run it as a regular review
-    return executeReviewTask(
-      client,
-      agentId,
-      taskId,
-      owner,
-      repo,
-      prNumber,
-      diffContent,
-      prompt,
-      timeoutSeconds,
-      reviewDeps,
-      consumptionDeps,
-      logger,
-      routerRelay,
+    // Single-agent mode (review_count=1): this IS the review, run it as a regular
+    // review but submit as 'summary' to match the claimed role.
+    let reviewText: string;
+    let verdict: ReviewVerdict | undefined;
+    let tokensUsed: number;
+
+    if (routerRelay) {
+      const fullPrompt = routerRelay.buildReviewPrompt({
+        owner,
+        repo,
+        reviewMode: 'full',
+        prompt,
+        diffContent,
+      });
+      const response = await routerRelay.sendPrompt(
+        'review_request',
+        taskId,
+        fullPrompt,
+        timeoutSeconds,
+      );
+      const parsed = routerRelay.parseReviewResponse(response);
+      reviewText = parsed.review;
+      verdict = parsed.verdict as ReviewVerdict;
+      tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
+    } else {
+      const result = await executeReview(
+        {
+          taskId,
+          diffContent,
+          prompt,
+          owner,
+          repo,
+          prNumber,
+          timeout: timeoutSeconds,
+          reviewMode: 'full',
+        },
+        reviewDeps,
+      );
+      reviewText = result.review;
+      verdict = result.verdict;
+      tokensUsed = result.tokensUsed;
+    }
+
+    await withRetry(
+      () =>
+        client.post(`/api/tasks/${taskId}/result`, {
+          agent_id: agentId,
+          type: 'summary' as ClaimRole,
+          review_text: reviewText,
+          verdict,
+          tokens_used: tokensUsed,
+        }),
+      { maxAttempts: 3 },
       signal,
     );
+
+    recordSessionUsage(consumptionDeps.session, tokensUsed);
+    logger.log(`  Review submitted as summary (${tokensUsed.toLocaleString()} tokens)`);
+    logger.log(formatPostReviewStats(consumptionDeps.session));
+    return;
   }
 
   const summaryReviews = reviews.map((r) => ({

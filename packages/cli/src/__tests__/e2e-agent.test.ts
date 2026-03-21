@@ -345,30 +345,29 @@ describe('E2E Agent Scenarios', () => {
   });
 
   // ═══════════════════════════════════════════════════════════
-  // I. Summary Type Mismatch Bug (documents known issue)
+  // I. Single-agent mode: summary claim with empty reviews
   // ═══════════════════════════════════════════════════════════
 
-  describe('I. Summary type mismatch bug (single-agent mode)', () => {
-    it('single-agent: summary claim with empty reviews → type mismatch error', async () => {
+  describe('I. Single-agent mode (review_count=1)', () => {
+    it('single-agent: summary claim with empty reviews → submits as summary', async () => {
       // In single-agent mode (review_count=1), the agent claims 'summary'.
-      // Server returns empty reviews. executeSummaryTask falls back to
-      // executeReviewTask, which submits type: 'review'. But the claim role
-      // is 'summary' — server rejects with 400 (type mismatch).
+      // Server returns empty reviews. The agent runs a regular review but
+      // submits with type: 'summary' to match the claimed role.
       const taskId = await server.injectTask({ reviewCount: 1 });
 
       const agentPromise = startTestAgent('single-agent');
-      await advanceTime(3000);
+      await advanceTime(10000);
 
       // Tool was called (review execution happened)
       expect(mockedExecuteTool).toHaveBeenCalled();
 
-      // The type mismatch error was logged
-      expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining("does not match submission type 'review'"),
+      // No type mismatch error — submission type should be 'summary'
+      expect(console.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("does not match submission type"),
       );
 
       await server.store.updateTask(taskId, { status: 'completed' });
       await stopAgent(agentPromise, server);
-    });
+    }, 15000);
   });
 });
