@@ -704,9 +704,14 @@ agentCommand
       console.log(`Starting ${config.agents.length} agent(s)...`);
 
       const promises: Promise<void>[] = [];
+      let startFailed = false;
       for (let i = 0; i < config.agents.length; i++) {
         const p = startAgentByIndex(config, i, pollIntervalMs);
-        if (p) promises.push(p);
+        if (p) {
+          promises.push(p);
+        } else {
+          startFailed = true;
+        }
       }
 
       if (promises.length === 0) {
@@ -715,16 +720,39 @@ agentCommand
         return;
       }
 
+      if (startFailed) {
+        console.error(
+          'One or more agents could not start (see warnings above). Continuing with the rest.',
+        );
+      }
+
       console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
-      await Promise.all(promises);
+
+      // Use allSettled so one agent crashing doesn't orphan the others
+      const results = await Promise.allSettled(promises);
+      const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failures.length > 0) {
+        for (const f of failures) {
+          console.error(`Agent exited with error: ${f.reason}`);
+        }
+        process.exit(1);
+      }
     } else {
       // Start a single agent by index
-      const agentIndex = parseInt(opts.agent, 10);
+      const maxIndex = (config.agents?.length ?? 0) - 1;
+      const agentIndex = Number(opts.agent);
+      if (!Number.isInteger(agentIndex) || agentIndex < 0 || agentIndex > maxIndex) {
+        console.error(
+          maxIndex >= 0
+            ? `--agent must be an integer between 0 and ${maxIndex}.`
+            : 'No agents configured in ~/.opencara/config.yml',
+        );
+        process.exit(1);
+        return;
+      }
       const p = startAgentByIndex(config, agentIndex, pollIntervalMs);
       if (!p) {
-        console.error(
-          'No command configured. Set agent_command or agents[].command in ~/.opencara/config.yml',
-        );
+        // startAgentByIndex already logged the specific reason
         process.exit(1);
         return;
       }
