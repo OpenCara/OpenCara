@@ -38,6 +38,22 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const MAX_CONSECUTIVE_AUTH_ERRORS = 3;
 const MAX_POLL_BACKOFF_MS = 300_000; // 5 minutes
 
+/** Logger functions that optionally prepend a label prefix. */
+interface Logger {
+  log: (msg: string) => void;
+  logError: (msg: string) => void;
+  logWarn: (msg: string) => void;
+}
+
+function createLogger(label?: string): Logger {
+  const prefix = label ? `[${label}] ` : '';
+  return {
+    log: (msg: string) => console.log(`${prefix}${msg}`),
+    logError: (msg: string) => console.error(`${prefix}${msg}`),
+    logWarn: (msg: string) => console.warn(`${prefix}${msg}`),
+  };
+}
+
 /** HTTP statuses that will never succeed on retry (auth/not-found). */
 const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
 
@@ -88,6 +104,7 @@ async function pollLoop(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   agentInfo: { model: string; tool: string },
+  logger: Logger,
   options: {
     pollIntervalMs: number;
     routerRelay?: RouterRelay;
@@ -96,8 +113,9 @@ async function pollLoop(
   },
 ): Promise<void> {
   const { pollIntervalMs, routerRelay, reviewOnly, signal } = options;
+  const { log, logError, logWarn } = logger;
 
-  console.log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
+  log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
 
   let consecutiveAuthErrors = 0;
   let consecutiveErrors = 0;
@@ -121,6 +139,7 @@ async function pollLoop(
           reviewDeps,
           consumptionDeps,
           agentInfo,
+          logger,
           routerRelay,
           signal,
         );
@@ -131,17 +150,17 @@ async function pollLoop(
       if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
         consecutiveAuthErrors++;
         consecutiveErrors++;
-        console.error(
+        logError(
           `Auth error (${err.status}): ${err.message} [${consecutiveAuthErrors}/${MAX_CONSECUTIVE_AUTH_ERRORS}]`,
         );
         if (consecutiveAuthErrors >= MAX_CONSECUTIVE_AUTH_ERRORS) {
-          console.error('Authentication failed repeatedly. Exiting.');
+          logError('Authentication failed repeatedly. Exiting.');
           break;
         }
       } else {
         consecutiveAuthErrors = 0;
         consecutiveErrors++;
-        console.error(`Poll error: ${(err as Error).message}`);
+        logError(`Poll error: ${(err as Error).message}`);
       }
 
       // Exponential backoff on consecutive failures
@@ -152,7 +171,7 @@ async function pollLoop(
         );
         const extraDelay = backoff - pollIntervalMs;
         if (extraDelay > 0) {
-          console.warn(
+          logWarn(
             `Poll failed (${consecutiveErrors} consecutive). Next poll in ${Math.round(backoff / 1000)}s`,
           );
           await sleep(extraDelay, signal);
@@ -175,13 +194,15 @@ async function handleTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   agentInfo: { model: string; tool: string },
+  logger: Logger,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
 ): Promise<void> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
+  const { log, logError } = logger;
 
-  console.log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
-  console.log(`  ${diff_url}`);
+  log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
+  log(`  ${diff_url}`);
 
   // Claim the task (retry once — slot may be taken)
   let claimResponse: ClaimResponse;
@@ -199,25 +220,31 @@ async function handleTask(
     );
   } catch (err) {
     const status = err instanceof HttpError ? ` (${err.status})` : '';
-    console.error(`  Failed to claim task ${task_id}${status}: ${(err as Error).message}`);
+    logError(`  Failed to claim task ${task_id}${status}: ${(err as Error).message}`);
     return;
   }
 
   if (!claimResponse.claimed) {
-    console.log(`  Claim rejected: ${(claimResponse as { reason: string }).reason}`);
+    log(`  Claim rejected: ${(claimResponse as { reason: string }).reason}`);
     return;
   }
 
-  console.log(`  Claimed as ${role}`);
+  log(`  Claimed as ${role}`);
 
   // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
   try {
     diffContent = await fetchDiff(diff_url, reviewDeps.githubToken, signal);
-    console.log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
+    log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
-    console.error(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
-    await safeReject(client, task_id, agentId, `Cannot access diff: ${(err as Error).message}`);
+    logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
+    await safeReject(
+      client,
+      task_id,
+      agentId,
+      `Cannot access diff: ${(err as Error).message}`,
+      logger,
+    );
     return;
   }
 
@@ -237,6 +264,7 @@ async function handleTask(
         claimResponse.reviews,
         reviewDeps,
         consumptionDeps,
+        logger,
         routerRelay,
         signal,
       );
@@ -253,17 +281,18 @@ async function handleTask(
         timeout_seconds,
         reviewDeps,
         consumptionDeps,
+        logger,
         routerRelay,
         signal,
       );
     }
   } catch (err) {
     if (err instanceof DiffTooLargeError || err instanceof InputTooLargeError) {
-      console.error(`  ${err.message}`);
-      await safeReject(client, task_id, agentId, err.message);
+      logError(`  ${err.message}`);
+      await safeReject(client, task_id, agentId, err.message, logger);
     } else {
-      console.error(`  Error on task ${task_id}: ${(err as Error).message}`);
-      await safeError(client, task_id, agentId, (err as Error).message);
+      logError(`  Error on task ${task_id}: ${(err as Error).message}`);
+      await safeError(client, task_id, agentId, (err as Error).message, logger);
     }
   }
 }
@@ -276,6 +305,7 @@ async function safeReject(
   taskId: string,
   agentId: string,
   reason: string,
+  logger: Logger,
 ): Promise<void> {
   try {
     await withRetry(
@@ -283,7 +313,7 @@ async function safeReject(
       { maxAttempts: 2 },
     );
   } catch (err) {
-    console.error(
+    logger.logError(
       `  Failed to report rejection for task ${taskId}: ${(err as Error).message} (logged locally)`,
     );
   }
@@ -297,13 +327,14 @@ async function safeError(
   taskId: string,
   agentId: string,
   error: string,
+  logger: Logger,
 ): Promise<void> {
   try {
     await withRetry(() => client.post(`/api/tasks/${taskId}/error`, { agent_id: agentId, error }), {
       maxAttempts: 2,
     });
   } catch (err) {
-    console.error(
+    logger.logError(
       `  Failed to report error for task ${taskId}: ${(err as Error).message} (logged locally)`,
     );
   }
@@ -321,6 +352,7 @@ async function executeReviewTask(
   timeoutSeconds: number,
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
+  logger: Logger,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -382,8 +414,8 @@ async function executeReviewTask(
   );
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
-  console.log(`  Review submitted (${tokensUsed.toLocaleString()} tokens)`);
-  console.log(formatPostReviewStats(consumptionDeps.session));
+  logger.log(`  Review submitted (${tokensUsed.toLocaleString()} tokens)`);
+  logger.log(formatPostReviewStats(consumptionDeps.session));
 }
 
 async function executeSummaryTask(
@@ -399,6 +431,7 @@ async function executeSummaryTask(
   reviews: ClaimReview[],
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
+  logger: Logger,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -416,6 +449,7 @@ async function executeSummaryTask(
       timeoutSeconds,
       reviewDeps,
       consumptionDeps,
+      logger,
       routerRelay,
       signal,
     );
@@ -480,8 +514,8 @@ async function executeSummaryTask(
   );
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
-  console.log(`  Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
-  console.log(formatPostReviewStats(consumptionDeps.session));
+  logger.log(`  Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
+  logger.log(formatPostReviewStats(consumptionDeps.session));
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -511,18 +545,25 @@ export async function startAgent(
   agentInfo: { model: string; tool: string },
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
-  options?: { pollIntervalMs?: number; routerRelay?: RouterRelay; reviewOnly?: boolean },
+  options?: {
+    pollIntervalMs?: number;
+    routerRelay?: RouterRelay;
+    reviewOnly?: boolean;
+    label?: string;
+  },
 ): Promise<void> {
   const client = new ApiClient(platformUrl);
   const session = consumptionDeps?.session ?? createSessionTracker();
   const deps = consumptionDeps ?? { agentId, limits: null, session };
+  const logger = createLogger(options?.label);
+  const { log, logError } = logger;
 
-  console.log(`Agent ${agentId} starting...`);
-  console.log(`Platform: ${platformUrl}`);
-  console.log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}`);
+  log(`Agent ${agentId} starting...`);
+  log(`Platform: ${platformUrl}`);
+  log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}`);
 
   if (!reviewDeps) {
-    console.error('No review command configured. Set command in config.yml');
+    logError('No review command configured. Set command in config.yml');
     return;
   }
 
@@ -530,21 +571,21 @@ export async function startAgent(
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {
-    console.log('\nShutting down...');
+    log('\nShutting down...');
     abortController.abort();
   });
   process.on('SIGTERM', () => {
     abortController.abort();
   });
 
-  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, {
+  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, {
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     routerRelay: options?.routerRelay,
     reviewOnly: options?.reviewOnly,
     signal: abortController.signal,
   });
 
-  console.log('Agent stopped.');
+  log('Agent stopped.');
 }
 
 /**
@@ -584,6 +625,7 @@ export async function startAgentRouter(): Promise<void> {
 
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
+  const label = agentConfig?.name ?? 'agent[0]';
 
   await startAgent(
     agentId,
@@ -598,6 +640,7 @@ export async function startAgentRouter(): Promise<void> {
     {
       routerRelay: router,
       reviewOnly: agentConfig?.review_only,
+      label,
     },
   );
 
@@ -674,6 +717,7 @@ function startAgentByIndex(
       pollIntervalMs,
       routerRelay,
       reviewOnly: agentConfig?.review_only,
+      label,
     },
   ).finally(() => {
     routerRelay?.stop();
