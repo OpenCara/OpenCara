@@ -138,6 +138,7 @@ describe('executeSummary', () => {
           timeoutMs: number,
           signal?: AbortSignal,
           vars?: Record<string, string>,
+          cwd?: string,
         ) => Promise<ToolExecutorResult>
       >()
       .mockResolvedValue({ stdout, stderr: '', tokensUsed, tokensParsed });
@@ -156,6 +157,7 @@ describe('executeSummary', () => {
       expect.stringContaining('acme/widgets'),
       expect.any(Number),
       expect.any(AbortSignal),
+      undefined,
       undefined,
     );
   });
@@ -244,7 +246,7 @@ describe('executeSummary', () => {
     expect(signal.aborted).toBe(false);
   });
 
-  it('passes CODEBASE_DIR var when codebaseDir is set', async () => {
+  it('passes cwd when codebaseDir is set', async () => {
     const mockRunTool = createMockRunTool('Summary');
 
     await executeSummary(
@@ -253,16 +255,16 @@ describe('executeSummary', () => {
       mockRunTool,
     );
 
-    const vars = mockRunTool.mock.calls[0][4];
-    expect(vars).toEqual({ CODEBASE_DIR: '/tmp/repos/acme/widgets' });
+    const cwd = mockRunTool.mock.calls[0][5];
+    expect(cwd).toBe('/tmp/repos/acme/widgets');
   });
 
-  it('does not pass vars when codebaseDir is not set', async () => {
+  it('does not pass cwd when codebaseDir is not set', async () => {
     const mockRunTool = createMockRunTool('Summary');
 
     await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    const vars = mockRunTool.mock.calls[0][4];
-    expect(vars).toBeUndefined();
+    const cwd = mockRunTool.mock.calls[0][5];
+    expect(cwd).toBeUndefined();
   });
 });

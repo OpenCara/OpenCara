@@ -172,6 +172,7 @@ export function executeTool(
   timeoutMs: number,
   signal?: AbortSignal,
   vars?: Record<string, string>,
+  cwd?: string,
 ): Promise<ToolExecutorResult> {
   const promptViaArg = commandTemplate.includes('${PROMPT}');
   const allVars = { ...vars, PROMPT: prompt };
@@ -185,6 +186,7 @@ export function executeTool(
 
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: cwd || undefined,
     });
 
     let stdout = '';
