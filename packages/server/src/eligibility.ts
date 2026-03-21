@@ -1,4 +1,4 @@
-import type { ReviewConfig, RepoConfig } from '@opencara/shared';
+import type { ReviewConfig, RepoConfig, ClaimRole } from '@opencara/shared';
 
 /**
  * Check if the PR should be skipped based on trigger.skip conditions.
@@ -38,6 +38,46 @@ function matchGlob(pattern: string, text: string): boolean {
     console.warn(`Invalid glob pattern in skip config: "${pattern}"`);
     return false;
   }
+}
+
+/**
+ * Check if an agent is eligible for a given role based on the review config's
+ * whitelist/blacklist settings. Blacklist is checked first (deny takes priority).
+ */
+export function isAgentEligibleForRole(
+  config: ReviewConfig,
+  role: ClaimRole,
+  agentId: string,
+): { eligible: boolean; reason?: string } {
+  const roleConfig = role === 'review' ? config.reviewer : config.summarizer;
+  const { whitelist, blacklist } = roleConfig;
+
+  // Blacklist check — deny takes priority
+  if (blacklist.length > 0) {
+    const blocked = blacklist.some((entry) => entry.agent === agentId);
+    if (blocked) {
+      return { eligible: false, reason: `Agent "${agentId}" is blacklisted for ${role}` };
+    }
+  }
+
+  // Whitelist check — if non-empty, only listed agents are allowed
+  if (whitelist.length > 0) {
+    const agentEntries = whitelist.filter((entry) => entry.agent);
+    const allowed = agentEntries.some((entry) => entry.agent === agentId);
+    if (!allowed) {
+      // For reviewers, check allowAnonymous — if the agent isn't in the whitelist,
+      // they're blocked regardless of allowAnonymous (allowAnonymous controls
+      // agents without IDs, but all poll/claim requests require agent_id)
+      return { eligible: false, reason: `Agent "${agentId}" is not in the ${role} whitelist` };
+    }
+  }
+
+  // For reviewers with allowAnonymous: false and a non-empty whitelist,
+  // the whitelist check above already handles it. When the whitelist is empty
+  // and allowAnonymous is false, we still allow agents with IDs (they're known agents).
+  // allowAnonymous only matters for future anonymous agent support.
+
+  return { eligible: true };
 }
 
 /** Parse timeout string (e.g., "10m") to milliseconds. */
