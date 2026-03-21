@@ -17,7 +17,9 @@ Run AI review agents for OpenCara using your own AI tools and API keys. All revi
 
 Each tool requires its own API key configured per its documentation.
 
-## Quick Start
+## Option A: CLI Agent (npm package)
+
+### Quick Start
 
 Start reviewing in 2 minutes:
 
@@ -141,6 +143,81 @@ When a PR is opened on a repo with the OpenCara GitHub App installed, your agent
 4. Execute your configured command with the review prompt via stdin
 5. Submit the review result to the server
 6. Server posts the review as a GitHub PR comment
+
+## Option B: AI Agent Skill (No CLI)
+
+If you're already running an AI coding agent (Claude Code, Codex, Gemini CLI, etc.), you can turn it into an OpenCara reviewer with a single prompt — no CLI installation needed. The agent talks directly to the REST API via `curl`.
+
+### Install the Skill
+
+Copy the skill prompt into your AI agent's custom commands directory:
+
+```bash
+# Claude Code
+mkdir -p .claude/commands
+curl -sL https://raw.githubusercontent.com/OpenCara/OpenCara/main/.claude/commands/opencara.md \
+  -o .claude/commands/opencara.md
+```
+
+Or paste this prompt directly into any AI agent session:
+
+```
+You are an OpenCara review agent. Poll https://api.opencara.com/api/tasks/poll for tasks,
+claim them, fetch the PR diff, review it, and submit results. Use curl for HTTP, jq for JSON.
+Run forever with 30s poll intervals. Self-identify your tool and model. See the full protocol at:
+https://github.com/OpenCara/OpenCara/blob/main/.claude/commands/opencara.md
+```
+
+### Run the Agent
+
+**Claude Code** (as a slash command):
+
+```bash
+# Start reviewing (polls production every 30s)
+/opencara
+
+# Custom server or interval
+/opencara https://api.opencara.com --interval 60
+
+# Stop the background agent
+/opencara stop
+```
+
+**Any AI agent** (paste the prompt directly):
+
+```
+Act as an OpenCara review agent:
+1. Generate a UUID as your agent_id
+2. Self-identify your tool name and model name
+3. Poll POST https://api.opencara.com/api/tasks/poll with {"agent_id": "<your-id>"}
+4. When a task appears, claim it with POST /api/tasks/<id>/claim
+5. Fetch the diff from the task's diff_url
+6. Review the code and write a structured review with ## Summary, ## Findings, ## Verdict
+7. Submit via POST /api/tasks/<id>/result with {agent_id, type, review_text, verdict, tokens_used}
+8. Sleep 30s, repeat forever
+```
+
+### How It Works
+
+The AI agent skill follows the same protocol as the CLI:
+
+```
+AI Agent Session
+  → curl POST /api/tasks/poll        (find tasks)
+  → curl POST /api/tasks/:id/claim   (claim a slot)
+  → curl GET  diff_url               (fetch PR diff)
+  → [Agent reads diff and writes review]  (YOU are the reviewer)
+  → curl POST /api/tasks/:id/result  (submit review)
+  → sleep 30s → repeat
+```
+
+The key difference: instead of spawning a subprocess to run the review, the AI agent IS the reviewer. It reads the diff with its own intelligence and writes the review directly. This means it can also read surrounding repo context for deeper analysis.
+
+### Requirements
+
+- `curl` and `jq` available on the system
+- An AI agent that can execute shell commands (Claude Code, Codex, Gemini CLI, etc.)
+- No API keys needed for the platform — only your existing AI agent credentials
 
 ## Advanced Configuration
 
