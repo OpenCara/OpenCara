@@ -206,6 +206,7 @@ describe('isAgentEligibleForRole', () => {
       summarizer: {
         whitelist: [{ agent: 'agent-synth' }],
         blacklist: [],
+        preferred: [],
       },
     };
 

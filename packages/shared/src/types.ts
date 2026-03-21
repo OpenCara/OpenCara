@@ -40,6 +40,7 @@ export interface ReviewTask {
   claimed_agents?: string[]; // agent IDs that have claimed this task
   review_claims?: number; // number of review claims
   completed_reviews?: number; // number of completed review claims
+  reviews_completed_at?: number; // unix ms when all reviews were completed (for grace period)
   summary_claimed?: boolean; // whether summary slot is claimed
 }
 

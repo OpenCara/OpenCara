@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, type ReviewTask } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createApp } from '../index.js';
-import { resetTimeoutThrottle } from '../routes/tasks.js';
+import { resetTimeoutThrottle, PREFERRED_SYNTH_GRACE_PERIOD_MS } from '../routes/tasks.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -883,6 +883,7 @@ describe('Task Routes', () => {
             summarizer: {
               whitelist: [{ agent: 'agent-synth' }],
               blacklist: [],
+              preferred: [],
             },
           },
         }),
@@ -931,6 +932,7 @@ describe('Task Routes', () => {
             summarizer: {
               whitelist: [{ agent: 'agent-synth' }],
               blacklist: [],
+              preferred: [],
             },
           },
         }),
@@ -1151,6 +1153,238 @@ describe('Task Routes', () => {
       body = await res.json();
       expect(body.tasks).toHaveLength(1);
       expect(body.tasks[0].role).toBe('summary');
+    });
+  });
+
+  // ── Preferred synthesizer (#216) ──────────────────────
+
+  describe('preferred synthesizer (#216)', () => {
+    function makePreferredConfig(preferred: Array<{ agent: string }>) {
+      return {
+        ...DEFAULT_REVIEW_CONFIG,
+        summarizer: {
+          ...DEFAULT_REVIEW_CONFIG.summarizer,
+          preferred,
+        },
+      };
+    }
+
+    describe('review_count=1 (summary-only tasks)', () => {
+      it('preferred agent gets summary immediately', async () => {
+        await store.createTask(
+          makeTask({
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-preferred' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('non-preferred agent is held during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            created_at: Date.now(), // just created
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+
+      it('non-preferred agent gets summary after grace period expires', async () => {
+        await store.createTask(
+          makeTask({
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            created_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+    });
+
+    describe('multi-agent tasks (review_count > 1)', () => {
+      it('preferred agent gets summary immediately when reviews are complete', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            claimed_agents: ['agent-a', 'agent-b'],
+            review_claims: 2,
+            completed_reviews: 2,
+            reviews_completed_at: Date.now(), // just completed
+            status: 'reviewing',
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-preferred' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('non-preferred agent is held during grace period after reviews complete', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            claimed_agents: ['agent-a', 'agent-b'],
+            review_claims: 2,
+            completed_reviews: 2,
+            reviews_completed_at: Date.now(), // just completed
+            status: 'reviewing',
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+
+      it('non-preferred agent gets summary after grace period expires', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            claimed_agents: ['agent-a', 'agent-b'],
+            review_claims: 2,
+            completed_reviews: 2,
+            reviews_completed_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
+            status: 'reviewing',
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('non-preferred agent cannot claim summary during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            claimed_agents: ['agent-a', 'agent-b'],
+            review_claims: 2,
+            completed_reviews: 2,
+            reviews_completed_at: Date.now(), // just completed
+            status: 'reviewing',
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-other',
+          role: 'summary',
+        });
+        const body = await res.json();
+        expect(body.claimed).toBe(false);
+      });
+
+      it('preferred agent can claim summary during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            claimed_agents: ['agent-a', 'agent-b'],
+            review_claims: 2,
+            completed_reviews: 2,
+            reviews_completed_at: Date.now(), // just completed
+            status: 'reviewing',
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-preferred',
+          role: 'summary',
+        });
+        const body = await res.json();
+        expect(body.claimed).toBe(true);
+      });
+    });
+
+    describe('no preference configured', () => {
+      it('summary is available immediately when no preferred list', async () => {
+        // DEFAULT_REVIEW_CONFIG has preferred: [] — current behavior unchanged
+        await store.createTask(makeTask());
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'any-agent' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+    });
+
+    describe('reviews_completed_at is set when last review is submitted', () => {
+      it('sets reviews_completed_at on final review submission', async () => {
+        await store.createTask(makeTask({ review_count: 2 }));
+
+        // Claim review
+        await request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-a',
+          role: 'review',
+        });
+
+        // Submit review
+        await request('POST', '/api/tasks/task-1/result', {
+          agent_id: 'agent-a',
+          type: 'review',
+          review_text: 'Looks good',
+          verdict: 'approve',
+        });
+
+        const task = await store.getTask('task-1');
+        expect(task?.reviews_completed_at).toBeDefined();
+        expect(task?.reviews_completed_at).toBeGreaterThan(0);
+      });
+
+      it('does not set reviews_completed_at before all reviews are done', async () => {
+        await store.createTask(makeTask({ review_count: 3 }));
+
+        // Claim and submit first review
+        await request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-a',
+          role: 'review',
+        });
+        await request('POST', '/api/tasks/task-1/result', {
+          agent_id: 'agent-a',
+          type: 'review',
+          review_text: 'Review A',
+          verdict: 'approve',
+        });
+
+        const task = await store.getTask('task-1');
+        expect(task?.reviews_completed_at).toBeUndefined();
+      });
+    });
+
+    describe('multiple preferred agents (priority order)', () => {
+      it('any preferred agent gets summary immediately', async () => {
+        await store.createTask(
+          makeTask({
+            config: makePreferredConfig([
+              { agent: 'agent-first-choice' },
+              { agent: 'agent-second-choice' },
+            ]),
+          }),
+        );
+
+        // Second choice preferred agent also gets immediate access
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-second-choice',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
     });
   });
 });
