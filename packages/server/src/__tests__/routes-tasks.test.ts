@@ -981,6 +981,123 @@ describe('Task Routes', () => {
     });
   });
 
+  // ── Duplicate summary claim prevention (#221) ──────────
+
+  describe('duplicate summary claim prevention (#221)', () => {
+    it('rejects summary claim when another pending summary claim exists', async () => {
+      await store.createTask(makeTask());
+
+      // Agent A claims summary
+      const res1 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'summary',
+      });
+      const body1 = await res1.json();
+      expect(body1.claimed).toBe(true);
+
+      // Simulate KV stale read: task still shows summary_claimed=false
+      // by manually resetting it (mimics KV eventual consistency)
+      await store.updateTask('task-1', { summary_claimed: false, claimed_agents: [] });
+
+      // Agent B tries to claim summary — task-level flag says available,
+      // but claim-level check should catch the existing pending claim
+      const res2 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-b',
+        role: 'summary',
+      });
+      const body2 = await res2.json();
+      expect(body2.claimed).toBe(false);
+      expect(body2.reason).toContain('Summary already claimed');
+    });
+
+    it('allows summary claim after previous summary claim was rejected', async () => {
+      await store.createTask(makeTask());
+
+      // Agent A claims and rejects summary
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'summary',
+      });
+      await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'agent-a',
+        reason: 'test',
+      });
+
+      // Agent B should be able to claim summary
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-b',
+        role: 'summary',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
+
+    it('allows summary claim after previous summary claim errored', async () => {
+      await store.createTask(makeTask());
+
+      // Agent A claims and errors summary
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'summary',
+      });
+      await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'agent-a',
+        error: 'OOM',
+      });
+
+      // Agent B should be able to claim summary
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-b',
+        role: 'summary',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
+
+    it('postFinalReview skips duplicate post when task is already completed', async () => {
+      await store.createTask(makeTask({ status: 'reviewing', summary_claimed: true }));
+
+      // Create two summary claims (simulating the race that slipped past claim-time dedup)
+      await store.createClaim({
+        id: 'task-1:agent-a',
+        task_id: 'task-1',
+        agent_id: 'agent-a',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.createClaim({
+        id: 'task-1:agent-b',
+        task_id: 'task-1',
+        agent_id: 'agent-b',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Agent A submits — should post and complete task
+      const res1 = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-a',
+        type: 'summary',
+        review_text: '## Summary\nFirst review.',
+      });
+      expect(res1.status).toBe(200);
+
+      // Task should be in terminal state (completed or failed depending on GitHub mock)
+      const taskAfterFirst = await store.getTask('task-1');
+      expect(['completed', 'failed']).toContain(taskAfterFirst?.status);
+
+      // Agent B submits — postFinalReview should skip (task already completed)
+      const res2 = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-b',
+        type: 'summary',
+        review_text: '## Summary\nDuplicate review.',
+      });
+      // Result endpoint returns 200 (claim was updated), but postFinalReview skips posting
+      expect(res2.status).toBe(200);
+    });
+  });
+
   // ── Multi-agent flow ─────────────────────────────────────
 
   describe('multi-agent review flow', () => {

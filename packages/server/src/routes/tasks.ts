@@ -149,6 +149,15 @@ async function postFinalReview(
   const task = await store.getTask(taskId);
   if (!task) return;
 
+  // Defense-in-depth: if task is already completed, another agent already posted.
+  // This prevents duplicate GitHub comments even if duplicate summary claims slip through.
+  if (task.status === 'completed') {
+    console.log(
+      `Task ${taskId}: skipping duplicate post from ${summaryAgentId} — task already completed`,
+    );
+    return;
+  }
+
   // Use direct getClaim (KV get) instead of getClaims (KV list) to avoid
   // eventual consistency issues — the claim was just updated moments ago.
   const summaryClaim = await store.getClaim(`${taskId}:${summaryAgentId}`);
@@ -280,6 +289,25 @@ export function taskRoutes() {
         claimed: false,
         reason: actualRole ? `Expected role ${actualRole}, got ${role}` : 'No slots available',
       });
+    }
+
+    // Defense-in-depth: check existing claims before creating a summary claim.
+    // The task-level `summary_claimed` flag can be stale due to KV eventual consistency,
+    // so we also check individual claim entries which have a narrower consistency window.
+    if (role === 'summary') {
+      const existingClaims = await store.getClaims(taskId);
+      const existingSummaryClaim = existingClaims.find(
+        (c) => c.role === 'summary' && c.status === 'pending',
+      );
+      if (existingSummaryClaim) {
+        console.log(
+          `Task ${taskId}: rejecting duplicate summary claim from ${agent_id} — already claimed by ${existingSummaryClaim.agent_id}`,
+        );
+        return c.json<ClaimResponse>({
+          claimed: false,
+          reason: 'Summary already claimed by another agent',
+        });
+      }
     }
 
     // Create the claim
