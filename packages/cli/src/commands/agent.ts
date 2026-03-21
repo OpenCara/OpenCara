@@ -605,85 +605,157 @@ export async function startAgentRouter(): Promise<void> {
 
 // ── CLI Commands ─────────────────────────────────────────────
 
+/**
+ * Resolve and start a single agent by index from config.
+ * Returns a promise that resolves when the agent stops.
+ * Returns null (with error logged) if the agent cannot be started.
+ */
+function startAgentByIndex(
+  config: ReturnType<typeof loadConfig>,
+  agentIndex: number,
+  pollIntervalMs: number,
+): Promise<void> | null {
+  const agentId = crypto.randomUUID();
+  let commandTemplate: string | undefined;
+  let limits: ConsumptionLimits | null = config.limits;
+  let agentConfig: LocalAgentConfig | undefined;
+
+  if (config.agents && config.agents.length > agentIndex) {
+    agentConfig = config.agents[agentIndex];
+    commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
+    limits = resolveAgentLimits(agentConfig.limits, config.limits);
+  } else {
+    commandTemplate = config.agentCommand ?? undefined;
+  }
+
+  const label = agentConfig?.name ?? `agent[${agentIndex}]`;
+
+  if (!commandTemplate) {
+    console.error(`[${label}] No command configured. Skipping.`);
+    return null;
+  }
+
+  if (!validateCommandBinary(commandTemplate)) {
+    console.error(
+      `[${label}] Command binary not found: ${commandTemplate.split(' ')[0]}. Skipping.`,
+    );
+    return null;
+  }
+
+  const githubToken = agentConfig
+    ? resolveGithubToken(agentConfig.github_token, config.githubToken)
+    : config.githubToken;
+
+  const reviewDeps: ReviewExecutorDeps = {
+    commandTemplate,
+    maxDiffSizeKb: config.maxDiffSizeKb,
+    githubToken,
+  };
+
+  const isRouter = agentConfig?.router === true;
+  let routerRelay: RouterRelay | undefined;
+  if (isRouter) {
+    routerRelay = new RouterRelay();
+    routerRelay.start();
+  }
+
+  const session = createSessionTracker();
+  const model = agentConfig?.model ?? 'unknown';
+  const tool = agentConfig?.tool ?? 'unknown';
+
+  const agentPromise = startAgent(
+    agentId,
+    config.platformUrl,
+    { model, tool },
+    reviewDeps,
+    { agentId, limits, session },
+    {
+      pollIntervalMs,
+      routerRelay,
+      reviewOnly: agentConfig?.review_only,
+    },
+  ).finally(() => {
+    routerRelay?.stop();
+  });
+
+  return agentPromise;
+}
+
 export const agentCommand = new Command('agent').description('Manage review agents');
 
 agentCommand
   .command('start')
-  .description('Start an agent in polling mode')
+  .description('Start agents in polling mode')
   .option('--poll-interval <seconds>', 'Poll interval in seconds', '10')
   .option('--agent <index>', 'Agent index from config.yml (0-based)', '0')
-  .action(async (opts: { pollInterval: string; agent: string }) => {
+  .option('--all', 'Start all configured agents concurrently')
+  .action(async (opts: { pollInterval: string; agent: string; all?: boolean }) => {
     const config = loadConfig();
     const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
-    const agentIndex = parseInt(opts.agent, 10);
 
-    const agentId = crypto.randomUUID();
-    let commandTemplate: string | undefined;
-    let limits: ConsumptionLimits | null = config.limits;
-    let agentConfig: LocalAgentConfig | undefined;
+    if (opts.all) {
+      // Start all agents concurrently
+      if (!config.agents || config.agents.length === 0) {
+        console.error('No agents configured in ~/.opencara/config.yml');
+        process.exit(1);
+        return;
+      }
 
-    if (config.agents && config.agents.length > agentIndex) {
-      agentConfig = config.agents[agentIndex];
-      commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
-      limits = resolveAgentLimits(agentConfig.limits, config.limits);
+      console.log(`Starting ${config.agents.length} agent(s)...`);
+
+      const promises: Promise<void>[] = [];
+      let startFailed = false;
+      for (let i = 0; i < config.agents.length; i++) {
+        const p = startAgentByIndex(config, i, pollIntervalMs);
+        if (p) {
+          promises.push(p);
+        } else {
+          startFailed = true;
+        }
+      }
+
+      if (promises.length === 0) {
+        console.error('No agents could be started. Check your config.');
+        process.exit(1);
+        return;
+      }
+
+      if (startFailed) {
+        console.error(
+          'One or more agents could not start (see warnings above). Continuing with the rest.',
+        );
+      }
+
+      console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
+
+      // Use allSettled so one agent crashing doesn't orphan the others
+      const results = await Promise.allSettled(promises);
+      const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failures.length > 0) {
+        for (const f of failures) {
+          console.error(`Agent exited with error: ${f.reason}`);
+        }
+        process.exit(1);
+      }
     } else {
-      commandTemplate = config.agentCommand ?? undefined;
-    }
-
-    if (!commandTemplate) {
-      console.error(
-        'No command configured. Set agent_command or agents[].command in ~/.opencara/config.yml',
-      );
-      process.exit(1);
-      return; // unreachable, helps TypeScript narrow
-    }
-
-    if (!validateCommandBinary(commandTemplate)) {
-      console.error(`Command binary not found: ${commandTemplate.split(' ')[0]}`);
-      process.exit(1);
-      return;
-    }
-
-    const githubToken = agentConfig
-      ? resolveGithubToken(agentConfig.github_token, config.githubToken)
-      : config.githubToken;
-
-    const reviewDeps: ReviewExecutorDeps = {
-      commandTemplate,
-      maxDiffSizeKb: config.maxDiffSizeKb,
-      githubToken,
-    };
-
-    const isRouter = agentConfig?.router === true;
-    let routerRelay: RouterRelay | undefined;
-    if (isRouter) {
-      routerRelay = new RouterRelay();
-      routerRelay.start();
-    }
-
-    const session = createSessionTracker();
-
-    const model = agentConfig?.model ?? 'unknown';
-    const tool = agentConfig?.tool ?? 'unknown';
-
-    try {
-      await startAgent(
-        agentId,
-        config.platformUrl,
-        { model, tool },
-        reviewDeps,
-        {
-          agentId,
-          limits,
-          session,
-        },
-        {
-          pollIntervalMs,
-          routerRelay,
-          reviewOnly: agentConfig?.review_only,
-        },
-      );
-    } finally {
-      routerRelay?.stop();
+      // Start a single agent by index
+      const maxIndex = (config.agents?.length ?? 0) - 1;
+      const agentIndex = Number(opts.agent);
+      if (!Number.isInteger(agentIndex) || agentIndex < 0 || agentIndex > maxIndex) {
+        console.error(
+          maxIndex >= 0
+            ? `--agent must be an integer between 0 and ${maxIndex}.`
+            : 'No agents configured in ~/.opencara/config.yml',
+        );
+        process.exit(1);
+        return;
+      }
+      const p = startAgentByIndex(config, agentIndex, pollIntervalMs);
+      if (!p) {
+        // startAgentByIndex already logged the specific reason
+        process.exit(1);
+        return;
+      }
+      await p;
     }
   });
