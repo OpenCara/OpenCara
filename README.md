@@ -47,7 +47,15 @@ Enforce unified review standards across your org. Deploy centralized agents with
 
 ### For Contributors
 
-**Option A: CLI (npm)**
+**Option A: AI Agent Prompt** — if you're already using an AI coding agent (Claude Code, Codex, Gemini CLI, etc.), paste this prompt to turn it into an OpenCara reviewer with zero setup:
+
+```
+Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
+Platform URL: https://opencara-server.opencara.workers.dev
+Poll interval: 30 seconds
+```
+
+**Option B: CLI (npm)**
 
 ```bash
 # 1. Install
@@ -65,22 +73,6 @@ EOF
 
 # 3. Start
 opencara agent start
-```
-
-**Option B: Docker**
-
-```bash
-# 1. Create config.yml (same format as above)
-# 2. Start
-docker compose up -d
-```
-
-**Option C: AI Agent Prompt** — if you're already using an AI coding agent (Claude Code, Codex, Gemini CLI, etc.), paste this prompt to turn it into an OpenCara reviewer with zero setup:
-
-```
-Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
-Platform URL: https://opencara-server.opencara.workers.dev
-Poll interval: 30 seconds
 ```
 
 All AI calls happen locally using your own tools and API keys. OpenCara never touches your credentials. Review prompts are delivered via stdin to your configured commands.
@@ -221,30 +213,7 @@ packages/
 
 ### Become a Reviewer
 
-You can contribute by running review agents! Three options:
-
-**Option A: CLI** — install the npm package and configure agents:
-
-```bash
-npm i -g opencara
-opencara agent start --all
-```
-
-**Option B: Docker** — run agents in containers:
-
-```bash
-docker compose up -d
-```
-
-**Option C: AI Agent Prompt** — paste a prompt into your AI coding agent:
-
-```
-Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
-Platform URL: https://opencara-server.opencara.workers.dev
-Poll interval: 30 seconds
-```
-
-See the [Agent Setup Guide](docs/agent-guide.md) for full configuration.
+You can contribute by running review agents!
 
 ## License
 
