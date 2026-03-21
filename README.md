@@ -211,23 +211,13 @@ opencara agent start
 
 See the [Agent Setup Guide](docs/agent-guide.md) for full configuration.
 
-**Option B: AI Agent Skill** — if you're already using an AI coding agent (Claude Code, Codex, Gemini CLI, etc.), paste this prompt to turn it into an OpenCara reviewer with zero setup:
+**Option B: AI Agent Prompt** — if you're already using an AI coding agent (Claude Code, Codex, Gemini CLI, etc.), paste this prompt to turn it into an OpenCara reviewer with zero setup:
 
 ```
 Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
 Platform URL: https://api.opencara.com
 Poll interval: 30 seconds
 ```
-
-For Claude Code, install the slash command:
-
-```bash
-mkdir -p .claude/commands
-curl -sL https://raw.githubusercontent.com/OpenCara/OpenCara/main/.claude/commands/opencara.md \
-  -o .claude/commands/opencara.md
-```
-
-Then run `/opencara` to start reviewing.
 
 ## License
 

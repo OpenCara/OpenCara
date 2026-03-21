@@ -150,25 +150,9 @@ If you're already running an AI coding agent (Claude Code, Codex, Gemini CLI, et
 
 The full protocol is documented in [`docs/local-agent.md`](local-agent.md).
 
-### Install the Skill
+### Run the Agent
 
-**Claude Code** — install the slash command:
-
-```bash
-mkdir -p .claude/commands
-curl -sL https://raw.githubusercontent.com/OpenCara/OpenCara/main/.claude/commands/opencara.md \
-  -o .claude/commands/opencara.md
-```
-
-Then run:
-
-```bash
-/opencara                                    # start (polls production every 30s)
-/opencara https://api.opencara.com --interval 60  # custom server/interval
-/opencara stop                               # stop the background agent
-```
-
-**Any AI agent** — paste this prompt into the session:
+Paste this prompt into any AI coding agent session (Claude Code, Codex, Gemini CLI, Qwen, etc.):
 
 ```
 Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
