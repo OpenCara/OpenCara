@@ -327,6 +327,73 @@ describe('agent poll loop', () => {
     expect(pollBody!.review_only).toBeUndefined();
   });
 
+  it('prefixes log output with label when provided', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      }),
+    );
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100, label: 'My Claude Agent' },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(console.log).toHaveBeenCalledWith('[My Claude Agent] Agent test-agent starting...');
+    expect(console.log).toHaveBeenCalledWith('[My Claude Agent] Platform: https://api.test.com');
+    expect(console.log).toHaveBeenCalledWith(
+      '[My Claude Agent] Model: test-model | Tool: test-tool',
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      '[My Claude Agent] Authentication failed repeatedly. Exiting.',
+    );
+    expect(console.log).toHaveBeenCalledWith('[My Claude Agent] Agent stopped.');
+  });
+
+  it('does not prefix log output when no label is provided', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      }),
+    );
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(console.log).toHaveBeenCalledWith('Agent test-agent starting...');
+    expect(console.log).toHaveBeenCalledWith('Agent stopped.');
+    // Verify no bracketed prefix
+    const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
+    const prefixedCalls = logCalls.filter(
+      (c: string[]) => typeof c[0] === 'string' && c[0].startsWith('['),
+    );
+    expect(prefixedCalls).toHaveLength(0);
+  });
+
   it('resets auth counter on successful poll', async () => {
     let callCount = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
