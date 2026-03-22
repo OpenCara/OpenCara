@@ -83,7 +83,9 @@ describe('agent poll loop', () => {
 
     await promise;
 
-    expect(console.error).toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Authentication failed repeatedly. Exiting.'),
+    );
   });
 
   it('backs off exponentially on consecutive non-auth failures', async () => {
@@ -174,7 +176,9 @@ describe('agent poll loop', () => {
     await vi.advanceTimersByTimeAsync(10000);
 
     // Should NOT have exited with auth error message
-    expect(console.error).not.toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
+    expect(console.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('Authentication failed repeatedly. Exiting.'),
+    );
     // Agent is still running (callCount > 3 means it got past the errors)
     expect(callCount).toBeGreaterThan(3);
   });
@@ -203,7 +207,9 @@ describe('agent poll loop', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await promise;
 
-    expect(console.log).toHaveBeenCalledWith('Model: claude-sonnet-4-6 | Tool: claude');
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('Model: claude-sonnet-4-6 | Tool: claude'),
+    );
   });
 
   it('includes model and tool in claim request body', async () => {
@@ -378,15 +384,17 @@ describe('agent poll loop', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await promise;
 
-    expect(console.log).toHaveBeenCalledWith('[My Claude Agent] Agent test-agent starting...');
-    expect(console.log).toHaveBeenCalledWith('[My Claude Agent] Platform: https://api.test.com');
+    // Label should appear in log output
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('My Claude Agent'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Agent started'));
     expect(console.log).toHaveBeenCalledWith(
-      '[My Claude Agent] Model: test-model | Tool: test-tool',
+      expect.stringContaining('Model: test-model | Tool: test-tool'),
     );
     expect(console.error).toHaveBeenCalledWith(
-      '[My Claude Agent] Authentication failed repeatedly. Exiting.',
+      expect.stringContaining('Authentication failed repeatedly. Exiting.'),
     );
-    expect(console.log).toHaveBeenCalledWith('[My Claude Agent] Agent stopped.');
+    // Exit summary should be printed
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Shutting down'));
   });
 
   it('does not prefix log output when no label is provided', async () => {
@@ -412,14 +420,16 @@ describe('agent poll loop', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await promise;
 
-    expect(console.log).toHaveBeenCalledWith('Agent test-agent starting...');
-    expect(console.log).toHaveBeenCalledWith('Agent stopped.');
-    // Verify no label-style prefix (e.g. [My Agent] ...)
+    // Should log agent started and exit summary
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Agent started'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Shutting down'));
+    // All log lines have timestamps [HH:MM:SS] but no agent label prefix
     const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
-    const prefixedCalls = logCalls.filter(
-      (c: string[]) => typeof c[0] === 'string' && /^\[[^\]]+\] /.test(c[0]),
+    // Timestamps like [12:34:56] are expected, but custom labels like [My Agent] are not
+    const hasCustomLabel = logCalls.some(
+      (c: string[]) => typeof c[0] === 'string' && /\[(?!\d{2}:\d{2}:\d{2}\])[^\]]+\]/.test(c[0]),
     );
-    expect(prefixedCalls).toHaveLength(0);
+    expect(hasCustomLabel).toBe(false);
   });
 
   it('resets auth counter on successful poll', async () => {
@@ -465,7 +475,9 @@ describe('agent poll loop', () => {
 
     // After call 3 (success), auth counter resets. Calls 4-5 are 401 but only 2 consecutive,
     // so it should NOT exit with repeated auth failure.
-    expect(console.error).not.toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
+    expect(console.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('Authentication failed repeatedly. Exiting.'),
+    );
     expect(callCount).toBeGreaterThanOrEqual(5);
   });
 
@@ -495,8 +507,8 @@ describe('agent poll loop', () => {
     await promise;
 
     expect(testCommand).toHaveBeenCalledWith('echo test');
-    expect(console.log).toHaveBeenCalledWith('Testing command...');
-    expect(console.log).toHaveBeenCalledWith('Testing command... ok (1.2s)');
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Testing command...'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Command test ok (1.2s)'));
   });
 
   it('warns but continues when command dry-run fails', async () => {
@@ -529,10 +541,14 @@ describe('agent poll loop', () => {
     await promise;
 
     expect(console.warn).toHaveBeenCalledWith(
-      'Warning: command test failed (command exited with code 1). Reviews may fail.',
+      expect.stringContaining(
+        'Command test failed (command exited with code 1). Reviews may fail.',
+      ),
     );
     // Agent should still enter poll loop (auth errors prove it did)
-    expect(console.error).toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Authentication failed repeatedly. Exiting.'),
+    );
   });
 
   it('skips command dry-run in router mode', async () => {
@@ -669,7 +685,9 @@ describe('agent poll loop', () => {
 
     await promise;
 
-    expect(console.error).toHaveBeenCalledWith('Too many consecutive errors (3/3). Shutting down.');
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Too many consecutive errors (3/3). Shutting down.'),
+    );
     expect(process.exitCode).toBe(1);
   });
 

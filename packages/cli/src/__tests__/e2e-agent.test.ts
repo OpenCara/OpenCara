@@ -348,7 +348,9 @@ describe('E2E Agent Scenarios', () => {
       await advanceTime(2000);
       await agentPromise;
 
-      expect(console.error).toHaveBeenCalledWith('Authentication failed repeatedly. Exiting.');
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Authentication failed repeatedly. Exiting.'),
+      );
     });
   });
 

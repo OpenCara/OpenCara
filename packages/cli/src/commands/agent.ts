@@ -36,6 +36,14 @@ import {
 } from '../consumption.js';
 import { sanitizeTokens } from '../sanitize.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
+import {
+  createLogger,
+  createAgentSession,
+  formatExitSummary,
+  icons,
+  type Logger,
+  type AgentSessionStats,
+} from '../logger.js';
 
 export interface ConsumptionDeps {
   agentId: string;
@@ -45,22 +53,6 @@ export interface ConsumptionDeps {
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const MAX_CONSECUTIVE_AUTH_ERRORS = 3;
 const MAX_POLL_BACKOFF_MS = 300_000; // 5 minutes
-
-/** Logger functions that optionally prepend a label prefix. */
-interface Logger {
-  log: (msg: string) => void;
-  logError: (msg: string) => void;
-  logWarn: (msg: string) => void;
-}
-
-function createLogger(label?: string): Logger {
-  const prefix = label ? `[${label}] ` : '';
-  return {
-    log: (msg: string) => console.log(`${prefix}${sanitizeTokens(msg)}`),
-    logError: (msg: string) => console.error(`${prefix}${sanitizeTokens(msg)}`),
-    logWarn: (msg: string) => console.warn(`${prefix}${sanitizeTokens(msg)}`),
-  };
-}
 
 /** HTTP statuses that will never succeed on retry (auth/not-found). */
 const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
@@ -142,6 +134,7 @@ async function pollLoop(
   consumptionDeps: ConsumptionDeps,
   agentInfo: { model: string; tool: string },
   logger: Logger,
+  agentSession: AgentSessionStats,
   options: {
     pollIntervalMs: number;
     maxConsecutiveErrors: number;
@@ -155,7 +148,7 @@ async function pollLoop(
     options;
   const { log, logError, logWarn } = logger;
 
-  log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
+  log(`${icons.polling} Polling every ${pollIntervalMs / 1000}s...`);
 
   let consecutiveAuthErrors = 0;
   let consecutiveErrors = 0;
@@ -192,10 +185,12 @@ async function pollLoop(
           consumptionDeps,
           agentInfo,
           logger,
+          agentSession,
           routerRelay,
           signal,
         );
         if (result.diffFetchFailed) {
+          agentSession.errorsEncountered++;
           const count = (diffFailCounts.get(task.task_id) ?? 0) + 1;
           diffFailCounts.set(task.task_id, count);
           if (count >= MAX_DIFF_FETCH_ATTEMPTS) {
@@ -206,20 +201,22 @@ async function pollLoop(
     } catch (err) {
       if (signal?.aborted) break;
 
+      agentSession.errorsEncountered++;
+
       if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
         consecutiveAuthErrors++;
         consecutiveErrors++;
         logError(
-          `Auth error (${err.status}): ${err.message} [${consecutiveAuthErrors}/${MAX_CONSECUTIVE_AUTH_ERRORS}]`,
+          `${icons.error} Auth error (${err.status}): ${err.message} [${consecutiveAuthErrors}/${MAX_CONSECUTIVE_AUTH_ERRORS}]`,
         );
         if (consecutiveAuthErrors >= MAX_CONSECUTIVE_AUTH_ERRORS) {
-          logError('Authentication failed repeatedly. Exiting.');
+          logError(`${icons.error} Authentication failed repeatedly. Exiting.`);
           break;
         }
       } else {
         consecutiveAuthErrors = 0;
         consecutiveErrors++;
-        logError(`Poll error: ${(err as Error).message}`);
+        logError(`${icons.error} Poll error: ${(err as Error).message}`);
       }
 
       // Exit after too many consecutive errors
@@ -268,13 +265,14 @@ async function handleTask(
   consumptionDeps: ConsumptionDeps,
   agentInfo: { model: string; tool: string },
   logger: Logger,
+  agentSession: AgentSessionStats,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
 ): Promise<HandleTaskResult> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
 
-  log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
+  log(`${icons.success} Claimed task ${task_id} (${role}) — ${owner}/${repo}#${pr_number}`);
   log(`  https://github.com/${owner}/${repo}/pull/${pr_number}`);
 
   // Claim the task (retry once — slot may be taken)
@@ -302,8 +300,6 @@ async function handleTask(
     }
     return {};
   }
-
-  log(`  Claimed as ${role}`);
 
   // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
@@ -420,12 +416,14 @@ async function handleTask(
         contextBlock,
       );
     }
+    agentSession.tasksCompleted++;
   } catch (err) {
+    agentSession.errorsEncountered++;
     if (err instanceof DiffTooLargeError || err instanceof InputTooLargeError) {
-      logError(`  ${err.message}`);
+      logError(`  ${icons.error} ${err.message}`);
       await safeReject(client, task_id, agentId, err.message, logger);
     } else {
-      logError(`  Error on task ${task_id}: ${(err as Error).message}`);
+      logError(`  ${icons.error} Error on task ${task_id}: ${(err as Error).message}`);
       await safeError(client, task_id, agentId, (err as Error).message, logger);
     }
   } finally {
@@ -512,7 +510,7 @@ async function executeReviewTask(
 
   if (routerRelay) {
     // Router mode: relay to external agent
-    logger.log(`  Executing review command: [router mode]`);
+    logger.log(`  ${icons.running} Executing review: [router mode]`);
     const fullPrompt = routerRelay.buildReviewPrompt({
       owner,
       repo,
@@ -533,7 +531,7 @@ async function executeReviewTask(
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
   } else {
     // Direct mode: execute tool locally
-    logger.log(`  Executing review command: ${reviewDeps.commandTemplate}`);
+    logger.log(`  ${icons.running} Executing review: ${reviewDeps.commandTemplate}`);
     const result = await executeReview(
       {
         taskId,
@@ -571,7 +569,7 @@ async function executeReviewTask(
   );
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
-  logger.log(`  Review submitted (${tokensUsed.toLocaleString()} tokens)`);
+  logger.log(`  ${icons.success} Review submitted (${tokensUsed.toLocaleString()} tokens)`);
   logger.log(formatPostReviewStats(consumptionDeps.session));
 }
 
@@ -601,7 +599,7 @@ async function executeSummaryTask(
     let tokensUsed: number;
 
     if (routerRelay) {
-      logger.log(`  Executing summary command: [router mode]`);
+      logger.log(`  ${icons.running} Executing summary: [router mode]`);
       const fullPrompt = routerRelay.buildReviewPrompt({
         owner,
         repo,
@@ -621,7 +619,7 @@ async function executeSummaryTask(
       verdict = parsed.verdict as ReviewVerdict;
       tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
     } else {
-      logger.log(`  Executing summary command: ${reviewDeps.commandTemplate}`);
+      logger.log(`  ${icons.running} Executing summary: ${reviewDeps.commandTemplate}`);
       const result = await executeReview(
         {
           taskId,
@@ -657,7 +655,9 @@ async function executeSummaryTask(
     );
 
     recordSessionUsage(consumptionDeps.session, tokensUsed);
-    logger.log(`  Review submitted as summary (${tokensUsed.toLocaleString()} tokens)`);
+    logger.log(
+      `  ${icons.success} Review submitted as summary (${tokensUsed.toLocaleString()} tokens)`,
+    );
     logger.log(formatPostReviewStats(consumptionDeps.session));
     return;
   }
@@ -674,7 +674,7 @@ async function executeSummaryTask(
   let tokensUsed: number;
 
   if (routerRelay) {
-    logger.log(`  Executing summary command: [router mode]`);
+    logger.log(`  ${icons.running} Executing summary: [router mode]`);
     const fullPrompt = routerRelay.buildSummaryPrompt({
       owner,
       repo,
@@ -692,7 +692,7 @@ async function executeSummaryTask(
     summaryText = response;
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
   } else {
-    logger.log(`  Executing summary command: ${reviewDeps.commandTemplate}`);
+    logger.log(`  ${icons.running} Executing summary: ${reviewDeps.commandTemplate}`);
     const result = await executeSummary(
       {
         taskId,
@@ -727,7 +727,7 @@ async function executeSummaryTask(
   );
 
   recordSessionUsage(consumptionDeps.session, tokensUsed);
-  logger.log(`  Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
+  logger.log(`  ${icons.success} Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
   logger.log(formatPostReviewStats(consumptionDeps.session));
 }
 
@@ -773,12 +773,13 @@ export async function startAgent(
   const logger = createLogger(options?.label);
   const { log, logError, logWarn } = logger;
 
-  log(`Agent ${agentId} starting...`);
-  log(`Platform: ${platformUrl}`);
+  const agentSession = createAgentSession();
+
+  log(`${icons.start} Agent started (polling ${platformUrl})`);
   log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}`);
 
   if (!reviewDeps) {
-    logError('No review command configured. Set command in config.yml');
+    logError(`${icons.error} No review command configured. Set command in config.yml`);
     return;
   }
 
@@ -788,9 +789,9 @@ export async function startAgent(
     log('Testing command...');
     const result = await testCommand(reviewDeps.commandTemplate);
     if (result.ok) {
-      log(`Testing command... ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
+      log(`${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
     } else {
-      logWarn(`Warning: command test failed (${result.error}). Reviews may fail.`);
+      logWarn(`${icons.warn} Command test failed (${result.error}). Reviews may fail.`);
     }
   }
 
@@ -798,14 +799,13 @@ export async function startAgent(
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {
-    log('\nShutting down...');
     abortController.abort();
   });
   process.on('SIGTERM', () => {
     abortController.abort();
   });
 
-  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, {
+  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, agentSession, {
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     maxConsecutiveErrors: options?.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
     routerRelay: options?.routerRelay,
@@ -814,7 +814,7 @@ export async function startAgent(
     signal: abortController.signal,
   });
 
-  log('Agent stopped.');
+  log(formatExitSummary(agentSession));
 }
 
 /**
