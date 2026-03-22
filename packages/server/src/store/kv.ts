@@ -7,8 +7,8 @@ const CLAIM_PREFIX = 'claim:';
 const AGENT_PREFIX = 'agent:';
 const SUMMARY_LOCK_PREFIX = 'summary-lock:';
 
-/** TTL for terminal KV entries: 7 days in seconds */
-const TERMINAL_TTL = 7 * 24 * 60 * 60;
+/** Default TTL for terminal KV entries: 7 days */
+export const DEFAULT_TTL_DAYS = 7;
 
 const TERMINAL_TASK_STATES = ['completed', 'timeout', 'failed'];
 const TERMINAL_CLAIM_STATUSES = ['completed', 'rejected', 'error'];
@@ -42,7 +42,14 @@ export function safeParseJson<T>(raw: string, fallback: T | null = null): T | nu
  * in a shared JSON array.
  */
 export class KVTaskStore implements TaskStore {
-  constructor(private readonly kv: KVNamespace) {}
+  private readonly terminalTtl: number;
+
+  constructor(
+    private readonly kv: KVNamespace,
+    ttlDays: number = DEFAULT_TTL_DAYS,
+  ) {
+    this.terminalTtl = ttlDays * 24 * 60 * 60;
+  }
 
   // ── Tasks ──────────────────────────────────────────────────────
 
@@ -112,7 +119,7 @@ export class KVTaskStore implements TaskStore {
 
     const options: { expirationTtl?: number; metadata: TaskMetadata } = { metadata };
     if (TERMINAL_TASK_STATES.includes(updated.status)) {
-      options.expirationTtl = TERMINAL_TTL;
+      options.expirationTtl = this.terminalTtl;
     }
 
     await this.kv.put(`${TASK_PREFIX}${id}`, JSON.stringify(updated), options);
@@ -173,7 +180,7 @@ export class KVTaskStore implements TaskStore {
     const updated = { ...claim, ...updates };
 
     const options = TERMINAL_CLAIM_STATUSES.includes(updated.status)
-      ? { expirationTtl: TERMINAL_TTL }
+      ? { expirationTtl: this.terminalTtl }
       : undefined;
     await this.kv.put(key, JSON.stringify(updated), options);
   }
@@ -204,7 +211,7 @@ export class KVTaskStore implements TaskStore {
     // but the claim endpoint's task-level summary_claimed flag (set atomically
     // after lock acquisition) provides the primary guard. This lock is
     // defense-in-depth checked at result submission time.
-    await this.kv.put(key, agentId, { expirationTtl: TERMINAL_TTL });
+    await this.kv.put(key, agentId, { expirationTtl: this.terminalTtl });
     return true;
   }
 
@@ -231,5 +238,30 @@ export class KVTaskStore implements TaskStore {
 
   async setTimeoutLastCheck(timestamp: number): Promise<void> {
     await this.kv.put(KVTaskStore.TIMEOUT_CHECK_KEY, String(timestamp));
+  }
+
+  // ── Cleanup ─────────────────────────────────────────────────────
+
+  /**
+   * KV auto-expires terminal entries via expirationTtl, so this is a
+   * defense-in-depth pass that explicitly deletes any terminal tasks
+   * whose created_at is older than the TTL. Returns the count deleted.
+   */
+  async cleanupTerminalTasks(): Promise<number> {
+    const ttlMs = this.terminalTtl * 1000;
+    const cutoff = Date.now() - ttlMs;
+
+    const terminalTasks = await this.listTasks({
+      status: ['completed', 'timeout', 'failed'],
+    });
+
+    let deleted = 0;
+    for (const task of terminalTasks) {
+      if (task.created_at <= cutoff) {
+        await this.deleteTask(task.id);
+        deleted++;
+      }
+    }
+    return deleted;
   }
 }

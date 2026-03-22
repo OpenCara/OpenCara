@@ -7,6 +7,8 @@ export interface Env {
   GITHUB_APP_PRIVATE_KEY: string;
   TASK_STORE: KVNamespace;
   WEB_URL: string;
+  /** TTL in days for terminal tasks (default: 7). Set via wrangler.toml [vars]. */
+  TASK_TTL_DAYS?: string;
 }
 
 /** Hono context variables (set per-request via middleware) */

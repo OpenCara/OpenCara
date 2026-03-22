@@ -9,6 +9,7 @@ compatibility_date = "2024-12-01"
 
 [vars]
 WEB_URL = "https://opencara.com"
+TASK_TTL_DAYS = "7"
 
 [[kv_namespaces]]
 binding = "TASK_STORE"
@@ -23,6 +24,7 @@ name = "opencara-server-dev"
 
 [env.dev.vars]
 WEB_URL = "https://dev.opencara.com"
+TASK_TTL_DAYS = "7"
 
 [[env.dev.kv_namespaces]]
 binding = "TASK_STORE"

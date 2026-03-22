@@ -258,4 +258,77 @@ describe('MemoryTaskStore', () => {
       expect(await store.getTimeoutLastCheck()).toBe(0);
     });
   });
+
+  // ── cleanupTerminalTasks ─────────────────────────────────────
+
+  describe('cleanupTerminalTasks', () => {
+    it('deletes terminal tasks older than default TTL', async () => {
+      const oldTime = Date.now() - 8 * 24 * 60 * 60 * 1000; // 8 days ago
+      await store.createTask(
+        makeTask({ id: 'old-completed', status: 'completed', created_at: oldTime }),
+      );
+      await store.createTask(
+        makeTask({ id: 'old-timeout', status: 'timeout', created_at: oldTime }),
+      );
+      await store.createTask(makeTask({ id: 'old-failed', status: 'failed', created_at: oldTime }));
+
+      const deleted = await store.cleanupTerminalTasks();
+      expect(deleted).toBe(3);
+      expect(await store.getTask('old-completed')).toBeNull();
+      expect(await store.getTask('old-timeout')).toBeNull();
+      expect(await store.getTask('old-failed')).toBeNull();
+    });
+
+    it('does not delete terminal tasks within TTL', async () => {
+      const recentTime = Date.now() - 1 * 24 * 60 * 60 * 1000; // 1 day ago
+      await store.createTask(
+        makeTask({ id: 'recent', status: 'completed', created_at: recentTime }),
+      );
+
+      const deleted = await store.cleanupTerminalTasks();
+      expect(deleted).toBe(0);
+      expect(await store.getTask('recent')).not.toBeNull();
+    });
+
+    it('does not delete active tasks even if old', async () => {
+      const oldTime = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 days ago
+      await store.createTask(makeTask({ id: 'pending', status: 'pending', created_at: oldTime }));
+      await store.createTask(
+        makeTask({ id: 'reviewing', status: 'reviewing', created_at: oldTime }),
+      );
+
+      const deleted = await store.cleanupTerminalTasks();
+      expect(deleted).toBe(0);
+    });
+
+    it('respects custom TTL', async () => {
+      const customStore = new MemoryTaskStore(1); // 1 day TTL
+      const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000; // 2 days ago
+
+      await customStore.createTask(
+        makeTask({ id: 'old', status: 'completed', created_at: oldTime }),
+      );
+
+      const deleted = await customStore.cleanupTerminalTasks();
+      expect(deleted).toBe(1);
+    });
+
+    it('also deletes associated claims and summary locks', async () => {
+      const oldTime = Date.now() - 8 * 24 * 60 * 60 * 1000;
+      await store.createTask(makeTask({ id: 'old', status: 'completed', created_at: oldTime }));
+      await store.createClaim(
+        makeClaim({ id: 'old:agent-1', task_id: 'old', agent_id: 'agent-1' }),
+      );
+      await store.acquireSummaryLock('old', 'agent-1');
+
+      await store.cleanupTerminalTasks();
+      expect(await store.getClaims('old')).toEqual([]);
+      expect(await store.checkSummaryLock('old', 'agent-1')).toBe(false);
+    });
+
+    it('returns 0 when no tasks exist', async () => {
+      const deleted = await store.cleanupTerminalTasks();
+      expect(deleted).toBe(0);
+    });
+  });
 });

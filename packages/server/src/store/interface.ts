@@ -35,4 +35,8 @@ export interface TaskStore {
   // Timeout check throttle (persisted across isolate recycles)
   getTimeoutLastCheck(): Promise<number>;
   setTimeoutLastCheck(timestamp: number): Promise<void>;
+
+  // Cleanup
+  /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
+  cleanupTerminalTasks(): Promise<number>;
 }
