@@ -4,6 +4,7 @@ import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from './types.js';
 import { MemoryDataStore } from './store/memory.js';
 import { KVDataStore } from './store/kv.js';
+import { D1DataStore } from './store/d1.js';
 import type { DataStore } from './store/interface.js';
 import { webhookRoutes } from './routes/webhook.js';
 import { taskRoutes, checkTimeouts } from './routes/tasks.js';
@@ -85,9 +86,10 @@ export function parseTtlDays(env: Env): number {
   return Number.isNaN(parsed) || parsed < 1 ? 7 : parsed;
 }
 
-function createStore(env: Env): DataStore {
+export function createStore(env: Env): DataStore {
   const ttlDays = parseTtlDays(env);
-  // KV → Memory (dev/test). D1 binding (env.DB) prepared but not yet integrated (#309).
+  // D1 (preferred) → KV (fallback) → Memory (dev/test)
+  if (env.DB) return new D1DataStore(env.DB, ttlDays);
   if (env.TASK_STORE) return new KVDataStore(env.TASK_STORE, ttlDays);
   return new MemoryDataStore(ttlDays);
 }
