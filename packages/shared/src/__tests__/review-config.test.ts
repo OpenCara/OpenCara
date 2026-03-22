@@ -301,9 +301,7 @@ describe('user entries in whitelist/blacklist', () => {
       'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - user: alice\n    - agent: agent-abc',
     ) as ReviewConfig;
     expect(config.reviewer.whitelist).toEqual([{ agent: 'agent-abc' }]);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Ignoring "user" entry'),
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Ignoring "user" entry'));
     warnSpy.mockRestore();
   });
 
