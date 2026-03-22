@@ -56,7 +56,6 @@ describe('config', () => {
 
       const config = loadConfig();
 
-      expect(config.apiKey).toBeNull();
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.githubToken).toBeNull();
@@ -67,13 +66,10 @@ describe('config', () => {
 
     it('parses valid config file', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key: cr_test123\nplatform_url: https://custom.dev\n',
-      );
+      vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://custom.dev\n');
 
       const config = loadConfig();
 
-      expect(config.apiKey).toBe('cr_test123');
       expect(config.platformUrl).toBe('https://custom.dev');
     });
 
@@ -94,7 +90,7 @@ describe('config', () => {
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
     });
 
-    it('silently ignores old anthropic_api_key and review_model fields', () => {
+    it('silently ignores old anthropic_api_key, review_model, and api_key fields', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
         'anthropic_api_key: sk-ant-test\nreview_model: claude-opus-4-6\napi_key: cr_test\n',
@@ -103,9 +99,9 @@ describe('config', () => {
       const config = loadConfig();
 
       // Old fields are ignored, no errors thrown
-      expect(config.apiKey).toBe('cr_test');
       expect(config).not.toHaveProperty('anthropicApiKey');
       expect(config).not.toHaveProperty('reviewModel');
+      expect(config).not.toHaveProperty('apiKey');
     });
 
     it('returns defaults for empty config file', () => {
@@ -114,7 +110,6 @@ describe('config', () => {
 
       const config = loadConfig();
 
-      expect(config.apiKey).toBeNull();
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
     });
 
@@ -124,7 +119,6 @@ describe('config', () => {
 
       const config = loadConfig();
 
-      expect(config.apiKey).toBeNull();
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
     });
 
@@ -134,17 +128,7 @@ describe('config', () => {
 
       const config = loadConfig();
 
-      expect(config.apiKey).toBeNull();
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
-    });
-
-    it('handles config with non-string api_key', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: 123\n');
-
-      const config = loadConfig();
-
-      expect(config.apiKey).toBeNull();
     });
 
     it('handles config with non-string platform_url', () => {
@@ -250,7 +234,6 @@ describe('config', () => {
 
   describe('saveConfig', () => {
     const baseConfig = {
-      apiKey: null as string | null,
       platformUrl: 'https://api.dev',
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       githubToken: null as string | null,
@@ -260,15 +243,10 @@ describe('config', () => {
       agents: null as import('../config.js').LocalAgentConfig[] | null,
     };
 
-    it('saves config with API key', () => {
-      saveConfig({ ...baseConfig, apiKey: 'cr_test' });
+    it('saves config with platform_url', () => {
+      saveConfig(baseConfig);
 
       expect(fs.mkdirSync).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true });
-      expect(fs.writeFileSync).toHaveBeenCalledWith(
-        CONFIG_FILE,
-        expect.stringContaining('api_key: cr_test'),
-        { encoding: 'utf-8', mode: 0o600 },
-      );
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         CONFIG_FILE,
         expect.stringContaining('platform_url: https://api.dev'),
@@ -276,19 +254,11 @@ describe('config', () => {
       );
     });
 
-    it('saves config without API key when null', () => {
+    it('does not save api_key, anthropic_api_key or review_model', () => {
       saveConfig(baseConfig);
 
-      expect(fs.writeFileSync).toHaveBeenCalled();
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('api_key');
-      expect(content).toContain('platform_url');
-    });
-
-    it('does not save anthropic_api_key or review_model', () => {
-      saveConfig(baseConfig);
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('anthropic_api_key');
       expect(content).not.toContain('review_model');
     });
@@ -395,7 +365,6 @@ describe('config', () => {
 
     it('saveConfig writes agents when not null', () => {
       saveConfig({
-        apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
@@ -412,7 +381,6 @@ describe('config', () => {
 
     it('saveConfig omits agents when null', () => {
       saveConfig({
-        apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
@@ -481,7 +449,6 @@ agents:
 
     it('round-trips name through save and load', () => {
       saveConfig({
-        apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
@@ -780,7 +747,6 @@ agents:
 
     it('saveConfig persists repos field on agents', () => {
       saveConfig({
-        apiKey: 'cr_test',
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
@@ -830,7 +796,6 @@ agents:
 
     it('saveConfig writes github_token when present', () => {
       saveConfig({
-        apiKey: null,
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: 'ghp_xyz789',
@@ -846,7 +811,6 @@ agents:
 
     it('saveConfig omits github_token when null', () => {
       saveConfig({
-        apiKey: null,
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
@@ -940,7 +904,6 @@ anonymous_agents:
 
     it('saveConfig writes codebase_dir when present', () => {
       saveConfig({
-        apiKey: null,
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
@@ -956,7 +919,6 @@ anonymous_agents:
 
     it('saveConfig omits codebase_dir when null', () => {
       saveConfig({
-        apiKey: null,
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,

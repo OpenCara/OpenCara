@@ -15,7 +15,6 @@ export class ApiClient {
 
   constructor(
     private readonly baseUrl: string,
-    private readonly apiKey: string | null = null,
     debug?: boolean,
   ) {
     this.debug = debug ?? process.env.OPENCARA_DEBUG === '1';
@@ -26,13 +25,9 @@ export class ApiClient {
   }
 
   private headers(): Record<string, string> {
-    const h: Record<string, string> = {
+    return {
       'Content-Type': 'application/json',
     };
-    if (this.apiKey) {
-      h['Authorization'] = `Bearer ${this.apiKey}`;
-    }
-    return h;
   }
 
   async get<T>(path: string): Promise<T> {

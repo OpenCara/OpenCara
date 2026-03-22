@@ -24,7 +24,6 @@ export interface LocalAgentConfig {
 }
 
 export interface CliConfig {
-  apiKey: string | null;
   platformUrl: string;
   maxDiffSizeKb: number;
   githubToken: string | null;
@@ -146,7 +145,6 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
 
 export function loadConfig(): CliConfig {
   const defaults: CliConfig = {
-    apiKey: null,
     platformUrl: DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     githubToken: null,
@@ -168,7 +166,6 @@ export function loadConfig(): CliConfig {
   }
 
   return {
-    apiKey: typeof data.api_key === 'string' ? data.api_key : null,
     platformUrl: typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL,
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
@@ -185,9 +182,6 @@ export function saveConfig(config: CliConfig): void {
   const data: Record<string, unknown> = {
     platform_url: config.platformUrl,
   };
-  if (config.apiKey) {
-    data.api_key = config.apiKey;
-  }
   if (config.githubToken) {
     data.github_token = config.githubToken;
   }
