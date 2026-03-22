@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseTtlDays } from '../index.js';
+import { parseTtlDays, createStore } from '../index.js';
+import { D1DataStore } from '../store/d1.js';
+import { KVDataStore } from '../store/kv.js';
+import { MemoryDataStore } from '../store/memory.js';
 import type { Env } from '../types.js';
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
@@ -52,5 +55,41 @@ describe('scheduled handler', () => {
     // We can't easily test the full scheduled handler without mocking KV,
     // but we verify the export exists and is a function
     expect(typeof handler.scheduled).toBe('function');
+  });
+});
+
+describe('createStore', () => {
+  /** Build an Env with only the specified bindings set. */
+  function makeStoreEnv(bindings: { DB?: D1Database; TASK_STORE?: KVNamespace }): Env {
+    return {
+      GITHUB_WEBHOOK_SECRET: 'test',
+      GITHUB_APP_ID: '123',
+      GITHUB_APP_PRIVATE_KEY: 'key',
+      TASK_STORE: bindings.TASK_STORE as KVNamespace,
+      WEB_URL: 'https://test.com',
+      ...('DB' in bindings ? { DB: bindings.DB } : {}),
+    };
+  }
+
+  it('returns D1DataStore when only DB is present', () => {
+    const store = createStore(makeStoreEnv({ DB: {} as D1Database }));
+    expect(store).toBeInstanceOf(D1DataStore);
+  });
+
+  it('returns KVDataStore when only TASK_STORE is present', () => {
+    const store = createStore(makeStoreEnv({ TASK_STORE: {} as KVNamespace }));
+    expect(store).toBeInstanceOf(KVDataStore);
+  });
+
+  it('returns MemoryDataStore when neither DB nor TASK_STORE is present', () => {
+    const store = createStore(makeStoreEnv({}));
+    expect(store).toBeInstanceOf(MemoryDataStore);
+  });
+
+  it('prefers D1 over KV when both are present', () => {
+    const store = createStore(
+      makeStoreEnv({ DB: {} as D1Database, TASK_STORE: {} as KVNamespace }),
+    );
+    expect(store).toBeInstanceOf(D1DataStore);
   });
 });
