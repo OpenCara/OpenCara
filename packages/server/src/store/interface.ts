@@ -23,6 +23,15 @@ export interface TaskStore {
   setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;
   getAgentLastSeen(agentId: string): Promise<number | null>;
 
+  // Summary lock (prevents duplicate summary claims under KV eventual consistency)
+
+  /** Acquire exclusive summary lock. Idempotent: returns true if same agent already holds it. */
+  acquireSummaryLock(taskId: string, agentId: string): Promise<boolean>;
+  /** Check if the given agent holds the summary lock. */
+  checkSummaryLock(taskId: string, agentId: string): Promise<boolean>;
+  /** Release the summary lock, allowing a new agent to claim the summary role. */
+  releaseSummaryLock(taskId: string): Promise<void>;
+
   // Timeout check throttle (persisted across isolate recycles)
   getTimeoutLastCheck(): Promise<number>;
   setTimeoutLastCheck(timestamp: number): Promise<void>;

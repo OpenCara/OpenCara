@@ -173,6 +173,67 @@ describe('MemoryTaskStore', () => {
     });
   });
 
+  // ── Summary lock ─────────────────────────────────────────
+
+  describe('summary lock', () => {
+    it('acquires lock for first agent', async () => {
+      const result = await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(result).toBe(true);
+    });
+
+    it('rejects second agent when lock is held', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      const result = await store.acquireSummaryLock('task-1', 'agent-b');
+      expect(result).toBe(false);
+    });
+
+    it('is idempotent for same agent', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      const result = await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(result).toBe(true);
+    });
+
+    it('checkSummaryLock returns true for lock holder', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(true);
+    });
+
+    it('checkSummaryLock returns false for non-holder', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.checkSummaryLock('task-1', 'agent-b')).toBe(false);
+    });
+
+    it('checkSummaryLock returns false when no lock exists', async () => {
+      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(false);
+    });
+
+    it('releaseSummaryLock allows new acquisition', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      await store.releaseSummaryLock('task-1');
+      const result = await store.acquireSummaryLock('task-1', 'agent-b');
+      expect(result).toBe(true);
+    });
+
+    it('deleteTask cleans up summary lock', async () => {
+      await store.createTask(makeTask());
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      await store.deleteTask('task-1');
+      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(false);
+    });
+
+    it('reset() clears summary locks', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      store.reset();
+      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(false);
+    });
+
+    it('locks are independent per task', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      const result = await store.acquireSummaryLock('task-2', 'agent-b');
+      expect(result).toBe(true);
+    });
+  });
+
   describe('timeout check throttle', () => {
     it('returns 0 when no timestamp set', async () => {
       expect(await store.getTimeoutLastCheck()).toBe(0);

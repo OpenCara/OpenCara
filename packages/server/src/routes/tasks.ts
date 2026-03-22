@@ -165,6 +165,7 @@ export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
       // Only mark timeout AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
       await store.updateTask(task.id, { status: 'timeout' });
+      await store.releaseSummaryLock(task.id);
     } catch (err) {
       console.error(
         `[task:${task.id}] action=timeout_post_failed error=${err instanceof Error ? err.message : String(err)}`,
@@ -245,12 +246,14 @@ async function postFinalReview(
     await postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.updateTask(taskId, { status: 'completed' });
+    await store.releaseSummaryLock(taskId);
     console.log(`Task ${taskId}: review posted to GitHub`);
   } catch (err) {
     console.error(
       `[agent:${summaryAgentId}] task=${taskId} action=post_review_failed error=${err instanceof Error ? err.message : String(err)}`,
     );
     await store.updateTask(taskId, { status: 'failed' });
+    await store.releaseSummaryLock(taskId);
   }
 }
 
@@ -348,17 +351,13 @@ export function taskRoutes() {
       });
     }
 
-    // Defense-in-depth: check existing claims before creating a summary claim.
-    // The task-level `summary_claimed` flag can be stale due to KV eventual consistency,
-    // so we also check individual claim entries which have a narrower consistency window.
+    // Acquire summary lock to prevent concurrent claims under KV eventual consistency.
+    // Uses a dedicated KV key so only the first agent to write wins.
     if (role === 'summary') {
-      const existingClaims = await store.getClaims(taskId);
-      const existingSummaryClaim = existingClaims.find(
-        (c) => c.role === 'summary' && c.status === 'pending',
-      );
-      if (existingSummaryClaim) {
+      const lockAcquired = await store.acquireSummaryLock(taskId, agent_id);
+      if (!lockAcquired) {
         console.log(
-          `Task ${taskId}: rejecting duplicate summary claim from ${agent_id} — already claimed by ${existingSummaryClaim.agent_id}`,
+          `Task ${taskId}: rejecting duplicate summary claim from ${agent_id} — lock held by another agent`,
         );
         return c.json<ClaimResponse>({
           claimed: false,
@@ -465,6 +464,17 @@ export function taskRoutes() {
     }
 
     if (type === 'summary') {
+      // Verify this agent holds the summary lock before posting to GitHub.
+      // Under concurrent claims, multiple agents may have claimed summary,
+      // but only the lock holder should post the review.
+      const holdsLock = await store.checkSummaryLock(taskId, agent_id);
+      if (!holdsLock) {
+        console.log(
+          `Task ${taskId}: accepting result from ${agent_id} but skipping GitHub post — agent does not hold summary lock`,
+        );
+        return c.json<ResultResponse>({ success: true });
+      }
+
       // Summary submitted — post the final review to GitHub
       // Pass data directly to avoid KV read-after-write staleness
       await postFinalReview(store, c.env, taskId, agent_id, {
@@ -526,6 +536,7 @@ export function taskRoutes() {
         updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
       } else if (claim.role === 'summary') {
         updates.summary_claimed = false;
+        await store.releaseSummaryLock(taskId);
       }
       await store.updateTask(taskId, updates);
     }
@@ -571,6 +582,7 @@ export function taskRoutes() {
         updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
       } else if (claim.role === 'summary') {
         updates.summary_claimed = false;
+        await store.releaseSummaryLock(taskId);
       }
       await store.updateTask(taskId, updates);
     }

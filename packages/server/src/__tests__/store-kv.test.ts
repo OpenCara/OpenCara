@@ -417,6 +417,56 @@ describe('KVTaskStore', () => {
     });
   });
 
+  // ── Summary lock ────────────────────────────────────────────
+
+  describe('summary lock', () => {
+    it('acquires lock for first agent', async () => {
+      expect(await store.acquireSummaryLock('task-1', 'agent-a')).toBe(true);
+    });
+
+    it('rejects second agent when lock is held', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.acquireSummaryLock('task-1', 'agent-b')).toBe(false);
+    });
+
+    it('is idempotent for same agent', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.acquireSummaryLock('task-1', 'agent-a')).toBe(true);
+    });
+
+    it('checkSummaryLock returns true for lock holder', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(true);
+    });
+
+    it('checkSummaryLock returns false for non-holder', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.checkSummaryLock('task-1', 'agent-b')).toBe(false);
+    });
+
+    it('checkSummaryLock returns false when no lock exists', async () => {
+      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(false);
+    });
+
+    it('releaseSummaryLock allows new acquisition', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      await store.releaseSummaryLock('task-1');
+      expect(await store.acquireSummaryLock('task-1', 'agent-b')).toBe(true);
+    });
+
+    it('writes to summary-lock: KV prefix', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      const putCall = kv.putCalls.find((c) => c.key === 'summary-lock:task-1');
+      expect(putCall).toBeDefined();
+      expect(putCall!.value).toBe('agent-a');
+    });
+
+    it('locks are independent per task', async () => {
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      expect(await store.acquireSummaryLock('task-2', 'agent-b')).toBe(true);
+    });
+  });
+
   describe('timeout check throttle', () => {
     it('returns 0 when no timestamp set', async () => {
       expect(await store.getTimeoutLastCheck()).toBe(0);
