@@ -2,7 +2,7 @@
  * Local integration tests — full E2E flows with in-memory store.
  *
  * Mocks only the external boundary (GitHub API via global fetch).
- * Everything else (Hono routing, TaskStore, review parsing, formatting)
+ * Everything else (Hono routing, DataStore, review parsing, formatting)
  * runs for real.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
