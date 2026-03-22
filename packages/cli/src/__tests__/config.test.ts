@@ -975,6 +975,22 @@ agents:
         const config = loadConfig();
         expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       });
+
+      it('rejects non-HTTP URL schemes', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: file:///etc/passwd\n');
+
+        expect(() => loadConfig()).toThrow(ConfigValidationError);
+        expect(() => loadConfig()).toThrow('is not a valid URL');
+      });
+
+      it('accepts http URL', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: http://localhost:8787\n');
+
+        const config = loadConfig();
+        expect(config.platformUrl).toBe('http://localhost:8787');
+      });
     });
 
     describe('numeric bounds validation', () => {
@@ -1084,6 +1100,21 @@ agents:
 
         const config = loadConfig();
         expect(config.agents).toHaveLength(4);
+      });
+
+      it('shows migration hint for claude-code tool name', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude-code
+`);
+
+        const config = loadConfig();
+        expect(config.agents).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('did you mean "claude"?'));
+        warnSpy.mockRestore();
       });
 
       it('warning message includes known tool names', () => {

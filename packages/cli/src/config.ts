@@ -123,8 +123,9 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     }
     if (!KNOWN_TOOL_NAMES.has(obj.tool)) {
       const toolNames = [...KNOWN_TOOL_NAMES].join(', ');
+      const hint = obj.tool === 'claude-code' ? ' (did you mean "claude"?)' : '';
       console.warn(
-        `\u26a0 Config warning: agents[${i}].tool "${obj.tool}" not in registry (known: ${toolNames}), skipping agent`,
+        `\u26a0 Config warning: agents[${i}].tool "${obj.tool}" not in registry (known: ${toolNames})${hint}, skipping agent`,
       );
       continue;
     }
@@ -142,21 +143,36 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
   return agents;
 }
 
-function isValidUrl(value: string): boolean {
+function isValidHttpUrl(value: string): boolean {
   try {
-    new URL(value);
-    return true;
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
   } catch {
     return false;
   }
 }
 
+interface ValidatedOverrides {
+  maxDiffSizeKb?: number;
+  maxConsecutiveErrors?: number;
+}
+
 /**
  * Validate parsed config data. Warns for optional field issues, throws for required field errors.
+ * Returns corrected values for any invalid optional fields instead of mutating the input.
  */
-function validateConfigData(data: Record<string, unknown>, envPlatformUrl: string | null): void {
+function validateConfigData(
+  data: Record<string, unknown>,
+  envPlatformUrl: string | null,
+): ValidatedOverrides {
+  const overrides: ValidatedOverrides = {};
+
   // Validate platform_url — only check the file value if env is not overriding
-  if (!envPlatformUrl && typeof data.platform_url === 'string' && !isValidUrl(data.platform_url)) {
+  if (
+    !envPlatformUrl &&
+    typeof data.platform_url === 'string' &&
+    !isValidHttpUrl(data.platform_url)
+  ) {
     throw new ConfigValidationError(
       `\u2717 Config error: platform_url "${data.platform_url}" is not a valid URL`,
     );
@@ -167,15 +183,17 @@ function validateConfigData(data: Record<string, unknown>, envPlatformUrl: strin
     console.warn(
       `\u26a0 Config warning: max_diff_size_kb must be > 0, got ${data.max_diff_size_kb}, using default (${DEFAULT_MAX_DIFF_SIZE_KB})`,
     );
-    data.max_diff_size_kb = DEFAULT_MAX_DIFF_SIZE_KB;
+    overrides.maxDiffSizeKb = DEFAULT_MAX_DIFF_SIZE_KB;
   }
 
   if (typeof data.max_consecutive_errors === 'number' && data.max_consecutive_errors <= 0) {
     console.warn(
       `\u26a0 Config warning: max_consecutive_errors must be > 0, got ${data.max_consecutive_errors}, using default (${DEFAULT_MAX_CONSECUTIVE_ERRORS})`,
     );
-    data.max_consecutive_errors = DEFAULT_MAX_CONSECUTIVE_ERRORS;
+    overrides.maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS;
   }
+
+  return overrides;
 }
 
 export function loadConfig(): CliConfig {
@@ -202,18 +220,22 @@ export function loadConfig(): CliConfig {
     return defaults;
   }
 
-  validateConfigData(data, envPlatformUrl);
+  const overrides = validateConfigData(data, envPlatformUrl);
 
   return {
     platformUrl:
       envPlatformUrl ||
       (typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL),
     maxDiffSizeKb:
-      typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
+      overrides.maxDiffSizeKb ??
+      (typeof data.max_diff_size_kb === 'number'
+        ? data.max_diff_size_kb
+        : DEFAULT_MAX_DIFF_SIZE_KB),
     maxConsecutiveErrors:
-      typeof data.max_consecutive_errors === 'number'
+      overrides.maxConsecutiveErrors ??
+      (typeof data.max_consecutive_errors === 'number'
         ? data.max_consecutive_errors
-        : DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        : DEFAULT_MAX_CONSECUTIVE_ERRORS),
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
