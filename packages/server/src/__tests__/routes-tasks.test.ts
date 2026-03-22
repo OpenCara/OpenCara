@@ -7,6 +7,7 @@ import {
   PREFERRED_SYNTH_GRACE_PERIOD_MS,
   TIMEOUT_CHECK_INTERVAL_MS,
 } from '../routes/tasks.js';
+import { resetRateLimits } from '../middleware/rate-limit.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -43,6 +44,7 @@ describe('Task Routes', () => {
 
   beforeEach(() => {
     resetTimeoutThrottle();
+    resetRateLimits();
     store = new MemoryTaskStore();
     app = createApp(store);
   });
@@ -147,6 +149,39 @@ describe('Task Routes', () => {
       const body = await res.json();
       expect(body.tasks).toHaveLength(1);
       expect(body.tasks[0].role).toBe('summary');
+    });
+  });
+
+  // ── Rate Limiting ────────────────────────────────────────
+
+  describe('rate limiting', () => {
+    it('returns 429 when poll rate limit exceeded', async () => {
+      // POLL_RATE_LIMIT is 12 requests per 60s
+      for (let i = 0; i < 12; i++) {
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'spam-agent' });
+        expect(res.status).toBe(200);
+      }
+      // 13th request should be rate limited
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'spam-agent' });
+      expect(res.status).toBe(429);
+      const body = await res.json();
+      expect(body.error).toBe('Rate limit exceeded');
+      expect(res.headers.get('Retry-After')).toBeDefined();
+    });
+
+    it('does not rate limit different agents', async () => {
+      for (let i = 0; i < 12; i++) {
+        await request('POST', '/api/tasks/poll', { agent_id: 'agent-a' });
+      }
+      // agent-b should still be allowed
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-b' });
+      expect(res.status).toBe(200);
+    });
+
+    it('allows requests without agent_id to pass through to handler', async () => {
+      // Without agent_id, the rate limiter skips (lets handler return 400)
+      const res = await request('POST', '/api/tasks/poll', {});
+      expect(res.status).toBe(400);
     });
   });
 

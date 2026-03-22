@@ -5,6 +5,7 @@ import type { TaskStore } from '../store/interface.js';
 import { getInstallationToken } from '../github/app.js';
 import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
+import { rateLimitByIP } from '../middleware/rate-limit.js';
 
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
@@ -140,7 +141,7 @@ export async function createTaskForPR(
 export function webhookRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-  app.post('/webhook/github', async (c) => {
+  app.post('/webhook/github', rateLimitByIP({ maxRequests: 60, windowMs: 60_000 }), async (c) => {
     const store = c.get('store');
     const body = await c.req.text();
     const signature = c.req.header('X-Hub-Signature-256') ?? null;
