@@ -105,7 +105,9 @@ describe('safeParseJson', () => {
   it('logs a warning on malformed JSON', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     safeParseJson('bad');
-    expect(warnSpy).toHaveBeenCalledWith('KV: corrupted JSON entry, returning fallback');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('KV: corrupted JSON entry, returning fallback'),
+    );
     warnSpy.mockRestore();
   });
 });
@@ -244,7 +246,7 @@ describe('KVTaskStore', () => {
       expect(claims).toHaveLength(1);
       expect(claims[0].agent_id).toBe('a1');
       expect(warnSpy).toHaveBeenCalledWith(
-        'KV: skipping corrupted claim entry at claim:task-1:bad',
+        expect.stringContaining('KV: skipping corrupted claim entry'),
       );
       warnSpy.mockRestore();
     });
@@ -273,7 +275,7 @@ describe('KVTaskStore', () => {
       const putCallsForKey = kv.putCalls.filter((c) => c.key === 'claim:task-1:agent-1');
       expect(putCallsForKey).toHaveLength(0);
       expect(warnSpy).toHaveBeenCalledWith(
-        'KV: corrupted claim entry claim:task-1:agent-1, skipping update',
+        expect.stringContaining('KV: corrupted claim entry, skipping update'),
       );
       warnSpy.mockRestore();
     });

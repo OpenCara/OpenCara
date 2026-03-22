@@ -1,6 +1,7 @@
 import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
 import { githubFetch } from './fetch.js';
 import { postPrComment } from './reviews.js';
+import { createLogger } from '../logger.js';
 
 /**
  * Fetch the .review.yml file from a repository at a specific ref.
@@ -56,7 +57,10 @@ export async function fetchPrDetails(
   );
 
   if (!response.ok) {
-    console.error(`Failed to fetch PR details: ${response.status} ${response.statusText}`);
+    createLogger().error('Failed to fetch PR details', {
+      status: response.status,
+      statusText: response.statusText,
+    });
     return null;
   }
 
@@ -74,22 +78,27 @@ export async function loadReviewConfig(
   prNumber: number,
   token: string,
 ): Promise<{ config: ReviewConfig; parseError: boolean }> {
+  const logger = createLogger();
   let configYaml: string | null;
   try {
     configYaml = await fetchReviewConfig(owner, repo, baseRef, token);
   } catch (err) {
-    console.error('Failed to fetch .review.yml:', err);
+    logger.error('Failed to fetch .review.yml', {
+      owner,
+      repo,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
   if (configYaml === null) {
-    console.log(`No .review.yml found in ${owner}/${repo} — using default review config`);
+    logger.info('No .review.yml found — using default review config', { owner, repo });
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
   const parsed = parseReviewConfig(configYaml);
   if ('error' in parsed) {
-    console.log(`.review.yml parse error: ${parsed.error}`);
+    logger.info('.review.yml parse error', { error: parsed.error });
     try {
       await postPrComment(
         owner,
@@ -99,7 +108,9 @@ export async function loadReviewConfig(
         token,
       );
     } catch (err) {
-      console.error('Failed to post error comment:', err);
+      logger.error('Failed to post error comment', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
   }

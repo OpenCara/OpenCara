@@ -20,6 +20,7 @@ export function testRoutes() {
    */
   app.post('/test/events/pr', async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const body = await c.req.json<{
       owner?: string;
       repo?: string;
@@ -58,6 +59,7 @@ export function testRoutes() {
       headRef,
       config,
       body.private ?? false,
+      logger,
     );
 
     if (!taskId) {

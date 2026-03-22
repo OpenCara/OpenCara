@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ReviewConfig } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
+import type { Logger } from '../logger.js';
 import { getInstallationToken } from '../github/app.js';
 import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
@@ -102,6 +103,7 @@ export async function createTaskForPR(
   headRef: string,
   config: ReviewConfig,
   isPrivate: boolean,
+  logger: Logger,
 ): Promise<string | null> {
   // Check for existing active task on this PR (dedup guard)
   const activeTasks = await store.listTasks({ status: ['pending', 'reviewing'] });
@@ -109,9 +111,12 @@ export async function createTaskForPR(
     (t) => t.owner === owner && t.repo === repo && t.pr_number === prNumber,
   );
   if (duplicate) {
-    console.log(
-      `Task ${duplicate.id} already exists for PR #${prNumber} on ${owner}/${repo} — skipping`,
-    );
+    logger.info('Task already exists for PR — skipping', {
+      taskId: duplicate.id,
+      owner,
+      repo,
+      prNumber,
+    });
     return null;
   }
 
@@ -137,7 +142,7 @@ export async function createTaskForPR(
     created_at: Date.now(),
   });
 
-  console.log(`Task ${taskId} created for PR #${prNumber} on ${owner}/${repo}`);
+  logger.info('Task created', { taskId, owner, repo, prNumber });
   return taskId;
 }
 
@@ -146,6 +151,7 @@ export function webhookRoutes() {
 
   app.post('/webhook/github', rateLimitByIP({ maxRequests: 60, windowMs: 60_000 }), async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const body = await c.req.text();
     const signature = c.req.header('X-Hub-Signature-256') ?? null;
 
@@ -166,14 +172,25 @@ export function webhookRoutes() {
 
     switch (event) {
       case 'pull_request':
-        return handlePullRequest(c.env, store, payload as unknown as PullRequestPayload, action);
+        return handlePullRequest(
+          c.env,
+          store,
+          payload as unknown as PullRequestPayload,
+          action,
+          logger,
+        );
       case 'issue_comment':
         if (action === 'created') {
-          return handleIssueComment(c.env, store, payload as unknown as IssueCommentPayload);
+          return handleIssueComment(
+            c.env,
+            store,
+            payload as unknown as IssueCommentPayload,
+            logger,
+          );
         }
         break;
       case 'installation':
-        console.log(`Installation event: ${action}`);
+        logger.info('Installation event', { action });
         break;
     }
 
@@ -188,11 +205,12 @@ async function handlePullRequest(
   store: TaskStore,
   payload: PullRequestPayload,
   action: string,
+  logger: Logger,
 ): Promise<Response> {
   const { installation, repository, pull_request } = payload;
 
   if (!installation) {
-    console.log('PR event without installation — skipping');
+    logger.info('PR event without installation — skipping');
     return new Response('OK', { status: 200 });
   }
 
@@ -201,13 +219,22 @@ async function handlePullRequest(
   const prNumber = pull_request.number;
   const headRef = pull_request.head.ref;
 
-  console.log(`PR #${prNumber} on ${owner}/${repo}: action=${action}, head=${headRef}`);
+  logger.info('Webhook received', {
+    event: 'pull_request',
+    owner,
+    repo,
+    prNumber,
+    action,
+    headRef,
+  });
 
   let token: string;
   try {
     token = await getInstallationToken(installation.id, env);
   } catch (err) {
-    console.error('Failed to get installation token:', err);
+    logger.error('Failed to get installation token', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return new Response('OK', { status: 200 });
   }
 
@@ -215,14 +242,16 @@ async function handlePullRequest(
   const { config, parseError } = await loadReviewConfig(owner, repo, baseRef, prNumber, token);
 
   if (parseError) {
-    console.log(`PR #${prNumber}: aborting due to .review.yml parse error`);
+    logger.info('Aborting due to .review.yml parse error', { prNumber });
     return new Response('OK', { status: 200 });
   }
 
   if (!config.trigger.on.includes(action)) {
-    console.log(
-      `PR #${prNumber}: action "${action}" not in trigger.on [${config.trigger.on.join(', ')}] — skipping`,
-    );
+    logger.info('Action not in trigger.on — skipping', {
+      prNumber,
+      action,
+      triggerOn: config.trigger.on,
+    });
     return new Response('OK', { status: 200 });
   }
 
@@ -232,7 +261,7 @@ async function handlePullRequest(
     headRef,
   });
   if (skipReason) {
-    console.log(`PR #${prNumber}: skipped — ${skipReason}`);
+    logger.info('PR skipped', { prNumber, reason: skipReason });
     return new Response('OK', { status: 200 });
   }
 
@@ -248,6 +277,7 @@ async function handlePullRequest(
     headRef,
     config,
     repository.private ?? false,
+    logger,
   );
 
   return new Response('OK', { status: 200 });
@@ -257,6 +287,7 @@ async function handleIssueComment(
   env: Env,
   store: TaskStore,
   payload: IssueCommentPayload,
+  logger: Logger,
 ): Promise<Response> {
   const { installation, repository, issue, comment } = payload;
 
@@ -265,7 +296,7 @@ async function handleIssueComment(
   }
 
   if (!installation) {
-    console.log('Comment event without installation — skipping');
+    logger.info('Comment event without installation — skipping');
     return new Response('OK', { status: 200 });
   }
 
@@ -277,13 +308,15 @@ async function handleIssueComment(
   try {
     token = await getInstallationToken(installation.id, env);
   } catch (err) {
-    console.error('Failed to get installation token:', err);
+    logger.error('Failed to get installation token', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return new Response('OK', { status: 200 });
   }
 
   const pr = await fetchPrDetails(owner, repo, prNumber, token);
   if (!pr) {
-    console.error(`Failed to fetch PR #${prNumber} details`);
+    logger.error('Failed to fetch PR details', { owner, repo, prNumber });
     return new Response('OK', { status: 200 });
   }
 
@@ -295,15 +328,21 @@ async function handleIssueComment(
   }
 
   if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
-    console.log(
-      `${triggerCommand} ignored from @${comment.user.login} (${comment.author_association}) — not a trusted contributor`,
-    );
+    logger.info('Trigger command ignored — not a trusted contributor', {
+      command: triggerCommand,
+      user: comment.user.login,
+      association: comment.author_association,
+    });
     return new Response('OK', { status: 200 });
   }
 
-  console.log(
-    `${triggerCommand} triggered by @${comment.user.login} on PR #${prNumber} (${owner}/${repo})`,
-  );
+  logger.info('Trigger command received', {
+    command: triggerCommand,
+    user: comment.user.login,
+    owner,
+    repo,
+    prNumber,
+  });
 
   await createTaskForPR(
     store,
@@ -317,6 +356,7 @@ async function handleIssueComment(
     pr.head.ref,
     config,
     repository.private ?? false,
+    logger,
   );
 
   return new Response('OK', { status: 200 });

@@ -15,6 +15,8 @@ import type {
 } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { TaskStore } from '../store/interface.js';
+import type { Logger } from '../logger.js';
+import { createLogger } from '../logger.js';
 import { getInstallationToken } from '../github/app.js';
 import { postPrComment } from '../github/reviews.js';
 import {
@@ -120,6 +122,7 @@ async function maybeCheckTimeouts(store: TaskStore, env: Env): Promise<void> {
  * Exported for use by the scheduled event handler (Cron Trigger).
  */
 export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
+  const logger = createLogger();
   const now = Date.now();
   const expired = await store.listTasks({
     status: ['pending', 'reviewing'],
@@ -127,14 +130,24 @@ export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
   });
 
   for (const task of expired) {
-    console.log(`Task ${task.id} timed out (PR #${task.pr_number} on ${task.owner}/${task.repo})`);
+    logger.info('Task timed out', {
+      taskId: task.id,
+      owner: task.owner,
+      repo: task.repo,
+      prNumber: task.pr_number,
+    });
 
     // Post fallback: any completed reviews as individual comments
     const claims = await store.getClaims(task.id);
 
     // Log structured errors for each pending claim that timed out
     for (const claim of claims.filter((c) => c.status === 'pending')) {
-      console.error(`[agent:${claim.agent_id}] task=${task.id} action=timeout role=${claim.role}`);
+      logger.error('Agent claim timed out', {
+        agentId: claim.agent_id,
+        taskId: task.id,
+        action: 'timeout',
+        role: claim.role,
+      });
     }
     const completedReviews = claims.filter(
       (c) => c.role === 'review' && c.status === 'completed' && c.review_text,
@@ -168,9 +181,11 @@ export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
       await store.updateTask(task.id, { status: 'timeout' });
       await store.releaseSummaryLock(task.id);
     } catch (err) {
-      console.error(
-        `[task:${task.id}] action=timeout_post_failed error=${err instanceof Error ? err.message : String(err)}`,
-      );
+      logger.error('Timeout post failed', {
+        taskId: task.id,
+        action: 'timeout_post_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 }
@@ -197,6 +212,7 @@ async function postFinalReview(
   taskId: string,
   summaryAgentId: string,
   summaryData: SummaryData,
+  logger: Logger,
 ): Promise<void> {
   const task = await store.getTask(taskId);
   if (!task) return;
@@ -204,18 +220,20 @@ async function postFinalReview(
   // Defense-in-depth: if task is already completed, another agent already posted.
   // This prevents duplicate GitHub comments even if duplicate summary claims slip through.
   if (task.status === 'completed') {
-    console.log(
-      `Task ${taskId}: skipping duplicate post from ${summaryAgentId} — task already completed`,
-    );
+    logger.info('Skipping duplicate post — task already completed', {
+      taskId,
+      agentId: summaryAgentId,
+    });
     return;
   }
 
   // Observability only: check if KV has propagated the write yet (does not affect review posting)
   const summaryClaim = await store.getClaim(`${taskId}:${summaryAgentId}`);
   if (!summaryClaim?.review_text) {
-    console.warn(
-      `Task ${taskId}: KV claim for ${summaryAgentId} returned stale data (no review_text) — using directly passed summary data`,
-    );
+    logger.warn('KV claim returned stale data — using directly passed summary data', {
+      taskId,
+      agentId: summaryAgentId,
+    });
   }
 
   const claims = await store.getClaims(taskId);
@@ -248,11 +266,19 @@ async function postFinalReview(
 
     await store.updateTask(taskId, { status: 'completed' });
     await store.releaseSummaryLock(taskId);
-    console.log(`Task ${taskId}: review posted to GitHub`);
+    logger.info('Review posted to GitHub', {
+      taskId,
+      owner: task.owner,
+      repo: task.repo,
+      prNumber: task.pr_number,
+    });
   } catch (err) {
-    console.error(
-      `[agent:${summaryAgentId}] task=${taskId} action=post_review_failed error=${err instanceof Error ? err.message : String(err)}`,
-    );
+    logger.error('Failed to post review to GitHub', {
+      agentId: summaryAgentId,
+      taskId,
+      action: 'post_review_failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
     await store.updateTask(taskId, { status: 'failed' });
     await store.releaseSummaryLock(taskId);
   }
@@ -321,6 +347,7 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/claim', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ClaimRequest>();
     const { agent_id, role, model, tool } = body;
@@ -369,9 +396,10 @@ export function taskRoutes() {
     if (role === 'summary') {
       const lockAcquired = await store.acquireSummaryLock(taskId, agent_id);
       if (!lockAcquired) {
-        console.log(
-          `Task ${taskId}: rejecting duplicate summary claim from ${agent_id} — lock held by another agent`,
-        );
+        logger.info('Rejecting duplicate summary claim — lock held by another agent', {
+          taskId,
+          agentId: agent_id,
+        });
         return apiError(c, 409, 'SUMMARY_LOCKED', 'Summary already claimed by another agent');
       }
     }
@@ -426,6 +454,7 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/result', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ResultRequest>();
     const { agent_id, type, review_text, verdict, tokens_used } = body;
@@ -438,21 +467,26 @@ export function taskRoutes() {
     const claim = await store.getClaim(claimId);
 
     if (!claim) {
-      console.error(`[agent:${agent_id}] task=${taskId} action=result_rejected reason=no_claim`);
+      logger.error('Result rejected — no claim found', { agentId: agent_id, taskId });
       return apiError(c, 404, 'CLAIM_NOT_FOUND', 'No claim found for this agent on this task');
     }
 
     if (claim.status !== 'pending') {
-      console.error(
-        `[agent:${agent_id}] task=${taskId} action=result_rejected reason=claim_${claim.status}`,
-      );
+      logger.error('Result rejected — claim not pending', {
+        agentId: agent_id,
+        taskId,
+        claimStatus: claim.status,
+      });
       return apiError(c, 409, 'CLAIM_CONFLICT', `Claim already ${claim.status}`);
     }
 
     if (claim.role !== type) {
-      console.error(
-        `[agent:${agent_id}] task=${taskId} action=result_rejected reason=role_mismatch claim_role=${claim.role} submission_type=${type}`,
-      );
+      logger.error('Result rejected — role mismatch', {
+        agentId: agent_id,
+        taskId,
+        claimRole: claim.role,
+        submissionType: type,
+      });
       return apiError(
         c,
         400,
@@ -481,19 +515,30 @@ export function taskRoutes() {
       // but only the lock holder should post the review.
       const holdsLock = await store.checkSummaryLock(taskId, agent_id);
       if (!holdsLock) {
-        console.log(
-          `Task ${taskId}: accepting result from ${agent_id} but skipping GitHub post — agent does not hold summary lock`,
+        logger.info(
+          'Accepting result but skipping GitHub post — agent does not hold summary lock',
+          {
+            taskId,
+            agentId: agent_id,
+          },
         );
         return c.json<ResultResponse>({ success: true });
       }
 
       // Summary submitted — post the final review to GitHub
       // Pass data directly to avoid KV read-after-write staleness
-      await postFinalReview(store, c.env, taskId, agent_id, {
-        review_text,
-        model: claim.model,
-        tool: claim.tool,
-      });
+      await postFinalReview(
+        store,
+        c.env,
+        taskId,
+        agent_id,
+        {
+          review_text,
+          model: claim.model,
+          tool: claim.tool,
+        },
+        logger,
+      );
     } else {
       // Review submitted — increment completed_reviews counter on task
       const newCompleted = (task.completed_reviews ?? 0) + 1;
@@ -503,9 +548,10 @@ export function taskRoutes() {
       if (reviewSlots > 0 && newCompleted >= reviewSlots) {
         // Set reviews_completed_at for preferred synthesizer grace period
         taskUpdates.reviews_completed_at = Date.now();
-        console.log(
-          `Task ${taskId}: all ${reviewSlots} reviews complete, summary slot now available`,
-        );
+        logger.info('All reviews complete, summary slot now available', {
+          taskId,
+          reviewSlots,
+        });
       }
       await store.updateTask(taskId, taskUpdates);
     }
@@ -517,6 +563,7 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/reject', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<RejectRequest>();
     const { agent_id, reason } = body;
@@ -553,9 +600,13 @@ export function taskRoutes() {
       await store.updateTask(taskId, updates);
     }
 
-    console.error(
-      `[agent:${agent_id}] task=${taskId} action=reject role=${claim.role} reason=${reason ?? 'none'}`,
-    );
+    logger.error('Agent rejected task', {
+      agentId: agent_id,
+      taskId,
+      action: 'reject',
+      role: claim.role,
+      reason: reason ?? 'none',
+    });
     return c.json({ success: true });
   });
 
@@ -563,6 +614,7 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/error', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ErrorRequest>();
     const { agent_id, error } = body;
@@ -599,9 +651,13 @@ export function taskRoutes() {
       await store.updateTask(taskId, updates);
     }
 
-    console.error(
-      `[agent:${agent_id}] task=${taskId} action=error role=${claim.role} error=${error ?? 'unknown'}`,
-    );
+    logger.error('Agent reported error', {
+      agentId: agent_id,
+      taskId,
+      action: 'error',
+      role: claim.role,
+      error: error ?? 'unknown',
+    });
     return c.json({ success: true });
   });
 

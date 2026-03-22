@@ -9,6 +9,7 @@ import { webhookRoutes } from '../../routes/webhook.js';
 import { taskRoutes } from '../../routes/tasks.js';
 import { registryRoutes } from '../../routes/registry.js';
 import { testRoutes } from '../../routes/test.js';
+import { requestIdMiddleware } from '../../middleware/request-id.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
@@ -19,6 +20,9 @@ type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
  */
 export function createTestApp(store: TaskStore): HonoApp {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
+
+  // Generate request ID and attach structured logger
+  app.use('*', requestIdMiddleware());
 
   // Inject store
   app.use('*', async (c, next) => {
@@ -44,7 +48,11 @@ export function createTestApp(store: TaskStore): HonoApp {
 
   // Error handler
   app.onError((err, c) => {
-    console.error('Unhandled error:', err);
+    const logger = c.get('logger');
+    logger.error('Unhandled error', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     return c.json<ErrorResponse>(
       { error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } },
       500,
