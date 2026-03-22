@@ -80,7 +80,7 @@ export class FakeServer {
 
       // 1. CLI API calls → route to Hono app
       if (url.startsWith(FAKE_SERVER_URL)) {
-        // Reset rate limiter before each request to prevent test pollution
+        // Reset rate limiter before each request so rate limits never fire during CLI tests
         resetRateLimits();
         const path = url.slice(FAKE_SERVER_URL.length);
         const response = await app.request(
