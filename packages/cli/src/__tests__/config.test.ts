@@ -19,6 +19,7 @@ import {
   resolveCodebaseDir,
   resolveGithubToken,
   RepoConfigError,
+  ConfigValidationError,
   CONFIG_DIR,
   CONFIG_FILE,
   DEFAULT_PLATFORM_URL,
@@ -344,12 +345,12 @@ describe('config', () => {
     it('parses agents with model, tool, and command', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key: cr_test\nagents:\n  - model: claude-opus-4-6\n    tool: claude-code\n    command: claude -p\n',
+        'api_key: cr_test\nagents:\n  - model: claude-opus-4-6\n    tool: claude\n    command: claude -p\n',
       );
 
       const config = loadConfig();
       expect(config.agents).toEqual([
-        { model: 'claude-opus-4-6', tool: 'claude-code', command: 'claude -p' },
+        { model: 'claude-opus-4-6', tool: 'claude', command: 'claude -p' },
       ]);
     });
 
@@ -367,11 +368,11 @@ describe('config', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key: cr_test\nagents:\n  - model: valid\n    tool: ok\n  - broken: true\n',
+        'agents:\n  - model: valid\n    tool: claude\n  - broken: true\n',
       );
 
       const config = loadConfig();
-      expect(config.agents).toEqual([{ model: 'valid', tool: 'ok' }]);
+      expect(config.agents).toEqual([{ model: 'valid', tool: 'claude' }]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('agents[1]'));
       warnSpy.mockRestore();
     });
@@ -415,7 +416,7 @@ describe('config', () => {
 agents:
   - name: SecurityBot
     model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
   - model: glm-5
     tool: qwen
 `);
@@ -433,7 +434,7 @@ agents:
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,
-        agents: [{ model: 'claude-sonnet-4-6', tool: 'claude-code', name: 'MyBot' }],
+        agents: [{ model: 'claude-sonnet-4-6', tool: 'claude', name: 'MyBot' }],
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
@@ -450,7 +451,7 @@ agents:
     tool: codex
     review_only: true
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -463,7 +464,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     review_only: false
 `);
       const config = loadConfig();
@@ -477,7 +478,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     router: true
   - model: glm-5
     tool: qwen
@@ -493,7 +494,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     router: false
 `);
       const config = loadConfig();
@@ -507,7 +508,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toBeUndefined();
@@ -518,7 +519,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: all
 `);
@@ -531,7 +532,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: own
 `);
@@ -544,7 +545,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: whitelist
       list:
@@ -563,7 +564,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: blacklist
       list:
@@ -581,7 +582,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: invalid
 `);
@@ -594,7 +595,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       list:
         - foo/bar
@@ -608,7 +609,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos: just-a-string
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
@@ -620,7 +621,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: whitelist
 `);
@@ -633,7 +634,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: blacklist
       list: []
@@ -647,7 +648,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: whitelist
       list:
@@ -662,7 +663,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: whitelist
       list:
@@ -677,7 +678,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: all
 `);
@@ -691,7 +692,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     repos:
       mode: own
 `);
@@ -711,7 +712,7 @@ agents:
         agents: [
           {
             model: 'claude-opus-4-6',
-            tool: 'claude-code',
+            tool: 'claude',
             repos: { mode: 'whitelist', list: ['org/repo'] },
           },
         ],
@@ -784,7 +785,7 @@ agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     github_token: ghp_agent1
   - model: glm-5
     tool: qwen
@@ -892,7 +893,7 @@ anonymous_agents:
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
-    tool: claude-code
+    tool: claude
     codebase_dir: ~/repos
   - model: glm-5
     tool: qwen
@@ -936,6 +937,206 @@ agents:
 
     it('returns null for empty string agent dir with null global', () => {
       expect(resolveCodebaseDir('', null)).toBeNull();
+    });
+  });
+
+  describe('config validation', () => {
+    describe('platform_url validation', () => {
+      it('throws ConfigValidationError for invalid URL', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: not-a-url\n');
+
+        expect(() => loadConfig()).toThrow(ConfigValidationError);
+        expect(() => loadConfig()).toThrow('platform_url "not-a-url" is not a valid URL');
+      });
+
+      it('accepts valid URL', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://example.com\n');
+
+        const config = loadConfig();
+        expect(config.platformUrl).toBe('https://example.com');
+      });
+
+      it('skips URL validation when env var overrides', () => {
+        process.env.OPENCARA_PLATFORM_URL = 'https://env.dev';
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: not-a-url\n');
+
+        const config = loadConfig();
+        expect(config.platformUrl).toBe('https://env.dev');
+        delete process.env.OPENCARA_PLATFORM_URL;
+      });
+
+      it('does not throw for non-string platform_url (falls back to default)', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: 123\n');
+
+        const config = loadConfig();
+        expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
+      });
+    });
+
+    describe('numeric bounds validation', () => {
+      it('warns and uses default for max_diff_size_kb <= 0', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: -5\n');
+
+        const config = loadConfig();
+        expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_diff_size_kb must be > 0'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('warns and uses default for max_diff_size_kb = 0', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: 0\n');
+
+        const config = loadConfig();
+        expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_diff_size_kb must be > 0'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('accepts positive max_diff_size_kb', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: 200\n');
+
+        const config = loadConfig();
+        expect(config.maxDiffSizeKb).toBe(200);
+      });
+
+      it('warns and uses default for max_consecutive_errors <= 0', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: -1\n');
+
+        const config = loadConfig();
+        expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_consecutive_errors must be > 0'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('warns and uses default for max_consecutive_errors = 0', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: 0\n');
+
+        const config = loadConfig();
+        expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_consecutive_errors must be > 0'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('accepts positive max_consecutive_errors', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: 5\n');
+
+        const config = loadConfig();
+        expect(config.maxConsecutiveErrors).toBe(5);
+      });
+    });
+
+    describe('agent tool validation', () => {
+      it('skips agent with unrecognized tool and warns', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: some-model
+    tool: invalid-tool
+  - model: claude-opus-4-6
+    tool: claude
+`);
+
+        const config = loadConfig();
+        expect(config.agents).toHaveLength(1);
+        expect(config.agents![0].tool).toBe('claude');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('agents[0].tool "invalid-tool" not in registry'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('accepts all valid registry tools', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+  - model: gpt-5-codex
+    tool: codex
+  - model: gemini-2.5-pro
+    tool: gemini
+  - model: qwen3.5-plus
+    tool: qwen
+`);
+
+        const config = loadConfig();
+        expect(config.agents).toHaveLength(4);
+      });
+
+      it('warning message includes known tool names', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: m
+    tool: unknown
+`);
+
+        loadConfig();
+        const msg = warnSpy.mock.calls[0][0] as string;
+        expect(msg).toContain('claude');
+        expect(msg).toContain('codex');
+        expect(msg).toContain('gemini');
+        expect(msg).toContain('qwen');
+        warnSpy.mockRestore();
+      });
+    });
+
+    describe('agent entry validation', () => {
+      it('warns with correct format for non-object agent entry', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - just a string
+`);
+
+        const config = loadConfig();
+        expect(config.agents).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Config warning: agents[0] is not an object'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('warns with correct format for missing model/tool', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - name: incomplete
+`);
+
+        const config = loadConfig();
+        expect(config.agents).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Config warning: agents[0] missing required model/tool fields'),
+        );
+        warnSpy.mockRestore();
+      });
     });
   });
 });
