@@ -98,7 +98,11 @@ describe('E2E Agent Scenarios', () => {
 
   function startTestAgent(
     agentId: string,
-    opts?: { reviewOnly?: boolean; maxDiffSizeKb?: number },
+    opts?: {
+      reviewOnly?: boolean;
+      maxDiffSizeKb?: number;
+      repoConfig?: import('@opencara/shared').RepoConfig;
+    },
   ): Promise<void> {
     const deps = makeDeps(agentId);
     const reviewDeps = opts?.maxDiffSizeKb
@@ -111,7 +115,7 @@ describe('E2E Agent Scenarios', () => {
       { model: 'test-model', tool: 'test-tool' },
       reviewDeps,
       deps.consumptionDeps,
-      { pollIntervalMs: 100, reviewOnly: opts?.reviewOnly },
+      { pollIntervalMs: 100, reviewOnly: opts?.reviewOnly, repoConfig: opts?.repoConfig },
     );
   }
 
@@ -345,7 +349,71 @@ describe('E2E Agent Scenarios', () => {
   });
 
   // ═══════════════════════════════════════════════════════════
-  // I. Single-agent mode: summary claim with empty reviews
+  // I. Repo Filtering
+  // ═══════════════════════════════════════════════════════════
+
+  describe('I. Repo filtering', () => {
+    it('agent with repo whitelist skips tasks for non-matching repos', async () => {
+      // Default task is for owner=acme, repo=widget
+      await server.injectTask({ reviewCount: 2 });
+
+      const agentPromise = startTestAgent('filtered-agent', {
+        repoConfig: { mode: 'whitelist', list: ['other/repo'] },
+      });
+      await advanceTime(500);
+
+      // Agent should not have claimed anything — repo doesn't match
+      expect(mockedExecuteTool).not.toHaveBeenCalled();
+
+      await stopAgent(agentPromise, server);
+    });
+
+    it('agent with repo whitelist picks up matching tasks', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      const agentPromise = startTestAgent('filtered-agent', {
+        repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
+      });
+      await advanceTime(500);
+
+      const claims = await server.getClaims(taskId);
+      expect(claims).toHaveLength(1);
+      expect(claims[0].status).toBe('completed');
+
+      await stopAgent(agentPromise, server);
+    });
+
+    it('agent with repo blacklist skips blacklisted repos', async () => {
+      await server.injectTask({ reviewCount: 2 });
+
+      const agentPromise = startTestAgent('filtered-agent', {
+        repoConfig: { mode: 'blacklist', list: ['test-org/test-repo'] },
+      });
+      await advanceTime(500);
+
+      expect(mockedExecuteTool).not.toHaveBeenCalled();
+
+      await stopAgent(agentPromise, server);
+    });
+
+    it('agent with mode=all picks up any task', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      const agentPromise = startTestAgent('all-agent', {
+        repoConfig: { mode: 'all' },
+      });
+      await advanceTime(500);
+
+      const claims = await server.getClaims(taskId);
+      expect(claims).toHaveLength(1);
+      expect(claims[0].status).toBe('completed');
+
+      await stopAgent(agentPromise, server);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // J. Single-agent mode: summary claim with empty reviews
   // ═══════════════════════════════════════════════════════════
 
   describe('I. Single-agent mode (review_count=1)', () => {

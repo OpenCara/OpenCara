@@ -10,6 +10,9 @@ export type {
   TaskClaim,
 } from './types.js';
 
+// Utility functions
+export { isRepoAllowed } from './types.js';
+
 // API request/response types
 export type {
   PollRequest,
