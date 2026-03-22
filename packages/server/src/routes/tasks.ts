@@ -269,11 +269,14 @@ export function taskRoutes() {
   app.post('/api/tasks/poll', rateLimitByAgent(POLL_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const body = await c.req.json<PollRequest>();
-    const { agent_id, review_only } = body;
+    const { agent_id, review_only, repos } = body;
 
     if (!agent_id) {
       return c.json({ error: 'agent_id is required' }, 400);
     }
+
+    // Build a set of repos the agent declares for fast lookup
+    const agentRepos = repos && repos.length > 0 ? new Set(repos) : null;
 
     // Update last-seen
     await store.setAgentLastSeen(agent_id, Date.now());
@@ -286,6 +289,11 @@ export function taskRoutes() {
     const available: PollTask[] = [];
 
     for (const task of tasks) {
+      // Private repo tasks: only return to agents declaring matching repos
+      if (task.private && (!agentRepos || !agentRepos.has(`${task.owner}/${task.repo}`))) {
+        continue;
+      }
+
       const role = availableRole(task, agent_id);
       if (!role) continue;
       if (review_only && role === 'summary') continue;

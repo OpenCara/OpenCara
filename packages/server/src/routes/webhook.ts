@@ -12,7 +12,7 @@ const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRI
 interface PullRequestPayload {
   action: string;
   installation?: { id: number };
-  repository: { owner: { login: string }; name: string };
+  repository: { owner: { login: string }; name: string; private?: boolean };
   pull_request: {
     number: number;
     html_url: string;
@@ -27,7 +27,7 @@ interface PullRequestPayload {
 interface IssueCommentPayload {
   action: string;
   installation?: { id: number };
-  repository: { owner: { login: string }; name: string };
+  repository: { owner: { login: string }; name: string; private?: boolean };
   issue: {
     number: number;
     pull_request?: { url: string };
@@ -100,6 +100,7 @@ export async function createTaskForPR(
   baseRef: string,
   headRef: string,
   config: ReviewConfig,
+  isPrivate: boolean,
 ): Promise<string | null> {
   // Check for existing active task on this PR (dedup guard)
   const activeTasks = await store.listTasks({ status: ['pending', 'reviewing'] });
@@ -130,6 +131,7 @@ export async function createTaskForPR(
     timeout_at: Date.now() + timeoutMs,
     status: 'pending',
     github_installation_id: installationId,
+    private: isPrivate,
     config,
     created_at: Date.now(),
   });
@@ -244,6 +246,7 @@ async function handlePullRequest(
     pull_request.base.ref,
     headRef,
     config,
+    repository.private ?? false,
   );
 
   return new Response('OK', { status: 200 });
@@ -312,6 +315,7 @@ async function handleIssueComment(
     pr.base.ref,
     pr.head.ref,
     config,
+    repository.private ?? false,
   );
 
   return new Response('OK', { status: 200 });
