@@ -20,12 +20,14 @@ vi.mock('../config.js', () => ({
     githubToken: 'config-token',
     codebaseDir: null,
     agentCommand: 'echo test',
+    logFile: null,
     agents: [
       { model: 'claude', tool: 'claude-cli', name: 'agent-0', command: 'echo review' },
       { model: 'gpt-4', tool: 'codex', name: 'agent-1', command: 'echo codex' },
     ],
   })),
   resolveCodebaseDir: vi.fn(() => null),
+  resolveLogFile: vi.fn(() => null),
   resolveGithubToken: vi.fn(
     (agentToken?: string, globalToken?: string | null) => agentToken ?? globalToken ?? null,
   ),

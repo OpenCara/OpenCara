@@ -15,6 +15,7 @@ export interface LocalAgentConfig {
   github_token?: string;
   codebase_dir?: string;
   repos?: RepoConfig;
+  log_file?: string;
 }
 
 export interface CliConfig {
@@ -24,6 +25,7 @@ export interface CliConfig {
   githubToken: string | null;
   codebaseDir: string | null;
   agentCommand: string | null;
+  logFile: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
 }
 
@@ -149,6 +151,7 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (obj.review_only === true) agent.review_only = true;
     if (typeof obj.github_token === 'string') agent.github_token = obj.github_token;
     if (typeof obj.codebase_dir === 'string') agent.codebase_dir = obj.codebase_dir;
+    if (typeof obj.log_file === 'string') agent.log_file = obj.log_file;
     const repoConfig = parseRepoConfig(obj, i);
     if (repoConfig) agent.repos = repoConfig;
     agents.push(agent);
@@ -219,6 +222,7 @@ export function loadConfig(): CliConfig {
     githubToken: null,
     codebaseDir: null,
     agentCommand: null,
+    logFile: null,
     agents: null,
   };
 
@@ -252,6 +256,7 @@ export function loadConfig(): CliConfig {
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
+    logFile: typeof data.log_file === 'string' ? data.log_file : null,
     agents: parseAgents(data),
   };
 }
@@ -275,6 +280,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;
+  }
+  if (config.logFile) {
+    data.log_file = config.logFile;
   }
   if (config.agents !== null) {
     data.agents = config.agents;
@@ -301,6 +309,22 @@ export function resolveCodebaseDir(
   globalDir: string | null,
 ): string | null {
   const raw = agentDir || globalDir;
+  if (!raw) return null;
+  if (raw.startsWith('~/') || raw === '~') {
+    return path.join(os.homedir(), raw.slice(1));
+  }
+  return path.resolve(raw);
+}
+
+/**
+ * Resolve log_file: per-agent overrides global.
+ * Expands ~ to home directory.
+ */
+export function resolveLogFile(
+  agentLogFile: string | undefined,
+  globalLogFile: string | null,
+): string | null {
+  const raw = agentLogFile || globalLogFile;
   if (!raw) return null;
   if (raw.startsWith('~/') || raw === '~') {
     return path.join(os.homedir(), raw.slice(1));

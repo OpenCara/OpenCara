@@ -17,6 +17,7 @@ import {
   saveConfig,
   ensureConfigDir,
   resolveCodebaseDir,
+  resolveLogFile,
   resolveGithubToken,
   RepoConfigError,
   ConfigValidationError,
@@ -940,6 +941,34 @@ agents:
     });
   });
 
+  describe('resolveLogFile', () => {
+    it('returns null when both args are absent', () => {
+      expect(resolveLogFile(undefined, null)).toBeNull();
+    });
+
+    it('uses global when agent is undefined', () => {
+      expect(resolveLogFile(undefined, '/tmp/global.log')).toBe('/tmp/global.log');
+    });
+
+    it('uses agent when global is null', () => {
+      expect(resolveLogFile('/tmp/agent.log', null)).toBe('/tmp/agent.log');
+    });
+
+    it('agent overrides global', () => {
+      expect(resolveLogFile('/tmp/agent.log', '/tmp/global.log')).toBe('/tmp/agent.log');
+    });
+
+    it('expands tilde in path', () => {
+      const result = resolveLogFile(undefined, '~/logs/agent.log');
+      expect(result).not.toContain('~');
+      expect(result).toContain('logs/agent.log');
+    });
+
+    it('returns null for empty string agent with null global', () => {
+      expect(resolveLogFile('', null)).toBeNull();
+    });
+  });
+
   describe('config validation', () => {
     describe('platform_url validation', () => {
       it('throws ConfigValidationError for invalid URL', () => {
@@ -1136,6 +1165,55 @@ agents:
         expect(msg).toContain('gemini');
         expect(msg).toContain('qwen');
         warnSpy.mockRestore();
+      });
+    });
+
+    describe('log_file config', () => {
+      it('parses global log_file', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('log_file: /tmp/agent.log\n');
+
+        const config = loadConfig();
+        expect(config.logFile).toBe('/tmp/agent.log');
+      });
+
+      it('defaults to null when not specified', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://api.opencara.dev\n');
+
+        const config = loadConfig();
+        expect(config.logFile).toBeNull();
+      });
+
+      it('parses per-agent log_file', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    log_file: /tmp/claude.log
+`);
+
+        const config = loadConfig();
+        expect(config.agents![0].log_file).toBe('/tmp/claude.log');
+      });
+
+      it('saves log_file in config', () => {
+        saveConfig({
+          platformUrl: DEFAULT_PLATFORM_URL,
+          maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+          maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+          githubToken: null,
+          codebaseDir: null,
+          agentCommand: null,
+          logFile: '/tmp/agent.log',
+          agents: null,
+        });
+
+        expect(fs.writeFileSync).toHaveBeenCalled();
+        const writtenContent = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+        expect(writtenContent).toContain('log_file');
+        expect(writtenContent).toContain('/tmp/agent.log');
       });
     });
 
