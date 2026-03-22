@@ -31,6 +31,7 @@ import {
   formatPostReviewStats,
   type SessionStats,
 } from '../consumption.js';
+import { sanitizeTokens } from '../sanitize.js';
 
 export interface ConsumptionDeps {
   agentId: string;
@@ -51,9 +52,9 @@ interface Logger {
 function createLogger(label?: string): Logger {
   const prefix = label ? `[${label}] ` : '';
   return {
-    log: (msg: string) => console.log(`${prefix}${msg}`),
-    logError: (msg: string) => console.error(`${prefix}${msg}`),
-    logWarn: (msg: string) => console.warn(`${prefix}${msg}`),
+    log: (msg: string) => console.log(`${prefix}${sanitizeTokens(msg)}`),
+    logError: (msg: string) => console.error(`${prefix}${sanitizeTokens(msg)}`),
+    logWarn: (msg: string) => console.warn(`${prefix}${sanitizeTokens(msg)}`),
   };
 }
 
@@ -397,7 +398,11 @@ async function safeReject(
 ): Promise<void> {
   try {
     await withRetry(
-      () => client.post(`/api/tasks/${taskId}/reject`, { agent_id: agentId, reason }),
+      () =>
+        client.post(`/api/tasks/${taskId}/reject`, {
+          agent_id: agentId,
+          reason: sanitizeTokens(reason),
+        }),
       { maxAttempts: 2 },
     );
   } catch (err) {
@@ -418,9 +423,14 @@ async function safeError(
   logger: Logger,
 ): Promise<void> {
   try {
-    await withRetry(() => client.post(`/api/tasks/${taskId}/error`, { agent_id: agentId, error }), {
-      maxAttempts: 2,
-    });
+    await withRetry(
+      () =>
+        client.post(`/api/tasks/${taskId}/error`, {
+          agent_id: agentId,
+          error: sanitizeTokens(error),
+        }),
+      { maxAttempts: 2 },
+    );
   } catch (err) {
     logger.logError(
       `  Failed to report error for task ${taskId}: ${(err as Error).message} (logged locally)`,
@@ -487,13 +497,16 @@ async function executeReviewTask(
     tokensUsed = result.tokensUsed;
   }
 
+  // Sanitize review text before submission to prevent token leakage
+  const sanitizedReview = sanitizeTokens(reviewText);
+
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
     () =>
       client.post(`/api/tasks/${taskId}/result`, {
         agent_id: agentId,
         type: 'review' as ClaimRole,
-        review_text: reviewText,
+        review_text: sanitizedReview,
         verdict,
         tokens_used: tokensUsed,
       }),
@@ -567,12 +580,14 @@ async function executeSummaryTask(
       tokensUsed = result.tokensUsed;
     }
 
+    const sanitizedReview = sanitizeTokens(reviewText);
+
     await withRetry(
       () =>
         client.post(`/api/tasks/${taskId}/result`, {
           agent_id: agentId,
           type: 'summary' as ClaimRole,
-          review_text: reviewText,
+          review_text: sanitizedReview,
           verdict,
           tokens_used: tokensUsed,
         }),
@@ -631,13 +646,15 @@ async function executeSummaryTask(
     tokensUsed = result.tokensUsed;
   }
 
+  const sanitizedSummary = sanitizeTokens(summaryText);
+
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
     () =>
       client.post(`/api/tasks/${taskId}/result`, {
         agent_id: agentId,
         type: 'summary' as ClaimRole,
-        review_text: summaryText,
+        review_text: sanitizedSummary,
         tokens_used: tokensUsed,
       }),
     { maxAttempts: 3 },

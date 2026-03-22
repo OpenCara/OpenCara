@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { sanitizeTokens } from './sanitize.js';
 
 /** Pattern for valid GitHub owner/repo names */
 const VALID_NAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
@@ -73,13 +74,6 @@ export function buildCloneUrl(owner: string, repo: string, githubToken?: string 
 }
 
 /**
- * Strip embedded tokens from git error messages to prevent leakage.
- */
-function sanitizeGitError(message: string): string {
-  return message.replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@');
-}
-
-/**
  * Run a git command synchronously.
  * Throws on non-zero exit. Sanitizes error messages to prevent token leakage.
  */
@@ -93,6 +87,6 @@ function git(args: string[], cwd?: string): string {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(sanitizeGitError(message));
+    throw new Error(sanitizeTokens(message));
   }
 }
