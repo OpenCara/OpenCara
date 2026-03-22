@@ -207,7 +207,8 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  const { config, parseError } = await loadReviewConfig(owner, repo, headRef, prNumber, token);
+  const baseRef = pull_request.base.ref;
+  const { config, parseError } = await loadReviewConfig(owner, repo, baseRef, prNumber, token);
 
   if (parseError) {
     console.log(`PR #${prNumber}: aborting due to .review.yml parse error`);
@@ -281,7 +282,7 @@ async function handleIssueComment(
     return new Response('OK', { status: 200 });
   }
 
-  const { config } = await loadReviewConfig(owner, repo, pr.head.ref, prNumber, token);
+  const { config } = await loadReviewConfig(owner, repo, pr.base.ref, prNumber, token);
 
   const triggerCommand = config.trigger.comment;
   if (!comment.body.trim().toLowerCase().startsWith(triggerCommand.toLowerCase())) {
