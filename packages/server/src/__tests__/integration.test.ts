@@ -655,6 +655,71 @@ APPROVE`;
       const c4 = await claim('task-multi-race', 'a4', 'review');
       expect(c4.claimed).toBe(false);
     });
+
+    // Note: MemoryTaskStore is synchronous, so Promise.all executes claims
+    // serially in the same microtask turn. These tests validate the locking
+    // logic at the API layer but cannot reproduce true I/O-level races that
+    // occur with Cloudflare KV's eventual consistency. The lock mechanism
+    // (summary-lock:{taskId} key) is the defense-in-depth for production.
+    it('concurrent summary claims: only one agent wins (#273)', async () => {
+      await store.createTask(makeTask({ id: 'task-concurrent-summary' }));
+
+      // Fire 5 concurrent summary claims simultaneously
+      const results = await Promise.all(
+        ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5'].map((agentId) =>
+          claim('task-concurrent-summary', agentId, 'summary'),
+        ),
+      );
+
+      const claimed = results.filter((r) => r.claimed === true);
+      const rejected = results.filter((r) => r.claimed === false);
+
+      // Exactly one agent should win
+      expect(claimed).toHaveLength(1);
+      expect(rejected).toHaveLength(4);
+
+      // All rejected agents should have a reason
+      for (const r of rejected) {
+        expect(r.reason).toBeDefined();
+      }
+    });
+
+    it('concurrent summary claims + result: only one GitHub comment posted (#273)', async () => {
+      await store.createTask(makeTask({ id: 'task-concurrent-post' }));
+
+      const agentIds = ['synth-a', 'synth-b', 'synth-c'];
+
+      // Fire 3 concurrent summary claims
+      const claimResults = await Promise.all(
+        agentIds.map((agentId) => claim('task-concurrent-post', agentId, 'summary')),
+      );
+
+      const winners = claimResults
+        .map((r, i) => ({ result: r, agentId: agentIds[i] }))
+        .filter((r) => r.result.claimed === true);
+      expect(winners).toHaveLength(1);
+      const winner = winners[0]!;
+
+      // Count GitHub comment calls before
+      const commentsBefore = githubCalls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+
+      // Winner submits result — should post to GitHub
+      await submitResult(
+        'task-concurrent-post',
+        winner.agentId,
+        'summary',
+        '## Summary\nLooks good.',
+        'approve',
+      );
+
+      // Only 1 comment should have been posted
+      const commentsAfter = githubCalls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+      expect(commentsAfter - commentsBefore).toBe(1);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════

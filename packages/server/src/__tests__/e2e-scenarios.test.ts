@@ -467,6 +467,61 @@ describe('E2E Scenarios', () => {
       const c2 = await a.claim(taskId, 'review');
       expect(c2.claimed).toBe(false);
     });
+
+    // Note: MemoryTaskStore is synchronous, so Promise.all executes claims
+    // serially in the same microtask turn. These tests validate the locking
+    // logic at the API layer but cannot reproduce true I/O-level races that
+    // occur with Cloudflare KV's eventual consistency.
+    it('concurrent summary claims via Promise.all: exactly one wins (#273)', async () => {
+      const taskId = await injectPR();
+
+      // Fire 5 concurrent summary claims simultaneously
+      const agents = Array.from({ length: 5 }, (_, i) => agent(`concurrent-${i}`));
+      const results = await Promise.all(agents.map((a) => a.claim(taskId, 'summary')));
+
+      const claimed = results.filter((r) => r.claimed === true);
+      const rejected = results.filter((r) => r.claimed === false);
+
+      // Exactly one agent should win the summary lock
+      expect(claimed).toHaveLength(1);
+      expect(rejected).toHaveLength(4);
+
+      // All rejected agents should have a reason
+      for (const r of rejected) {
+        expect(r.reason).toBeDefined();
+      }
+    });
+
+    it('concurrent claims + results: only one GitHub comment posted (#273)', async () => {
+      const taskId = await injectPR();
+
+      // Fire 3 concurrent summary claims
+      const claimAgents = [agent('race-a'), agent('race-b'), agent('race-c')];
+      const claimResults = await Promise.all(claimAgents.map((a) => a.claim(taskId, 'summary')));
+
+      const winnerIdx = claimResults.findIndex((r) => r.claimed === true);
+      expect(winnerIdx).toBeGreaterThanOrEqual(0);
+      const winner = claimAgents[winnerIdx]!;
+
+      // Count GitHub comment calls before
+      const commentsBefore = github.calls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+
+      // Winner submits result
+      await winner.submitResult(taskId, 'summary', '## Summary\nLooks good.', 'approve');
+
+      // Exactly 1 GitHub comment posted
+      const commentsAfter = github.calls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+      expect(commentsAfter - commentsBefore).toBe(1);
+
+      // Task should be in terminal state
+      const task = await store.getTask(taskId);
+      expect(task).toBeDefined();
+      expect(['completed', 'failed']).toContain(task!.status);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════
