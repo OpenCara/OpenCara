@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { KVTaskStore, safeParseJson, DEFAULT_TTL_DAYS } from '../store/kv.js';
+import { KVDataStore, safeParseJson, DEFAULT_TTL_DAYS } from '../store/kv.js';
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 
@@ -112,13 +112,13 @@ describe('safeParseJson', () => {
   });
 });
 
-describe('KVTaskStore', () => {
+describe('KVDataStore', () => {
   let kv: MockKV;
-  let store: KVTaskStore;
+  let store: KVDataStore;
 
   beforeEach(() => {
     kv = new MockKV();
-    store = new KVTaskStore(kv as unknown as KVNamespace);
+    store = new KVDataStore(kv as unknown as KVNamespace);
   });
 
   // ── getTask: corrupted JSON ──────────────────────────────────
@@ -422,51 +422,51 @@ describe('KVTaskStore', () => {
 
   // ── Summary lock ────────────────────────────────────────────
 
-  describe('summary lock', () => {
+  describe('locks', () => {
     it('acquires lock for first agent', async () => {
-      expect(await store.acquireSummaryLock('task-1', 'agent-a')).toBe(true);
+      expect(await store.acquireLock('summary:task-1', 'agent-a')).toBe(true);
     });
 
     it('rejects second agent when lock is held', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      expect(await store.acquireSummaryLock('task-1', 'agent-b')).toBe(false);
+      await store.acquireLock('summary:task-1', 'agent-a');
+      expect(await store.acquireLock('summary:task-1', 'agent-b')).toBe(false);
     });
 
     it('is idempotent for same agent', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      expect(await store.acquireSummaryLock('task-1', 'agent-a')).toBe(true);
+      await store.acquireLock('summary:task-1', 'agent-a');
+      expect(await store.acquireLock('summary:task-1', 'agent-a')).toBe(true);
     });
 
-    it('checkSummaryLock returns true for lock holder', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(true);
+    it('checkLock returns true for lock holder', async () => {
+      await store.acquireLock('summary:task-1', 'agent-a');
+      expect(await store.checkLock('summary:task-1', 'agent-a')).toBe(true);
     });
 
-    it('checkSummaryLock returns false for non-holder', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      expect(await store.checkSummaryLock('task-1', 'agent-b')).toBe(false);
+    it('checkLock returns false for non-holder', async () => {
+      await store.acquireLock('summary:task-1', 'agent-a');
+      expect(await store.checkLock('summary:task-1', 'agent-b')).toBe(false);
     });
 
-    it('checkSummaryLock returns false when no lock exists', async () => {
-      expect(await store.checkSummaryLock('task-1', 'agent-a')).toBe(false);
+    it('checkLock returns false when no lock exists', async () => {
+      expect(await store.checkLock('summary:task-1', 'agent-a')).toBe(false);
     });
 
-    it('releaseSummaryLock allows new acquisition', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      await store.releaseSummaryLock('task-1');
-      expect(await store.acquireSummaryLock('task-1', 'agent-b')).toBe(true);
+    it('releaseLock allows new acquisition', async () => {
+      await store.acquireLock('summary:task-1', 'agent-a');
+      await store.releaseLock('summary:task-1');
+      expect(await store.acquireLock('summary:task-1', 'agent-b')).toBe(true);
     });
 
-    it('writes to summary-lock: KV prefix', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      const putCall = kv.putCalls.find((c) => c.key === 'summary-lock:task-1');
+    it('writes to lock: KV prefix', async () => {
+      await store.acquireLock('summary:task-1', 'agent-a');
+      const putCall = kv.putCalls.find((c) => c.key === 'lock:summary:task-1');
       expect(putCall).toBeDefined();
       expect(putCall!.value).toBe('agent-a');
     });
 
     it('locks are independent per task', async () => {
-      await store.acquireSummaryLock('task-1', 'agent-a');
-      expect(await store.acquireSummaryLock('task-2', 'agent-b')).toBe(true);
+      await store.acquireLock('summary:task-1', 'agent-a');
+      expect(await store.acquireLock('summary:task-2', 'agent-b')).toBe(true);
     });
   });
 
@@ -493,7 +493,7 @@ describe('KVTaskStore', () => {
   describe('custom TTL', () => {
     it('uses custom TTL for terminal task updates', async () => {
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, 3);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, 3);
 
       await customStore.createTask(makeTask());
       customKv.putCalls = [];
@@ -506,7 +506,7 @@ describe('KVTaskStore', () => {
 
     it('uses custom TTL for terminal claim updates', async () => {
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, 3);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, 3);
 
       await customStore.createClaim(makeClaim());
       customKv.putCalls = [];
@@ -519,11 +519,11 @@ describe('KVTaskStore', () => {
 
     it('uses custom TTL for summary locks', async () => {
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, 3);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, 3);
 
-      await customStore.acquireSummaryLock('task-1', 'agent-a');
+      await customStore.acquireLock('summary:task-1', 'agent-a');
 
-      const put = customKv.putCalls.find((c) => c.key === 'summary-lock:task-1');
+      const put = customKv.putCalls.find((c) => c.key === 'lock:summary:task-1');
       expect(put!.options?.expirationTtl).toBe(3 * 24 * 60 * 60);
     });
 
@@ -538,7 +538,7 @@ describe('KVTaskStore', () => {
     it('deletes terminal tasks older than TTL', async () => {
       const ttlDays = 1;
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, ttlDays);
 
       const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000; // 2 days ago
       await customStore.createTask(
@@ -561,7 +561,7 @@ describe('KVTaskStore', () => {
     it('does not delete terminal tasks within TTL', async () => {
       const ttlDays = 7;
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, ttlDays);
 
       const recentTime = Date.now() - 1 * 24 * 60 * 60 * 1000; // 1 day ago
       await customStore.createTask(
@@ -576,7 +576,7 @@ describe('KVTaskStore', () => {
     it('does not delete active tasks', async () => {
       const ttlDays = 1;
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, ttlDays);
 
       const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000;
       await customStore.createTask(
@@ -595,7 +595,7 @@ describe('KVTaskStore', () => {
     it('also deletes associated claims', async () => {
       const ttlDays = 1;
       const customKv = new MockKV();
-      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+      const customStore = new KVDataStore(customKv as unknown as KVNamespace, ttlDays);
 
       const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000;
       await customStore.createTask(

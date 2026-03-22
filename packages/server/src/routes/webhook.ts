@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ReviewConfig } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
-import type { TaskStore } from '../store/interface.js';
+import type { DataStore } from '../store/interface.js';
 import type { Logger } from '../logger.js';
 import { getInstallationToken } from '../github/app.js';
 import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
@@ -92,7 +92,7 @@ function hexToBytes(hex: string): Uint8Array | null {
  * (idempotency guard against webhook redeliveries and rapid PR events).
  */
 export async function createTaskForPR(
-  store: TaskStore,
+  store: DataStore,
   installationId: number,
   owner: string,
   repo: string,
@@ -202,7 +202,7 @@ export function webhookRoutes() {
 
 async function handlePullRequest(
   env: Env,
-  store: TaskStore,
+  store: DataStore,
   payload: PullRequestPayload,
   action: string,
   logger: Logger,
@@ -292,7 +292,7 @@ async function handlePullRequest(
 
 async function handleIssueComment(
   env: Env,
-  store: TaskStore,
+  store: DataStore,
   payload: IssueCommentPayload,
   logger: Logger,
 ): Promise<Response> {

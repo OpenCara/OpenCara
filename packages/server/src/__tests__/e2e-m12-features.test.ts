@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
-import { MemoryTaskStore } from '../store/memory.js';
+import { MemoryDataStore } from '../store/memory.js';
 import { resetTimeoutThrottle, POLL_RATE_LIMIT } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import type { Env } from '../types.js';
@@ -38,7 +38,7 @@ function getMockEnv(): Env {
 }
 
 describe('M12 Feature E2E Tests', () => {
-  let store: MemoryTaskStore;
+  let store: MemoryDataStore;
   let app: ReturnType<typeof createTestApp>;
   let env: Env;
   let github: ReturnType<typeof createGitHubMock>;
@@ -50,7 +50,7 @@ describe('M12 Feature E2E Tests', () => {
   beforeEach(() => {
     resetTimeoutThrottle();
     resetRateLimits();
-    store = new MemoryTaskStore();
+    store = new MemoryDataStore();
     app = createTestApp(store);
     env = getMockEnv();
     github = createGitHubMock();
@@ -563,7 +563,7 @@ describe('M12 Feature E2E Tests', () => {
     });
 
     it('custom TTL controls cleanup threshold', async () => {
-      const shortTtlStore = new MemoryTaskStore(1); // 1 day TTL
+      const shortTtlStore = new MemoryDataStore(1); // 1 day TTL
       const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
 
       await shortTtlStore.createTask({
