@@ -655,6 +655,66 @@ APPROVE`;
       const c4 = await claim('task-multi-race', 'a4', 'review');
       expect(c4.claimed).toBe(false);
     });
+
+    it('concurrent summary claims: only one agent wins (#273)', async () => {
+      await store.createTask(makeTask({ id: 'task-concurrent-summary' }));
+
+      // Fire 5 concurrent summary claims simultaneously
+      const results = await Promise.all(
+        ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5'].map((agentId) =>
+          claim('task-concurrent-summary', agentId, 'summary'),
+        ),
+      );
+
+      const claimed = results.filter((r) => r.claimed === true);
+      const rejected = results.filter((r) => r.claimed === false);
+
+      // Exactly one agent should win
+      expect(claimed).toHaveLength(1);
+      expect(rejected).toHaveLength(4);
+
+      // All rejected agents should have a reason
+      for (const r of rejected) {
+        expect(r.reason).toBeDefined();
+      }
+    });
+
+    it('concurrent summary claims + result: only one GitHub comment posted (#273)', async () => {
+      await store.createTask(makeTask({ id: 'task-concurrent-post' }));
+
+      // Fire 3 concurrent summary claims
+      const claimResults = await Promise.all(
+        ['synth-a', 'synth-b', 'synth-c'].map((agentId) =>
+          claim('task-concurrent-post', agentId, 'summary'),
+        ),
+      );
+
+      const winners = claimResults
+        .map((r, i) => ({ result: r, agentId: ['synth-a', 'synth-b', 'synth-c'][i] }))
+        .filter((r) => r.result.claimed === true);
+      expect(winners).toHaveLength(1);
+      const winner = winners[0];
+
+      // Count GitHub comment calls before
+      const commentsBefore = githubCalls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+
+      // Winner submits result — should post to GitHub
+      await submitResult(
+        'task-concurrent-post',
+        winner.agentId,
+        'summary',
+        '## Summary\nLooks good.',
+        'approve',
+      );
+
+      // Only 1 comment should have been posted
+      const commentsAfter = githubCalls.filter(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      ).length;
+      expect(commentsAfter - commentsBefore).toBe(1);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════
