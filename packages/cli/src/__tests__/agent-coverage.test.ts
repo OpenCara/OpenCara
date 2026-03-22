@@ -951,4 +951,194 @@ describe('Agent Coverage Tests', () => {
       }
     });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // PR URL logging (#278) and command logging (#277)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('Logging improvements', () => {
+    it('logs PR URL instead of diff URL when handling a task', async () => {
+      const taskId = await server.injectTask({
+        owner: 'my-org',
+        repo: 'my-repo',
+        prNumber: 42,
+        reviewCount: 2,
+      });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('pr-url-agent');
+        await advanceTime(2000);
+
+        // Should log PR URL, not diff URL
+        expect(console.log).toHaveBeenCalledWith('  https://github.com/my-org/my-repo/pull/42');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('logs review command before executing review task', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('review-cmd-agent');
+        await advanceTime(2000);
+
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.type).toBe('review');
+        expect(console.log).toHaveBeenCalledWith('  Executing review command: echo test');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('logs summary command before executing summary task', async () => {
+      const taskId = await server.injectTask({ reviewCount: 1 });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('summary-cmd-agent');
+        await advanceTime(2000);
+
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.type).toBe('summary');
+        expect(console.log).toHaveBeenCalledWith('  Executing summary command: echo test');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('sanitizes tokens in logged command', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        // Use a command template with a GitHub token embedded
+        const deps = makeDeps('sanitize-agent');
+        const reviewDeps: ReviewExecutorDeps = {
+          ...deps.reviewDeps,
+          commandTemplate: 'claude --token ghp_secrettoken123abc --print',
+        };
+
+        const agentPromise = startAgent(
+          'sanitize-agent',
+          FAKE_SERVER_URL,
+          { model: 'test', tool: 'test' },
+          reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        // The command should be logged with the token sanitized
+        expect(console.log).toHaveBeenCalledWith(
+          '  Executing review command: claude --token *** --print',
+        );
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('logs router mode for review command in router relay', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+      const mockRelay = {
+        start: vi.fn(),
+        stop: vi.fn(),
+        buildReviewPrompt: vi.fn(() => 'router review prompt'),
+        buildSummaryPrompt: vi.fn(() => 'router summary prompt'),
+        sendPrompt: vi.fn(async () => '## Summary\nRouter OK\n\n## Verdict\nAPPROVE'),
+        parseReviewResponse: vi.fn(() => ({ review: 'Router OK', verdict: 'approve' })),
+      };
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('router-log-agent');
+        const promise = startAgent(
+          'router-log-agent',
+          FAKE_SERVER_URL,
+          { model: 'test', tool: 'test' },
+          deps.reviewDeps,
+          deps.consumptionDeps,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          { pollIntervalMs: 100, routerRelay: mockRelay as any },
+        );
+
+        await advanceTime(2000);
+
+        expect(console.log).toHaveBeenCalledWith('  Executing review command: [router mode]');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(promise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
 });

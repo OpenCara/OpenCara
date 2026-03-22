@@ -268,7 +268,7 @@ async function handleTask(
   const { log, logError, logWarn } = logger;
 
   log(`\nTask ${task_id}: PR #${pr_number} on ${owner}/${repo} (role: ${role})`);
-  log(`  ${diff_url}`);
+  log(`  https://github.com/${owner}/${repo}/pull/${pr_number}`);
 
   // Claim the task (retry once — slot may be taken)
   let claimResponse: ClaimResponse;
@@ -468,6 +468,7 @@ async function executeReviewTask(
 
   if (routerRelay) {
     // Router mode: relay to external agent
+    logger.log(`  Executing review command: [router mode]`);
     const fullPrompt = routerRelay.buildReviewPrompt({
       owner,
       repo,
@@ -487,6 +488,7 @@ async function executeReviewTask(
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
   } else {
     // Direct mode: execute tool locally
+    logger.log(`  Executing review command: ${reviewDeps.commandTemplate}`);
     const result = await executeReview(
       {
         taskId,
@@ -552,6 +554,7 @@ async function executeSummaryTask(
     let tokensUsed: number;
 
     if (routerRelay) {
+      logger.log(`  Executing summary command: [router mode]`);
       const fullPrompt = routerRelay.buildReviewPrompt({
         owner,
         repo,
@@ -570,6 +573,7 @@ async function executeSummaryTask(
       verdict = parsed.verdict as ReviewVerdict;
       tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
     } else {
+      logger.log(`  Executing summary command: ${reviewDeps.commandTemplate}`);
       const result = await executeReview(
         {
           taskId,
@@ -621,6 +625,7 @@ async function executeSummaryTask(
   let tokensUsed: number;
 
   if (routerRelay) {
+    logger.log(`  Executing summary command: [router mode]`);
     const fullPrompt = routerRelay.buildSummaryPrompt({
       owner,
       repo,
@@ -637,6 +642,7 @@ async function executeSummaryTask(
     summaryText = response;
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
   } else {
+    logger.log(`  Executing summary command: ${reviewDeps.commandTemplate}`);
     const result = await executeSummary(
       {
         taskId,
