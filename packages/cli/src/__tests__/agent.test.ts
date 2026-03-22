@@ -10,8 +10,7 @@ vi.mock('../tool-executor.js', async (importOriginal) => {
     ...actual,
     testCommand: vi.fn().mockResolvedValue({ ok: true, elapsedMs: 150 }),
     executeTool: vi.fn().mockResolvedValue({
-      stdout:
-        '## Summary\nLooks good.\n\n## Findings\nNo issues found.\n\n## Verdict\nAPPROVE',
+      stdout: '## Summary\nLooks good.\n\n## Findings\nNo issues found.\n\n## Verdict\nAPPROVE',
       stderr: '',
       exitCode: 0,
       tokensUsed: 100,
