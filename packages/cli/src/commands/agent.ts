@@ -7,7 +7,9 @@ import type {
   ClaimReview,
   ReviewVerdict,
   ClaimRole,
+  RepoConfig,
 } from '@opencara/shared';
+import { isRepoAllowed } from '@opencara/shared';
 import {
   loadConfig,
   resolveAgentLimits,
@@ -141,10 +143,11 @@ async function pollLoop(
     pollIntervalMs: number;
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
+    repoConfig?: RepoConfig;
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const { pollIntervalMs, routerRelay, reviewOnly, signal } = options;
+  const { pollIntervalMs, routerRelay, reviewOnly, repoConfig, signal } = options;
   const { log, logError, logWarn } = logger;
 
   log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
@@ -164,8 +167,11 @@ async function pollLoop(
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
 
-      // Find first task not exhausted by diff fetch failures
-      const task = pollResponse.tasks.find(
+      // Filter tasks by repo config, then find first not exhausted by diff fetch failures
+      const eligibleTasks = repoConfig
+        ? pollResponse.tasks.filter((t) => isRepoAllowed(repoConfig, t.owner, t.repo))
+        : pollResponse.tasks;
+      const task = eligibleTasks.find(
         (t) => (diffFailCounts.get(t.task_id) ?? 0) < MAX_DIFF_FETCH_ATTEMPTS,
       );
 
@@ -665,6 +671,7 @@ export async function startAgent(
     pollIntervalMs?: number;
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
+    repoConfig?: RepoConfig;
     label?: string;
   },
 ): Promise<void> {
@@ -710,6 +717,7 @@ export async function startAgent(
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     routerRelay: options?.routerRelay,
     reviewOnly: options?.reviewOnly,
+    repoConfig: options?.repoConfig,
     signal: abortController.signal,
   });
 
@@ -773,6 +781,7 @@ export async function startAgentRouter(): Promise<void> {
     {
       routerRelay: router,
       reviewOnly: agentConfig?.review_only,
+      repoConfig: agentConfig?.repos,
       label,
     },
   );
@@ -865,6 +874,7 @@ function startAgentByIndex(
       pollIntervalMs,
       routerRelay,
       reviewOnly: agentConfig?.review_only,
+      repoConfig: agentConfig?.repos,
       label,
     },
   ).finally(() => {

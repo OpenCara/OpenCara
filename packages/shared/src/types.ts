@@ -59,5 +59,30 @@ export interface TaskClaim {
   created_at: number;
 }
 
+/**
+ * Check if an agent's repo config allows reviewing a given repo.
+ */
+export function isRepoAllowed(
+  repoConfig: RepoConfig | null | undefined,
+  targetOwner: string,
+  targetRepo: string,
+  agentOwner?: string,
+): boolean {
+  if (!repoConfig) return true; // null = accept all
+  const fullRepo = `${targetOwner}/${targetRepo}`;
+  switch (repoConfig.mode) {
+    case 'all':
+      return true;
+    case 'own':
+      return agentOwner === targetOwner;
+    case 'whitelist':
+      return (repoConfig.list ?? []).includes(fullRepo);
+    case 'blacklist':
+      return !(repoConfig.list ?? []).includes(fullRepo);
+    default:
+      return true;
+  }
+}
+
 // Re-export ReviewConfig from review-config.ts
 export type { ReviewConfig, TriggerConfig } from './review-config.js';

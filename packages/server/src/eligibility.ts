@@ -1,4 +1,5 @@
-import type { ReviewConfig, RepoConfig, ClaimRole } from '@opencara/shared';
+import type { ReviewConfig, ClaimRole } from '@opencara/shared';
+export { isRepoAllowed } from '@opencara/shared';
 
 /**
  * Check if the PR should be skipped based on trigger.skip conditions.
@@ -76,29 +77,4 @@ export function parseTimeoutMs(timeout: string): number {
   const match = timeout.match(/^(\d+)m$/);
   if (!match) return 10 * 60 * 1000;
   return parseInt(match[1], 10) * 60 * 1000;
-}
-
-/**
- * Check if an agent's repo config allows reviewing a given repo.
- */
-export function isRepoAllowed(
-  repoConfig: RepoConfig | null | undefined,
-  targetOwner: string,
-  targetRepo: string,
-  agentOwner?: string,
-): boolean {
-  if (!repoConfig) return true; // null = accept all
-  const fullRepo = `${targetOwner}/${targetRepo}`;
-  switch (repoConfig.mode) {
-    case 'all':
-      return true;
-    case 'own':
-      return agentOwner === targetOwner;
-    case 'whitelist':
-      return (repoConfig.list ?? []).includes(fullRepo);
-    case 'blacklist':
-      return !(repoConfig.list ?? []).includes(fullRepo);
-    default:
-      return true;
-  }
 }
