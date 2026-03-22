@@ -121,4 +121,3 @@ summarizer:
 # Format: "<minutes>m" (range: 1m–30m)
 # Default: "10m"
 timeout: '10m'
-
