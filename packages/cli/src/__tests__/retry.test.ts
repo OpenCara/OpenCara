@@ -37,7 +37,7 @@ describe('withRetry', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it('uses exponential backoff', async () => {
+  it('uses exponential backoff with jitter', async () => {
     const delays: number[] = [];
     // Intercept setTimeout to capture delays without actually waiting
     vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler, ms?: number) => {
@@ -54,11 +54,17 @@ describe('withRetry', () => {
     ).rejects.toThrow('fail');
 
     expect(fn).toHaveBeenCalledTimes(4);
-    // 3 delays between 4 attempts: 100, 200, 400
-    expect(delays).toEqual([100, 200, 400]);
+    // 3 delays between 4 attempts: base 100, 200, 400 with ±30% jitter
+    expect(delays).toHaveLength(3);
+    expect(delays[0]).toBeGreaterThanOrEqual(70);
+    expect(delays[0]).toBeLessThanOrEqual(130);
+    expect(delays[1]).toBeGreaterThanOrEqual(140);
+    expect(delays[1]).toBeLessThanOrEqual(260);
+    expect(delays[2]).toBeGreaterThanOrEqual(280);
+    expect(delays[2]).toBeLessThanOrEqual(520);
   });
 
-  it('caps delay at maxDelayMs', async () => {
+  it('caps delay at maxDelayMs (with jitter)', async () => {
     const delays: number[] = [];
     vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler, ms?: number) => {
       delays.push(ms ?? 0);
@@ -73,8 +79,12 @@ describe('withRetry', () => {
     ).rejects.toThrow('fail');
 
     expect(fn).toHaveBeenCalledTimes(3);
-    // Delays: min(20000, 30000)=20000, min(40000, 30000)=30000
-    expect(delays).toEqual([20000, 30000]);
+    // Base delays: min(20000, 30000)=20000, min(40000, 30000)=30000 with ±30% jitter
+    expect(delays).toHaveLength(2);
+    expect(delays[0]).toBeGreaterThanOrEqual(14000);
+    expect(delays[0]).toBeLessThanOrEqual(26000);
+    expect(delays[1]).toBeGreaterThanOrEqual(21000);
+    expect(delays[1]).toBeLessThanOrEqual(39000);
   });
 
   it('aborts immediately when signal is already aborted', async () => {
@@ -117,9 +127,10 @@ describe('withRetry', () => {
     await expect(withRetry(fn, { maxAttempts: 2, baseDelayMs: 1000 })).rejects.toThrow('fail');
 
     expect(fn).toHaveBeenCalledTimes(2);
-    // Only 1 delay (between attempt 0 and 1)
+    // Only 1 delay (between attempt 0 and 1), base 1000 with ±30% jitter
     expect(delays).toHaveLength(1);
-    expect(delays[0]).toBe(1000);
+    expect(delays[0]).toBeGreaterThanOrEqual(700);
+    expect(delays[0]).toBeLessThanOrEqual(1300);
   });
 
   it('does not retry NonRetryableError', async () => {
@@ -129,6 +140,31 @@ describe('withRetry', () => {
       '404 Not Found',
     );
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('jitter produces non-deterministic delays', async () => {
+    const runs: number[][] = [];
+
+    for (let run = 0; run < 5; run++) {
+      const delays: number[] = [];
+      vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler, ms?: number) => {
+        delays.push(ms ?? 0);
+        if (typeof cb === 'function') cb();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
+
+      const fn = vi.fn().mockImplementation(() => Promise.reject(new Error('fail')));
+      await expect(
+        withRetry(fn, { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000 }),
+      ).rejects.toThrow('fail');
+      runs.push(delays);
+      vi.restoreAllMocks();
+    }
+
+    // At least two runs should have different first delays
+    const firstDelays = runs.map((r) => r[0]);
+    const unique = new Set(firstDelays);
+    expect(unique.size).toBeGreaterThan(1);
   });
 
   it('preserves NonRetryableError type', async () => {
