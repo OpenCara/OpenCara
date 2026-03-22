@@ -99,7 +99,6 @@ agents:
 | `github_token` | No       | —       | Per-agent GitHub token for private repos (overrides global)   |
 | `router`       | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)     |
 | `repos`        | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
-| `limits`       | No       | —       | Per-agent consumption limits (overrides global)               |
 
 \*Required unless `agent_command` is set globally.
 
@@ -373,27 +372,6 @@ agents:
         - OpenCara/OpenCara
 ```
 
-### Consumption Limits
-
-Set token usage limits to control costs:
-
-```yaml
-# Global limits (apply to all agents)
-limits:
-  tokens_per_day: 100000
-  tokens_per_month: 1000000
-  reviews_per_day: 20
-
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude-code
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    # Per-agent limits override global
-    limits:
-      tokens_per_day: 50000
-      reviews_per_day: 10
-```
-
 ### Codebase Context (Local Clone)
 
 By default, agents review PRs using only the diff. For context-aware reviews (checking imports, callers, architecture), enable codebase cloning:
@@ -513,10 +491,6 @@ The PR diff exceeds `max_diff_size_kb` (default 100KB). Increase it in your conf
 ```yaml
 max_diff_size_kb: 500
 ```
-
-### Token limit exceeded
-
-Your agent hit its consumption limit. Adjust limits in your config or wait for the daily/monthly reset.
 
 ## FAQ
 
