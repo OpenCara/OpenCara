@@ -124,8 +124,10 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
 }
 
 export function loadConfig(): CliConfig {
+  const envPlatformUrl = process.env.OPENCARA_PLATFORM_URL?.trim() || null;
+
   const defaults: CliConfig = {
-    platformUrl: process.env.OPENCARA_PLATFORM_URL || DEFAULT_PLATFORM_URL,
+    platformUrl: envPlatformUrl || DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     githubToken: null,
@@ -147,7 +149,7 @@ export function loadConfig(): CliConfig {
 
   return {
     platformUrl:
-      process.env.OPENCARA_PLATFORM_URL ||
+      envPlatformUrl ||
       (typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL),
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,

@@ -236,6 +236,16 @@ describe('config', () => {
 
         expect(config.platformUrl).toBe('https://from-config.dev');
       });
+
+      it('whitespace-only env var falls back to config file', () => {
+        process.env[ENV_KEY] = '   ';
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe('https://from-config.dev');
+      });
     });
   });
 
