@@ -126,14 +126,15 @@ Implementations:
 
 ### KV Key Schema
 
-| Key Pattern | Value | TTL | Purpose |
-|-------------|-------|-----|---------|
-| `task:{id}` | ReviewTask JSON | 7 days (terminal) | Task data (PR info, status, review count, counters) |
-| `claim:{taskId}:{agentId}` | TaskClaim JSON | 7 days (terminal) | Agent's claim on a task (role, status, review text) |
-| `agent:{agentId}` | Last-seen timestamp (string) | None | Agent heartbeat tracking |
-| `summary-lock:{taskId}` | Agent ID (string) | 7 days | Lock to prevent duplicate summary claims |
+| Key Pattern                | Value                        | TTL               | Purpose                                             |
+| -------------------------- | ---------------------------- | ----------------- | --------------------------------------------------- |
+| `task:{id}`                | ReviewTask JSON              | 7 days (terminal) | Task data (PR info, status, review count, counters) |
+| `claim:{taskId}:{agentId}` | TaskClaim JSON               | 7 days (terminal) | Agent's claim on a task (role, status, review text) |
+| `agent:{agentId}`          | Last-seen timestamp (string) | None              | Agent heartbeat tracking                            |
+| `summary-lock:{taskId}`    | Agent ID (string)            | 7 days            | Lock to prevent duplicate summary claims            |
 
 **Task metadata** (stored on KV entry for fast `list()` filtering):
+
 ```json
 { "status": "pending|reviewing|completed|timeout|failed", "timeout_at": 1711234567890 }
 ```
@@ -152,16 +153,16 @@ The Worker is stateless — each request creates a fresh `KVTaskStore` wrapper a
 Request → Hono middleware → KVTaskStore(env.TASK_STORE) → inject into context → route handler
 ```
 
-| Operation | KV Call | Trigger |
-|-----------|---------|---------|
-| Create task | `kv.put("task:{id}", json, { metadata })` | Webhook receives PR event |
-| List tasks | `kv.list({ prefix: "task:" })` + metadata filter | Agent polls for work |
-| Get task | `kv.get("task:{id}")` | Claim, result, timeout check |
-| Update task | `kv.put("task:{id}", json, { metadata })` | Status changes, counter updates |
-| Create claim | `kv.put("claim:{taskId}:{agentId}", json)` | Agent claims a task |
-| List claims | `kv.list({ prefix: "claim:{taskId}:" })` + get each | Summary role needs review texts |
-| Lock summary | `kv.put("summary-lock:{taskId}", agentId)` | First summary claim attempt |
-| Agent heartbeat | `kv.put("agent:{agentId}", timestamp)` | Every poll request |
+| Operation       | KV Call                                             | Trigger                         |
+| --------------- | --------------------------------------------------- | ------------------------------- |
+| Create task     | `kv.put("task:{id}", json, { metadata })`           | Webhook receives PR event       |
+| List tasks      | `kv.list({ prefix: "task:" })` + metadata filter    | Agent polls for work            |
+| Get task        | `kv.get("task:{id}")`                               | Claim, result, timeout check    |
+| Update task     | `kv.put("task:{id}", json, { metadata })`           | Status changes, counter updates |
+| Create claim    | `kv.put("claim:{taskId}:{agentId}", json)`          | Agent claims a task             |
+| List claims     | `kv.list({ prefix: "claim:{taskId}:" })` + get each | Summary role needs review texts |
+| Lock summary    | `kv.put("summary-lock:{taskId}", agentId)`          | First summary claim attempt     |
+| Agent heartbeat | `kv.put("agent:{agentId}", timestamp)`              | Every poll request              |
 
 **Cron trigger** (every minute via `wrangler.toml`): Creates a fresh `KVTaskStore`, runs `checkTimeouts()` to mark expired tasks as `timeout` and post partial results.
 

@@ -145,9 +145,11 @@ At the end of every milestone, PM creates a **QA checklist issue** and dispatche
 ## Milestone QA Checklist — M<N>
 
 ### New Features & Fixes (this milestone)
+
 - [ ] #<issue> — <description> — <how to verify>
 
 ### Existing Features (regression check)
+
 - [ ] Webhook receives and creates tasks — POST /webhook/github with valid signature returns 200
 - [ ] Agent poll/claim/result lifecycle — POST /api/tasks/poll returns valid response
 - [ ] CLI help/version commands — `opencara --help` and `opencara --version` show expected output

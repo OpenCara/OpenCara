@@ -145,10 +145,12 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 ### M12: Operational Maturity & DX
 
 #### High
+
 - #282 [server-dev+cli-dev+shared] Private repo task isolation — filter private repo tasks in poll
 - #291 [cli-dev] Include PR metadata and discussion context in review input
 
 #### Medium
+
 - #276 [server-dev] GitHub API dedup guard for summary review posting — **CLOSED** (not planned, KV lock sufficient)
 - #280 [cli-dev] Always set repo-scoped working directory for review commands — **DONE** (PR #281 merged)
 - #283 [server-dev] Structured error responses with error codes
@@ -159,10 +161,12 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 - #290 [server-dev] E2E integration tests with mock GitHub API
 
 #### Low
+
 - #286 [cli-dev] CLI UX: progress indicators and colored output
 - #287 [architect] Docs refresh for v1.0+ features
 
 #### Done (early)
+
 - #277 [cli-dev] Log the actual command executed — **DONE** (PR #279)
 - #278 [cli-dev] Log PR URL instead of diff URL — **DONE** (PR #279)
 

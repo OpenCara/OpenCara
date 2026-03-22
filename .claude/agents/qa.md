@@ -45,10 +45,12 @@ The QA checklist issue body follows this format:
 ## Milestone QA Checklist — M<N>
 
 ### New Features & Fixes (this milestone)
+
 - [ ] #<issue> — <description> — <how to verify>
 - [ ] #<issue> — <description> — <how to verify>
 
 ### Existing Features (regression check)
+
 - [ ] Webhook receives and creates tasks
 - [ ] Agent poll/claim/result lifecycle works end-to-end
 - [ ] CLI help/version/agent commands work
