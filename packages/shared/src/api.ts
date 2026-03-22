@@ -43,10 +43,11 @@ export interface ClaimReview {
   verdict: ReviewVerdict;
 }
 
-/** POST /api/tasks/{taskId}/claim — response */
-export type ClaimResponse =
-  | { claimed: true; reviews?: ClaimReview[] }
-  | { claimed: false; reason: string };
+/** POST /api/tasks/{taskId}/claim — success response (errors use ErrorResponse) */
+export interface ClaimResponse {
+  claimed: true;
+  reviews?: ClaimReview[];
+}
 
 // ── Result ─────────────────────────────────────────────────────
 
@@ -182,7 +183,21 @@ export const DEFAULT_REGISTRY: RegistryResponse = {
 
 // ── Common ─────────────────────────────────────────────────────
 
-/** Standard error response */
+/** Standardized API error codes for programmatic error handling. */
+export type ErrorCode =
+  | 'UNAUTHORIZED'
+  | 'TASK_NOT_FOUND'
+  | 'CLAIM_CONFLICT'
+  | 'CLAIM_NOT_FOUND'
+  | 'INVALID_REQUEST'
+  | 'RATE_LIMITED'
+  | 'INTERNAL_ERROR'
+  | 'SUMMARY_LOCKED';
+
+/** Standard error response — structured format with error code. */
 export interface ErrorResponse {
-  error: string;
+  error: {
+    code: ErrorCode;
+    message: string;
+  };
 }

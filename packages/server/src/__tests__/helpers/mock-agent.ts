@@ -11,10 +11,16 @@ import type {
   ClaimResponse,
   ClaimRole,
   ReviewVerdict,
+  ErrorResponse,
 } from '@opencara/shared';
 import type { Env, AppVariables } from '../../types.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
+
+/** Extended claim result: either a successful ClaimResponse or a structured error. */
+export type ClaimResult =
+  | (ClaimResponse & { _status: 200 })
+  | { claimed: false; error: ErrorResponse['error']; _status: number };
 
 export class MockAgent {
   constructor(
@@ -45,19 +51,24 @@ export class MockAgent {
     return body.tasks;
   }
 
-  /** Claim a task with a specific role. */
+  /** Claim a task with a specific role. Returns success or structured error. */
   async claim(
     taskId: string,
     role: ClaimRole,
     opts?: { model?: string; tool?: string },
-  ): Promise<ClaimResponse> {
+  ): Promise<ClaimResult> {
     const res = await this.request('POST', `/api/tasks/${taskId}/claim`, {
       agent_id: this.agentId,
       role,
       model: opts?.model,
       tool: opts?.tool,
     });
-    return (await res.json()) as ClaimResponse;
+    const body = (await res.json()) as ClaimResponse | ErrorResponse;
+    if (res.status === 200) {
+      return { ...(body as ClaimResponse), _status: 200 };
+    }
+    const err = body as ErrorResponse;
+    return { claimed: false, error: err.error, _status: res.status };
   }
 
   /** Submit a review result. Returns status and parsed body. */
@@ -102,7 +113,7 @@ export class MockAgent {
    */
   async pollAndClaim(
     role?: ClaimRole,
-  ): Promise<{ taskId: string; claimResponse: ClaimResponse } | null> {
+  ): Promise<{ taskId: string; claimResponse: ClaimResult } | null> {
     const tasks = await this.poll(role === 'review' ? { reviewOnly: true } : undefined);
     if (tasks.length === 0) return null;
 

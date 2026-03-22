@@ -24,6 +24,7 @@ import {
 } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
+import { apiError } from '../errors.js';
 
 /** Default grace period (ms) for preferred synthesizer agents. */
 export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
@@ -272,7 +273,7 @@ export function taskRoutes() {
     const { agent_id, review_only, repos } = body;
 
     if (!agent_id) {
-      return c.json({ error: 'agent_id is required' }, 400);
+      return apiError(c, 400, 'INVALID_REQUEST', 'agent_id is required');
     }
 
     // Build a set of repos the agent declares for fast lookup
@@ -325,38 +326,42 @@ export function taskRoutes() {
     const { agent_id, role, model, tool } = body;
 
     if (!agent_id || !role) {
-      return c.json({ error: 'agent_id and role are required' }, 400);
+      return apiError(c, 400, 'INVALID_REQUEST', 'agent_id and role are required');
     }
 
     const task = await store.getTask(taskId);
     if (!task) {
-      return c.json<ClaimResponse>({ claimed: false, reason: 'Task not found' });
+      return apiError(c, 404, 'TASK_NOT_FOUND', 'Task not found');
     }
 
     if (task.status !== 'pending' && task.status !== 'reviewing') {
-      return c.json<ClaimResponse>({ claimed: false, reason: `Task is ${task.status}` });
+      return apiError(c, 409, 'CLAIM_CONFLICT', `Task is ${task.status}`);
     }
 
     if (task.timeout_at <= Date.now()) {
-      return c.json<ClaimResponse>({ claimed: false, reason: 'Task has timed out' });
+      return apiError(c, 409, 'CLAIM_CONFLICT', 'Task has timed out');
     }
 
     // Check whitelist/blacklist eligibility before slot availability
     const eligibility = isAgentEligibleForRole(task.config, role, agent_id);
     if (!eligibility.eligible) {
-      return c.json<ClaimResponse>({
-        claimed: false,
-        reason: eligibility.reason ?? 'Agent not eligible for this role',
-      });
+      return apiError(
+        c,
+        409,
+        'CLAIM_CONFLICT',
+        eligibility.reason ?? 'Agent not eligible for this role',
+      );
     }
 
     const actualRole = availableRole(task, agent_id);
 
     if (!actualRole || actualRole !== role) {
-      return c.json<ClaimResponse>({
-        claimed: false,
-        reason: actualRole ? `Expected role ${actualRole}, got ${role}` : 'No slots available',
-      });
+      return apiError(
+        c,
+        409,
+        'CLAIM_CONFLICT',
+        actualRole ? `Expected role ${actualRole}, got ${role}` : 'No slots available',
+      );
     }
 
     // Acquire summary lock to prevent concurrent claims under KV eventual consistency.
@@ -367,10 +372,7 @@ export function taskRoutes() {
         console.log(
           `Task ${taskId}: rejecting duplicate summary claim from ${agent_id} — lock held by another agent`,
         );
-        return c.json<ClaimResponse>({
-          claimed: false,
-          reason: 'Summary already claimed by another agent',
-        });
+        return apiError(c, 409, 'SUMMARY_LOCKED', 'Summary already claimed by another agent');
       }
     }
 
@@ -429,7 +431,7 @@ export function taskRoutes() {
     const { agent_id, type, review_text, verdict, tokens_used } = body;
 
     if (!agent_id || !type || !review_text) {
-      return c.json({ error: 'agent_id, type, and review_text are required' }, 400);
+      return apiError(c, 400, 'INVALID_REQUEST', 'agent_id, type, and review_text are required');
     }
 
     const claimId = `${taskId}:${agent_id}`;
@@ -437,23 +439,25 @@ export function taskRoutes() {
 
     if (!claim) {
       console.error(`[agent:${agent_id}] task=${taskId} action=result_rejected reason=no_claim`);
-      return c.json({ error: 'No claim found for this agent on this task' }, 404);
+      return apiError(c, 404, 'CLAIM_NOT_FOUND', 'No claim found for this agent on this task');
     }
 
     if (claim.status !== 'pending') {
       console.error(
         `[agent:${agent_id}] task=${taskId} action=result_rejected reason=claim_${claim.status}`,
       );
-      return c.json({ error: `Claim already ${claim.status}` }, 409);
+      return apiError(c, 409, 'CLAIM_CONFLICT', `Claim already ${claim.status}`);
     }
 
     if (claim.role !== type) {
       console.error(
         `[agent:${agent_id}] task=${taskId} action=result_rejected reason=role_mismatch claim_role=${claim.role} submission_type=${type}`,
       );
-      return c.json(
-        { error: `Claim role '${claim.role}' does not match submission type '${type}'` },
+      return apiError(
+        c,
         400,
+        'INVALID_REQUEST',
+        `Claim role '${claim.role}' does not match submission type '${type}'`,
       );
     }
 
@@ -521,7 +525,7 @@ export function taskRoutes() {
     const claim = await store.getClaim(claimId);
 
     if (!claim) {
-      return c.json({ error: 'Claim not found' }, 404);
+      return apiError(c, 404, 'CLAIM_NOT_FOUND', 'Claim not found');
     }
 
     if (claim.status !== 'pending') {
@@ -529,7 +533,7 @@ export function taskRoutes() {
       if (claim.status === 'rejected') {
         return c.json({ success: true });
       }
-      return c.json({ error: `Claim is ${claim.status}, expected pending` }, 409);
+      return apiError(c, 409, 'CLAIM_CONFLICT', `Claim is ${claim.status}, expected pending`);
     }
 
     await store.updateClaim(claimId, { status: 'rejected' });
@@ -567,7 +571,7 @@ export function taskRoutes() {
     const claim = await store.getClaim(claimId);
 
     if (!claim) {
-      return c.json({ error: 'Claim not found' }, 404);
+      return apiError(c, 404, 'CLAIM_NOT_FOUND', 'Claim not found');
     }
 
     if (claim.status !== 'pending') {
@@ -575,7 +579,7 @@ export function taskRoutes() {
       if (claim.status === 'error') {
         return c.json({ success: true });
       }
-      return c.json({ error: `Claim is ${claim.status}, expected pending` }, 409);
+      return apiError(c, 409, 'CLAIM_CONFLICT', `Claim is ${claim.status}, expected pending`);
     }
 
     await store.updateClaim(claimId, { status: 'error' });

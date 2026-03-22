@@ -109,10 +109,16 @@ describe('Integration: full E2E flows', () => {
     return (await res.json()) as { tasks: Array<Record<string, unknown>> };
   }
 
-  /** Claim a task. */
+  /** Claim a task. Returns success body or error body with claimed=false. */
   async function claim(taskId: string, agentId: string, role: string) {
     const res = await api('POST', `/api/tasks/${taskId}/claim`, { agent_id: agentId, role });
-    return (await res.json()) as Record<string, unknown>;
+    const body = (await res.json()) as Record<string, unknown>;
+    if (res.status !== 200) {
+      // Map structured error to a flat shape for backward-compatible assertions
+      const err = body as { error: { code: string; message: string } };
+      return { claimed: false, reason: err.error.message, errorCode: err.error.code };
+    }
+    return body;
   }
 
   /** Submit a result. */

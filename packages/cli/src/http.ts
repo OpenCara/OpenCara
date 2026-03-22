@@ -1,9 +1,10 @@
-import type { ErrorResponse } from '@opencara/shared';
+import type { ErrorCode, ErrorResponse } from '@opencara/shared';
 
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly errorCode?: ErrorCode,
   ) {
     super(message);
     this.name = 'HttpError';
@@ -52,14 +53,19 @@ export class ApiClient {
   private async handleResponse<T>(res: Response, path: string): Promise<T> {
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
+      let errorCode: ErrorCode | undefined;
       try {
         const body = (await res.json()) as ErrorResponse;
-        if (body.error) message = body.error;
+        if (body.error && typeof body.error === 'object' && 'code' in body.error) {
+          // Structured error response
+          errorCode = body.error.code;
+          message = body.error.message;
+        }
       } catch {
-        // ignore parse errors
+        // ignore parse errors — keep generic message
       }
       this.log(`${res.status} ${message} (${path})`);
-      throw new HttpError(res.status, message);
+      throw new HttpError(res.status, message, errorCode);
     }
     this.log(`${res.status} OK (${path})`);
     return (await res.json()) as T;
