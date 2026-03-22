@@ -517,7 +517,6 @@ describe('E2E Agent Scenarios', () => {
       const agentPromise = startTestAgent('cleanup-agent');
       await advanceTime(500);
 
-      // After task completion, the repo-scoped dir should have been removed
       const expectedDir = path.join(
         os.homedir(),
         '.opencara',
@@ -526,7 +525,14 @@ describe('E2E Agent Scenarios', () => {
         'test-repo',
         taskId,
       );
-      // cleanupTaskDir removes the directory — verify it no longer exists
+
+      // Verify the tool was called with the repo-scoped dir
+      expect(mockedExecuteTool).toHaveBeenCalled();
+      const cwdArg = mockedExecuteTool.mock.calls[0][5];
+      expect(cwdArg).toBe(expectedDir);
+
+      // After task completion, cleanupTaskDir removes the directory
+      // Since mkdirSync actually runs, verify directory no longer exists
       expect(fs.existsSync(expectedDir)).toBe(false);
 
       await stopAgent(agentPromise, server);
@@ -551,16 +557,7 @@ describe('E2E Agent Scenarios', () => {
       );
       await advanceTime(500);
 
-      // When codebase_dir is configured, cloneOrUpdate runs (and may fail),
-      // but the cwd should NOT be the repo-scoped pattern
-      if (mockedExecuteTool.mock.calls.length > 0) {
-        const cwdArg = mockedExecuteTool.mock.calls[0][5] as string | undefined;
-        if (cwdArg) {
-          expect(cwdArg).not.toMatch(/\.opencara\/repos/);
-        }
-      }
-
-      // The "Working directory:" log should NOT appear
+      // The "Working directory:" log should NOT appear (codebase_dir takes the clone path)
       const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
       const repoScopedLogs = logCalls.filter(
         (c: string[]) => typeof c[0] === 'string' && c[0].includes('Working directory:'),

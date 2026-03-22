@@ -20,7 +20,7 @@ import {
   CONFIG_DIR,
   type LocalAgentConfig,
 } from '../config.js';
-import { cloneOrUpdate, cleanupTaskDir } from '../codebase.js';
+import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.js';
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
 import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
@@ -342,11 +342,20 @@ async function handleTask(
     }
   } else {
     // No codebase_dir configured — create a repo-scoped working directory
-    const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
-    fs.mkdirSync(repoScopedDir, { recursive: true });
-    taskCheckoutPath = repoScopedDir;
-    taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
-    log(`  Working directory: ${repoScopedDir}`);
+    try {
+      validatePathSegment(owner, 'owner');
+      validatePathSegment(repo, 'repo');
+      validatePathSegment(task_id, 'task_id');
+      const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
+      fs.mkdirSync(repoScopedDir, { recursive: true });
+      taskCheckoutPath = repoScopedDir;
+      taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
+      log(`  Working directory: ${repoScopedDir}`);
+    } catch (err) {
+      logWarn(
+        `  Warning: failed to create working directory: ${(err as Error).message}. Continuing without scoped cwd.`,
+      );
+    }
   }
 
   // Execute review or summary
