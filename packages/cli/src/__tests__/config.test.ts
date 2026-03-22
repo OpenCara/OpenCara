@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -182,6 +182,70 @@ describe('config', () => {
       const config = loadConfig();
 
       expect(config.agentCommand).toBeNull();
+    });
+
+    describe('OPENCARA_PLATFORM_URL env var', () => {
+      const ENV_KEY = 'OPENCARA_PLATFORM_URL';
+
+      afterEach(() => {
+        delete process.env[ENV_KEY];
+      });
+
+      it('env var overrides config file value', () => {
+        process.env[ENV_KEY] = 'https://env-override.dev';
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe('https://env-override.dev');
+      });
+
+      it('env var overrides default when no config file exists', () => {
+        process.env[ENV_KEY] = 'https://env-override.dev';
+        vi.mocked(fs.existsSync).mockReturnValue(false);
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe('https://env-override.dev');
+      });
+
+      it('config file value used when env var is not set', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe('https://from-config.dev');
+      });
+
+      it('default used when neither env var nor config file is set', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(false);
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
+      });
+
+      it('empty env var falls back to config file', () => {
+        process.env[ENV_KEY] = '';
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe('https://from-config.dev');
+      });
+
+      it('whitespace-only env var falls back to config file', () => {
+        process.env[ENV_KEY] = '   ';
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+
+        const config = loadConfig();
+
+        expect(config.platformUrl).toBe('https://from-config.dev');
+      });
     });
   });
 
