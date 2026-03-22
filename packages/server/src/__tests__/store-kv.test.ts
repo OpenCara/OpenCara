@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { KVTaskStore, safeParseJson } from '../store/kv.js';
+import { KVTaskStore, safeParseJson, DEFAULT_TTL_DAYS } from '../store/kv.js';
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 
@@ -483,6 +483,134 @@ describe('KVTaskStore', () => {
       await store.setTimeoutLastCheck(1000);
       await store.setTimeoutLastCheck(2000);
       expect(await store.getTimeoutLastCheck()).toBe(2000);
+    });
+  });
+
+  // ── Custom TTL ─────────────────────────────────────────────────
+
+  describe('custom TTL', () => {
+    it('uses custom TTL for terminal task updates', async () => {
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, 3);
+
+      await customStore.createTask(makeTask());
+      customKv.putCalls = [];
+
+      await customStore.updateTask('task-1', { status: 'completed' });
+
+      const put = customKv.putCalls.find((c) => c.key === 'task:task-1');
+      expect(put!.options?.expirationTtl).toBe(3 * 24 * 60 * 60);
+    });
+
+    it('uses custom TTL for terminal claim updates', async () => {
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, 3);
+
+      await customStore.createClaim(makeClaim());
+      customKv.putCalls = [];
+
+      await customStore.updateClaim('task-1:agent-1', { status: 'completed' });
+
+      const put = customKv.putCalls.find((c) => c.key === 'claim:task-1:agent-1');
+      expect(put!.options).toEqual({ expirationTtl: 3 * 24 * 60 * 60 });
+    });
+
+    it('uses custom TTL for summary locks', async () => {
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, 3);
+
+      await customStore.acquireSummaryLock('task-1', 'agent-a');
+
+      const put = customKv.putCalls.find((c) => c.key === 'summary-lock:task-1');
+      expect(put!.options?.expirationTtl).toBe(3 * 24 * 60 * 60);
+    });
+
+    it('defaults to DEFAULT_TTL_DAYS when no ttlDays provided', () => {
+      expect(DEFAULT_TTL_DAYS).toBe(7);
+    });
+  });
+
+  // ── cleanupTerminalTasks ───────────────────────────────────────
+
+  describe('cleanupTerminalTasks', () => {
+    it('deletes terminal tasks older than TTL', async () => {
+      const ttlDays = 1;
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+
+      const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000; // 2 days ago
+      await customStore.createTask(
+        makeTask({ id: 'old-completed', status: 'completed', created_at: oldTime }),
+      );
+      await customStore.createTask(
+        makeTask({ id: 'old-timeout', status: 'timeout', created_at: oldTime }),
+      );
+      await customStore.createTask(
+        makeTask({ id: 'old-failed', status: 'failed', created_at: oldTime }),
+      );
+
+      const deleted = await customStore.cleanupTerminalTasks();
+      expect(deleted).toBe(3);
+      expect(await customStore.getTask('old-completed')).toBeNull();
+      expect(await customStore.getTask('old-timeout')).toBeNull();
+      expect(await customStore.getTask('old-failed')).toBeNull();
+    });
+
+    it('does not delete terminal tasks within TTL', async () => {
+      const ttlDays = 7;
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+
+      const recentTime = Date.now() - 1 * 24 * 60 * 60 * 1000; // 1 day ago
+      await customStore.createTask(
+        makeTask({ id: 'recent', status: 'completed', created_at: recentTime }),
+      );
+
+      const deleted = await customStore.cleanupTerminalTasks();
+      expect(deleted).toBe(0);
+      expect(await customStore.getTask('recent')).not.toBeNull();
+    });
+
+    it('does not delete active tasks', async () => {
+      const ttlDays = 1;
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+
+      const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      await customStore.createTask(
+        makeTask({ id: 'pending', status: 'pending', created_at: oldTime }),
+      );
+      await customStore.createTask(
+        makeTask({ id: 'reviewing', status: 'reviewing', created_at: oldTime }),
+      );
+
+      const deleted = await customStore.cleanupTerminalTasks();
+      expect(deleted).toBe(0);
+      expect(await customStore.getTask('pending')).not.toBeNull();
+      expect(await customStore.getTask('reviewing')).not.toBeNull();
+    });
+
+    it('also deletes associated claims', async () => {
+      const ttlDays = 1;
+      const customKv = new MockKV();
+      const customStore = new KVTaskStore(customKv as unknown as KVNamespace, ttlDays);
+
+      const oldTime = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      await customStore.createTask(
+        makeTask({ id: 'old', status: 'completed', created_at: oldTime }),
+      );
+      await customStore.createClaim(
+        makeClaim({ id: 'old:agent-1', task_id: 'old', agent_id: 'agent-1' }),
+      );
+
+      await customStore.cleanupTerminalTasks();
+      const claims = await customStore.getClaims('old');
+      expect(claims).toEqual([]);
+    });
+
+    it('returns 0 when no tasks exist', async () => {
+      const deleted = await store.cleanupTerminalTasks();
+      expect(deleted).toBe(0);
     });
   });
 });

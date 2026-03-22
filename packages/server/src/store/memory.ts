@@ -1,6 +1,9 @@
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { TaskStore } from './interface.js';
+import { DEFAULT_TTL_DAYS } from './kv.js';
+
+const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
 
 /**
  * In-memory TaskStore for dev/testing. No mocks needed in tests.
@@ -10,6 +13,11 @@ export class MemoryTaskStore implements TaskStore {
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
   private summaryLocks = new Map<string, string>();
+  private readonly ttlMs: number;
+
+  constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
+    this.ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+  }
 
   // Tasks
 
@@ -115,6 +123,26 @@ export class MemoryTaskStore implements TaskStore {
 
   async setTimeoutLastCheck(timestamp: number): Promise<void> {
     this.timeoutLastCheck = timestamp;
+  }
+
+  // Cleanup
+
+  async cleanupTerminalTasks(): Promise<number> {
+    const cutoff = Date.now() - this.ttlMs;
+    let deleted = 0;
+    for (const [id, task] of this.tasks) {
+      if (TERMINAL_STATUSES.includes(task.status) && task.created_at <= cutoff) {
+        this.tasks.delete(id);
+        this.summaryLocks.delete(id);
+        for (const [claimId, claim] of this.claims) {
+          if (claim.task_id === id) {
+            this.claims.delete(claimId);
+          }
+        }
+        deleted++;
+      }
+    }
+    return deleted;
   }
 
   /** Clear all data. Test-only — not on the TaskStore interface. */

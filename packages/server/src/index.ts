@@ -69,24 +69,44 @@ export function createApp(store: TaskStore): HonoApp {
   return buildApp(() => store);
 }
 
+/** Parse TASK_TTL_DAYS from env, defaulting to 7. */
+export function parseTtlDays(env: Env): number {
+  if (!env.TASK_TTL_DAYS) return 7;
+  const parsed = parseInt(env.TASK_TTL_DAYS, 10);
+  return Number.isNaN(parsed) || parsed < 1 ? 7 : parsed;
+}
+
+function createStore(env: Env): TaskStore {
+  const ttlDays = parseTtlDays(env);
+  return env.TASK_STORE ? new KVTaskStore(env.TASK_STORE, ttlDays) : new MemoryTaskStore(ttlDays);
+}
+
 // Cloudflare Workers entrypoint — app created once at module level
-const workerApp = buildApp((env) =>
-  env.TASK_STORE ? new KVTaskStore(env.TASK_STORE) : new MemoryTaskStore(),
-);
+const workerApp = buildApp(createStore);
 
 export default {
   fetch: workerApp.fetch,
-  /** Cloudflare Cron Trigger handler — checks for timed-out tasks. */
+  /** Cloudflare Cron Trigger handler — checks for timed-out tasks and cleans up stale entries. */
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    const store = createStore(env);
+
     try {
-      const store: TaskStore = env.TASK_STORE
-        ? new KVTaskStore(env.TASK_STORE)
-        : new MemoryTaskStore();
       await store.setTimeoutLastCheck(Date.now());
       await checkTimeouts(store, env);
     } catch (err) {
       console.error(
         `[scheduled] action=check_timeouts error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    try {
+      const deleted = await store.cleanupTerminalTasks();
+      if (deleted > 0) {
+        console.log(`[scheduled] action=cleanup_terminal deleted=${deleted}`);
+      }
+    } catch (err) {
+      console.error(
+        `[scheduled] action=cleanup_terminal error=${err instanceof Error ? err.message : String(err)}`,
       );
     }
   },
