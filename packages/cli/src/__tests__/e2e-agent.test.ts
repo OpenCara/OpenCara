@@ -381,6 +381,8 @@ describe('E2E Agent Scenarios', () => {
         }) as typeof fetch;
 
         const agentPromise = startTestAgent('single-agent');
+        // 2000ms is sufficient — result fetch is intercepted and returns instantly,
+        // so no crypto.subtle or network round-trip occurs.
         await advanceTime(2000);
 
         // Tool was called (review execution happened)
