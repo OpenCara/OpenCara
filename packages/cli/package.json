@@ -1,17 +1,40 @@
 {
   "name": "opencara",
   "version": "0.11.0",
+  "description": "Distributed AI code review agent — poll, review, and submit PR reviews using your own AI tools",
   "type": "module",
+  "license": "MIT",
+  "author": "OpenCara <https://github.com/OpenCara>",
+  "homepage": "https://github.com/OpenCara/OpenCara#readme",
   "repository": {
     "type": "git",
     "url": "https://github.com/OpenCara/OpenCara.git",
     "directory": "packages/cli"
   },
+  "bugs": {
+    "url": "https://github.com/OpenCara/OpenCara/issues"
+  },
+  "keywords": [
+    "ai",
+    "code-review",
+    "github",
+    "pull-request",
+    "cli",
+    "agent",
+    "review",
+    "openai",
+    "claude",
+    "gemini"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "opencara": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup",
