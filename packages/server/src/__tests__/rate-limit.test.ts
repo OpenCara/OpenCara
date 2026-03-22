@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { checkRateLimit, resetRateLimits } from '../middleware/rate-limit.js';
 
 describe('Rate Limiter', () => {
   beforeEach(() => {
     resetRateLimits();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('checkRateLimit', () => {
@@ -41,17 +46,25 @@ describe('Rate Limiter', () => {
     });
 
     it('allows requests after window expires', () => {
-      const config = { maxRequests: 1, windowMs: 100 }; // 100ms window
+      const config = { maxRequests: 1, windowMs: 1_000 };
       expect(checkRateLimit('key1', config)).toBeNull();
       expect(checkRateLimit('key1', config)).not.toBeNull();
 
-      // Wait for window to expire (use a real short window)
-      return new Promise<void>((resolve) => {
-        setTimeout(() => {
-          expect(checkRateLimit('key1', config)).toBeNull();
-          resolve();
-        }, 150);
-      });
+      // Advance past the window
+      vi.advanceTimersByTime(1_100);
+      expect(checkRateLimit('key1', config)).toBeNull();
+    });
+
+    it('rejects new keys when at MAX_TRACKED_KEYS capacity', () => {
+      const config = { maxRequests: 100, windowMs: 60_000 };
+      // Fill up to capacity (10,000 keys)
+      for (let i = 0; i < 10_000; i++) {
+        expect(checkRateLimit(`flood-${i}`, config)).toBeNull();
+      }
+      // New key should be rejected
+      const retryAfter = checkRateLimit('new-key', config);
+      expect(retryAfter).not.toBeNull();
+      expect(retryAfter).toBe(60); // windowMs / 1000
     });
   });
 });
