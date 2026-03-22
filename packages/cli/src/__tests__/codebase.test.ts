@@ -243,6 +243,18 @@ describe('codebase', () => {
       expect(result2.localPath).toBe('/tmp/repos/acme/widgets/task-2');
       expect(result1.localPath).not.toBe(result2.localPath);
     });
+
+    it('rejects taskId with path traversal', () => {
+      expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos', null, '../../etc')).toThrow(
+        'disallowed characters',
+      );
+    });
+
+    it('rejects taskId with slashes', () => {
+      expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos', null, 'a/b')).toThrow(
+        'disallowed characters',
+      );
+    });
   });
 
   describe('cleanupTaskDir', () => {
@@ -255,13 +267,35 @@ describe('codebase', () => {
       });
     });
 
-    it('silently ignores errors', () => {
+    it('ignores ENOENT errors silently', () => {
       vi.mocked(fs.rmSync).mockImplementation(() => {
-        throw new Error('ENOENT');
+        throw Object.assign(new Error('No such file'), { code: 'ENOENT' });
       });
 
-      // Should not throw
-      expect(() => cleanupTaskDir('/tmp/repos/nonexistent')).not.toThrow();
+      expect(() => cleanupTaskDir('/tmp/repos/acme/widgets/task-123')).not.toThrow();
+    });
+
+    it('warns on non-ENOENT errors but does not throw', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.rmSync).mockImplementation(() => {
+        throw Object.assign(new Error('Permission denied'), { code: 'EPERM' });
+      });
+
+      expect(() => cleanupTaskDir('/tmp/repos/acme/widgets/task-123')).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Permission denied'));
+      warnSpy.mockRestore();
+    });
+
+    it('refuses to delete shallow paths', () => {
+      cleanupTaskDir('/tmp');
+
+      expect(fs.rmSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses to delete relative paths', () => {
+      cleanupTaskDir('repos/acme/widgets');
+
+      expect(fs.rmSync).not.toHaveBeenCalled();
     });
   });
 });

@@ -38,6 +38,9 @@ export function cloneOrUpdate(
 ): CloneOrUpdateResult {
   validatePathSegment(owner, 'owner');
   validatePathSegment(repo, 'repo');
+  if (taskId) {
+    validatePathSegment(taskId, 'taskId');
+  }
 
   // Use task-specific subdirectory to isolate concurrent checkouts
   const repoDir = taskId
@@ -62,13 +65,20 @@ export function cloneOrUpdate(
 
 /**
  * Remove a task-specific checkout directory after review completes.
- * Silently ignores errors (e.g., directory already removed).
+ * Refuses to delete shallow paths as a safety guard.
+ * Ignores ENOENT (already removed), warns on other errors.
  */
 export function cleanupTaskDir(dirPath: string): void {
+  // Guard: must be an absolute path with sufficient depth to avoid deleting important dirs
+  if (!path.isAbsolute(dirPath) || dirPath.split(path.sep).filter(Boolean).length < 3) {
+    return;
+  }
   try {
     fs.rmSync(dirPath, { recursive: true, force: true });
-  } catch {
-    // Ignore cleanup errors — non-critical
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn(`[cleanup] Failed to remove ${dirPath}: ${(err as Error).message}`);
+    }
   }
 }
 
