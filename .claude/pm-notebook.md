@@ -137,7 +137,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 ### Milestone QA (2026-03-22)
 
 - #272 [qa] Milestone M11 QA Checklist — **DONE** (36/37 passed, #257 coverage gap accepted at 96.75%)
-- #303 [qa] Milestone M12 QA Checklist — **IN PROGRESS** (spawn requested)
+- #303 [qa] Milestone M12 QA Checklist — **DONE** (18/19 passed, #287 stale test count fixed in 22433b4)
 
 ### Critical bug (team-lead reported, 2026-03-22)
 
