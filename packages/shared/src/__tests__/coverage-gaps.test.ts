@@ -1,24 +1,9 @@
 /**
  * Tests covering shared source gaps:
- * - api.ts: getModelDefaultReputation (lines 196-198)
  * - types.ts: isRepoAllowed default case (line 83)
  */
 import { describe, it, expect } from 'vitest';
-import { getModelDefaultReputation, DEFAULT_REPUTATION_FALLBACK } from '../api.js';
 import { isRepoAllowed } from '../types.js';
-
-describe('getModelDefaultReputation', () => {
-  it('returns default reputation for known models', () => {
-    expect(getModelDefaultReputation('claude-opus-4-6')).toBe(0.8);
-    expect(getModelDefaultReputation('claude-sonnet-4-6')).toBe(0.7);
-    expect(getModelDefaultReputation('qwen3.5-plus')).toBe(0.6);
-  });
-
-  it('returns DEFAULT_REPUTATION_FALLBACK for unknown models', () => {
-    expect(getModelDefaultReputation('unknown-model')).toBe(DEFAULT_REPUTATION_FALLBACK);
-    expect(getModelDefaultReputation('')).toBe(DEFAULT_REPUTATION_FALLBACK);
-  });
-});
 
 describe('isRepoAllowed edge cases', () => {
   it('returns true for null repoConfig', () => {

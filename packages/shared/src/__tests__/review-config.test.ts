@@ -19,7 +19,6 @@ agents:
   preferred_tools:
     - claude-code
     - codex
-  min_reputation: 0.6
 reviewer:
   whitelist:
     - agent: abc-123
@@ -32,10 +31,6 @@ summarizer:
   blacklist:
     - agent: agent-spam
 timeout: 15m
-auto_approve:
-  enabled: false
-  conditions:
-    - type: lint_only
 `;
 
 const MINIMAL_CONFIG = `
@@ -53,15 +48,12 @@ describe('parseReviewConfig', () => {
     expect(config.agents.reviewCount).toBe(2);
     expect(config.agents.preferredModels).toEqual(['claude-opus-4-6', 'glm-5']);
     expect(config.agents.preferredTools).toEqual(['claude-code', 'codex']);
-    expect(config.agents.minReputation).toBe(0.6);
     expect(config.reviewer.whitelist).toEqual([{ agent: 'abc-123' }]);
     expect(config.reviewer.blacklist).toEqual([{ agent: 'agent-bad' }]);
     expect(config.reviewer.allowAnonymous).toBe(false);
     expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-synth' }]);
     expect(config.summarizer.blacklist).toEqual([{ agent: 'agent-spam' }]);
     expect(config.timeout).toBe('15m');
-    expect(config.autoApprove.enabled).toBe(false);
-    expect(config.autoApprove.conditions).toEqual([{ type: 'lint_only' }]);
   });
 
   it('parses a minimal config with defaults', () => {
@@ -72,15 +64,12 @@ describe('parseReviewConfig', () => {
     expect(config.prompt).toBe('Review this code.');
     expect(config.agents.reviewCount).toBe(1);
     expect(config.agents.preferredTools).toEqual([]);
-    expect(config.agents.minReputation).toBe(0.0);
     expect(config.reviewer.whitelist).toEqual([]);
     expect(config.reviewer.blacklist).toEqual([]);
     expect(config.summarizer.whitelist).toEqual([]);
     expect(config.summarizer.blacklist).toEqual([]);
     expect(config.summarizer.preferred).toEqual([]);
     expect(config.timeout).toBe('10m');
-    expect(config.autoApprove.enabled).toBe(false);
-    expect(config.autoApprove.conditions).toEqual([]);
   });
 
   it('returns error for invalid YAML syntax', () => {
@@ -129,18 +118,6 @@ describe('parseReviewConfig', () => {
       'version: 1\nprompt: test\nagents:\n  review_count: 99',
     ) as ReviewConfig;
     expect(high.agents.reviewCount).toBe(10);
-  });
-
-  it('clamps min_reputation to range 0.0-1.0', () => {
-    const low = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  min_reputation: -0.5',
-    ) as ReviewConfig;
-    expect(low.agents.minReputation).toBe(0.0);
-
-    const high = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  min_reputation: 1.5',
-    ) as ReviewConfig;
-    expect(high.agents.minReputation).toBe(1.0);
   });
 
   it('uses default timeout for invalid format', () => {
@@ -204,10 +181,8 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
     expect(DEFAULT_REVIEW_CONFIG.version).toBe(1);
     expect(DEFAULT_REVIEW_CONFIG.prompt).toBeTruthy();
     expect(DEFAULT_REVIEW_CONFIG.agents.reviewCount).toBe(1);
-    expect(DEFAULT_REVIEW_CONFIG.agents.minReputation).toBe(0);
     expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
     expect(DEFAULT_REVIEW_CONFIG.reviewer.allowAnonymous).toBe(true);
-    expect(DEFAULT_REVIEW_CONFIG.autoApprove.enabled).toBe(false);
     expect(DEFAULT_REVIEW_CONFIG.trigger.on).toEqual(['opened']);
     expect(DEFAULT_REVIEW_CONFIG.trigger.comment).toBe('/opencara review');
     expect(DEFAULT_REVIEW_CONFIG.trigger.skip).toEqual(['draft']);

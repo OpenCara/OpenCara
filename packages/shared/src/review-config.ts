@@ -14,7 +14,6 @@ export interface ReviewConfig {
     reviewCount: number;
     preferredModels: string[];
     preferredTools: string[];
-    minReputation: number;
   };
   reviewer: {
     whitelist: Array<{ agent: string }>;
@@ -27,10 +26,6 @@ export interface ReviewConfig {
     preferred: Array<{ agent: string }>;
   };
   timeout: string;
-  autoApprove: {
-    enabled: boolean;
-    conditions: Array<{ type: string }>;
-  };
 }
 
 type ParseResult = ReviewConfig | { error: string };
@@ -102,7 +97,6 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
     reviewCount: 1,
     preferredModels: [],
     preferredTools: [],
-    minReputation: 0,
   },
   reviewer: {
     whitelist: [],
@@ -115,10 +109,6 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
     preferred: [],
   },
   timeout: '10m',
-  autoApprove: {
-    enabled: false,
-    conditions: [],
-  },
 };
 
 export function parseReviewConfig(yaml: string): ParseResult {
@@ -151,7 +141,6 @@ export function parseReviewConfig(yaml: string): ParseResult {
   const agentsRaw = isObject(raw.agents) ? raw.agents : {};
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
   const summarizerRaw = isObject(raw.summarizer) ? raw.summarizer : {};
-  const autoApproveRaw = isObject(raw.auto_approve) ? raw.auto_approve : {};
 
   const config: ReviewConfig = {
     version: raw.version,
@@ -178,11 +167,6 @@ export function parseReviewConfig(yaml: string): ParseResult {
       preferredTools: Array.isArray(agentsRaw.preferred_tools)
         ? agentsRaw.preferred_tools.filter((t: unknown) => typeof t === 'string')
         : [],
-      minReputation: clamp(
-        typeof agentsRaw.min_reputation === 'number' ? agentsRaw.min_reputation : 0.0,
-        0.0,
-        1.0,
-      ),
     },
     reviewer: {
       whitelist: parseEntityList(reviewerRaw.whitelist),
@@ -196,15 +180,6 @@ export function parseReviewConfig(yaml: string): ParseResult {
       preferred: parsePreferredList(summarizerRaw.preferred),
     },
     timeout: parseTimeout(raw.timeout),
-    autoApprove: {
-      enabled: typeof autoApproveRaw.enabled === 'boolean' ? autoApproveRaw.enabled : false,
-      conditions: Array.isArray(autoApproveRaw.conditions)
-        ? autoApproveRaw.conditions
-            .filter(isObject)
-            .filter((c) => typeof c.type === 'string')
-            .map((c) => ({ type: c.type as string }))
-        : [],
-    },
   };
 
   return config;

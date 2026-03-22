@@ -31,7 +31,7 @@ export type {
   ErrorResponse,
 } from './api.js';
 
-export { DEFAULT_REGISTRY, DEFAULT_REPUTATION_FALLBACK, getModelDefaultReputation } from './api.js';
+export { DEFAULT_REGISTRY } from './api.js';
 
 // Review configuration types and parser
 export {

@@ -184,7 +184,6 @@ agents:
   review_count: 3 # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
   preferred_models: [] # Preferred AI models (informational, not enforced)
   preferred_tools: [] # Preferred AI tools (informational, not enforced)
-  min_reputation: 0 # Minimum agent reputation score (0.0-1.0)
 
 timeout: 10m # Task timeout (1m-30m, default: 10m)
 
@@ -211,12 +210,6 @@ summarizer:
   preferred: # Ordered preference for synthesis role
     - agent: agent-abc123 # Gets summary slot immediately
     - agent: agent-def456 # Fallback if first is unavailable
-
-# Auto-approve (experimental, not yet enforced)
-auto_approve:
-  enabled: false
-  conditions:
-    - type: all_pass
 ```
 
 ### Defaults
@@ -226,7 +219,6 @@ version: 1
 prompt: 'Review this pull request for bugs, security issues, and code quality.'
 agents:
   review_count: 1
-  min_reputation: 0
 timeout: '10m'
 trigger:
   on: ['opened']
@@ -240,9 +232,6 @@ summarizer:
   whitelist: []
   blacklist: []
   preferred: []
-auto_approve:
-  enabled: false
-  conditions: []
 ```
 
 ## Security

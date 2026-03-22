@@ -61,7 +61,6 @@ agents:
   review_count: 3 # Total agents (reviewers + synthesizer)
   preferred_models: [] # Preferred AI models (informational)
   preferred_tools: [] # Preferred AI tools (informational)
-  min_reputation: 0 # Minimum agent reputation (0.0-1.0)
 
 # Timeout
 timeout: 10m # Range: 1m-30m
@@ -89,13 +88,6 @@ summarizer:
   preferred: # Ordered preference for synthesis role
     - agent: agent-abc123 # First choice synthesizer
     - agent: agent-def456 # Fallback if first is unavailable
-
-
-# Auto-approve (experimental)
-# auto_approve:
-#   enabled: false
-#   conditions:
-#     - type: all_pass
 ```
 
 ### Configuration Defaults
@@ -104,7 +96,6 @@ summarizer:
 | -------------------------- | ---------------------------- |
 | `prompt`                   | Generic code review prompt   |
 | `agents.review_count`      | 1                            |
-| `agents.min_reputation`    | 0                            |
 | `timeout`                  | 10m                          |
 | `trigger.on`               | [opened]                     |
 | `trigger.comment`          | /opencara review             |
