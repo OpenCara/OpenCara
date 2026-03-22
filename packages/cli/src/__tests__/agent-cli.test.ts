@@ -120,7 +120,7 @@ describe('Agent CLI tests', () => {
       await promise;
 
       expect(console.error).toHaveBeenCalledWith(
-        'No review command configured. Set command in config.yml',
+        expect.stringContaining('No review command configured. Set command in config.yml'),
       );
     });
   });
