@@ -169,7 +169,6 @@ export interface SummaryData {
   review_text: string;
   model?: string;
   tool?: string;
-  verdict?: string;
 }
 
 /**
@@ -200,7 +199,7 @@ async function postFinalReview(
     return;
   }
 
-  // Observability: check if KV claim has propagated yet (non-blocking)
+  // Observability only: check if KV has propagated the write yet (does not affect review posting)
   const summaryClaim = await store.getClaim(`${taskId}:${summaryAgentId}`);
   if (!summaryClaim?.review_text) {
     console.warn(
@@ -459,7 +458,6 @@ export function taskRoutes() {
         review_text,
         model: claim.model,
         tool: claim.tool,
-        verdict,
       });
     } else {
       // Review submitted — increment completed_reviews counter on task

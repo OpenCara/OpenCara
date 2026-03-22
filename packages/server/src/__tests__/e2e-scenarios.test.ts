@@ -842,6 +842,10 @@ describe('E2E Scenarios', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('H. KV Read-After-Write Staleness', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     it('review is posted even when getClaim returns stale data without review_text', async () => {
       const taskId = await injectPR();
       const a = agent('stale-agent');
@@ -851,16 +855,14 @@ describe('E2E Scenarios', () => {
 
       // Intercept getClaim to simulate KV staleness: return claim without review_text
       const originalGetClaim = store.getClaim.bind(store);
-      const getClaimSpy = vi
-        .spyOn(store, 'getClaim')
-        .mockImplementation(async (claimId: string) => {
-          const claim = await originalGetClaim(claimId);
-          if (claim && claimId === `${taskId}:stale-agent`) {
-            // Simulate KV staleness — return claim without review_text
-            return { ...claim, review_text: undefined };
-          }
-          return claim;
-        });
+      vi.spyOn(store, 'getClaim').mockImplementation(async (claimId: string) => {
+        const claim = await originalGetClaim(claimId);
+        if (claim && claimId === `${taskId}:stale-agent`) {
+          // Simulate KV staleness — return claim without review_text
+          return { ...claim, review_text: undefined };
+        }
+        return claim;
+      });
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -890,24 +892,33 @@ describe('E2E Scenarios', () => {
 
       // Warning was logged about stale KV data
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('stale data'));
-
-      getClaimSpy.mockRestore();
-      warnSpy.mockRestore();
     });
 
     it('review uses model/tool from directly passed summary data, not stale KV', async () => {
-      const taskId = await injectPR();
-      const a = agent('model-agent');
+      // Use multi-agent mode so synthesizer model/tool appears in the comment
+      const taskId = await injectPR({ reviewCount: 2 });
+      const reviewer = agent('reviewer-agent');
+      const synth = agent('model-agent');
 
-      // Claim with model and tool
-      await a.claim(taskId, 'summary', { model: 'claude-3', tool: 'opencara-cli' });
+      // Reviewer claims and completes the review
+      await reviewer.claim(taskId, 'review', { model: 'gpt-4', tool: 'other-cli' });
+      await reviewer.submitResult(taskId, 'review', 'LGTM', 'approve', 300);
 
-      // Intercept getClaim to return stale data with wrong model/tool
+      // Synthesizer claims with correct model and tool
+      await synth.claim(taskId, 'summary', { model: 'claude-3', tool: 'opencara-cli' });
+
+      // Intercept getClaim to return stale data on the SECOND call (postFinalReview's
+      // observability check), not the first call (result handler's claim lookup)
       const originalGetClaim = store.getClaim.bind(store);
+      let callCount = 0;
       vi.spyOn(store, 'getClaim').mockImplementation(async (claimId: string) => {
         const claim = await originalGetClaim(claimId);
         if (claim && claimId === `${taskId}:model-agent`) {
-          return { ...claim, review_text: undefined, model: 'stale-model', tool: 'stale-tool' };
+          callCount++;
+          if (callCount > 1) {
+            // Second call (postFinalReview observability) — return stale data
+            return { ...claim, review_text: undefined, model: 'stale-model', tool: 'stale-tool' };
+          }
         }
         return claim;
       });
@@ -915,7 +926,7 @@ describe('E2E Scenarios', () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       // Submit result
-      const result = await a.submitResult(
+      const result = await synth.submitResult(
         taskId,
         'summary',
         '## Summary\nModel test.',
@@ -931,11 +942,10 @@ describe('E2E Scenarios', () => {
       );
       expect(commentPost).toBeDefined();
       const commentBody = (commentPost!.body as { body: string }).body;
-      // Should NOT contain stale-model or stale-tool
+      // Should contain correct model/tool (formatted as `model/tool`) and NOT stale ones
+      expect(commentBody).toContain('claude-3/opencara-cli');
       expect(commentBody).not.toContain('stale-model');
       expect(commentBody).not.toContain('stale-tool');
-
-      vi.restoreAllMocks();
     });
   });
 });
