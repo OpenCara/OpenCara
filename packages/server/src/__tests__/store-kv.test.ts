@@ -464,6 +464,15 @@ describe('KVDataStore', () => {
       expect(putCall!.value).toBe('agent-a');
     });
 
+    it('isLockHeld returns true when lock exists', async () => {
+      await store.acquireLock('summary:task-1', 'agent-a');
+      expect(await store.isLockHeld('summary:task-1')).toBe(true);
+    });
+
+    it('isLockHeld returns false when no lock exists', async () => {
+      expect(await store.isLockHeld('summary:task-1')).toBe(false);
+    });
+
     it('locks are independent per task', async () => {
       await store.acquireLock('summary:task-1', 'agent-a');
       expect(await store.acquireLock('summary:task-2', 'agent-b')).toBe(true);

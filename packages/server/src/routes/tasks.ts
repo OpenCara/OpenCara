@@ -325,8 +325,12 @@ export function taskRoutes() {
         continue;
       }
 
-      // Check if summary slot is locked via the generic lock mechanism
-      const summaryClaimed = await store.isLockHeld(`summary:${task.id}`);
+      // Derive summary claimed state from task counters (avoids O(n) KV lock reads).
+      // This is a best-effort poll filter — the claim endpoint uses acquireLock for
+      // the authoritative check.
+      const claimedCount = (task.claimed_agents ?? []).length;
+      const reviewClaims = task.review_claims ?? 0;
+      const summaryClaimed = claimedCount > reviewClaims;
 
       const role = availableRole(task, agent_id, summaryClaimed);
       if (!role) continue;

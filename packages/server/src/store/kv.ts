@@ -134,6 +134,9 @@ export class KVDataStore implements DataStore {
   async deleteTask(id: string): Promise<void> {
     await this.kv.delete(`${TASK_PREFIX}${id}`);
 
+    // Delete associated lock (summary lock for this task)
+    await this.kv.delete(`${LOCK_PREFIX}summary:${id}`);
+
     // Delete claims (best effort — list by prefix)
     const claimList = await this.kv.list({ prefix: `${CLAIM_PREFIX}${id}:` });
     for (const key of claimList.keys) {
@@ -147,6 +150,10 @@ export class KVDataStore implements DataStore {
     const key = `${CLAIM_PREFIX}${claim.task_id}:${claim.agent_id}`;
     // Check if an active claim already exists for this (task_id, agent_id).
     // Terminal claims (rejected, error) are overwritten to allow re-claiming.
+    // Note: this GET→PUT is not atomic — concurrent retries from the same agent
+    // could both pass the check. This is acceptable since idempotent writes of
+    // the same claim data are harmless, and distinct agents are differentiated
+    // by the lock mechanism at claim time.
     const existing = await this.kv.get(key);
     if (existing) {
       const parsed = safeParseJson<TaskClaim>(existing);

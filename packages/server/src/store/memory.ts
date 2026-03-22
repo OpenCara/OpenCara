@@ -53,12 +53,8 @@ export class MemoryDataStore implements DataStore {
 
   async deleteTask(id: string): Promise<void> {
     this.tasks.delete(id);
-    // Delete locks associated with this task (any key containing the task id)
-    for (const key of this.locks.keys()) {
-      if (key.includes(id)) {
-        this.locks.delete(key);
-      }
-    }
+    // Delete the summary lock for this task (exact key match to avoid substring collisions)
+    this.locks.delete(`summary:${id}`);
     // Also delete associated claims
     for (const [claimId, claim] of this.claims) {
       if (claim.task_id === id) {
@@ -154,11 +150,7 @@ export class MemoryDataStore implements DataStore {
     for (const [id, task] of this.tasks) {
       if (TERMINAL_STATUSES.includes(task.status) && task.created_at <= cutoff) {
         this.tasks.delete(id);
-        for (const key of this.locks.keys()) {
-          if (key.includes(id)) {
-            this.locks.delete(key);
-          }
-        }
+        this.locks.delete(`summary:${id}`);
         for (const [claimId, claim] of this.claims) {
           if (claim.task_id === id) {
             this.claims.delete(claimId);
