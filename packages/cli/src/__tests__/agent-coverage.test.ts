@@ -144,7 +144,7 @@ describe('Agent Coverage Tests', () => {
       await promise;
 
       expect(console.error).toHaveBeenCalledWith(
-        'No review command configured. Set command in config.yml',
+        expect.stringContaining('No review command configured. Set command in config.yml'),
       );
     });
   });
@@ -996,7 +996,9 @@ describe('Agent Coverage Tests', () => {
         await advanceTime(2000);
 
         // Should log PR URL, not diff URL
-        expect(console.log).toHaveBeenCalledWith('  https://github.com/my-org/my-repo/pull/42');
+        expect(console.log).toHaveBeenCalledWith(
+          expect.stringContaining('https://github.com/my-org/my-repo/pull/42'),
+        );
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(agentPromise, server);
@@ -1028,7 +1030,9 @@ describe('Agent Coverage Tests', () => {
 
         expect(resultBody).not.toBeNull();
         expect(resultBody!.type).toBe('review');
-        expect(console.log).toHaveBeenCalledWith('  Executing review command: echo test');
+        expect(console.log).toHaveBeenCalledWith(
+          expect.stringContaining('Executing review: echo test'),
+        );
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(agentPromise, server);
@@ -1060,7 +1064,9 @@ describe('Agent Coverage Tests', () => {
 
         expect(resultBody).not.toBeNull();
         expect(resultBody!.type).toBe('summary');
-        expect(console.log).toHaveBeenCalledWith('  Executing summary command: echo test');
+        expect(console.log).toHaveBeenCalledWith(
+          expect.stringContaining('Executing summary: echo test'),
+        );
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(agentPromise, server);
@@ -1103,7 +1109,7 @@ describe('Agent Coverage Tests', () => {
 
         // The command should be logged with the token sanitized
         expect(console.log).toHaveBeenCalledWith(
-          '  Executing review command: claude --token *** --print',
+          expect.stringContaining('Executing review: claude --token *** --print'),
         );
 
         await server.store.updateTask(taskId, { status: 'completed' });
@@ -1148,7 +1154,9 @@ describe('Agent Coverage Tests', () => {
 
         await advanceTime(2000);
 
-        expect(console.log).toHaveBeenCalledWith('  Executing review command: [router mode]');
+        expect(console.log).toHaveBeenCalledWith(
+          expect.stringContaining('Executing review: [router mode]'),
+        );
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(promise, server);

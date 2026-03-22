@@ -43,14 +43,15 @@
   },
   "dependencies": {
     "commander": "^13.0.0",
+    "picocolors": "^1.1.1",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@opencara/shared": "workspace:*",
-    "@opencara/server": "workspace:*",
     "@cloudflare/workers-types": "^4.20250214.0",
-    "hono": "^4.7.0",
+    "@opencara/server": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "@types/node": "^22.0.0",
+    "hono": "^4.7.0",
     "tsup": "^8.5.1",
     "tsx": "^4.0.0"
   }
