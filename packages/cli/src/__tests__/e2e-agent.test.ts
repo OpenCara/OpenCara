@@ -9,6 +9,9 @@
  * which uses crypto.subtle (doesn't resolve with fake timers). These tests
  * verify claim status only, not task final status.
  */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
@@ -470,6 +473,98 @@ describe('E2E Agent Scenarios', () => {
       } finally {
         globalThis.fetch = originalFetch;
       }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // K. Repo-scoped working directory (no codebase_dir)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('K. Repo-scoped working directory when codebase_dir is not configured', () => {
+    it('creates repo-scoped dir and passes it as cwd to review tool', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      const agentPromise = startTestAgent('repo-cwd-agent');
+      await advanceTime(500);
+
+      const expectedDir = path.join(
+        os.homedir(),
+        '.opencara',
+        'repos',
+        'test-org',
+        'test-repo',
+        taskId,
+      );
+
+      // Verify executeTool was called with the repo-scoped dir as cwd
+      expect(mockedExecuteTool).toHaveBeenCalled();
+      const toolCall = mockedExecuteTool.mock.calls[0];
+      // executeTool args: (commandTemplate, prompt, timeoutMs, signal, vars, cwd)
+      const cwdArg = toolCall[5];
+      expect(cwdArg).toBe(expectedDir);
+
+      // Verify log message
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining(`Working directory: ${expectedDir}`),
+      );
+
+      await stopAgent(agentPromise, server);
+    });
+
+    it('cleans up repo-scoped dir after task completion', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      const agentPromise = startTestAgent('cleanup-agent');
+      await advanceTime(500);
+
+      const expectedDir = path.join(
+        os.homedir(),
+        '.opencara',
+        'repos',
+        'test-org',
+        'test-repo',
+        taskId,
+      );
+
+      // Verify the tool was called with the repo-scoped dir
+      expect(mockedExecuteTool).toHaveBeenCalled();
+      const cwdArg = mockedExecuteTool.mock.calls[0][5];
+      expect(cwdArg).toBe(expectedDir);
+
+      // After task completion, cleanupTaskDir removes the directory
+      // Since mkdirSync actually runs, verify directory no longer exists
+      expect(fs.existsSync(expectedDir)).toBe(false);
+
+      await stopAgent(agentPromise, server);
+    });
+
+    it('does not use repo-scoped dir when codebase_dir is configured', async () => {
+      await server.injectTask({ reviewCount: 2 });
+
+      const deps = makeDeps('codebase-agent');
+      const reviewDeps: ReviewExecutorDeps = {
+        ...deps.reviewDeps,
+        codebaseDir: '/tmp/test-codebase',
+      };
+
+      const agentPromise = startAgent(
+        'codebase-agent',
+        FAKE_SERVER_URL,
+        { model: 'test-model', tool: 'test-tool' },
+        reviewDeps,
+        deps.consumptionDeps,
+        { pollIntervalMs: 100 },
+      );
+      await advanceTime(500);
+
+      // The "Working directory:" log should NOT appear (codebase_dir takes the clone path)
+      const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
+      const repoScopedLogs = logCalls.filter(
+        (c: string[]) => typeof c[0] === 'string' && c[0].includes('Working directory:'),
+      );
+      expect(repoScopedLogs).toHaveLength(0);
+
+      await stopAgent(agentPromise, server);
     });
   });
 });

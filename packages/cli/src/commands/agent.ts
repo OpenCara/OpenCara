@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type {
   PollResponse,
   PollTask,
@@ -15,9 +17,10 @@ import {
   resolveCodebaseDir,
   resolveGithubToken as resolveConfigToken,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
+  CONFIG_DIR,
   type LocalAgentConfig,
 } from '../config.js';
-import { cloneOrUpdate, cleanupTaskDir } from '../codebase.js';
+import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.js';
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
 import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
@@ -314,7 +317,7 @@ async function handleTask(
     return { diffFetchFailed: true };
   }
 
-  // Clone/update codebase if configured
+  // Clone/update codebase if configured, otherwise create a repo-scoped working directory
   let taskReviewDeps = reviewDeps;
   let taskCheckoutPath: string | null = null;
   if (reviewDeps.codebaseDir) {
@@ -336,6 +339,22 @@ async function handleTask(
         `  Warning: codebase clone failed: ${(err as Error).message}. Continuing with diff-only review.`,
       );
       taskReviewDeps = { ...reviewDeps, codebaseDir: null };
+    }
+  } else {
+    // No codebase_dir configured — create a repo-scoped working directory
+    try {
+      validatePathSegment(owner, 'owner');
+      validatePathSegment(repo, 'repo');
+      validatePathSegment(task_id, 'task_id');
+      const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
+      fs.mkdirSync(repoScopedDir, { recursive: true });
+      taskCheckoutPath = repoScopedDir;
+      taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
+      log(`  Working directory: ${repoScopedDir}`);
+    } catch (err) {
+      logWarn(
+        `  Warning: failed to create working directory: ${(err as Error).message}. Continuing without scoped cwd.`,
+      );
     }
   }
 
