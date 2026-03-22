@@ -1,7 +1,7 @@
 import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
 import { githubFetch } from './fetch.js';
 import { postPrComment } from './reviews.js';
-import { createLogger } from '../logger.js';
+import { createLogger, type Logger } from '../logger.js';
 
 /**
  * Fetch the .review.yml file from a repository at a specific ref.
@@ -50,6 +50,7 @@ export async function fetchPrDetails(
   repo: string,
   prNumber: number,
   token: string,
+  logger: Logger = createLogger(),
 ): Promise<PrDetails | null> {
   const response = await githubFetch(
     `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -57,7 +58,7 @@ export async function fetchPrDetails(
   );
 
   if (!response.ok) {
-    createLogger().error('Failed to fetch PR details', {
+    logger.error('Failed to fetch PR details', {
       status: response.status,
       statusText: response.statusText,
     });
@@ -77,8 +78,8 @@ export async function loadReviewConfig(
   baseRef: string,
   prNumber: number,
   token: string,
+  logger: Logger = createLogger(),
 ): Promise<{ config: ReviewConfig; parseError: boolean }> {
-  const logger = createLogger();
   let configYaml: string | null;
   try {
     configYaml = await fetchReviewConfig(owner, repo, baseRef, token);

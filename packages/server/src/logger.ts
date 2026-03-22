@@ -32,23 +32,38 @@ export class Logger {
   }
 
   private emit(level: LogLevel, msg: string, data?: Record<string, unknown>): void {
+    // Spread user data first so core fields cannot be overwritten
     const entry: LogEntry = {
+      ...data,
       level,
       msg,
       ts: new Date().toISOString(),
       ...(this.requestId ? { requestId: this.requestId } : {}),
-      ...data,
     };
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(entry);
+    } catch {
+      // Fallback for circular references or non-serializable values
+      serialized = JSON.stringify({
+        level,
+        msg,
+        ts: entry.ts,
+        ...(this.requestId ? { requestId: this.requestId } : {}),
+        _serializationError: true,
+      });
+    }
 
     switch (level) {
       case 'error':
-        console.error(JSON.stringify(entry));
+        console.error(serialized);
         break;
       case 'warn':
-        console.warn(JSON.stringify(entry));
+        console.warn(serialized);
         break;
       default:
-        console.log(JSON.stringify(entry));
+        console.log(serialized);
     }
   }
 }

@@ -63,6 +63,39 @@ describe('Logger', () => {
     expect(entry.level).toBe('info');
     expect(entry.msg).toBe('Simple message');
   });
+
+  it('protects core fields from being overwritten by data', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logger = new Logger('req-safe');
+    logger.info('Protected fields', {
+      level: 'hacked' as unknown as string,
+      msg: 'overwritten',
+      ts: 'fake-ts',
+      requestId: 'fake-id',
+    });
+
+    const entry = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(entry.level).toBe('info');
+    expect(entry.msg).toBe('Protected fields');
+    expect(entry.requestId).toBe('req-safe');
+    expect(entry.ts).not.toBe('fake-ts');
+  });
+
+  it('handles non-serializable data gracefully', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = new Logger('req-circular');
+
+    // Create circular reference
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    logger.error('Circular data', circular);
+
+    expect(spy).toHaveBeenCalledOnce();
+    const entry = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(entry.level).toBe('error');
+    expect(entry.msg).toBe('Circular data');
+    expect(entry._serializationError).toBe(true);
+  });
 });
 
 describe('createLogger', () => {

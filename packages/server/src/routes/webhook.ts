@@ -239,7 +239,14 @@ async function handlePullRequest(
   }
 
   const baseRef = pull_request.base.ref;
-  const { config, parseError } = await loadReviewConfig(owner, repo, baseRef, prNumber, token);
+  const { config, parseError } = await loadReviewConfig(
+    owner,
+    repo,
+    baseRef,
+    prNumber,
+    token,
+    logger,
+  );
 
   if (parseError) {
     logger.info('Aborting due to .review.yml parse error', { prNumber });
@@ -314,7 +321,7 @@ async function handleIssueComment(
     return new Response('OK', { status: 200 });
   }
 
-  const pr = await fetchPrDetails(owner, repo, prNumber, token);
+  const pr = await fetchPrDetails(owner, repo, prNumber, token, logger);
   if (!pr) {
     logger.error('Failed to fetch PR details', { owner, repo, prNumber });
     return new Response('OK', { status: 200 });
