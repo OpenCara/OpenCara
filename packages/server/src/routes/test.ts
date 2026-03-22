@@ -9,6 +9,7 @@ import type { Env, AppVariables } from '../types.js';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createTaskForPR } from './webhook.js';
 import { resetTimeoutThrottle } from './tasks.js';
+import { resetRateLimits } from '../middleware/rate-limit.js';
 
 export function testRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
@@ -73,6 +74,7 @@ export function testRoutes() {
       store.reset();
     }
     resetTimeoutThrottle();
+    resetRateLimits();
     return c.json({ success: true });
   });
 

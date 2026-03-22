@@ -23,6 +23,7 @@ import {
   type ReviewAgentInfo,
 } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
+import { rateLimitByAgent } from '../middleware/rate-limit.js';
 
 /** Default grace period (ms) for preferred synthesizer agents. */
 export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
@@ -253,12 +254,16 @@ async function postFinalReview(
   }
 }
 
+/** Rate limit configs for task endpoints. */
+export const POLL_RATE_LIMIT = { maxRequests: 12, windowMs: 60_000 };
+export const MUTATION_RATE_LIMIT = { maxRequests: 30, windowMs: 60_000 };
+
 export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // ── Poll ─────────────────────────────────────────────────────
 
-  app.post('/api/tasks/poll', async (c) => {
+  app.post('/api/tasks/poll', rateLimitByAgent(POLL_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const body = await c.req.json<PollRequest>();
     const { agent_id, review_only } = body;
@@ -302,7 +307,7 @@ export function taskRoutes() {
 
   // ── Claim ────────────────────────────────────────────────────
 
-  app.post('/api/tasks/:taskId/claim', async (c) => {
+  app.post('/api/tasks/:taskId/claim', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ClaimRequest>();
@@ -410,7 +415,7 @@ export function taskRoutes() {
 
   // ── Result ───────────────────────────────────────────────────
 
-  app.post('/api/tasks/:taskId/result', async (c) => {
+  app.post('/api/tasks/:taskId/result', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ResultRequest>();
@@ -488,7 +493,7 @@ export function taskRoutes() {
 
   // ── Reject ───────────────────────────────────────────────────
 
-  app.post('/api/tasks/:taskId/reject', async (c) => {
+  app.post('/api/tasks/:taskId/reject', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<RejectRequest>();
@@ -533,7 +538,7 @@ export function taskRoutes() {
 
   // ── Error ────────────────────────────────────────────────────
 
-  app.post('/api/tasks/:taskId/error', async (c) => {
+  app.post('/api/tasks/:taskId/error', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ErrorRequest>();
