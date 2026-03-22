@@ -164,15 +164,29 @@ async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
   }
 }
 
+/** Data passed directly from the result endpoint to avoid KV read-after-write staleness. */
+export interface SummaryData {
+  review_text: string;
+  model?: string;
+  tool?: string;
+  verdict?: string;
+}
+
 /**
  * Post the final review to GitHub when a task is complete.
  * For summary role: post the synthesized/single review with inline comments.
+ *
+ * Summary data is passed directly from the result endpoint rather than
+ * re-read from KV, because KV eventual consistency (30-60s) can cause
+ * the re-read to return stale data without review_text, silently dropping
+ * the review.
  */
 async function postFinalReview(
   store: TaskStore,
   env: Env,
   taskId: string,
   summaryAgentId: string,
+  summaryData: SummaryData,
 ): Promise<void> {
   const task = await store.getTask(taskId);
   if (!task) return;
@@ -186,10 +200,13 @@ async function postFinalReview(
     return;
   }
 
-  // Use direct getClaim (KV get) instead of getClaims (KV list) to avoid
-  // eventual consistency issues — the claim was just updated moments ago.
+  // Observability: check if KV claim has propagated yet (non-blocking)
   const summaryClaim = await store.getClaim(`${taskId}:${summaryAgentId}`);
-  if (!summaryClaim?.review_text) return;
+  if (!summaryClaim?.review_text) {
+    console.warn(
+      `Task ${taskId}: KV claim for ${summaryAgentId} returned stale data (no review_text) — using directly passed summary data`,
+    );
+  }
 
   const claims = await store.getClaims(taskId);
 
@@ -203,18 +220,18 @@ async function postFinalReview(
       tool: c.tool ?? 'unknown',
     }));
     const synthAgent: ReviewAgentInfo = {
-      model: summaryClaim.model ?? 'unknown',
-      tool: summaryClaim.tool ?? 'unknown',
+      model: summaryData.model ?? 'unknown',
+      tool: summaryData.tool ?? 'unknown',
     };
 
-    // Format the body
+    // Format the body — use summaryData.review_text directly (never re-read from KV)
     let body: string;
     if (task.review_count === 1) {
       // Single agent — post directly
-      body = formatSummaryComment(summaryClaim.review_text, [], null);
+      body = formatSummaryComment(summaryData.review_text, [], null);
     } else {
       // Multi-agent — include reviewer info in header
-      body = formatSummaryComment(summaryClaim.review_text, reviewerAgents, synthAgent);
+      body = formatSummaryComment(summaryData.review_text, reviewerAgents, synthAgent);
     }
 
     await postPrComment(task.owner, task.repo, task.pr_number, body, token);
@@ -437,7 +454,13 @@ export function taskRoutes() {
 
     if (type === 'summary') {
       // Summary submitted — post the final review to GitHub
-      await postFinalReview(store, c.env, taskId, agent_id);
+      // Pass data directly to avoid KV read-after-write staleness
+      await postFinalReview(store, c.env, taskId, agent_id, {
+        review_text,
+        model: claim.model,
+        tool: claim.tool,
+        verdict,
+      });
     } else {
       // Review submitted — increment completed_reviews counter on task
       const newCompleted = (task.completed_reviews ?? 0) + 1;

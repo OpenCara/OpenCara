@@ -6,7 +6,7 @@
  *
  * Mocks only the external boundary (GitHub API via global fetch).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
@@ -834,6 +834,108 @@ describe('E2E Scenarios', () => {
       const res = await app.request(`/test/claims/${taskId}`, { method: 'GET' }, env);
       const body = (await res.json()) as { claims: unknown[] };
       expect(body.claims).toHaveLength(1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // H. KV Read-After-Write Staleness
+  // ═══════════════════════════════════════════════════════════
+
+  describe('H. KV Read-After-Write Staleness', () => {
+    it('review is posted even when getClaim returns stale data without review_text', async () => {
+      const taskId = await injectPR();
+      const a = agent('stale-agent');
+
+      // Claim
+      await a.claim(taskId, 'summary');
+
+      // Intercept getClaim to simulate KV staleness: return claim without review_text
+      const originalGetClaim = store.getClaim.bind(store);
+      const getClaimSpy = vi
+        .spyOn(store, 'getClaim')
+        .mockImplementation(async (claimId: string) => {
+          const claim = await originalGetClaim(claimId);
+          if (claim && claimId === `${taskId}:stale-agent`) {
+            // Simulate KV staleness — return claim without review_text
+            return { ...claim, review_text: undefined };
+          }
+          return claim;
+        });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Submit result — should still post to GitHub despite stale getClaim
+      const result = await a.submitResult(
+        taskId,
+        'summary',
+        '## Summary\nThis should still be posted.',
+        'approve',
+        500,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.success).toBe(true);
+
+      // Task should be completed — review was posted despite stale KV read
+      const finalTask = await store.getTask(taskId);
+      expect(finalTask?.status).toBe('completed');
+
+      // GitHub comment was posted with the correct review text
+      const commentPost = github.calls.find(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      );
+      expect(commentPost).toBeDefined();
+      expect(commentPost!.body).toBeDefined();
+      const commentBody = (commentPost!.body as { body: string }).body;
+      expect(commentBody).toContain('This should still be posted.');
+
+      // Warning was logged about stale KV data
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('stale data'));
+
+      getClaimSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('review uses model/tool from directly passed summary data, not stale KV', async () => {
+      const taskId = await injectPR();
+      const a = agent('model-agent');
+
+      // Claim with model and tool
+      await a.claim(taskId, 'summary', { model: 'claude-3', tool: 'opencara-cli' });
+
+      // Intercept getClaim to return stale data with wrong model/tool
+      const originalGetClaim = store.getClaim.bind(store);
+      vi.spyOn(store, 'getClaim').mockImplementation(async (claimId: string) => {
+        const claim = await originalGetClaim(claimId);
+        if (claim && claimId === `${taskId}:model-agent`) {
+          return { ...claim, review_text: undefined, model: 'stale-model', tool: 'stale-tool' };
+        }
+        return claim;
+      });
+
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Submit result
+      const result = await a.submitResult(
+        taskId,
+        'summary',
+        '## Summary\nModel test.',
+        'approve',
+        500,
+      );
+      expect(result.status).toBe(200);
+
+      // GitHub comment should use the model/tool from the claim (set at claim time),
+      // not the stale KV re-read
+      const commentPost = github.calls.find(
+        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
+      );
+      expect(commentPost).toBeDefined();
+      const commentBody = (commentPost!.body as { body: string }).body;
+      // Should NOT contain stale-model or stale-tool
+      expect(commentBody).not.toContain('stale-model');
+      expect(commentBody).not.toContain('stale-tool');
+
+      vi.restoreAllMocks();
     });
   });
 });
