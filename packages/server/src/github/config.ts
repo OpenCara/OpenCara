@@ -70,13 +70,13 @@ export async function fetchPrDetails(
 export async function loadReviewConfig(
   owner: string,
   repo: string,
-  headRef: string,
+  baseRef: string,
   prNumber: number,
   token: string,
 ): Promise<{ config: ReviewConfig; parseError: boolean }> {
   let configYaml: string | null;
   try {
-    configYaml = await fetchReviewConfig(owner, repo, headRef, token);
+    configYaml = await fetchReviewConfig(owner, repo, baseRef, token);
   } catch (err) {
     console.error('Failed to fetch .review.yml:', err);
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };

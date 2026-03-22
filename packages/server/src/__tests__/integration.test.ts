@@ -864,6 +864,46 @@ APPROVE`;
       expect(pollResult.tasks[0].role).toBe('summary'); // review_count=1 (default)
     });
 
+    it('fetches .review.yml from base branch, not head branch', async () => {
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: { owner: { login: 'acme' }, name: 'widget' },
+        pull_request: {
+          number: 78,
+          html_url: 'https://github.com/acme/widget/pull/78',
+          diff_url: 'https://github.com/acme/widget/pull/78.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/malicious-config' },
+          draft: false,
+          labels: [],
+        },
+      };
+
+      const body = JSON.stringify(payload);
+      const signature = await signPayload(body, WEBHOOK_SECRET);
+
+      await app.request(
+        '/webhook/github',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': signature,
+            'X-GitHub-Event': 'pull_request',
+          },
+          body,
+        },
+        mockEnv,
+      );
+
+      // The .review.yml fetch should use base ref (main), not head ref (feat/malicious-config)
+      const configFetch = githubCalls.find((c) => c.url.includes('/contents/.review.yml'));
+      expect(configFetch).toBeDefined();
+      expect(configFetch!.url).toContain('ref=main');
+      expect(configFetch!.url).not.toContain('ref=feat/malicious-config');
+    });
+
     it('invalid signature is rejected with 401', async () => {
       const body = JSON.stringify({ action: 'opened' });
 
@@ -1137,6 +1177,18 @@ APPROVE`;
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].pr_number).toBe(81);
+    });
+
+    it('/opencara review comment fetches .review.yml from base branch', async () => {
+      githubCalls.length = 0;
+      await sendCommentWebhook(83, '/opencara review');
+
+      // The mock returns PR details with base: { ref: 'main' } and head: { ref: 'feat/test' }
+      // .review.yml should be fetched using base ref (main), not head ref
+      const configFetch = githubCalls.find((c) => c.url.includes('/contents/.review.yml'));
+      expect(configFetch).toBeDefined();
+      expect(configFetch!.url).toContain('ref=main');
+      expect(configFetch!.url).not.toContain('ref=feat/test');
     });
 
     it('/opencara review comment creates task after previous task completed', async () => {
