@@ -16,7 +16,6 @@ import {
   loadConfig,
   saveConfig,
   ensureConfigDir,
-  resolveAgentLimits,
   resolveCodebaseDir,
   resolveGithubToken,
   RepoConfigError,
@@ -60,7 +59,6 @@ describe('config', () => {
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.githubToken).toBeNull();
       expect(config.codebaseDir).toBeNull();
-      expect(config.limits).toBeNull();
       expect(config.agentCommand).toBeNull();
     });
 
@@ -140,70 +138,6 @@ describe('config', () => {
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
     });
 
-    it('parses consumption limits', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'limits:\n  tokens_per_day: 50000\n  tokens_per_month: 500000\n  reviews_per_day: 20\n',
-      );
-
-      const config = loadConfig();
-
-      expect(config.limits).toEqual({
-        tokens_per_day: 50000,
-        tokens_per_month: 500000,
-        reviews_per_day: 20,
-      });
-    });
-
-    it('parses partial limits (only tokens_per_day)', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('limits:\n  tokens_per_day: 50000\n');
-
-      const config = loadConfig();
-
-      expect(config.limits).toEqual({ tokens_per_day: 50000 });
-    });
-
-    it('returns null limits when limits section is not an object', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('limits: not_an_object\n');
-
-      const config = loadConfig();
-
-      expect(config.limits).toBeNull();
-    });
-
-    it('returns null limits when limits section has no valid numeric fields', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'limits:\n  tokens_per_day: not_a_number\n  unknown_field: 123\n',
-      );
-
-      const config = loadConfig();
-
-      expect(config.limits).toBeNull();
-    });
-
-    it('ignores non-numeric limit values', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'limits:\n  tokens_per_day: 50000\n  reviews_per_day: bad\n',
-      );
-
-      const config = loadConfig();
-
-      expect(config.limits).toEqual({ tokens_per_day: 50000 });
-    });
-
-    it('returns null limits when limits section is missing', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
-
-      const config = loadConfig();
-
-      expect(config.limits).toBeNull();
-    });
-
     it('parses agent_command config field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue('agent_command: "ollama run codestral"\n');
@@ -238,7 +172,7 @@ describe('config', () => {
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       githubToken: null as string | null,
       codebaseDir: null as string | null,
-      limits: null as import('../config.js').ConsumptionLimits | null,
+
       agentCommand: null as string | null,
       agents: null as import('../config.js').LocalAgentConfig[] | null,
     };
@@ -275,25 +209,6 @@ describe('config', () => {
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('max_diff_size_kb');
-    });
-
-    it('saves limits when present', () => {
-      saveConfig({
-        ...baseConfig,
-        limits: { tokens_per_day: 50000, reviews_per_day: 20 },
-      });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('limits');
-      expect(content).toContain('tokens_per_day: 50000');
-      expect(content).toContain('reviews_per_day: 20');
-    });
-
-    it('does not save limits when null', () => {
-      saveConfig(baseConfig);
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).not.toContain('limits');
     });
 
     it('saves agent_command when present', () => {
@@ -369,7 +284,6 @@ describe('config', () => {
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
       });
@@ -385,48 +299,12 @@ describe('config', () => {
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: null,
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(written).not.toContain('agents');
-    });
-  });
-
-  describe('resolveAgentLimits', () => {
-    it('returns null when both are null/undefined', () => {
-      expect(resolveAgentLimits(undefined, null)).toBeNull();
-    });
-
-    it('returns global limits when agent has none', () => {
-      const global = { tokens_per_day: 100000, reviews_per_day: 50 };
-      expect(resolveAgentLimits(undefined, global)).toEqual(global);
-    });
-
-    it('returns agent limits when global is null', () => {
-      const agent = { tokens_per_day: 30000 };
-      expect(resolveAgentLimits(agent, null)).toEqual(agent);
-    });
-
-    it('agent limits override global, missing fields fall back', () => {
-      const global = { tokens_per_day: 100000, tokens_per_month: 2000000, reviews_per_day: 50 };
-      const agent = { tokens_per_day: 30000 };
-      expect(resolveAgentLimits(agent, global)).toEqual({
-        tokens_per_day: 30000,
-        tokens_per_month: 2000000,
-        reviews_per_day: 50,
-      });
-    });
-
-    it('agent fully overrides all global fields', () => {
-      const global = { tokens_per_day: 100000, reviews_per_day: 50 };
-      const agent = { tokens_per_day: 10000, reviews_per_day: 5 };
-      expect(resolveAgentLimits(agent, global)).toEqual({
-        tokens_per_day: 10000,
-        reviews_per_day: 5,
-      });
     });
   });
 
@@ -453,7 +331,6 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: [{ model: 'claude-sonnet-4-6', tool: 'claude-code', name: 'MyBot' }],
       });
@@ -520,29 +397,6 @@ agents:
 `);
       const config = loadConfig();
       expect(config.agents![0].router).toBeUndefined();
-    });
-  });
-
-  describe('per-agent limits in config', () => {
-    it('parses per-agent limits from YAML', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude-code
-    limits:
-      tokens_per_day: 30000
-      reviews_per_day: 10
-  - model: glm-5
-    tool: qwen
-`);
-      const config = loadConfig();
-      expect(config.agents).toHaveLength(2);
-      expect(config.agents![0].limits).toEqual({
-        tokens_per_day: 30000,
-        reviews_per_day: 10,
-      });
-      expect(config.agents![1].limits).toBeUndefined();
     });
   });
 
@@ -751,7 +605,6 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: [
           {
@@ -800,7 +653,6 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: 'ghp_xyz789',
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: null,
       });
@@ -815,7 +667,6 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: null,
       });
@@ -908,7 +759,6 @@ anonymous_agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: '~/.opencara/repos',
-        limits: null,
         agentCommand: null,
         agents: null,
       });
@@ -923,7 +773,6 @@ anonymous_agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         githubToken: null,
         codebaseDir: null,
-        limits: null,
         agentCommand: null,
         agents: null,
       });

@@ -44,7 +44,7 @@ function makeDeps(agentId = 'test-agent'): {
   const session = createSessionTracker();
   return {
     reviewDeps: { commandTemplate: 'echo test', maxDiffSizeKb: 500 },
-    consumptionDeps: { agentId, limits: null, session },
+    consumptionDeps: { agentId, session },
   };
 }
 
