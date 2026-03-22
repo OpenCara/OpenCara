@@ -656,6 +656,11 @@ APPROVE`;
       expect(c4.claimed).toBe(false);
     });
 
+    // Note: MemoryTaskStore is synchronous, so Promise.all executes claims
+    // serially in the same microtask turn. These tests validate the locking
+    // logic at the API layer but cannot reproduce true I/O-level races that
+    // occur with Cloudflare KV's eventual consistency. The lock mechanism
+    // (summary-lock:{taskId} key) is the defense-in-depth for production.
     it('concurrent summary claims: only one agent wins (#273)', async () => {
       await store.createTask(makeTask({ id: 'task-concurrent-summary' }));
 
@@ -682,18 +687,18 @@ APPROVE`;
     it('concurrent summary claims + result: only one GitHub comment posted (#273)', async () => {
       await store.createTask(makeTask({ id: 'task-concurrent-post' }));
 
+      const agentIds = ['synth-a', 'synth-b', 'synth-c'];
+
       // Fire 3 concurrent summary claims
       const claimResults = await Promise.all(
-        ['synth-a', 'synth-b', 'synth-c'].map((agentId) =>
-          claim('task-concurrent-post', agentId, 'summary'),
-        ),
+        agentIds.map((agentId) => claim('task-concurrent-post', agentId, 'summary')),
       );
 
       const winners = claimResults
-        .map((r, i) => ({ result: r, agentId: ['synth-a', 'synth-b', 'synth-c'][i] }))
+        .map((r, i) => ({ result: r, agentId: agentIds[i] }))
         .filter((r) => r.result.claimed === true);
       expect(winners).toHaveLength(1);
-      const winner = winners[0];
+      const winner = winners[0]!;
 
       // Count GitHub comment calls before
       const commentsBefore = githubCalls.filter(

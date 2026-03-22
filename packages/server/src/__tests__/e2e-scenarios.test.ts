@@ -468,6 +468,10 @@ describe('E2E Scenarios', () => {
       expect(c2.claimed).toBe(false);
     });
 
+    // Note: MemoryTaskStore is synchronous, so Promise.all executes claims
+    // serially in the same microtask turn. These tests validate the locking
+    // logic at the API layer but cannot reproduce true I/O-level races that
+    // occur with Cloudflare KV's eventual consistency.
     it('concurrent summary claims via Promise.all: exactly one wins (#273)', async () => {
       const taskId = await injectPR();
 
@@ -481,6 +485,11 @@ describe('E2E Scenarios', () => {
       // Exactly one agent should win the summary lock
       expect(claimed).toHaveLength(1);
       expect(rejected).toHaveLength(4);
+
+      // All rejected agents should have a reason
+      for (const r of rejected) {
+        expect(r.reason).toBeDefined();
+      }
     });
 
     it('concurrent claims + results: only one GitHub comment posted (#273)', async () => {
@@ -492,7 +501,7 @@ describe('E2E Scenarios', () => {
 
       const winnerIdx = claimResults.findIndex((r) => r.claimed === true);
       expect(winnerIdx).toBeGreaterThanOrEqual(0);
-      const winner = claimAgents[winnerIdx];
+      const winner = claimAgents[winnerIdx]!;
 
       // Count GitHub comment calls before
       const commentsBefore = github.calls.filter(
@@ -510,7 +519,8 @@ describe('E2E Scenarios', () => {
 
       // Task should be in terminal state
       const task = await store.getTask(taskId);
-      expect(['completed', 'failed']).toContain(task?.status);
+      expect(task).toBeDefined();
+      expect(['completed', 'failed']).toContain(task!.status);
     });
   });
 
