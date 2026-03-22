@@ -88,13 +88,16 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
 
 /**
  * Throttle timeout checks to avoid O(n) KV scans on every poll request.
- * In Workers, global state persists within an isolate but not across isolates.
- * Worst case: multiple isolates each check once per interval — still far better than every poll.
+ *
+ * Uses an in-memory timestamp for fast-path throttling within an isolate.
+ * A Cron Trigger (`scheduled` event) also calls checkTimeouts every minute,
+ * ensuring timeouts are handled even during zero-traffic periods or after
+ * isolate recycles.
  */
 let lastTimeoutCheck = 0;
-const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
+export const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
 
-/** Exported for testing — reset the throttle state. */
+/** Exported for testing — reset the in-memory throttle state. */
 export function resetTimeoutThrottle(): void {
   lastTimeoutCheck = 0;
 }
@@ -108,8 +111,9 @@ async function maybeCheckTimeouts(store: TaskStore, env: Env): Promise<void> {
 
 /**
  * Check for timed-out tasks and handle them.
+ * Exported so the Cron Trigger scheduled handler can call it directly.
  */
-async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
+export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
   const now = Date.now();
   const expired = await store.listTasks({
     status: ['pending', 'reviewing'],

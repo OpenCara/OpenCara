@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, type ReviewTask } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createApp } from '../index.js';
-import { resetTimeoutThrottle, PREFERRED_SYNTH_GRACE_PERIOD_MS } from '../routes/tasks.js';
+import {
+  resetTimeoutThrottle,
+  PREFERRED_SYNTH_GRACE_PERIOD_MS,
+  checkTimeouts,
+} from '../routes/tasks.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -1385,6 +1389,43 @@ describe('Task Routes', () => {
         expect(body.tasks).toHaveLength(1);
         expect(body.tasks[0].role).toBe('summary');
       });
+    });
+  });
+
+  // ── checkTimeouts (exported for cron trigger) ─────────────
+
+  describe('checkTimeouts (exported for cron trigger)', () => {
+    it('can be called directly to handle expired tasks', async () => {
+      await store.createTask(makeTask({ id: 'task-expired', timeout_at: Date.now() - 1000 }));
+
+      // Call checkTimeouts directly (as the cron handler would)
+      // GitHub posting will fail (no valid key), but the function runs
+      await checkTimeouts(store, mockEnv);
+
+      // Task stays pending because GitHub posting fails, but checkTimeouts ran
+      const task = await store.getTask('task-expired');
+      expect(task).toBeDefined();
+    });
+
+    it('bypasses the in-memory throttle when called directly', async () => {
+      // Spy on console before any calls
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // First: trigger throttle via poll
+      await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+
+      // Create expired task after throttle is set
+      await store.createTask(makeTask({ id: 'task-cron', timeout_at: Date.now() - 1000 }));
+
+      // Direct call bypasses throttle (cron trigger path)
+      await checkTimeouts(store, mockEnv);
+
+      // Verify checkTimeouts found the expired task (it logs the timeout)
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('task-cron timed out'));
+
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
     });
   });
 });

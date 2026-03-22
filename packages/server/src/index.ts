@@ -5,7 +5,7 @@ import { MemoryTaskStore } from './store/memory.js';
 import { KVTaskStore } from './store/kv.js';
 import type { TaskStore } from './store/interface.js';
 import { webhookRoutes } from './routes/webhook.js';
-import { taskRoutes } from './routes/tasks.js';
+import { taskRoutes, checkTimeouts } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
@@ -66,4 +66,14 @@ const workerApp = buildApp((env) =>
   env.TASK_STORE ? new KVTaskStore(env.TASK_STORE) : new MemoryTaskStore(),
 );
 
-export default workerApp;
+export default {
+  fetch: workerApp.fetch,
+  /**
+   * Cron Trigger handler — runs timeout checks independently of poll traffic.
+   * Ensures timed-out tasks are handled even during zero-traffic periods.
+   */
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const store = env.TASK_STORE ? new KVTaskStore(env.TASK_STORE) : new MemoryTaskStore();
+    await checkTimeouts(store, env);
+  },
+};

@@ -14,6 +14,10 @@ WEB_URL = "https://opencara.com"
 binding = "TASK_STORE"
 id = "b6cb6efb2960419ea5a7c6a5a51b4345"
 
+# Cron trigger: check for timed-out tasks every minute
+[triggers]
+crons = ["* * * * *"]
+
 # ── Dev environment ──────────────────────────────────────────────
 [env.dev]
 name = "opencara-server-dev"
@@ -24,3 +28,6 @@ WEB_URL = "https://dev.opencara.com"
 [[env.dev.kv_namespaces]]
 binding = "TASK_STORE"
 id = "8b056c1e0a884c48a63111a583d7a50f"
+
+[env.dev.triggers]
+crons = ["* * * * *"]
