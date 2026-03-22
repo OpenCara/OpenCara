@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, type ReviewTask } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createApp } from '../index.js';
-import { resetTimeoutThrottle, PREFERRED_SYNTH_GRACE_PERIOD_MS } from '../routes/tasks.js';
+import {
+  resetTimeoutThrottle,
+  PREFERRED_SYNTH_GRACE_PERIOD_MS,
+  TIMEOUT_CHECK_INTERVAL_MS,
+} from '../routes/tasks.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -646,8 +650,8 @@ describe('Task Routes', () => {
       // Create expired task
       await store.createTask(makeTask({ id: 'task-delayed', timeout_at: Date.now() - 1000 }));
 
-      // Simulate 31s passing by setting the stored timestamp to 31s ago
-      await store.setTimeoutLastCheck(Date.now() - 31_000);
+      // Simulate passing the throttle interval by setting the stored timestamp past the threshold
+      await store.setTimeoutLastCheck(Date.now() - TIMEOUT_CHECK_INTERVAL_MS - 1000);
 
       // Poll again — should now run checkTimeouts
       await request('POST', '/api/tasks/poll', { agent_id: 'agent-2' });

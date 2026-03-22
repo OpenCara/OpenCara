@@ -196,7 +196,8 @@ export class KVTaskStore implements TaskStore {
   async getTimeoutLastCheck(): Promise<number> {
     const raw = await this.kv.get(KVTaskStore.TIMEOUT_CHECK_KEY);
     if (!raw) return 0;
-    return parseInt(raw, 10);
+    const parsed = parseInt(raw, 10);
+    return Number.isNaN(parsed) ? 0 : parsed;
   }
 
   async setTimeoutLastCheck(timestamp: number): Promise<void> {

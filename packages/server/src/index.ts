@@ -70,9 +70,16 @@ export default {
   fetch: workerApp.fetch,
   /** Cloudflare Cron Trigger handler — checks for timed-out tasks. */
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
-    const store: TaskStore = env.TASK_STORE
-      ? new KVTaskStore(env.TASK_STORE)
-      : new MemoryTaskStore();
-    await checkTimeouts(store, env);
+    try {
+      const store: TaskStore = env.TASK_STORE
+        ? new KVTaskStore(env.TASK_STORE)
+        : new MemoryTaskStore();
+      await store.setTimeoutLastCheck(Date.now());
+      await checkTimeouts(store, env);
+    } catch (err) {
+      console.error(
+        `[scheduled] action=check_timeouts error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   },
 };

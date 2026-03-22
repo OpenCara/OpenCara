@@ -89,7 +89,9 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
 /**
  * Throttle timeout checks to avoid O(n) KV scans on every poll request.
  * The last-check timestamp is stored in KV (via TaskStore) so it survives
- * isolate recycles and is shared across all isolates.
+ * isolate recycles. Note: the get-set sequence is not atomic, so concurrent
+ * isolates may occasionally both pass the threshold — still far better than
+ * checking on every poll.
  */
 export const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
 
