@@ -5,31 +5,39 @@ import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 
 // ── Mock KVNamespace ───────────────────────────────────────────────
 
-type PutOptions = { expirationTtl?: number };
+type PutOptions = { expirationTtl?: number; metadata?: unknown };
+
+interface StoredEntry {
+  value: string;
+  metadata?: unknown;
+}
 
 class MockKV {
-  private data = new Map<string, string>();
+  private data = new Map<string, StoredEntry>();
   /** Track put calls with their options for TTL assertions */
   putCalls: Array<{ key: string; value: string; options?: PutOptions }> = [];
 
   async get(key: string): Promise<string | null> {
-    return this.data.get(key) ?? null;
+    const entry = this.data.get(key);
+    return entry?.value ?? null;
   }
 
   async put(key: string, value: string, options?: PutOptions): Promise<void> {
     this.putCalls.push({ key, value, options });
-    this.data.set(key, value);
+    this.data.set(key, { value, metadata: options?.metadata });
   }
 
   async delete(key: string): Promise<void> {
     this.data.delete(key);
   }
 
-  async list(opts: { prefix: string }): Promise<{ keys: Array<{ name: string }> }> {
-    const keys: Array<{ name: string }> = [];
-    for (const k of this.data.keys()) {
+  async list(opts: {
+    prefix: string;
+  }): Promise<{ keys: Array<{ name: string; metadata?: unknown }> }> {
+    const keys: Array<{ name: string; metadata?: unknown }> = [];
+    for (const [k, entry] of this.data.entries()) {
       if (k.startsWith(opts.prefix)) {
-        keys.push({ name: k });
+        keys.push({ name: k, metadata: entry.metadata });
       }
     }
     return { keys };
@@ -37,7 +45,7 @@ class MockKV {
 
   /** Inject raw string at a key (for corruption tests) */
   _setRaw(key: string, value: string): void {
-    this.data.set(key, value);
+    this.data.set(key, { value });
   }
 }
 
@@ -127,6 +135,91 @@ describe('KVTaskStore', () => {
     });
   });
 
+  // ── createTask: metadata ──────────────────────────────────────
+
+  describe('createTask — metadata', () => {
+    it('stores task status and timeout_at in KV metadata', async () => {
+      const task = makeTask();
+      await store.createTask(task);
+
+      const putCall = kv.putCalls.find((c) => c.key === 'task:task-1');
+      expect(putCall).toBeDefined();
+      expect(putCall!.options?.metadata).toEqual({
+        status: 'pending',
+        timeout_at: task.timeout_at,
+      });
+    });
+  });
+
+  // ── listTasks: uses kv.list() instead of index ────────────────
+
+  describe('listTasks — uses kv.list() prefix scan', () => {
+    it('lists all tasks via prefix scan', async () => {
+      await store.createTask(makeTask({ id: 'a' }));
+      await store.createTask(makeTask({ id: 'b' }));
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+      expect(tasks.map((t) => t.id).sort()).toEqual(['a', 'b']);
+    });
+
+    it('filters by status using metadata', async () => {
+      await store.createTask(makeTask({ id: 'a', status: 'pending' }));
+      await store.createTask(makeTask({ id: 'b', status: 'reviewing' }));
+      await store.createTask(makeTask({ id: 'c', status: 'completed' }));
+
+      const pending = await store.listTasks({ status: ['pending'] });
+      expect(pending).toHaveLength(1);
+      expect(pending[0].id).toBe('a');
+
+      const active = await store.listTasks({ status: ['pending', 'reviewing'] });
+      expect(active).toHaveLength(2);
+    });
+
+    it('filters by timeout_before using metadata', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ id: 'expired', timeout_at: now - 1000 }));
+      await store.createTask(makeTask({ id: 'active', timeout_at: now + 60_000 }));
+
+      const expired = await store.listTasks({ timeout_before: now });
+      expect(expired).toHaveLength(1);
+      expect(expired[0].id).toBe('expired');
+    });
+
+    it('handles entries without metadata (backwards compatibility)', async () => {
+      // Simulate a task stored without metadata (pre-migration)
+      kv._setRaw('task:legacy', JSON.stringify(makeTask({ id: 'legacy', status: 'pending' })));
+
+      const tasks = await store.listTasks({ status: ['pending'] });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe('legacy');
+    });
+
+    it('skips corrupted task entries', async () => {
+      await store.createTask(makeTask({ id: 'good' }));
+      kv._setRaw('task:bad', '{corrupt');
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe('good');
+      warnSpy.mockRestore();
+    });
+
+    it('no race condition: concurrent creates are independent KV keys', async () => {
+      // With the index-based approach, concurrent creates could lose entries.
+      // With prefix scan, each task is an independent key — no shared state.
+      await Promise.all([
+        store.createTask(makeTask({ id: 'concurrent-1' })),
+        store.createTask(makeTask({ id: 'concurrent-2' })),
+        store.createTask(makeTask({ id: 'concurrent-3' })),
+      ]);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(3);
+    });
+  });
+
   // ── getClaim: corrupted JSON ─────────────────────────────────
 
   describe('getClaim — corrupted JSON', () => {
@@ -166,16 +259,6 @@ describe('KVTaskStore', () => {
     });
   });
 
-  // ── getTaskIndex: corrupted JSON ─────────────────────────────
-
-  describe('getTaskIndex — corrupted JSON', () => {
-    it('returns empty array when task_index is corrupted', async () => {
-      kv._setRaw('task_index', '{not-an-array');
-      const tasks = await store.listTasks();
-      expect(tasks).toEqual([]);
-    });
-  });
-
   // ── updateClaim: corrupted JSON ──────────────────────────────
 
   describe('updateClaim — corrupted JSON', () => {
@@ -206,7 +289,7 @@ describe('KVTaskStore', () => {
 
       const taskPut = kv.putCalls.find((c) => c.key === 'task:task-1');
       expect(taskPut).toBeDefined();
-      expect(taskPut!.options).toEqual({ expirationTtl: SEVEN_DAYS });
+      expect(taskPut!.options?.expirationTtl).toBe(SEVEN_DAYS);
     });
 
     it('sets expirationTtl when status transitions to timeout', async () => {
@@ -216,7 +299,7 @@ describe('KVTaskStore', () => {
       await store.updateTask('task-1', { status: 'timeout' });
 
       const taskPut = kv.putCalls.find((c) => c.key === 'task:task-1');
-      expect(taskPut!.options).toEqual({ expirationTtl: SEVEN_DAYS });
+      expect(taskPut!.options?.expirationTtl).toBe(SEVEN_DAYS);
     });
 
     it('sets expirationTtl when status transitions to failed', async () => {
@@ -226,7 +309,7 @@ describe('KVTaskStore', () => {
       await store.updateTask('task-1', { status: 'failed' });
 
       const taskPut = kv.putCalls.find((c) => c.key === 'task:task-1');
-      expect(taskPut!.options).toEqual({ expirationTtl: SEVEN_DAYS });
+      expect(taskPut!.options?.expirationTtl).toBe(SEVEN_DAYS);
     });
 
     it('does NOT set expirationTtl for non-terminal status', async () => {
@@ -237,7 +320,7 @@ describe('KVTaskStore', () => {
 
       const taskPut = kv.putCalls.find((c) => c.key === 'task:task-1');
       expect(taskPut).toBeDefined();
-      expect(taskPut!.options).toBeUndefined();
+      expect(taskPut!.options?.expirationTtl).toBeUndefined();
     });
 
     it('does NOT set expirationTtl when updating non-status fields', async () => {
@@ -248,7 +331,17 @@ describe('KVTaskStore', () => {
 
       const taskPut = kv.putCalls.find((c) => c.key === 'task:task-1');
       expect(taskPut).toBeDefined();
-      expect(taskPut!.options).toBeUndefined();
+      expect(taskPut!.options?.expirationTtl).toBeUndefined();
+    });
+
+    it('updates metadata on every task update', async () => {
+      await store.createTask(makeTask());
+      kv.putCalls = [];
+
+      await store.updateTask('task-1', { status: 'reviewing' });
+
+      const taskPut = kv.putCalls.find((c) => c.key === 'task:task-1');
+      expect(taskPut!.options?.metadata).toEqual(expect.objectContaining({ status: 'reviewing' }));
     });
   });
 
@@ -295,6 +388,32 @@ describe('KVTaskStore', () => {
       const claimPut = kv.putCalls.find((c) => c.key === 'claim:task-1:agent-1');
       expect(claimPut).toBeDefined();
       expect(claimPut!.options).toBeUndefined();
+    });
+  });
+
+  // ── deleteTask: cleanup ────────────────────────────────────────
+
+  describe('deleteTask', () => {
+    it('removes task and associated claims', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(makeClaim({ task_id: 'task-1', agent_id: 'a1' }));
+
+      await store.deleteTask('task-1');
+
+      expect(await store.getTask('task-1')).toBeNull();
+      const claims = await store.getClaims('task-1');
+      expect(claims).toEqual([]);
+    });
+
+    it('task no longer appears in listTasks after deletion', async () => {
+      await store.createTask(makeTask({ id: 'a' }));
+      await store.createTask(makeTask({ id: 'b' }));
+
+      await store.deleteTask('a');
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe('b');
     });
   });
 });

@@ -1,17 +1,22 @@
-import type { ReviewTask, TaskClaim } from '@opencara/shared';
+import type { ReviewTask, TaskClaim, TaskStatus } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { TaskStore } from './interface.js';
 
 const TASK_PREFIX = 'task:';
 const CLAIM_PREFIX = 'claim:';
 const AGENT_PREFIX = 'agent:';
-const TASK_INDEX_KEY = 'task_index';
 
 /** TTL for terminal KV entries: 7 days in seconds */
 const TERMINAL_TTL = 7 * 24 * 60 * 60;
 
 const TERMINAL_TASK_STATES = ['completed', 'timeout', 'failed'];
 const TERMINAL_CLAIM_STATUSES = ['completed', 'rejected', 'error'];
+
+/** Metadata stored on task KV entries for fast filtering via list(). */
+interface TaskMetadata {
+  status: TaskStatus;
+  timeout_at: number;
+}
 
 /** Safely parse JSON, returning fallback on malformed input. */
 export function safeParseJson<T>(raw: string, fallback: T | null = null): T | null {
@@ -27,10 +32,13 @@ export function safeParseJson<T>(raw: string, fallback: T | null = null): T | nu
  * Cloudflare Workers KV-backed TaskStore.
  *
  * Key layout:
- *   task:{id}              → ReviewTask JSON
- *   claim:{taskId}:{agentId} → TaskClaim JSON
- *   agent:{agentId}        → last-seen timestamp (string)
- *   task_index             → JSON array of task IDs (for listing)
+ *   task:{id}                 → ReviewTask JSON (with metadata: { status, timeout_at })
+ *   claim:{taskId}:{agentId}  → TaskClaim JSON
+ *   agent:{agentId}           → last-seen timestamp (string)
+ *
+ * Task enumeration uses kv.list({ prefix: "task:" }) instead of a shared index,
+ * eliminating the race condition where concurrent creates/deletes could lose entries
+ * in a shared JSON array.
  */
 export class KVTaskStore implements TaskStore {
   constructor(private readonly kv: KVNamespace) {}
@@ -38,11 +46,11 @@ export class KVTaskStore implements TaskStore {
   // ── Tasks ──────────────────────────────────────────────────────
 
   async createTask(task: ReviewTask): Promise<void> {
-    await this.kv.put(`${TASK_PREFIX}${task.id}`, JSON.stringify(task));
-    // Add to index
-    const index = await this.getTaskIndex();
-    index.push(task.id);
-    await this.kv.put(TASK_INDEX_KEY, JSON.stringify(index));
+    const metadata: TaskMetadata = {
+      status: task.status,
+      timeout_at: task.timeout_at,
+    };
+    await this.kv.put(`${TASK_PREFIX}${task.id}`, JSON.stringify(task), { metadata });
   }
 
   async getTask(id: string): Promise<ReviewTask | null> {
@@ -52,18 +60,37 @@ export class KVTaskStore implements TaskStore {
   }
 
   async listTasks(filter?: TaskFilter): Promise<ReviewTask[]> {
-    const index = await this.getTaskIndex();
+    // Use kv.list() to enumerate all task keys, using metadata for fast filtering
+    const listResult = await this.kv.list({ prefix: TASK_PREFIX });
     const tasks: ReviewTask[] = [];
 
-    for (const id of index) {
-      const task = await this.getTask(id);
+    for (const key of listResult.keys) {
+      const meta = key.metadata as TaskMetadata | undefined;
+
+      // Fast-path filtering using metadata (avoids full JSON fetch)
+      if (meta) {
+        if (filter?.status && filter.status.length > 0 && !filter.status.includes(meta.status)) {
+          continue;
+        }
+        if (filter?.timeout_before && meta.timeout_at > filter.timeout_before) {
+          continue;
+        }
+      }
+
+      // Fetch full task JSON
+      const raw = await this.kv.get(key.name);
+      if (!raw) continue;
+      const task = safeParseJson<ReviewTask>(raw);
       if (!task) continue;
 
-      if (filter?.status && filter.status.length > 0 && !filter.status.includes(task.status)) {
-        continue;
-      }
-      if (filter?.timeout_before && task.timeout_at > filter.timeout_before) {
-        continue;
+      // Double-check filter for tasks without metadata (backwards compatibility)
+      if (!meta) {
+        if (filter?.status && filter.status.length > 0 && !filter.status.includes(task.status)) {
+          continue;
+        }
+        if (filter?.timeout_before && task.timeout_at > filter.timeout_before) {
+          continue;
+        }
       }
 
       tasks.push(task);
@@ -77,27 +104,22 @@ export class KVTaskStore implements TaskStore {
     if (!task) return false;
     const updated = { ...task, ...updates };
 
-    const options = TERMINAL_TASK_STATES.includes(updated.status)
-      ? { expirationTtl: TERMINAL_TTL }
-      : undefined;
-    await this.kv.put(`${TASK_PREFIX}${id}`, JSON.stringify(updated), options);
+    const metadata: TaskMetadata = {
+      status: updated.status,
+      timeout_at: updated.timeout_at,
+    };
 
-    // Remove from index when reaching terminal state to prevent unbounded growth
-    if (updates.status && TERMINAL_TASK_STATES.includes(updates.status)) {
-      const index = await this.getTaskIndex();
-      const filtered = index.filter((tid) => tid !== id);
-      await this.kv.put(TASK_INDEX_KEY, JSON.stringify(filtered));
+    const options: { expirationTtl?: number; metadata: TaskMetadata } = { metadata };
+    if (TERMINAL_TASK_STATES.includes(updated.status)) {
+      options.expirationTtl = TERMINAL_TTL;
     }
 
+    await this.kv.put(`${TASK_PREFIX}${id}`, JSON.stringify(updated), options);
     return true;
   }
 
   async deleteTask(id: string): Promise<void> {
     await this.kv.delete(`${TASK_PREFIX}${id}`);
-    // Remove from index
-    const index = await this.getTaskIndex();
-    const filtered = index.filter((tid) => tid !== id);
-    await this.kv.put(TASK_INDEX_KEY, JSON.stringify(filtered));
 
     // Delete claims (best effort — list by prefix)
     const claimList = await this.kv.list({ prefix: `${CLAIM_PREFIX}${id}:` });
@@ -165,13 +187,5 @@ export class KVTaskStore implements TaskStore {
     const raw = await this.kv.get(`${AGENT_PREFIX}${agentId}`);
     if (!raw) return null;
     return parseInt(raw, 10);
-  }
-
-  // ── Helpers ────────────────────────────────────────────────────
-
-  private async getTaskIndex(): Promise<string[]> {
-    const raw = await this.kv.get(TASK_INDEX_KEY);
-    if (!raw) return [];
-    return safeParseJson<string[]>(raw, []) ?? [];
   }
 }
