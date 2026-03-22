@@ -9,6 +9,8 @@ import { webhookRoutes } from './routes/webhook.js';
 import { taskRoutes, checkTimeouts } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
 import { healthRoutes } from './routes/health.js';
+import { requestIdMiddleware } from './middleware/request-id.js';
+import { createLogger } from './logger.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
@@ -18,6 +20,9 @@ type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
  */
 function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
+
+  // Generate request ID and attach structured logger
+  app.use('*', requestIdMiddleware());
 
   // Inject store into every request's context
   app.use('*', async (c, next) => {
@@ -51,7 +56,11 @@ function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
 
   // Error handler
   app.onError((err, c) => {
-    console.error('Unhandled error:', err);
+    const logger = c.get('logger');
+    logger.error('Unhandled error', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     return c.json<ErrorResponse>(
       { error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } },
       500,
@@ -89,25 +98,28 @@ export default {
   /** Cloudflare Cron Trigger handler — checks for timed-out tasks and cleans up stale entries. */
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
     const store = createStore(env);
+    const logger = createLogger();
 
     try {
       await store.setTimeoutLastCheck(Date.now());
       await checkTimeouts(store, env);
     } catch (err) {
-      console.error(
-        `[scheduled] action=check_timeouts error=${err instanceof Error ? err.message : String(err)}`,
-      );
+      logger.error('Scheduled timeout check failed', {
+        action: 'check_timeouts',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     try {
       const deleted = await store.cleanupTerminalTasks();
       if (deleted > 0) {
-        console.log(`[scheduled] action=cleanup_terminal deleted=${deleted}`);
+        logger.info('Cleaned up terminal tasks', { action: 'cleanup_terminal', deleted });
       }
     } catch (err) {
-      console.error(
-        `[scheduled] action=cleanup_terminal error=${err instanceof Error ? err.message : String(err)}`,
-      );
+      logger.error('Scheduled terminal cleanup failed', {
+        action: 'cleanup_terminal',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   },
 };

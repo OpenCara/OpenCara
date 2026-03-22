@@ -812,9 +812,13 @@ describe('Task Routes', () => {
         reason: 'Cannot access diff',
       });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[agent:agent-1] task=task-1 action=reject role=review reason=Cannot access diff',
-      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Agent rejected task"'));
+      const logEntry = JSON.parse(errorSpy.mock.calls[0][0] as string);
+      expect(logEntry.agentId).toBe('agent-1');
+      expect(logEntry.taskId).toBe('task-1');
+      expect(logEntry.action).toBe('reject');
+      expect(logEntry.role).toBe('review');
+      expect(logEntry.reason).toBe('Cannot access diff');
     });
 
     it('error endpoint logs structured error with agent ID', async () => {
@@ -840,9 +844,13 @@ describe('Task Routes', () => {
         error: 'Tool crashed',
       });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[agent:agent-1] task=task-1 action=error role=review error=Tool crashed',
-      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Agent reported error"'));
+      const logEntry = JSON.parse(errorSpy.mock.calls[0][0] as string);
+      expect(logEntry.agentId).toBe('agent-1');
+      expect(logEntry.taskId).toBe('task-1');
+      expect(logEntry.action).toBe('error');
+      expect(logEntry.role).toBe('review');
+      expect(logEntry.error).toBe('Tool crashed');
     });
 
     it('result endpoint logs on no claim found', async () => {
@@ -854,9 +862,10 @@ describe('Task Routes', () => {
         review_text: 'test',
       });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[agent:agent-unknown] task=task-1 action=result_rejected reason=no_claim',
-      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Result rejected'));
+      const logEntry = JSON.parse(errorSpy.mock.calls[0][0] as string);
+      expect(logEntry.agentId).toBe('agent-unknown');
+      expect(logEntry.taskId).toBe('task-1');
     });
 
     it('result endpoint logs on already-completed claim', async () => {
@@ -876,9 +885,10 @@ describe('Task Routes', () => {
         review_text: 'test',
       });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[agent:agent-1] task=task-1 action=result_rejected reason=claim_completed',
-      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Result rejected'));
+      const logEntry = JSON.parse(errorSpy.mock.calls[0][0] as string);
+      expect(logEntry.agentId).toBe('agent-1');
+      expect(logEntry.claimStatus).toBe('completed');
     });
 
     it('result endpoint logs on role mismatch', async () => {
@@ -898,9 +908,11 @@ describe('Task Routes', () => {
         review_text: 'Synthesized review',
       });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[agent:agent-1] task=task-1 action=result_rejected reason=role_mismatch claim_role=review submission_type=summary',
-      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Result rejected'));
+      const logEntry = JSON.parse(errorSpy.mock.calls[0][0] as string);
+      expect(logEntry.agentId).toBe('agent-1');
+      expect(logEntry.claimRole).toBe('review');
+      expect(logEntry.submissionType).toBe('summary');
     });
   });
 

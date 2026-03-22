@@ -1,4 +1,5 @@
 import type { TaskStore } from './store/interface.js';
+import type { Logger } from './logger.js';
 
 /** Cloudflare Workers environment bindings */
 export interface Env {
@@ -14,6 +15,8 @@ export interface Env {
 /** Hono context variables (set per-request via middleware) */
 export interface AppVariables {
   store: TaskStore;
+  logger: Logger;
+  requestId: string;
 }
 
 /** Filter for querying tasks */

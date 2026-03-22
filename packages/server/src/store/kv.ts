@@ -1,6 +1,7 @@
 import type { ReviewTask, TaskClaim, TaskStatus } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { TaskStore } from './interface.js';
+import { createLogger } from '../logger.js';
 
 const TASK_PREFIX = 'task:';
 const CLAIM_PREFIX = 'claim:';
@@ -13,6 +14,9 @@ export const DEFAULT_TTL_DAYS = 7;
 const TERMINAL_TASK_STATES = ['completed', 'timeout', 'failed'];
 const TERMINAL_CLAIM_STATUSES = ['completed', 'rejected', 'error'];
 
+/** Module-level logger for KV store operations (avoids per-call instantiation). */
+const kvLogger = createLogger();
+
 /** Metadata stored on task KV entries for fast filtering via list(). */
 interface TaskMetadata {
   status: TaskStatus;
@@ -24,7 +28,7 @@ export function safeParseJson<T>(raw: string, fallback: T | null = null): T | nu
   try {
     return JSON.parse(raw) as T;
   } catch {
-    console.warn('KV: corrupted JSON entry, returning fallback');
+    kvLogger.warn('KV: corrupted JSON entry, returning fallback');
     return fallback;
   }
 }
@@ -159,7 +163,7 @@ export class KVTaskStore implements TaskStore {
         if (claim) {
           claims.push(claim);
         } else {
-          console.warn(`KV: skipping corrupted claim entry at ${key.name}`);
+          kvLogger.warn('KV: skipping corrupted claim entry', { key: key.name });
         }
       }
     }
@@ -174,7 +178,7 @@ export class KVTaskStore implements TaskStore {
     if (!raw) return;
     const claim = safeParseJson<TaskClaim>(raw);
     if (!claim) {
-      console.warn(`KV: corrupted claim entry ${key}, skipping update`);
+      kvLogger.warn('KV: corrupted claim entry, skipping update', { key });
       return;
     }
     const updated = { ...claim, ...updates };

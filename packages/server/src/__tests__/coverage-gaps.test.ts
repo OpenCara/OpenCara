@@ -209,8 +209,10 @@ describe('github/config.ts edge cases', () => {
     const { config, parseError } = await loadReviewConfig('owner', 'repo', 'main', 1, 'token');
     expect(config).toEqual(DEFAULT_REVIEW_CONFIG);
     expect(parseError).toBe(true);
-    // Should log error but not throw
-    expect(console.error).toHaveBeenCalledWith('Failed to post error comment:', expect.any(Error));
+    // Should log error but not throw — now outputs structured JSON
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to post error comment'),
+    );
   });
 });
 
@@ -416,7 +418,7 @@ describe('webhook.ts edge cases', () => {
       action: 'created',
     });
     expect(res.status).toBe(200);
-    expect(console.log).toHaveBeenCalledWith('Installation event: created');
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"Installation event"'));
   });
 
   it('handles unknown event type', async () => {
@@ -452,7 +454,9 @@ describe('webhook.ts edge cases', () => {
       },
     });
     expect(res.status).toBe(200);
-    expect(console.log).toHaveBeenCalledWith('PR event without installation — skipping');
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('PR event without installation'),
+    );
   });
 
   it('PR event with failed installation token is skipped', async () => {
@@ -479,8 +483,7 @@ describe('webhook.ts edge cases', () => {
     });
     expect(res.status).toBe(200);
     expect(console.error).toHaveBeenCalledWith(
-      'Failed to get installation token:',
-      expect.anything(),
+      expect.stringContaining('Failed to get installation token'),
     );
   });
 
@@ -529,7 +532,7 @@ describe('webhook.ts edge cases', () => {
     });
     expect(res.status).toBe(200);
     expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining('aborting due to .review.yml parse error'),
+      expect.stringContaining('Aborting due to .review.yml parse error'),
     );
   });
 
@@ -556,7 +559,9 @@ describe('webhook.ts edge cases', () => {
       comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
     });
     expect(res.status).toBe(200);
-    expect(console.log).toHaveBeenCalledWith('Comment event without installation — skipping');
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('Comment event without installation'),
+    );
   });
 
   it('issue_comment with failed installation token is skipped', async () => {
@@ -577,8 +582,7 @@ describe('webhook.ts edge cases', () => {
     });
     expect(res.status).toBe(200);
     expect(console.error).toHaveBeenCalledWith(
-      'Failed to get installation token:',
-      expect.anything(),
+      expect.stringContaining('Failed to get installation token'),
     );
   });
 
@@ -613,7 +617,7 @@ describe('webhook.ts edge cases', () => {
     });
     expect(res.status).toBe(200);
     expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to fetch PR #1 details'),
+      expect.stringContaining('Failed to fetch PR details'),
     );
   });
 
