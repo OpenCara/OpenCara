@@ -81,6 +81,7 @@ describe('E2E Agent Scenarios', () => {
     server = new FakeServer();
     server.install();
 
+    mockedExecuteTool.mockReset();
     mockedExecuteTool.mockResolvedValue({
       stdout:
         '## Summary\nLooks good. No issues found.\n\n## Findings\nNo issues found.\n\n## Verdict\nAPPROVE',
@@ -353,21 +354,46 @@ describe('E2E Agent Scenarios', () => {
       // In single-agent mode (review_count=1), the agent claims 'summary'.
       // Server returns empty reviews. The agent runs a regular review but
       // submits with type: 'summary' to match the claimed role.
+      //
+      // The result submission triggers postFinalReview on the server, which uses
+      // crypto.subtle for JWT signing. Under fake timers this can hang when
+      // previous tests leave residual microtask state. To avoid this, we
+      // intercept the result submission fetch to verify type='summary' directly
+      // without letting postFinalReview run.
       const taskId = await server.injectTask({ reviewCount: 1 });
 
+      // Wrap the fake server fetch to capture the result submission body
+      let resultBody: Record<string, unknown> | null = null;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        // Intercept the result submission — return success without hitting server
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          resultBody = JSON.parse(init?.body as string);
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        // Everything else goes through the real fake server
+        return (originalFetch as typeof fetch)(input, init);
+      }) as typeof fetch;
+
       const agentPromise = startTestAgent('single-agent');
-      await advanceTime(10000);
+      await advanceTime(2000);
 
       // Tool was called (review execution happened)
       expect(mockedExecuteTool).toHaveBeenCalled();
 
-      // No type mismatch error — submission type should be 'summary'
+      // Verify submission type is 'summary' (not 'review')
+      expect(resultBody).not.toBeNull();
+      expect(resultBody!.type).toBe('summary');
+
+      // No type mismatch error
       expect(console.error).not.toHaveBeenCalledWith(
         expect.stringContaining('does not match submission type'),
       );
 
       await server.store.updateTask(taskId, { status: 'completed' });
       await stopAgent(agentPromise, server);
-    }, 15000);
+    });
   });
 });
