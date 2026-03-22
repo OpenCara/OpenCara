@@ -7,6 +7,7 @@ import type { TaskStore } from './store/interface.js';
 import { webhookRoutes } from './routes/webhook.js';
 import { taskRoutes, checkTimeouts } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
+import { healthRoutes } from './routes/health.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
@@ -40,6 +41,7 @@ function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
   app.route('/', webhookRoutes());
   app.route('/', taskRoutes());
   app.route('/', registryRoutes());
+  app.route('/', healthRoutes());
 
   // 404
   app.notFound((c) => c.json({ error: 'Not Found' }, 404));
