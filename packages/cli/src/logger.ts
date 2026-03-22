@@ -62,13 +62,10 @@ function openLogFile(filePath: string): number | null {
 
 export function createLogger(labelOrOptions?: string | LoggerOptions): Logger {
   const opts =
-    typeof labelOrOptions === 'string'
-      ? { label: labelOrOptions }
-      : (labelOrOptions ?? {});
+    typeof labelOrOptions === 'string' ? { label: labelOrOptions } : (labelOrOptions ?? {});
   const { label, logFile } = opts;
 
   const labelStr = label ? ` ${pc.dim(`[${label}]`)}` : '';
-  const plainLabel = label ? ` [${label}]` : '';
 
   const fd = logFile ? openLogFile(logFile) : null;
 

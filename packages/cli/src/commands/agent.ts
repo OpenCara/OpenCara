@@ -844,7 +844,10 @@ export async function startAgentRouter(): Promise<void> {
   const configToken = resolveConfigToken(agentConfig?.github_token, config.githubToken);
   const auth = resolveGithubToken(configToken);
   const logFile = resolveLogFile(agentConfig?.log_file, config.logFile);
-  const logger = createLogger({ label: agentConfig?.name ?? 'agent[0]', logFile: logFile ?? undefined });
+  const logger = createLogger({
+    label: agentConfig?.name ?? 'agent[0]',
+    logFile: logFile ?? undefined,
+  });
   logAuthMethod(auth.method, logger.log);
 
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
@@ -1057,9 +1060,7 @@ agentCommand
 
         // Use allSettled so one agent crashing doesn't orphan the others
         const results = await Promise.allSettled(promises);
-        const failures = results.filter(
-          (r): r is PromiseRejectedResult => r.status === 'rejected',
-        );
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failures.length > 0) {
           for (const f of failures) {
             console.error(`Agent exited with error: ${f.reason}`);
