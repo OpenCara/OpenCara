@@ -426,8 +426,12 @@ describe('agent poll loop', () => {
     // All log lines have timestamps [HH:MM:SS] but no agent label prefix
     const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
     // Timestamps like [12:34:56] are expected, but custom labels like [My Agent] are not
+    // Strip ANSI escape codes before matching (picocolors adds brackets like [2m, [22m)
+    // eslint-disable-next-line no-control-regex
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
     const hasCustomLabel = logCalls.some(
-      (c: string[]) => typeof c[0] === 'string' && /\[(?!\d{2}:\d{2}:\d{2}\])[^\]]+\]/.test(c[0]),
+      (c: string[]) =>
+        typeof c[0] === 'string' && /\[(?!\d{2}:\d{2}:\d{2}\])[^\]]+\]/.test(stripAnsi(c[0])),
     );
     expect(hasCustomLabel).toBe(false);
   });

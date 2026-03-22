@@ -62,8 +62,11 @@ describe('logger', () => {
       const logger = createLogger();
       logger.log('test');
       const call = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      // Strip ANSI escape codes before matching (picocolors adds brackets like [2m, [22m)
+      // eslint-disable-next-line no-control-regex
+      const stripped = call.replace(/\x1b\[[0-9;]*m/g, '');
       // Should not have a label bracket other than the timestamp
-      expect(call).not.toMatch(/\[(?!\d{2}:\d{2}:\d{2}\])[^\]]+\]/);
+      expect(stripped).not.toMatch(/\[(?!\d{2}:\d{2}:\d{2}\])[^\]]+\]/);
     });
 
     it('sanitizes tokens from messages', () => {
