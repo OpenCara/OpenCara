@@ -61,6 +61,11 @@ export class ConfigValidationError extends Error {
 
 const KNOWN_TOOL_NAMES = new Set(DEFAULT_REGISTRY.tools.map((t) => t.name));
 
+/** Backward-compatible aliases for renamed tools. */
+const TOOL_ALIASES: Record<string, string> = {
+  'claude-code': 'claude',
+};
+
 function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfig | undefined {
   const raw = obj.repos;
   if (raw === undefined || raw === null) return undefined;
@@ -121,15 +126,23 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
       );
       continue;
     }
-    if (!KNOWN_TOOL_NAMES.has(obj.tool)) {
-      const toolNames = [...KNOWN_TOOL_NAMES].join(', ');
-      const hint = obj.tool === 'claude-code' ? ' (did you mean "claude"?)' : '';
-      console.warn(
-        `\u26a0 Config warning: agents[${i}].tool "${obj.tool}" not in registry (known: ${toolNames})${hint}, skipping agent`,
-      );
-      continue;
+    let resolvedTool = obj.tool;
+    if (!KNOWN_TOOL_NAMES.has(resolvedTool)) {
+      const alias = TOOL_ALIASES[resolvedTool];
+      if (alias) {
+        console.warn(
+          `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" is deprecated, using "${alias}" instead`,
+        );
+        resolvedTool = alias;
+      } else {
+        const toolNames = [...KNOWN_TOOL_NAMES].join(', ');
+        console.warn(
+          `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" not in registry (known: ${toolNames}), skipping agent`,
+        );
+        continue;
+      }
     }
-    const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
+    const agent: LocalAgentConfig = { model: obj.model, tool: resolvedTool };
     if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;

@@ -1102,7 +1102,7 @@ agents:
         expect(config.agents).toHaveLength(4);
       });
 
-      it('shows migration hint for claude-code tool name', () => {
+      it('auto-migrates claude-code to claude with deprecation warning', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
@@ -1112,8 +1112,11 @@ agents:
 `);
 
         const config = loadConfig();
-        expect(config.agents).toEqual([]);
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('did you mean "claude"?'));
+        expect(config.agents).toHaveLength(1);
+        expect(config.agents![0].tool).toBe('claude');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('"claude-code" is deprecated, using "claude"'),
+        );
         warnSpy.mockRestore();
       });
 
