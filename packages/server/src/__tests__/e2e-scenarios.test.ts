@@ -11,6 +11,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
+import { resetRateLimiters } from '../rate-limit.js';
 import type { Env } from '../types.js';
 import { createTestApp } from './helpers/test-server.js';
 import { createGitHubMock } from './helpers/github-mock.js';
@@ -83,6 +84,7 @@ describe('E2E Scenarios', () => {
 
   beforeEach(() => {
     resetTimeoutThrottle();
+    resetRateLimiters();
     store = new MemoryTaskStore();
     app = createTestApp(store);
     env = getMockEnv();

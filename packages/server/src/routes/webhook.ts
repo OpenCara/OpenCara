@@ -5,6 +5,7 @@ import type { TaskStore } from '../store/interface.js';
 import { getInstallationToken } from '../github/app.js';
 import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
+import { webhookRateLimiter } from '../rate-limit.js';
 
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
@@ -141,6 +142,17 @@ export function webhookRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   app.post('/webhook/github', async (c) => {
+    // Rate limit per IP before any processing
+    const clientIp =
+      c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'unknown';
+    const retryAfter = webhookRateLimiter.check(clientIp);
+    if (retryAfter > 0) {
+      return c.text('Too Many Requests', {
+        status: 429,
+        headers: { 'Retry-After': String(retryAfter) },
+      });
+    }
+
     const store = c.get('store');
     const body = await c.req.text();
     const signature = c.req.header('X-Hub-Signature-256') ?? null;

@@ -23,6 +23,7 @@ import {
   type ReviewAgentInfo,
 } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
+import { agentRateLimiter } from '../rate-limit.js';
 
 /** Default grace period (ms) for preferred synthesizer agents. */
 export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
@@ -265,6 +266,15 @@ export function taskRoutes() {
 
     if (!agent_id) {
       return c.json({ error: 'agent_id is required' }, 400);
+    }
+
+    // Rate limit per agent_id
+    const retryAfter = agentRateLimiter.check(agent_id);
+    if (retryAfter > 0) {
+      return c.json(
+        { error: 'Too many requests' },
+        { status: 429, headers: { 'Retry-After': String(retryAfter) } },
+      );
     }
 
     // Update last-seen

@@ -12,6 +12,7 @@ import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
+import { resetRateLimiters } from '../rate-limit.js';
 import type { Env } from '../types.js';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ describe('Integration: full E2E flows', () => {
 
   beforeEach(() => {
     resetTimeoutThrottle();
+    resetRateLimiters();
     store = new MemoryTaskStore();
     app = createApp(store);
     mockEnv = getMockEnv();

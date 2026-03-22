@@ -7,6 +7,7 @@ import {
   PREFERRED_SYNTH_GRACE_PERIOD_MS,
   TIMEOUT_CHECK_INTERVAL_MS,
 } from '../routes/tasks.js';
+import { resetRateLimiters } from '../rate-limit.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -43,6 +44,7 @@ describe('Task Routes', () => {
 
   beforeEach(() => {
     resetTimeoutThrottle();
+    resetRateLimiters();
     store = new MemoryTaskStore();
     app = createApp(store);
   });
@@ -621,6 +623,43 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-1');
       expect(task?.summary_claimed).toBe(false);
       expect(task?.claimed_agents).toEqual([]);
+    });
+  });
+
+  // ── Rate limiting ──────────────────────────────────────
+
+  describe('rate limiting', () => {
+    it('returns 429 when agent exceeds poll rate limit', async () => {
+      await store.createTask(makeTask());
+
+      // Exhaust the 60-token burst
+      for (let i = 0; i < 60; i++) {
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'flood-agent' });
+        expect(res.status).toBe(200);
+      }
+
+      // 61st request should be rate-limited
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'flood-agent' });
+      expect(res.status).toBe(429);
+      expect(res.headers.get('Retry-After')).toBeTruthy();
+    });
+
+    it('rate limits are per agent_id', async () => {
+      await store.createTask(makeTask());
+
+      // Exhaust agent-1's burst
+      for (let i = 0; i < 60; i++) {
+        await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      }
+      expect((await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' })).status).toBe(429);
+
+      // agent-2 is unaffected
+      expect((await request('POST', '/api/tasks/poll', { agent_id: 'agent-2' })).status).toBe(200);
+    });
+
+    it('does not rate-limit requests without agent_id (returns 400 instead)', async () => {
+      const res = await request('POST', '/api/tasks/poll', {});
+      expect(res.status).toBe(400);
     });
   });
 

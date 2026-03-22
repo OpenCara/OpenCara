@@ -14,6 +14,7 @@ import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryTaskStore } from '../../../../server/src/store/memory.js';
 import { createTestApp } from '../../../../server/src/__tests__/helpers/test-server.js';
 import { resetTimeoutThrottle } from '../../../../server/src/routes/tasks.js';
+import { resetRateLimiters } from '../../../../server/src/rate-limit.js';
 import type { Env } from '../../../../server/src/types.js';
 
 export const FAKE_SERVER_URL = 'http://fake-server';
@@ -62,6 +63,7 @@ export class FakeServer {
     };
     this.app = createTestApp(this.store);
     this.originalFetch = globalThis.fetch;
+    resetRateLimiters();
   }
 
   /** Replace globalThis.fetch with interceptor. */
@@ -177,10 +179,11 @@ export class FakeServer {
     vi.restoreAllMocks();
   }
 
-  /** Reset store and timeout throttle. */
+  /** Reset store, timeout throttle, and rate limiters. */
   reset(): void {
     this.store.reset();
     resetTimeoutThrottle();
+    resetRateLimiters();
     this.diffFetchError = false;
     this.diffContent = CANNED_DIFF;
   }
