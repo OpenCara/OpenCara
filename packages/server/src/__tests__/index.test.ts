@@ -59,25 +59,37 @@ describe('scheduled handler', () => {
 });
 
 describe('createStore', () => {
-  it('returns D1DataStore when env.DB is present', () => {
-    const store = createStore(makeEnv({ DB: {} as D1Database }));
+  /** Build an Env with only the specified bindings set. */
+  function makeStoreEnv(bindings: { DB?: D1Database; TASK_STORE?: KVNamespace }): Env {
+    return {
+      GITHUB_WEBHOOK_SECRET: 'test',
+      GITHUB_APP_ID: '123',
+      GITHUB_APP_PRIVATE_KEY: 'key',
+      TASK_STORE: bindings.TASK_STORE as KVNamespace,
+      WEB_URL: 'https://test.com',
+      ...('DB' in bindings ? { DB: bindings.DB } : {}),
+    };
+  }
+
+  it('returns D1DataStore when only DB is present', () => {
+    const store = createStore(makeStoreEnv({ DB: {} as D1Database }));
     expect(store).toBeInstanceOf(D1DataStore);
   });
 
-  it('returns KVDataStore when env.TASK_STORE is present and env.DB is not', () => {
-    const store = createStore(makeEnv({ DB: undefined }));
+  it('returns KVDataStore when only TASK_STORE is present', () => {
+    const store = createStore(makeStoreEnv({ TASK_STORE: {} as KVNamespace }));
     expect(store).toBeInstanceOf(KVDataStore);
   });
 
   it('returns MemoryDataStore when neither DB nor TASK_STORE is present', () => {
-    const store = createStore(
-      makeEnv({ DB: undefined, TASK_STORE: undefined as unknown as KVNamespace }),
-    );
+    const store = createStore(makeStoreEnv({}));
     expect(store).toBeInstanceOf(MemoryDataStore);
   });
 
   it('prefers D1 over KV when both are present', () => {
-    const store = createStore(makeEnv({ DB: {} as D1Database, TASK_STORE: {} as KVNamespace }));
+    const store = createStore(
+      makeStoreEnv({ DB: {} as D1Database, TASK_STORE: {} as KVNamespace }),
+    );
     expect(store).toBeInstanceOf(D1DataStore);
   });
 });

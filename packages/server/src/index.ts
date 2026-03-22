@@ -86,6 +86,7 @@ export function parseTtlDays(env: Env): number {
   return Number.isNaN(parsed) || parsed < 1 ? 7 : parsed;
 }
 
+/** @internal Exported for testing only. */
 export function createStore(env: Env): DataStore {
   const ttlDays = parseTtlDays(env);
   // D1 (preferred) → KV (fallback) → Memory (dev/test)
