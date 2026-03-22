@@ -114,13 +114,14 @@ export class RouterRelay {
     reviewMode: string;
     prompt: string;
     diffContent: string;
+    contextBlock?: string;
   }): string {
     const systemPrompt = buildSystemPrompt(
       req.owner,
       req.repo,
       req.reviewMode as ReviewRequest['reviewMode'],
     );
-    const userMessage = buildUserMessage(req.prompt, req.diffContent);
+    const userMessage = buildUserMessage(req.prompt, req.diffContent, req.contextBlock);
     return `${systemPrompt}\n\n${userMessage}`;
   }
 
@@ -131,9 +132,15 @@ export class RouterRelay {
     prompt: string;
     reviews: SummaryReviewInput[];
     diffContent: string;
+    contextBlock?: string;
   }): string {
     const systemPrompt = buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length);
-    const userMessage = buildSummaryUserMessage(req.prompt, req.reviews, req.diffContent);
+    const userMessage = buildSummaryUserMessage(
+      req.prompt,
+      req.reviews,
+      req.diffContent,
+      req.contextBlock,
+    );
     return `${systemPrompt}\n\n${userMessage}`;
   }
 

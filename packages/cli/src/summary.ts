@@ -18,6 +18,7 @@ export interface SummaryRequest {
   prNumber: number;
   timeout: number;
   diffContent: string;
+  contextBlock?: string;
 }
 
 export interface SummaryResponse {
@@ -73,21 +74,32 @@ export function buildSummaryUserMessage(
   prompt: string,
   reviews: SummaryReviewInput[],
   diffContent: string,
+  contextBlock?: string,
 ): string {
   const reviewSections = reviews
     .map((r) => `### Review by ${r.model}/${r.tool} (Verdict: ${r.verdict})\n${r.review}`)
     .join('\n\n');
 
-  return `Project review guidelines:\n${prompt}\n\n---\n\nPull request diff:\n\n${diffContent}\n\n---\n\nCompact reviews from other agents:\n\n${reviewSections}`;
+  const parts = [`Project review guidelines:\n${prompt}`];
+  if (contextBlock) {
+    parts.push(contextBlock);
+  }
+  parts.push(`Pull request diff:\n\n${diffContent}`);
+  parts.push(`Compact reviews from other agents:\n\n${reviewSections}`);
+  return parts.join('\n\n---\n\n');
 }
 
 export function calculateInputSize(
   prompt: string,
   reviews: SummaryReviewInput[],
   diffContent: string,
+  contextBlock?: string,
 ): number {
   let size = Buffer.byteLength(prompt, 'utf-8');
   size += Buffer.byteLength(diffContent, 'utf-8');
+  if (contextBlock) {
+    size += Buffer.byteLength(contextBlock, 'utf-8');
+  }
   for (const r of reviews) {
     size += Buffer.byteLength(r.review, 'utf-8');
     size += Buffer.byteLength(r.model, 'utf-8');
@@ -109,7 +121,7 @@ export async function executeSummary(
     cwd?: string,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
-  const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent);
+  const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent, req.contextBlock);
   if (inputSize > MAX_INPUT_SIZE_BYTES) {
     throw new InputTooLargeError(
       `Summary input too large (${Math.round(inputSize / 1024)}KB > ${Math.round(MAX_INPUT_SIZE_BYTES / 1024)}KB limit)`,
@@ -129,7 +141,12 @@ export async function executeSummary(
 
   try {
     const systemPrompt = buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length);
-    const userMessage = buildSummaryUserMessage(req.prompt, req.reviews, req.diffContent);
+    const userMessage = buildSummaryUserMessage(
+      req.prompt,
+      req.reviews,
+      req.diffContent,
+      req.contextBlock,
+    );
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
     const result = await runTool(

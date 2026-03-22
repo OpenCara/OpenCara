@@ -263,9 +263,21 @@ describe('Agent Coverage Tests', () => {
         }
 
         if (url.includes('api.github.com/repos') && url.includes('/pulls/')) {
+          const headers = init?.headers as Record<string, string> | undefined;
+          const accept = headers?.['Accept'] ?? '';
+          // PR context fetches use application/vnd.github+json — return JSON
+          if (accept.includes('+json')) {
+            return new Response(JSON.stringify([]), { status: 200 });
+          }
+          // Diff fetch uses application/vnd.github.v3.diff — capture for assertion
           diffFetchUrl = url;
-          diffFetchHeaders = init?.headers as Record<string, string>;
+          diffFetchHeaders = headers;
           return new Response('diff --git a/f b/f', { status: 200 });
+        }
+
+        // PR context issue comments endpoint
+        if (url.includes('api.github.com/repos') && url.includes('/issues/')) {
+          return new Response(JSON.stringify([]), { status: 200 });
         }
 
         if (url.includes('/result') || url.includes('/reject') || url.includes('/error')) {
