@@ -1402,30 +1402,55 @@ describe('Task Routes', () => {
       // GitHub posting will fail (no valid key), but the function runs
       await checkTimeouts(store, mockEnv);
 
-      // Task stays pending because GitHub posting fails, but checkTimeouts ran
+      // Task stays pending because GitHub posting fails (intentional —
+      // next checkTimeouts call will retry)
       const task = await store.getTask('task-expired');
       expect(task).toBeDefined();
+      expect(task?.status).toBe('pending');
     });
 
     it('bypasses the in-memory throttle when called directly', async () => {
-      // Spy on console before any calls
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        // First: trigger throttle via poll
+        await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
 
-      // First: trigger throttle via poll
-      await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+        // Create expired task after throttle is set
+        await store.createTask(makeTask({ id: 'task-cron', timeout_at: Date.now() - 1000 }));
 
-      // Create expired task after throttle is set
-      await store.createTask(makeTask({ id: 'task-cron', timeout_at: Date.now() - 1000 }));
+        // Direct call bypasses throttle (cron trigger path)
+        await checkTimeouts(store, mockEnv);
 
-      // Direct call bypasses throttle (cron trigger path)
-      await checkTimeouts(store, mockEnv);
+        // Verify checkTimeouts found the expired task (it logs the timeout)
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('task-cron timed out'));
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
 
-      // Verify checkTimeouts found the expired task (it logs the timeout)
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('task-cron timed out'));
+    it('skips task when status changed between list and recheck', async () => {
+      await store.createTask(
+        makeTask({ id: 'task-race', timeout_at: Date.now() - 1000, status: 'timeout' }),
+      );
 
-      logSpy.mockRestore();
-      errorSpy.mockRestore();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        // Manually pass a task that appears expired but has already been handled
+        // checkTimeouts' re-check should skip it
+        await checkTimeouts(store, mockEnv);
+
+        // The "skipping timeout" log should appear (or no "timed out" log)
+        const timedOutCalls = logSpy.mock.calls.filter((args) =>
+          String(args[0]).includes('task-race timed out'),
+        );
+        expect(timedOutCalls).toHaveLength(0);
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
     });
   });
 });

@@ -121,6 +121,14 @@ export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
   });
 
   for (const task of expired) {
+    // Defense-in-depth: re-check status to prevent duplicate posts when
+    // cron trigger and poll-triggered maybeCheckTimeouts run concurrently.
+    const currentTask = await store.getTask(task.id);
+    if (!currentTask || (currentTask.status !== 'pending' && currentTask.status !== 'reviewing')) {
+      console.log(`Task ${task.id}: skipping timeout — status changed to ${currentTask?.status}`);
+      continue;
+    }
+
     console.log(`Task ${task.id} timed out (PR #${task.pr_number} on ${task.owner}/${task.repo})`);
 
     // Post fallback: any completed reviews as individual comments

@@ -74,6 +74,12 @@ export default {
    */
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     const store = env.TASK_STORE ? new KVTaskStore(env.TASK_STORE) : new MemoryTaskStore();
-    await checkTimeouts(store, env);
+    try {
+      await checkTimeouts(store, env);
+    } catch (err) {
+      console.error(
+        `[cron] action=check_timeouts_failed error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   },
 };
