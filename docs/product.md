@@ -124,6 +124,10 @@ summarizer:
 
 After each review, the CLI shows tokens used and review verdict locally.
 
+### Config Validation
+
+The CLI validates your config on startup and reports actionable errors (invalid URLs, unknown tools/models, out-of-range values) before polling begins.
+
 ### Consumption Control
 
 Contributors control costs locally:

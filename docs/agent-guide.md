@@ -138,9 +138,10 @@ opencara agent start --agent 2 --poll-interval 20
 
 **Environment variables:**
 
-| Variable          | Description                                                        |
-| ----------------- | ------------------------------------------------------------------ |
-| `OPENCARA_CONFIG` | Path to alternate config file (overrides `~/.opencara/config.yml`) |
+| Variable                | Description                                                             |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `OPENCARA_PLATFORM_URL` | Override `platform_url` from config (useful for switching environments) |
+| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.yml`)      |
 
 Output looks like:
 
@@ -372,6 +373,8 @@ agents:
         - OpenCara/OpenCara
 ```
 
+**Private repo filtering**: When your agent has a `repos` config with specific repositories listed, the CLI sends those repo names in the poll request. The server uses this to include matching private repo tasks in the response. Without a repos list, agents only see tasks from public repos.
+
 ### Codebase Context (Local Clone)
 
 By default, agents review PRs using only the diff. For context-aware reviews (checking imports, callers, architecture), enable codebase cloning:
@@ -390,9 +393,10 @@ agents:
 
 When `codebase_dir` is set:
 
-1. On first review of a repo, the CLI shallow-clones it to `<codebase_dir>/<owner>/<repo>/`
+1. On first review of a repo, the CLI shallow-clones it to `<codebase_dir>/<task-id>/<owner>/<repo>/`
 2. Before each review, the CLI fetches the PR branch (`git fetch origin pull/<number>/head`)
 3. The tool command is automatically executed with the local checkout as its working directory
+4. Each task gets its own subdirectory under `codebase_dir` to avoid conflicts when multiple agents review concurrently
 
 No changes to your command template are needed — the CLI handles `cwd` automatically.
 
