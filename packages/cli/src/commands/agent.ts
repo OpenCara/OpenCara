@@ -15,6 +15,7 @@ import { isRepoAllowed } from '@opencara/shared';
 import {
   loadConfig,
   resolveCodebaseDir,
+  resolveLogFile,
   resolveGithubToken as resolveConfigToken,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   CONFIG_DIR,
@@ -765,12 +766,13 @@ export async function startAgent(
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
     label?: string;
+    logFile?: string;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl);
   const session = consumptionDeps?.session ?? createSessionTracker();
   const deps = consumptionDeps ?? { agentId, session };
-  const logger = createLogger(options?.label);
+  const logger = createLogger({ label: options?.label, logFile: options?.logFile });
   const { log, logError, logWarn } = logger;
 
   const agentSession = createAgentSession();
@@ -841,7 +843,11 @@ export async function startAgentRouter(): Promise<void> {
 
   const configToken = resolveConfigToken(agentConfig?.github_token, config.githubToken);
   const auth = resolveGithubToken(configToken);
-  const logger = createLogger(agentConfig?.name ?? 'agent[0]');
+  const logFile = resolveLogFile(agentConfig?.log_file, config.logFile);
+  const logger = createLogger({
+    label: agentConfig?.name ?? 'agent[0]',
+    logFile: logFile ?? undefined,
+  });
   logAuthMethod(auth.method, logger.log);
 
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
@@ -873,6 +879,7 @@ export async function startAgentRouter(): Promise<void> {
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,
       label,
+      logFile: logFile ?? undefined,
     },
   );
 
@@ -895,6 +902,7 @@ function startAgentByIndex(
   agentIndex: number,
   pollIntervalMs: number,
   auth: GithubAuthResult,
+  logFileOverride?: string | null,
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
   let commandTemplate: string | undefined;
@@ -934,6 +942,10 @@ function startAgentByIndex(
   }
 
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
+  const logFile =
+    logFileOverride !== undefined
+      ? (logFileOverride ?? undefined)
+      : (resolveLogFile(agentConfig?.log_file, config.logFile) ?? undefined);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
     maxDiffSizeKb: config.maxDiffSizeKb,
@@ -965,6 +977,7 @@ function startAgentByIndex(
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,
       label,
+      logFile,
     },
   ).finally(() => {
     routerRelay?.stop();
@@ -981,78 +994,99 @@ agentCommand
   .option('--poll-interval <seconds>', 'Poll interval in seconds', '10')
   .option('--agent <index>', 'Agent index from config.yml (0-based)', '0')
   .option('--all', 'Start all configured agents concurrently')
-  .action(async (opts: { pollInterval: string; agent: string; all?: boolean }) => {
-    const config = loadConfig();
-    const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
+  .option('--log-file <path>', 'Write logs to file (overrides config)')
+  .option('--no-log-file', 'Disable file logging even if configured')
+  .action(
+    async (opts: {
+      pollInterval: string;
+      agent: string;
+      all?: boolean;
+      logFile?: string | boolean;
+    }) => {
+      const config = loadConfig();
+      const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
 
-    // Resolve GitHub auth once at startup (env → gh-cli → config → none)
-    const configToken = resolveConfigToken(undefined, config.githubToken);
-    const auth = resolveGithubToken(configToken);
-    logAuthMethod(auth.method, console.log.bind(console));
-
-    if (opts.all) {
-      // Start all agents concurrently
-      if (!config.agents || config.agents.length === 0) {
-        console.error('No agents configured in ~/.opencara/config.yml');
-        process.exit(1);
-        return;
+      // Resolve log file: --no-log-file sets opts.logFile to false,
+      // --log-file <path> sets it to the path string
+      let logFileOverride: string | null | undefined;
+      if (opts.logFile === false) {
+        // --no-log-file: explicitly disable
+        logFileOverride = null;
+      } else if (typeof opts.logFile === 'string') {
+        // --log-file <path>: explicit override
+        logFileOverride = opts.logFile;
       }
+      // undefined means "use config default"
 
-      console.log(`Starting ${config.agents.length} agent(s)...`);
+      // Resolve GitHub auth once at startup (env → gh-cli → config → none)
+      const configToken = resolveConfigToken(undefined, config.githubToken);
+      const auth = resolveGithubToken(configToken);
+      logAuthMethod(auth.method, console.log.bind(console));
 
-      const promises: Promise<void>[] = [];
-      let startFailed = false;
-      for (let i = 0; i < config.agents.length; i++) {
-        const p = startAgentByIndex(config, i, pollIntervalMs, auth);
-        if (p) {
-          promises.push(p);
-        } else {
-          startFailed = true;
+      if (opts.all) {
+        // Start all agents concurrently
+        if (!config.agents || config.agents.length === 0) {
+          console.error('No agents configured in ~/.opencara/config.yml');
+          process.exit(1);
+          return;
         }
-      }
 
-      if (promises.length === 0) {
-        console.error('No agents could be started. Check your config.');
-        process.exit(1);
-        return;
-      }
+        console.log(`Starting ${config.agents.length} agent(s)...`);
 
-      if (startFailed) {
-        console.error(
-          'One or more agents could not start (see warnings above). Continuing with the rest.',
-        );
-      }
-
-      console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
-
-      // Use allSettled so one agent crashing doesn't orphan the others
-      const results = await Promise.allSettled(promises);
-      const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failures.length > 0) {
-        for (const f of failures) {
-          console.error(`Agent exited with error: ${f.reason}`);
+        const promises: Promise<void>[] = [];
+        let startFailed = false;
+        for (let i = 0; i < config.agents.length; i++) {
+          const p = startAgentByIndex(config, i, pollIntervalMs, auth, logFileOverride);
+          if (p) {
+            promises.push(p);
+          } else {
+            startFailed = true;
+          }
         }
-        process.exit(1);
+
+        if (promises.length === 0) {
+          console.error('No agents could be started. Check your config.');
+          process.exit(1);
+          return;
+        }
+
+        if (startFailed) {
+          console.error(
+            'One or more agents could not start (see warnings above). Continuing with the rest.',
+          );
+        }
+
+        console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
+
+        // Use allSettled so one agent crashing doesn't orphan the others
+        const results = await Promise.allSettled(promises);
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        if (failures.length > 0) {
+          for (const f of failures) {
+            console.error(`Agent exited with error: ${f.reason}`);
+          }
+          process.exit(1);
+        }
+      } else {
+        // Start a single agent by index
+        const maxIndex = (config.agents?.length ?? 0) - 1;
+        const agentIndex = Number(opts.agent);
+        if (!Number.isInteger(agentIndex) || agentIndex < 0 || agentIndex > maxIndex) {
+          console.error(
+            maxIndex >= 0
+              ? `--agent must be an integer between 0 and ${maxIndex}.`
+              : 'No agents configured in ~/.opencara/config.yml',
+          );
+          process.exit(1);
+          return;
+        }
+        const p = startAgentByIndex(config, agentIndex, pollIntervalMs, auth, logFileOverride);
+        if (!p) {
+          // startAgentByIndex already logged the specific reason
+          process.exit(1);
+          return;
+        }
+        await p;
       }
-    } else {
-      // Start a single agent by index
-      const maxIndex = (config.agents?.length ?? 0) - 1;
-      const agentIndex = Number(opts.agent);
-      if (!Number.isInteger(agentIndex) || agentIndex < 0 || agentIndex > maxIndex) {
-        console.error(
-          maxIndex >= 0
-            ? `--agent must be an integer between 0 and ${maxIndex}.`
-            : 'No agents configured in ~/.opencara/config.yml',
-        );
-        process.exit(1);
-        return;
-      }
-      const p = startAgentByIndex(config, agentIndex, pollIntervalMs, auth);
-      if (!p) {
-        // startAgentByIndex already logged the specific reason
-        process.exit(1);
-        return;
-      }
-      await p;
-    }
-  });
+    },
+  );

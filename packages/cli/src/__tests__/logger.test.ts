@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   createLogger,
   createAgentSession,
   formatUptime,
   formatExitSummary,
   timestamp,
+  stripAnsi,
   icons,
 } from '../logger.js';
 
@@ -75,6 +79,12 @@ describe('logger', () => {
       const call = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
       expect(call).not.toContain('gho_abc123xyz');
     });
+
+    it('accepts options object with label', () => {
+      const logger = createLogger({ label: 'test-label' });
+      logger.log('hello');
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('test-label'));
+    });
   });
 
   describe('icons', () => {
@@ -125,6 +135,141 @@ describe('logger', () => {
       expect(session.errorsEncountered).toBe(0);
       expect(session.startTime).toBeGreaterThanOrEqual(before);
       expect(session.startTime).toBeLessThanOrEqual(after);
+    });
+  });
+
+  describe('stripAnsi', () => {
+    it('strips ANSI color codes', () => {
+      expect(stripAnsi('\x1b[31mred text\x1b[0m')).toBe('red text');
+    });
+
+    it('strips multiple ANSI sequences', () => {
+      expect(stripAnsi('\x1b[2m[\x1b[22m\x1b[32mhello\x1b[39m\x1b[2m]\x1b[22m')).toBe('[hello]');
+    });
+
+    it('returns plain text unchanged', () => {
+      expect(stripAnsi('plain text')).toBe('plain text');
+    });
+
+    it('handles empty string', () => {
+      expect(stripAnsi('')).toBe('');
+    });
+  });
+
+  describe('file logging', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencara-logger-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('writes log output to file', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('hello world');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      expect(content).toContain('hello world');
+    });
+
+    it('writes all log levels to file', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('info message');
+      logger.logError('error message');
+      logger.logWarn('warn message');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      expect(content).toContain('info message');
+      expect(content).toContain('error message');
+      expect(content).toContain('warn message');
+    });
+
+    it('strips ANSI codes from file output', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('test message');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      // File content should not contain ANSI escape sequences
+      // eslint-disable-next-line no-control-regex
+      expect(content).not.toMatch(/\x1b\[/);
+    });
+
+    it('appends to existing file', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      fs.writeFileSync(logFile, 'existing content\n');
+
+      const logger = createLogger({ logFile });
+      logger.log('new content');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      expect(content).toContain('existing content');
+      expect(content).toContain('new content');
+    });
+
+    it('creates parent directories if needed', () => {
+      const logFile = path.join(tmpDir, 'sub', 'dir', 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('deep path');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      expect(content).toContain('deep path');
+    });
+
+    it('continues with console-only if file path is not writable', () => {
+      // Use a path that cannot be created (root-only directory)
+      const logFile = '/proc/nonexistent/test.log';
+      // Should not throw — just warns on stderr
+      const logger = createLogger({ logFile });
+      logger.log('still works');
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('still works'));
+    });
+
+    it('includes label in file output', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ label: 'my-agent', logFile });
+      logger.log('labeled message');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      expect(content).toContain('[my-agent]');
+      expect(content).toContain('labeled message');
+    });
+
+    it('includes timestamp in file output', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('timed message');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      expect(content).toMatch(/\[\d{2}:\d{2}:\d{2}\]/);
+    });
+
+    it('each line ends with newline', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('line one');
+      logger.log('line two');
+
+      const content = fs.readFileSync(logFile, 'utf-8');
+      const lines = content.split('\n').filter((l) => l.length > 0);
+      expect(lines.length).toBe(2);
+    });
+
+    it('still outputs to console when file logging is enabled', () => {
+      const logFile = path.join(tmpDir, 'test.log');
+      const logger = createLogger({ logFile });
+      logger.log('both outputs');
+      logger.logError('both errors');
+      logger.logWarn('both warns');
+
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('both outputs'));
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('both errors'));
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('both warns'));
     });
   });
 

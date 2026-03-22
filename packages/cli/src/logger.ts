@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import pc from 'picocolors';
 import { sanitizeTokens } from './sanitize.js';
 
@@ -21,6 +23,14 @@ export function timestamp(): string {
   return `${h}:${m}:${s}`;
 }
 
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+/** Strip ANSI escape codes from a string for plain-text file output. */
+export function stripAnsi(input: string): string {
+  return input.replace(ANSI_PATTERN, '');
+}
+
 /** Logger functions that prepend a timestamp and optional label. */
 export interface Logger {
   log: (msg: string) => void;
@@ -28,15 +38,62 @@ export interface Logger {
   logWarn: (msg: string) => void;
 }
 
-export function createLogger(label?: string): Logger {
+export interface LoggerOptions {
+  label?: string;
+  logFile?: string;
+}
+
+/**
+ * Try to open a log file for appending. Returns the file descriptor on success,
+ * or null if the file is not writable (with a warning printed to stderr).
+ */
+function openLogFile(filePath: string): number | null {
+  try {
+    const dir = path.dirname(filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    return fs.openSync(filePath, 'a');
+  } catch (err) {
+    console.warn(
+      `Warning: Cannot open log file "${filePath}": ${(err as Error).message}. Continuing with console-only logging.`,
+    );
+    return null;
+  }
+}
+
+export function createLogger(labelOrOptions?: string | LoggerOptions): Logger {
+  const opts =
+    typeof labelOrOptions === 'string' ? { label: labelOrOptions } : (labelOrOptions ?? {});
+  const { label, logFile } = opts;
+
   const labelStr = label ? ` ${pc.dim(`[${label}]`)}` : '';
+
+  const fd = logFile ? openLogFile(logFile) : null;
+
+  function writeToFile(line: string): void {
+    if (fd === null) return;
+    try {
+      fs.writeSync(fd, stripAnsi(line) + '\n');
+    } catch {
+      // If writing fails mid-session, silently skip — console output continues
+    }
+  }
+
   return {
-    log: (msg: string) =>
-      console.log(`${pc.dim(`[${timestamp()}]`)}${labelStr} ${sanitizeTokens(msg)}`),
-    logError: (msg: string) =>
-      console.error(`${pc.dim(`[${timestamp()}]`)}${labelStr} ${pc.red(sanitizeTokens(msg))}`),
-    logWarn: (msg: string) =>
-      console.warn(`${pc.dim(`[${timestamp()}]`)}${labelStr} ${pc.yellow(sanitizeTokens(msg))}`),
+    log: (msg: string) => {
+      const line = `${pc.dim(`[${timestamp()}]`)}${labelStr} ${sanitizeTokens(msg)}`;
+      console.log(line);
+      writeToFile(line);
+    },
+    logError: (msg: string) => {
+      const line = `${pc.dim(`[${timestamp()}]`)}${labelStr} ${pc.red(sanitizeTokens(msg))}`;
+      console.error(line);
+      writeToFile(line);
+    },
+    logWarn: (msg: string) => {
+      const line = `${pc.dim(`[${timestamp()}]`)}${labelStr} ${pc.yellow(sanitizeTokens(msg))}`;
+      console.warn(line);
+      writeToFile(line);
+    },
   };
 }
 
