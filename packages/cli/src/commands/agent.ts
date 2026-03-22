@@ -17,7 +17,7 @@ import {
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   type LocalAgentConfig,
 } from '../config.js';
-import { cloneOrUpdate } from '../codebase.js';
+import { cloneOrUpdate, cleanupTaskDir } from '../codebase.js';
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
 import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
@@ -316,6 +316,7 @@ async function handleTask(
 
   // Clone/update codebase if configured
   let taskReviewDeps = reviewDeps;
+  let taskCheckoutPath: string | null = null;
   if (reviewDeps.codebaseDir) {
     try {
       const result = cloneOrUpdate(
@@ -324,8 +325,10 @@ async function handleTask(
         pr_number,
         reviewDeps.codebaseDir,
         reviewDeps.githubToken,
+        task_id,
       );
       log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
+      taskCheckoutPath = result.localPath;
       // Pass the resolved local path as codebaseDir for this task
       taskReviewDeps = { ...reviewDeps, codebaseDir: result.localPath };
     } catch (err) {
@@ -381,6 +384,11 @@ async function handleTask(
     } else {
       logError(`  Error on task ${task_id}: ${(err as Error).message}`);
       await safeError(client, task_id, agentId, (err as Error).message, logger);
+    }
+  } finally {
+    // Clean up task-specific checkout to avoid disk bloat
+    if (taskCheckoutPath) {
+      cleanupTaskDir(taskCheckoutPath);
     }
   }
   return {};
