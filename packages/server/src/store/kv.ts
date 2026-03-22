@@ -294,8 +294,3 @@ export class KVDataStore implements DataStore {
     return deleted;
   }
 }
-
-/** @deprecated Use KVDataStore instead. Will be removed after D1 migration. */
-export const KVTaskStore = KVDataStore;
-/** @deprecated Use KVDataStore instead. */
-export type KVTaskStore = KVDataStore;

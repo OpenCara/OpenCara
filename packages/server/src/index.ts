@@ -87,7 +87,9 @@ export function parseTtlDays(env: Env): number {
 
 function createStore(env: Env): DataStore {
   const ttlDays = parseTtlDays(env);
-  return env.TASK_STORE ? new KVDataStore(env.TASK_STORE, ttlDays) : new MemoryDataStore(ttlDays);
+  // KV → Memory (dev/test). D1 binding (env.DB) prepared but not yet integrated (#309).
+  if (env.TASK_STORE) return new KVDataStore(env.TASK_STORE, ttlDays);
+  return new MemoryDataStore(ttlDays);
 }
 
 // Cloudflare Workers entrypoint — app created once at module level

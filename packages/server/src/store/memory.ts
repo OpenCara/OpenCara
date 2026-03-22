@@ -171,8 +171,3 @@ export class MemoryDataStore implements DataStore {
     this.timeoutLastCheck = 0;
   }
 }
-
-/** @deprecated Use MemoryDataStore instead. Will be removed after D1 migration. */
-export const MemoryTaskStore = MemoryDataStore;
-/** @deprecated Use MemoryDataStore instead. */
-export type MemoryTaskStore = MemoryDataStore;
