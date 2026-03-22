@@ -87,7 +87,7 @@ export function parseTtlDays(env: Env): number {
 
 function createStore(env: Env): DataStore {
   const ttlDays = parseTtlDays(env);
-  // D1 preferred → KV fallback → Memory (dev/test)
+  // KV → Memory (dev/test). D1 binding (env.DB) prepared but not yet integrated (#309).
   if (env.TASK_STORE) return new KVDataStore(env.TASK_STORE, ttlDays);
   return new MemoryDataStore(ttlDays);
 }

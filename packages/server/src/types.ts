@@ -7,7 +7,7 @@ export interface Env {
   GITHUB_APP_ID: string;
   GITHUB_APP_PRIVATE_KEY: string;
   TASK_STORE: KVNamespace;
-  /** Optional D1 binding — preferred over KV when present. */
+  /** Optional D1 binding — prepared for future D1DataStore integration (#309). */
   DB?: D1Database;
   WEB_URL: string;
   /** TTL in days for terminal tasks (default: 7). Set via wrangler.toml [vars]. */
