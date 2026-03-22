@@ -39,6 +39,3 @@ export interface DataStore {
   /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
   cleanupTerminalTasks(): Promise<number>;
 }
-
-/** @deprecated Use DataStore instead. Will be removed after D1 migration. */
-export type TaskStore = DataStore;

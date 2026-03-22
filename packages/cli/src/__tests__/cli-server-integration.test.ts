@@ -2,7 +2,7 @@
  * CLI ↔ Server integration tests.
  *
  * Runs the real CLI startAgent() against an in-process Hono server with
- * MemoryTaskStore. Verifies cross-package contract: shared types, poll/claim
+ * MemoryDataStore. Verifies cross-package contract: shared types, poll/claim
  * responses, result submission, and error handling match between CLI and server.
  *
  * Mocks: tool-executor (no real AI calls), globalThis.fetch (routes to Hono app).
