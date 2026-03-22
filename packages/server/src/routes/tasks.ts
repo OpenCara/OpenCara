@@ -165,6 +165,7 @@ export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
       // Only mark timeout AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
       await store.updateTask(task.id, { status: 'timeout' });
+      await store.releaseSummaryLock(task.id);
     } catch (err) {
       console.error(
         `[task:${task.id}] action=timeout_post_failed error=${err instanceof Error ? err.message : String(err)}`,

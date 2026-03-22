@@ -204,7 +204,7 @@ export class KVTaskStore implements TaskStore {
     // but the claim endpoint's task-level summary_claimed flag (set atomically
     // after lock acquisition) provides the primary guard. This lock is
     // defense-in-depth checked at result submission time.
-    await this.kv.put(key, agentId);
+    await this.kv.put(key, agentId, { expirationTtl: TERMINAL_TTL });
     return true;
   }
 

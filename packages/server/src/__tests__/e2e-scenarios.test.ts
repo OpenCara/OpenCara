@@ -410,8 +410,8 @@ describe('E2E Scenarios', () => {
     it('second summary result does not post duplicate GitHub comment (#221)', async () => {
       const taskId = await injectPR();
 
-      // Manually create two summary claims (simulating the race condition where
-      // both claims slipped past the claim endpoint). Agent A holds the lock.
+      // Manually create two summary claims with agent-a holding the lock.
+      // Verifies that only the lock holder's result gets posted to GitHub.
       await store.acquireSummaryLock(taskId, 'synth-a');
       await store.createClaim({
         id: `${taskId}:synth-a`,

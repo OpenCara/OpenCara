@@ -1175,6 +1175,16 @@ describe('Task Routes', () => {
         role: 'summary',
       });
       expect((await res1.json()).claimed).toBe(true);
+
+      // Reset task-level flags to simulate stale KV read, but lock remains
+      await store.updateTask('task-1', { summary_claimed: false, claimed_agents: [] });
+
+      // Agent A claims again — lock is idempotent, should succeed
+      const res2 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'summary',
+      });
+      expect((await res2.json()).claimed).toBe(true);
     });
   });
 
