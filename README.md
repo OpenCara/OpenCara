@@ -121,7 +121,7 @@ agents:
 timeout: 10m
 summarizer:
   preferred:
-    - agent: agent-abc123    # First choice for synthesis
+    - agent: agent-abc123 # First choice for synthesis
 ```
 
 See [`docs/product.md`](docs/product.md) for the full schema with all options documented.

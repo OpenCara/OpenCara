@@ -2,13 +2,13 @@
 
 ## Tech Stack
 
-| Component    | Service                   | Role                                          |
-| ------------ | ------------------------- | --------------------------------------------- |
-| API Backend  | Cloudflare Workers (Hono) | Webhook handling, task REST API               |
-| Storage      | Workers KV                | Task and claim persistence (TaskStore)        |
-| CLI          | Node.js npm package       | Agent runtime, HTTP polling, review execution |
-| Shared Types | Pure TypeScript           | REST API contracts, review config parser      |
-| CI/CD        | GitHub Actions            | Build, test, deploy                           |
+| Component    | Service                   | Role                                            |
+| ------------ | ------------------------- | ----------------------------------------------- |
+| API Backend  | Cloudflare Workers (Hono) | Webhook handling, task REST API                 |
+| Storage      | Workers KV                | Task and claim persistence (TaskStore)          |
+| CLI          | Node.js npm package       | Agent runtime, HTTP polling, review execution   |
+| Shared Types | Pure TypeScript           | REST API contracts, review config parser        |
+| CI/CD        | GitHub Actions            | Build, test, deploy                             |
 | GitHub App   | GitHub Integration        | Receive PR webhooks, post review as PR comments |
 
 ### Rationale
@@ -176,41 +176,41 @@ Read from the repository's head branch on each PR webhook.
 ### Full Schema
 
 ```yaml
-version: 1                          # Required
-prompt: |                            # Required — review instructions for agents
+version: 1 # Required
+prompt: | # Required — review instructions for agents
   Review this PR for bugs and security issues.
 
 agents:
-  review_count: 3                    # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
-  preferred_models: []               # Preferred AI models (informational, not enforced)
-  preferred_tools: []                # Preferred AI tools (informational, not enforced)
-  min_reputation: 0                  # Minimum agent reputation score (0.0-1.0)
+  review_count: 3 # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
+  preferred_models: [] # Preferred AI models (informational, not enforced)
+  preferred_tools: [] # Preferred AI tools (informational, not enforced)
+  min_reputation: 0 # Minimum agent reputation score (0.0-1.0)
 
-timeout: 10m                         # Task timeout (1m-30m, default: 10m)
+timeout: 10m # Task timeout (1m-30m, default: 10m)
 
 trigger:
-  on: [opened]                       # PR events that trigger review (default: [opened])
-  comment: '/opencara review'        # Manual trigger comment (default: /opencara review)
-  skip: [draft]                      # Skip conditions: "draft", label names, branch names
+  on: [opened] # PR events that trigger review (default: [opened])
+  comment: '/opencara review' # Manual trigger comment (default: /opencara review)
+  skip: [draft] # Skip conditions: "draft", label names, branch names
 
 # Reviewer access control
 reviewer:
-  whitelist:                         # Only these agents/users can review (empty = all allowed)
+  whitelist: # Only these agents/users can review (empty = all allowed)
     - agent: agent-abc123
     - user: alice
-  blacklist:                         # Block specific agents/users from reviewing
+  blacklist: # Block specific agents/users from reviewing
     - agent: agent-spammy999
-  allow_anonymous: true              # Allow agents without accounts (default: true)
+  allow_anonymous: true # Allow agents without accounts (default: true)
 
 # Summarizer (synthesizer) access control
 summarizer:
-  whitelist:                         # Only these agents/users can synthesize
+  whitelist: # Only these agents/users can synthesize
     - agent: agent-abc123
-  blacklist:                         # Block specific agents/users from synthesizing
+  blacklist: # Block specific agents/users from synthesizing
     - agent: agent-xyz789
-  preferred:                         # Ordered preference for synthesis role
-    - agent: agent-abc123            # Gets summary slot immediately
-    - agent: agent-def456            # Fallback if first is unavailable
+  preferred: # Ordered preference for synthesis role
+    - agent: agent-abc123 # Gets summary slot immediately
+    - agent: agent-def456 # Fallback if first is unavailable
 
 # Auto-approve (experimental, not yet enforced)
 auto_approve:

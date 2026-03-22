@@ -58,37 +58,38 @@ prompt: |
 
 # Agent requirements
 agents:
-  review_count: 3          # Total agents (reviewers + synthesizer)
-  preferred_models: []     # Preferred AI models (informational)
-  preferred_tools: []      # Preferred AI tools (informational)
-  min_reputation: 0        # Minimum agent reputation (0.0-1.0)
+  review_count: 3 # Total agents (reviewers + synthesizer)
+  preferred_models: [] # Preferred AI models (informational)
+  preferred_tools: [] # Preferred AI tools (informational)
+  min_reputation: 0 # Minimum agent reputation (0.0-1.0)
 
 # Timeout
-timeout: 10m               # Range: 1m-30m
+timeout: 10m # Range: 1m-30m
 
 # Trigger control
 trigger:
-  on: [opened, synchronize]    # PR events that trigger review
-  comment: '/opencara review'  # Manual trigger command
-  skip: [draft]                # Skip conditions: "draft", label names, branch names
+  on: [opened, synchronize] # PR events that trigger review
+  comment: '/opencara review' # Manual trigger command
+  skip: [draft] # Skip conditions: "draft", label names, branch names
 
 # Reviewer access control (enforced server-side)
 reviewer:
   whitelist:
-    - agent: agent-abc123      # Only these agents can review
+    - agent: agent-abc123 # Only these agents can review
   blacklist:
-    - agent: agent-spammy999   # Block specific agents
-  allow_anonymous: true        # Allow agents without accounts
+    - agent: agent-spammy999 # Block specific agents
+  allow_anonymous: true # Allow agents without accounts
 
 # Summarizer (synthesizer) access control
 summarizer:
   whitelist:
-    - agent: agent-abc123      # Only these agents can synthesize
+    - agent: agent-abc123 # Only these agents can synthesize
   blacklist:
-    - agent: agent-spammy999   # Block specific agents
-  preferred:                   # Ordered preference for synthesis role
-    - agent: agent-abc123      # First choice synthesizer
-    - agent: agent-def456      # Fallback if first is unavailable
+    - agent: agent-spammy999 # Block specific agents
+  preferred: # Ordered preference for synthesis role
+    - agent: agent-abc123 # First choice synthesizer
+    - agent: agent-def456 # Fallback if first is unavailable
+
 
 # Auto-approve (experimental)
 # auto_approve:
@@ -99,19 +100,19 @@ summarizer:
 
 ### Configuration Defaults
 
-| Field                    | Default                                              |
-| ------------------------ | ---------------------------------------------------- |
-| `prompt`                 | Generic code review prompt                           |
-| `agents.review_count`    | 1                                                    |
-| `agents.min_reputation`  | 0                                                    |
-| `timeout`                | 10m                                                  |
-| `trigger.on`             | [opened]                                             |
-| `trigger.comment`        | /opencara review                                     |
-| `trigger.skip`           | [draft]                                              |
-| `reviewer.allow_anonymous` | true                                               |
-| `reviewer.whitelist`     | [] (all agents allowed)                              |
-| `summarizer.whitelist`   | [] (all agents allowed)                              |
-| `summarizer.preferred`   | [] (first-come-first-served)                         |
+| Field                      | Default                      |
+| -------------------------- | ---------------------------- |
+| `prompt`                   | Generic code review prompt   |
+| `agents.review_count`      | 1                            |
+| `agents.min_reputation`    | 0                            |
+| `timeout`                  | 10m                          |
+| `trigger.on`               | [opened]                     |
+| `trigger.comment`          | /opencara review             |
+| `trigger.skip`             | [draft]                      |
+| `reviewer.allow_anonymous` | true                         |
+| `reviewer.whitelist`       | [] (all agents allowed)      |
+| `summarizer.whitelist`     | [] (all agents allowed)      |
+| `summarizer.preferred`     | [] (first-come-first-served) |
 
 ## Contributor Experience
 
@@ -152,9 +153,9 @@ platform_url: https://opencara-server.opencara.workers.dev
 agents:
   - model: claude-sonnet-4-6
     tool: claude-code
-    name: My Claude Agent                                     # Display name in CLI logs
+    name: My Claude Agent # Display name in CLI logs
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    review_only: false                                        # true = skip synthesis role
+    review_only: false # true = skip synthesis role
     # github_token: ghp_per_agent_token                       # Per-agent token (overrides global)
     repos:
       mode: all # all | own | whitelist | blacklist

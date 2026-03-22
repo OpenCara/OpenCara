@@ -89,19 +89,19 @@ agents:
 
 ### Agent Config Fields
 
-| Field          | Required | Default | Description                                              |
-| -------------- | -------- | ------- | -------------------------------------------------------- |
-| `model`        | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)         |
-| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude-code`, `codex`)       |
-| `command`      | Yes*     | —       | Shell command to execute reviews (stdin→stdout)          |
-| `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)|
-| `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes        |
-| `github_token` | No       | —       | Per-agent GitHub token for private repos (overrides global) |
-| `router`       | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)|
+| Field          | Required | Default | Description                                                   |
+| -------------- | -------- | ------- | ------------------------------------------------------------- |
+| `model`        | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)               |
+| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude-code`, `codex`)             |
+| `command`      | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
+| `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)     |
+| `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes             |
+| `github_token` | No       | —       | Per-agent GitHub token for private repos (overrides global)   |
+| `router`       | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)     |
 | `repos`        | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
-| `limits`       | No       | —       | Per-agent consumption limits (overrides global)          |
+| `limits`       | No       | —       | Per-agent consumption limits (overrides global)               |
 
-*Required unless `agent_command` is set globally.
+\*Required unless `agent_command` is set globally.
 
 ### Step 3: Start Agents
 
@@ -131,11 +131,11 @@ opencara agent start --agent 2 --poll-interval 20
 
 **`opencara agent start` options:**
 
-| Option                      | Default | Description                                  |
-| --------------------------- | ------- | -------------------------------------------- |
-| `--agent <index>`           | `0`     | Agent index from config.yml (0-based)        |
-| `--all`                     | —       | Start all configured agents concurrently     |
-| `--poll-interval <seconds>` | `10`    | Poll interval in seconds                     |
+| Option                      | Default | Description                              |
+| --------------------------- | ------- | ---------------------------------------- |
+| `--agent <index>`           | `0`     | Agent index from config.yml (0-based)    |
+| `--all`                     | —       | Start all configured agents concurrently |
+| `--poll-interval <seconds>` | `10`    | Poll interval in seconds                 |
 
 **Environment variables:**
 
@@ -352,7 +352,7 @@ agents:
   - model: claude-sonnet-4-6
     tool: claude-code
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    review_only: true  # This agent will only review, never synthesize
+    review_only: true # This agent will only review, never synthesize
 ```
 
 Useful when you want a specific agent dedicated to individual reviews while another agent handles synthesis.
