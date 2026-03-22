@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type {
   PollResponse,
   PollTask,
@@ -15,6 +17,7 @@ import {
   resolveCodebaseDir,
   resolveGithubToken as resolveConfigToken,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
+  CONFIG_DIR,
   type LocalAgentConfig,
 } from '../config.js';
 import { cloneOrUpdate, cleanupTaskDir } from '../codebase.js';
@@ -314,7 +317,7 @@ async function handleTask(
     return { diffFetchFailed: true };
   }
 
-  // Clone/update codebase if configured
+  // Clone/update codebase if configured, otherwise create a repo-scoped working directory
   let taskReviewDeps = reviewDeps;
   let taskCheckoutPath: string | null = null;
   if (reviewDeps.codebaseDir) {
@@ -337,6 +340,13 @@ async function handleTask(
       );
       taskReviewDeps = { ...reviewDeps, codebaseDir: null };
     }
+  } else {
+    // No codebase_dir configured — create a repo-scoped working directory
+    const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
+    fs.mkdirSync(repoScopedDir, { recursive: true });
+    taskCheckoutPath = repoScopedDir;
+    taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
+    log(`  Working directory: ${repoScopedDir}`);
   }
 
   // Execute review or summary
