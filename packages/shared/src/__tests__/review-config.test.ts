@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseReviewConfig,
   validateReviewConfig,
@@ -22,16 +22,15 @@ agents:
   min_reputation: 0.6
 reviewer:
   whitelist:
-    - user: alice
     - agent: abc-123
   blacklist:
-    - user: bob
+    - agent: agent-bad
   allow_anonymous: false
 summarizer:
   whitelist:
-    - user: alice
+    - agent: agent-synth
   blacklist:
-    - user: charlie
+    - agent: agent-spam
 timeout: 15m
 auto_approve:
   enabled: false
@@ -55,11 +54,11 @@ describe('parseReviewConfig', () => {
     expect(config.agents.preferredModels).toEqual(['claude-opus-4-6', 'glm-5']);
     expect(config.agents.preferredTools).toEqual(['claude-code', 'codex']);
     expect(config.agents.minReputation).toBe(0.6);
-    expect(config.reviewer.whitelist).toEqual([{ user: 'alice' }, { agent: 'abc-123' }]);
-    expect(config.reviewer.blacklist).toEqual([{ user: 'bob' }]);
+    expect(config.reviewer.whitelist).toEqual([{ agent: 'abc-123' }]);
+    expect(config.reviewer.blacklist).toEqual([{ agent: 'agent-bad' }]);
     expect(config.reviewer.allowAnonymous).toBe(false);
-    expect(config.summarizer.whitelist).toEqual([{ user: 'alice' }]);
-    expect(config.summarizer.blacklist).toEqual([{ user: 'charlie' }]);
+    expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-synth' }]);
+    expect(config.summarizer.blacklist).toEqual([{ agent: 'agent-spam' }]);
     expect(config.timeout).toBe('15m');
     expect(config.autoApprove.enabled).toBe(false);
     expect(config.autoApprove.conditions).toEqual([{ type: 'lint_only' }]);
@@ -292,6 +291,37 @@ describe('summarizer.preferred parsing', () => {
     expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-a' }]);
     expect(config.summarizer.blacklist).toEqual([{ agent: 'agent-b' }]);
     expect(config.summarizer.preferred).toEqual([{ agent: 'agent-a' }]);
+  });
+});
+
+describe('user entries in whitelist/blacklist', () => {
+  it('ignores user-only entries and logs a warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - user: alice\n    - agent: agent-abc',
+    ) as ReviewConfig;
+    expect(config.reviewer.whitelist).toEqual([{ agent: 'agent-abc' }]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Ignoring "user" entry'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('keeps entries that have both user and agent fields (agent wins)', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - user: alice\n      agent: agent-abc',
+    ) as ReviewConfig;
+    expect(config.reviewer.whitelist).toEqual([{ agent: 'agent-abc' }]);
+  });
+
+  it('produces empty list when all entries are user-only', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  blacklist:\n    - user: bob\n    - user: charlie',
+    ) as ReviewConfig;
+    expect(config.reviewer.blacklist).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
   });
 });
 
