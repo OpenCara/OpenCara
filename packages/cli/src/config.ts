@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { parse, stringify } from 'yaml';
+import { DEFAULT_REGISTRY } from '@opencara/shared';
 import type { RepoConfig, RepoFilterMode } from '@opencara/shared';
 
 export interface LocalAgentConfig {
@@ -50,6 +51,20 @@ export class RepoConfigError extends Error {
     this.name = 'RepoConfigError';
   }
 }
+
+export class ConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigValidationError';
+  }
+}
+
+const KNOWN_TOOL_NAMES = new Set(DEFAULT_REGISTRY.tools.map((t) => t.name));
+
+/** Backward-compatible aliases for renamed tools. */
+const TOOL_ALIASES: Record<string, string> = {
+  'claude-code': 'claude',
+};
 
 function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfig | undefined {
   const raw = obj.repos;
@@ -101,15 +116,33 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
   for (let i = 0; i < raw.length; i++) {
     const entry = raw[i];
     if (!entry || typeof entry !== 'object') {
-      console.warn(`Warning: agents[${i}] is not an object, skipping`);
+      console.warn(`\u26a0 Config warning: agents[${i}] is not an object, skipping agent`);
       continue;
     }
     const obj = entry as Record<string, unknown>;
     if (typeof obj.model !== 'string' || typeof obj.tool !== 'string') {
-      console.warn(`Warning: agents[${i}] missing required model/tool fields, skipping`);
+      console.warn(
+        `\u26a0 Config warning: agents[${i}] missing required model/tool fields, skipping agent`,
+      );
       continue;
     }
-    const agent: LocalAgentConfig = { model: obj.model, tool: obj.tool };
+    let resolvedTool = obj.tool;
+    if (!KNOWN_TOOL_NAMES.has(resolvedTool)) {
+      const alias = TOOL_ALIASES[resolvedTool];
+      if (alias) {
+        console.warn(
+          `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" is deprecated, using "${alias}" instead`,
+        );
+        resolvedTool = alias;
+      } else {
+        const toolNames = [...KNOWN_TOOL_NAMES].join(', ');
+        console.warn(
+          `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" not in registry (known: ${toolNames}), skipping agent`,
+        );
+        continue;
+      }
+    }
+    const agent: LocalAgentConfig = { model: obj.model, tool: resolvedTool };
     if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;
@@ -121,6 +154,59 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     agents.push(agent);
   }
   return agents;
+}
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+interface ValidatedOverrides {
+  maxDiffSizeKb?: number;
+  maxConsecutiveErrors?: number;
+}
+
+/**
+ * Validate parsed config data. Warns for optional field issues, throws for required field errors.
+ * Returns corrected values for any invalid optional fields instead of mutating the input.
+ */
+function validateConfigData(
+  data: Record<string, unknown>,
+  envPlatformUrl: string | null,
+): ValidatedOverrides {
+  const overrides: ValidatedOverrides = {};
+
+  // Validate platform_url — only check the file value if env is not overriding
+  if (
+    !envPlatformUrl &&
+    typeof data.platform_url === 'string' &&
+    !isValidHttpUrl(data.platform_url)
+  ) {
+    throw new ConfigValidationError(
+      `\u2717 Config error: platform_url "${data.platform_url}" is not a valid URL`,
+    );
+  }
+
+  // Validate numeric bounds
+  if (typeof data.max_diff_size_kb === 'number' && data.max_diff_size_kb <= 0) {
+    console.warn(
+      `\u26a0 Config warning: max_diff_size_kb must be > 0, got ${data.max_diff_size_kb}, using default (${DEFAULT_MAX_DIFF_SIZE_KB})`,
+    );
+    overrides.maxDiffSizeKb = DEFAULT_MAX_DIFF_SIZE_KB;
+  }
+
+  if (typeof data.max_consecutive_errors === 'number' && data.max_consecutive_errors <= 0) {
+    console.warn(
+      `\u26a0 Config warning: max_consecutive_errors must be > 0, got ${data.max_consecutive_errors}, using default (${DEFAULT_MAX_CONSECUTIVE_ERRORS})`,
+    );
+    overrides.maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS;
+  }
+
+  return overrides;
 }
 
 export function loadConfig(): CliConfig {
@@ -147,16 +233,22 @@ export function loadConfig(): CliConfig {
     return defaults;
   }
 
+  const overrides = validateConfigData(data, envPlatformUrl);
+
   return {
     platformUrl:
       envPlatformUrl ||
       (typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL),
     maxDiffSizeKb:
-      typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
+      overrides.maxDiffSizeKb ??
+      (typeof data.max_diff_size_kb === 'number'
+        ? data.max_diff_size_kb
+        : DEFAULT_MAX_DIFF_SIZE_KB),
     maxConsecutiveErrors:
-      typeof data.max_consecutive_errors === 'number'
+      overrides.maxConsecutiveErrors ??
+      (typeof data.max_consecutive_errors === 'number'
         ? data.max_consecutive_errors
-        : DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        : DEFAULT_MAX_CONSECUTIVE_ERRORS),
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
