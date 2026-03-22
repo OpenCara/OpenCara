@@ -14,6 +14,7 @@ import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryTaskStore } from '../../../../server/src/store/memory.js';
 import { createTestApp } from '../../../../server/src/__tests__/helpers/test-server.js';
 import { resetTimeoutThrottle } from '../../../../server/src/routes/tasks.js';
+import { resetRateLimits } from '../../../../server/src/middleware/rate-limit.js';
 import type { Env } from '../../../../server/src/types.js';
 
 export const FAKE_SERVER_URL = 'http://fake-server';
@@ -64,8 +65,9 @@ export class FakeServer {
     this.originalFetch = globalThis.fetch;
   }
 
-  /** Replace globalThis.fetch with interceptor. */
+  /** Replace globalThis.fetch with interceptor. Resets rate limiter state. */
   install(): void {
+    resetRateLimits();
     const { app, env, diffContent: _dc, diffFetchError: _de } = this;
     // Use closures to reference mutable properties
     const getDiffError = () => this.diffFetchError;
@@ -78,6 +80,8 @@ export class FakeServer {
 
       // 1. CLI API calls → route to Hono app
       if (url.startsWith(FAKE_SERVER_URL)) {
+        // Reset rate limiter before each request to prevent test pollution
+        resetRateLimits();
         const path = url.slice(FAKE_SERVER_URL.length);
         const response = await app.request(
           path,
@@ -181,6 +185,7 @@ export class FakeServer {
   reset(): void {
     this.store.reset();
     resetTimeoutThrottle();
+    resetRateLimits();
     this.diffFetchError = false;
     this.diffContent = CANNED_DIFF;
   }
