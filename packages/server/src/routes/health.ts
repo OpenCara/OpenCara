@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { TaskStatus } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 
 export function healthRoutes() {
@@ -12,7 +13,7 @@ export function healthRoutes() {
     const store = c.get('store');
     const tasks = await store.listTasks();
 
-    const counts: Record<string, number> = {
+    const counts: Record<TaskStatus, number> = {
       pending: 0,
       reviewing: 0,
       completed: 0,
@@ -20,13 +21,17 @@ export function healthRoutes() {
       failed: 0,
     };
     for (const task of tasks) {
-      counts[task.status] = (counts[task.status] ?? 0) + 1;
+      counts[task.status]++;
     }
 
     return c.json({
       tasks: {
         total: tasks.length,
-        ...counts,
+        pending: counts.pending,
+        reviewing: counts.reviewing,
+        completed: counts.completed,
+        timeout: counts.timeout,
+        failed: counts.failed,
       },
     });
   });
