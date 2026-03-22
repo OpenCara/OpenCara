@@ -52,6 +52,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     timeout_at: Date.now() + 600_000,
     status: 'pending',
     github_installation_id: 999,
+    private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
     ...overrides,

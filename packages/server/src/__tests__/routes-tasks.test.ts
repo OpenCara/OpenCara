@@ -24,6 +24,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     timeout_at: Date.now() + 600_000,
     status: 'pending',
     github_installation_id: 123,
+    private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
     ...overrides,
@@ -149,6 +150,60 @@ describe('Task Routes', () => {
       const body = await res.json();
       expect(body.tasks).toHaveLength(1);
       expect(body.tasks[0].role).toBe('summary');
+    });
+
+    // ── Private repo filtering ────────────────────────────
+
+    it('hides private repo tasks from agents without matching repos', async () => {
+      await store.createTask(makeTask({ private: true }));
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('returns private repo tasks to agents with matching repos', async () => {
+      await store.createTask(makeTask({ private: true }));
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        repos: ['test-org/test-repo'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('task-1');
+    });
+
+    it('hides private repo tasks when agent repos do not match', async () => {
+      await store.createTask(makeTask({ private: true }));
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        repos: ['other-org/other-repo'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('returns public tasks to all agents regardless of repos', async () => {
+      await store.createTask(makeTask({ private: false }));
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+    });
+
+    it('returns public tasks plus matching private tasks', async () => {
+      await store.createTask(makeTask({ id: 'public-task', private: false }));
+      await store.createTask(
+        makeTask({ id: 'private-match', private: true, owner: 'priv-org', repo: 'priv-repo' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'private-no-match', private: true, owner: 'secret-org', repo: 'secret' }),
+      );
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        repos: ['priv-org/priv-repo'],
+      });
+      const body = await res.json();
+      const ids = body.tasks.map((t: { task_id: string }) => t.task_id).sort();
+      expect(ids).toEqual(['private-match', 'public-task']);
     });
   });
 

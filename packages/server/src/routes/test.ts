@@ -30,6 +30,7 @@ export function testRoutes() {
       head_ref?: string;
       draft?: boolean;
       labels?: string[];
+      private?: boolean;
       config?: Partial<ReviewConfig>;
     }>();
 
@@ -56,6 +57,7 @@ export function testRoutes() {
       baseRef,
       headRef,
       config,
+      body.private ?? false,
     );
 
     if (!taskId) {

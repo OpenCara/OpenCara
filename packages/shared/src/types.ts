@@ -34,6 +34,7 @@ export interface ReviewTask {
   timeout_at: number; // unix ms
   status: TaskStatus;
   github_installation_id: number;
+  private: boolean; // true if the source repo is private
   config: import('./review-config.js').ReviewConfig; // parsed .review.yml
   created_at: number;
   // Claim counters — updated atomically on task to avoid KV list() consistency issues
