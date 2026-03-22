@@ -229,12 +229,10 @@ describe('githubFetch', () => {
       try {
         const delays: number[] = [];
         const origSetTimeout = globalThis.setTimeout;
-        vi.spyOn(globalThis, 'setTimeout').mockImplementation(
-          (cb: TimerHandler, ms?: number) => {
-            delays.push(ms ?? 0);
-            return origSetTimeout(cb, 0);
-          },
-        );
+        vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler, ms?: number) => {
+          delays.push(ms ?? 0);
+          return origSetTimeout(cb, 0);
+        });
 
         fetchMock
           .mockResolvedValueOnce(new Response('error', { status: 500 }))
