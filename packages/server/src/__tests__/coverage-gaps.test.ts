@@ -322,7 +322,7 @@ describe('Server app edge cases', () => {
     );
     expect(res.status).toBe(404);
     const body = await res.json();
-    expect(body).toEqual({ error: 'Not Found' });
+    expect(body).toEqual({ error: { code: 'INVALID_REQUEST', message: 'Not Found' } });
   });
 });
 

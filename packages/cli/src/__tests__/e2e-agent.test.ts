@@ -63,7 +63,7 @@ async function stopAgent(promise: Promise<void>, server: FakeServer): Promise<vo
   globalThis.fetch = vi.fn().mockResolvedValue({
     ok: false,
     status: 401,
-    json: () => Promise.resolve({ error: 'shutdown' }),
+    json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
   });
   await advanceTime(3000);
   await promise;

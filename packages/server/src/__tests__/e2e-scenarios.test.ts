@@ -486,9 +486,11 @@ describe('E2E Scenarios', () => {
       expect(claimed).toHaveLength(1);
       expect(rejected).toHaveLength(4);
 
-      // All rejected agents should have a reason
+      // All rejected agents should have an error
       for (const r of rejected) {
-        expect(r.reason).toBeDefined();
+        if ('error' in r) {
+          expect(r.error.code).toBeDefined();
+        }
       }
     });
 
@@ -583,8 +585,8 @@ describe('E2E Scenarios', () => {
       const a = agent('late-agent');
       const c = await a.claim(taskId, 'summary');
       expect(c.claimed).toBe(false);
-      if (!c.claimed) {
-        expect(c.reason).toContain('timed out');
+      if ('error' in c) {
+        expect(c.error.message).toContain('timed out');
       }
     });
   });
@@ -679,7 +681,8 @@ describe('E2E Scenarios', () => {
       await a.claim(taskId, 'review');
       const result = await a.submitResult(taskId, 'summary', 'Synthesized review');
       expect(result.status).toBe(400);
-      expect(result.body.error).toContain("does not match submission type 'summary'");
+      expect(result.body.error.code).toBe('INVALID_REQUEST');
+      expect(result.body.error.message).toContain("does not match submission type 'summary'");
     });
 
     it('summary claimer cannot submit as review', async () => {
@@ -689,7 +692,8 @@ describe('E2E Scenarios', () => {
       await a.claim(taskId, 'summary');
       const result = await a.submitResult(taskId, 'review', 'Individual review');
       expect(result.status).toBe(400);
-      expect(result.body.error).toContain("does not match submission type 'review'");
+      expect(result.body.error.code).toBe('INVALID_REQUEST');
+      expect(result.body.error.message).toContain("does not match submission type 'review'");
     });
   });
 

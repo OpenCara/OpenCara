@@ -56,7 +56,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 
@@ -184,7 +184,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 
@@ -237,10 +237,14 @@ describe('agent poll loop', () => {
       // Claim call — capture the body
       if (urlStr.includes('/claim')) {
         claimBody = JSON.parse(init?.body as string);
-        // Return claimed: false so the loop doesn't try to fetch a diff
+        // Return structured error so the loop doesn't try to fetch a diff
         return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ claimed: false, reason: 'test' }),
+          ok: false,
+          status: 409,
+          json: () =>
+            Promise.resolve({
+              error: { code: 'CLAIM_CONFLICT', message: 'No slots available' },
+            }),
         });
       }
 
@@ -284,7 +288,7 @@ describe('agent poll loop', () => {
         return Promise.resolve({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'Unauthorized' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
         });
       }
 
@@ -323,7 +327,7 @@ describe('agent poll loop', () => {
         return Promise.resolve({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'Unauthorized' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
         });
       }
 
@@ -356,7 +360,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 
@@ -390,7 +394,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 
@@ -427,7 +431,7 @@ describe('agent poll loop', () => {
         return Promise.resolve({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'Unauthorized' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
         });
       }
       if (callCount === 3) {
@@ -472,7 +476,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 
@@ -506,7 +510,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 
@@ -538,7 +542,7 @@ describe('agent poll loop', () => {
       Promise.resolve({
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
+        json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
       }),
     );
 

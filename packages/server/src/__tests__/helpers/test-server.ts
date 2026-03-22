@@ -2,6 +2,7 @@
  * Test server factory — creates a Hono app with test routes mounted.
  */
 import { Hono } from 'hono';
+import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from '../../types.js';
 import type { TaskStore } from '../../store/interface.js';
 import { webhookRoutes } from '../../routes/webhook.js';
@@ -37,12 +38,17 @@ export function createTestApp(store: TaskStore): HonoApp {
   app.route('/', testRoutes());
 
   // 404
-  app.notFound((c) => c.json({ error: 'Not Found' }, 404));
+  app.notFound((c) =>
+    c.json<ErrorResponse>({ error: { code: 'INVALID_REQUEST', message: 'Not Found' } }, 404),
+  );
 
   // Error handler
   app.onError((err, c) => {
     console.error('Unhandled error:', err);
-    return c.json({ error: 'Internal Server Error' }, 500);
+    return c.json<ErrorResponse>(
+      { error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } },
+      500,
+    );
   });
 
   return app;

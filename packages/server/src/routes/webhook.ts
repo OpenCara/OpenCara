@@ -6,6 +6,7 @@ import { getInstallationToken } from '../github/app.js';
 import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
+import { apiError } from '../errors.js';
 
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
@@ -150,7 +151,7 @@ export function webhookRoutes() {
 
     const valid = await verifySignature(body, signature, c.env.GITHUB_WEBHOOK_SECRET);
     if (!valid) {
-      return c.text('Unauthorized', 401);
+      return apiError(c, 401, 'UNAUTHORIZED', 'Invalid webhook signature');
     }
 
     const event = c.req.header('X-GitHub-Event');
@@ -158,7 +159,7 @@ export function webhookRoutes() {
     try {
       payload = JSON.parse(body) as Record<string, unknown>;
     } catch {
-      return c.text('Bad Request', 400);
+      return apiError(c, 400, 'INVALID_REQUEST', 'Malformed request body');
     }
 
     const action = typeof payload.action === 'string' ? payload.action : '';

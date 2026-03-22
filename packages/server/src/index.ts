@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from './types.js';
 import { MemoryTaskStore } from './store/memory.js';
 import { KVTaskStore } from './store/kv.js';
@@ -44,12 +45,17 @@ function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
   app.route('/', healthRoutes());
 
   // 404
-  app.notFound((c) => c.json({ error: 'Not Found' }, 404));
+  app.notFound((c) =>
+    c.json<ErrorResponse>({ error: { code: 'INVALID_REQUEST', message: 'Not Found' } }, 404),
+  );
 
   // Error handler
   app.onError((err, c) => {
     console.error('Unhandled error:', err);
-    return c.json({ error: 'Internal Server Error' }, 500);
+    return c.json<ErrorResponse>(
+      { error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' } },
+      500,
+    );
   });
 
   return app;

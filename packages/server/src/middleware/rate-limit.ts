@@ -1,4 +1,5 @@
 import type { Context, MiddlewareHandler } from 'hono';
+import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 
 /**
@@ -128,7 +129,10 @@ export function rateLimitByAgent(config: RateLimiterConfig): MiddlewareHandler {
     const retryAfter = checkRateLimit(`agent:${agentId}`, config);
     if (retryAfter !== null) {
       c.header('Retry-After', String(retryAfter));
-      return c.json({ error: 'Rate limit exceeded' }, 429);
+      return c.json<ErrorResponse>(
+        { error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } },
+        429,
+      );
     }
 
     await next();
@@ -145,7 +149,10 @@ export function rateLimitByIP(config: RateLimiterConfig): MiddlewareHandler {
     const retryAfter = checkRateLimit(`ip:${ip}`, config);
     if (retryAfter !== null) {
       c.header('Retry-After', String(retryAfter));
-      return c.json({ error: 'Rate limit exceeded' }, 429);
+      return c.json<ErrorResponse>(
+        { error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } },
+        429,
+      );
     }
 
     await next();

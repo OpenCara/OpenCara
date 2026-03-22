@@ -220,7 +220,8 @@ describe('Task Routes', () => {
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'spam-agent' });
       expect(res.status).toBe(429);
       const body = await res.json();
-      expect(body.error).toBe('Rate limit exceeded');
+      expect(body.error.code).toBe('RATE_LIMITED');
+      expect(body.error.message).toBe('Rate limit exceeded');
       expect(res.headers.get('Retry-After')).toBeDefined();
     });
 
@@ -259,9 +260,9 @@ describe('Task Routes', () => {
         agent_id: 'agent-1',
         role: 'summary',
       });
+      expect(res.status).toBe(404);
       const body = await res.json();
-      expect(body.claimed).toBe(false);
-      expect(body.reason).toContain('not found');
+      expect(body.error.code).toBe('TASK_NOT_FOUND');
     });
 
     it('rejects claim with wrong role', async () => {
@@ -270,8 +271,9 @@ describe('Task Routes', () => {
         agent_id: 'agent-1',
         role: 'review',
       });
+      expect(res.status).toBe(409);
       const body = await res.json();
-      expect(body.claimed).toBe(false);
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
 
     it('rejects double claim from same agent', async () => {
@@ -286,8 +288,9 @@ describe('Task Routes', () => {
         agent_id: 'agent-1',
         role: 'review',
       });
+      expect(res.status).toBe(409);
       const body = await res.json();
-      expect(body.claimed).toBe(false);
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
 
     it('includes reviews when claiming summary role', async () => {
@@ -390,7 +393,10 @@ describe('Task Routes', () => {
       });
       expect(res.status).toBe(400);
       const body = await res.json();
-      expect(body.error).toContain("Claim role 'review' does not match submission type 'summary'");
+      expect(body.error.code).toBe('INVALID_REQUEST');
+      expect(body.error.message).toContain(
+        "Claim role 'review' does not match submission type 'summary'",
+      );
     });
 
     it('rejects result when submission type does not match claim role (summary claim, review submission)', async () => {
@@ -411,7 +417,10 @@ describe('Task Routes', () => {
       });
       expect(res.status).toBe(400);
       const body = await res.json();
-      expect(body.error).toContain("Claim role 'summary' does not match submission type 'review'");
+      expect(body.error.code).toBe('INVALID_REQUEST');
+      expect(body.error.message).toContain(
+        "Claim role 'summary' does not match submission type 'review'",
+      );
     });
 
     it('rejects result for already completed claim', async () => {
@@ -1020,9 +1029,10 @@ describe('Task Routes', () => {
         agent_id: 'agent-blocked',
         role: 'review',
       });
+      expect(res.status).toBe(409);
       const body = await res.json();
-      expect(body.claimed).toBe(false);
-      expect(body.reason).toContain('blacklisted');
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toContain('blacklisted');
     });
 
     it('claim rejects non-whitelisted agent with reason', async () => {
@@ -1043,9 +1053,10 @@ describe('Task Routes', () => {
         agent_id: 'agent-other',
         role: 'summary',
       });
+      expect(res.status).toBe(409);
       const body = await res.json();
-      expect(body.claimed).toBe(false);
-      expect(body.reason).toContain('not in the summary whitelist');
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toContain('not in the summary whitelist');
     });
 
     it('default config (empty lists) allows all agents — backward compatible', async () => {
@@ -1078,9 +1089,10 @@ describe('Task Routes', () => {
         agent_id: 'agent-both',
         role: 'review',
       });
+      expect(res.status).toBe(409);
       const body = await res.json();
-      expect(body.claimed).toBe(false);
-      expect(body.reason).toContain('blacklisted');
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toContain('blacklisted');
     });
   });
 
@@ -1107,9 +1119,10 @@ describe('Task Routes', () => {
         agent_id: 'agent-b',
         role: 'summary',
       });
+      expect(res2.status).toBe(409);
       const body2 = await res2.json();
-      expect(body2.claimed).toBe(false);
-      expect(body2.reason).toContain('Summary already claimed');
+      expect(body2.error.code).toBe('SUMMARY_LOCKED');
+      expect(body2.error.message).toContain('Summary already claimed');
     });
 
     it('allows summary claim after previous summary claim was rejected (lock released)', async () => {
@@ -1428,8 +1441,9 @@ describe('Task Routes', () => {
           agent_id: 'agent-other',
           role: 'summary',
         });
+        expect(res.status).toBe(409);
         const body = await res.json();
-        expect(body.claimed).toBe(false);
+        expect(body.error.code).toBe('CLAIM_CONFLICT');
       });
 
       it('preferred agent can claim summary during grace period', async () => {

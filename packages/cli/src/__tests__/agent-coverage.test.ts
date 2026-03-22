@@ -62,7 +62,7 @@ async function stopAgent(promise: Promise<void>, server: FakeServer): Promise<vo
   globalThis.fetch = vi.fn().mockResolvedValue({
     ok: false,
     status: 401,
-    json: () => Promise.resolve({ error: 'shutdown' }),
+    json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
   });
   await advanceTime(3000);
   await promise;
@@ -313,7 +313,7 @@ describe('Agent Coverage Tests', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'shutdown' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
         });
         await advanceTime(3000);
         await promise;
@@ -393,7 +393,7 @@ describe('Agent Coverage Tests', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'shutdown' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
         });
         await advanceTime(3000);
         await promise;
@@ -474,7 +474,7 @@ describe('Agent Coverage Tests', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'shutdown' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
         });
         await advanceTime(3000);
         await promise;
@@ -517,9 +517,12 @@ describe('Agent Coverage Tests', () => {
           );
         }
 
-        // Claim returns 409 Conflict
+        // Claim returns 409 Conflict with structured error
         if (url.includes('/claim')) {
-          return new Response(JSON.stringify({ error: 'Conflict' }), { status: 409 });
+          return new Response(
+            JSON.stringify({ error: { code: 'CLAIM_CONFLICT', message: 'No slots available' } }),
+            { status: 409 },
+          );
         }
 
         return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
@@ -538,12 +541,13 @@ describe('Agent Coverage Tests', () => {
 
         await advanceTime(2000);
 
-        expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Failed to claim task'));
+        expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Claim rejected'));
 
         globalThis.fetch = vi.fn().mockResolvedValue({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'shutdown' }),
+          json: () =>
+            Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' } }),
         });
         await advanceTime(3000);
         await promise;
@@ -954,7 +958,7 @@ describe('Agent Coverage Tests', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
           ok: false,
           status: 401,
-          json: () => Promise.resolve({ error: 'shutdown' }),
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
         });
         await advanceTime(3000);
         await promise;
