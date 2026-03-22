@@ -30,26 +30,37 @@ describe('ApiClient', () => {
     expect(calledHeaders).not.toHaveProperty('Authorization');
   });
 
-  it('throws HttpError with server error message on 401', async () => {
+  it('throws HttpError with structured error message on 401', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
-      json: () => Promise.resolve({ error: 'Unauthorized' }),
+      json: () =>
+        Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Invalid webhook signature' } }),
     });
 
     const client = new ApiClient('https://api.test.com');
-    await expect(client.get('/test')).rejects.toThrow('Unauthorized');
+    const err = await client.get('/test').catch((e: HttpError) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err.message).toBe('Invalid webhook signature');
+    expect(err.errorCode).toBe('UNAUTHORIZED');
+    expect(err.status).toBe(401);
   });
 
-  it('throws HttpError with server error message', async () => {
+  it('throws HttpError with structured error message on 500', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
-      json: () => Promise.resolve({ error: 'Internal server error' }),
+      json: () =>
+        Promise.resolve({
+          error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' },
+        }),
     });
 
     const client = new ApiClient('https://api.test.com');
-    await expect(client.get('/test')).rejects.toThrow('Internal server error');
+    const err = await client.get('/test').catch((e: HttpError) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err.message).toBe('Internal Server Error');
+    expect(err.errorCode).toBe('INTERNAL_ERROR');
   });
 
   it('post sends JSON body', async () => {
@@ -71,11 +82,16 @@ describe('ApiClient', () => {
     );
   });
 
-  it('HttpError has correct status', async () => {
+  it('HttpError has correct status and optional errorCode', async () => {
     const err = new HttpError(403, 'Forbidden');
     expect(err.status).toBe(403);
     expect(err.message).toBe('Forbidden');
     expect(err.name).toBe('HttpError');
+    expect(err.errorCode).toBeUndefined();
+
+    const err2 = new HttpError(429, 'Rate limit exceeded', 'RATE_LIMITED');
+    expect(err2.status).toBe(429);
+    expect(err2.errorCode).toBe('RATE_LIMITED');
   });
 
   it('falls back to generic message when error response is not JSON', async () => {
@@ -86,7 +102,9 @@ describe('ApiClient', () => {
     });
 
     const client = new ApiClient('https://api.test.com');
-    await expect(client.get('/test')).rejects.toThrow('HTTP 502');
+    const err = await client.get('/test').catch((e: HttpError) => e);
+    expect(err.message).toBe('HTTP 502');
+    expect(err.errorCode).toBeUndefined();
   });
 
   it('logs requests in debug mode', async () => {
@@ -125,14 +143,14 @@ describe('ApiClient', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 404,
-      json: () => Promise.resolve({ error: 'Not found' }),
+      json: () => Promise.resolve({ error: { code: 'TASK_NOT_FOUND', message: 'Task not found' } }),
     });
 
     const client = new ApiClient('https://api.test.com', true);
-    await expect(client.get('/missing')).rejects.toThrow('Not found');
+    await expect(client.get('/missing')).rejects.toThrow('Task not found');
 
     expect(debugSpy).toHaveBeenCalledWith('[ApiClient] GET /missing');
-    expect(debugSpy).toHaveBeenCalledWith('[ApiClient] 404 Not found (/missing)');
+    expect(debugSpy).toHaveBeenCalledWith('[ApiClient] 404 Task not found (/missing)');
     debugSpy.mockRestore();
   });
 });

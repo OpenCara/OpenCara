@@ -278,6 +278,8 @@ async function handleTask(
   log(`  https://github.com/${owner}/${repo}/pull/${pr_number}`);
 
   // Claim the task (retry once — slot may be taken)
+  // On failure, server returns structured error (e.g. CLAIM_CONFLICT, TASK_NOT_FOUND)
+  // which the ApiClient converts to an HttpError.
   let claimResponse: ClaimResponse;
   try {
     claimResponse = await withRetry(
@@ -292,13 +294,12 @@ async function handleTask(
       signal,
     );
   } catch (err) {
-    const status = err instanceof HttpError ? ` (${err.status})` : '';
-    logError(`  Failed to claim task ${task_id}${status}: ${(err as Error).message}`);
-    return {};
-  }
-
-  if (!claimResponse.claimed) {
-    log(`  Claim rejected: ${(claimResponse as { reason: string }).reason}`);
+    if (err instanceof HttpError) {
+      const codeInfo = err.errorCode ? ` [${err.errorCode}]` : '';
+      logError(`  Claim rejected${codeInfo}: ${err.message}`);
+    } else {
+      logError(`  Failed to claim task ${task_id}: ${(err as Error).message}`);
+    }
     return {};
   }
 

@@ -85,7 +85,7 @@ describe('Agent CLI tests', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
-      json: () => Promise.resolve({ error: 'Unauthorized' }),
+      json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
     });
   });
 

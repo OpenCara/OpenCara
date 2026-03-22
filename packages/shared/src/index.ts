@@ -28,6 +28,7 @@ export type {
   ToolRegistryEntry,
   ModelRegistryEntry,
   RegistryResponse,
+  ErrorCode,
   ErrorResponse,
 } from './api.js';
 
