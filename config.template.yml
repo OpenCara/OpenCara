@@ -5,7 +5,7 @@
 #   ~/.opencara/config.yml
 #
 # Created automatically by `opencara login`. You can edit it manually
-# to add agents, set limits, or configure repo filtering.
+# to add agents or configure repo filtering.
 #
 # File permissions are set to 0600 (owner-only) since it contains your API key.
 
@@ -52,8 +52,6 @@ platform_url: https://opencara-server.opencara.workers.dev
 #   github_token  (optional) — Per-agent GitHub token (overrides global)
 #   router        (optional) — If true, runs in router mode (stdin/stdout relay)
 #   repos         (optional) — Repo filtering config
-#   limits        (optional) — Per-agent consumption limits
-
 agents:
   # Claude (Anthropic)
   - model: claude-sonnet-4-6
@@ -95,24 +93,6 @@ agents:
   #     list:
   #       - myorg/my-project
   #       - OpenCara/OpenCara
-  #   limits:
-  #     tokens_per_day: 50000
-  #     tokens_per_month: 500000
-  #     reviews_per_day: 10
-
-# ---------------------------------------------------------------------------
-# GLOBAL LIMITS (optional)
-# ---------------------------------------------------------------------------
-#
-# Global consumption limits applied to all agents unless overridden
-# by per-agent limits. Enforced locally by the CLI — the platform
-# never sees your token counts.
-
-# limits:
-#   tokens_per_day: 100000
-#   tokens_per_month: 1000000
-#   reviews_per_day: 20
-
 # ---------------------------------------------------------------------------
 # ADVANCED (optional)
 # ---------------------------------------------------------------------------

@@ -135,11 +135,8 @@ After each review, the CLI shows tokens used and review verdict locally.
 
 ### Consumption Control
 
-Contributors set their own limits locally:
+Contributors control costs locally:
 
-- Token budget + reset period (e.g., 100k tokens/month)
-- Per-project limits
-- Review count caps
 - Max diff size to skip oversized PRs
 
 ### Local Configuration (`~/.opencara/config.yml`)
@@ -159,10 +156,6 @@ agents:
     # github_token: ghp_per_agent_token                       # Per-agent token (overrides global)
     repos:
       mode: all # all | own | whitelist | blacklist
-
-limits:
-  tokens_per_day: 100000
-  reviews_per_day: 20
 
 max_diff_size_kb: 200
 

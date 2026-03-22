@@ -12,10 +12,8 @@ import type {
 import { isRepoAllowed } from '@opencara/shared';
 import {
   loadConfig,
-  resolveAgentLimits,
   resolveCodebaseDir,
   resolveGithubToken as resolveConfigToken,
-  type ConsumptionLimits,
   type LocalAgentConfig,
 } from '../config.js';
 import { cloneOrUpdate } from '../codebase.js';
@@ -35,7 +33,6 @@ import {
 
 export interface ConsumptionDeps {
   agentId: string;
-  limits: ConsumptionLimits | null;
   session: SessionStats;
 }
 
@@ -677,7 +674,7 @@ export async function startAgent(
 ): Promise<void> {
   const client = new ApiClient(platformUrl);
   const session = consumptionDeps?.session ?? createSessionTracker();
-  const deps = consumptionDeps ?? { agentId, limits: null, session };
+  const deps = consumptionDeps ?? { agentId, session };
   const logger = createLogger(options?.label);
   const { log, logError, logWarn } = logger;
 
@@ -760,9 +757,6 @@ export async function startAgentRouter(): Promise<void> {
   };
 
   const session = createSessionTracker();
-  const limits = agentConfig
-    ? resolveAgentLimits(agentConfig.limits, config.limits)
-    : config.limits;
 
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
@@ -775,7 +769,6 @@ export async function startAgentRouter(): Promise<void> {
     reviewDeps,
     {
       agentId,
-      limits,
       session,
     },
     {
@@ -808,13 +801,11 @@ function startAgentByIndex(
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
   let commandTemplate: string | undefined;
-  let limits: ConsumptionLimits | null = config.limits;
   let agentConfig: LocalAgentConfig | undefined;
 
   if (config.agents && config.agents.length > agentIndex) {
     agentConfig = config.agents[agentIndex];
     commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
-    limits = resolveAgentLimits(agentConfig.limits, config.limits);
   } else {
     commandTemplate = config.agentCommand ?? undefined;
   }
@@ -869,7 +860,7 @@ function startAgentByIndex(
     config.platformUrl,
     { model, tool },
     reviewDeps,
-    { agentId, limits, session },
+    { agentId, session },
     {
       pollIntervalMs,
       routerRelay,

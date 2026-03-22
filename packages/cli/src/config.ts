@@ -4,12 +4,6 @@ import * as os from 'node:os';
 import { parse, stringify } from 'yaml';
 import type { RepoConfig, RepoFilterMode } from '@opencara/shared';
 
-export interface ConsumptionLimits {
-  tokens_per_day?: number;
-  tokens_per_month?: number;
-  reviews_per_day?: number;
-}
-
 export interface LocalAgentConfig {
   model: string;
   tool: string;
@@ -19,7 +13,6 @@ export interface LocalAgentConfig {
   review_only?: boolean;
   github_token?: string;
   codebase_dir?: string;
-  limits?: ConsumptionLimits;
   repos?: RepoConfig;
 }
 
@@ -28,7 +21,6 @@ export interface CliConfig {
   maxDiffSizeKb: number;
   githubToken: string | null;
   codebaseDir: string | null;
-  limits: ConsumptionLimits | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
 }
@@ -46,18 +38,6 @@ export function ensureConfigDir(): void {
 }
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
-
-function parseLimits(data: Record<string, unknown>): ConsumptionLimits | null {
-  const raw = data.limits;
-  if (!raw || typeof raw !== 'object') return null;
-  const obj = raw as Record<string, unknown>;
-  const limits: ConsumptionLimits = {};
-  if (typeof obj.tokens_per_day === 'number') limits.tokens_per_day = obj.tokens_per_day;
-  if (typeof obj.tokens_per_month === 'number') limits.tokens_per_month = obj.tokens_per_month;
-  if (typeof obj.reviews_per_day === 'number') limits.reviews_per_day = obj.reviews_per_day;
-  if (Object.keys(limits).length === 0) return null;
-  return limits;
-}
 
 const VALID_REPO_MODES: RepoFilterMode[] = ['all', 'own', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
@@ -134,8 +114,6 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (obj.review_only === true) agent.review_only = true;
     if (typeof obj.github_token === 'string') agent.github_token = obj.github_token;
     if (typeof obj.codebase_dir === 'string') agent.codebase_dir = obj.codebase_dir;
-    const agentLimits = parseLimits(obj);
-    if (agentLimits) agent.limits = agentLimits;
     const repoConfig = parseRepoConfig(obj, i);
     if (repoConfig) agent.repos = repoConfig;
     agents.push(agent);
@@ -149,7 +127,6 @@ export function loadConfig(): CliConfig {
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     githubToken: null,
     codebaseDir: null,
-    limits: null,
     agentCommand: null,
     agents: null,
   };
@@ -171,7 +148,6 @@ export function loadConfig(): CliConfig {
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
-    limits: parseLimits(data),
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
   };
@@ -190,9 +166,6 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
-  }
-  if (config.limits) {
-    data.limits = config.limits;
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;
@@ -227,19 +200,4 @@ export function resolveCodebaseDir(
     return path.join(os.homedir(), raw.slice(1));
   }
   return path.resolve(raw);
-}
-
-/**
- * Merge per-agent limits with global limits.
- * Agent values override global; missing fields fall back to global.
- */
-export function resolveAgentLimits(
-  agentLimits: ConsumptionLimits | undefined,
-  globalLimits: ConsumptionLimits | null,
-): ConsumptionLimits | null {
-  if (!agentLimits && !globalLimits) return null;
-  if (!agentLimits) return globalLimits;
-  if (!globalLimits) return agentLimits;
-  const merged: ConsumptionLimits = { ...globalLimits, ...agentLimits };
-  return Object.keys(merged).length === 0 ? null : merged;
 }
