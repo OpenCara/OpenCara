@@ -23,6 +23,11 @@ export interface TaskStore {
   setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;
   getAgentLastSeen(agentId: string): Promise<number | null>;
 
+  // Summary lock (prevents duplicate summary claims under KV eventual consistency)
+  acquireSummaryLock(taskId: string, agentId: string): Promise<boolean>;
+  checkSummaryLock(taskId: string, agentId: string): Promise<boolean>;
+  releaseSummaryLock(taskId: string): Promise<void>;
+
   // Timeout check throttle (persisted across isolate recycles)
   getTimeoutLastCheck(): Promise<number>;
   setTimeoutLastCheck(timestamp: number): Promise<void>;

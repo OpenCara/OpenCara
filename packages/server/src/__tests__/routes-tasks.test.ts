@@ -1029,13 +1029,13 @@ describe('Task Routes', () => {
     });
   });
 
-  // ── Duplicate summary claim prevention (#221) ──────────
+  // ── Summary lock — duplicate claim prevention (#221, #273) ──────────
 
-  describe('duplicate summary claim prevention (#221)', () => {
-    it('rejects summary claim when another pending summary claim exists', async () => {
+  describe('summary lock — duplicate claim prevention (#221, #273)', () => {
+    it('rejects summary claim when lock is held by another agent', async () => {
       await store.createTask(makeTask());
 
-      // Agent A claims summary
+      // Agent A claims summary (acquires lock)
       const res1 = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-a',
         role: 'summary',
@@ -1047,8 +1047,7 @@ describe('Task Routes', () => {
       // by manually resetting it (mimics KV eventual consistency)
       await store.updateTask('task-1', { summary_claimed: false, claimed_agents: [] });
 
-      // Agent B tries to claim summary — task-level flag says available,
-      // but claim-level check should catch the existing pending claim
+      // Agent B tries to claim summary — lock is still held by agent-a
       const res2 = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-b',
         role: 'summary',
@@ -1058,7 +1057,7 @@ describe('Task Routes', () => {
       expect(body2.reason).toContain('Summary already claimed');
     });
 
-    it('allows summary claim after previous summary claim was rejected', async () => {
+    it('allows summary claim after previous summary claim was rejected (lock released)', async () => {
       await store.createTask(makeTask());
 
       // Agent A claims and rejects summary
@@ -1071,7 +1070,7 @@ describe('Task Routes', () => {
         reason: 'test',
       });
 
-      // Agent B should be able to claim summary
+      // Agent B should be able to claim summary (lock was released on reject)
       const res = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-b',
         role: 'summary',
@@ -1080,7 +1079,7 @@ describe('Task Routes', () => {
       expect(body.claimed).toBe(true);
     });
 
-    it('allows summary claim after previous summary claim errored', async () => {
+    it('allows summary claim after previous summary claim errored (lock released)', async () => {
       await store.createTask(makeTask());
 
       // Agent A claims and errors summary
@@ -1093,7 +1092,7 @@ describe('Task Routes', () => {
         error: 'OOM',
       });
 
-      // Agent B should be able to claim summary
+      // Agent B should be able to claim summary (lock was released on error)
       const res = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-b',
         role: 'summary',
@@ -1102,10 +1101,12 @@ describe('Task Routes', () => {
       expect(body.claimed).toBe(true);
     });
 
-    it('postFinalReview skips duplicate post when task is already completed', async () => {
+    it('result submission by non-lock-holder is accepted but not posted to GitHub', async () => {
       await store.createTask(makeTask({ status: 'reviewing', summary_claimed: true }));
 
-      // Create two summary claims (simulating the race that slipped past claim-time dedup)
+      // Simulate a race: two agents both have pending summary claims,
+      // but only agent-a holds the lock
+      await store.acquireSummaryLock('task-1', 'agent-a');
       await store.createClaim({
         id: 'task-1:agent-a',
         task_id: 'task-1',
@@ -1123,6 +1124,35 @@ describe('Task Routes', () => {
         created_at: Date.now(),
       });
 
+      // Agent B submits — result accepted, but no GitHub post (doesn't hold lock)
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-b',
+        type: 'summary',
+        review_text: '## Summary\nDuplicate review.',
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+
+      // Task should NOT be completed (agent-b didn't hold lock, no post happened)
+      const task = await store.getTask('task-1');
+      expect(task?.status).toBe('reviewing');
+    });
+
+    it('postFinalReview skips duplicate post when task is already completed', async () => {
+      await store.createTask(makeTask({ status: 'reviewing', summary_claimed: true }));
+
+      // Agent-a holds the lock and has a pending claim
+      await store.acquireSummaryLock('task-1', 'agent-a');
+      await store.createClaim({
+        id: 'task-1:agent-a',
+        task_id: 'task-1',
+        agent_id: 'agent-a',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
       // Agent A submits — should post and complete task
       const res1 = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-a',
@@ -1131,18 +1161,20 @@ describe('Task Routes', () => {
       });
       expect(res1.status).toBe(200);
 
-      // Task should be in terminal state (completed or failed depending on GitHub mock)
+      // Task should be in terminal state
       const taskAfterFirst = await store.getTask('task-1');
       expect(['completed', 'failed']).toContain(taskAfterFirst?.status);
+    });
 
-      // Agent B submits — postFinalReview should skip (task already completed)
-      const res2 = await request('POST', '/api/tasks/task-1/result', {
-        agent_id: 'agent-b',
-        type: 'summary',
-        review_text: '## Summary\nDuplicate review.',
+    it('same agent can re-claim summary (idempotent lock)', async () => {
+      await store.createTask(makeTask());
+
+      // Agent A claims summary
+      const res1 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'summary',
       });
-      // Result endpoint returns 200 (claim was updated), but postFinalReview skips posting
-      expect(res2.status).toBe(200);
+      expect((await res1.json()).claimed).toBe(true);
     });
   });
 

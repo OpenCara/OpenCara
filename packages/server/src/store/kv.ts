@@ -5,6 +5,7 @@ import type { TaskStore } from './interface.js';
 const TASK_PREFIX = 'task:';
 const CLAIM_PREFIX = 'claim:';
 const AGENT_PREFIX = 'agent:';
+const SUMMARY_LOCK_PREFIX = 'summary-lock:';
 
 /** TTL for terminal KV entries: 7 days in seconds */
 const TERMINAL_TTL = 7 * 24 * 60 * 60;
@@ -187,6 +188,34 @@ export class KVTaskStore implements TaskStore {
     const raw = await this.kv.get(`${AGENT_PREFIX}${agentId}`);
     if (!raw) return null;
     return parseInt(raw, 10);
+  }
+
+  // ── Summary lock ─────────────────────────────────────────
+
+  async acquireSummaryLock(taskId: string, agentId: string): Promise<boolean> {
+    const key = `${SUMMARY_LOCK_PREFIX}${taskId}`;
+    const existing = await this.kv.get(key);
+    if (existing) {
+      // Lock already held — only succeed if same agent (idempotent)
+      return existing === agentId;
+    }
+    // No lock exists — write it. Under KV eventual consistency, two agents
+    // may both see no lock and both write. The second write wins in KV,
+    // but the claim endpoint's task-level summary_claimed flag (set atomically
+    // after lock acquisition) provides the primary guard. This lock is
+    // defense-in-depth checked at result submission time.
+    await this.kv.put(key, agentId);
+    return true;
+  }
+
+  async checkSummaryLock(taskId: string, agentId: string): Promise<boolean> {
+    const key = `${SUMMARY_LOCK_PREFIX}${taskId}`;
+    const holder = await this.kv.get(key);
+    return holder === agentId;
+  }
+
+  async releaseSummaryLock(taskId: string): Promise<void> {
+    await this.kv.delete(`${SUMMARY_LOCK_PREFIX}${taskId}`);
   }
 
   // ── Timeout check throttle ────────────────────────────────────

@@ -9,6 +9,7 @@ export class MemoryTaskStore implements TaskStore {
   private tasks = new Map<string, ReviewTask>();
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
+  private summaryLocks = new Map<string, string>();
 
   // Tasks
 
@@ -44,6 +45,7 @@ export class MemoryTaskStore implements TaskStore {
 
   async deleteTask(id: string): Promise<void> {
     this.tasks.delete(id);
+    this.summaryLocks.delete(id);
     // Also delete associated claims
     for (const [claimId, claim] of this.claims) {
       if (claim.task_id === id) {
@@ -84,6 +86,25 @@ export class MemoryTaskStore implements TaskStore {
     return this.agentLastSeen.get(agentId) ?? null;
   }
 
+  // Summary lock
+
+  async acquireSummaryLock(taskId: string, agentId: string): Promise<boolean> {
+    const existing = this.summaryLocks.get(taskId);
+    if (existing) {
+      return existing === agentId;
+    }
+    this.summaryLocks.set(taskId, agentId);
+    return true;
+  }
+
+  async checkSummaryLock(taskId: string, agentId: string): Promise<boolean> {
+    return this.summaryLocks.get(taskId) === agentId;
+  }
+
+  async releaseSummaryLock(taskId: string): Promise<void> {
+    this.summaryLocks.delete(taskId);
+  }
+
   // Timeout check throttle
 
   private timeoutLastCheck = 0;
@@ -101,6 +122,7 @@ export class MemoryTaskStore implements TaskStore {
     this.tasks.clear();
     this.claims.clear();
     this.agentLastSeen.clear();
+    this.summaryLocks.clear();
     this.timeoutLastCheck = 0;
   }
 }

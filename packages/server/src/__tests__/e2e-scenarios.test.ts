@@ -410,7 +410,9 @@ describe('E2E Scenarios', () => {
     it('second summary result does not post duplicate GitHub comment (#221)', async () => {
       const taskId = await injectPR();
 
-      // Manually create two summary claims (simulating the race condition)
+      // Manually create two summary claims (simulating the race condition where
+      // both claims slipped past the claim endpoint). Agent A holds the lock.
+      await store.acquireSummaryLock(taskId, 'synth-a');
       await store.createClaim({
         id: `${taskId}:synth-a`,
         task_id: taskId,
@@ -441,10 +443,10 @@ describe('E2E Scenarios', () => {
         (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
       ).length;
 
-      // Agent A submits summary — should post
+      // Agent A submits summary — holds lock, should post
       await synthA.submitResult(taskId, 'summary', '## Summary\nFirst.', 'approve');
 
-      // Agent B submits summary — postFinalReview should skip (task already completed)
+      // Agent B submits summary — doesn't hold lock, result accepted but no GitHub post
       await synthB.submitResult(taskId, 'summary', '## Summary\nDuplicate.', 'approve');
 
       // Only 1 new comment should have been posted (not 2)
