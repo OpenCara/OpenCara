@@ -2,7 +2,7 @@
  * E2E tests for the CLI agent — runs startAgent() against a real Hono server
  * (in-memory) with a mocked tool executor.
  *
- * Fake Server: real Hono app + MemoryTaskStore, accessed via fetch interception
+ * Fake Server: real Hono app + MemoryDataStore, accessed via fetch interception
  * Fake Tool: vi.mock() on tool-executor.js returns canned review output
  *
  * Note: tests that submit summary results trigger server-side postFinalReview
@@ -249,9 +249,9 @@ describe('E2E Agent Scenarios', () => {
 
       await server.store.updateTask(taskId, {
         claimed_agents: ['other-agent'],
-        summary_claimed: true,
         status: 'reviewing',
       });
+      await server.store.acquireLock(`summary:${taskId}`, 'other-agent');
       await server.store.createClaim({
         id: `${taskId}:other-agent`,
         task_id: taskId,

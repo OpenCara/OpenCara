@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from './types.js';
-import { MemoryTaskStore } from './store/memory.js';
-import { KVTaskStore } from './store/kv.js';
-import type { TaskStore } from './store/interface.js';
+import { MemoryDataStore } from './store/memory.js';
+import { KVDataStore } from './store/kv.js';
+import type { DataStore } from './store/interface.js';
 import { webhookRoutes } from './routes/webhook.js';
 import { taskRoutes, checkTimeouts } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
@@ -16,9 +16,9 @@ type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
 /**
  * Build the Hono app with store injected via middleware.
- * The storeProvider callback is called per-request to produce a TaskStore.
+ * The storeProvider callback is called per-request to produce a DataStore.
  */
-function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
+function buildApp(storeProvider: (env: Env) => DataStore): HonoApp {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // Generate request ID and attach structured logger
@@ -72,9 +72,9 @@ function buildApp(storeProvider: (env: Env) => TaskStore): HonoApp {
 
 /**
  * Create the Hono app with a specific store.
- * Used by tests (pass a MemoryTaskStore).
+ * Used by tests (pass a MemoryDataStore).
  */
-export function createApp(store: TaskStore): HonoApp {
+export function createApp(store: DataStore): HonoApp {
   return buildApp(() => store);
 }
 
@@ -85,9 +85,11 @@ export function parseTtlDays(env: Env): number {
   return Number.isNaN(parsed) || parsed < 1 ? 7 : parsed;
 }
 
-function createStore(env: Env): TaskStore {
+function createStore(env: Env): DataStore {
   const ttlDays = parseTtlDays(env);
-  return env.TASK_STORE ? new KVTaskStore(env.TASK_STORE, ttlDays) : new MemoryTaskStore(ttlDays);
+  // KV → Memory (dev/test). D1 binding (env.DB) prepared but not yet integrated (#309).
+  if (env.TASK_STORE) return new KVDataStore(env.TASK_STORE, ttlDays);
+  return new MemoryDataStore(ttlDays);
 }
 
 // Cloudflare Workers entrypoint — app created once at module level

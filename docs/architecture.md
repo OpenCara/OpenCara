@@ -141,7 +141,7 @@ Implementations:
 
 **Task enumeration** uses `kv.list({ prefix: "task:" })` with metadata filtering instead of a shared index, eliminating race conditions on concurrent creates/deletes.
 
-**Task counters** (`claimed_agents`, `review_claims`, `completed_reviews`, `summary_claimed`, `reviews_completed_at`) are stored on the task object itself to avoid KV eventual consistency issues with list operations.
+**Task counters** (`claimed_agents`, `review_claims`, `completed_reviews`, `reviews_completed_at`) are stored on the task object itself to avoid KV eventual consistency issues with list operations. Summary claim state is tracked via the generic lock mechanism (`lock:summary:{taskId}`).
 
 **Summary dedup** uses defense-in-depth: KV lock key at claim time (first writer wins) + task completion check at post time. See [#276](https://github.com/OpenCara/OpenCara/issues/276) for known limitations of KV-based locking.
 

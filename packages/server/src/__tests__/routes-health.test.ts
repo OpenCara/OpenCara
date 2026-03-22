@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MemoryTaskStore } from '../store/memory.js';
+import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import type { ReviewTask } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
@@ -37,7 +37,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
 describe('Health Routes', () => {
   describe('GET /health', () => {
     it('returns 200 with status ok', async () => {
-      const app = createApp(new MemoryTaskStore());
+      const app = createApp(new MemoryDataStore());
       const res = await app.request('/health', { method: 'GET' }, mockEnv);
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -47,7 +47,7 @@ describe('Health Routes', () => {
 
   describe('GET /metrics', () => {
     it('returns zeros when no tasks exist', async () => {
-      const app = createApp(new MemoryTaskStore());
+      const app = createApp(new MemoryDataStore());
       const res = await app.request('/metrics', { method: 'GET' }, mockEnv);
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
@@ -69,7 +69,7 @@ describe('Health Routes', () => {
     });
 
     it('counts tasks by status', async () => {
-      const store = new MemoryTaskStore();
+      const store = new MemoryDataStore();
       await store.createTask(makeTask({ id: 't1', status: 'pending' }));
       await store.createTask(makeTask({ id: 't2', status: 'pending' }));
       await store.createTask(makeTask({ id: 't3', status: 'reviewing' }));

@@ -1,12 +1,12 @@
 import type { ReviewTask, TaskClaim, TaskStatus } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
-import type { TaskStore } from './interface.js';
+import type { DataStore } from './interface.js';
 import { createLogger } from '../logger.js';
 
 const TASK_PREFIX = 'task:';
 const CLAIM_PREFIX = 'claim:';
 const AGENT_PREFIX = 'agent:';
-const SUMMARY_LOCK_PREFIX = 'summary-lock:';
+const LOCK_PREFIX = 'lock:';
 
 /** Default TTL for terminal KV entries: 7 days */
 export const DEFAULT_TTL_DAYS = 7;
@@ -34,18 +34,19 @@ export function safeParseJson<T>(raw: string, fallback: T | null = null): T | nu
 }
 
 /**
- * Cloudflare Workers KV-backed TaskStore.
+ * Cloudflare Workers KV-backed DataStore.
  *
  * Key layout:
  *   task:{id}                 → ReviewTask JSON (with metadata: { status, timeout_at })
  *   claim:{taskId}:{agentId}  → TaskClaim JSON
  *   agent:{agentId}           → last-seen timestamp (string)
+ *   lock:{key}                → holder string (lock value)
  *
  * Task enumeration uses kv.list({ prefix: "task:" }) instead of a shared index,
  * eliminating the race condition where concurrent creates/deletes could lose entries
  * in a shared JSON array.
  */
-export class KVTaskStore implements TaskStore {
+export class KVDataStore implements DataStore {
   private readonly terminalTtl: number;
 
   constructor(
@@ -133,6 +134,9 @@ export class KVTaskStore implements TaskStore {
   async deleteTask(id: string): Promise<void> {
     await this.kv.delete(`${TASK_PREFIX}${id}`);
 
+    // Delete associated lock (summary lock for this task)
+    await this.kv.delete(`${LOCK_PREFIX}summary:${id}`);
+
     // Delete claims (best effort — list by prefix)
     const claimList = await this.kv.list({ prefix: `${CLAIM_PREFIX}${id}:` });
     for (const key of claimList.keys) {
@@ -142,8 +146,24 @@ export class KVTaskStore implements TaskStore {
 
   // ── Claims ─────────────────────────────────────────────────────
 
-  async createClaim(claim: TaskClaim): Promise<void> {
-    await this.kv.put(`${CLAIM_PREFIX}${claim.task_id}:${claim.agent_id}`, JSON.stringify(claim));
+  async createClaim(claim: TaskClaim): Promise<boolean> {
+    const key = `${CLAIM_PREFIX}${claim.task_id}:${claim.agent_id}`;
+    // Check if an active claim already exists for this (task_id, agent_id).
+    // Terminal claims (rejected, error) are overwritten to allow re-claiming.
+    // Note: this GET→PUT is not atomic — concurrent retries from the same agent
+    // could both pass the check. This is acceptable since idempotent writes of
+    // the same claim data are harmless, and distinct agents are differentiated
+    // by the lock mechanism at claim time.
+    const existing = await this.kv.get(key);
+    if (existing) {
+      const parsed = safeParseJson<TaskClaim>(existing);
+      if (parsed && (parsed.status === 'pending' || parsed.status === 'completed')) {
+        return false;
+      }
+      // Terminal claim — allow overwrite
+    }
+    await this.kv.put(key, JSON.stringify(claim));
+    return true;
   }
 
   async getClaim(claimId: string): Promise<TaskClaim | null> {
@@ -201,32 +221,37 @@ export class KVTaskStore implements TaskStore {
     return parseInt(raw, 10);
   }
 
-  // ── Summary lock ─────────────────────────────────────────
+  // ── Locks ─────────────────────────────────────────────────
 
-  async acquireSummaryLock(taskId: string, agentId: string): Promise<boolean> {
-    const key = `${SUMMARY_LOCK_PREFIX}${taskId}`;
+  async acquireLock(lockKey: string, holder: string): Promise<boolean> {
+    const key = `${LOCK_PREFIX}${lockKey}`;
     const existing = await this.kv.get(key);
     if (existing) {
-      // Lock already held — only succeed if same agent (idempotent)
-      return existing === agentId;
+      // Lock already held — only succeed if same holder (idempotent)
+      return existing === holder;
     }
     // No lock exists — write it. Under KV eventual consistency, two agents
     // may both see no lock and both write. The second write wins in KV,
-    // but the claim endpoint's task-level summary_claimed flag (set atomically
-    // after lock acquisition) provides the primary guard. This lock is
-    // defense-in-depth checked at result submission time.
-    await this.kv.put(key, agentId, { expirationTtl: this.terminalTtl });
+    // but the claim endpoint's task-level guards provide the primary defense.
+    // This lock is defense-in-depth checked at result submission time.
+    await this.kv.put(key, holder, { expirationTtl: this.terminalTtl });
     return true;
   }
 
-  async checkSummaryLock(taskId: string, agentId: string): Promise<boolean> {
-    const key = `${SUMMARY_LOCK_PREFIX}${taskId}`;
-    const holder = await this.kv.get(key);
-    return holder === agentId;
+  async checkLock(lockKey: string, holder: string): Promise<boolean> {
+    const key = `${LOCK_PREFIX}${lockKey}`;
+    const current = await this.kv.get(key);
+    return current === holder;
   }
 
-  async releaseSummaryLock(taskId: string): Promise<void> {
-    await this.kv.delete(`${SUMMARY_LOCK_PREFIX}${taskId}`);
+  async isLockHeld(lockKey: string): Promise<boolean> {
+    const key = `${LOCK_PREFIX}${lockKey}`;
+    const current = await this.kv.get(key);
+    return current !== null;
+  }
+
+  async releaseLock(lockKey: string): Promise<void> {
+    await this.kv.delete(`${LOCK_PREFIX}${lockKey}`);
   }
 
   // ── Timeout check throttle ────────────────────────────────────
@@ -234,14 +259,14 @@ export class KVTaskStore implements TaskStore {
   private static readonly TIMEOUT_CHECK_KEY = 'meta:timeout_last_check';
 
   async getTimeoutLastCheck(): Promise<number> {
-    const raw = await this.kv.get(KVTaskStore.TIMEOUT_CHECK_KEY);
+    const raw = await this.kv.get(KVDataStore.TIMEOUT_CHECK_KEY);
     if (!raw) return 0;
     const parsed = parseInt(raw, 10);
     return Number.isNaN(parsed) ? 0 : parsed;
   }
 
   async setTimeoutLastCheck(timestamp: number): Promise<void> {
-    await this.kv.put(KVTaskStore.TIMEOUT_CHECK_KEY, String(timestamp));
+    await this.kv.put(KVDataStore.TIMEOUT_CHECK_KEY, String(timestamp));
   }
 
   // ── Cleanup ─────────────────────────────────────────────────────

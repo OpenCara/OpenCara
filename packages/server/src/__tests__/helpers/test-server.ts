@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from '../../types.js';
-import type { TaskStore } from '../../store/interface.js';
+import type { DataStore } from '../../store/interface.js';
 import { webhookRoutes } from '../../routes/webhook.js';
 import { taskRoutes } from '../../routes/tasks.js';
 import { registryRoutes } from '../../routes/registry.js';
@@ -18,7 +18,7 @@ type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
  * Unlike `createApp()` from index.ts, this also mounts `/test/*` endpoints
  * that bypass webhook signature verification.
  */
-export function createTestApp(store: TaskStore): HonoApp {
+export function createTestApp(store: DataStore): HonoApp {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // Generate request ID and attach structured logger
