@@ -5,7 +5,7 @@ import { MemoryTaskStore } from './store/memory.js';
 import { KVTaskStore } from './store/kv.js';
 import type { TaskStore } from './store/interface.js';
 import { webhookRoutes } from './routes/webhook.js';
-import { taskRoutes } from './routes/tasks.js';
+import { taskRoutes, checkTimeouts } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
@@ -66,4 +66,20 @@ const workerApp = buildApp((env) =>
   env.TASK_STORE ? new KVTaskStore(env.TASK_STORE) : new MemoryTaskStore(),
 );
 
-export default workerApp;
+export default {
+  fetch: workerApp.fetch,
+  /** Cloudflare Cron Trigger handler — checks for timed-out tasks. */
+  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    try {
+      const store: TaskStore = env.TASK_STORE
+        ? new KVTaskStore(env.TASK_STORE)
+        : new MemoryTaskStore();
+      await store.setTimeoutLastCheck(Date.now());
+      await checkTimeouts(store, env);
+    } catch (err) {
+      console.error(
+        `[scheduled] action=check_timeouts error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  },
+};

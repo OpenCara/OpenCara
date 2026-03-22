@@ -22,4 +22,8 @@ export interface TaskStore {
   // Agent last-seen (updated on each poll)
   setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;
   getAgentLastSeen(agentId: string): Promise<number | null>;
+
+  // Timeout check throttle (persisted across isolate recycles)
+  getTimeoutLastCheck(): Promise<number>;
+  setTimeoutLastCheck(timestamp: number): Promise<void>;
 }

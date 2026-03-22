@@ -188,4 +188,19 @@ export class KVTaskStore implements TaskStore {
     if (!raw) return null;
     return parseInt(raw, 10);
   }
+
+  // ── Timeout check throttle ────────────────────────────────────
+
+  private static readonly TIMEOUT_CHECK_KEY = 'meta:timeout_last_check';
+
+  async getTimeoutLastCheck(): Promise<number> {
+    const raw = await this.kv.get(KVTaskStore.TIMEOUT_CHECK_KEY);
+    if (!raw) return 0;
+    const parsed = parseInt(raw, 10);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  async setTimeoutLastCheck(timestamp: number): Promise<void> {
+    await this.kv.put(KVTaskStore.TIMEOUT_CHECK_KEY, String(timestamp));
+  }
 }

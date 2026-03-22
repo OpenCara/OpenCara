@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, type ReviewTask } from '@opencara/shared';
 import { MemoryTaskStore } from '../store/memory.js';
 import { createApp } from '../index.js';
-import { resetTimeoutThrottle, PREFERRED_SYNTH_GRACE_PERIOD_MS } from '../routes/tasks.js';
+import {
+  resetTimeoutThrottle,
+  PREFERRED_SYNTH_GRACE_PERIOD_MS,
+  TIMEOUT_CHECK_INTERVAL_MS,
+} from '../routes/tasks.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -646,11 +650,8 @@ describe('Task Routes', () => {
       // Create expired task
       await store.createTask(makeTask({ id: 'task-delayed', timeout_at: Date.now() - 1000 }));
 
-      // Advance time past 30s threshold
-      vi.useFakeTimers();
-      vi.advanceTimersByTime(31_000);
-      resetTimeoutThrottle(); // In production, the in-memory timestamp would be stale; simulate by resetting
-      vi.useRealTimers();
+      // Simulate passing the throttle interval by setting the stored timestamp past the threshold
+      await store.setTimeoutLastCheck(Date.now() - TIMEOUT_CHECK_INTERVAL_MS - 1000);
 
       // Poll again — should now run checkTimeouts
       await request('POST', '/api/tasks/poll', { agent_id: 'agent-2' });
@@ -663,6 +664,16 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-delayed');
       // Task stays pending because GitHub posting fails, but checkTimeouts DID run
       expect(task).toBeDefined();
+    });
+
+    it('persists throttle timestamp in store, not module memory', async () => {
+      // Poll to trigger checkTimeouts — this should store the timestamp
+      await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+
+      // Verify the timestamp was stored in the store
+      const lastCheck = await store.getTimeoutLastCheck();
+      expect(lastCheck).toBeGreaterThan(0);
+      expect(lastCheck).toBeLessThanOrEqual(Date.now());
     });
   });
 
