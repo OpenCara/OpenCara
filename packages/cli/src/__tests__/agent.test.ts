@@ -635,5 +635,6 @@ describe('agent poll loop', () => {
 
     expect(diffFetchInit).toBeDefined();
     expect(diffFetchInit!.signal).toBeInstanceOf(AbortSignal);
+    expect(diffFetchInit!.signal!.aborted).toBe(false);
   });
 });
