@@ -363,7 +363,7 @@ describe('E2E Agent Scenarios', () => {
 
       // No type mismatch error — submission type should be 'summary'
       expect(console.error).not.toHaveBeenCalledWith(
-        expect.stringContaining("does not match submission type"),
+        expect.stringContaining('does not match submission type'),
       );
 
       await server.store.updateTask(taskId, { status: 'completed' });

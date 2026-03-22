@@ -69,9 +69,7 @@ const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
  * but the API endpoint does when using Accept: application/vnd.github.v3.diff.
  */
 function toApiDiffUrl(webUrl: string): string | null {
-  const match = webUrl.match(
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\.diff)?$/,
-  );
+  const match = webUrl.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\.diff)?$/);
   if (!match) return null;
   const [, owner, repo, prNumber] = match;
   return `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
@@ -187,9 +185,7 @@ async function pollLoop(
           const count = (diffFailCounts.get(task.task_id) ?? 0) + 1;
           diffFailCounts.set(task.task_id, count);
           if (count >= MAX_DIFF_FETCH_ATTEMPTS) {
-            logWarn(
-              `  Skipping task ${task.task_id} after ${count} diff fetch failures`,
-            );
+            logWarn(`  Skipping task ${task.task_id} after ${count} diff fetch failures`);
           }
         }
       }
