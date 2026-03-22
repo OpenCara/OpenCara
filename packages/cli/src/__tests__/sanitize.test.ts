@@ -33,6 +33,14 @@ describe('sanitizeTokens', () => {
     expect(sanitizeTokens('Authorization: Bearer ghp_secret123')).toBe('Authorization: ***');
   });
 
+  it('strips non-GitHub tokens from Authorization headers', () => {
+    expect(sanitizeTokens('Authorization: token app-generated-secret')).toBe('Authorization: ***');
+  });
+
+  it('strips Authorization header case-insensitively', () => {
+    expect(sanitizeTokens('authorization: bearer some_secret')).toBe('authorization: ***');
+  });
+
   it('strips multiple tokens from a single string', () => {
     const input = 'token1=ghp_abc token2=ghs_def url=https://x-access-token:secret@github.com';
     const result = sanitizeTokens(input);

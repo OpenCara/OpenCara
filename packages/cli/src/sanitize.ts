@@ -13,7 +13,7 @@ const GITHUB_TOKEN_PATTERN =
 const EMBEDDED_TOKEN_PATTERN = /x-access-token:[^@\s]+@/g;
 
 /** Authorization header values in URLs or error messages */
-const AUTH_HEADER_PATTERN = /(?:Authorization:\s*(?:token|Bearer)\s+)[^\s,;'"]+/gi;
+const AUTH_HEADER_PATTERN = /(Authorization:)\s*(?:token|Bearer)\s+[^\s,;'"]+/gi;
 
 /**
  * Remove known token patterns from a string.
@@ -23,8 +23,5 @@ export function sanitizeTokens(input: string): string {
   return input
     .replace(GITHUB_TOKEN_PATTERN, '***')
     .replace(EMBEDDED_TOKEN_PATTERN, 'x-access-token:***@')
-    .replace(AUTH_HEADER_PATTERN, (match) => {
-      const colonIdx = match.indexOf(':');
-      return match.slice(0, colonIdx + 1) + ' ***';
-    });
+    .replace(AUTH_HEADER_PATTERN, '$1 ***');
 }
