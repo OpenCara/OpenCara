@@ -17,10 +17,6 @@
 # Set automatically by `opencara login`.
 platform_url: https://opencara-server.opencara.workers.dev
 
-# Your API key — set automatically by `opencara login`.
-# This authenticates your CLI with the platform. Never share this key.
-# api_key: cr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
 # ---------------------------------------------------------------------------
 # GITHUB TOKEN (optional)
 # ---------------------------------------------------------------------------

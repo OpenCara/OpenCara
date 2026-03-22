@@ -9,35 +9,23 @@ describe('ApiClient', () => {
     vi.restoreAllMocks();
   });
 
-  it('adds Authorization header when apiKey is provided', async () => {
+  it('sends Content-Type header', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ data: 'test' }),
     });
 
-    const client = new ApiClient('https://api.test.com', 'cr_mykey');
+    const client = new ApiClient('https://api.test.com');
     await client.get('/test');
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'https://api.test.com/test',
       expect.objectContaining({
         headers: expect.objectContaining({
-          Authorization: 'Bearer cr_mykey',
           'Content-Type': 'application/json',
         }),
       }),
     );
-  });
-
-  it('omits Authorization header when no apiKey', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({}),
-    });
-
-    const client = new ApiClient('https://api.test.com');
-    await client.get('/test');
-
     const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
     expect(calledHeaders).not.toHaveProperty('Authorization');
   });
@@ -49,7 +37,7 @@ describe('ApiClient', () => {
       json: () => Promise.resolve({ error: 'Unauthorized' }),
     });
 
-    const client = new ApiClient('https://api.test.com', 'cr_bad');
+    const client = new ApiClient('https://api.test.com');
     await expect(client.get('/test')).rejects.toThrow('Unauthorized');
   });
 
@@ -60,7 +48,7 @@ describe('ApiClient', () => {
       json: () => Promise.resolve({ error: 'Internal server error' }),
     });
 
-    const client = new ApiClient('https://api.test.com', 'cr_key');
+    const client = new ApiClient('https://api.test.com');
     await expect(client.get('/test')).rejects.toThrow('Internal server error');
   });
 
@@ -70,7 +58,7 @@ describe('ApiClient', () => {
       json: () => Promise.resolve({ id: '123' }),
     });
 
-    const client = new ApiClient('https://api.test.com', 'cr_key');
+    const client = new ApiClient('https://api.test.com');
     const result = await client.post('/agents', { model: 'gpt-4' });
 
     expect(result).toEqual({ id: '123' });
@@ -97,7 +85,7 @@ describe('ApiClient', () => {
       json: () => Promise.reject(new Error('not json')),
     });
 
-    const client = new ApiClient('https://api.test.com', 'cr_key');
+    const client = new ApiClient('https://api.test.com');
     await expect(client.get('/test')).rejects.toThrow('HTTP 502');
   });
 
@@ -109,7 +97,7 @@ describe('ApiClient', () => {
       json: () => Promise.resolve({ data: 'test' }),
     });
 
-    const client = new ApiClient('https://api.test.com', null, true);
+    const client = new ApiClient('https://api.test.com', true);
     await client.post('/tasks/poll', { agent_id: 'a1' });
 
     expect(debugSpy).toHaveBeenCalledWith('[ApiClient] POST /tasks/poll');
@@ -125,7 +113,7 @@ describe('ApiClient', () => {
       json: () => Promise.resolve({}),
     });
 
-    const client = new ApiClient('https://api.test.com', null, false);
+    const client = new ApiClient('https://api.test.com', false);
     await client.get('/test');
 
     expect(debugSpy).not.toHaveBeenCalled();
@@ -140,7 +128,7 @@ describe('ApiClient', () => {
       json: () => Promise.resolve({ error: 'Not found' }),
     });
 
-    const client = new ApiClient('https://api.test.com', null, true);
+    const client = new ApiClient('https://api.test.com', true);
     await expect(client.get('/missing')).rejects.toThrow('Not found');
 
     expect(debugSpy).toHaveBeenCalledWith('[ApiClient] GET /missing');
