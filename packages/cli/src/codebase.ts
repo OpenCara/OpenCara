@@ -16,12 +16,15 @@ export interface CloneOrUpdateResult {
 /**
  * Clone or update a GitHub repository for context-aware code review.
  *
- * - First review of a repo: shallow clone to `<baseDir>/<owner>/<repo>/`
- * - Subsequent reviews: fetch PR ref into existing clone
- * - Checkout: `git fetch --force origin pull/<prNumber>/head && git checkout FETCH_HEAD`
+ * - Each task gets its own isolated checkout at `<baseDir>/<owner>/<repo>/<taskId>/`
+ *   to prevent concurrent reviews of the same repo from interfering.
+ * - Checkout: `git clone --depth 1` then `git fetch --force origin pull/<prNumber>/head`
  *
  * Uses `x-access-token` scheme when a GitHub token is provided (required for private repos).
  * All git operations use `--depth 1` for minimal disk/time footprint.
+ *
+ * After review completes, callers should call `cleanupTaskDir()` to remove the
+ * task-specific directory.
  *
  * @throws on git errors — callers should catch and fall back to diff-only review.
  */
@@ -31,17 +34,21 @@ export function cloneOrUpdate(
   prNumber: number,
   baseDir: string,
   githubToken?: string | null,
+  taskId?: string,
 ): CloneOrUpdateResult {
   validatePathSegment(owner, 'owner');
   validatePathSegment(repo, 'repo');
 
-  const repoDir = path.join(baseDir, owner, repo);
+  // Use task-specific subdirectory to isolate concurrent checkouts
+  const repoDir = taskId
+    ? path.join(baseDir, owner, repo, taskId)
+    : path.join(baseDir, owner, repo);
   const cloneUrl = buildCloneUrl(owner, repo, githubToken);
   let cloned = false;
 
   if (!fs.existsSync(path.join(repoDir, '.git'))) {
     // First clone — shallow
-    fs.mkdirSync(path.join(baseDir, owner), { recursive: true });
+    fs.mkdirSync(repoDir, { recursive: true });
     git(['clone', '--depth', '1', cloneUrl, repoDir]);
     cloned = true;
   }
@@ -51,6 +58,18 @@ export function cloneOrUpdate(
   git(['checkout', 'FETCH_HEAD'], repoDir);
 
   return { localPath: repoDir, cloned };
+}
+
+/**
+ * Remove a task-specific checkout directory after review completes.
+ * Silently ignores errors (e.g., directory already removed).
+ */
+export function cleanupTaskDir(dirPath: string): void {
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  } catch {
+    // Ignore cleanup errors — non-critical
+  }
 }
 
 /**

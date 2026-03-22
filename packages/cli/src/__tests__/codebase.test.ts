@@ -10,12 +10,13 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     existsSync: vi.fn(),
     mkdirSync: vi.fn(),
+    rmSync: vi.fn(),
   };
 });
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { cloneOrUpdate, buildCloneUrl, validatePathSegment } from '../codebase.js';
+import { cloneOrUpdate, cleanupTaskDir, buildCloneUrl, validatePathSegment } from '../codebase.js';
 
 describe('codebase', () => {
   beforeEach(() => {
@@ -205,6 +206,62 @@ describe('codebase', () => {
 
       const checkoutCall = vi.mocked(execFileSync).mock.calls[1];
       expect(checkoutCall[2]).toMatchObject({ cwd: expect.stringContaining('acme/widgets') });
+    });
+
+    it('uses task-specific subdirectory when taskId is provided', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = cloneOrUpdate('acme', 'widgets', 42, '/tmp/repos', null, 'task-abc-123');
+
+      expect(result.localPath).toBe('/tmp/repos/acme/widgets/task-abc-123');
+      expect(result.cloned).toBe(true);
+
+      // Should create task-specific dir
+      expect(fs.mkdirSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets/task-abc-123', {
+        recursive: true,
+      });
+    });
+
+    it('uses owner/repo path without taskId (backward compatible)', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = cloneOrUpdate('acme', 'widgets', 42, '/tmp/repos');
+
+      expect(result.localPath).toBe('/tmp/repos/acme/widgets');
+    });
+
+    it('isolates concurrent tasks with different taskIds', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result1 = cloneOrUpdate('acme', 'widgets', 10, '/tmp/repos', null, 'task-1');
+      const result2 = cloneOrUpdate('acme', 'widgets', 20, '/tmp/repos', null, 'task-2');
+
+      expect(result1.localPath).toBe('/tmp/repos/acme/widgets/task-1');
+      expect(result2.localPath).toBe('/tmp/repos/acme/widgets/task-2');
+      expect(result1.localPath).not.toBe(result2.localPath);
+    });
+  });
+
+  describe('cleanupTaskDir', () => {
+    it('removes the task directory', () => {
+      cleanupTaskDir('/tmp/repos/acme/widgets/task-123');
+
+      expect(fs.rmSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets/task-123', {
+        recursive: true,
+        force: true,
+      });
+    });
+
+    it('silently ignores errors', () => {
+      vi.mocked(fs.rmSync).mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
+
+      // Should not throw
+      expect(() => cleanupTaskDir('/tmp/repos/nonexistent')).not.toThrow();
     });
   });
 });
