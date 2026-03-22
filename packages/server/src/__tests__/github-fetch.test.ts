@@ -223,6 +223,33 @@ describe('githubFetch', () => {
       expect(fetchMock).toHaveBeenCalledTimes(4);
     });
 
+    it('applies jitter to retry delays', async () => {
+      vi.useRealTimers();
+
+      try {
+        const delays: number[] = [];
+        const origSetTimeout = globalThis.setTimeout;
+        vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler, ms?: number) => {
+          delays.push(ms ?? 0);
+          return origSetTimeout(cb, 0);
+        });
+
+        fetchMock
+          .mockResolvedValueOnce(new Response('error', { status: 500 }))
+          .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+
+        const res = await githubFetch('https://api.github.com/test');
+
+        expect(res.status).toBe(200);
+        expect(delays).toHaveLength(1);
+        // Base delay is 1000ms, with ±30% jitter → 700-1300
+        expect(delays[0]).toBeGreaterThanOrEqual(700);
+        expect(delays[0]).toBeLessThanOrEqual(1300);
+      } finally {
+        vi.useFakeTimers();
+      }
+    });
+
     it('respects Retry-After header (seconds)', async () => {
       fetchMock
         .mockResolvedValueOnce(

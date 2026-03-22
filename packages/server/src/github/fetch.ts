@@ -44,7 +44,7 @@ export async function githubFetch(
           const retryAfter = response.headers.get('Retry-After');
           const delay = retryAfter
             ? parseInt(retryAfter, 10) * 1000
-            : BASE_DELAY_MS * Math.pow(2, attempt);
+            : Math.round(BASE_DELAY_MS * Math.pow(2, attempt) * (0.7 + Math.random() * 0.6));
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -55,7 +55,8 @@ export async function githubFetch(
     } catch (err) {
       // Network errors are transient — retry
       if (attempt < MAX_RETRIES) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+        const baseDelay = BASE_DELAY_MS * Math.pow(2, attempt);
+        const delay = Math.round(baseDelay * (0.7 + Math.random() * 0.6));
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
