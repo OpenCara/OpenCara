@@ -197,6 +197,7 @@ export class FakeServer {
     prNumber?: number;
     reviewCount?: number;
     timeout?: string;
+    private?: boolean;
   }): Promise<string> {
     const config: ReviewConfig = {
       ...DEFAULT_REVIEW_CONFIG,
@@ -216,6 +217,7 @@ export class FakeServer {
           owner: opts?.owner ?? 'test-org',
           repo: opts?.repo ?? 'test-repo',
           pr_number: opts?.prNumber ?? 1,
+          ...(opts?.private !== undefined ? { private: opts.private } : {}),
           config,
         }),
       },

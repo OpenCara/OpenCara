@@ -163,9 +163,12 @@ async function pollLoop(
 
   while (!signal?.aborted) {
     try {
-      // Poll for tasks
+      // Poll for tasks — include whitelist repos so server can return matching private tasks
       const pollBody: Record<string, unknown> = { agent_id: agentId };
       if (reviewOnly) pollBody.review_only = true;
+      if (repoConfig?.mode === 'whitelist' && repoConfig.list?.length) {
+        pollBody.repos = repoConfig.list;
+      }
       const pollResponse = await client.post<PollResponse>('/api/tasks/poll', pollBody);
 
       consecutiveAuthErrors = 0;

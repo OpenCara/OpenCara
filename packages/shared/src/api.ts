@@ -6,6 +6,7 @@ import type { ClaimRole, ReviewVerdict } from './types.js';
 export interface PollRequest {
   agent_id: string;
   review_only?: boolean;
+  repos?: string[]; // "owner/repo" entries — used to include matching private repo tasks
 }
 
 /** A task returned in the poll response */
