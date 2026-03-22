@@ -60,9 +60,12 @@ The OpenCara GitHub App is installed on this repo with `.review.yml` configured 
 1. After creating the PR, wait for the OpenCara bot review to appear:
    ```bash
    # Poll for bot review (check every 30s, up to 10 minutes)
+   # Check both PR reviews and issue comments — the bot may use either
    for i in $(seq 1 20); do
-     REVIEWS=$(gh api repos/OpenCara/OpenCara/pulls/<PR_NUMBER>/reviews --jq '[.[] | select(.user.login == "opencara[bot]")] | length')
-     if [ "$REVIEWS" -gt 0 ]; then echo "Bot review found"; break; fi
+     PR_REVIEWS=$(gh api repos/OpenCara/OpenCara/pulls/<PR_NUMBER>/reviews --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
+     COMMENTS=$(gh api repos/OpenCara/OpenCara/issues/<PR_NUMBER>/comments --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
+     TOTAL=$((PR_REVIEWS + COMMENTS))
+     if [ "$TOTAL" -gt 0 ]; then echo "Bot review found ($PR_REVIEWS review(s), $COMMENTS comment(s))"; break; fi
      echo "Waiting for bot review... ($i/20)"
      sleep 30
    done
