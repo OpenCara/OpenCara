@@ -14,6 +14,7 @@ import {
   loadConfig,
   resolveCodebaseDir,
   resolveGithubToken as resolveConfigToken,
+  DEFAULT_MAX_CONSECUTIVE_ERRORS,
   type LocalAgentConfig,
 } from '../config.js';
 import { cloneOrUpdate } from '../codebase.js';
@@ -138,13 +139,15 @@ async function pollLoop(
   logger: Logger,
   options: {
     pollIntervalMs: number;
+    maxConsecutiveErrors: number;
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const { pollIntervalMs, routerRelay, reviewOnly, repoConfig, signal } = options;
+  const { pollIntervalMs, maxConsecutiveErrors, routerRelay, reviewOnly, repoConfig, signal } =
+    options;
   const { log, logError, logWarn } = logger;
 
   log(`Agent ${agentId} polling every ${pollIntervalMs / 1000}s...`);
@@ -209,6 +212,15 @@ async function pollLoop(
         consecutiveAuthErrors = 0;
         consecutiveErrors++;
         logError(`Poll error: ${(err as Error).message}`);
+      }
+
+      // Exit after too many consecutive errors
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        logError(
+          `Too many consecutive errors (${consecutiveErrors}/${maxConsecutiveErrors}). Shutting down.`,
+        );
+        process.exitCode = 1;
+        break;
       }
 
       // Exponential backoff on consecutive failures
@@ -666,6 +678,7 @@ export async function startAgent(
   consumptionDeps?: ConsumptionDeps,
   options?: {
     pollIntervalMs?: number;
+    maxConsecutiveErrors?: number;
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
@@ -712,6 +725,7 @@ export async function startAgent(
 
   await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, {
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+    maxConsecutiveErrors: options?.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
     routerRelay: options?.routerRelay,
     reviewOnly: options?.reviewOnly,
     repoConfig: options?.repoConfig,
@@ -772,6 +786,7 @@ export async function startAgentRouter(): Promise<void> {
       session,
     },
     {
+      maxConsecutiveErrors: config.maxConsecutiveErrors,
       routerRelay: router,
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,
@@ -863,6 +878,7 @@ function startAgentByIndex(
     { agentId, session },
     {
       pollIntervalMs,
+      maxConsecutiveErrors: config.maxConsecutiveErrors,
       routerRelay,
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,

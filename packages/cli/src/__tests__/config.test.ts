@@ -23,6 +23,7 @@ import {
   CONFIG_FILE,
   DEFAULT_PLATFORM_URL,
   DEFAULT_MAX_DIFF_SIZE_KB,
+  DEFAULT_MAX_CONSECUTIVE_ERRORS,
 } from '../config.js';
 
 describe('config', () => {
@@ -57,6 +58,7 @@ describe('config', () => {
 
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
+      expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
       expect(config.githubToken).toBeNull();
       expect(config.codebaseDir).toBeNull();
       expect(config.agentCommand).toBeNull();
@@ -78,6 +80,23 @@ describe('config', () => {
       const config = loadConfig();
 
       expect(config.maxDiffSizeKb).toBe(200);
+    });
+
+    it('parses max_consecutive_errors config field', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: 5\n');
+
+      const config = loadConfig();
+
+      expect(config.maxConsecutiveErrors).toBe(5);
+    });
+
+    it('returns default for non-number max_consecutive_errors', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: many\n');
+
+      const config = loadConfig();
+      expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
     });
 
     it('returns defaults for non-number max_diff_size_kb', () => {
@@ -170,6 +189,7 @@ describe('config', () => {
     const baseConfig = {
       platformUrl: 'https://api.dev',
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+      maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       githubToken: null as string | null,
       codebaseDir: null as string | null,
 
@@ -209,6 +229,20 @@ describe('config', () => {
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('max_diff_size_kb');
+    });
+
+    it('saves max_consecutive_errors when non-default', () => {
+      saveConfig({ ...baseConfig, maxConsecutiveErrors: 5 });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('max_consecutive_errors: 5');
+    });
+
+    it('does not save max_consecutive_errors when default', () => {
+      saveConfig(baseConfig);
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('max_consecutive_errors');
     });
 
     it('saves agent_command when present', () => {
@@ -282,6 +316,7 @@ describe('config', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,
@@ -297,6 +332,7 @@ describe('config', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,
@@ -329,6 +365,7 @@ agents:
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,
@@ -603,6 +640,7 @@ agents:
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,
@@ -651,6 +689,7 @@ agents:
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: 'ghp_xyz789',
         codebaseDir: null,
         agentCommand: null,
@@ -665,6 +704,7 @@ agents:
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,
@@ -757,6 +797,7 @@ anonymous_agents:
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: '~/.opencara/repos',
         agentCommand: null,
@@ -771,6 +812,7 @@ anonymous_agents:
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
         codebaseDir: null,
         agentCommand: null,

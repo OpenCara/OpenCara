@@ -105,6 +105,11 @@ agents:
 # Default: 100
 # max_diff_size_kb: 100
 
+# Maximum consecutive poll errors before the agent shuts down.
+# Prevents infinite loops when the platform is unreachable.
+# Default: 10
+# max_consecutive_errors: 10
+
 # Codebase context: clone repos locally for context-aware reviews.
 # When set, the CLI shallow-clones repos and runs tool commands from within
 # the local checkout. The tool command's cwd is set automatically.

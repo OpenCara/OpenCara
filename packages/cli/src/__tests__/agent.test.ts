@@ -46,6 +46,7 @@ describe('agent poll loop', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    process.exitCode = undefined;
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -635,5 +636,84 @@ describe('agent poll loop', () => {
     expect(diffFetchInit).toBeDefined();
     expect(diffFetchInit!.signal).toBeInstanceOf(AbortSignal);
     expect(diffFetchInit!.signal!.aborted).toBe(false);
+  });
+
+  it('exits after maxConsecutiveErrors threshold', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+        maxConsecutiveErrors: 3,
+      },
+    );
+
+    // Advance through 3 consecutive errors with backoff
+    // poll 1: error (consecutive=1), no extra backoff, sleep 100
+    await vi.advanceTimersByTimeAsync(100);
+    // poll 2: error (consecutive=2), backoff=200, extra 100, sleep 100
+    await vi.advanceTimersByTimeAsync(300);
+    // poll 3: error (consecutive=3) → exits
+    await vi.advanceTimersByTimeAsync(100);
+
+    await promise;
+
+    expect(console.error).toHaveBeenCalledWith('Too many consecutive errors (3/3). Shutting down.');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('resets consecutive error count on successful poll', async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      // Fail first 2, then succeed, then fail 2 more, then succeed forever
+      if (callCount <= 2 || (callCount >= 4 && callCount <= 5)) {
+        return Promise.reject(new Error('Network error'));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    void startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+        maxConsecutiveErrors: 3,
+      },
+    );
+
+    // Advance enough for 6 polls (errors reset on success, never hits 3 consecutive)
+    // poll 1: error (1), sleep 100
+    await vi.advanceTimersByTimeAsync(100);
+    // poll 2: error (2), backoff extra 100, sleep 100
+    await vi.advanceTimersByTimeAsync(300);
+    // poll 3: success (reset to 0), sleep 100
+    await vi.advanceTimersByTimeAsync(100);
+    // poll 4: error (1), sleep 100
+    await vi.advanceTimersByTimeAsync(100);
+    // poll 5: error (2), backoff extra 100, sleep 100
+    await vi.advanceTimersByTimeAsync(300);
+    // poll 6: success (reset to 0), sleep 100
+    await vi.advanceTimersByTimeAsync(100);
+
+    // Should still be running — never hit 3 consecutive
+    expect(console.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('Too many consecutive errors'),
+    );
   });
 });

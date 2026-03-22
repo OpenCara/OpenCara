@@ -19,6 +19,7 @@ export interface LocalAgentConfig {
 export interface CliConfig {
   platformUrl: string;
   maxDiffSizeKb: number;
+  maxConsecutiveErrors: number;
   githubToken: string | null;
   codebaseDir: string | null;
   agentCommand: string | null;
@@ -38,6 +39,7 @@ export function ensureConfigDir(): void {
 }
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
+export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
 
 const VALID_REPO_MODES: RepoFilterMode[] = ['all', 'own', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
@@ -125,6 +127,7 @@ export function loadConfig(): CliConfig {
   const defaults: CliConfig = {
     platformUrl: DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+    maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     githubToken: null,
     codebaseDir: null,
     agentCommand: null,
@@ -146,6 +149,10 @@ export function loadConfig(): CliConfig {
     platformUrl: typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL,
     maxDiffSizeKb:
       typeof data.max_diff_size_kb === 'number' ? data.max_diff_size_kb : DEFAULT_MAX_DIFF_SIZE_KB,
+    maxConsecutiveErrors:
+      typeof data.max_consecutive_errors === 'number'
+        ? data.max_consecutive_errors
+        : DEFAULT_MAX_CONSECUTIVE_ERRORS,
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
@@ -166,6 +173,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
+  }
+  if (config.maxConsecutiveErrors !== DEFAULT_MAX_CONSECUTIVE_ERRORS) {
+    data.max_consecutive_errors = config.maxConsecutiveErrors;
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;
