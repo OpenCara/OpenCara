@@ -416,4 +416,22 @@ describe('KVTaskStore', () => {
       expect(tasks[0].id).toBe('b');
     });
   });
+
+  describe('timeout check throttle', () => {
+    it('returns 0 when no timestamp set', async () => {
+      expect(await store.getTimeoutLastCheck()).toBe(0);
+    });
+
+    it('stores and retrieves timestamp', async () => {
+      const now = Date.now();
+      await store.setTimeoutLastCheck(now);
+      expect(await store.getTimeoutLastCheck()).toBe(now);
+    });
+
+    it('overwrites previous timestamp', async () => {
+      await store.setTimeoutLastCheck(1000);
+      await store.setTimeoutLastCheck(2000);
+      expect(await store.getTimeoutLastCheck()).toBe(2000);
+    });
+  });
 });

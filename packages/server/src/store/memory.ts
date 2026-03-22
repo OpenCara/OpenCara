@@ -84,10 +84,23 @@ export class MemoryTaskStore implements TaskStore {
     return this.agentLastSeen.get(agentId) ?? null;
   }
 
+  // Timeout check throttle
+
+  private timeoutLastCheck = 0;
+
+  async getTimeoutLastCheck(): Promise<number> {
+    return this.timeoutLastCheck;
+  }
+
+  async setTimeoutLastCheck(timestamp: number): Promise<void> {
+    this.timeoutLastCheck = timestamp;
+  }
+
   /** Clear all data. Test-only — not on the TaskStore interface. */
   reset(): void {
     this.tasks.clear();
     this.claims.clear();
     this.agentLastSeen.clear();
+    this.timeoutLastCheck = 0;
   }
 }

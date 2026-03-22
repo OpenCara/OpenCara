@@ -646,11 +646,8 @@ describe('Task Routes', () => {
       // Create expired task
       await store.createTask(makeTask({ id: 'task-delayed', timeout_at: Date.now() - 1000 }));
 
-      // Advance time past 30s threshold
-      vi.useFakeTimers();
-      vi.advanceTimersByTime(31_000);
-      resetTimeoutThrottle(); // In production, the in-memory timestamp would be stale; simulate by resetting
-      vi.useRealTimers();
+      // Simulate 31s passing by setting the stored timestamp to 31s ago
+      await store.setTimeoutLastCheck(Date.now() - 31_000);
 
       // Poll again — should now run checkTimeouts
       await request('POST', '/api/tasks/poll', { agent_id: 'agent-2' });
@@ -663,6 +660,16 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-delayed');
       // Task stays pending because GitHub posting fails, but checkTimeouts DID run
       expect(task).toBeDefined();
+    });
+
+    it('persists throttle timestamp in store, not module memory', async () => {
+      // Poll to trigger checkTimeouts — this should store the timestamp
+      await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+
+      // Verify the timestamp was stored in the store
+      const lastCheck = await store.getTimeoutLastCheck();
+      expect(lastCheck).toBeGreaterThan(0);
+      expect(lastCheck).toBeLessThanOrEqual(Date.now());
     });
   });
 

@@ -88,28 +88,34 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
 
 /**
  * Throttle timeout checks to avoid O(n) KV scans on every poll request.
- * In Workers, global state persists within an isolate but not across isolates.
- * Worst case: multiple isolates each check once per interval — still far better than every poll.
+ * The last-check timestamp is stored in KV (via TaskStore) so it survives
+ * isolate recycles and is shared across all isolates.
  */
-let lastTimeoutCheck = 0;
-const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
+export const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
 
-/** Exported for testing — reset the throttle state. */
+/**
+ * No-op — kept for backward compatibility with tests.
+ * Throttle state is now stored in TaskStore, so fresh store creation
+ * (or MemoryTaskStore.reset()) handles the reset.
+ * @deprecated Use a fresh TaskStore instance instead.
+ */
 export function resetTimeoutThrottle(): void {
-  lastTimeoutCheck = 0;
+  // no-op — throttle state is now in TaskStore, not module-level
 }
 
 async function maybeCheckTimeouts(store: TaskStore, env: Env): Promise<void> {
   const now = Date.now();
-  if (now - lastTimeoutCheck < TIMEOUT_CHECK_INTERVAL_MS) return;
-  lastTimeoutCheck = now;
+  const lastCheck = await store.getTimeoutLastCheck();
+  if (now - lastCheck < TIMEOUT_CHECK_INTERVAL_MS) return;
+  await store.setTimeoutLastCheck(now);
   await checkTimeouts(store, env);
 }
 
 /**
  * Check for timed-out tasks and handle them.
+ * Exported for use by the scheduled event handler (Cron Trigger).
  */
-async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
+export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
   const now = Date.now();
   const expired = await store.listTasks({
     status: ['pending', 'reviewing'],
