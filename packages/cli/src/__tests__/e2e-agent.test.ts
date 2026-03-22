@@ -365,35 +365,41 @@ describe('E2E Agent Scenarios', () => {
       // Wrap the fake server fetch to capture the result submission body
       let resultBody: Record<string, unknown> | null = null;
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        // Intercept the result submission — return success without hitting server
-        if (url.includes(`/api/tasks/${taskId}/result`)) {
-          resultBody = JSON.parse(init?.body as string);
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
-        }
-        // Everything else goes through the real fake server
-        return (originalFetch as typeof fetch)(input, init);
-      }) as typeof fetch;
+      try {
+        globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+          // Intercept the result submission — return success without hitting server
+          if (url.includes(`/api/tasks/${taskId}/result`)) {
+            if (typeof init?.body === 'string') {
+              resultBody = JSON.parse(init.body);
+            }
+            return new Response(JSON.stringify({ success: true }), { status: 200 });
+          }
+          // Everything else goes through the real fake server
+          return originalFetch(input, init);
+        }) as typeof fetch;
 
-      const agentPromise = startTestAgent('single-agent');
-      await advanceTime(2000);
+        const agentPromise = startTestAgent('single-agent');
+        await advanceTime(2000);
 
-      // Tool was called (review execution happened)
-      expect(mockedExecuteTool).toHaveBeenCalled();
+        // Tool was called (review execution happened)
+        expect(mockedExecuteTool).toHaveBeenCalled();
 
-      // Verify submission type is 'summary' (not 'review')
-      expect(resultBody).not.toBeNull();
-      expect(resultBody!.type).toBe('summary');
+        // Verify submission type is 'summary' (not 'review')
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.type).toBe('summary');
 
-      // No type mismatch error
-      expect(console.error).not.toHaveBeenCalledWith(
-        expect.stringContaining('does not match submission type'),
-      );
+        // No type mismatch error
+        expect(console.error).not.toHaveBeenCalledWith(
+          expect.stringContaining('does not match submission type'),
+        );
 
-      await server.store.updateTask(taskId, { status: 'completed' });
-      await stopAgent(agentPromise, server);
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });
