@@ -17,8 +17,6 @@ export interface RateLimitConfig {
   maxTokens: number;
   /** Tokens added per second (sustained rate). */
   refillRate: number;
-  /** Key extractor: returns the rate-limit key for a request, or null to skip. */
-  keyExtractor: (req: Request) => string | null;
 }
 
 interface TokenBucket {
@@ -26,9 +24,13 @@ interface TokenBucket {
   lastRefill: number;
 }
 
+/** Cleanup runs at most once per this interval (ms). */
+const CLEANUP_INTERVAL_MS = 60_000;
+
 export class RateLimiter {
   private readonly buckets = new Map<string, TokenBucket>();
   private readonly config: RateLimitConfig;
+  private lastCleanup = 0;
 
   constructor(config: RateLimitConfig) {
     this.config = config;
@@ -40,6 +42,13 @@ export class RateLimiter {
    */
   check(key: string): number {
     const now = Date.now();
+
+    // Periodic cleanup to prevent unbounded memory growth
+    if (now - this.lastCleanup > CLEANUP_INTERVAL_MS) {
+      this.lastCleanup = now;
+      this.cleanup();
+    }
+
     let bucket = this.buckets.get(key);
 
     if (!bucket) {
@@ -78,6 +87,7 @@ export class RateLimiter {
   /** Reset all state (for testing). */
   reset(): void {
     this.buckets.clear();
+    this.lastCleanup = 0;
   }
 }
 
@@ -85,21 +95,19 @@ export class RateLimiter {
  * Pre-configured rate limiters for the server.
  *
  * Agent rate limiter: keyed by agent_id from JSON body.
- *   - 12 tokens max (burst), refill 1/5s → ~1 request per 5 seconds sustained
+ *   - 60 tokens max (burst), refill 0.2/s → ~1 request per 5 seconds sustained
  *
- * Webhook rate limiter: keyed by client IP.
+ * Webhook rate limiter: keyed by client IP (CF-Connecting-IP).
  *   - 30 tokens max (burst), refill 2/s → ~2 requests per second sustained
  */
 export const agentRateLimiter = new RateLimiter({
   maxTokens: 60,
-  refillRate: 0.2, // 1 token per 5 seconds sustained
-  keyExtractor: () => null, // keyed externally by agent_id
+  refillRate: 0.2,
 });
 
 export const webhookRateLimiter = new RateLimiter({
   maxTokens: 30,
   refillRate: 2,
-  keyExtractor: () => null, // keyed externally by IP
 });
 
 /** Reset all rate limiters — for use in tests. */

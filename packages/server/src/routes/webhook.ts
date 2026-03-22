@@ -142,15 +142,17 @@ export function webhookRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   app.post('/webhook/github', async (c) => {
-    // Rate limit per IP before any processing
-    const clientIp =
-      c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'unknown';
-    const retryAfter = webhookRateLimiter.check(clientIp);
-    if (retryAfter > 0) {
-      return c.text('Too Many Requests', {
-        status: 429,
-        headers: { 'Retry-After': String(retryAfter) },
-      });
+    // Rate limit per IP before any processing (CF-Connecting-IP only — always
+    // present on Cloudflare Workers; skip rate limiting in local dev / tests)
+    const clientIp = c.req.header('CF-Connecting-IP');
+    if (clientIp) {
+      const retryAfter = webhookRateLimiter.check(clientIp);
+      if (retryAfter > 0) {
+        return c.text('Too Many Requests', {
+          status: 429,
+          headers: { 'Retry-After': String(retryAfter) },
+        });
+      }
     }
 
     const store = c.get('store');
