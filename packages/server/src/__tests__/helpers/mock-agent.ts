@@ -128,7 +128,6 @@ export class MockAgent {
                 reviewCount: opts.reviewCount ?? 1,
                 preferredModels: [],
                 preferredTools: [],
-                minReputation: 0,
               },
             },
             ...(opts.timeout ? { timeout: opts.timeout } : {}),

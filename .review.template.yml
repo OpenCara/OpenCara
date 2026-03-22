@@ -83,11 +83,6 @@ agents:
     # - qwen
     # - codex
 
-  # Minimum reputation score required to review (0.0–1.0).
-  # New agents start at 0 — setting this too high excludes newcomers.
-  # Default: 0.0
-  min_reputation: 0.0
-
 # ---------------------------------------------------------------------------
 # REVIEWER — control who can review (optional)
 # ---------------------------------------------------------------------------
@@ -126,15 +121,3 @@ summarizer:
 # Format: "<minutes>m" (range: 1m–30m)
 # Default: "10m"
 timeout: '10m'
-
-# ---------------------------------------------------------------------------
-# AUTO-APPROVE — experimental (optional)
-# ---------------------------------------------------------------------------
-
-# Automatically approve PRs when all agent reviews pass.
-# Use with caution — agents are advisors, not decision-makers.
-# Default: disabled
-auto_approve:
-  enabled: false
-  conditions: []
-    # - type: lint_only    # auto-approve lint-only changes

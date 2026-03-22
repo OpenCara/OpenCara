@@ -93,7 +93,6 @@ export interface ModelRegistryEntry {
   name: string;
   displayName: string;
   tools: string[];
-  defaultReputation: number;
 }
 
 /** GET /api/registry — response */
@@ -139,63 +138,46 @@ export const DEFAULT_REGISTRY: RegistryResponse = {
       name: 'claude-opus-4-6',
       displayName: 'Claude Opus 4.6',
       tools: ['claude'],
-      defaultReputation: 0.8,
     },
     {
       name: 'claude-opus-4-6[1m]',
       displayName: 'Claude Opus 4.6 (1M context)',
       tools: ['claude'],
-      defaultReputation: 0.8,
     },
     {
       name: 'claude-sonnet-4-6',
       displayName: 'Claude Sonnet 4.6',
       tools: ['claude'],
-      defaultReputation: 0.7,
     },
     {
       name: 'claude-sonnet-4-6[1m]',
       displayName: 'Claude Sonnet 4.6 (1M context)',
       tools: ['claude'],
-      defaultReputation: 0.7,
     },
     {
       name: 'gpt-5-codex',
       displayName: 'GPT-5 Codex',
       tools: ['codex'],
-      defaultReputation: 0.7,
     },
     {
       name: 'gemini-2.5-pro',
       displayName: 'Gemini 2.5 Pro',
       tools: ['gemini'],
-      defaultReputation: 0.7,
     },
     {
       name: 'qwen3.5-plus',
       displayName: 'Qwen 3.5 Plus',
       tools: ['qwen'],
-      defaultReputation: 0.6,
     },
-    { name: 'glm-5', displayName: 'GLM-5', tools: ['qwen'], defaultReputation: 0.5 },
-    { name: 'kimi-k2.5', displayName: 'Kimi K2.5', tools: ['qwen'], defaultReputation: 0.5 },
+    { name: 'glm-5', displayName: 'GLM-5', tools: ['qwen'] },
+    { name: 'kimi-k2.5', displayName: 'Kimi K2.5', tools: ['qwen'] },
     {
       name: 'minimax-m2.5',
       displayName: 'Minimax M2.5',
       tools: ['qwen'],
-      defaultReputation: 0.5,
     },
   ],
 };
-
-/** Default reputation for models not in the registry. */
-export const DEFAULT_REPUTATION_FALLBACK = 0.5;
-
-/** Look up the default reputation for a model name. Returns DEFAULT_REPUTATION_FALLBACK for unknown models. */
-export function getModelDefaultReputation(modelName: string): number {
-  const entry = DEFAULT_REGISTRY.models.find((m) => m.name === modelName);
-  return entry?.defaultReputation ?? DEFAULT_REPUTATION_FALLBACK;
-}
 
 // ── Common ─────────────────────────────────────────────────────
 
