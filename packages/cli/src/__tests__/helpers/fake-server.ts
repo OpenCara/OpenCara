@@ -1,5 +1,5 @@
 /**
- * FakeServer — wraps the real Hono server with MemoryTaskStore,
+ * FakeServer — wraps the real Hono server with MemoryDataStore,
  * intercepting globalThis.fetch to route CLI API calls through app.request().
  *
  * Handles three categories of fetch:
@@ -11,7 +11,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { vi } from 'vitest';
 import type { ReviewConfig, ReviewTask, TaskClaim } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
-import { MemoryTaskStore } from '../../../../server/src/store/memory.js';
+import { MemoryDataStore } from '../../../../server/src/store/memory.js';
 import { createTestApp } from '../../../../server/src/__tests__/helpers/test-server.js';
 import { resetTimeoutThrottle } from '../../../../server/src/routes/tasks.js';
 import { resetRateLimits } from '../../../../server/src/middleware/rate-limit.js';
@@ -43,7 +43,7 @@ function getTestPem(): string {
 }
 
 export class FakeServer {
-  store: MemoryTaskStore;
+  store: MemoryDataStore;
   env: Env;
   app: ReturnType<typeof createTestApp>;
   private originalFetch: typeof globalThis.fetch;
@@ -53,7 +53,7 @@ export class FakeServer {
   diffContent: string = CANNED_DIFF;
 
   constructor() {
-    this.store = new MemoryTaskStore();
+    this.store = new MemoryDataStore();
     this.env = {
       GITHUB_WEBHOOK_SECRET: 'test-secret',
       GITHUB_APP_ID: '12345',

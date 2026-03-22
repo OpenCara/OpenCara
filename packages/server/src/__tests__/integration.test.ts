@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import { generateKeyPairSync } from 'node:crypto';
 import type { ReviewTask } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
-import { MemoryTaskStore } from '../store/memory.js';
+import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
@@ -84,7 +84,7 @@ interface GitHubCall {
 // ── Test suite ─────────────────────────────────────────────────
 
 describe('Integration: full E2E flows', () => {
-  let store: MemoryTaskStore;
+  let store: MemoryDataStore;
   let app: ReturnType<typeof createApp>;
   let mockEnv: Env;
   let githubCalls: GitHubCall[];
@@ -143,7 +143,7 @@ describe('Integration: full E2E flows', () => {
   beforeEach(() => {
     resetTimeoutThrottle();
     resetRateLimits();
-    store = new MemoryTaskStore();
+    store = new MemoryDataStore();
     app = createApp(store);
     mockEnv = getMockEnv();
     githubCalls = [];
@@ -663,11 +663,11 @@ APPROVE`;
       expect(c4.claimed).toBe(false);
     });
 
-    // Note: MemoryTaskStore is synchronous, so Promise.all executes claims
+    // Note: MemoryDataStore is synchronous, so Promise.all executes claims
     // serially in the same microtask turn. These tests validate the locking
     // logic at the API layer but cannot reproduce true I/O-level races that
     // occur with Cloudflare KV's eventual consistency. The lock mechanism
-    // (summary-lock:{taskId} key) is the defense-in-depth for production.
+    // (lock:summary:{taskId} key) is the defense-in-depth for production.
     it('concurrent summary claims: only one agent wins (#273)', async () => {
       await store.createTask(makeTask({ id: 'task-concurrent-summary' }));
 

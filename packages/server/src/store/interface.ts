@@ -2,10 +2,10 @@ import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 
 /**
- * TaskStore — abstracted storage for tasks, claims, and agent heartbeats.
- * Implementations: MemoryTaskStore (dev/test), KVTaskStore (Workers KV).
+ * DataStore — abstracted storage for tasks, claims, locks, heartbeats, and meta.
+ * Implementations: MemoryDataStore (dev/test), KVDataStore (Workers KV), D1DataStore (future).
  */
-export interface TaskStore {
+export interface DataStore {
   // Tasks
   createTask(task: ReviewTask): Promise<void>;
   getTask(id: string): Promise<ReviewTask | null>;
@@ -13,26 +13,25 @@ export interface TaskStore {
   updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean>;
   deleteTask(id: string): Promise<void>;
 
-  // Claims
-  createClaim(claim: TaskClaim): Promise<void>;
+  // Claims — createClaim returns false if (task_id, agent_id) already exists
+  createClaim(claim: TaskClaim): Promise<boolean>;
   getClaim(claimId: string): Promise<TaskClaim | null>;
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 
-  // Agent last-seen (updated on each poll)
+  // Locks — atomic acquire-or-fail
+  acquireLock(key: string, holder: string): Promise<boolean>;
+  /** Check if the given holder holds the lock. */
+  checkLock(key: string, holder: string): Promise<boolean>;
+  /** Check if the lock is held by anyone. */
+  isLockHeld(key: string): Promise<boolean>;
+  releaseLock(key: string): Promise<void>;
+
+  // Agent heartbeats
   setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;
   getAgentLastSeen(agentId: string): Promise<number | null>;
 
-  // Summary lock (prevents duplicate summary claims under KV eventual consistency)
-
-  /** Acquire exclusive summary lock. Idempotent: returns true if same agent already holds it. */
-  acquireSummaryLock(taskId: string, agentId: string): Promise<boolean>;
-  /** Check if the given agent holds the summary lock. */
-  checkSummaryLock(taskId: string, agentId: string): Promise<boolean>;
-  /** Release the summary lock, allowing a new agent to claim the summary role. */
-  releaseSummaryLock(taskId: string): Promise<void>;
-
-  // Timeout check throttle (persisted across isolate recycles)
+  // Meta (timeout throttle, etc.)
   getTimeoutLastCheck(): Promise<number>;
   setTimeoutLastCheck(timestamp: number): Promise<void>;
 
@@ -40,3 +39,6 @@ export interface TaskStore {
   /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
   cleanupTerminalTasks(): Promise<number>;
 }
+
+/** @deprecated Use DataStore instead. Will be removed after D1 migration. */
+export type TaskStore = DataStore;

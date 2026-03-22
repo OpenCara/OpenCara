@@ -189,9 +189,9 @@ describe('CLI ↔ Server Integration', () => {
       // Pre-claim the slot
       await server.store.updateTask(taskId, {
         claimed_agents: ['other-agent'],
-        summary_claimed: true,
         status: 'reviewing',
       });
+      await server.store.acquireLock(`summary:${taskId}`, 'other-agent');
       await server.store.createClaim({
         id: `${taskId}:other-agent`,
         task_id: taskId,

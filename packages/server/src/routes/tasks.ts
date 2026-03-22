@@ -14,7 +14,7 @@ import type {
   ReviewTask,
 } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
-import type { TaskStore } from '../store/interface.js';
+import type { DataStore } from '../store/interface.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
 import { getInstallationToken } from '../github/app.js';
@@ -57,15 +57,19 @@ function isSummaryAvailableForAgent(task: ReviewTask, agentId: string): boolean 
 /**
  * Determine the available role for an agent on a task.
  * Uses task-level counters (not claim list queries) to avoid KV eventual consistency issues.
+ * The summaryClaimed parameter is resolved by the caller via store.checkLock().
  * Returns null if no role is available.
  */
-function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
+function availableRole(
+  task: ReviewTask,
+  agentId: string,
+  summaryClaimed: boolean,
+): ClaimRole | null {
   const claimedAgents = task.claimed_agents ?? [];
   if (claimedAgents.includes(agentId)) return null;
 
   const reviewClaims = task.review_claims ?? 0;
   const completedReviews = task.completed_reviews ?? 0;
-  const summaryClaimed = task.summary_claimed ?? false;
 
   if (task.review_count === 1) {
     if (!summaryClaimed) {
@@ -92,7 +96,7 @@ function availableRole(task: ReviewTask, agentId: string): ClaimRole | null {
 
 /**
  * Throttle timeout checks to avoid O(n) KV scans on every poll request.
- * The last-check timestamp is stored in KV (via TaskStore) so it survives
+ * The last-check timestamp is stored in KV (via DataStore) so it survives
  * isolate recycles. Note: the get-set sequence is not atomic, so concurrent
  * isolates may occasionally both pass the threshold — still far better than
  * checking on every poll.
@@ -101,15 +105,15 @@ export const TIMEOUT_CHECK_INTERVAL_MS = 30_000;
 
 /**
  * No-op — kept for backward compatibility with tests.
- * Throttle state is now stored in TaskStore, so fresh store creation
- * (or MemoryTaskStore.reset()) handles the reset.
- * @deprecated Use a fresh TaskStore instance instead.
+ * Throttle state is now stored in DataStore, so fresh store creation
+ * (or MemoryDataStore.reset()) handles the reset.
+ * @deprecated Use a fresh DataStore instance instead.
  */
 export function resetTimeoutThrottle(): void {
-  // no-op — throttle state is now in TaskStore, not module-level
+  // no-op — throttle state is now in DataStore, not module-level
 }
 
-async function maybeCheckTimeouts(store: TaskStore, env: Env): Promise<void> {
+async function maybeCheckTimeouts(store: DataStore, env: Env): Promise<void> {
   const now = Date.now();
   const lastCheck = await store.getTimeoutLastCheck();
   if (now - lastCheck < TIMEOUT_CHECK_INTERVAL_MS) return;
@@ -121,7 +125,7 @@ async function maybeCheckTimeouts(store: TaskStore, env: Env): Promise<void> {
  * Check for timed-out tasks and handle them.
  * Exported for use by the scheduled event handler (Cron Trigger).
  */
-export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
+export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
   const logger = createLogger();
   const now = Date.now();
   const expired = await store.listTasks({
@@ -179,7 +183,7 @@ export async function checkTimeouts(store: TaskStore, env: Env): Promise<void> {
       // Only mark timeout AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
       await store.updateTask(task.id, { status: 'timeout' });
-      await store.releaseSummaryLock(task.id);
+      await store.releaseLock(`summary:${task.id}`);
     } catch (err) {
       logger.error('Timeout post failed', {
         taskId: task.id,
@@ -207,7 +211,7 @@ export interface SummaryData {
  * the review.
  */
 async function postFinalReview(
-  store: TaskStore,
+  store: DataStore,
   env: Env,
   taskId: string,
   summaryAgentId: string,
@@ -265,7 +269,7 @@ async function postFinalReview(
     await postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.updateTask(taskId, { status: 'completed' });
-    await store.releaseSummaryLock(taskId);
+    await store.releaseLock(`summary:${taskId}`);
     logger.info('Review posted to GitHub', {
       taskId,
       owner: task.owner,
@@ -280,7 +284,7 @@ async function postFinalReview(
       error: err instanceof Error ? err.message : String(err),
     });
     await store.updateTask(taskId, { status: 'failed' });
-    await store.releaseSummaryLock(taskId);
+    await store.releaseLock(`summary:${taskId}`);
   }
 }
 
@@ -321,7 +325,14 @@ export function taskRoutes() {
         continue;
       }
 
-      const role = availableRole(task, agent_id);
+      // Derive summary claimed state from task counters (avoids O(n) KV lock reads).
+      // This is a best-effort poll filter — the claim endpoint uses acquireLock for
+      // the authoritative check.
+      const claimedCount = (task.claimed_agents ?? []).length;
+      const reviewClaims = task.review_claims ?? 0;
+      const summaryClaimed = claimedCount > reviewClaims;
+
+      const role = availableRole(task, agent_id, summaryClaimed);
       if (!role) continue;
       if (review_only && role === 'summary') continue;
 
@@ -380,7 +391,8 @@ export function taskRoutes() {
       );
     }
 
-    const actualRole = availableRole(task, agent_id);
+    const claimSummaryClaimed = await store.isLockHeld(`summary:${taskId}`);
+    const actualRole = availableRole(task, agent_id, claimSummaryClaimed);
 
     if (!actualRole || actualRole !== role) {
       return apiError(
@@ -394,7 +406,7 @@ export function taskRoutes() {
     // Acquire summary lock to prevent concurrent claims under KV eventual consistency.
     // Uses a dedicated KV key so only the first agent to write wins.
     if (role === 'summary') {
-      const lockAcquired = await store.acquireSummaryLock(taskId, agent_id);
+      const lockAcquired = await store.acquireLock(`summary:${taskId}`, agent_id);
       if (!lockAcquired) {
         logger.info('Rejecting duplicate summary claim — lock held by another agent', {
           taskId,
@@ -404,9 +416,9 @@ export function taskRoutes() {
       }
     }
 
-    // Create the claim
+    // Create the claim — returns false if (task_id, agent_id) already exists
     const claimId = `${taskId}:${agent_id}`;
-    await store.createClaim({
+    const claimCreated = await store.createClaim({
       id: claimId,
       task_id: taskId,
       agent_id,
@@ -416,6 +428,9 @@ export function taskRoutes() {
       tool,
       created_at: Date.now(),
     });
+    if (!claimCreated) {
+      return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
+    }
 
     // Update task counters atomically (avoids KV list consistency issues)
     const claimedAgents = task.claimed_agents ?? [];
@@ -428,8 +443,6 @@ export function taskRoutes() {
     };
     if (role === 'review') {
       taskUpdates.review_claims = (task.review_claims ?? 0) + 1;
-    } else {
-      taskUpdates.summary_claimed = true;
     }
     await store.updateTask(taskId, taskUpdates);
 
@@ -513,7 +526,7 @@ export function taskRoutes() {
       // Verify this agent holds the summary lock before posting to GitHub.
       // Under concurrent claims, multiple agents may have claimed summary,
       // but only the lock holder should post the review.
-      const holdsLock = await store.checkSummaryLock(taskId, agent_id);
+      const holdsLock = await store.checkLock(`summary:${taskId}`, agent_id);
       if (!holdsLock) {
         logger.info(
           'Accepting result but skipping GitHub post — agent does not hold summary lock',
@@ -594,8 +607,7 @@ export function taskRoutes() {
       if (claim.role === 'review') {
         updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
       } else if (claim.role === 'summary') {
-        updates.summary_claimed = false;
-        await store.releaseSummaryLock(taskId);
+        await store.releaseLock(`summary:${taskId}`);
       }
       await store.updateTask(taskId, updates);
     }
@@ -645,8 +657,7 @@ export function taskRoutes() {
       if (claim.role === 'review') {
         updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
       } else if (claim.role === 'summary') {
-        updates.summary_claimed = false;
-        await store.releaseSummaryLock(taskId);
+        await store.releaseLock(`summary:${taskId}`);
       }
       await store.updateTask(taskId, updates);
     }

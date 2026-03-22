@@ -235,7 +235,7 @@ describe('github/reviews.ts edge cases', () => {
 
 // ── store/kv.ts agent last-seen ──────────────────────────────
 
-describe('KVTaskStore agent last-seen', () => {
+describe('KVDataStore agent last-seen', () => {
   class MockKV {
     private data = new Map<string, { value: string; metadata?: unknown }>();
     putCalls: Array<{ key: string; value: string; options?: unknown }> = [];
@@ -265,9 +265,9 @@ describe('KVTaskStore agent last-seen', () => {
   }
 
   it('setAgentLastSeen stores timestamp and getAgentLastSeen retrieves it', async () => {
-    const { KVTaskStore } = await import('../store/kv.js');
+    const { KVDataStore } = await import('../store/kv.js');
     const kv = new MockKV();
-    const store = new KVTaskStore(kv as unknown as KVNamespace);
+    const store = new KVDataStore(kv as unknown as KVNamespace);
 
     await store.setAgentLastSeen('agent-1', 1234567890);
     const result = await store.getAgentLastSeen('agent-1');
@@ -275,27 +275,27 @@ describe('KVTaskStore agent last-seen', () => {
   });
 
   it('getAgentLastSeen returns null for unknown agent', async () => {
-    const { KVTaskStore } = await import('../store/kv.js');
+    const { KVDataStore } = await import('../store/kv.js');
     const kv = new MockKV();
-    const store = new KVTaskStore(kv as unknown as KVNamespace);
+    const store = new KVDataStore(kv as unknown as KVNamespace);
 
     const result = await store.getAgentLastSeen('unknown-agent');
     expect(result).toBeNull();
   });
 
   it('updateTask returns false for non-existent task', async () => {
-    const { KVTaskStore } = await import('../store/kv.js');
+    const { KVDataStore } = await import('../store/kv.js');
     const kv = new MockKV();
-    const store = new KVTaskStore(kv as unknown as KVNamespace);
+    const store = new KVDataStore(kv as unknown as KVNamespace);
 
     const result = await store.updateTask('nonexistent', { status: 'completed' });
     expect(result).toBe(false);
   });
 
   it('updateClaim does nothing for non-existent claim', async () => {
-    const { KVTaskStore } = await import('../store/kv.js');
+    const { KVDataStore } = await import('../store/kv.js');
     const kv = new MockKV();
-    const store = new KVTaskStore(kv as unknown as KVNamespace);
+    const store = new KVDataStore(kv as unknown as KVNamespace);
 
     await store.updateClaim('nonexistent:agent', { status: 'completed' });
     expect(kv.putCalls).toHaveLength(0);
@@ -307,8 +307,8 @@ describe('KVTaskStore agent last-seen', () => {
 describe('Server app edge cases', () => {
   it('returns 404 for unknown routes', async () => {
     const { createApp } = await import('../index.js');
-    const { MemoryTaskStore } = await import('../store/memory.js');
-    const store = new MemoryTaskStore();
+    const { MemoryDataStore } = await import('../store/memory.js');
+    const store = new MemoryDataStore();
     const app = createApp(store);
 
     const res = await app.request(
@@ -355,8 +355,8 @@ describe('webhook.ts edge cases', () => {
       TEST_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
     }
     const { createApp } = await import('../index.js');
-    const { MemoryTaskStore } = await import('../store/memory.js');
-    const store = new MemoryTaskStore();
+    const { MemoryDataStore } = await import('../store/memory.js');
+    const store = new MemoryDataStore();
     const app = createApp(store);
     const mockEnv = {
       GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,

@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
-import { MemoryTaskStore } from '../store/memory.js';
+import { MemoryDataStore } from '../store/memory.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import type { Env } from '../types.js';
@@ -36,7 +36,7 @@ function getMockEnv(): Env {
 }
 
 describe('E2E Scenarios', () => {
-  let store: MemoryTaskStore;
+  let store: MemoryDataStore;
   let app: ReturnType<typeof createTestApp>;
   let env: Env;
   let github: ReturnType<typeof createGitHubMock>;
@@ -85,7 +85,7 @@ describe('E2E Scenarios', () => {
   beforeEach(() => {
     resetTimeoutThrottle();
     resetRateLimits();
-    store = new MemoryTaskStore();
+    store = new MemoryDataStore();
     app = createTestApp(store);
     env = getMockEnv();
     github = createGitHubMock();
@@ -339,8 +339,8 @@ describe('E2E Scenarios', () => {
       await a1.claim(taskId, 'summary');
       await a1.reportError(taskId, 'OOM');
 
-      const task = await store.getTask(taskId);
-      expect(task?.summary_claimed).toBe(false);
+      // Lock should be released after error
+      expect(await store.isLockHeld(`summary:${taskId}`)).toBe(false);
 
       const tasks = await a2.poll();
       expect(tasks).toHaveLength(1);
@@ -389,7 +389,7 @@ describe('E2E Scenarios', () => {
       expect(c4.claimed).toBe(false);
     });
 
-    it('duplicate summary claim rejected even with stale task-level flag (#221)', async () => {
+    it('duplicate summary claim rejected even with stale task counters (#221)', async () => {
       const taskId = await injectPR();
       const a1 = agent('synth-1');
       const a2 = agent('synth-2');
@@ -398,11 +398,12 @@ describe('E2E Scenarios', () => {
       const c1 = await a1.claim(taskId, 'summary');
       expect(c1.claimed).toBe(true);
 
-      // Simulate KV stale read: reset task-level summary_claimed flag
+      // Simulate KV stale read: reset claimed_agents
       // (mimics what happens when a concurrent read returns stale data)
-      await store.updateTask(taskId, { summary_claimed: false, claimed_agents: [] });
+      // Lock is still held by synth-1
+      await store.updateTask(taskId, { claimed_agents: [] });
 
-      // Agent 2 tries to claim — claim-level dedup should catch it
+      // Agent 2 tries to claim — lock prevents it
       const c2 = await a2.claim(taskId, 'summary');
       expect(c2.claimed).toBe(false);
     });
@@ -412,7 +413,7 @@ describe('E2E Scenarios', () => {
 
       // Manually create two summary claims with agent-a holding the lock.
       // Verifies that only the lock holder's result gets posted to GitHub.
-      await store.acquireSummaryLock(taskId, 'synth-a');
+      await store.acquireLock(`summary:${taskId}`, 'synth-a');
       await store.createClaim({
         id: `${taskId}:synth-a`,
         task_id: taskId,
@@ -430,7 +431,6 @@ describe('E2E Scenarios', () => {
         created_at: Date.now(),
       });
       await store.updateTask(taskId, {
-        summary_claimed: true,
         claimed_agents: ['synth-a', 'synth-b'],
         status: 'reviewing',
       });
@@ -468,7 +468,7 @@ describe('E2E Scenarios', () => {
       expect(c2.claimed).toBe(false);
     });
 
-    // Note: MemoryTaskStore is synchronous, so Promise.all executes claims
+    // Note: MemoryDataStore is synchronous, so Promise.all executes claims
     // serially in the same microtask turn. These tests validate the locking
     // logic at the API layer but cannot reproduce true I/O-level races that
     // occur with Cloudflare KV's eventual consistency.

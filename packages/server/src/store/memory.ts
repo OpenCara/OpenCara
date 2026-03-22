@@ -1,18 +1,18 @@
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
-import type { TaskStore } from './interface.js';
+import type { DataStore } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './kv.js';
 
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
 
 /**
- * In-memory TaskStore for dev/testing. No mocks needed in tests.
+ * In-memory DataStore for dev/testing. No mocks needed in tests.
  */
-export class MemoryTaskStore implements TaskStore {
+export class MemoryDataStore implements DataStore {
   private tasks = new Map<string, ReviewTask>();
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
-  private summaryLocks = new Map<string, string>();
+  private locks = new Map<string, string>();
   private readonly ttlMs: number;
 
   constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
@@ -53,7 +53,8 @@ export class MemoryTaskStore implements TaskStore {
 
   async deleteTask(id: string): Promise<void> {
     this.tasks.delete(id);
-    this.summaryLocks.delete(id);
+    // Delete the summary lock for this task (exact key match to avoid substring collisions)
+    this.locks.delete(`summary:${id}`);
     // Also delete associated claims
     for (const [claimId, claim] of this.claims) {
       if (claim.task_id === id) {
@@ -62,10 +63,22 @@ export class MemoryTaskStore implements TaskStore {
     }
   }
 
-  // Claims
+  // Claims — returns false if (task_id, agent_id) already exists
 
-  async createClaim(claim: TaskClaim): Promise<void> {
+  async createClaim(claim: TaskClaim): Promise<boolean> {
+    // Dedup check: if an active claim with the same (task_id, agent_id) exists, reject.
+    // Terminal claims (rejected, error) are overwritten to allow re-claiming after rejection.
+    for (const [id, existing] of this.claims) {
+      if (existing.task_id === claim.task_id && existing.agent_id === claim.agent_id) {
+        if (existing.status === 'pending' || existing.status === 'completed') {
+          return false;
+        }
+        // Remove the terminal claim so re-claim can proceed
+        this.claims.delete(id);
+      }
+    }
     this.claims.set(claim.id, { ...claim });
+    return true;
   }
 
   async getClaim(claimId: string): Promise<TaskClaim | null> {
@@ -84,6 +97,29 @@ export class MemoryTaskStore implements TaskStore {
     }
   }
 
+  // Locks — atomic acquire-or-fail
+
+  async acquireLock(key: string, holder: string): Promise<boolean> {
+    const existing = this.locks.get(key);
+    if (existing) {
+      return existing === holder; // Idempotent for same holder
+    }
+    this.locks.set(key, holder);
+    return true;
+  }
+
+  async checkLock(key: string, holder: string): Promise<boolean> {
+    return this.locks.get(key) === holder;
+  }
+
+  async isLockHeld(key: string): Promise<boolean> {
+    return this.locks.has(key);
+  }
+
+  async releaseLock(key: string): Promise<void> {
+    this.locks.delete(key);
+  }
+
   // Agent last-seen
 
   async setAgentLastSeen(agentId: string, timestamp: number): Promise<void> {
@@ -92,25 +128,6 @@ export class MemoryTaskStore implements TaskStore {
 
   async getAgentLastSeen(agentId: string): Promise<number | null> {
     return this.agentLastSeen.get(agentId) ?? null;
-  }
-
-  // Summary lock
-
-  async acquireSummaryLock(taskId: string, agentId: string): Promise<boolean> {
-    const existing = this.summaryLocks.get(taskId);
-    if (existing) {
-      return existing === agentId;
-    }
-    this.summaryLocks.set(taskId, agentId);
-    return true;
-  }
-
-  async checkSummaryLock(taskId: string, agentId: string): Promise<boolean> {
-    return this.summaryLocks.get(taskId) === agentId;
-  }
-
-  async releaseSummaryLock(taskId: string): Promise<void> {
-    this.summaryLocks.delete(taskId);
   }
 
   // Timeout check throttle
@@ -133,7 +150,7 @@ export class MemoryTaskStore implements TaskStore {
     for (const [id, task] of this.tasks) {
       if (TERMINAL_STATUSES.includes(task.status) && task.created_at <= cutoff) {
         this.tasks.delete(id);
-        this.summaryLocks.delete(id);
+        this.locks.delete(`summary:${id}`);
         for (const [claimId, claim] of this.claims) {
           if (claim.task_id === id) {
             this.claims.delete(claimId);
@@ -145,12 +162,17 @@ export class MemoryTaskStore implements TaskStore {
     return deleted;
   }
 
-  /** Clear all data. Test-only — not on the TaskStore interface. */
+  /** Clear all data. Test-only — not on the DataStore interface. */
   reset(): void {
     this.tasks.clear();
     this.claims.clear();
     this.agentLastSeen.clear();
-    this.summaryLocks.clear();
+    this.locks.clear();
     this.timeoutLastCheck = 0;
   }
 }
+
+/** @deprecated Use MemoryDataStore instead. Will be removed after D1 migration. */
+export const MemoryTaskStore = MemoryDataStore;
+/** @deprecated Use MemoryDataStore instead. */
+export type MemoryTaskStore = MemoryDataStore;

@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { ReviewConfig } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
-import { MemoryTaskStore } from '../store/memory.js';
+import { MemoryDataStore } from '../store/memory.js';
 import { createTaskForPR } from './webhook.js';
 import { resetTimeoutThrottle } from './tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
@@ -74,7 +74,7 @@ export function testRoutes() {
    */
   app.post('/test/reset', async (c) => {
     const store = c.get('store');
-    if (store instanceof MemoryTaskStore) {
+    if (store instanceof MemoryDataStore) {
       store.reset();
     }
     resetTimeoutThrottle();
