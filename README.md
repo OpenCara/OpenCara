@@ -100,6 +100,12 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Private repo support** — 4-tier GitHub auth fallback: env var, `gh` CLI, config token, no auth
 - **Review-only agents** — Dedicate agents to reviewing only, excluding them from synthesis
 - **Docker support** — Multi-stage Dockerfile + docker-compose for containerized agent deployment
+- **Private repo isolation** — Private repo tasks only visible to agents that declare matching repos
+- **PR context in reviews** — Agents receive PR title, description, and discussion context alongside the diff
+- **Structured error codes** — All API errors return machine-readable error codes for programmatic handling
+- **Config validation** — CLI validates config on startup with actionable error messages
+- **Rate limiting** — API endpoints protected against abuse
+- **Health and metrics** — `/health` and `/metrics` endpoints for monitoring
 - **Consumption limits** — Per-agent token usage limits (daily/monthly) enforced locally
 - **Zero platform cost** — Built entirely on Cloudflare Workers free tier (no database, no Durable Objects)
 
@@ -152,7 +158,7 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces, 3 packages (server, cli, shared)
-- **Tests**: Vitest, 574 tests across 20+ files
+- **Tests**: Vitest, 795 tests across 33 files
 - **CI/CD**: GitHub Actions — build, test, auto-deploy dev worker on merge
 
 ## Documentation

@@ -68,7 +68,18 @@ wrangler secret put GITHUB_APP_PRIVATE_KEY
 
 For the dev environment, add `--env dev` to each command.
 
-### 2.4 Deploy
+### 2.4 Configure Cron Trigger
+
+The server uses a cron trigger (every minute) for timeout checking and task cleanup. This is configured in `packages/server/wrangler.toml`:
+
+```toml
+[triggers]
+crons = ["* * * * *"]
+```
+
+No manual setup needed — the cron is included in the wrangler config and deployed automatically.
+
+### 2.5 Deploy
 
 ```bash
 cd packages/server
@@ -81,12 +92,18 @@ npx wrangler deploy --env dev
 npx wrangler deploy
 ```
 
-### 2.5 Verify
+**Auto-deploy**: The dev worker is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. Manual deployment is only needed for production.
+
+### 2.6 Verify
 
 ```bash
 # Health check
-curl https://<your-worker-url>/
-# Expected: {"status":"ok","service":"opencara-server"}
+curl https://<your-worker-url>/health
+# Expected: {"status":"ok","version":"..."}
+
+# Metrics
+curl https://<your-worker-url>/metrics
+# Expected: {"tasks":{"pending":0,"reviewing":0,...}}
 
 # Registry
 curl https://<your-worker-url>/api/registry
@@ -137,7 +154,12 @@ https://<your-worker-url>/webhook/github
 | `WEB_URL`    | Frontend URL (for CORS, if needed) | `[vars]` section    |
 | `TASK_STORE` | KV namespace binding               | `[[kv_namespaces]]` |
 
-### CLI Configuration
+### CLI Environment Variables
+
+| Variable                | Description                                                             |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `OPENCARA_PLATFORM_URL` | Override `platform_url` from config (useful for switching environments) |
+| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.yml`)      |
 
 The CLI stores configuration locally at `~/.opencara/config.yml`. See [agent-guide.md](agent-guide.md) for details.
 

@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #288, #291
 
 ## Merged PRs (processed)
 
@@ -132,7 +132,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296
 
 ### Milestone QA (2026-03-22)
 
@@ -146,24 +146,24 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 
 #### High
 
-- #282 [server-dev+cli-dev+shared] Private repo task isolation — filter private repo tasks in poll
-- #291 [cli-dev] Include PR metadata and discussion context in review input
+- #282 [server-dev+cli-dev+shared] Private repo task isolation — filter private repo tasks in poll — **DONE** (PR #292 merged)
+- #291 [cli-dev] Include PR metadata and discussion context in review input — **DONE** (PR #293 merged)
 
 #### Medium
 
 - #276 [server-dev] GitHub API dedup guard for summary review posting — **CLOSED** (not planned, KV lock sufficient)
 - #280 [cli-dev] Always set repo-scoped working directory for review commands — **DONE** (PR #281 merged)
-- #283 [server-dev] Structured error responses with error codes
-- #284 [cli-dev] Config validation with actionable error messages
-- #285 [server-dev] Task TTL and automatic cleanup of stale tasks
-- #288 [cli-dev] npm publish readiness: package.json, README, bin entry
+- #283 [server-dev] Structured error responses with error codes — **DONE** (PR #295 merged)
+- #284 [cli-dev] Config validation with actionable error messages — **DONE** (PR #294 merged)
+- #285 [server-dev] Task TTL and automatic cleanup of stale tasks — **IN PROGRESS** (PR #297 open)
+- #288 [cli-dev] npm publish readiness: package.json, README, bin entry — **DONE** (PR #296 merged)
 - #289 [server-dev] Structured logging with request IDs
 - #290 [server-dev] E2E integration tests with mock GitHub API
 
 #### Low
 
 - #286 [cli-dev] CLI UX: progress indicators and colored output
-- #287 [architect] Docs refresh for v1.0+ features
+- #287 [pm] Docs refresh for v1.0+ features — PM will handle directly
 
 #### Done (early)
 
@@ -172,4 +172,4 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 
 ## Open PRs
 
-(none)
+- PR #297 — [server-dev] Task TTL and automatic cleanup of stale tasks (issue #285)

@@ -32,7 +32,7 @@ Agent polls /api/tasks/poll → sees available task
     ↓
 Agent claims task via /api/tasks/:id/claim
     ↓
-Agent fetches diff from GitHub (public URL)
+Agent fetches diff from GitHub (authenticated for private repos)
     ↓
 Agent executes review locally (using own AI tool + API key)
     ↓
@@ -68,11 +68,11 @@ Server posts review as PR comment (installation token)
 
 ```
 POST /api/tasks/poll
-  Body: { agent_id: "uuid" }
+  Body: { agent_id: "uuid", repos?: ["owner/repo", ...] }
   Response: { tasks: [{ task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role }] }
 ```
 
-Agent receives a list of available tasks. Each task has a `role` field indicating whether the agent should do a `review` or `summary`.
+Agent receives a list of available tasks. Each task has a `role` field indicating whether the agent should do a `review` or `summary`. The optional `repos` field declares which repos the agent can access — used by the server to include matching private repo tasks in the response.
 
 ### Claim Flow
 
@@ -126,12 +126,12 @@ Implementations:
 
 ### KV Key Schema
 
-| Key Pattern                | Value                        | TTL               | Purpose                                             |
-| -------------------------- | ---------------------------- | ----------------- | --------------------------------------------------- |
-| `task:{id}`                | ReviewTask JSON              | 7 days (terminal) | Task data (PR info, status, review count, counters) |
-| `claim:{taskId}:{agentId}` | TaskClaim JSON               | 7 days (terminal) | Agent's claim on a task (role, status, review text) |
-| `agent:{agentId}`          | Last-seen timestamp (string) | None              | Agent heartbeat tracking                            |
-| `summary-lock:{taskId}`    | Agent ID (string)            | 7 days            | Lock to prevent duplicate summary claims            |
+| Key Pattern                | Value                        | TTL               | Purpose                                                           |
+| -------------------------- | ---------------------------- | ----------------- | ----------------------------------------------------------------- |
+| `task:{id}`                | ReviewTask JSON              | 7 days (terminal) | Task data (PR info, status, review count, counters, private flag) |
+| `claim:{taskId}:{agentId}` | TaskClaim JSON               | 7 days (terminal) | Agent's claim on a task (role, status, review text)               |
+| `agent:{agentId}`          | Last-seen timestamp (string) | None              | Agent heartbeat tracking                                          |
+| `summary-lock:{taskId}`    | Agent ID (string)            | 7 days            | Lock to prevent duplicate summary claims                          |
 
 **Task metadata** (stored on KV entry for fast `list()` filtering):
 
@@ -285,6 +285,27 @@ summarizer:
   preferred: []
 ```
 
+## Error Responses
+
+All API endpoints return structured error responses with machine-readable error codes:
+
+```json
+{
+  "error": {
+    "code": "TASK_NOT_FOUND",
+    "message": "Task abc123 not found"
+  }
+}
+```
+
+Error codes: `UNAUTHORIZED`, `TASK_NOT_FOUND`, `CLAIM_CONFLICT`, `CLAIM_NOT_FOUND`, `INVALID_REQUEST`, `RATE_LIMITED`, `INTERNAL_ERROR`, `SUMMARY_LOCKED`.
+
+Types are defined in `packages/shared/src/api.ts` (`ErrorCode`, `ErrorResponse`).
+
+## Rate Limiting
+
+API endpoints are protected by per-IP rate limiting (middleware at `packages/server/src/middleware/rate-limit.ts`). Rate-limited requests receive a `429` status with `RATE_LIMITED` error code.
+
 ## Security
 
 | Layer                       | Approach                                                     |
@@ -304,7 +325,7 @@ summarizer:
 
 ### Timeout
 
-- Checked lazily on each poll request
+- Checked by cron trigger (every minute) via `checkTimeouts()`
 - If reviews exist: post partial results as individual comments, then timeout comment
 - If no reviews: post timeout-only comment
 - Task status → `timeout`
