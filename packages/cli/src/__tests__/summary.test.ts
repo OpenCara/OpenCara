@@ -68,6 +68,28 @@ describe('buildSummaryUserMessage', () => {
     expect(message).toContain('Review');
     expect(message).toContain('Compact reviews from other agents:');
   });
+
+  it('includes contextBlock between prompt and diff when provided', () => {
+    const message = buildSummaryUserMessage(
+      'Check for bugs',
+      sampleReviews,
+      'diff content',
+      '## PR Context\n**Title**: Fix',
+    );
+    expect(message).toContain('## PR Context');
+    expect(message).toContain('**Title**: Fix');
+    // Context should be between prompt and diff
+    const promptIndex = message.indexOf('Check for bugs');
+    const contextIndex = message.indexOf('## PR Context');
+    const diffIndex = message.indexOf('diff content');
+    expect(contextIndex).toBeGreaterThan(promptIndex);
+    expect(diffIndex).toBeGreaterThan(contextIndex);
+  });
+
+  it('omits contextBlock when not provided', () => {
+    const without = buildSummaryUserMessage('Review', sampleReviews, 'diff');
+    expect(without).not.toContain('## PR Context');
+  });
 });
 
 describe('calculateInputSize', () => {
@@ -91,6 +113,13 @@ describe('calculateInputSize', () => {
   it('returns prompt + diff size for empty reviews', () => {
     const size = calculateInputSize('my prompt', [], 'diff');
     expect(size).toBe(Buffer.byteLength('my prompt', 'utf-8') + Buffer.byteLength('diff', 'utf-8'));
+  });
+
+  it('includes contextBlock size when provided', () => {
+    const ctx = '## PR Context\n**Title**: Fix';
+    const size = calculateInputSize('prompt', [], 'diff', ctx);
+    const sizeWithout = calculateInputSize('prompt', [], 'diff');
+    expect(size).toBe(sizeWithout + Buffer.byteLength(ctx, 'utf-8'));
   });
 
   it('handles multi-byte characters', () => {

@@ -35,6 +35,7 @@ import {
   type SessionStats,
 } from '../consumption.js';
 import { sanitizeTokens } from '../sanitize.js';
+import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 
 export interface ConsumptionDeps {
   agentId: string;
@@ -358,6 +359,23 @@ async function handleTask(
     }
   }
 
+  // Fetch PR context (metadata, comments, reviews) — non-blocking on failure
+  let contextBlock: string | undefined;
+  try {
+    const prContext = await fetchPRContext(owner, repo, pr_number, {
+      githubToken: reviewDeps.githubToken,
+      signal,
+    });
+    if (hasContent(prContext)) {
+      contextBlock = formatPRContext(prContext, taskReviewDeps.codebaseDir);
+      log('  PR context fetched');
+    }
+  } catch (err) {
+    logWarn(
+      `  Warning: failed to fetch PR context: ${(err as Error).message}. Continuing without.`,
+    );
+  }
+
   // Execute review or summary
   try {
     if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
@@ -377,6 +395,7 @@ async function handleTask(
         logger,
         routerRelay,
         signal,
+        contextBlock,
       );
     } else {
       await executeReviewTask(
@@ -394,6 +413,7 @@ async function handleTask(
         logger,
         routerRelay,
         signal,
+        contextBlock,
       );
     }
   } catch (err) {
@@ -480,6 +500,7 @@ async function executeReviewTask(
   logger: Logger,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
+  contextBlock?: string,
 ): Promise<void> {
   let reviewText: string;
   let verdict: ReviewVerdict;
@@ -494,6 +515,7 @@ async function executeReviewTask(
       reviewMode: 'full',
       prompt,
       diffContent,
+      contextBlock,
     });
     const response = await routerRelay.sendPrompt(
       'review_request',
@@ -518,6 +540,7 @@ async function executeReviewTask(
         prNumber,
         timeout: timeoutSeconds,
         reviewMode: 'full',
+        contextBlock,
       },
       reviewDeps,
     );
@@ -564,6 +587,7 @@ async function executeSummaryTask(
   logger: Logger,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
+  contextBlock?: string,
 ): Promise<void> {
   if (reviews.length === 0) {
     // Single-agent mode (review_count=1): this IS the review, run it as a regular
@@ -580,6 +604,7 @@ async function executeSummaryTask(
         reviewMode: 'full',
         prompt,
         diffContent,
+        contextBlock,
       });
       const response = await routerRelay.sendPrompt(
         'review_request',
@@ -603,6 +628,7 @@ async function executeSummaryTask(
           prNumber,
           timeout: timeoutSeconds,
           reviewMode: 'full',
+          contextBlock,
         },
         reviewDeps,
       );
@@ -651,6 +677,7 @@ async function executeSummaryTask(
       prompt,
       reviews: summaryReviews,
       diffContent,
+      contextBlock,
     });
     const response = await routerRelay.sendPrompt(
       'summary_request',
@@ -672,6 +699,7 @@ async function executeSummaryTask(
         prNumber,
         timeout: timeoutSeconds,
         diffContent,
+        contextBlock,
       },
       reviewDeps,
     );

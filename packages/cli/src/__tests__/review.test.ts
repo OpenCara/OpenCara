@@ -25,6 +25,31 @@ describe('buildUserMessage', () => {
     expect(message).toContain('diff content here');
     expect(message).toContain('---');
   });
+
+  it('includes contextBlock between prompt and diff when provided', () => {
+    const message = buildUserMessage(
+      'Review this PR',
+      'diff content',
+      '## PR Context\n**Title**: Fix',
+    );
+    expect(message).toContain('Review this PR');
+    expect(message).toContain('## PR Context');
+    expect(message).toContain('**Title**: Fix');
+    expect(message).toContain('diff content');
+    // Context should be between prompt and diff
+    const promptIndex = message.indexOf('Review this PR');
+    const contextIndex = message.indexOf('## PR Context');
+    const diffIndex = message.indexOf('diff content');
+    expect(contextIndex).toBeGreaterThan(promptIndex);
+    expect(diffIndex).toBeGreaterThan(contextIndex);
+  });
+
+  it('omits contextBlock when not provided', () => {
+    const withContext = buildUserMessage('prompt', 'diff', '## PR Context');
+    const without = buildUserMessage('prompt', 'diff');
+    expect(withContext).toContain('## PR Context');
+    expect(without).not.toContain('## PR Context');
+  });
 });
 
 describe('extractVerdict', () => {
@@ -254,6 +279,25 @@ describe('executeReview', () => {
 
     const cwd = mockRunTool.mock.calls[0][5];
     expect(cwd).toBe('/tmp/repos/acme/widgets');
+  });
+
+  it('includes contextBlock in prompt when provided', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: APPROVE\nOK',
+      stderr: '',
+      tokensUsed: 0,
+      tokensParsed: false,
+    });
+
+    await executeReview(
+      { ...defaultRequest, contextBlock: '## PR Context\n**Title**: Fix race condition' },
+      defaultDeps,
+      mockRunTool,
+    );
+
+    const prompt = mockRunTool.mock.calls[0][1];
+    expect(prompt).toContain('## PR Context');
+    expect(prompt).toContain('**Title**: Fix race condition');
   });
 
   it('does not pass cwd or vars when codebaseDir is not set', async () => {

@@ -12,6 +12,7 @@ export interface ReviewRequest {
   prNumber: number;
   timeout: number;
   reviewMode: ReviewMode;
+  contextBlock?: string;
 }
 
 export interface ReviewResponse {
@@ -64,8 +65,17 @@ export function buildSystemPrompt(owner: string, repo: string, mode: ReviewMode 
   return template.replace('{owner}', owner).replace('{repo}', repo);
 }
 
-export function buildUserMessage(prompt: string, diffContent: string): string {
-  return `${prompt}\n\n---\n\n${diffContent}`;
+export function buildUserMessage(
+  prompt: string,
+  diffContent: string,
+  contextBlock?: string,
+): string {
+  const parts = [prompt];
+  if (contextBlock) {
+    parts.push(contextBlock);
+  }
+  parts.push(diffContent);
+  return parts.join('\n\n---\n\n');
 }
 
 // New format: ## Verdict section at end of markdown
@@ -140,7 +150,7 @@ export async function executeReview(
 
   try {
     const systemPrompt = buildSystemPrompt(req.owner, req.repo, req.reviewMode);
-    const userMessage = buildUserMessage(req.prompt, req.diffContent);
+    const userMessage = buildUserMessage(req.prompt, req.diffContent, req.contextBlock);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
     const result = await runTool(
