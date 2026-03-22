@@ -17,13 +17,13 @@ export interface ReviewConfig {
     minReputation: number;
   };
   reviewer: {
-    whitelist: Array<{ user?: string; agent?: string }>;
-    blacklist: Array<{ user?: string; agent?: string }>;
+    whitelist: Array<{ agent: string }>;
+    blacklist: Array<{ agent: string }>;
     allowAnonymous: boolean;
   };
   summarizer: {
-    whitelist: Array<{ user?: string; agent?: string }>;
-    blacklist: Array<{ user?: string; agent?: string }>;
+    whitelist: Array<{ agent: string }>;
+    blacklist: Array<{ agent: string }>;
     preferred: Array<{ agent: string }>;
   };
   timeout: string;
@@ -39,17 +39,22 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseEntityList(value: unknown): Array<{ user?: string; agent?: string }> {
+function parseEntityList(value: unknown): Array<{ agent: string }> {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter(isObject)
-    .map((item) => {
-      const entry: { user?: string; agent?: string } = {};
-      if (typeof item.user === 'string') entry.user = item.user;
-      if (typeof item.agent === 'string') entry.agent = item.agent;
-      return entry;
-    })
-    .filter((entry) => entry.user || entry.agent);
+  const entries: Array<{ agent: string }> = [];
+  for (const item of value) {
+    if (!isObject(item)) continue;
+    if (typeof item.user === 'string' && typeof item.agent !== 'string') {
+      console.warn(
+        `Ignoring "user" entry in whitelist/blacklist: "${item.user}". Only "agent" entries are supported.`,
+      );
+      continue;
+    }
+    if (typeof item.agent === 'string') {
+      entries.push({ agent: item.agent });
+    }
+  }
+  return entries;
 }
 
 function parsePreferredList(value: unknown): Array<{ agent: string }> {

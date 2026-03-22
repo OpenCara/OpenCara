@@ -237,18 +237,18 @@ describe('isAgentEligibleForRole', () => {
     });
   });
 
-  describe('whitelist with user-only entries', () => {
-    const config = {
-      ...baseConfig,
-      reviewer: {
-        ...baseConfig.reviewer,
-        whitelist: [{ user: 'alice' }],
-      },
-    };
-
-    it('blocks agents when whitelist has only user entries (no agent entries match)', () => {
+  describe('user-only entries are filtered out during parsing', () => {
+    it('allows all agents when whitelist had only user entries (filtered to empty)', () => {
+      // After parsing, user-only entries are stripped, so whitelist is empty → open access
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [], // user entries are removed during config parsing
+        },
+      };
       const result = isAgentEligibleForRole(config, 'review', 'agent-xyz');
-      expect(result.eligible).toBe(false);
+      expect(result.eligible).toBe(true);
     });
   });
 });

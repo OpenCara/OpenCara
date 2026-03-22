@@ -60,10 +60,9 @@ export function isAgentEligibleForRole(
     }
   }
 
-  // Whitelist check — if non-empty, only agents with a matching agent entry are allowed
+  // Whitelist check — if non-empty, only listed agents are allowed
   if (whitelist.length > 0) {
-    const agentEntries = whitelist.filter((entry) => entry.agent);
-    const allowed = agentEntries.some((entry) => entry.agent === agentId);
+    const allowed = whitelist.some((entry) => entry.agent === agentId);
     if (!allowed) {
       return { eligible: false, reason: `Agent "${agentId}" is not in the ${role} whitelist` };
     }
