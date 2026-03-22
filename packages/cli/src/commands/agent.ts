@@ -107,7 +107,7 @@ async function fetchDiff(
         }
       }
 
-      const response = await fetch(url, { headers });
+      const response = await fetch(url, { headers, signal });
       if (!response.ok) {
         const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
         if (NON_RETRYABLE_STATUSES.has(response.status)) {

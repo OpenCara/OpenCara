@@ -9,6 +9,13 @@ vi.mock('../tool-executor.js', async (importOriginal) => {
   return {
     ...actual,
     testCommand: vi.fn().mockResolvedValue({ ok: true, elapsedMs: 150 }),
+    executeTool: vi.fn().mockResolvedValue({
+      stdout: '## Summary\nLooks good.\n\n## Findings\nNo issues found.\n\n## Verdict\nAPPROVE',
+      stderr: '',
+      exitCode: 0,
+      tokensUsed: 100,
+      tokensParsed: true,
+    }),
   };
 });
 
@@ -552,5 +559,81 @@ describe('agent poll loop', () => {
     await promise;
 
     expect(testCommand).not.toHaveBeenCalled();
+  });
+
+  it('passes AbortSignal to fetch when fetching diff', async () => {
+    let diffFetchInit: RequestInit | undefined;
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : String(url);
+
+      if (urlStr.includes('/api/tasks/poll')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              tasks: [
+                {
+                  task_id: 'task-1',
+                  owner: 'test-owner',
+                  repo: 'test-repo',
+                  pr_number: 42,
+                  diff_url: 'https://github.com/test/repo/pull/42.diff',
+                  timeout_seconds: 300,
+                  prompt: 'Review this PR',
+                  role: 'review',
+                },
+              ],
+            }),
+        });
+      }
+
+      if (urlStr.includes('/claim')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ claimed: true, role: 'review' }),
+        });
+      }
+
+      // Diff fetch — capture init to check signal
+      if (urlStr.includes('.diff')) {
+        diffFetchInit = init;
+        return Promise.resolve({
+          ok: true,
+          text: () => Promise.resolve('diff content'),
+        });
+      }
+
+      // Reject endpoint (called after review — just succeed)
+      if (urlStr.includes('/reject') || urlStr.includes('/result') || urlStr.includes('/error')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    void startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      { pollIntervalMs: 100 },
+    );
+
+    // Advance enough for poll + claim + diff fetch
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(diffFetchInit).toBeDefined();
+    expect(diffFetchInit!.signal).toBeInstanceOf(AbortSignal);
+    expect(diffFetchInit!.signal!.aborted).toBe(false);
   });
 });
