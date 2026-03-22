@@ -95,7 +95,7 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 | #189 | #174  | server-dev | GitHub API retry logic                          |
 | #190 | #182  | server-dev | Webhook idempotency via PR identity dedup       |
 
-## M11: Code Review Audit [OPEN — 2026-03-21]
+## M11: Code Review Audit [DONE — 2026-03-22]
 
 15 issues from external code review audit (4 reports analyzed, deduplicated, validated).
 
@@ -129,7 +129,47 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 | #241  | server-dev | KV listTasks O(n) performance                   |
 | #242  | server-dev | Installation token not refreshed for long tasks |
 
+## M12: Operational Maturity & DX [DONE — 2026-03-22]
+
+12 issues covering private repo support, developer experience, observability, and test coverage.
+
+### High Priority [ALL DONE]
+
+| Issue | Agent              | PR   | Description                                          |
+| ----- | ------------------ | ---- | ---------------------------------------------------- |
+| #282  | server-dev+shared  | #292 | Private repo task isolation — filter at poll time     |
+| #291  | cli-dev            | #293 | Include PR metadata and discussion context in review  |
+
+### Medium Priority [ALL DONE]
+
+| Issue | Agent      | PR        | Description                                     |
+| ----- | ---------- | --------- | ----------------------------------------------- |
+| #280  | cli-dev    | #281      | Always set repo-scoped working directory        |
+| #283  | server-dev | #295      | Structured error responses with error codes     |
+| #284  | cli-dev    | #294      | Config validation with actionable error messages|
+| #285  | server-dev | #297      | Task TTL and automatic cleanup of stale tasks   |
+| #288  | cli-dev    | #296      | npm publish readiness: package.json, README, bin|
+| #289  | server-dev | #298      | Structured logging with request IDs             |
+| #290  | server-dev | #299      | E2E integration tests with mock GitHub API      |
+
+### Low Priority [ALL DONE]
+
+| Issue | Agent  | PR        | Description                                    |
+| ----- | ------ | --------- | ---------------------------------------------- |
+| #286  | cli-dev| #300      | CLI UX: progress indicators and colored output |
+| #287  | pm     | direct    | Docs refresh for v1.0+ features                |
+
+### Done (early — before M12 started)
+
+| Issue | Agent   | PR   | Description                         |
+| ----- | ------- | ---- | ----------------------------------- |
+| #277  | cli-dev | #279 | Log the actual command executed     |
+| #278  | cli-dev | #279 | Log PR URL instead of diff URL      |
+
 ## Open Issues
+
+- #301 [cli-dev, medium] Configurable error retry limit before agent shutdown
+- #302 [cli-dev, medium] Save agent logs to file for debugging
 
 ## Merged PRs
 
