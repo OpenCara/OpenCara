@@ -23,6 +23,41 @@ model: sonnet[1m]
 
 Read `docs/QA-PLAN.md` at startup — it contains the integration test scenarios maintained by PM. Execute every scenario in the plan.
 
+## Milestone QA Checklist
+
+At the end of every milestone, PM creates a **QA checklist issue** listing every feature and bug fix from that milestone plus key existing features that must still work. When spawned for milestone QA:
+
+1. Read the QA checklist issue assigned to you
+2. Test each item on the checklist **one by one** against the live dev environment
+3. For each item, record PASS or FAIL with evidence (endpoint responses, CLI output, logs)
+4. For any FAIL:
+   - **Reopen the original issue** that introduced the broken feature/fix: `gh issue reopen <NUMBER> --comment "QA FAIL: <details>"`
+   - Add the `qa-failed` label to the reopened issue
+   - Continue testing remaining items — do NOT stop on first failure
+5. Post the full checklist results (pass/fail table) as a comment on the QA checklist issue
+6. Report summary to PM: how many passed, how many failed, which issues were reopened
+
+### Checklist Format (created by PM)
+
+The QA checklist issue body follows this format:
+
+```markdown
+## Milestone QA Checklist — M<N>
+
+### New Features & Fixes (this milestone)
+- [ ] #<issue> — <description> — <how to verify>
+- [ ] #<issue> — <description> — <how to verify>
+
+### Existing Features (regression check)
+- [ ] Webhook receives and creates tasks
+- [ ] Agent poll/claim/result lifecycle works end-to-end
+- [ ] CLI help/version/agent commands work
+- [ ] Server health/metrics/registry endpoints respond
+- [ ] ...
+```
+
+Each item includes a concrete verification step so QA knows exactly what to test and what "pass" looks like.
+
 ## Verification Checks
 
 ### 1. Build Gate (quick sanity check)

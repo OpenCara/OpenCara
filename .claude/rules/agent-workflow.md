@@ -13,7 +13,7 @@ Event-driven, PM-centric architecture. All agents defined in `.claude/agents/`.
 
 All agents inherit their model and context window from the team lead.
 
-**Flow**: PM polls GitHub via `gh` → triages new issues/PRs → spawns dev agent in worktree → dev implements → self-reviews (multi-AI) → merges → PM spawns QA → QA verifies → done.
+**Flow**: PM polls GitHub via `gh` → triages new issues/PRs → spawns dev agent in worktree → dev implements → self-reviews (multi-AI) → merges → done. At milestone end, PM creates QA checklist issue → spawns QA → QA tests every item → reopens failed issues → PM triages fixes.
 
 Dev agents escalate to architect (via issue comment) if cross-package changes are needed. PM owns product and design decisions.
 

@@ -60,7 +60,9 @@ Server posts review as PR comment (installation token)
 | POST   | `/api/tasks/:id/reject` | None | Agent rejects a claimed task    |
 | POST   | `/api/tasks/:id/error`  | None | Agent reports execution error   |
 | GET    | `/api/registry`         | None | Tool/model registry             |
-| GET    | `/`                     | None | Health check                    |
+| GET    | `/health`               | None | Health check (status + version) |
+| GET    | `/metrics`              | None | Task count metrics              |
+| GET    | `/`                     | None | Root health check               |
 
 ### Poll Flow
 
@@ -124,7 +126,55 @@ Implementations:
 
 ### KV Key Schema
 
-Tasks are stored with prefix `task:`, claims with prefix `claim:`, and agent heartbeats with prefix `agent:`. Task counters (claimed_agents, review_claims, completed_reviews, summary_claimed, reviews_completed_at) are stored on the task object itself to avoid KV eventual consistency issues with list operations. Summary claims use defense-in-depth dedup (claim-time check + post-time check) to prevent duplicate synthesis.
+| Key Pattern | Value | TTL | Purpose |
+|-------------|-------|-----|---------|
+| `task:{id}` | ReviewTask JSON | 7 days (terminal) | Task data (PR info, status, review count, counters) |
+| `claim:{taskId}:{agentId}` | TaskClaim JSON | 7 days (terminal) | Agent's claim on a task (role, status, review text) |
+| `agent:{agentId}` | Last-seen timestamp (string) | None | Agent heartbeat tracking |
+| `summary-lock:{taskId}` | Agent ID (string) | 7 days | Lock to prevent duplicate summary claims |
+
+**Task metadata** (stored on KV entry for fast `list()` filtering):
+```json
+{ "status": "pending|reviewing|completed|timeout|failed", "timeout_at": 1711234567890 }
+```
+
+**Task enumeration** uses `kv.list({ prefix: "task:" })` with metadata filtering instead of a shared index, eliminating race conditions on concurrent creates/deletes.
+
+**Task counters** (`claimed_agents`, `review_claims`, `completed_reviews`, `summary_claimed`, `reviews_completed_at`) are stored on the task object itself to avoid KV eventual consistency issues with list operations.
+
+**Summary dedup** uses defense-in-depth: KV lock key at claim time (first writer wins) + task completion check at post time. See [#276](https://github.com/OpenCara/OpenCara/issues/276) for known limitations of KV-based locking.
+
+### Worker ↔ KV Interaction
+
+The Worker is stateless — each request creates a fresh `KVTaskStore` wrapper around the `TASK_STORE` KV binding:
+
+```
+Request → Hono middleware → KVTaskStore(env.TASK_STORE) → inject into context → route handler
+```
+
+| Operation | KV Call | Trigger |
+|-----------|---------|---------|
+| Create task | `kv.put("task:{id}", json, { metadata })` | Webhook receives PR event |
+| List tasks | `kv.list({ prefix: "task:" })` + metadata filter | Agent polls for work |
+| Get task | `kv.get("task:{id}")` | Claim, result, timeout check |
+| Update task | `kv.put("task:{id}", json, { metadata })` | Status changes, counter updates |
+| Create claim | `kv.put("claim:{taskId}:{agentId}", json)` | Agent claims a task |
+| List claims | `kv.list({ prefix: "claim:{taskId}:" })` + get each | Summary role needs review texts |
+| Lock summary | `kv.put("summary-lock:{taskId}", agentId)` | First summary claim attempt |
+| Agent heartbeat | `kv.put("agent:{agentId}", timestamp)` | Every poll request |
+
+**Cron trigger** (every minute via `wrangler.toml`): Creates a fresh `KVTaskStore`, runs `checkTimeouts()` to mark expired tasks as `timeout` and post partial results.
+
+**No connection pooling** — each Worker isolate is stateless. KV is managed by Cloudflare; the Worker calls `get`/`put`/`list`/`delete` on the binding.
+
+### KV Consistency Model
+
+Workers KV is **eventually consistent** (up to 60s propagation). Key implications:
+
+- **Reads may be stale**: A value written in one isolate may not be visible in another for up to 60s
+- **No atomic operations**: No compare-and-swap, no conditional writes, `put` always succeeds
+- **Write rate limit**: 1 write/sec per key
+- **Mitigations**: Task counters stored on the task object (single key), summary lock as best-effort defense, polling interval (10s) naturally buffers propagation delays
 
 ## Review Task Lifecycle
 

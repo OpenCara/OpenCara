@@ -71,6 +71,49 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 - #216 [server-dev, medium] Add preferred synthesizer config in .review.yml — **DONE** (PR #224 merged)
 - #217 [server-dev, medium] Switch from PR Review API to issue comments — **DONE** (PR #218 merged)
 
+### Code review audit (from external reports, 2026-03-21)
+
+- #228 [server-dev, HIGH] Security: .review.yml read from PR head branch allows config manipulation — **DONE** (PR #243 merged)
+- #229 [server-dev, HIGH] KV store race conditions: non-atomic read-modify-write operations — **DONE** (PR #247 merged)
+- #230 [server-dev, HIGH] Reviewer/summarizer whitelist: user field parsed but never enforced — **DONE** (PR #244 merged)
+- #231 [server-dev, HIGH] Repo filtering config parsed but not enforced in poll endpoint — **DONE** (PR #246 merged)
+- #232 [server-dev, medium] Timeout check relies on Worker isolate memory, not persistent state — **DONE** (PR #260 merged, PR #259 superseded)
+- #233 [cli-dev, medium] Retry logic missing jitter causes thundering herd — **DONE** (PR #250 merged)
+- #234 [server-dev, medium] Add rate limiting to API endpoints — **DONE** (PR #263 merged, PR #262 superseded)
+- #235 [cli-dev, medium] AbortSignal not passed to fetch() in fetchDiff — **DONE** (PR #249 merged)
+- #236 [cli-dev, medium] api_key config field never passed to ApiClient — **DONE** (PR #251 merged)
+- #237 [cli-dev, medium] Consumption limits parsed but never enforced — **DONE** (PR #252 merged)
+- #238 [cli-dev, medium] Token sanitization incomplete — only covers git errors — **DONE** (PR #255 merged)
+- #239 [server-dev, low] Add health check and basic metrics endpoint — **DONE** (PR #268 merged)
+- #240 [server-dev, low] Dead config fields: autoApprove, minReputation, defaultReputation — **DONE** (PR #267 merged)
+- #241 [server-dev, low] KV listTasks performance: O(n) scan of entire task index on every poll — **CLOSED** (already resolved by PR #247)
+- #242 [server-dev, low] GitHub installation token not refreshed for long-running tasks — **CLOSED** (N/A, token refresh already works correctly)
+
+### User-requested (2026-03-22)
+
+- #245 [cli-dev, medium] Auto-shutdown agent after too many consecutive errors — **DONE** (PR #253 merged)
+
+### User-requested (2026-03-22)
+
+- #256 [cli-dev, medium] Use task ID as subdirectory in codebase_dir to avoid concurrent task conflicts — **DONE** (PR #264 merged)
+
+### Critical bug (team-lead reported, 2026-03-22)
+
+- #254 [server-dev, HIGH] Summary reviews silently not posted due to KV read-after-write inconsistency — **DONE** (PR #258 merged)
+
+### Test coverage (user-requested, 2026-03-22)
+
+- #257 [cli-dev, medium] Increase test coverage to near 100% across all packages — **DONE** (96.75% accepted, PR #261 merged)
+
+### Test regression (post-merge, 2026-03-22)
+
+- #265 [cli-dev, HIGH] Fix 10 test failures caused by PR #260 export default change — **DONE** (PR #266 merged)
+
+### Bug fix (user-reported, 2026-03-22)
+
+- #269 [cli-dev, HIGH] Environment variable OPENCARA_PLATFORM_URL does not override platform_url config — **DONE** (PR #270 merged)
+- #271 [cli-dev, medium] Add env var overrides for remaining 5 CLI config fields (follow-up to #269) — **CLOSED** (not needed, OPENCARA_PLATFORM_URL + OPENCARA_CONFIG sufficient)
+
 ## Closed Issues (processed)
 
 #1, #3, #4, #5, #8, #9, #11, #13, #14, #18, #19, #20, #24, #25, #26, #27,
@@ -80,7 +123,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280
 
 ## Merged PRs (processed)
 
@@ -89,4 +132,40 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281
+
+### Milestone QA (2026-03-22)
+
+- #272 [qa] Milestone M11 QA Checklist — **DONE** (36/37 passed, #257 coverage gap accepted at 96.75%)
+
+### Critical bug (team-lead reported, 2026-03-22)
+
+- #273 [server-dev, HIGH] Duplicate summary reviews from concurrent KV claim races — **DONE** (PR #274 merged, PR #275 race tests merged, 733 tests. Review claim race confirmed benign — no fix needed per YAGNI)
+
+### M12: Operational Maturity & DX
+
+#### High
+- #282 [server-dev+cli-dev+shared] Private repo task isolation — filter private repo tasks in poll
+- #291 [cli-dev] Include PR metadata and discussion context in review input
+
+#### Medium
+- #276 [server-dev] GitHub API dedup guard for summary review posting — **CLOSED** (not planned, KV lock sufficient)
+- #280 [cli-dev] Always set repo-scoped working directory for review commands — **DONE** (PR #281 merged)
+- #283 [server-dev] Structured error responses with error codes
+- #284 [cli-dev] Config validation with actionable error messages
+- #285 [server-dev] Task TTL and automatic cleanup of stale tasks
+- #288 [cli-dev] npm publish readiness: package.json, README, bin entry
+- #289 [server-dev] Structured logging with request IDs
+- #290 [server-dev] E2E integration tests with mock GitHub API
+
+#### Low
+- #286 [cli-dev] CLI UX: progress indicators and colored output
+- #287 [architect] Docs refresh for v1.0+ features
+
+#### Done (early)
+- #277 [cli-dev] Log the actual command executed — **DONE** (PR #279)
+- #278 [cli-dev] Log PR URL instead of diff URL — **DONE** (PR #279)
+
+## Open PRs
+
+(none)

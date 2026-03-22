@@ -99,14 +99,14 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 
 15 issues from external code review audit (4 reports analyzed, deduplicated, validated).
 
-### High Priority
+### High Priority [ALL DONE]
 
-| Issue | Agent      | Description                                             |
-| ----- | ---------- | ------------------------------------------------------- |
-| #228  | server-dev | Security: .review.yml read from PR head branch          |
-| #229  | server-dev | KV store race conditions: non-atomic read-modify-write  |
-| #230  | server-dev | Reviewer/summarizer whitelist: user field not enforced  |
-| #231  | server-dev | Repo filtering parsed but not enforced in poll endpoint |
+| Issue | Agent      | PR   | Description                                             |
+| ----- | ---------- | ---- | ------------------------------------------------------- |
+| #228  | server-dev | #243 | Security: .review.yml read from PR head branch          |
+| #229  | server-dev | #247 | KV store race conditions: eliminate shared task index   |
+| #230  | server-dev | #244 | Reviewer/summarizer whitelist: user field not enforced  |
+| #231  | server-dev | #246 | Repo filtering parsed but not enforced in poll endpoint |
 
 ### Medium Priority
 

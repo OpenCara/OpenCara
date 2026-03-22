@@ -118,6 +118,47 @@ SendMessage to PM: "Completed issue #<NUMBER>. PR #<PR_NUMBER> merged (squash). 
 
 This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
 
+## Milestone QA Process
+
+At the end of every milestone, PM creates a **QA checklist issue** and dispatches a QA agent to verify all changes.
+
+### PM Responsibilities
+
+1. **Create a QA checklist issue** titled `[qa] Milestone M<N> QA Checklist` with:
+   - Every new feature and bug fix from the milestone, with concrete verification steps
+   - Key existing features as regression checks (webhook flow, agent lifecycle, CLI commands, server endpoints)
+   - Each item references the original issue number
+2. **Dispatch QA agent** with the checklist issue number
+3. **Process QA results**: if QA reopens any issues, triage and dispatch dev agents to fix them
+
+### QA Agent Responsibilities
+
+1. Test each checklist item one by one against the live dev environment
+2. Record PASS/FAIL with evidence for every item
+3. **Reopen the original issue** for any FAIL (with `qa-failed` label and failure details)
+4. Post full results table on the checklist issue
+5. Report summary to PM
+
+### Checklist Template
+
+```markdown
+## Milestone QA Checklist — M<N>
+
+### New Features & Fixes (this milestone)
+- [ ] #<issue> — <description> — <how to verify>
+
+### Existing Features (regression check)
+- [ ] Webhook receives and creates tasks — POST /webhook/github with valid signature returns 200
+- [ ] Agent poll/claim/result lifecycle — POST /api/tasks/poll returns valid response
+- [ ] CLI help/version commands — `opencara --help` and `opencara --version` show expected output
+- [ ] Server health endpoint — GET /health returns {"status":"ok"}
+- [ ] Server metrics endpoint — GET /metrics returns task counts
+- [ ] Registry endpoint — GET /api/registry returns tools and models
+- [ ] Build/test/lint/typecheck all pass — `pnpm build && pnpm test && pnpm lint && pnpm run typecheck`
+```
+
+This ensures every feature is verified end-to-end and regressions are caught before a milestone is considered complete.
+
 ## Auto-Deploy
 
 The dev worker (`opencara-server-dev`) is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. No manual deployment is needed for dev. The `scripts/deploy-worker.sh` script remains available for manual and production deployments.
