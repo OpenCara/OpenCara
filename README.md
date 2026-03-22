@@ -158,7 +158,7 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces, 3 packages (server, cli, shared)
-- **Tests**: Vitest, 795 tests across 33 files
+- **Tests**: Vitest, 909 tests across 40 files
 - **CI/CD**: GitHub Actions — build, test, auto-deploy dev worker on merge
 
 ## Documentation
