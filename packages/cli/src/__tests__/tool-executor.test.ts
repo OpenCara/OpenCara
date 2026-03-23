@@ -6,6 +6,7 @@ import {
   parseTokenUsage,
   estimateTokens,
   ToolTimeoutError,
+  SIGKILL_GRACE_MS,
 } from '../tool-executor.js';
 
 import EventEmitter from 'node:events';
@@ -456,6 +457,102 @@ describe('executeTool', () => {
 
     const result = await promise;
     expect(result.stdout).toBe('VERDICT: APPROVE\nAll good');
+  });
+
+  describe('SIGKILL escalation', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('sends SIGKILL after grace period if process ignores SIGTERM on timeout', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const timeoutMs = 10_000;
+      const promise = executeTool('stubborn-tool', 'test', timeoutMs);
+
+      // Advance past timeout — SIGTERM fires
+      vi.advanceTimersByTime(timeoutMs);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      // Advance past SIGKILL grace period — process still alive
+      vi.advanceTimersByTime(SIGKILL_GRACE_MS);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+
+      // Process finally exits with SIGKILL
+      emitOutput(child, { code: null, signal: 'SIGKILL' });
+
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+    });
+
+    it('does not send SIGKILL if process exits after SIGTERM', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const timeoutMs = 10_000;
+      const promise = executeTool('good-tool', 'test', timeoutMs);
+
+      // Advance past timeout — SIGTERM fires
+      vi.advanceTimersByTime(timeoutMs);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Process exits promptly after SIGTERM (before grace period)
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+
+      // Advance past grace period — SIGKILL should NOT be sent because cleanup cleared it
+      vi.advanceTimersByTime(SIGKILL_GRACE_MS);
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    });
+
+    it('sends SIGKILL after grace period when abort signal fires', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const controller = new AbortController();
+      const promise = executeTool('stubborn-tool', 'test', 60_000, controller.signal);
+
+      // Abort the signal — SIGTERM fires
+      controller.abort();
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      // Advance past SIGKILL grace period — process still alive
+      vi.advanceTimersByTime(SIGKILL_GRACE_MS);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+
+      // Process finally exits with SIGKILL
+      emitOutput(child, { code: null, signal: 'SIGKILL' });
+
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+    });
+
+    it('clears SIGKILL timer if process exits after abort SIGTERM', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const controller = new AbortController();
+      const promise = executeTool('good-tool', 'test', 60_000, controller.signal);
+
+      // Abort the signal — SIGTERM fires
+      controller.abort();
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Process exits promptly
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+
+      // Advance past grace period — SIGKILL should NOT be sent
+      vi.advanceTimersByTime(SIGKILL_GRACE_MS);
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    });
   });
 });
 
