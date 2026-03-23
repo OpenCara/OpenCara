@@ -135,36 +135,36 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 
 ### High Priority [ALL DONE]
 
-| Issue | Agent              | PR   | Description                                          |
-| ----- | ------------------ | ---- | ---------------------------------------------------- |
-| #282  | server-dev+shared  | #292 | Private repo task isolation — filter at poll time     |
-| #291  | cli-dev            | #293 | Include PR metadata and discussion context in review  |
+| Issue | Agent             | PR   | Description                                          |
+| ----- | ----------------- | ---- | ---------------------------------------------------- |
+| #282  | server-dev+shared | #292 | Private repo task isolation — filter at poll time    |
+| #291  | cli-dev           | #293 | Include PR metadata and discussion context in review |
 
 ### Medium Priority [ALL DONE]
 
-| Issue | Agent      | PR        | Description                                     |
-| ----- | ---------- | --------- | ----------------------------------------------- |
-| #280  | cli-dev    | #281      | Always set repo-scoped working directory        |
-| #283  | server-dev | #295      | Structured error responses with error codes     |
-| #284  | cli-dev    | #294      | Config validation with actionable error messages|
-| #285  | server-dev | #297      | Task TTL and automatic cleanup of stale tasks   |
-| #288  | cli-dev    | #296      | npm publish readiness: package.json, README, bin|
-| #289  | server-dev | #298      | Structured logging with request IDs             |
-| #290  | server-dev | #299      | E2E integration tests with mock GitHub API      |
+| Issue | Agent      | PR   | Description                                      |
+| ----- | ---------- | ---- | ------------------------------------------------ |
+| #280  | cli-dev    | #281 | Always set repo-scoped working directory         |
+| #283  | server-dev | #295 | Structured error responses with error codes      |
+| #284  | cli-dev    | #294 | Config validation with actionable error messages |
+| #285  | server-dev | #297 | Task TTL and automatic cleanup of stale tasks    |
+| #288  | cli-dev    | #296 | npm publish readiness: package.json, README, bin |
+| #289  | server-dev | #298 | Structured logging with request IDs              |
+| #290  | server-dev | #299 | E2E integration tests with mock GitHub API       |
 
 ### Low Priority [ALL DONE]
 
-| Issue | Agent  | PR        | Description                                    |
-| ----- | ------ | --------- | ---------------------------------------------- |
-| #286  | cli-dev| #300      | CLI UX: progress indicators and colored output |
-| #287  | pm     | direct    | Docs refresh for v1.0+ features                |
+| Issue | Agent   | PR     | Description                                    |
+| ----- | ------- | ------ | ---------------------------------------------- |
+| #286  | cli-dev | #300   | CLI UX: progress indicators and colored output |
+| #287  | pm      | direct | Docs refresh for v1.0+ features                |
 
 ### Done (early — before M12 started)
 
-| Issue | Agent   | PR   | Description                         |
-| ----- | ------- | ---- | ----------------------------------- |
-| #277  | cli-dev | #279 | Log the actual command executed     |
-| #278  | cli-dev | #279 | Log PR URL instead of diff URL      |
+| Issue | Agent   | PR   | Description                     |
+| ----- | ------- | ---- | ------------------------------- |
+| #277  | cli-dev | #279 | Log the actual command executed |
+| #278  | cli-dev | #279 | Log PR URL instead of diff URL  |
 
 ## Open Issues
 
