@@ -62,21 +62,6 @@ export function parseEntityList(value: unknown): EntityEntry[] {
   return entries;
 }
 
-function parsePreferredList(value: unknown): EntityEntry[] {
-  if (!Array.isArray(value)) return [];
-  const entries: EntityEntry[] = [];
-  for (const item of value) {
-    if (!isObject(item)) continue;
-    const entry: EntityEntry = {};
-    if (typeof item.agent === 'string') entry.agent = item.agent;
-    if (typeof item.github === 'string') entry.github = item.github;
-    if (entry.agent !== undefined || entry.github !== undefined) {
-      entries.push(entry);
-    }
-  }
-  return entries;
-}
-
 /**
  * Check if an agent/user matches an entity entry.
  * Matches if the entry's agent field equals agentId OR the entry's github field equals githubUsername.
@@ -87,7 +72,11 @@ export function isEntityMatch(
   githubUsername?: string,
 ): boolean {
   if (entry.agent !== undefined && agentId !== undefined && entry.agent === agentId) return true;
-  if (entry.github !== undefined && githubUsername !== undefined && entry.github === githubUsername)
+  if (
+    entry.github !== undefined &&
+    githubUsername !== undefined &&
+    entry.github.toLowerCase() === githubUsername.toLowerCase()
+  )
     return true;
   return false;
 }
@@ -191,7 +180,7 @@ function parseSummarizerSection(raw: unknown): ReviewConfig['summarizer'] {
   return {
     whitelist: parseEntityList(raw.whitelist),
     blacklist: parseEntityList(raw.blacklist),
-    preferred: parsePreferredList(raw.preferred),
+    preferred: parseEntityList(raw.preferred),
   };
 }
 

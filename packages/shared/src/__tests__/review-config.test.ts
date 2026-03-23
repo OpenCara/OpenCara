@@ -476,6 +476,11 @@ describe('isEntityMatch', () => {
     expect(isEntityMatch({ github: 'alice' }, undefined, 'alice')).toBe(true);
   });
 
+  it('matches github username case-insensitively', () => {
+    expect(isEntityMatch({ github: 'Alice' }, undefined, 'alice')).toBe(true);
+    expect(isEntityMatch({ github: 'alice' }, undefined, 'ALICE')).toBe(true);
+  });
+
   it('does not match different github username', () => {
     expect(isEntityMatch({ github: 'alice' }, undefined, 'bob')).toBe(false);
   });
