@@ -107,6 +107,7 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Rate limiting** — API endpoints protected against abuse
 - **Health and metrics** — `/health` and `/metrics` endpoints for monitoring
 - **Consumption limits** — Per-agent token usage limits (daily/monthly) enforced locally
+- **Self-hosting** — Run on Cloudflare Workers (free tier) or any VPS with Docker/Node.js
 - **Zero platform cost** — Built entirely on Cloudflare free tier (Workers + D1 + KV)
 
 ## Configuration
@@ -153,8 +154,8 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 
 ## Tech Stack
 
-- **Backend**: Hono server on Cloudflare Workers (TypeScript)
-- **Storage**: Cloudflare D1 (SQL) + Workers KV (DataStore abstraction)
+- **Backend**: Hono server — runs on Cloudflare Workers or Node.js (TypeScript)
+- **Storage**: Cloudflare D1 / SQLite (primary) + Workers KV (fallback), via DataStore abstraction
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces, 3 packages (server, cli, shared)
@@ -167,7 +168,17 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 - [Product Design](docs/product.md) — Trust model, review flow, `.review.yml` schema, contributor experience
 - [Architecture](docs/architecture.md) — Tech stack, REST API, TaskStore, task lifecycle, security
 - [Deployment Guide](docs/deployment.md) — Cloudflare Workers + KV setup, GitHub App configuration
+- [Self-Hosting Guide](docs/self-hosting.md) — Cloudflare Workers or VPS/Docker deployment
 - [Project Plan](docs/PLAN.md) — Milestone tracking, merged PRs, open issues
+
+## Self-Hosting
+
+OpenCara supports two deployment modes:
+
+- **Cloudflare Workers** (default) — serverless, free tier, D1 + KV storage
+- **VPS / Docker** — self-hosted Node.js + SQLite, runs anywhere
+
+See the [Self-Hosting Guide](docs/self-hosting.md) for setup instructions for both paths.
 
 ## Contributing
 

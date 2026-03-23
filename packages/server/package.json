@@ -7,15 +7,22 @@
     "build": "tsc --build",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "start:node": "node dist/node.js",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.0",
     "@opencara/shared": "workspace:*",
+    "better-sqlite3": "^12.8.0",
     "hono": "^4.7.0",
+    "node-cron": "^3.0.3",
     "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250214.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
     "wrangler": "^4.74.0"
   }
 }

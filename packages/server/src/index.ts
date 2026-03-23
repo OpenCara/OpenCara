@@ -13,13 +13,14 @@ import { healthRoutes } from './routes/health.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import { createLogger } from './logger.js';
 
-type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
+export type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
 /**
  * Build the Hono app with store injected via middleware.
  * The storeProvider callback is called per-request to produce a DataStore.
+ * Exported for the Node.js entry point.
  */
-function buildApp(storeProvider: (env: Env) => DataStore): HonoApp {
+export function buildApp(storeProvider: (env: Env) => DataStore): HonoApp {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // Generate request ID and attach structured logger
@@ -101,7 +102,7 @@ const workerApp = buildApp(createStore);
 export default {
   fetch: workerApp.fetch,
   /** Cloudflare Cron Trigger handler — checks for timed-out tasks and cleans up stale entries. */
-  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+  async scheduled(_event: { scheduledTime: number; cron: string }, env: Env): Promise<void> {
     const store = createStore(env);
     const logger = createLogger();
 

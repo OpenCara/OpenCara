@@ -1,0 +1,31 @@
+# Stage 1: Build
+FROM node:20-slim AS builder
+WORKDIR /app
+RUN corepack enable
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY tsconfig.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/server/package.json packages/server/
+RUN pnpm install --frozen-lockfile
+COPY packages/shared/ packages/shared/
+COPY packages/server/ packages/server/
+RUN pnpm --filter @opencara/server... build
+
+# Stage 2: Runtime
+FROM node:20-slim
+WORKDIR /app
+RUN corepack enable
+COPY --from=builder /app/packages/server/dist packages/server/dist
+COPY --from=builder /app/packages/server/migrations packages/server/migrations
+COPY --from=builder /app/packages/server/package.json packages/server/
+COPY --from=builder /app/packages/shared/dist packages/shared/dist
+COPY --from=builder /app/packages/shared/package.json packages/shared/
+COPY --from=builder /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/package.json ./
+ENV NODE_ENV=production
+RUN pnpm install --frozen-lockfile --prod
+
+VOLUME /data
+ENV DATABASE_PATH=/data/opencara.db
+EXPOSE 3000
+
+ENTRYPOINT ["node", "packages/server/dist/node.js"]
