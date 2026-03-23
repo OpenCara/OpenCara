@@ -664,7 +664,6 @@ export function taskRoutes() {
 /**
  * Find a pending claim for an agent on a task. Checks role-aware claim IDs
  * (summary first since that's the more impactful role to release).
- * Falls back to old-style claim ID for backward compatibility during migration.
  */
 async function findClaimForAgent(
   store: DataStore,
