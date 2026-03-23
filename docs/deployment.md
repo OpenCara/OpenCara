@@ -163,11 +163,11 @@ https://<your-worker-url>/webhook/github
 
 ### Wrangler Config Variables
 
-| Variable     | Description                        | In wrangler.toml      |
-| ------------ | ---------------------------------- | --------------------- |
-| `WEB_URL`    | Frontend URL (for CORS, if needed) | `[vars]` section      |
-| `TASK_STORE` | KV namespace binding               | `[[kv_namespaces]]`   |
-| `DB`         | D1 database binding                | `[[d1_databases]]`    |
+| Variable     | Description                        | In wrangler.toml    |
+| ------------ | ---------------------------------- | ------------------- |
+| `WEB_URL`    | Frontend URL (for CORS, if needed) | `[vars]` section    |
+| `TASK_STORE` | KV namespace binding               | `[[kv_namespaces]]` |
+| `DB`         | D1 database binding                | `[[d1_databases]]`  |
 
 ### CLI Environment Variables
 

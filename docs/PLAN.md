@@ -170,20 +170,20 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 
 Introduced D1 (Cloudflare SQL) as the persistent data store, replacing KV-only storage for task coordination. Abstract DataStore interface enables KV, D1, or in-memory backends.
 
-| Issue | Agent      | PR        | Description                                          |
-| ----- | ---------- | --------- | ---------------------------------------------------- |
+| Issue | Agent      | PR        | Description                                           |
+| ----- | ---------- | --------- | ----------------------------------------------------- |
 | #307  | architect  | #310      | Define DataStore interface + MemoryDataStore          |
 | #308  | server-dev | #311,#314 | Integrate DataStore into server routes                |
 | #309  | architect  | #312      | D1DataStore implementation + migration SQL + wrangler |
 
 ### Post-M13 Fixes
 
-| PR   | Issue | Agent   | Description                                      |
-| ---- | ----- | ------- | ------------------------------------------------ |
-| #306 | #302  | cli-dev | Save agent logs to file for debugging            |
-| #320 | #318  | direct  | Fix test suite hanging — resolve leaked handles  |
-| #322 | --    | direct  | CI baseline test at last green commit            |
-| #324 | --    | direct  | Fix: allow mode:all agents to see private tasks  |
+| PR   | Issue | Agent   | Description                                     |
+| ---- | ----- | ------- | ----------------------------------------------- |
+| #306 | #302  | cli-dev | Save agent logs to file for debugging           |
+| #320 | #318  | direct  | Fix test suite hanging — resolve leaked handles |
+| #322 | --    | direct  | CI baseline test at last green commit           |
+| #324 | --    | direct  | Fix: allow mode:all agents to see private tasks |
 
 ## Open Issues
 

@@ -374,12 +374,12 @@ agents:
         - myorg/private-repo
 ```
 
-| Mode        | Public repos     | Private repos in `list` | Private repos NOT in `list` |
-| ----------- | ---------------- | ----------------------- | --------------------------- |
-| `all`       | All              | Yes                     | No                          |
-| `whitelist` | Only if in list  | Only if in list         | No                          |
-| `blacklist` | Unless in list   | No                      | No                          |
-| `own`       | Same owner only  | No                      | No                          |
+| Mode        | Public repos    | Private repos in `list` | Private repos NOT in `list` |
+| ----------- | --------------- | ----------------------- | --------------------------- |
+| `all`       | All             | Yes                     | No                          |
+| `whitelist` | Only if in list | Only if in list         | No                          |
+| `blacklist` | Unless in list  | No                      | No                          |
+| `own`       | Same owner only | No                      | No                          |
 
 **Recommended for most users**: Use `mode: all` with a `list` of your private repos. This reviews any public project while also receiving tasks from your private repos.
 
