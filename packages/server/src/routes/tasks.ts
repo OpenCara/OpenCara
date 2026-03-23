@@ -347,6 +347,16 @@ export function taskRoutes() {
           if (!isRepoAllowed(synthesize_repos, task.owner, task.repo)) continue;
         }
 
+        // Check if agent already has a summary claim on this task
+        const existingSummaryClaim = await store.getClaim(`${task.id}:${agent_id}:summary`);
+        if (
+          existingSummaryClaim &&
+          existingSummaryClaim.status !== 'rejected' &&
+          existingSummaryClaim.status !== 'error'
+        ) {
+          continue;
+        }
+
         available.push({
           task_id: task.id,
           owner: task.owner,
