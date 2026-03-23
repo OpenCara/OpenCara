@@ -4,6 +4,10 @@
  * Wraps better-sqlite3 (synchronous) calls in Promises to match the
  * async D1 API. This allows D1DataStore to run against a local SQLite
  * file on VPS / self-hosted deployments without any code changes.
+ *
+ * Usage: construct with a file path for production, or pass an existing
+ * better-sqlite3 Database instance for testing (caller is responsible
+ * for PRAGMA settings in that case).
  */
 import Database from 'better-sqlite3';
 import type { D1Database, D1PreparedStatement, D1Result } from '../store/d1.js';
@@ -18,10 +22,11 @@ export class SqliteD1Adapter implements D1Database {
     if (typeof pathOrDb === 'string') {
       this.db = new Database(pathOrDb);
       this.db.pragma('journal_mode = WAL');
-      this.db.pragma('foreign_keys = ON');
     } else {
       this.db = pathOrDb;
     }
+    // Always enable foreign keys regardless of construction path.
+    this.db.pragma('foreign_keys = ON');
   }
 
   prepare(sql: string): D1PreparedStatement {
@@ -30,10 +35,12 @@ export class SqliteD1Adapter implements D1Database {
 
   async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
     const results: D1Result<T>[] = [];
-    // Run all statements inside a transaction for atomicity (matching D1 batch semantics).
     const runBatch = this.db.transaction(() => {
       for (const stmt of statements) {
-        results.push((stmt as SqliteD1PreparedStatement).runSync() as D1Result<T>);
+        if (!(stmt instanceof SqliteD1PreparedStatement)) {
+          throw new Error('batch() only accepts statements from this adapter');
+        }
+        results.push(stmt.runSync() as D1Result<T>);
       }
     });
     runBatch();
@@ -64,7 +71,6 @@ class SqliteD1PreparedStatement implements D1PreparedStatement {
   ) {}
 
   bind(...values: unknown[]): D1PreparedStatement {
-    // Immutable — return a new instance with the bound values.
     return new SqliteD1PreparedStatement(this.db, this.sql, values);
   }
 
@@ -76,20 +82,17 @@ class SqliteD1PreparedStatement implements D1PreparedStatement {
     const stmt = this.db.prepare(this.sql);
     const row = stmt.get(...this.params) as Record<string, unknown> | undefined;
     if (!row) return null;
-    if (column) return (row[column] as T) ?? null;
-    return row as T;
+    if (column) return (row[column] ?? null) as T | null;
+    return row as unknown as T;
   }
 
   async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
     const stmt = this.db.prepare(this.sql);
     const rows = stmt.all(...this.params) as T[];
-    return { results: rows, success: true };
+    return { results: rows, success: true, meta: { changes: 0 } };
   }
 
-  /**
-   * Synchronous run — used internally by batch() to execute inside a transaction.
-   * @internal
-   */
+  /** Synchronous run — used by batch() for transactional execution. */
   runSync(): D1Result {
     const stmt = this.db.prepare(this.sql);
     const info = stmt.run(...this.params);

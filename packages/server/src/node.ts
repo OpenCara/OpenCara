@@ -49,7 +49,15 @@ const TASK_TTL_DAYS = process.env.TASK_TTL_DAYS;
 // ── Database setup ──────────────────────────────────────────────────
 
 const dbDir = path.dirname(path.resolve(DATABASE_PATH));
-fs.mkdirSync(dbDir, { recursive: true });
+try {
+  fs.mkdirSync(dbDir, { recursive: true });
+} catch (err) {
+  logger.error('Failed to create database directory', {
+    path: dbDir,
+    error: err instanceof Error ? err.message : String(err),
+  });
+  process.exit(1);
+}
 
 const sqliteAdapter = new SqliteD1Adapter(DATABASE_PATH);
 
@@ -113,7 +121,11 @@ const server = serve({ fetch: app.fetch, port: PORT }, () => {
 
 // ── Scheduled tasks (replaces CF Cron Triggers) ─────────────────────
 
+let cronRunning = false;
+
 cron.schedule('* * * * *', async () => {
+  if (cronRunning) return;
+  cronRunning = true;
   try {
     await store.setTimeoutLastCheck(Date.now());
     await checkTimeouts(store, nodeEnv);
@@ -134,16 +146,33 @@ cron.schedule('* * * * *', async () => {
       action: 'cleanup_terminal',
       error: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    cronRunning = false;
   }
 });
 
 // ── Graceful shutdown ───────────────────────────────────────────────
 
+let shuttingDown = false;
+
 function shutdown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info('Shutting down...');
-  server.close();
-  sqliteAdapter.close();
-  process.exit(0);
+
+  // Give in-flight requests up to 10 seconds to complete.
+  const forceExit = setTimeout(() => {
+    logger.warn('Forcing exit after timeout');
+    sqliteAdapter.close();
+    process.exit(1);
+  }, 10_000);
+  forceExit.unref();
+
+  server.close(() => {
+    sqliteAdapter.close();
+    logger.info('Shutdown complete');
+    process.exit(0);
+  });
 }
 
 process.on('SIGTERM', shutdown);
