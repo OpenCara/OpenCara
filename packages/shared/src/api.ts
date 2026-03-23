@@ -10,6 +10,8 @@ export interface PollRequest {
   review_only?: boolean; // deprecated — use roles instead
   repos?: string[]; // "owner/repo" entries — used to include matching private repo tasks
   synthesize_repos?: RepoConfig; // repos this agent will synthesize for
+  model?: string; // agent's model name (for preferred_models matching)
+  tool?: string; // agent's tool name (for preferred_tools matching)
 }
 
 /** A task returned in the poll response */
