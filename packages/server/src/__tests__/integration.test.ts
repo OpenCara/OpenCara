@@ -350,7 +350,7 @@ APPROVE`;
       expect(task?.status).toBe('timeout');
     });
 
-    it('expired reviewing tasks with partial reviews post them as fallback', async () => {
+    it('expired reviewing tasks with partial reviews post them as a single consolidated comment', async () => {
       await store.createTask(
         makeTask({
           id: 'task-partial-timeout',
@@ -376,16 +376,15 @@ APPROVE`;
       const task = await store.getTask('task-partial-timeout');
       expect(task?.status).toBe('timeout');
 
-      // Should have tried to post the partial review + timeout comment as issue comments
+      // Should post exactly 1 consolidated comment (not N+1)
       const commentPosts = githubCalls.filter((c) => c.method === 'postPrComment');
-      // At least 2: one for the partial review, one for the timeout message
-      expect(commentPosts.length).toBeGreaterThanOrEqual(2);
+      expect(commentPosts.length).toBe(1);
 
-      // Verify the timeout comment mentions partial reviews
-      const timeoutComment = commentPosts.find((c) =>
-        (c.args.body as string)?.includes('timed out'),
-      );
-      expect(timeoutComment).toBeDefined();
+      // Verify the single comment includes both timeout message and partial review
+      const body = commentPosts[0].args.body as string;
+      expect(body).toContain('timed out');
+      expect(body).toContain('1 partial review(s) collected');
+      expect(body).toContain('Partial review content');
     });
 
     it('claim is rejected for expired task', async () => {

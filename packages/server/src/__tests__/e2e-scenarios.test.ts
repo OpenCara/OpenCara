@@ -554,10 +554,15 @@ describe('E2E Scenarios', () => {
       const task = await store.getTask(taskId);
       expect(task?.status).toBe('timeout');
 
-      // Partial review + timeout comment should have been posted as issue comments
+      // Should post exactly 1 consolidated comment (not N+1)
       const commentPosts = github.calls.filter((c) => c.method === 'postPrComment');
-      // At least 2: one for the partial review, one for the timeout message
-      expect(commentPosts.length).toBeGreaterThanOrEqual(2);
+      expect(commentPosts.length).toBe(1);
+
+      // Verify the single comment includes both timeout message and partial review
+      const body = commentPosts[0].args.body as string;
+      expect(body).toContain('timed out');
+      expect(body).toContain('1 partial review(s) collected');
+      expect(body).toContain('Partial review content');
     });
 
     it('claim rejected for expired task', async () => {

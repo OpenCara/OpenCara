@@ -69,6 +69,41 @@ describe('review-formatter edge cases', () => {
     const comment = formatIndividualReviewComment('gemini', 'tool', 'comment', 'Looks ok');
     expect(comment).toContain('comment');
   });
+
+  it('formatTimeoutComment with no reviews returns simple timeout message', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(10, []);
+    expect(result).toBe('**OpenCara**: Review timed out after 10 minutes.');
+    expect(result).not.toContain('partial review');
+  });
+
+  it('formatTimeoutComment with reviews returns consolidated comment', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(10, [
+      { model: 'claude', tool: 'cli', verdict: 'approve', review_text: 'LGTM' },
+      { model: 'gemini', tool: 'codex', verdict: 'request_changes', review_text: 'Fix bugs' },
+    ]);
+    expect(result).toContain('timed out after 10 minutes');
+    expect(result).toContain('2 partial review(s) collected');
+    expect(result).toContain('Review 1');
+    expect(result).toContain('approve');
+    expect(result).toContain('LGTM');
+    expect(result).toContain('Review 2');
+    expect(result).toContain('request_changes');
+    expect(result).toContain('Fix bugs');
+    // Verify sections are separated by horizontal rules
+    expect(result).toContain('---');
+  });
+
+  it('formatTimeoutComment with single review', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(5, [
+      { model: 'gpt', tool: 'tool', verdict: 'comment', review_text: 'Minor suggestions' },
+    ]);
+    expect(result).toContain('1 partial review(s) collected');
+    expect(result).toContain('Review 1');
+    expect(result).toContain('Minor suggestions');
+  });
 });
 
 // ── github/config.ts ─────────────────────────────────────────

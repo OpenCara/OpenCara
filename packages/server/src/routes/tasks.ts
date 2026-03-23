@@ -20,8 +20,9 @@ import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
 import {
   formatSummaryComment,
-  formatIndividualReviewComment,
+  formatTimeoutComment,
   type ReviewAgentInfo,
+  type TimeoutReview,
 } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
@@ -130,26 +131,17 @@ export async function checkTimeouts(
 
     try {
       const token = await github.getInstallationToken(task.github_installation_id);
+      const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
 
-      if (completedReviews.length > 0) {
-        for (const claim of completedReviews) {
-          const body = formatIndividualReviewComment(
-            'unknown',
-            'unknown',
-            (claim.verdict as ReviewVerdict) ?? 'comment',
-            claim.review_text!,
-          );
-          await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
-        }
-      }
+      const reviews: TimeoutReview[] = completedReviews.map((claim) => ({
+        model: claim.model ?? 'unknown',
+        tool: claim.tool ?? 'unknown',
+        verdict: (claim.verdict as ReviewVerdict) ?? 'comment',
+        review_text: claim.review_text!,
+      }));
 
-      await github.postPrComment(
-        task.owner,
-        task.repo,
-        task.pr_number,
-        `**OpenCara**: Review timed out after ${Math.round((task.timeout_at - task.created_at) / 60000)} minutes.${completedReviews.length > 0 ? ` ${completedReviews.length} partial review(s) posted above.` : ''}`,
-        token,
-      );
+      const body = formatTimeoutComment(timeoutMinutes, reviews);
+      await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
       // Only mark timeout AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
