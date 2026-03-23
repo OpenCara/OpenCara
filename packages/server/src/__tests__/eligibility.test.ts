@@ -237,6 +237,41 @@ describe('isAgentEligibleForRole', () => {
     });
   });
 
+  describe('allowAnonymous enforcement', () => {
+    it('rejects anonymous agent when allow_anonymous is false', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: { ...baseConfig.reviewer, allowAnonymous: false },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-xyz');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('Anonymous agents not allowed');
+    });
+
+    it('allows anonymous agent when allow_anonymous is true (default)', () => {
+      const result = isAgentEligibleForRole(baseConfig, 'review', 'agent-xyz');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('allows identified agent regardless of allow_anonymous setting', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: { ...baseConfig.reviewer, allowAnonymous: false },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-xyz', 'alice');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('does not affect summarizer role', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: { ...baseConfig.reviewer, allowAnonymous: false },
+      };
+      const result = isAgentEligibleForRole(config, 'summary', 'agent-xyz');
+      expect(result.eligible).toBe(true);
+    });
+  });
+
   describe('user-only entries are filtered out during parsing', () => {
     it('allows all agents when whitelist had only user entries (filtered to empty)', () => {
       // After parsing, user-only entries are stripped, so whitelist is empty → open access
