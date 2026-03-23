@@ -147,13 +147,10 @@ export class KVDataStore implements DataStore {
   // ── Claims ─────────────────────────────────────────────────────
 
   async createClaim(claim: TaskClaim): Promise<boolean> {
-    const key = `${CLAIM_PREFIX}${claim.task_id}:${claim.agent_id}`;
-    // Check if an active claim already exists for this (task_id, agent_id).
+    // Role-aware: key uses claim.id which includes role (taskId:agentId:role)
+    const key = `${CLAIM_PREFIX}${claim.id}`;
+    // Check if an active claim already exists for this (task_id, agent_id, role).
     // Terminal claims (rejected, error) are overwritten to allow re-claiming.
-    // Note: this GET→PUT is not atomic — concurrent retries from the same agent
-    // could both pass the check. This is acceptable since idempotent writes of
-    // the same claim data are harmless, and distinct agents are differentiated
-    // by the lock mechanism at claim time.
     const existing = await this.kv.get(key);
     if (existing) {
       const parsed = safeParseJson<TaskClaim>(existing);

@@ -51,14 +51,15 @@ interface TaskRow {
   prompt: string;
   timeout_at: number;
   status: string;
+  queue: string;
   github_installation_id: number;
   private: number; // SQLite stores booleans as 0/1
   config: string; // JSON string
   created_at: number;
-  claimed_agents: string | null; // JSON array or null
   review_claims: number;
   completed_reviews: number;
   reviews_completed_at: number | null;
+  summary_agent_id: string | null;
 }
 
 interface ClaimRow {
@@ -90,6 +91,7 @@ export function rowToTask(row: TaskRow): ReviewTask {
     prompt: row.prompt,
     timeout_at: row.timeout_at,
     status: row.status as ReviewTask['status'],
+    queue: (row.queue ?? 'review') as ReviewTask['queue'],
     github_installation_id: row.github_installation_id,
     private: Boolean(row.private),
     config: JSON.parse(row.config),
@@ -98,11 +100,11 @@ export function rowToTask(row: TaskRow): ReviewTask {
     completed_reviews: row.completed_reviews,
   };
 
-  if (row.claimed_agents) {
-    task.claimed_agents = JSON.parse(row.claimed_agents);
-  }
   if (row.reviews_completed_at !== null) {
     task.reviews_completed_at = row.reviews_completed_at;
+  }
+  if (row.summary_agent_id !== null) {
+    task.summary_agent_id = row.summary_agent_id;
   }
 
   return task;
@@ -154,9 +156,9 @@ export class D1DataStore implements DataStore {
     await this.db
       .prepare(
         `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
-        review_count, prompt, timeout_at, status, github_installation_id, private, config,
-        created_at, claimed_agents, review_claims, completed_reviews, reviews_completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
+        created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         task.id,
@@ -171,14 +173,15 @@ export class D1DataStore implements DataStore {
         task.prompt,
         task.timeout_at,
         task.status,
+        task.queue,
         task.github_installation_id,
         task.private ? 1 : 0,
         JSON.stringify(task.config),
         task.created_at,
-        task.claimed_agents ? JSON.stringify(task.claimed_agents) : null,
         task.review_claims ?? 0,
         task.completed_reviews ?? 0,
         task.reviews_completed_at ?? null,
+        task.summary_agent_id ?? null,
       )
       .run();
   }
@@ -232,14 +235,15 @@ export class D1DataStore implements DataStore {
       prompt: (v) => v,
       timeout_at: (v) => v,
       status: (v) => v,
+      queue: (v) => v,
       github_installation_id: (v) => v,
       private: (v) => (v ? 1 : 0),
       config: (v) => JSON.stringify(v),
       created_at: (v) => v,
-      claimed_agents: (v) => (v ? JSON.stringify(v) : null),
       review_claims: (v) => v,
       completed_reviews: (v) => v,
       reviews_completed_at: (v) => v ?? null,
+      summary_agent_id: (v) => v ?? null,
     };
 
     for (const [field, transform] of Object.entries(columnMap)) {
@@ -273,10 +277,11 @@ export class D1DataStore implements DataStore {
   // ── Claims ─────────────────────────────────────────────────────
 
   async createClaim(claim: TaskClaim): Promise<boolean> {
-    // Check for existing active claim. Terminal claims (rejected, error) can be overwritten.
+    // Check for existing active claim with same (task_id, agent_id, role).
+    // Terminal claims (rejected, error) can be overwritten.
     const existing = await this.db
-      .prepare('SELECT id, status FROM claims WHERE task_id = ? AND agent_id = ?')
-      .bind(claim.task_id, claim.agent_id)
+      .prepare('SELECT id, status FROM claims WHERE task_id = ? AND agent_id = ? AND role = ?')
+      .bind(claim.task_id, claim.agent_id, claim.role)
       .first<{ id: string; status: string }>();
 
     if (existing) {

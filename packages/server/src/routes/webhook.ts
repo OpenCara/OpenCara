@@ -122,6 +122,7 @@ export async function createTaskForPR(
 
   const taskId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(config.timeout);
+  const reviewCount = config.agents.reviewCount;
 
   await store.createTask({
     id: taskId,
@@ -132,10 +133,11 @@ export async function createTaskForPR(
     diff_url: diffUrl,
     base_ref: baseRef,
     head_ref: headRef,
-    review_count: config.agents.reviewCount,
+    review_count: reviewCount,
     prompt: config.prompt,
     timeout_at: Date.now() + timeoutMs,
     status: 'pending',
+    queue: reviewCount > 1 ? 'review' : 'summary',
     github_installation_id: installationId,
     private: isPrivate,
     config,

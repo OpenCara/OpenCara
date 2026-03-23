@@ -63,13 +63,18 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
-  // Claims — returns false if (task_id, agent_id) already exists
+  // Claims — returns false if (task_id, agent_id, role) already has an active claim
 
   async createClaim(claim: TaskClaim): Promise<boolean> {
-    // Dedup check: if an active claim with the same (task_id, agent_id) exists, reject.
+    // Dedup check: if an active claim with the same (task_id, agent_id, role) exists, reject.
     // Terminal claims (rejected, error) are overwritten to allow re-claiming after rejection.
+    // Role-aware: a reviewer can also create a separate summary claim.
     for (const [id, existing] of this.claims) {
-      if (existing.task_id === claim.task_id && existing.agent_id === claim.agent_id) {
+      if (
+        existing.task_id === claim.task_id &&
+        existing.agent_id === claim.agent_id &&
+        existing.role === claim.role
+      ) {
         if (existing.status === 'pending' || existing.status === 'completed') {
           return false;
         }

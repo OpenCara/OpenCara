@@ -129,9 +129,9 @@ describe('E2E Agent Scenarios', () => {
 
   describe('A. Single-agent review lifecycle', () => {
     it('poll → claim review → tool runs → submit → claim completed', async () => {
-      // Use review_count=2 so the agent gets a 'review' role (not summary).
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue.
       // Review submissions don't trigger postFinalReview (no crypto.subtle).
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('agent-1');
       await advanceTime(500);
@@ -163,7 +163,8 @@ describe('E2E Agent Scenarios', () => {
 
   describe('B. Multi-agent review flow', () => {
     it('two agents claim review slots → both submit successfully', async () => {
-      const taskId = await server.injectTask({ reviewCount: 3 });
+      // reviewCount=4 → 3 review slots; after 2 reviews, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 4 });
 
       // First agent claims and completes review
       const agent1Promise = startTestAgent('reviewer-1');
@@ -248,12 +249,12 @@ describe('E2E Agent Scenarios', () => {
       const taskId = await server.injectTask();
 
       await server.store.updateTask(taskId, {
-        claimed_agents: ['other-agent'],
+        queue: 'finished',
+        summary_agent_id: 'other-agent',
         status: 'reviewing',
       });
-      await server.store.acquireLock(`summary:${taskId}`, 'other-agent');
       await server.store.createClaim({
-        id: `${taskId}:other-agent`,
+        id: `${taskId}:other-agent:summary`,
         task_id: taskId,
         agent_id: 'other-agent',
         role: 'summary',
@@ -375,7 +376,8 @@ describe('E2E Agent Scenarios', () => {
     });
 
     it('agent with repo whitelist picks up matching tasks', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('filtered-agent', {
         repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
@@ -390,7 +392,7 @@ describe('E2E Agent Scenarios', () => {
     });
 
     it('agent with repo blacklist skips blacklisted repos', async () => {
-      await server.injectTask({ reviewCount: 2 });
+      await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('filtered-agent', {
         repoConfig: { mode: 'blacklist', list: ['test-org/test-repo'] },
@@ -403,7 +405,8 @@ describe('E2E Agent Scenarios', () => {
     });
 
     it('agent with mode=all picks up any task', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('all-agent', {
         repoConfig: { mode: 'all' },
@@ -484,7 +487,8 @@ describe('E2E Agent Scenarios', () => {
 
   describe('K. Repo-scoped working directory when codebase_dir is not configured', () => {
     it('creates repo-scoped dir and passes it as cwd to review tool', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('repo-cwd-agent');
       await advanceTime(500);
@@ -514,7 +518,8 @@ describe('E2E Agent Scenarios', () => {
     });
 
     it('cleans up repo-scoped dir after task completion', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('cleanup-agent');
       await advanceTime(500);
@@ -541,7 +546,8 @@ describe('E2E Agent Scenarios', () => {
     });
 
     it('does not use repo-scoped dir when codebase_dir is configured', async () => {
-      await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      await server.injectTask({ reviewCount: 3 });
 
       const deps = makeDeps('codebase-agent');
       const reviewDeps: ReviewExecutorDeps = {

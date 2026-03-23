@@ -38,6 +38,7 @@ function getMockEnv(): Env {
 }
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
+  const reviewCount = overrides.review_count ?? 1;
   return {
     id: `task-${crypto.randomUUID().slice(0, 8)}`,
     owner: 'acme',
@@ -47,10 +48,11 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     diff_url: 'https://github.com/acme/widget/pull/42.diff',
     base_ref: 'main',
     head_ref: 'feat/awesome',
-    review_count: 1,
+    review_count: reviewCount,
     prompt: 'Review this pull request for bugs and code quality.',
     timeout_at: Date.now() + 600_000,
     status: 'pending',
+    queue: reviewCount > 1 ? 'review' : 'summary',
     github_installation_id: 999,
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
@@ -421,7 +423,7 @@ APPROVE`;
       );
       // One completed review
       await store.createClaim({
-        id: 'task-partial-timeout:r1',
+        id: 'task-partial-timeout:r1:review',
         task_id: 'task-partial-timeout',
         agent_id: 'r1',
         role: 'review',
@@ -573,7 +575,7 @@ APPROVE`;
         reason: 'Transient error',
       });
 
-      // Same agent can re-claim (removed from claimed_agents)
+      // Same agent can re-claim (claim status set to rejected)
       const pollRes = await poll('agent-1');
       expect(pollRes.tasks).toHaveLength(1);
 
@@ -603,7 +605,6 @@ APPROVE`;
       // Slot should be freed — task counters updated
       const task = await store.getTask('task-error');
       expect(task?.review_claims).toBe(0);
-      expect(task?.claimed_agents).toEqual([]);
 
       // Another agent can now claim the freed slot
       const pollRes = await poll('agent-replacement');
