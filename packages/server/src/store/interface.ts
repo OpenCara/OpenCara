@@ -21,6 +21,10 @@ export interface DataStore {
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 
+  // Completed reviews — atomic increment (prevents lost increments under concurrency)
+  /** Atomically increment completed_reviews and return the new count plus the current queue state. */
+  incrementCompletedReviews(taskId: string): Promise<{ newCount: number; queue: string } | null>;
+
   // Review slot — atomic increment-if-below (prevents oversubscription)
   /** Atomically increment review_claims if review_claims < maxSlots (exclusive). Returns true if a slot was reserved. */
   claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean>;

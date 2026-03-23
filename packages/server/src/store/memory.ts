@@ -117,6 +117,17 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
+  // Completed reviews — atomic increment
+
+  async incrementCompletedReviews(
+    taskId: string,
+  ): Promise<{ newCount: number; queue: string } | null> {
+    const task = this.tasks.get(taskId);
+    if (!task) return null;
+    task.completed_reviews = (task.completed_reviews ?? 0) + 1;
+    return { newCount: task.completed_reviews, queue: task.queue };
+  }
+
   // Review slot — atomic check-and-increment
 
   async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {

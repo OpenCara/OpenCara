@@ -371,6 +371,23 @@ export class D1DataStore implements DataStore {
       .run();
   }
 
+  // ── Completed reviews (atomic increment) ────────────────────
+
+  async incrementCompletedReviews(
+    taskId: string,
+  ): Promise<{ newCount: number; queue: string } | null> {
+    await this.db
+      .prepare(`UPDATE tasks SET completed_reviews = completed_reviews + 1 WHERE id = ?`)
+      .bind(taskId)
+      .run();
+    const row = await this.db
+      .prepare('SELECT completed_reviews, queue FROM tasks WHERE id = ?')
+      .bind(taskId)
+      .first<{ completed_reviews: number; queue: string }>();
+    if (!row) return null;
+    return { newCount: row.completed_reviews, queue: row.queue };
+  }
+
   // ── Review slot (atomic conditional increment) ──────────────
 
   async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {

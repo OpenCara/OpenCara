@@ -619,21 +619,25 @@ export function taskRoutes() {
         logger,
       );
     } else {
-      // Review submitted — increment completed_reviews counter on task
-      const newCompleted = (task.completed_reviews ?? 0) + 1;
-      const taskUpdates: Partial<ReviewTask> = { completed_reviews: newCompleted };
-
-      const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
-      if (reviewSlots > 0 && newCompleted >= reviewSlots) {
-        // All reviews done — move task to summary queue
-        taskUpdates.queue = 'summary';
-        taskUpdates.reviews_completed_at = Date.now();
-        logger.info('All reviews complete, task moved to summary queue', {
-          taskId,
-          reviewSlots,
-        });
+      // Review submitted — atomically increment completed_reviews counter
+      const result = await store.incrementCompletedReviews(taskId);
+      if (result) {
+        const { newCount, queue } = result;
+        const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
+        if (reviewSlots > 0 && newCount >= reviewSlots && queue === 'review') {
+          // All reviews done — move task to summary queue
+          // Guard: only transition if queue is still 'review' to prevent
+          // late review results from overwriting 'summary' or 'finished' state
+          await store.updateTask(taskId, {
+            queue: 'summary',
+            reviews_completed_at: Date.now(),
+          });
+          logger.info('All reviews complete, task moved to summary queue', {
+            taskId,
+            reviewSlots,
+          });
+        }
       }
-      await store.updateTask(taskId, taskUpdates);
     }
 
     return c.json<ResultResponse>({ success: true });
