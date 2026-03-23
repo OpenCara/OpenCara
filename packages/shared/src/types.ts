@@ -1,6 +1,9 @@
 /** ReviewVerdict — the agent's conclusion on a PR */
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
+/** Task queue — determines what kind of claims the task accepts */
+export type TaskQueue = 'review' | 'summary' | 'finished' | 'completed';
+
 /** Task status lifecycle */
 export type TaskStatus = 'pending' | 'reviewing' | 'completed' | 'timeout' | 'failed';
 
@@ -33,15 +36,16 @@ export interface ReviewTask {
   prompt: string;
   timeout_at: number; // unix ms
   status: TaskStatus;
+  queue: TaskQueue; // which queue this task is in
   github_installation_id: number;
   private: boolean; // true if the source repo is private
   config: import('./review-config.js').ReviewConfig; // parsed .review.yml
   created_at: number;
-  // Claim counters — updated atomically on task to avoid KV list() consistency issues
-  claimed_agents?: string[]; // agent IDs that have claimed this task
-  review_claims?: number; // number of review claims
-  completed_reviews?: number; // number of completed review claims
-  reviews_completed_at?: number; // unix ms when all reviews were completed (for grace period)
+  // Counters — updated atomically on task to avoid KV list() consistency issues
+  review_claims?: number; // number of review slot claims
+  completed_reviews?: number; // number of completed review submissions
+  reviews_completed_at?: number; // unix ms when all reviews completed (for grace period)
+  summary_agent_id?: string; // agent that claimed summary (queue=finished)
 }
 
 /** A claim on a task (review_result equivalent) */

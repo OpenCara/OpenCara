@@ -9,7 +9,6 @@ import type {
   ResultResponse,
   RejectRequest,
   ErrorRequest,
-  ClaimRole,
   ReviewVerdict,
   ReviewTask,
 } from '@opencara/shared';
@@ -32,15 +31,15 @@ import { apiError } from '../errors.js';
 export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
 
 /**
- * Check if a summary role is available for the given agent, considering
+ * Check if a summary queue task is visible to the given agent, considering
  * the preferred synthesizer grace period.
  *
  * - If no preferred list is configured, summary is available immediately.
  * - If the agent is in the preferred list, summary is available immediately.
  * - If the agent is NOT preferred, summary is only available after the grace period
- *   has elapsed since all reviews were completed.
+ *   has elapsed since the task entered the summary queue.
  */
-function isSummaryAvailableForAgent(task: ReviewTask, agentId: string): boolean {
+function isSummaryVisibleToAgent(task: ReviewTask, agentId: string): boolean {
   const preferred = task.config?.summarizer?.preferred ?? [];
   if (preferred.length === 0) return true;
 
@@ -52,46 +51,6 @@ function isSummaryAvailableForAgent(task: ReviewTask, agentId: string): boolean 
   const graceStart = task.reviews_completed_at ?? (task.review_count === 1 ? task.created_at : 0);
   if (!graceStart) return false; // reviews not yet completed
   return Date.now() - graceStart >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
-}
-
-/**
- * Determine the available role for an agent on a task.
- * Uses task-level counters (not claim list queries) to avoid KV eventual consistency issues.
- * The summaryClaimed parameter is resolved by the caller via store.checkLock().
- * Returns null if no role is available.
- */
-function availableRole(
-  task: ReviewTask,
-  agentId: string,
-  summaryClaimed: boolean,
-): ClaimRole | null {
-  const claimedAgents = task.claimed_agents ?? [];
-  if (claimedAgents.includes(agentId)) return null;
-
-  const reviewClaims = task.review_claims ?? 0;
-  const completedReviews = task.completed_reviews ?? 0;
-
-  if (task.review_count === 1) {
-    if (!summaryClaimed) {
-      const { eligible } = isAgentEligibleForRole(task.config, 'summary', agentId);
-      if (!eligible) return null;
-      return isSummaryAvailableForAgent(task, agentId) ? 'summary' : null;
-    }
-    return null;
-  }
-
-  const reviewSlots = task.review_count - 1;
-  if (reviewClaims < reviewSlots) {
-    const { eligible } = isAgentEligibleForRole(task.config, 'review', agentId);
-    if (eligible) return 'review';
-  }
-  if (completedReviews >= reviewSlots && !summaryClaimed) {
-    const { eligible } = isAgentEligibleForRole(task.config, 'summary', agentId);
-    if (!eligible) return null;
-    return isSummaryAvailableForAgent(task, agentId) ? 'summary' : null;
-  }
-
-  return null;
 }
 
 /**
@@ -183,7 +142,6 @@ export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
       // Only mark timeout AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
       await store.updateTask(task.id, { status: 'timeout' });
-      await store.releaseLock(`summary:${task.id}`);
     } catch (err) {
       logger.error('Timeout post failed', {
         taskId: task.id,
@@ -222,22 +180,12 @@ async function postFinalReview(
   if (!task) return;
 
   // Defense-in-depth: if task is already completed, another agent already posted.
-  // This prevents duplicate GitHub comments even if duplicate summary claims slip through.
-  if (task.status === 'completed') {
+  if (task.status === 'completed' || task.queue === 'completed') {
     logger.info('Skipping duplicate post — task already completed', {
       taskId,
       agentId: summaryAgentId,
     });
     return;
-  }
-
-  // Observability only: check if KV has propagated the write yet (does not affect review posting)
-  const summaryClaim = await store.getClaim(`${taskId}:${summaryAgentId}`);
-  if (!summaryClaim?.review_text) {
-    logger.warn('KV claim returned stale data — using directly passed summary data', {
-      taskId,
-      agentId: summaryAgentId,
-    });
   }
 
   const claims = await store.getClaims(taskId);
@@ -268,8 +216,7 @@ async function postFinalReview(
 
     await postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
-    await store.updateTask(taskId, { status: 'completed' });
-    await store.releaseLock(`summary:${taskId}`);
+    await store.updateTask(taskId, { status: 'completed', queue: 'completed' });
     logger.info('Review posted to GitHub', {
       taskId,
       owner: task.owner,
@@ -283,8 +230,13 @@ async function postFinalReview(
       action: 'post_review_failed',
       error: err instanceof Error ? err.message : String(err),
     });
-    await store.updateTask(taskId, { status: 'failed' });
+    // On failure, move task back to summary queue so another agent can retry
     await store.releaseLock(`summary:${taskId}`);
+    await store.updateTask(taskId, {
+      status: 'reviewing',
+      queue: 'summary',
+      summary_agent_id: undefined,
+    });
   }
 }
 
@@ -315,7 +267,7 @@ export function taskRoutes() {
     // Check timeouts lazily (throttled to every 30s per isolate)
     await maybeCheckTimeouts(store, c.env);
 
-    // Find available tasks
+    // Find available tasks — only active tasks (pending/reviewing)
     const tasks = await store.listTasks({ status: ['pending', 'reviewing'] });
     const available: PollTask[] = [];
 
@@ -325,30 +277,58 @@ export function taskRoutes() {
         continue;
       }
 
-      // Derive summary claimed state from task counters (avoids O(n) KV lock reads).
-      // This is a best-effort poll filter — the claim endpoint uses acquireLock for
-      // the authoritative check.
-      const claimedCount = (task.claimed_agents ?? []).length;
-      const reviewClaims = task.review_claims ?? 0;
-      const summaryClaimed = claimedCount > reviewClaims;
-
-      const role = availableRole(task, agent_id, summaryClaimed);
-      if (!role) continue;
-      if (review_only && role === 'summary') continue;
-
       const remainingMs = task.timeout_at - Date.now();
       if (remainingMs <= 0) continue;
 
-      available.push({
-        task_id: task.id,
-        owner: task.owner,
-        repo: task.repo,
-        pr_number: task.pr_number,
-        diff_url: task.diff_url,
-        timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
-        prompt: task.prompt,
-        role,
-      });
+      // Queue-based role assignment
+      if (task.queue === 'summary') {
+        // Summary queue — check eligibility and grace period
+        if (review_only) continue;
+        const { eligible } = isAgentEligibleForRole(task.config, 'summary', agent_id);
+        if (!eligible) continue;
+        if (!isSummaryVisibleToAgent(task, agent_id)) continue;
+
+        available.push({
+          task_id: task.id,
+          owner: task.owner,
+          repo: task.repo,
+          pr_number: task.pr_number,
+          diff_url: task.diff_url,
+          timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
+          prompt: task.prompt,
+          role: 'summary',
+        });
+      } else if (task.queue === 'review') {
+        // Review queue — check if review slots are available
+        const reviewSlots = task.review_count - 1;
+        const reviewClaims = task.review_claims ?? 0;
+        if (reviewClaims >= reviewSlots) continue;
+
+        const { eligible } = isAgentEligibleForRole(task.config, 'review', agent_id);
+        if (!eligible) continue;
+
+        // Check if agent already has a review claim on this task
+        const existingClaim = await store.getClaim(`${task.id}:${agent_id}:review`);
+        if (
+          existingClaim &&
+          existingClaim.status !== 'rejected' &&
+          existingClaim.status !== 'error'
+        ) {
+          continue;
+        }
+
+        available.push({
+          task_id: task.id,
+          owner: task.owner,
+          repo: task.repo,
+          pr_number: task.pr_number,
+          diff_url: task.diff_url,
+          timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
+          prompt: task.prompt,
+          role: 'review',
+        });
+      }
+      // Tasks in 'finished' or 'completed' queue are not pollable
     }
 
     return c.json<PollResponse>({ tasks: available });
@@ -358,7 +338,6 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/claim', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
-    const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ClaimRequest>();
     const { agent_id, role, model, tool } = body;
@@ -391,33 +370,40 @@ export function taskRoutes() {
       );
     }
 
-    const claimSummaryClaimed = await store.isLockHeld(`summary:${taskId}`);
-    const actualRole = availableRole(task, agent_id, claimSummaryClaimed);
-
-    if (!actualRole || actualRole !== role) {
-      return apiError(
-        c,
-        409,
-        'CLAIM_CONFLICT',
-        actualRole ? `Expected role ${actualRole}, got ${role}` : 'No slots available',
-      );
-    }
-
-    // Acquire summary lock to prevent concurrent claims under KV eventual consistency.
-    // Uses a dedicated KV key so only the first agent to write wins.
-    if (role === 'summary') {
-      const lockAcquired = await store.acquireLock(`summary:${taskId}`, agent_id);
-      if (!lockAcquired) {
-        logger.info('Rejecting duplicate summary claim — lock held by another agent', {
-          taskId,
-          agentId: agent_id,
-        });
-        return apiError(c, 409, 'SUMMARY_LOCKED', 'Summary already claimed by another agent');
+    // Queue-based claim validation
+    if (role === 'review') {
+      if (task.queue !== 'review') {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
+      }
+      const reviewSlots = task.review_count - 1;
+      const reviewClaims = task.review_claims ?? 0;
+      if (reviewClaims >= reviewSlots) {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
+      }
+    } else if (role === 'summary') {
+      if (task.queue !== 'summary') {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+      }
+      // Check preferred synthesizer grace period
+      if (!isSummaryVisibleToAgent(task, agent_id)) {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
     }
 
-    // Create the claim — returns false if (task_id, agent_id) already exists
-    const claimId = `${taskId}:${agent_id}`;
+    // For summary claims, acquire a lock to prevent concurrent claims.
+    // The lock is atomic (synchronous in MemoryDataStore, conditional-put in KV/D1)
+    // and prevents the race where multiple agents pass the queue check above
+    // but haven't yet updated the queue to 'finished'.
+    if (role === 'summary') {
+      const lockKey = `summary:${taskId}`;
+      const locked = await store.acquireLock(lockKey, agent_id);
+      if (!locked) {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Summary already claimed by another agent');
+      }
+    }
+
+    // Role-aware claim ID: allows reviewer to also claim summary later
+    const claimId = `${taskId}:${agent_id}:${role}`;
     const claimCreated = await store.createClaim({
       id: claimId,
       task_id: taskId,
@@ -429,33 +415,36 @@ export function taskRoutes() {
       created_at: Date.now(),
     });
     if (!claimCreated) {
+      if (role === 'summary') {
+        await store.releaseLock(`summary:${taskId}`);
+      }
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
     }
 
-    // Update task counters atomically (avoids KV list consistency issues)
-    const claimedAgents = task.claimed_agents ?? [];
-    if (!claimedAgents.includes(agent_id)) {
-      claimedAgents.push(agent_id);
-    }
+    // Update task state based on role
     const taskUpdates: Partial<ReviewTask> = {
-      claimed_agents: claimedAgents,
       status: task.status === 'pending' ? 'reviewing' : task.status,
     };
+
     if (role === 'review') {
       taskUpdates.review_claims = (task.review_claims ?? 0) + 1;
+    } else if (role === 'summary') {
+      // Move task from summary queue → finished queue
+      taskUpdates.queue = 'finished';
+      taskUpdates.summary_agent_id = agent_id;
     }
+
     await store.updateTask(taskId, taskUpdates);
 
-    // If summary role, include completed review texts (use getClaims here — OK since
-    // reviews were completed in prior requests, KV has had time to propagate)
+    // If summary role, include completed review texts
     if (role === 'summary') {
       const claims = await store.getClaims(taskId);
       const completedReviews = claims
-        .filter((c) => c.role === 'review' && c.status === 'completed' && c.review_text)
-        .map((c) => ({
-          agent_id: c.agent_id,
-          review_text: c.review_text!,
-          verdict: (c.verdict ?? 'comment') as ReviewVerdict,
+        .filter((cl) => cl.role === 'review' && cl.status === 'completed' && cl.review_text)
+        .map((cl) => ({
+          agent_id: cl.agent_id,
+          review_text: cl.review_text!,
+          verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
         }));
       return c.json<ClaimResponse>({ claimed: true, reviews: completedReviews });
     }
@@ -476,7 +465,8 @@ export function taskRoutes() {
       return apiError(c, 400, 'INVALID_REQUEST', 'agent_id, type, and review_text are required');
     }
 
-    const claimId = `${taskId}:${agent_id}`;
+    // Role-aware claim lookup
+    const claimId = `${taskId}:${agent_id}:${type}`;
     const claim = await store.getClaim(claimId);
 
     if (!claim) {
@@ -523,23 +513,16 @@ export function taskRoutes() {
     }
 
     if (type === 'summary') {
-      // Verify this agent holds the summary lock before posting to GitHub.
-      // Under concurrent claims, multiple agents may have claimed summary,
-      // but only the lock holder should post the review.
-      const holdsLock = await store.checkLock(`summary:${taskId}`, agent_id);
-      if (!holdsLock) {
-        logger.info(
-          'Accepting result but skipping GitHub post — agent does not hold summary lock',
-          {
-            taskId,
-            agentId: agent_id,
-          },
-        );
+      // Verify this agent is the summary holder (queue-based check)
+      if (task.summary_agent_id !== agent_id) {
+        logger.info('Accepting result but skipping GitHub post — agent is not summary holder', {
+          taskId,
+          agentId: agent_id,
+        });
         return c.json<ResultResponse>({ success: true });
       }
 
       // Summary submitted — post the final review to GitHub
-      // Pass data directly to avoid KV read-after-write staleness
       await postFinalReview(
         store,
         c.env,
@@ -559,9 +542,10 @@ export function taskRoutes() {
 
       const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
       if (reviewSlots > 0 && newCompleted >= reviewSlots) {
-        // Set reviews_completed_at for preferred synthesizer grace period
+        // All reviews done — move task to summary queue
+        taskUpdates.queue = 'summary';
         taskUpdates.reviews_completed_at = Date.now();
-        logger.info('All reviews complete, summary slot now available', {
+        logger.info('All reviews complete, task moved to summary queue', {
           taskId,
           reviewSlots,
         });
@@ -581,8 +565,8 @@ export function taskRoutes() {
     const body = await c.req.json<RejectRequest>();
     const { agent_id, reason } = body;
 
-    const claimId = `${taskId}:${agent_id}`;
-    const claim = await store.getClaim(claimId);
+    // Try role-aware claim IDs (summary first, then review)
+    const claim = await findClaimForAgent(store, taskId, agent_id);
 
     if (!claim) {
       return apiError(c, 404, 'CLAIM_NOT_FOUND', 'Claim not found');
@@ -596,17 +580,18 @@ export function taskRoutes() {
       return apiError(c, 409, 'CLAIM_CONFLICT', `Claim is ${claim.status}, expected pending`);
     }
 
-    await store.updateClaim(claimId, { status: 'rejected' });
+    await store.updateClaim(claim.id, { status: 'rejected' });
 
     // Free the slot so another agent can claim it
     const task = await store.getTask(taskId);
     if (task) {
-      const updates: Partial<ReviewTask> = {
-        claimed_agents: (task.claimed_agents ?? []).filter((id) => id !== agent_id),
-      };
+      const updates: Partial<ReviewTask> = {};
       if (claim.role === 'review') {
         updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
       } else if (claim.role === 'summary') {
+        // Move task back to summary queue from finished and release the lock
+        updates.queue = 'summary';
+        updates.summary_agent_id = undefined;
         await store.releaseLock(`summary:${taskId}`);
       }
       await store.updateTask(taskId, updates);
@@ -631,8 +616,8 @@ export function taskRoutes() {
     const body = await c.req.json<ErrorRequest>();
     const { agent_id, error } = body;
 
-    const claimId = `${taskId}:${agent_id}`;
-    const claim = await store.getClaim(claimId);
+    // Try role-aware claim IDs (summary first, then review)
+    const claim = await findClaimForAgent(store, taskId, agent_id);
 
     if (!claim) {
       return apiError(c, 404, 'CLAIM_NOT_FOUND', 'Claim not found');
@@ -646,17 +631,18 @@ export function taskRoutes() {
       return apiError(c, 409, 'CLAIM_CONFLICT', `Claim is ${claim.status}, expected pending`);
     }
 
-    await store.updateClaim(claimId, { status: 'error' });
+    await store.updateClaim(claim.id, { status: 'error' });
 
     // Free the slot so another agent can claim it
     const task = await store.getTask(taskId);
     if (task) {
-      const updates: Partial<ReviewTask> = {
-        claimed_agents: (task.claimed_agents ?? []).filter((id) => id !== agent_id),
-      };
+      const updates: Partial<ReviewTask> = {};
       if (claim.role === 'review') {
         updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
       } else if (claim.role === 'summary') {
+        // Move task back to summary queue from finished and release the lock
+        updates.queue = 'summary';
+        updates.summary_agent_id = undefined;
         await store.releaseLock(`summary:${taskId}`);
       }
       await store.updateTask(taskId, updates);
@@ -673,4 +659,29 @@ export function taskRoutes() {
   });
 
   return app;
+}
+
+/**
+ * Find a pending claim for an agent on a task. Checks role-aware claim IDs
+ * (summary first since that's the more impactful role to release).
+ * Falls back to old-style claim ID for backward compatibility during migration.
+ */
+async function findClaimForAgent(
+  store: DataStore,
+  taskId: string,
+  agentId: string,
+): Promise<import('@opencara/shared').TaskClaim | null> {
+  // Try summary claim first (higher priority to release)
+  const summaryClaim = await store.getClaim(`${taskId}:${agentId}:summary`);
+  if (summaryClaim && summaryClaim.status === 'pending') return summaryClaim;
+
+  // Try review claim
+  const reviewClaim = await store.getClaim(`${taskId}:${agentId}:review`);
+  if (reviewClaim && reviewClaim.status === 'pending') return reviewClaim;
+
+  // Return any found claim for idempotency checks (rejected/error/completed)
+  if (summaryClaim) return summaryClaim;
+  if (reviewClaim) return reviewClaim;
+
+  return null;
 }

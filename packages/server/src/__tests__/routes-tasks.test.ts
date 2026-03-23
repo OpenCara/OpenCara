@@ -23,6 +23,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     prompt: 'Review this PR',
     timeout_at: Date.now() + 600_000,
     status: 'pending',
+    queue: 'summary', // review_count=1 → summary queue
     github_installation_id: 123,
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
@@ -81,10 +82,15 @@ describe('Task Routes', () => {
       expect(body.tasks[0].role).toBe('summary'); // review_count=1 → summary only
     });
 
-    it('does not return tasks where agent already has a claim', async () => {
-      await store.createTask(makeTask({ claimed_agents: ['agent-1'] }));
-      await store.acquireLock('summary:task-1', 'agent-1');
+    it('does not return tasks already claimed by agent', async () => {
+      // Create task and claim it
+      await store.createTask(makeTask());
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+      });
 
+      // Task should now be in finished queue — not visible
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
       expect(body.tasks).toHaveLength(0);
@@ -98,7 +104,7 @@ describe('Task Routes', () => {
     });
 
     it('returns review role for multi-agent tasks', async () => {
-      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
       expect(body.tasks[0].role).toBe('review');
@@ -110,7 +116,7 @@ describe('Task Routes', () => {
     });
 
     it('skips summary tasks when review_only is true', async () => {
-      // review_count=1 → only summary role available
+      // review_count=1 → summary queue
       await store.createTask(makeTask());
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
@@ -121,8 +127,8 @@ describe('Task Routes', () => {
     });
 
     it('returns review tasks when review_only is true', async () => {
-      // review_count=3 → review role available
-      await store.createTask(makeTask({ review_count: 3 }));
+      // review_count=3 → review queue
+      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         review_only: true,
@@ -133,8 +139,8 @@ describe('Task Routes', () => {
     });
 
     it('returns both review and summary when review_only is not set', async () => {
-      await store.createTask(makeTask({ id: 'task-review', review_count: 3 }));
-      await store.createTask(makeTask({ id: 'task-summary', review_count: 1 }));
+      await store.createTask(makeTask({ id: 'task-review', review_count: 3, queue: 'review' }));
+      await store.createTask(makeTask({ id: 'task-summary', review_count: 1, queue: 'summary' }));
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
       expect(body.tasks).toHaveLength(2);
@@ -267,7 +273,7 @@ describe('Task Routes', () => {
     });
 
     it('rejects claim with wrong role', async () => {
-      await store.createTask(makeTask()); // review_count=1 → only summary
+      await store.createTask(makeTask()); // review_count=1, queue=summary → only summary
       const res = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
         role: 'review',
@@ -278,13 +284,13 @@ describe('Task Routes', () => {
     });
 
     it('rejects double claim from same agent', async () => {
-      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
       // First claim succeeds
       await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
         role: 'review',
       });
-      // Second claim fails
+      // Second claim fails (same agent, same role)
       const res = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
         role: 'review',
@@ -298,14 +304,14 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 2,
-          claimed_agents: ['reviewer'],
+          queue: 'summary',
           review_claims: 1,
           completed_reviews: 1,
         }),
       );
       // Add a completed review
       await store.createClaim({
-        id: 'task-1:reviewer',
+        id: 'task-1:reviewer:review',
         task_id: 'task-1',
         agent_id: 'reviewer',
         role: 'review',
@@ -334,15 +340,54 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-1');
       expect(task?.status).toBe('reviewing');
     });
+
+    it('moves task to finished queue on summary claim', async () => {
+      await store.createTask(makeTask());
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+      });
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+      expect(task?.summary_agent_id).toBe('agent-1');
+    });
+
+    it('reviewer can claim summary after completing review (#330)', async () => {
+      // Start with review_count=2, review queue
+      await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
+
+      // Agent-a claims review
+      await request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-a', role: 'review' });
+
+      // Agent-a submits review — this should move task to summary queue
+      await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-a',
+        type: 'review',
+        review_text: 'Review A',
+        verdict: 'approve',
+      });
+
+      // Task should now be in summary queue
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+
+      // Agent-a should be able to claim summary (role-aware claim ID)
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'summary',
+      });
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
   });
 
   // ── Result ───────────────────────────────────────────────
 
   describe('POST /api/tasks/:taskId/result', () => {
     it('stores review result', async () => {
-      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -377,9 +422,9 @@ describe('Task Routes', () => {
     });
 
     it('rejects result when submission type does not match claim role (review claim, summary submission)', async () => {
-      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -387,23 +432,19 @@ describe('Task Routes', () => {
         created_at: Date.now(),
       });
 
+      // Submitting 'summary' type looks for claim ID task-1:agent-1:summary which doesn't exist
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
         type: 'summary',
         review_text: 'Synthesized review',
       });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error.code).toBe('INVALID_REQUEST');
-      expect(body.error.message).toContain(
-        "Claim role 'review' does not match submission type 'summary'",
-      );
+      expect(res.status).toBe(404); // No summary claim exists
     });
 
     it('rejects result when submission type does not match claim role (summary claim, review submission)', async () => {
       await store.createTask(makeTask());
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:summary',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'summary',
@@ -411,23 +452,19 @@ describe('Task Routes', () => {
         created_at: Date.now(),
       });
 
+      // Submitting 'review' type looks for claim ID task-1:agent-1:review which doesn't exist
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
         type: 'review',
         review_text: 'Individual review',
       });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error.code).toBe('INVALID_REQUEST');
-      expect(body.error.message).toContain(
-        "Claim role 'summary' does not match submission type 'review'",
-      );
+      expect(res.status).toBe(404); // No review claim exists
     });
 
     it('rejects result for already completed claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:summary',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'summary',
@@ -442,6 +479,26 @@ describe('Task Routes', () => {
       });
       expect(res.status).toBe(409);
     });
+
+    it('moves task to summary queue when last review is submitted', async () => {
+      await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
+      // Agent claims review
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-a',
+        role: 'review',
+      });
+      // Submit review
+      await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-a',
+        type: 'review',
+        review_text: 'Looks good',
+        verdict: 'approve',
+      });
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+      expect(task?.completed_reviews).toBe(1);
+    });
   });
 
   // ── Reject / Error ───────────────────────────────────────
@@ -451,13 +508,13 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -485,7 +542,7 @@ describe('Task Routes', () => {
 
     it('returns 409 if claim is completed', async () => {
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -504,13 +561,13 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -533,17 +590,17 @@ describe('Task Routes', () => {
       expect(res2.status).toBe(200);
     });
 
-    it('frees review slot (review_claims decremented, agent removed from claimed_agents)', async () => {
+    it('frees review slot (review_claims decremented)', async () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1', 'agent-2'],
+          queue: 'review',
           review_claims: 2,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -558,19 +615,18 @@ describe('Task Routes', () => {
 
       const task = await store.getTask('task-1');
       expect(task?.review_claims).toBe(1);
-      expect(task?.claimed_agents).toEqual(['agent-2']);
     });
 
-    it('frees summary slot', async () => {
+    it('moves task back to summary queue on summary reject', async () => {
       await store.createTask(
         makeTask({
-          claimed_agents: ['agent-1'],
+          queue: 'finished',
+          summary_agent_id: 'agent-1',
           status: 'reviewing',
         }),
       );
-      await store.acquireLock('summary:task-1', 'agent-1');
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:summary',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'summary',
@@ -584,22 +640,21 @@ describe('Task Routes', () => {
       });
 
       const task = await store.getTask('task-1');
-      expect(task?.claimed_agents).toEqual([]);
-      // Lock should be released
-      expect(await store.isLockHeld('summary:task-1')).toBe(false);
+      expect(task?.queue).toBe('summary');
+      expect(task?.summary_agent_id).toBeUndefined();
     });
 
     it('counter underflow protection — reject when review_claims is already 0', async () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 0, // already 0 (edge case)
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -622,13 +677,13 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -656,7 +711,7 @@ describe('Task Routes', () => {
 
     it('returns 409 if claim is completed', async () => {
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -675,13 +730,13 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -697,16 +752,16 @@ describe('Task Routes', () => {
       expect(res2.status).toBe(200);
     });
 
-    it('frees summary slot on error', async () => {
+    it('moves task back to summary queue on summary error', async () => {
       await store.createTask(
         makeTask({
-          claimed_agents: ['agent-1'],
+          queue: 'finished',
+          summary_agent_id: 'agent-1',
           status: 'reviewing',
         }),
       );
-      await store.acquireLock('summary:task-1', 'agent-1');
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:summary',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'summary',
@@ -720,9 +775,8 @@ describe('Task Routes', () => {
       });
 
       const task = await store.getTask('task-1');
-      expect(task?.claimed_agents).toEqual([]);
-      // Lock should be released
-      expect(await store.isLockHeld('summary:task-1')).toBe(false);
+      expect(task?.queue).toBe('summary');
+      expect(task?.summary_agent_id).toBeUndefined();
     });
   });
 
@@ -758,13 +812,7 @@ describe('Task Routes', () => {
       // Poll again — should now run checkTimeouts
       await request('POST', '/api/tasks/poll', { agent_id: 'agent-2' });
 
-      // task-delayed should be processed (status changes from pending; exact target depends on GitHub mock)
-      // Since getInstallationToken fails in tests (no valid key), checkTimeouts catches the error
-      // and leaves the task as pending. But we can verify the throttle was bypassed by checking
-      // that the function actually ran (the timeout_at check would list it).
-      // The real test is the first one — this confirms the reset path works.
       const task = await store.getTask('task-delayed');
-      // Task stays pending because GitHub posting fails, but checkTimeouts DID run
       expect(task).toBeDefined();
     });
 
@@ -796,13 +844,13 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -828,13 +876,13 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          claimed_agents: ['agent-1'],
+          queue: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
       );
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'review',
@@ -874,7 +922,7 @@ describe('Task Routes', () => {
     it('result endpoint logs on already-completed claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim({
-        id: 'task-1:agent-1',
+        id: 'task-1:agent-1:summary',
         task_id: 'task-1',
         agent_id: 'agent-1',
         role: 'summary',
@@ -893,30 +941,6 @@ describe('Task Routes', () => {
       expect(logEntry.agentId).toBe('agent-1');
       expect(logEntry.claimStatus).toBe('completed');
     });
-
-    it('result endpoint logs on role mismatch', async () => {
-      await store.createTask(makeTask({ review_count: 3 }));
-      await store.createClaim({
-        id: 'task-1:agent-1',
-        task_id: 'task-1',
-        agent_id: 'agent-1',
-        role: 'review',
-        status: 'pending',
-        created_at: Date.now(),
-      });
-
-      await request('POST', '/api/tasks/task-1/result', {
-        agent_id: 'agent-1',
-        type: 'summary',
-        review_text: 'Synthesized review',
-      });
-
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Result rejected'));
-      const logEntry = JSON.parse(errorSpy.mock.calls[0][0] as string);
-      expect(logEntry.agentId).toBe('agent-1');
-      expect(logEntry.claimRole).toBe('review');
-      expect(logEntry.submissionType).toBe('summary');
-    });
   });
 
   // ── Whitelist / Blacklist enforcement ────────────────────
@@ -926,6 +950,7 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
+          queue: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -945,6 +970,7 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
+          queue: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -965,6 +991,7 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
+          queue: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -984,6 +1011,7 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
+          queue: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1030,6 +1058,7 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
+          queue: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1089,6 +1118,7 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
+          queue: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1111,36 +1141,28 @@ describe('Task Routes', () => {
     });
   });
 
-  // ── Summary lock — duplicate claim prevention (#221, #273) ──────────
+  // ── Summary queue — duplicate claim prevention ──────────
 
-  describe('summary lock — duplicate claim prevention (#221, #273)', () => {
-    it('rejects summary claim when lock is held by another agent', async () => {
+  describe('summary queue — duplicate claim prevention', () => {
+    it('rejects summary claim when task is already in finished queue', async () => {
       await store.createTask(makeTask());
 
-      // Agent A claims summary (acquires lock)
+      // Agent A claims summary (moves task to finished queue)
       const res1 = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-a',
         role: 'summary',
       });
-      const body1 = await res1.json();
-      expect(body1.claimed).toBe(true);
+      expect((await res1.json()).claimed).toBe(true);
 
-      // Simulate KV stale read: reset claimed_agents so agent-b appears eligible
-      // but the lock is still held by agent-a
-      await store.updateTask('task-1', { claimed_agents: [] });
-
-      // Agent B tries to claim summary — lock is still held by agent-a,
-      // so availableRole sees summaryClaimed=true and returns null
+      // Agent B tries to claim summary — task is in finished queue, not summary
       const res2 = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-b',
         role: 'summary',
       });
       expect(res2.status).toBe(409);
-      const body2 = await res2.json();
-      expect(body2.error.code).toBe('CLAIM_CONFLICT');
     });
 
-    it('allows summary claim after previous summary claim was rejected (lock released)', async () => {
+    it('allows summary claim after previous summary was rejected (task back in summary queue)', async () => {
       await store.createTask(makeTask());
 
       // Agent A claims and rejects summary
@@ -1153,7 +1175,7 @@ describe('Task Routes', () => {
         reason: 'test',
       });
 
-      // Agent B should be able to claim summary (lock was released on reject)
+      // Agent B should be able to claim summary (task is back in summary queue)
       const res = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-b',
         role: 'summary',
@@ -1162,7 +1184,7 @@ describe('Task Routes', () => {
       expect(body.claimed).toBe(true);
     });
 
-    it('allows summary claim after previous summary claim errored (lock released)', async () => {
+    it('allows summary claim after previous summary errored (task back in summary queue)', async () => {
       await store.createTask(makeTask());
 
       // Agent A claims and errors summary
@@ -1175,7 +1197,7 @@ describe('Task Routes', () => {
         error: 'OOM',
       });
 
-      // Agent B should be able to claim summary (lock was released on error)
+      // Agent B should be able to claim summary (task is back in summary queue)
       const res = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-b',
         role: 'summary',
@@ -1183,111 +1205,13 @@ describe('Task Routes', () => {
       const body = await res.json();
       expect(body.claimed).toBe(true);
     });
-
-    it('result submission by non-lock-holder is accepted but not posted to GitHub', async () => {
-      await store.createTask(makeTask({ status: 'reviewing' }));
-
-      // Simulate a race: two agents both have pending summary claims,
-      // but only agent-a holds the lock
-      await store.acquireLock('summary:task-1', 'agent-a');
-      await store.createClaim({
-        id: 'task-1:agent-a',
-        task_id: 'task-1',
-        agent_id: 'agent-a',
-        role: 'summary',
-        status: 'pending',
-        created_at: Date.now(),
-      });
-      // Manually insert a second claim (bypassing dedup for race simulation)
-      // In practice this wouldn't happen due to createClaim dedup, but we test
-      // the defense-in-depth lock check at result submission time
-      await store.updateClaim('task-1:agent-a', {}); // noop to keep agent-a
-      // Create agent-b claim with different task_id format to bypass dedup
-      const agentBClaim = {
-        id: 'task-1:agent-b',
-        task_id: 'task-1',
-        agent_id: 'agent-b',
-        role: 'summary' as const,
-        status: 'pending' as const,
-        created_at: Date.now(),
-      };
-      // Force-insert via internal mechanism — in real code, KV eventual consistency
-      // could allow this race. We simulate by directly setting the claim.
-      // Since createClaim would reject duplicate task_id+agent_id, and agent-b is
-      // a different agent, this should succeed.
-      await store.createClaim(agentBClaim);
-
-      // Agent B submits — result accepted, but no GitHub post (doesn't hold lock)
-      const res = await request('POST', '/api/tasks/task-1/result', {
-        agent_id: 'agent-b',
-        type: 'summary',
-        review_text: '## Summary\nDuplicate review.',
-      });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.success).toBe(true);
-
-      // Task should NOT be completed (agent-b didn't hold lock, no post happened)
-      const task = await store.getTask('task-1');
-      expect(task?.status).toBe('reviewing');
-    });
-
-    it('postFinalReview skips duplicate post when task is already completed', async () => {
-      await store.createTask(makeTask({ status: 'reviewing' }));
-
-      // Agent-a holds the lock and has a pending claim
-      await store.acquireLock('summary:task-1', 'agent-a');
-      await store.createClaim({
-        id: 'task-1:agent-a',
-        task_id: 'task-1',
-        agent_id: 'agent-a',
-        role: 'summary',
-        status: 'pending',
-        created_at: Date.now(),
-      });
-
-      // Agent A submits — should post and complete task
-      const res1 = await request('POST', '/api/tasks/task-1/result', {
-        agent_id: 'agent-a',
-        type: 'summary',
-        review_text: '## Summary\nFirst review.',
-      });
-      expect(res1.status).toBe(200);
-
-      // Task should be in terminal state
-      const taskAfterFirst = await store.getTask('task-1');
-      expect(['completed', 'failed']).toContain(taskAfterFirst?.status);
-    });
-
-    it('same agent can re-claim summary (idempotent lock)', async () => {
-      await store.createTask(makeTask());
-
-      // Agent A claims summary
-      const res1 = await request('POST', '/api/tasks/task-1/claim', {
-        agent_id: 'agent-a',
-        role: 'summary',
-      });
-      expect((await res1.json()).claimed).toBe(true);
-
-      // Reset task-level claimed_agents to simulate stale KV read, but lock remains
-      await store.updateTask('task-1', { claimed_agents: [] });
-
-      // Agent A claims again — lock is idempotent, but createClaim dedup
-      // will now reject since (task_id, agent_id) already exists
-      const res2 = await request('POST', '/api/tasks/task-1/claim', {
-        agent_id: 'agent-a',
-        role: 'summary',
-      });
-      // With createClaim dedup, re-claiming returns conflict
-      expect(res2.status).toBe(409);
-    });
   });
 
   // ── Multi-agent flow ─────────────────────────────────────
 
   describe('multi-agent review flow', () => {
     it('review_count=3: 2 reviews → summary becomes available', async () => {
-      await store.createTask(makeTask({ review_count: 3 }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
 
       // Agent A polls → gets review role
       let res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-a' });
@@ -1305,7 +1229,7 @@ describe('Task Routes', () => {
       // Agent B claims review
       await request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-b', role: 'review' });
 
-      // Agent C polls → no summary yet (reviews not complete)
+      // Agent C polls → no tasks (review slots filled, reviews not done)
       res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-c' });
       body = await res.json();
       expect(body.tasks).toHaveLength(0);
@@ -1331,9 +1255,18 @@ describe('Task Routes', () => {
         verdict: 'comment',
       });
 
-      // Now summary is available
+      // Now summary is available (task moved to summary queue)
       res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-c' });
       body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('summary');
+    });
+
+    it('review_count=1 goes directly to summary queue', async () => {
+      await store.createTask(makeTask({ review_count: 1, queue: 'summary' }));
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-a' });
+      const body = await res.json();
       expect(body.tasks).toHaveLength(1);
       expect(body.tasks[0].role).toBe('summary');
     });
@@ -1399,8 +1332,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
+            queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            claimed_agents: ['agent-a', 'agent-b'],
             review_claims: 2,
             completed_reviews: 2,
             reviews_completed_at: Date.now(), // just completed
@@ -1418,8 +1351,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
+            queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            claimed_agents: ['agent-a', 'agent-b'],
             review_claims: 2,
             completed_reviews: 2,
             reviews_completed_at: Date.now(), // just completed
@@ -1436,8 +1369,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
+            queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            claimed_agents: ['agent-a', 'agent-b'],
             review_claims: 2,
             completed_reviews: 2,
             reviews_completed_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
@@ -1455,8 +1388,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
+            queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            claimed_agents: ['agent-a', 'agent-b'],
             review_claims: 2,
             completed_reviews: 2,
             reviews_completed_at: Date.now(), // just completed
@@ -1477,8 +1410,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
+            queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            claimed_agents: ['agent-a', 'agent-b'],
             review_claims: 2,
             completed_reviews: 2,
             reviews_completed_at: Date.now(), // just completed
@@ -1509,7 +1442,7 @@ describe('Task Routes', () => {
 
     describe('reviews_completed_at is set when last review is submitted', () => {
       it('sets reviews_completed_at on final review submission', async () => {
-        await store.createTask(makeTask({ review_count: 2 }));
+        await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
 
         // Claim review
         await request('POST', '/api/tasks/task-1/claim', {
@@ -1531,7 +1464,7 @@ describe('Task Routes', () => {
       });
 
       it('does not set reviews_completed_at before all reviews are done', async () => {
-        await store.createTask(makeTask({ review_count: 3 }));
+        await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
 
         // Claim and submit first review
         await request('POST', '/api/tasks/task-1/claim', {

@@ -1,6 +1,7 @@
 // Core types
 export type {
   ReviewVerdict,
+  TaskQueue,
   TaskStatus,
   ClaimStatus,
   ClaimRole,

@@ -14,18 +14,20 @@ CREATE TABLE IF NOT EXISTS tasks (
   prompt TEXT NOT NULL,
   timeout_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
+  queue TEXT NOT NULL DEFAULT 'review',
   github_installation_id INTEGER NOT NULL,
   private INTEGER NOT NULL DEFAULT 0,
   config TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  claimed_agents TEXT,
   review_claims INTEGER NOT NULL DEFAULT 0,
   completed_reviews INTEGER NOT NULL DEFAULT 0,
-  reviews_completed_at INTEGER
+  reviews_completed_at INTEGER,
+  summary_agent_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_timeout ON tasks(timeout_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_queue ON tasks(queue);
 
 CREATE TABLE IF NOT EXISTS claims (
   id TEXT PRIMARY KEY,
@@ -39,7 +41,7 @@ CREATE TABLE IF NOT EXISTS claims (
   verdict TEXT,
   tokens_used INTEGER,
   created_at INTEGER NOT NULL,
-  UNIQUE(task_id, agent_id)
+  UNIQUE(task_id, agent_id, role)
 );
 
 CREATE INDEX IF NOT EXISTS idx_claims_task ON claims(task_id);

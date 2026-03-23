@@ -162,13 +162,13 @@ describe('Agent Coverage Tests', () => {
       const _task = await server.getTask(taskId);
       await server.store.updateTask(taskId, {
         status: 'reviewing',
-        claimed_agents: ['reviewer-1', 'reviewer-2'],
+        queue: 'summary',
         review_claims: 2,
         completed_reviews: 2,
         reviews_completed_at: Date.now(),
       });
       await server.store.createClaim({
-        id: `${taskId}:reviewer-1`,
+        id: `${taskId}:reviewer-1:review`,
         task_id: taskId,
         agent_id: 'reviewer-1',
         role: 'review',
@@ -180,7 +180,7 @@ describe('Agent Coverage Tests', () => {
         created_at: Date.now(),
       });
       await server.store.createClaim({
-        id: `${taskId}:reviewer-2`,
+        id: `${taskId}:reviewer-2:review`,
         task_id: taskId,
         agent_id: 'reviewer-2',
         role: 'review',
@@ -624,7 +624,7 @@ describe('Agent Coverage Tests', () => {
       // Set up completed reviews with very large review text
       await server.store.updateTask(taskId, {
         status: 'reviewing',
-        claimed_agents: ['r1', 'r2'],
+        queue: 'summary',
         review_claims: 2,
         completed_reviews: 2,
         reviews_completed_at: Date.now(),
@@ -632,7 +632,7 @@ describe('Agent Coverage Tests', () => {
       // Create review claims with huge text to exceed MAX_INPUT_SIZE_BYTES (200KB)
       const hugeReview = 'x'.repeat(150 * 1024);
       await server.store.createClaim({
-        id: `${taskId}:r1`,
+        id: `${taskId}:r1:review`,
         task_id: taskId,
         agent_id: 'r1',
         role: 'review',
@@ -642,7 +642,7 @@ describe('Agent Coverage Tests', () => {
         created_at: Date.now(),
       });
       await server.store.createClaim({
-        id: `${taskId}:r2`,
+        id: `${taskId}:r2:review`,
         task_id: taskId,
         agent_id: 'r2',
         role: 'review',
@@ -804,13 +804,13 @@ describe('Agent Coverage Tests', () => {
       // Set up completed reviews so next agent gets summary role
       await server.store.updateTask(taskId, {
         status: 'reviewing',
-        claimed_agents: ['reviewer-1', 'reviewer-2'],
+        queue: 'summary',
         review_claims: 2,
         completed_reviews: 2,
         reviews_completed_at: Date.now(),
       });
       await server.store.createClaim({
-        id: `${taskId}:reviewer-1`,
+        id: `${taskId}:reviewer-1:review`,
         task_id: taskId,
         agent_id: 'reviewer-1',
         role: 'review',
@@ -822,7 +822,7 @@ describe('Agent Coverage Tests', () => {
         created_at: Date.now(),
       });
       await server.store.createClaim({
-        id: `${taskId}:reviewer-2`,
+        id: `${taskId}:reviewer-2:review`,
         task_id: taskId,
         agent_id: 'reviewer-2',
         role: 'review',

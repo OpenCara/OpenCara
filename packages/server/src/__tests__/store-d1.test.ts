@@ -424,6 +424,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     github_installation_id: 123,
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
+    queue: 'review',
     created_at: Date.now(),
     ...overrides,
   };
@@ -431,7 +432,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
 
 function makeClaim(overrides: Partial<TaskClaim> = {}): TaskClaim {
   return {
-    id: 'task-1:agent-1',
+    id: 'task-1:agent-1:review',
     task_id: 'task-1',
     agent_id: 'agent-1',
     role: 'review',
@@ -482,18 +483,18 @@ describe('D1DataStore', () => {
       expect(retrieved?.private).toBe(true);
     });
 
-    it('stores claimed_agents as JSON', async () => {
-      const task = makeTask({ claimed_agents: ['agent-1', 'agent-2'] });
+    it('stores queue field', async () => {
+      const task = makeTask({ queue: 'summary' });
       await store.createTask(task);
       const retrieved = await store.getTask('task-1');
-      expect(retrieved?.claimed_agents).toEqual(['agent-1', 'agent-2']);
+      expect(retrieved?.queue).toBe('summary');
     });
 
-    it('handles null claimed_agents', async () => {
-      const task = makeTask();
+    it('stores summary_agent_id', async () => {
+      const task = makeTask({ summary_agent_id: 'agent-1' });
       await store.createTask(task);
       const retrieved = await store.getTask('task-1');
-      expect(retrieved?.claimed_agents).toBeUndefined();
+      expect(retrieved?.summary_agent_id).toBe('agent-1');
     });
 
     it('lists tasks with no filter', async () => {
@@ -591,10 +592,10 @@ describe('D1DataStore', () => {
       expect(await store.getClaims('task-1')).toEqual([]);
     });
 
-    it('returns false for duplicate (task_id, agent_id)', async () => {
+    it('returns false for duplicate (task_id, agent_id, role)', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1-dup' }));
+      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1:review-dup' }));
       expect(result).toBe(false);
       const claims = await store.getClaims('task-1');
       expect(claims).toHaveLength(1);
@@ -602,9 +603,9 @@ describe('D1DataStore', () => {
 
     it('allows different agents on same task', async () => {
       await store.createTask(makeTask());
-      await store.createClaim(makeClaim({ id: 'task-1:agent-1', agent_id: 'agent-1' }));
+      await store.createClaim(makeClaim({ id: 'task-1:agent-1:review', agent_id: 'agent-1' }));
       const result = await store.createClaim(
-        makeClaim({ id: 'task-1:agent-2', agent_id: 'agent-2' }),
+        makeClaim({ id: 'task-1:agent-2:review', agent_id: 'agent-2' }),
       );
       expect(result).toBe(true);
       const claims = await store.getClaims('task-1');
@@ -614,31 +615,31 @@ describe('D1DataStore', () => {
     it('allows re-claim after rejected claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      await store.updateClaim('task-1:agent-1', { status: 'rejected' });
-      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1-retry' }));
+      await store.updateClaim('task-1:agent-1:review', { status: 'rejected' });
+      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1:review-retry' }));
       expect(result).toBe(true);
     });
 
     it('allows re-claim after error claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      await store.updateClaim('task-1:agent-1', { status: 'error' });
-      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1-retry' }));
+      await store.updateClaim('task-1:agent-1:review', { status: 'error' });
+      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1:review-retry' }));
       expect(result).toBe(true);
     });
 
     it('blocks re-claim when claim is pending', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1-dup' }));
+      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1:review-dup' }));
       expect(result).toBe(false);
     });
 
     it('blocks re-claim when claim is completed', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      await store.updateClaim('task-1:agent-1', { status: 'completed' });
-      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1-dup' }));
+      await store.updateClaim('task-1:agent-1:review', { status: 'completed' });
+      const result = await store.createClaim(makeClaim({ id: 'task-1:agent-1:review-dup' }));
       expect(result).toBe(false);
     });
 
@@ -646,7 +647,7 @@ describe('D1DataStore', () => {
       await store.createTask(makeTask());
       const claim = makeClaim();
       await store.createClaim(claim);
-      const retrieved = await store.getClaim('task-1:agent-1');
+      const retrieved = await store.getClaim('task-1:agent-1:review');
       expect(retrieved).toEqual(claim);
     });
 
@@ -657,7 +658,7 @@ describe('D1DataStore', () => {
     it('updates a claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      await store.updateClaim('task-1:agent-1', {
+      await store.updateClaim('task-1:agent-1:review', {
         status: 'completed',
         review_text: 'LGTM',
         verdict: 'approve',
@@ -671,8 +672,8 @@ describe('D1DataStore', () => {
     it('updates claim with optional fields', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim({ model: 'gpt-4', tool: 'cursor' }));
-      await store.updateClaim('task-1:agent-1', { tokens_used: 1500 });
-      const claim = await store.getClaim('task-1:agent-1');
+      await store.updateClaim('task-1:agent-1:review', { tokens_used: 1500 });
+      const claim = await store.getClaim('task-1:agent-1:review');
       expect(claim?.tokens_used).toBe(1500);
     });
 
@@ -690,7 +691,7 @@ describe('D1DataStore', () => {
       await store.createTask(makeTask());
       const claim = makeClaim();
       await store.createClaim(claim);
-      const retrieved = await store.getClaim('task-1:agent-1');
+      const retrieved = await store.getClaim('task-1:agent-1:review');
       expect(retrieved?.model).toBeUndefined();
       expect(retrieved?.tool).toBeUndefined();
       expect(retrieved?.review_text).toBeUndefined();
@@ -898,21 +899,23 @@ describe('rowToTask', () => {
       private: 1,
       config: JSON.stringify(DEFAULT_REVIEW_CONFIG),
       created_at: 999000,
-      claimed_agents: JSON.stringify(['a1', 'a2']),
+      queue: 'review',
       review_claims: 2,
       completed_reviews: 1,
       reviews_completed_at: null,
+      summary_agent_id: null,
     };
 
     const task = rowToTask(row);
     expect(task.id).toBe('task-1');
     expect(task.private).toBe(true);
     expect(task.config).toEqual(DEFAULT_REVIEW_CONFIG);
-    expect(task.claimed_agents).toEqual(['a1', 'a2']);
+    expect(task.queue).toBe('review');
     expect(task.reviews_completed_at).toBeUndefined();
+    expect(task.summary_agent_id).toBeUndefined();
   });
 
-  it('handles null claimed_agents', () => {
+  it('handles summary queue with summary_agent_id', () => {
     const row = {
       id: 'task-1',
       owner: 'org',
@@ -925,19 +928,21 @@ describe('rowToTask', () => {
       review_count: 1,
       prompt: 'Review',
       timeout_at: 1000000,
-      status: 'pending',
+      status: 'reviewing',
       github_installation_id: 123,
       private: 0,
       config: JSON.stringify(DEFAULT_REVIEW_CONFIG),
       created_at: 999000,
-      claimed_agents: null,
+      queue: 'finished',
       review_claims: 0,
       completed_reviews: 0,
       reviews_completed_at: null,
+      summary_agent_id: 'agent-1',
     };
 
     const task = rowToTask(row);
-    expect(task.claimed_agents).toBeUndefined();
+    expect(task.queue).toBe('finished');
+    expect(task.summary_agent_id).toBe('agent-1');
     expect(task.private).toBe(false);
   });
 });
@@ -945,7 +950,7 @@ describe('rowToTask', () => {
 describe('rowToClaim', () => {
   it('converts a flat row to TaskClaim', () => {
     const row = {
-      id: 'task-1:agent-1',
+      id: 'task-1:agent-1:review',
       task_id: 'task-1',
       agent_id: 'agent-1',
       role: 'review',
@@ -959,7 +964,7 @@ describe('rowToClaim', () => {
     };
 
     const claim = rowToClaim(row);
-    expect(claim.id).toBe('task-1:agent-1');
+    expect(claim.id).toBe('task-1:agent-1:review');
     expect(claim.model).toBe('claude-3');
     expect(claim.verdict).toBe('approve');
     expect(claim.tokens_used).toBe(500);
@@ -967,7 +972,7 @@ describe('rowToClaim', () => {
 
   it('omits null optional fields', () => {
     const row = {
-      id: 'task-1:agent-1',
+      id: 'task-1:agent-1:review',
       task_id: 'task-1',
       agent_id: 'agent-1',
       role: 'review',

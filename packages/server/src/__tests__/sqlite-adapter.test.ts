@@ -28,6 +28,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     prompt: 'Review this PR',
     timeout_at: Date.now() + 600_000,
     status: 'pending',
+    queue: 'review',
     github_installation_id: 123,
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
@@ -38,7 +39,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
 
 function makeClaim(overrides: Partial<TaskClaim> = {}): TaskClaim {
   return {
-    id: 'task-1:agent-1',
+    id: 'task-1:agent-1:review',
     task_id: 'task-1',
     agent_id: 'agent-1',
     role: 'review',
@@ -231,19 +232,19 @@ describe('SqliteD1Adapter', () => {
       const first = await store.createClaim(makeClaim());
       expect(first).toBe(true);
 
-      // Duplicate should fail (same agent_id + task_id)
-      const dup = await store.createClaim(makeClaim({ id: 'task-1:agent-1-dup' }));
+      // Duplicate should fail (same agent_id + task_id + role)
+      const dup = await store.createClaim(makeClaim({ id: 'task-1:agent-1:review-dup' }));
       expect(dup).toBe(false);
     });
 
     it('allows re-claim after rejected claim', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
-      await store.updateClaim('task-1:agent-1', { status: 'rejected' });
+      await store.updateClaim('task-1:agent-1:review', { status: 'rejected' });
 
       // Re-claim should succeed
       const reclaim = await store.createClaim(
-        makeClaim({ id: 'task-1:agent-1-v2', status: 'pending' }),
+        makeClaim({ id: 'task-1:agent-1:review-v2', status: 'pending' }),
       );
       expect(reclaim).toBe(true);
     });
@@ -292,11 +293,12 @@ describe('SqliteD1Adapter', () => {
     });
 
     it('preserves boolean and JSON fields round-trip', async () => {
-      const task = makeTask({ private: true, claimed_agents: ['a1', 'a2'] });
+      const task = makeTask({ private: true, queue: 'summary', summary_agent_id: 'agent-1' });
       await store.createTask(task);
       const retrieved = await store.getTask(task.id);
       expect(retrieved?.private).toBe(true);
-      expect(retrieved?.claimed_agents).toEqual(['a1', 'a2']);
+      expect(retrieved?.queue).toBe('summary');
+      expect(retrieved?.summary_agent_id).toBe('agent-1');
     });
   });
 });

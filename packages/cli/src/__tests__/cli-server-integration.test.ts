@@ -123,7 +123,8 @@ describe('CLI ↔ Server Integration', () => {
 
   describe('A. CLI agent poll → claim → submit lifecycle', () => {
     it('CLI agent claims review task and submits result via server API', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('cli-review-agent');
       await advanceTime(500);
@@ -150,7 +151,8 @@ describe('CLI ↔ Server Integration', () => {
     });
 
     it('two CLI agents complete review slots sequentially', async () => {
-      const taskId = await server.injectTask({ reviewCount: 3 });
+      // reviewCount=4 → 3 review slots; after 2 reviews, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 4 });
 
       // First agent completes review
       const agent1Promise = startTestAgent('cli-r1');
@@ -186,14 +188,14 @@ describe('CLI ↔ Server Integration', () => {
     it('CLI handles claim conflict gracefully (slot taken)', async () => {
       const taskId = await server.injectTask();
 
-      // Pre-claim the slot
+      // Pre-claim the slot — move task to finished queue
       await server.store.updateTask(taskId, {
-        claimed_agents: ['other-agent'],
+        queue: 'finished',
+        summary_agent_id: 'other-agent',
         status: 'reviewing',
       });
-      await server.store.acquireLock(`summary:${taskId}`, 'other-agent');
       await server.store.createClaim({
-        id: `${taskId}:other-agent`,
+        id: `${taskId}:other-agent:summary`,
         task_id: taskId,
         agent_id: 'other-agent',
         role: 'summary',
@@ -261,7 +263,8 @@ describe('CLI ↔ Server Integration', () => {
     });
 
     it('CLI agent with matching whitelist claims the task', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('filtered-cli', {
         repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
@@ -386,10 +389,11 @@ describe('CLI ↔ Server Integration', () => {
 
   describe('G. Private repo tasks via CLI', () => {
     it('CLI agent with repo whitelist can see and claim private tasks', async () => {
+      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
       const taskId = await server.injectTask({
         owner: 'corp',
         repo: 'secret',
-        reviewCount: 2,
+        reviewCount: 3,
         private: true,
       });
 

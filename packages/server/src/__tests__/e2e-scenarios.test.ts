@@ -320,7 +320,6 @@ describe('E2E Scenarios', () => {
       // Slot freed
       const task = await store.getTask(taskId);
       expect(task?.review_claims).toBe(0);
-      expect(task?.claimed_agents).toEqual([]);
 
       // Replacement agent claims
       const tasks = await replacement.poll();
@@ -339,8 +338,9 @@ describe('E2E Scenarios', () => {
       await a1.claim(taskId, 'summary');
       await a1.reportError(taskId, 'OOM');
 
-      // Lock should be released after error
-      expect(await store.isLockHeld(`summary:${taskId}`)).toBe(false);
+      // Task should be back in summary queue after error
+      const taskAfterError = await store.getTask(taskId);
+      expect(taskAfterError?.queue).toBe('summary');
 
       const tasks = await a2.poll();
       expect(tasks).toHaveLength(1);
@@ -389,21 +389,20 @@ describe('E2E Scenarios', () => {
       expect(c4.claimed).toBe(false);
     });
 
-    it('duplicate summary claim rejected even with stale task counters (#221)', async () => {
+    it('duplicate summary claim rejected — task is in finished queue (#221)', async () => {
       const taskId = await injectPR();
       const a1 = agent('synth-1');
       const a2 = agent('synth-2');
 
-      // Agent 1 claims summary
+      // Agent 1 claims summary — moves task to finished queue
       const c1 = await a1.claim(taskId, 'summary');
       expect(c1.claimed).toBe(true);
 
-      // Simulate KV stale read: reset claimed_agents
-      // (mimics what happens when a concurrent read returns stale data)
-      // Lock is still held by synth-1
-      await store.updateTask(taskId, { claimed_agents: [] });
+      // Task is in finished queue now
+      const task = await store.getTask(taskId);
+      expect(task?.queue).toBe('finished');
 
-      // Agent 2 tries to claim — lock prevents it
+      // Agent 2 tries to claim — rejected because task is in finished queue
       const c2 = await a2.claim(taskId, 'summary');
       expect(c2.claimed).toBe(false);
     });
@@ -411,11 +410,10 @@ describe('E2E Scenarios', () => {
     it('second summary result does not post duplicate GitHub comment (#221)', async () => {
       const taskId = await injectPR();
 
-      // Manually create two summary claims with agent-a holding the lock.
-      // Verifies that only the lock holder's result gets posted to GitHub.
-      await store.acquireLock(`summary:${taskId}`, 'synth-a');
+      // Manually create two summary claims — synth-a is the designated summary agent.
+      // Verifies that only the summary_agent_id holder's result gets posted to GitHub.
       await store.createClaim({
-        id: `${taskId}:synth-a`,
+        id: `${taskId}:synth-a:summary`,
         task_id: taskId,
         agent_id: 'synth-a',
         role: 'summary',
@@ -423,7 +421,7 @@ describe('E2E Scenarios', () => {
         created_at: Date.now(),
       });
       await store.createClaim({
-        id: `${taskId}:synth-b`,
+        id: `${taskId}:synth-b:summary`,
         task_id: taskId,
         agent_id: 'synth-b',
         role: 'summary',
@@ -431,7 +429,8 @@ describe('E2E Scenarios', () => {
         created_at: Date.now(),
       });
       await store.updateTask(taskId, {
-        claimed_agents: ['synth-a', 'synth-b'],
+        queue: 'finished',
+        summary_agent_id: 'synth-a',
         status: 'reviewing',
       });
 
@@ -443,10 +442,10 @@ describe('E2E Scenarios', () => {
         (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
       ).length;
 
-      // Agent A submits summary — holds lock, should post
+      // Agent A submits summary — is summary_agent_id, should post
       await synthA.submitResult(taskId, 'summary', '## Summary\nFirst.', 'approve');
 
-      // Agent B submits summary — doesn't hold lock, result accepted but no GitHub post
+      // Agent B submits summary — not summary_agent_id, result accepted but no GitHub post
       await synthB.submitResult(taskId, 'summary', '## Summary\nDuplicate.', 'approve');
 
       // Only 1 new comment should have been posted (not 2)
@@ -679,10 +678,10 @@ describe('E2E Scenarios', () => {
       const a = agent('confused-agent');
 
       await a.claim(taskId, 'review');
+      // With role-aware claim IDs, the summary claim doesn't exist — returns 404
       const result = await a.submitResult(taskId, 'summary', 'Synthesized review');
-      expect(result.status).toBe(400);
-      expect(result.body.error.code).toBe('INVALID_REQUEST');
-      expect(result.body.error.message).toContain("does not match submission type 'summary'");
+      expect(result.status).toBe(404);
+      expect(result.body.error.code).toBe('CLAIM_NOT_FOUND');
     });
 
     it('summary claimer cannot submit as review', async () => {
@@ -690,10 +689,10 @@ describe('E2E Scenarios', () => {
       const a = agent('confused-agent');
 
       await a.claim(taskId, 'summary');
+      // With role-aware claim IDs, the review claim doesn't exist — returns 404
       const result = await a.submitResult(taskId, 'review', 'Individual review');
-      expect(result.status).toBe(400);
-      expect(result.body.error.code).toBe('INVALID_REQUEST');
-      expect(result.body.error.message).toContain("does not match submission type 'review'");
+      expect(result.status).toBe(404);
+      expect(result.body.error.code).toBe('CLAIM_NOT_FOUND');
     });
   });
 
@@ -920,16 +919,15 @@ describe('E2E Scenarios', () => {
       const originalGetClaim = store.getClaim.bind(store);
       vi.spyOn(store, 'getClaim').mockImplementation(async (claimId: string) => {
         const claim = await originalGetClaim(claimId);
-        if (claim && claimId === `${taskId}:stale-agent`) {
+        if (claim && claimId === `${taskId}:stale-agent:summary`) {
           // Simulate KV staleness — return claim without review_text
           return { ...claim, review_text: undefined };
         }
         return claim;
       });
 
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
       // Submit result — should still post to GitHub despite stale getClaim
+      // because review_text is passed directly from the result endpoint
       const result = await a.submitResult(
         taskId,
         'summary',
@@ -952,9 +950,6 @@ describe('E2E Scenarios', () => {
       expect(commentPost!.body).toBeDefined();
       const commentBody = (commentPost!.body as { body: string }).body;
       expect(commentBody).toContain('This should still be posted.');
-
-      // Warning was logged about stale KV data
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('stale data'));
     });
 
     it('review uses model/tool from directly passed summary data, not stale KV', async () => {
@@ -976,7 +971,7 @@ describe('E2E Scenarios', () => {
       let callCount = 0;
       vi.spyOn(store, 'getClaim').mockImplementation(async (claimId: string) => {
         const claim = await originalGetClaim(claimId);
-        if (claim && claimId === `${taskId}:model-agent`) {
+        if (claim && claimId === `${taskId}:model-agent:summary`) {
           callCount++;
           if (callCount > 1) {
             // Second call (postFinalReview observability) — return stale data
