@@ -1820,18 +1820,18 @@ describe('Task Routes', () => {
 
     describe('sorting preferred first', () => {
       it('preferred tasks are sorted before non-preferred', async () => {
-        // Task A: no preferences (everyone is "preferred")
+        // Task A: prefers gemini (not matching our agent)
         await store.createTask(
           makeTask({
             id: 'task-a',
             review_count: 3,
             queue: 'review',
-            config: makePreferredReviewConfig([], []),
+            config: makePreferredReviewConfig(['gemini-2.5-pro'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
         );
 
-        // Task B: prefers claude-sonnet-4-6
+        // Task B: prefers claude-sonnet-4-6 (matching our agent)
         await store.createTask(
           makeTask({
             id: 'task-b',
@@ -1842,16 +1842,15 @@ describe('Task Routes', () => {
           }),
         );
 
-        // Agent with claude-sonnet-4-6 — task-b should be sorted first (it's explicitly preferred)
-        // task-a has no preferences so everyone is "preferred" for it too
+        // Agent with claude-sonnet-4-6 — task-b (preferred) should be sorted before task-a
         const res = await request('POST', '/api/tasks/poll', {
           agent_id: 'agent-1',
           model: 'claude-sonnet-4-6',
         });
         const body = await res.json();
         expect(body.tasks).toHaveLength(2);
-        // Both are "preferred" since task-a has no prefs → both return true
-        // Stable sort preserves order
+        expect(body.tasks[0].task_id).toBe('task-b');
+        expect(body.tasks[1].task_id).toBe('task-a');
       });
 
       it('non-preferred agent sees preferred tasks sorted last', async () => {

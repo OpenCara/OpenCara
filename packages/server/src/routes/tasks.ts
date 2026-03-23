@@ -393,8 +393,12 @@ export function taskRoutes() {
       // Tasks in 'finished' or 'completed' queue are not pollable
     }
 
-    // Sort preferred tasks first (review tasks with matching model/tool)
+    // Sort preferred tasks first (only applies to review-role tasks)
     available.sort((a, b) => {
+      if (a.role !== 'review' && b.role !== 'review') return 0;
+      if (a.role !== 'review') return 1;
+      if (b.role !== 'review') return -1;
+
       const aTask = tasksById.get(a.task_id);
       const bTask = tasksById.get(b.task_id);
       const aPref = aTask ? isReviewPreferredAgent(aTask.config, body.model, body.tool) : false;
