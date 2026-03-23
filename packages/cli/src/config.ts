@@ -87,13 +87,15 @@ function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfi
 
   const config: RepoConfig = { mode: mode as RepoFilterMode };
 
+  const list = reposObj.list;
   if (mode === 'whitelist' || mode === 'blacklist') {
-    const list = reposObj.list;
     if (!Array.isArray(list) || list.length === 0) {
       throw new RepoConfigError(
         `agents[${index}].repos.list is required and must be non-empty for mode '${mode}'`,
       );
     }
+  }
+  if (Array.isArray(list) && list.length > 0) {
     for (let j = 0; j < list.length; j++) {
       if (typeof list[j] !== 'string' || !REPO_PATTERN.test(list[j])) {
         throw new RepoConfigError(
