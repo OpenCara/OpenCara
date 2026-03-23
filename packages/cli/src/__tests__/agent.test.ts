@@ -361,6 +361,48 @@ describe('agent poll loop', () => {
     expect(pollBody!.review_only).toBeUndefined();
   });
 
+  it('sends repos list in poll request for mode:all with private repos', async () => {
+    let pollBody: Record<string, unknown> | null = null;
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : String(url);
+
+      if (urlStr.includes('/api/tasks/poll')) {
+        pollBody = JSON.parse(init?.body as string);
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+        repoConfig: { mode: 'all', list: ['org/private-repo'] },
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await promise;
+
+    expect(pollBody).not.toBeNull();
+    expect(pollBody!.repos).toEqual(['org/private-repo']);
+  });
+
   it('prefixes log output with label when provided', async () => {
     globalThis.fetch = vi.fn().mockImplementation(() =>
       Promise.resolve({

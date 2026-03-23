@@ -157,7 +157,8 @@ async function pollLoop(
 
   while (!signal?.aborted) {
     try {
-      // Poll for tasks — include declared repos so server can return matching private tasks
+      // Poll for tasks — include declared repos so server can return matching private tasks.
+      // Server validates permissions; sending repos here doesn't bypass access control.
       const pollBody: Record<string, unknown> = { agent_id: agentId };
       if (reviewOnly) pollBody.review_only = true;
       if (repoConfig?.list?.length) {
