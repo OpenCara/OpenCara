@@ -401,9 +401,10 @@ export function taskRoutes() {
       if (task.queue !== 'review') {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
       }
+      // Atomic slot reservation — prevents concurrent oversubscription
       const reviewSlots = task.review_count - 1;
-      const reviewClaims = task.review_claims ?? 0;
-      if (reviewClaims >= reviewSlots) {
+      const slotReserved = await store.claimReviewSlot(taskId, reviewSlots);
+      if (!slotReserved) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
       }
     } else if (role === 'summary') {
@@ -440,23 +441,26 @@ export function taskRoutes() {
       created_at: Date.now(),
     });
     if (!claimCreated) {
-      if (role === 'summary') {
+      if (role === 'review') {
+        // Release the atomically reserved slot — re-read to get current count
+        const current = await store.getTask(taskId);
+        if (current) {
+          await store.updateTask(taskId, {
+            review_claims: Math.max(0, (current.review_claims ?? 1) - 1),
+          });
+        }
+      } else if (role === 'summary') {
         await store.releaseSummarySlot(taskId);
       }
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
     }
 
     // Update task state based on role
-    const taskUpdates: Partial<ReviewTask> = {
-      status: task.status === 'pending' ? 'reviewing' : task.status,
-    };
-
-    if (role === 'review') {
-      taskUpdates.review_claims = (task.review_claims ?? 0) + 1;
-    }
+    // Note: review_claims increment is handled atomically by claimReviewSlot above
     // Note: summary queue/agent updates are handled by claimSummarySlot above
-
-    await store.updateTask(taskId, taskUpdates);
+    if (task.status === 'pending') {
+      await store.updateTask(taskId, { status: 'reviewing' });
+    }
 
     // If summary role, include completed review texts
     if (role === 'summary') {

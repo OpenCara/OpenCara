@@ -226,8 +226,12 @@ class MockD1Statement implements D1PreparedStatement {
     let changes = 0;
     for (const row of table) {
       if (whereClause && !this._matchWhere(row, whereClause)) continue;
-      for (const { column, paramIndex } of setClauses) {
-        row[column] = this.boundValues[paramIndex];
+      for (const clause of setClauses) {
+        if ('expr' in clause && clause.expr === 'increment') {
+          row[clause.column] = ((row[clause.column] as number) ?? 0) + 1;
+        } else if ('paramIndex' in clause) {
+          row[clause.column] = this.boundValues[clause.paramIndex];
+        }
       }
       changes++;
     }
@@ -324,6 +328,14 @@ class MockD1Statement implements D1PreparedStatement {
         if ((row[col] as number) > (this.boundValues[paramIdx++] as number)) return false;
         continue;
       }
+
+      // Handle column < ?
+      const ltMatch = trimmed.match(/^(\w+)\s*<\s*\?$/);
+      if (ltMatch) {
+        const col = ltMatch[1];
+        if ((row[col] as number) >= (this.boundValues[paramIdx++] as number)) return false;
+        continue;
+      }
     }
 
     return true;
@@ -384,13 +396,26 @@ class MockD1Statement implements D1PreparedStatement {
     return false;
   }
 
-  private _parseSetClauses(setStr: string): Array<{ column: string; paramIndex: number }> {
-    const clauses: Array<{ column: string; paramIndex: number }> = [];
+  private _parseSetClauses(
+    setStr: string,
+  ): Array<{ column: string; paramIndex: number } | { column: string; expr: 'increment' }> {
+    const clauses: Array<
+      { column: string; paramIndex: number } | { column: string; expr: 'increment' }
+    > = [];
     const parts = setStr.split(',');
     let paramIdx = 0;
 
     for (const part of parts) {
-      const match = part.trim().match(/^(\w+)\s*=\s*\?$/);
+      const trimmed = part.trim();
+
+      // Handle column = column + 1 (self-increment expression)
+      const incrMatch = trimmed.match(/^(\w+)\s*=\s*\1\s*\+\s*1$/);
+      if (incrMatch) {
+        clauses.push({ column: incrMatch[1], expr: 'increment' });
+        continue;
+      }
+
+      const match = trimmed.match(/^(\w+)\s*=\s*\?$/);
       if (match) {
         clauses.push({ column: match[1], paramIndex: paramIdx++ });
       }
@@ -711,6 +736,46 @@ describe('D1DataStore', () => {
       await store.setAgentLastSeen('agent-1', 1000);
       await store.setAgentLastSeen('agent-1', 2000);
       expect(await store.getAgentLastSeen('agent-1')).toBe(2000);
+    });
+  });
+
+  // ── Review slot (atomic conditional increment) ──────────
+
+  describe('claimReviewSlot', () => {
+    it('claims slot when below max', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('rejects when at max slots', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
+    });
+
+    it('rejects when above max slots', async () => {
+      await store.createTask(makeTask({ review_claims: 3 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.claimReviewSlot('nonexistent', 2);
+      expect(result).toBe(false);
+    });
+
+    it('increments atomically up to max', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(true);
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(true);
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
     });
   });
 

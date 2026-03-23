@@ -99,6 +99,17 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
+  // Review slot — atomic check-and-increment
+
+  async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    const current = task.review_claims ?? 0;
+    if (current >= maxSlots) return false;
+    task.review_claims = current + 1;
+    return true;
+  }
+
   // Summary claim — atomic compare-and-swap (replaces locks)
 
   async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {
