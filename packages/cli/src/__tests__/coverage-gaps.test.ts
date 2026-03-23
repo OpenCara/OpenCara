@@ -66,6 +66,59 @@ describe('retry.ts sleep edge cases', () => {
 
     globalThis.setTimeout = origSetTimeout;
   });
+
+  it('sleep removes abort listener when timeout resolves normally', async () => {
+    const { withRetry } = await import('../retry.js');
+    const controller = new AbortController();
+
+    // Spy on removeEventListener to verify cleanup
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+
+    // Make setTimeout fire immediately so sleep completes normally (not via abort)
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler) => {
+      if (typeof cb === 'function') cb();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    // Fail twice so sleep is called twice, then succeed
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('fail1'))
+      .mockRejectedValueOnce(new Error('fail2'))
+      .mockResolvedValueOnce('ok');
+
+    const result = await withRetry(fn, { maxAttempts: 3, baseDelayMs: 100 }, controller.signal);
+    expect(result).toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(3);
+
+    // removeEventListener should have been called for each normal-path sleep
+    expect(removeSpy).toHaveBeenCalledTimes(2);
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
+  it('does not accumulate abort listeners over many sleep cycles', async () => {
+    const { withRetry } = await import('../retry.js');
+    const controller = new AbortController();
+
+    // Track addEventListener and removeEventListener calls on the signal
+    const addSpy = vi.spyOn(controller.signal, 'addEventListener');
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+
+    // Make setTimeout fire immediately
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler) => {
+      if (typeof cb === 'function') cb();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    // Run many retry cycles (simulating long-running polling)
+    for (let i = 0; i < 100; i++) {
+      const fn = vi.fn().mockRejectedValueOnce(new Error('fail')).mockResolvedValueOnce('ok');
+      await withRetry(fn, { maxAttempts: 2, baseDelayMs: 1 }, controller.signal);
+    }
+
+    // Each cycle adds one listener and removes one listener — net zero accumulation
+    expect(addSpy.mock.calls.length).toBe(removeSpy.mock.calls.length);
+  });
 });
 
 describe('tool-executor.ts additional coverage', () => {
