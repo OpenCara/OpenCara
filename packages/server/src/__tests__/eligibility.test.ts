@@ -262,6 +262,29 @@ describe('isAgentEligibleForRole', () => {
       expect(result.eligible).toBe(true);
     });
 
+    it('allows anonymous agent when allowAnonymous is undefined (not set)', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: { ...baseConfig.reviewer, allowAnonymous: undefined as unknown as boolean },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-xyz');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('rejects anonymous agent even if whitelisted by agentId', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          allowAnonymous: false,
+          whitelist: [{ agent: 'agent-xyz' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-xyz');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('Anonymous agents not allowed');
+    });
+
     it('does not affect summarizer role', () => {
       const config = {
         ...baseConfig,
