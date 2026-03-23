@@ -44,19 +44,20 @@ export interface LoggerOptions {
 }
 
 /**
- * Try to open a log file for appending. Returns the file descriptor on success,
- * or null if the file is not writable (with a warning printed to stderr).
+ * Verify a log file path is writable. Creates parent directories if needed.
+ * Returns true on success, false otherwise (with a warning printed to stderr).
  */
-function openLogFile(filePath: string): number | null {
+function verifyLogFile(filePath: string): boolean {
   try {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
-    return fs.openSync(filePath, 'a');
+    fs.appendFileSync(filePath, '');
+    return true;
   } catch (err) {
     console.warn(
       `Warning: Cannot open log file "${filePath}": ${(err as Error).message}. Continuing with console-only logging.`,
     );
-    return null;
+    return false;
   }
 }
 
@@ -67,12 +68,12 @@ export function createLogger(labelOrOptions?: string | LoggerOptions): Logger {
 
   const labelStr = label ? ` ${pc.dim(`[${label}]`)}` : '';
 
-  const fd = logFile ? openLogFile(logFile) : null;
+  const logFileOk = logFile ? verifyLogFile(logFile) : false;
 
   function writeToFile(line: string): void {
-    if (fd === null) return;
+    if (!logFileOk || !logFile) return;
     try {
-      fs.writeSync(fd, stripAnsi(line) + '\n');
+      fs.appendFileSync(logFile, stripAnsi(line) + '\n');
     } catch {
       // If writing fails mid-session, silently skip — console output continues
     }
