@@ -26,6 +26,7 @@ import {
 } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
+import { requireApiKey } from '../middleware/auth.js';
 import { apiError } from '../errors.js';
 
 /** Default grace period (ms) for preferred synthesizer agents. */
@@ -246,6 +247,9 @@ export const MUTATION_RATE_LIMIT = { maxRequests: 30, windowMs: 60_000 };
 
 export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
+
+  // API key auth — skips when API_KEYS is not configured (open mode)
+  app.use('/api/tasks/*', requireApiKey());
 
   // ── Poll ─────────────────────────────────────────────────────
 
