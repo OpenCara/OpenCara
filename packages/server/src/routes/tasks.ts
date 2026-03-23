@@ -442,13 +442,8 @@ export function taskRoutes() {
     });
     if (!claimCreated) {
       if (role === 'review') {
-        // Release the atomically reserved slot — re-read to get current count
-        const current = await store.getTask(taskId);
-        if (current) {
-          await store.updateTask(taskId, {
-            review_claims: Math.max(0, (current.review_claims ?? 1) - 1),
-          });
-        }
+        // Atomically release the reserved slot
+        await store.releaseReviewSlot(taskId);
       } else if (role === 'summary') {
         await store.releaseSummarySlot(taskId);
       }

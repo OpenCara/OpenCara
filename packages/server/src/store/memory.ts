@@ -110,6 +110,13 @@ export class MemoryDataStore implements DataStore {
     return true;
   }
 
+  async releaseReviewSlot(taskId: string): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task || (task.review_claims ?? 0) <= 0) return false;
+    task.review_claims = (task.review_claims ?? 0) - 1;
+    return true;
+  }
+
   // Summary claim — atomic compare-and-swap (replaces locks)
 
   async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {

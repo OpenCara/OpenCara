@@ -241,6 +241,35 @@ describe('MemoryDataStore', () => {
     });
   });
 
+  describe('releaseReviewSlot', () => {
+    it('decrements review_claims', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('returns false when review_claims is 0', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.releaseReviewSlot('nonexistent');
+      expect(result).toBe(false);
+    });
+
+    it('claim then release returns to original count', async () => {
+      await store.createTask(makeTask({ review_claims: 1 }));
+      await store.claimReviewSlot('task-1', 3);
+      expect((await store.getTask('task-1'))?.review_claims).toBe(2);
+      await store.releaseReviewSlot('task-1');
+      expect((await store.getTask('task-1'))?.review_claims).toBe(1);
+    });
+  });
+
   // ── Summary claim (CAS) ─────────────────────────────────
 
   describe('claimSummarySlot / releaseSummarySlot', () => {

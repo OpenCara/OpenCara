@@ -604,6 +604,36 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-1');
       expect(task?.review_claims).toBe(1);
     });
+
+    it('handles concurrent duplicate claims without corrupting slot count', async () => {
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+
+      // First claim succeeds
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+
+      // Fire multiple duplicate claims concurrently
+      await Promise.all([
+        request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-1',
+          role: 'review',
+        }),
+        request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-1',
+          role: 'review',
+        }),
+        request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-1',
+          role: 'review',
+        }),
+      ]);
+
+      // Slot count should still be 1 (only the original claim)
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
   });
 
   // ── Result ───────────────────────────────────────────────

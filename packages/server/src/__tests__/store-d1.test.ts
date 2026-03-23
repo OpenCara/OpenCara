@@ -229,6 +229,8 @@ class MockD1Statement implements D1PreparedStatement {
       for (const clause of setClauses) {
         if ('expr' in clause && clause.expr === 'increment') {
           row[clause.column] = ((row[clause.column] as number) ?? 0) + 1;
+        } else if ('expr' in clause && clause.expr === 'decrement') {
+          row[clause.column] = ((row[clause.column] as number) ?? 0) - 1;
         } else if ('paramIndex' in clause) {
           row[clause.column] = this.boundValues[clause.paramIndex];
         }
@@ -336,6 +338,14 @@ class MockD1Statement implements D1PreparedStatement {
         if ((row[col] as number) >= (this.boundValues[paramIdx++] as number)) return false;
         continue;
       }
+
+      // Handle column > ?
+      const gtMatch = trimmed.match(/^(\w+)\s*>\s*\?$/);
+      if (gtMatch) {
+        const col = gtMatch[1];
+        if ((row[col] as number) <= (this.boundValues[paramIdx++] as number)) return false;
+        continue;
+      }
     }
 
     return true;
@@ -398,9 +408,11 @@ class MockD1Statement implements D1PreparedStatement {
 
   private _parseSetClauses(
     setStr: string,
-  ): Array<{ column: string; paramIndex: number } | { column: string; expr: 'increment' }> {
+  ): Array<
+    { column: string; paramIndex: number } | { column: string; expr: 'increment' | 'decrement' }
+  > {
     const clauses: Array<
-      { column: string; paramIndex: number } | { column: string; expr: 'increment' }
+      { column: string; paramIndex: number } | { column: string; expr: 'increment' | 'decrement' }
     > = [];
     const parts = setStr.split(',');
     let paramIdx = 0;
@@ -412,6 +424,13 @@ class MockD1Statement implements D1PreparedStatement {
       const incrMatch = trimmed.match(/^(\w+)\s*=\s*\1\s*\+\s*1$/);
       if (incrMatch) {
         clauses.push({ column: incrMatch[1], expr: 'increment' });
+        continue;
+      }
+
+      // Handle column = column - 1 (self-decrement expression)
+      const decrMatch = trimmed.match(/^(\w+)\s*=\s*\1\s*-\s*1$/);
+      if (decrMatch) {
+        clauses.push({ column: decrMatch[1], expr: 'decrement' });
         continue;
       }
 
@@ -776,6 +795,37 @@ describe('D1DataStore', () => {
       expect(await store.claimReviewSlot('task-1', 2)).toBe(false);
       const task = await store.getTask('task-1');
       expect(task?.review_claims).toBe(2);
+    });
+  });
+
+  describe('releaseReviewSlot', () => {
+    it('decrements review_claims', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('returns false when review_claims is 0', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(0);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.releaseReviewSlot('nonexistent');
+      expect(result).toBe(false);
+    });
+
+    it('claim then release returns to original count', async () => {
+      await store.createTask(makeTask({ review_claims: 1 }));
+      await store.claimReviewSlot('task-1', 3);
+      expect((await store.getTask('task-1'))?.review_claims).toBe(2);
+      await store.releaseReviewSlot('task-1');
+      expect((await store.getTask('task-1'))?.review_claims).toBe(1);
     });
   });
 

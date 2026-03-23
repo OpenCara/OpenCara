@@ -369,6 +369,16 @@ export class D1DataStore implements DataStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  async releaseReviewSlot(taskId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > ?`,
+      )
+      .bind(taskId, 0)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   // ── Summary claim (atomic CAS) ──────────────────────────────
 
   async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {
