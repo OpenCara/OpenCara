@@ -71,3 +71,36 @@ export function formatIndividualReviewComment(
     review,
   ].join('\n');
 }
+
+/** A partial review collected before timeout. */
+export interface TimeoutReview {
+  model: string;
+  tool: string;
+  verdict: ReviewVerdict;
+  review_text: string;
+}
+
+/**
+ * Format a consolidated timeout comment containing all partial reviews
+ * and the timeout message in a single GitHub comment.
+ */
+export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutReview[]): string {
+  if (reviews.length === 0) {
+    return `**OpenCara**: Review timed out after ${timeoutMinutes} minutes.`;
+  }
+
+  const parts: string[] = [
+    `**OpenCara**: Review timed out after ${timeoutMinutes} minutes. ${reviews.length} partial review(s) collected:`,
+  ];
+
+  for (let i = 0; i < reviews.length; i++) {
+    const r = reviews[i];
+    const emoji = VERDICT_EMOJI[r.verdict];
+    parts.push('---');
+    parts.push(`### Review ${i + 1} — ${emoji} ${r.verdict} (${r.model} / ${r.tool})`);
+    parts.push('');
+    parts.push(r.review_text);
+  }
+
+  return parts.join('\n');
+}
