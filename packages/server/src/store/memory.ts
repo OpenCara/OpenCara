@@ -43,6 +43,24 @@ export class MemoryDataStore implements DataStore {
     return results.map((t) => ({ ...t }));
   }
 
+  async findActiveTaskForPR(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<ReviewTask | null> {
+    for (const task of this.tasks.values()) {
+      if (
+        task.owner === owner &&
+        task.repo === repo &&
+        task.pr_number === prNumber &&
+        (task.status === 'pending' || task.status === 'reviewing')
+      ) {
+        return { ...task };
+      }
+    }
+    return null;
+  }
+
   async updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean> {
     const task = this.tasks.get(id);
     if (!task) return false;
