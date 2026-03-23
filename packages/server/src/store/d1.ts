@@ -371,6 +371,28 @@ export class D1DataStore implements DataStore {
       .run();
   }
 
+  // ── Review slot (atomic conditional increment) ──────────────
+
+  async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE tasks SET review_claims = review_claims + 1 WHERE id = ? AND review_claims < ?`,
+      )
+      .bind(taskId, maxSlots)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async releaseReviewSlot(taskId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > ?`,
+      )
+      .bind(taskId, 0)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   // ── Summary claim (atomic CAS) ──────────────────────────────
 
   async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {

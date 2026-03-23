@@ -21,6 +21,12 @@ export interface DataStore {
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 
+  // Review slot — atomic increment-if-below (prevents oversubscription)
+  /** Atomically increment review_claims if review_claims < maxSlots (exclusive). Returns true if a slot was reserved. */
+  claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean>;
+  /** Atomically decrement review_claims (floor at 0). Used to release a slot on claim failure. */
+  releaseReviewSlot(taskId: string): Promise<boolean>;
+
   // Summary claim — atomic compare-and-swap (replaces locks)
   /** Atomically claim summary: sets queue='finished' + summary_agent_id only if queue='summary'. Returns true if claimed. */
   claimSummarySlot(taskId: string, agentId: string): Promise<boolean>;

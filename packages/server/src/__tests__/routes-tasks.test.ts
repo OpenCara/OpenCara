@@ -558,6 +558,82 @@ describe('Task Routes', () => {
       const body = await res.json();
       expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
+
+    it('prevents oversubscription with concurrent review claims', async () => {
+      // Task with review_count=3 → 2 review slots (review_count - 1)
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+
+      // Three agents race for 2 review slots
+      const results = await Promise.all([
+        request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-1', role: 'review' }),
+        request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-2', role: 'review' }),
+        request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-3', role: 'review' }),
+      ]);
+
+      const statuses = results.map((r) => r.status);
+      const successes = statuses.filter((s) => s === 200);
+      const conflicts = statuses.filter((s) => s === 409);
+
+      // Exactly 2 should succeed, 1 should be rejected
+      expect(successes).toHaveLength(2);
+      expect(conflicts).toHaveLength(1);
+
+      // Task should have exactly 2 review_claims
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
+    });
+
+    it('review claim releases slot on duplicate agent claim', async () => {
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+
+      // First claim succeeds
+      const res1 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res1.status).toBe(200);
+
+      // Same agent tries again — should fail and release the reserved slot
+      const res2 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res2.status).toBe(409);
+
+      // review_claims should still be 1 (slot was released after duplicate detection)
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('handles concurrent duplicate claims without corrupting slot count', async () => {
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+
+      // First claim succeeds
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+
+      // Fire multiple duplicate claims concurrently
+      await Promise.all([
+        request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-1',
+          role: 'review',
+        }),
+        request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-1',
+          role: 'review',
+        }),
+        request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-1',
+          role: 'review',
+        }),
+      ]);
+
+      // Slot count should still be 1 (only the original claim)
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
   });
 
   // ── Result ───────────────────────────────────────────────

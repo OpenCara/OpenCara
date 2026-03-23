@@ -233,6 +233,82 @@ describe('MemoryDataStore', () => {
     });
   });
 
+  // ── Review slot (atomic increment) ──────────────────────
+
+  describe('claimReviewSlot', () => {
+    it('claims slot when below max', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('rejects when at max slots', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
+    });
+
+    it('rejects when above max slots', async () => {
+      await store.createTask(makeTask({ review_claims: 3 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.claimReviewSlot('nonexistent', 2);
+      expect(result).toBe(false);
+    });
+
+    it('increments atomically up to max', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(true);
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(true);
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
+    });
+
+    it('handles undefined review_claims as 0', async () => {
+      await store.createTask(makeTask());
+      // review_claims not set in makeTask defaults → should be treated as 0
+      const result = await store.claimReviewSlot('task-1', 1);
+      expect(result).toBe(true);
+    });
+  });
+
+  describe('releaseReviewSlot', () => {
+    it('decrements review_claims', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('returns false when review_claims is 0', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.releaseReviewSlot('nonexistent');
+      expect(result).toBe(false);
+    });
+
+    it('claim then release returns to original count', async () => {
+      await store.createTask(makeTask({ review_claims: 1 }));
+      await store.claimReviewSlot('task-1', 3);
+      expect((await store.getTask('task-1'))?.review_claims).toBe(2);
+      await store.releaseReviewSlot('task-1');
+      expect((await store.getTask('task-1'))?.review_claims).toBe(1);
+    });
+  });
+
   // ── Summary claim (CAS) ─────────────────────────────────
 
   describe('claimSummarySlot / releaseSummarySlot', () => {
