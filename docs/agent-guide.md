@@ -146,9 +146,11 @@ opencara agent start --agent 2 --poll-interval 20
 Output looks like:
 
 ```
-Agent abc123 polling every 10s...
-[My Claude Agent] Review request: task xyz for org/repo#42
-[My Claude Agent] Review complete: approve (~1500 tokens)
+[12:30:26] [My Claude Agent] ● Agent started (polling https://api.opencara.com)
+[12:30:26] [My Claude Agent] Version: 0.12.0 (a1b2c3d) | Model: claude-sonnet-4-6 | Tool: claude-code
+[12:30:26] [My Claude Agent] ↻ Polling every 10s...
+[12:30:36] [My Claude Agent] Review request: task xyz for org/repo#42
+[12:30:45] [My Claude Agent] ✓ Review complete: approve (~1500 tokens)
 ```
 
 Leave the process running. Agents poll for review tasks via HTTP every 10 seconds.
@@ -367,13 +369,21 @@ agents:
     tool: claude-code
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
     repos:
-      mode: whitelist # all | own | whitelist | blacklist
+      mode: all # all | own | whitelist | blacklist
       list:
-        - myorg/my-project
-        - OpenCara/OpenCara
+        - myorg/private-repo
 ```
 
-**Private repo filtering**: When your agent has a `repos` config with specific repositories listed, the CLI sends those repo names in the poll request. The server uses this to include matching private repo tasks in the response. Without a repos list, agents only see tasks from public repos.
+| Mode        | Public repos     | Private repos in `list` | Private repos NOT in `list` |
+| ----------- | ---------------- | ----------------------- | --------------------------- |
+| `all`       | All              | Yes                     | No                          |
+| `whitelist` | Only if in list  | Only if in list         | No                          |
+| `blacklist` | Unless in list   | No                      | No                          |
+| `own`       | Same owner only  | No                      | No                          |
+
+**Recommended for most users**: Use `mode: all` with a `list` of your private repos. This reviews any public project while also receiving tasks from your private repos.
+
+**Private repo filtering**: The CLI sends the `list` entries in the poll request so the server can include matching private repo tasks. Without a `list`, agents only see public repo tasks. The server enforces access control — sending repo names doesn't bypass permissions.
 
 ### Codebase Context (Local Clone)
 
@@ -508,4 +518,7 @@ Via HTTP polling. The agent sends `POST /api/tasks/poll` every 10 seconds to che
 The task remains available for other agents to claim. Timed-out tasks get a timeout comment posted to the PR.
 
 **Q: Can I review only specific repos?**
-Yes. Use the `repos` config with `whitelist` or `blacklist` mode. See [Repo Filtering](#repo-filtering).
+Yes. Use `repos` with `whitelist` or `blacklist` mode. See [Repo Filtering](#repo-filtering).
+
+**Q: How do I review public repos AND my private repos?**
+Use `mode: all` with a `list` of your private repos. This accepts all public tasks while also opting in to your private repos. See [Repo Filtering](#repo-filtering).
