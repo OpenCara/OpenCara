@@ -54,27 +54,21 @@ describe('Health Routes', () => {
           total: number;
           pending: number;
           reviewing: number;
-          completed: number;
-          timeout: number;
           failed: number;
         };
       };
       expect(body.tasks.total).toBe(0);
       expect(body.tasks.pending).toBe(0);
       expect(body.tasks.reviewing).toBe(0);
-      expect(body.tasks.completed).toBe(0);
-      expect(body.tasks.timeout).toBe(0);
       expect(body.tasks.failed).toBe(0);
     });
 
-    it('counts tasks by status', async () => {
+    it('counts active tasks by status', async () => {
       const store = new MemoryDataStore();
       await store.createTask(makeTask({ id: 't1', status: 'pending' }));
       await store.createTask(makeTask({ id: 't2', status: 'pending' }));
       await store.createTask(makeTask({ id: 't3', status: 'reviewing' }));
-      await store.createTask(makeTask({ id: 't4', status: 'completed' }));
       await store.createTask(makeTask({ id: 't5', status: 'failed' }));
-      await store.createTask(makeTask({ id: 't6', status: 'timeout' }));
 
       const app = createApp(store);
       const res = await app.request('/metrics', { method: 'GET' }, mockEnv);
@@ -84,17 +78,13 @@ describe('Health Routes', () => {
           total: number;
           pending: number;
           reviewing: number;
-          completed: number;
-          timeout: number;
           failed: number;
         };
       };
-      expect(body.tasks.total).toBe(6);
+      expect(body.tasks.total).toBe(4);
       expect(body.tasks.pending).toBe(2);
       expect(body.tasks.reviewing).toBe(1);
-      expect(body.tasks.completed).toBe(1);
       expect(body.tasks.failed).toBe(1);
-      expect(body.tasks.timeout).toBe(1);
     });
   });
 });

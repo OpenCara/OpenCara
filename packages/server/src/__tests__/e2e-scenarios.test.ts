@@ -127,9 +127,9 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
       expect(result.body.success).toBe(true);
 
-      // Task completed
+      // Task deleted after successful post
       const finalTask = await store.getTask(taskId);
-      expect(['completed', 'failed']).toContain(finalTask?.status);
+      expect(finalTask).toBeNull();
 
       // GitHub comment was posted
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
@@ -212,10 +212,11 @@ describe('E2E Scenarios', () => {
       );
       expect(result.status).toBe(200);
 
-      // All claims completed
+      // Task and claims deleted after successful post
+      const finalTask = await store.getTask(taskId);
+      expect(finalTask).toBeNull();
       const claims = await store.getClaims(taskId);
-      expect(claims).toHaveLength(3);
-      expect(claims.filter((c) => c.status === 'completed')).toHaveLength(3);
+      expect(claims).toHaveLength(0);
     });
 
     it('third agent cannot claim review when all slots taken', async () => {
@@ -502,10 +503,9 @@ describe('E2E Scenarios', () => {
       const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
       expect(commentsAfter - commentsBefore).toBe(1);
 
-      // Task should be in terminal state
+      // Task should be deleted after successful post
       const task = await store.getTask(taskId);
-      expect(task).toBeDefined();
-      expect(['completed', 'failed']).toContain(task!.status);
+      expect(task).toBeNull();
     });
   });
 
@@ -549,9 +549,9 @@ describe('E2E Scenarios', () => {
       const poller = agent('poller');
       await poller.poll();
 
-      // Task should be timed out
+      // Task should be deleted after successful timeout post
       const task = await store.getTask(taskId);
-      expect(task?.status).toBe('timeout');
+      expect(task).toBeNull();
 
       // Should post exactly 1 consolidated comment (not N+1)
       const commentPosts = github.calls.filter((c) => c.method === 'postPrComment');
@@ -610,9 +610,9 @@ describe('E2E Scenarios', () => {
       expect(tasks).toHaveLength(2);
     });
 
-    it('new task allowed after previous reached terminal state', async () => {
+    it('new task allowed after previous task deleted', async () => {
       const taskId = await injectPR({ prNumber: 50 });
-      await store.updateTask(taskId, { status: 'completed' });
+      await store.deleteTask(taskId);
 
       // New event for same PR — should create new task
       const newTaskId = await injectPR({ prNumber: 50 });
@@ -638,14 +638,15 @@ describe('E2E Scenarios', () => {
       expect(c.claimed).toBe(false);
     });
 
-    it('completed/timed-out/failed tasks excluded from poll', async () => {
+    it('deleted and failed tasks excluded from poll', async () => {
       const t1 = await injectPR({ prNumber: 1 });
       const t2 = await injectPR({ prNumber: 2 });
       const t3 = await injectPR({ prNumber: 3 });
       await injectPR({ prNumber: 4 }); // stays active
 
-      await store.updateTask(t1, { status: 'completed' });
-      await store.updateTask(t2, { status: 'timeout' });
+      // Completed/timeout tasks are deleted immediately; simulate that
+      await store.deleteTask(t1);
+      await store.deleteTask(t2);
       await store.updateTask(t3, { status: 'failed' });
 
       const a = agent('filter-agent');
@@ -771,26 +772,28 @@ describe('E2E Scenarios', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('K. State Machine', () => {
-    it('cannot reject a completed claim', async () => {
+    it('cannot reject after task is deleted (post-completion)', async () => {
       const taskId = await injectPR();
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
       await a.submitResult(taskId, 'summary', 'Done.', 'approve');
 
+      // Task + claims are deleted after successful post — returns 404
       const rejectRes = await a.reject(taskId, 'Too late');
-      expect(rejectRes.status).toBe(409);
+      expect(rejectRes.status).toBe(404);
     });
 
-    it('cannot error a completed claim', async () => {
+    it('cannot error after task is deleted (post-completion)', async () => {
       const taskId = await injectPR();
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
       await a.submitResult(taskId, 'summary', 'Done.', 'approve');
 
+      // Task + claims are deleted after successful post — returns 404
       const errRes = await a.reportError(taskId, 'Crash');
-      expect(errRes.status).toBe(409);
+      expect(errRes.status).toBe(404);
     });
 
     it('idempotent reject — double reject returns 200', async () => {
@@ -817,7 +820,7 @@ describe('E2E Scenarios', () => {
       expect(e2.status).toBe(200);
     });
 
-    it('cannot submit result twice on same claim', async () => {
+    it('cannot submit result twice — task deleted after first submit', async () => {
       const taskId = await injectPR();
       const a = agent('agent');
 
@@ -825,11 +828,12 @@ describe('E2E Scenarios', () => {
       const r1 = await a.submitResult(taskId, 'summary', 'First');
       expect(r1.status).toBe(200);
 
+      // Task + claims deleted after post — second submit returns 404
       const r2 = await a.submitResult(taskId, 'summary', 'Second');
-      expect(r2.status).toBe(409);
+      expect(r2.status).toBe(404);
     });
 
-    it('claim on completed task is rejected', async () => {
+    it('claim on deleted task (post-completion) is rejected', async () => {
       const taskId = await injectPR();
       const a1 = agent('agent-1');
       const a2 = agent('agent-2');
@@ -837,6 +841,7 @@ describe('E2E Scenarios', () => {
       await a1.claim(taskId, 'summary');
       await a1.submitResult(taskId, 'summary', 'Done', 'approve');
 
+      // Task deleted — returns 404 TASK_NOT_FOUND
       const c = await a2.claim(taskId, 'summary');
       expect(c.claimed).toBe(false);
     });
@@ -923,9 +928,9 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
       expect(result.body.success).toBe(true);
 
-      // Task should be completed — review was posted despite stale KV read
+      // Task should be deleted — review was posted despite stale KV read
       const finalTask = await store.getTask(taskId);
-      expect(finalTask?.status).toBe('completed');
+      expect(finalTask).toBeNull();
 
       // GitHub comment was posted with the correct review text
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
