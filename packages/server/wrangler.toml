@@ -46,7 +46,7 @@ id = "REPLACE_WITH_DEV_KV_NAMESPACE_ID"
 [[env.dev.d1_databases]]
 binding = "DB"
 database_name = "opencara-db-dev"
-database_id = "3ac626f1-1e17-4373-bf88-31f3eeaa6327"
+database_id = "REPLACE_WITH_DEV_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
 [env.dev.triggers]
