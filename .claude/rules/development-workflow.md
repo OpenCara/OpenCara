@@ -29,16 +29,17 @@ git branch -m issue-<NUMBER>-<short-description>
 # Build and test
 pnpm build && pnpm test
 
-# Commit with issue reference
+# Commit with issue reference (do NOT use "Closes" or "Fixes" — PM manages issue lifecycle)
 git add <specific files>
 git commit -m "<description>
 
-Closes #<NUMBER>"
+Part of #<NUMBER>"
 
 # Push and create PR — use your agent name as prefix: [architect], [server-dev], [cli-dev]
 # IMPORTANT: Always label PRs and issues with your agent name (e.g., agent:architect)
+# IMPORTANT: Do NOT use "Closes #N" or "Fixes #N" in PR body — PM manages issue status
 git push -u origin issue-<NUMBER>-<short-description>
-gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --body "Closes #<NUMBER>
+gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --body "Part of #<NUMBER>
 
 ## Summary
 - ...
@@ -113,56 +114,22 @@ gh pr merge <PR_NUMBER> --squash --delete-branch
 
 ### Step 5: Report Completion to PM
 
-After merging, notify PM so it can immediately dispatch any newly unblocked issues:
+After merging, notify PM so it can update project status and dispatch any newly unblocked issues:
 
 ```
 SendMessage to PM: "Completed issue #<NUMBER>. PR #<PR_NUMBER> merged (squash). Ready for shutdown."
 ```
 
-This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
+PM will then move the issue to **In review** status on the GitHub Project board and schedule QA verification. This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
 
-## Milestone QA Process
+## QA Process
 
-At the end of every milestone, PM creates a **QA checklist issue** and dispatches a QA agent to verify all changes.
+QA verifies issues that are in **In review** status on the GitHub Project board. No separate checklist issue is needed — the project board IS the checklist.
 
-### PM Responsibilities
-
-1. **Create a QA checklist issue** titled `[qa] Milestone M<N> QA Checklist` with:
-   - Every new feature and bug fix from the milestone, with concrete verification steps
-   - Key existing features as regression checks (webhook flow, agent lifecycle, CLI commands, server endpoints)
-   - Each item references the original issue number
-2. **Dispatch QA agent** with the checklist issue number
-3. **Process QA results**: if QA reopens any issues, triage and dispatch dev agents to fix them
-
-### QA Agent Responsibilities
-
-1. Test each checklist item one by one against the live dev environment
-2. Record PASS/FAIL with evidence for every item
-3. **Reopen the original issue** for any FAIL (with `qa-failed` label and failure details)
-4. Post full results table on the checklist issue
-5. Report summary to PM
-
-### Checklist Template
-
-```markdown
-## Milestone QA Checklist — M<N>
-
-### New Features & Fixes (this milestone)
-
-- [ ] #<issue> — <description> — <how to verify>
-
-### Existing Features (regression check)
-
-- [ ] Webhook receives and creates tasks — POST /webhook/github with valid signature returns 200
-- [ ] Agent poll/claim/result lifecycle — POST /api/tasks/poll returns valid response
-- [ ] CLI help/version commands — `opencara --help` and `opencara --version` show expected output
-- [ ] Server health endpoint — GET /health returns {"status":"ok"}
-- [ ] Server metrics endpoint — GET /metrics returns task counts
-- [ ] Registry endpoint — GET /api/registry returns tools and models
-- [ ] Build/test/lint/typecheck all pass — `pnpm build && pnpm test && pnpm lint && pnpm run typecheck`
-```
-
-This ensures every feature is verified end-to-end and regressions are caught before a milestone is considered complete.
+1. PM spawns QA agent with the list of **In review** issues
+2. QA verifies each issue one-by-one against its acceptance criteria
+3. QA reports per-issue PASS/FAIL to PM
+4. PM moves verified issues to **Done**, failed issues back to **In progress**
 
 ## Auto-Deploy
 

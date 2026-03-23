@@ -72,9 +72,12 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
 
    **New issue** (open, not in pm-notebook.md):
    - Read the issue content via `gh issue view <number>` and assess complexity
-   - **Simple issue** (single agent can handle) → triage and dispatch directly
-   - **Complex issue** (spans multiple agents or needs design) → run the Breakdown Flow
-   - Label, comment, spawn, update docs/PLAN.md, append to pm-notebook.md
+   - Add to GitHub Project as **Backlog** (all new issues start in Backlog)
+   - Write implementation spec and label with agent type
+   - If the issue is already in **Ready** status (set by team lead) → dispatch directly
+   - If the issue is in **Backlog** → do NOT dispatch, wait for team lead to move it to Ready
+   - **Complex issue** (spans multiple agents or needs design) → run the Breakdown Flow, sub-issues also start as Backlog
+   - Update docs/PLAN.md, append to pm-notebook.md
 
    **Closed issue** (closed, not yet recorded as closed):
    - Check if it was closed by a merged PR
@@ -87,10 +90,11 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - Append to pm-notebook.md
 
    **Merged PR** (merged, not yet recorded as merged):
-   - Spawn a **qa** agent to verify the merge (build, tests, smoke tests)
+   - Move the related issue to **In review** on the GitHub Project board
    - Update docs/PLAN.md — mark relevant phase as `[DONE]`, add to Merged PRs table
    - Update pm-notebook.md
    - **QA is mandatory for all code changes to main** — every merged PR with code changes must be verified. Doc-only commits (docs/PLAN.md, CLAUDE.md, design docs, agent configs) do NOT need QA.
+   - When spawning QA, provide the list of **In review** issues that need verification — QA verifies each issue one-by-one against its acceptance criteria
 
 ## Issue Triage Logic
 
@@ -199,6 +203,79 @@ PM maintains a DAG (directed acyclic graph) of issue dependencies and maximizes 
 - **On each loop iteration**: check if any blocked issues are now unblocked (blocker closed/merged) and dispatch all newly unblocked issues in parallel
 - **Maximize concurrency**: if two issues have no dependency between them, spawn both agents at the same time — don't serialize unnecessarily
 - Comment on unblocked issues: "Unblocked — dependency #XX resolved. Dispatching."
+
+## GitHub Project Status Management
+
+PM manages issue lifecycle status via the GitHub Project board (project #1, owner OpenCara). **Every issue must be in the project with the correct status at all times.**
+
+### Status Definitions
+
+| Status | Meaning | When to set |
+|--------|---------|-------------|
+| **Backlog** | Won't be addressed now | All new ideas, proposals, and feature requests start here |
+| **Ready** | Next milestone, can be picked up | **Only the team lead** can move issues to Ready — PM must never do this |
+| **In progress** | Agent actively working | Agent spawned and implementing |
+| **In review** | Code merged, awaiting QA | PR merged to main, QA not yet run or pending |
+| **Done** | QA verified | QA passed on the merged code |
+
+### Status Transitions
+
+```
+New issue → Backlog (ALL new ideas, proposals, and features go here by default)
+Backlog → Ready (ONLY the team lead can make this transition — PM must wait)
+Ready → In progress (PM dispatches agent — ONLY dispatch issues that are Ready)
+In progress → In review (when dev agent merges PR)
+In review → Done (when QA passes)
+In review → In progress (when QA fails and agent re-dispatched)
+Done → (closed)
+```
+
+### CRITICAL: Backlog → Ready Gate
+
+- **All new issues** (ideas, proposals, features, improvements) MUST start as **Backlog**
+- **PM must NEVER move issues from Backlog to Ready** — only the team lead controls this
+- **PM must ONLY dispatch issues that are in Ready status** — never dispatch Backlog issues
+- Bug fixes from QA (`qa-failed` label) are the exception — they go directly to Ready since they block verification
+- If PM finds an urgent issue, add it to Backlog and notify the team lead for prioritization
+
+### Commands
+
+```bash
+# Add issue to project (do this for every new issue during triage)
+gh project item-add 1 --owner OpenCara --url https://github.com/OpenCara/OpenCara/issues/<NUMBER>
+
+# Get item ID for an issue already in the project
+ITEM_ID=$(gh project item-list 1 --owner OpenCara --format json | jq -r '.items[] | select(.content.number == <NUMBER>) | .id')
+
+# Set status (replace <OPTION_ID> with the appropriate value below)
+gh project item-edit --project-id PVT_kwDOEAYvm84BSjju --id "$ITEM_ID" --field-id PVTSSF_lADOEAYvm84BSjjuzhADgLE --single-select-option-id <OPTION_ID>
+```
+
+**Status option IDs:**
+
+| Status | Option ID |
+|--------|-----------|
+| Backlog | `f75ad846` |
+| Ready | `61e4505c` |
+| In progress | `47fc9ee4` |
+| In review | `df73e18b` |
+| Done | `98236657` |
+
+### When to Update
+
+- **On triage** → add to project, set Backlog or Ready
+- **On dispatch** (spawning agent) → set In progress
+- **On agent completion** (PR merged) → set In review
+- **On QA pass** → set Done, close issue
+- **On QA fail** → set back to In progress (if re-dispatching) or Ready (if queued)
+- **On issue close** (no PR, e.g., duplicate/won't-fix) → remove from project or set Done
+
+### Polling Sync
+
+During each polling loop, verify that project statuses match reality:
+- Issues with active agents should be "In progress"
+- Issues with merged PRs awaiting QA should be "In review"
+- Issues that QA has verified should be "Done"
 
 ## Agent Spawning
 

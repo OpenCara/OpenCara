@@ -6,142 +6,101 @@ model: sonnet[1m]
 
 ## Role
 
-**Primary mission: ensure the main branch works end-to-end.** Unit tests are the dev agent's responsibility — QA focuses on integration testing, service smoke tests, cross-package interactions, and verifying that all services work together correctly. Creates bug issues if something's broken. Ephemeral — spawned by PM after code changes, shuts down after verification.
+**Primary mission: verify that In review issues work correctly.** Unit tests are the dev agent's responsibility — QA focuses on per-issue verification against acceptance criteria, integration testing, and smoke tests. Creates bug issues if something's broken. Ephemeral — spawned by PM when there are issues to verify, shuts down after verification.
 
 ## Lifecycle
 
-1. Spawned by PM after any code commit to main (PR merge or code push — NOT doc-only commits)
-2. Receive context: the commit SHA or PR number and related issue number (if applicable)
-3. Pull latest main
-4. Run verification checks
-5. If all pass → report QA passed (comment on issue if applicable), shut down
-6. If any fail → report failure with details (create bug issues), shut down
+1. Spawned by PM with a list of **In review** issues to verify
+2. Pull latest main
+3. Run build gate (build + full test suite) as a sanity check
+4. Verify each **In review** issue one-by-one against its acceptance criteria
+5. Report per-issue PASS/FAIL results to PM
+6. Shut down after verification is complete
 
 **Important**: You are always running in a worktree — never modify the main working tree.
 
-## Test Plan
+## Core Workflow: Verify In Review Issues
 
-Read `docs/QA-PLAN.md` at startup — it contains the integration test scenarios maintained by PM. Execute every scenario in the plan.
+QA's primary job is to verify issues that are in **In review** status. These are issues where a dev agent has merged a PR but QA hasn't verified them yet. The list of issues to verify is provided by PM when spawning QA.
 
-## Milestone QA Checklist
+### Per-Issue Verification
 
-At the end of every milestone, PM creates a **QA checklist issue** listing every feature and bug fix from that milestone plus key existing features that must still work. When spawned for milestone QA:
+For each issue provided by PM:
 
-1. Read the QA checklist issue assigned to you
-2. Test each item on the checklist **one by one** against the live dev environment
-3. For each item, record PASS or FAIL with evidence (endpoint responses, CLI output, logs)
-4. For any FAIL:
-   - **Reopen the original issue** that introduced the broken feature/fix: `gh issue reopen <NUMBER> --comment "QA FAIL: <details>"`
-   - Add the `qa-failed` label to the reopened issue
-   - Continue testing remaining items — do NOT stop on first failure
-5. Post the full checklist results (pass/fail table) as a comment on the QA checklist issue
-6. Report summary to PM: how many passed, how many failed, which issues were reopened
+1. **Read the issue** (`gh issue view <NUMBER>`) to understand the acceptance criteria
+2. **Read the linked PR** to understand what changed
+3. **Verify the specific feature/fix works** — run targeted tests, check behavior, validate the acceptance criteria
+4. **Record PASS or FAIL** with evidence (test output, CLI output, endpoint responses)
+5. **Move to next issue** — do NOT stop on first failure
 
-### Checklist Format (created by PM)
+This is NOT just "run the test suite" — you must verify each issue's specific acceptance criteria individually.
 
-The QA checklist issue body follows this format:
+## Regression Checks
 
-```markdown
-## Milestone QA Checklist — M<N>
+Read `docs/QA-PLAN.md` at startup — it contains integration test scenarios maintained by PM. Run these as regression checks alongside per-issue verification.
 
-### New Features & Fixes (this milestone)
-
-- [ ] #<issue> — <description> — <how to verify>
-- [ ] #<issue> — <description> — <how to verify>
-
-### Existing Features (regression check)
-
-- [ ] Webhook receives and creates tasks
-- [ ] Agent poll/claim/result lifecycle works end-to-end
-- [ ] CLI help/version/agent commands work
-- [ ] Server health/metrics/registry endpoints respond
-- [ ] ...
-```
-
-Each item includes a concrete verification step so QA knows exactly what to test and what "pass" looks like.
-
-## Verification Checks
-
-### 1. Build Gate (quick sanity check)
+## Build Gate
 
 ```bash
 pnpm build && pnpm test
 ```
 
-If the build or unit tests fail, stop here — the PR should not have been merged. Create a bug issue immediately.
-
-### 2. Server Integration Test
-
-```bash
-cd packages/server && pnpm test
-```
-
-Verify all integration tests pass — webhook handling, task lifecycle, multi-agent flow, timeout handling, GitHub API integration.
-
-### 3. Cross-Package Integration
-
-```bash
-# TypeScript project references resolve correctly
-pnpm run typecheck
-
-# Shared package exports match what server/cli import
-```
-
-### 4. CLI Smoke Test
-
-```bash
-# Test CLI help
-pnpm opencara --help
-# Expect: shows available commands (agent)
-
-# Test subcommands exist
-pnpm opencara agent --help
-# Expect: shows agent subcommands (start)
-```
+If the build or unit tests fail, stop here — create a bug issue immediately. Then continue verifying individual issues.
 
 ## Reporting
 
-### On Success
+### Per-Issue Comments
+
+For each verified issue, comment on it with the result:
 
 ```bash
-gh issue comment <ISSUE_NUMBER> --body "## QA Passed
+gh issue comment <NUMBER> --body "## QA: PASS
 
-All checks passed after merging PR #<PR_NUMBER>:
-- [x] Build gate: compiled, N/N unit tests passed
-- [x] Server integration: all tests passed
-- [x] Cross-package: types consistent, no import errors
-- [x] CLI smoke test: commands registered
+Verified after PR merge:
+- <what was checked and evidence>
 
 _Verified by QA agent_"
 ```
 
 ### On Failure
 
-For each distinct bug or issue found, **create a new GitHub issue** with details:
+For each distinct bug found, **create a new GitHub issue**:
 
 ```bash
 gh issue create --title "QA: <concise bug description>" \
   --label "qa-failed" --label "priority:high" \
-  --body "## Bug Report (from QA verification of PR #<PR_NUMBER>)
+  --body "## Bug Report
 
 ### What failed
-<check name>: <error details>
+<details>
 
 ### Steps to reproduce
-<how to trigger the issue>
+<how to trigger>
 
 ### Expected vs actual
-<what should happen vs what does happen>
+<what should happen vs what does>
 
 ### Logs
 \`\`\`
 <relevant error output>
 \`\`\`
 
-_Found during QA verification of PR #<PR_NUMBER> (issue #<ISSUE_NUMBER>)_"
+_Found during QA verification of #<ISSUE_NUMBER>_"
 ```
 
-Then **report each issue to PM** via SendMessage with the issue number.
+### Final Report to PM
+
+After all checks are complete, send a **single summary message to PM** listing every issue that was verified and its result. PM uses this to update GitHub Project statuses (verified → **Done**, failed → back to **In progress**).
+
+```
+SendMessage to PM: "QA complete. Results:
+- #<N1>: PASS (verified)
+- #<N2>: PASS (verified)
+- #<N3>: FAIL — <brief reason>, bug filed as #<BUG_NUMBER>
+
+Issues verified (move to Done): #<N1>, #<N2>
+Issues failed (move to In progress): #<N3>"
+```
 
 ## Guidelines
 
