@@ -13,6 +13,7 @@
  *   GITHUB_APP_PRIVATE_KEY  — GitHub App private key, PEM (optional when DEV_MODE=true)
  *   WEB_URL                 — Public URL for the server (default: http://localhost:3000)
  *   TASK_TTL_DAYS           — TTL in days for terminal tasks (default: 7)
+ *   API_KEYS                — Comma-separated valid API keys (optional; open mode if unset)
  */
 import { serve } from '@hono/node-server';
 import cron from 'node-cron';
@@ -56,6 +57,7 @@ const GITHUB_APP_PRIVATE_KEY = DEV_MODE
   : requiredEnv('GITHUB_APP_PRIVATE_KEY');
 const WEB_URL = process.env.WEB_URL ?? `http://localhost:${PORT}`;
 const TASK_TTL_DAYS = process.env.TASK_TTL_DAYS;
+const API_KEYS = process.env.API_KEYS;
 
 // ── GitHub service ──────────────────────────────────────────────────
 
@@ -129,6 +131,7 @@ const nodeEnv: Env = {
   DB: sqliteAdapter,
   WEB_URL,
   TASK_TTL_DAYS,
+  API_KEYS,
 };
 
 const ttlDays = parseTtlDays(nodeEnv);

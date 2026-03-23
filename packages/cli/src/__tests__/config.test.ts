@@ -110,7 +110,7 @@ describe('config', () => {
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
     });
 
-    it('silently ignores old anthropic_api_key, review_model, and api_key fields', () => {
+    it('silently ignores old anthropic_api_key and review_model fields, but parses api_key', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
         'anthropic_api_key: sk-ant-test\nreview_model: claude-opus-4-6\napi_key: cr_test\n',
@@ -121,7 +121,8 @@ describe('config', () => {
       // Old fields are ignored, no errors thrown
       expect(config).not.toHaveProperty('anthropicApiKey');
       expect(config).not.toHaveProperty('reviewModel');
-      expect(config).not.toHaveProperty('apiKey');
+      // api_key is now a valid config field
+      expect(config.apiKey).toBe('cr_test');
     });
 
     it('returns defaults for empty config file', () => {
@@ -255,6 +256,7 @@ describe('config', () => {
   describe('saveConfig', () => {
     const baseConfig = {
       platformUrl: 'https://api.dev',
+      apiKey: null as string | null,
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       githubToken: null as string | null,
@@ -276,13 +278,20 @@ describe('config', () => {
       );
     });
 
-    it('does not save api_key, anthropic_api_key or review_model', () => {
+    it('does not save api_key when null, and never saves anthropic_api_key or review_model', () => {
       saveConfig(baseConfig);
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('api_key');
       expect(content).not.toContain('anthropic_api_key');
       expect(content).not.toContain('review_model');
+    });
+
+    it('saves api_key when set', () => {
+      saveConfig({ ...baseConfig, apiKey: 'cr_my_key' });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('api_key: cr_my_key');
     });
 
     it('saves max_diff_size_kb when non-default', () => {
