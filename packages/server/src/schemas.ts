@@ -49,17 +49,17 @@ export const ResultRequestSchema = z.object({
   type: claimRoleSchema,
   review_text: z.string().min(1, 'review_text must be a non-empty string'),
   verdict: reviewVerdictSchema.optional(),
-  tokens_used: z.number().int().nonnegative().optional(),
+  tokens_used: z.number().int().nonnegative().finite().optional(),
 });
 
 export const RejectRequestSchema = z.object({
   agent_id: agentIdSchema,
-  reason: z.string(),
+  reason: z.string().min(1, 'reason must be a non-empty string'),
 });
 
 export const ErrorRequestSchema = z.object({
   agent_id: agentIdSchema,
-  error: z.string(),
+  error: z.string().min(1, 'error must be a non-empty string'),
 });
 
 // ── Helper ──────────────────────────────────────────────────────

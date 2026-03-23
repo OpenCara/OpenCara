@@ -252,6 +252,42 @@ describe('Request Validation (Zod)', () => {
       expect(res.status).toBe(400);
     });
 
+    it('accepts case-insensitive verdicts', async () => {
+      for (const verdict of ['APPROVE', 'Approve', 'REQUEST_CHANGES', 'Comment']) {
+        resetRateLimits();
+        store = new MemoryDataStore();
+        app = createApp(store);
+        await store.createTask(makeTask());
+        await store.createClaim({
+          id: 'task-1:agent-1:summary',
+          task_id: 'task-1',
+          agent_id: 'agent-1',
+          role: 'summary',
+          status: 'pending',
+          created_at: Date.now(),
+        });
+        await store.updateTask('task-1', { summary_agent_id: 'agent-1', queue: 'finished' });
+
+        const res = await request('POST', '/api/tasks/task-1/result', {
+          agent_id: 'agent-1',
+          type: 'summary',
+          review_text: 'Looks good.',
+          verdict,
+        });
+        expect(res.status).toBe(200);
+      }
+    });
+
+    it('rejects Infinity tokens_used', async () => {
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'a1',
+        type: 'review',
+        review_text: 'test',
+        tokens_used: Infinity,
+      });
+      expect(res.status).toBe(400);
+    });
+
     it('accepts valid result with verdict', async () => {
       await store.createTask(makeTask());
       // Claim first
@@ -291,6 +327,16 @@ describe('Request Validation (Zod)', () => {
       expect(res.status).toBe(400);
     });
 
+    it('rejects empty reason', async () => {
+      const res = await request('POST', '/api/tasks/task-1/reject', {
+        agent_id: 'a1',
+        reason: '',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.message).toContain('reason');
+    });
+
     it('accepts valid reject request', async () => {
       await store.createTask(makeTask());
       await store.createClaim({
@@ -323,6 +369,16 @@ describe('Request Validation (Zod)', () => {
     it('rejects missing error field', async () => {
       const res = await request('POST', '/api/tasks/task-1/error', { agent_id: 'a1' });
       expect(res.status).toBe(400);
+    });
+
+    it('rejects empty error string', async () => {
+      const res = await request('POST', '/api/tasks/task-1/error', {
+        agent_id: 'a1',
+        error: '',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.message).toContain('error');
     });
 
     it('accepts valid error request', async () => {
