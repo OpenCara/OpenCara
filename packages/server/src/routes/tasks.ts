@@ -1,14 +1,9 @@
 import { Hono } from 'hono';
 import type {
-  PollRequest,
   PollResponse,
   PollTask,
-  ClaimRequest,
   ClaimResponse,
-  ResultRequest,
   ResultResponse,
-  RejectRequest,
-  ErrorRequest,
   ReviewVerdict,
   ReviewTask,
 } from '@opencara/shared';
@@ -28,6 +23,14 @@ import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
 import { apiError } from '../errors.js';
+import {
+  parseBody,
+  PollRequestSchema,
+  ClaimRequestSchema,
+  ResultRequestSchema,
+  RejectRequestSchema,
+  ErrorRequestSchema,
+} from '../schemas.js';
 
 /** Default grace period (ms) for preferred synthesizer agents. */
 export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
@@ -291,12 +294,9 @@ export function taskRoutes() {
     const store = c.get('store');
     const github = c.get('github');
     const logger = c.get('logger');
-    const body = await c.req.json<PollRequest>();
+    const body = await parseBody(c, PollRequestSchema);
+    if (body instanceof Response) return body;
     const { agent_id, github_username, roles, review_only, repos, synthesize_repos } = body;
-
-    if (!agent_id) {
-      return apiError(c, 400, 'INVALID_REQUEST', 'agent_id is required');
-    }
 
     // Determine which roles this agent will accept
     // `roles` takes precedence over deprecated `review_only`
@@ -422,12 +422,9 @@ export function taskRoutes() {
   app.post('/api/tasks/:taskId/claim', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const taskId = c.req.param('taskId');
-    const body = await c.req.json<ClaimRequest>();
+    const body = await parseBody(c, ClaimRequestSchema);
+    if (body instanceof Response) return body;
     const { agent_id, role, github_username, model, tool } = body;
-
-    if (!agent_id || !role) {
-      return apiError(c, 400, 'INVALID_REQUEST', 'agent_id and role are required');
-    }
 
     const task = await store.getTask(taskId);
     if (!task) {
@@ -537,12 +534,9 @@ export function taskRoutes() {
     const github = c.get('github');
     const logger = c.get('logger');
     const taskId = c.req.param('taskId');
-    const body = await c.req.json<ResultRequest>();
+    const body = await parseBody(c, ResultRequestSchema);
+    if (body instanceof Response) return body;
     const { agent_id, type, review_text, verdict, tokens_used } = body;
-
-    if (!agent_id || !type || !review_text) {
-      return apiError(c, 400, 'INVALID_REQUEST', 'agent_id, type, and review_text are required');
-    }
 
     // Role-aware claim lookup
     const claimId = `${taskId}:${agent_id}:${type}`;
@@ -641,7 +635,8 @@ export function taskRoutes() {
     const store = c.get('store');
     const logger = c.get('logger');
     const taskId = c.req.param('taskId');
-    const body = await c.req.json<RejectRequest>();
+    const body = await parseBody(c, RejectRequestSchema);
+    if (body instanceof Response) return body;
     const { agent_id, reason } = body;
 
     // Try role-aware claim IDs (summary first, then review)
@@ -678,7 +673,7 @@ export function taskRoutes() {
       taskId,
       action: 'reject',
       role: claim.role,
-      reason: reason ?? 'none',
+      reason,
     });
     return c.json({ success: true });
   });
@@ -689,7 +684,8 @@ export function taskRoutes() {
     const store = c.get('store');
     const logger = c.get('logger');
     const taskId = c.req.param('taskId');
-    const body = await c.req.json<ErrorRequest>();
+    const body = await parseBody(c, ErrorRequestSchema);
+    if (body instanceof Response) return body;
     const { agent_id, error } = body;
 
     // Try role-aware claim IDs (summary first, then review)
@@ -726,7 +722,7 @@ export function taskRoutes() {
       taskId,
       action: 'error',
       role: claim.role,
-      error: error ?? 'unknown',
+      error,
     });
     return c.json({ success: true });
   });
