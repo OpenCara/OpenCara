@@ -105,10 +105,7 @@ export async function createTaskForPR(
   logger: Logger,
 ): Promise<string | null> {
   // Check for existing active task on this PR (dedup guard)
-  const activeTasks = await store.listTasks({ status: ['pending', 'reviewing'] });
-  const duplicate = activeTasks.find(
-    (t) => t.owner === owner && t.repo === repo && t.pr_number === prNumber,
-  );
+  const duplicate = await store.findActiveTaskForPR(owner, repo, prNumber);
   if (duplicate) {
     logger.info('Task already exists for PR — skipping', {
       taskId: duplicate.id,
