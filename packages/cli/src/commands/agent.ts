@@ -799,9 +799,10 @@ export async function startAgent(
     synthesizeRepos?: RepoConfig;
     githubUsername?: string;
     label?: string;
+    apiKey?: string | null;
   },
 ): Promise<void> {
-  const client = new ApiClient(platformUrl);
+  const client = new ApiClient(platformUrl, { apiKey: options?.apiKey });
   const session = consumptionDeps?.session ?? createSessionTracker();
   const deps = consumptionDeps ?? { agentId, session };
   const logger = createLogger(options?.label);
@@ -921,6 +922,7 @@ export async function startAgentRouter(): Promise<void> {
       synthesizeRepos: agentConfig?.synthesize_repos,
       githubUsername,
       label,
+      apiKey: config.apiKey,
     },
   );
 
@@ -1018,6 +1020,7 @@ function startAgentByIndex(
       synthesizeRepos: agentConfig?.synthesize_repos,
       githubUsername,
       label,
+      apiKey: config.apiKey,
     },
   ).finally(() => {
     routerRelay?.stop();

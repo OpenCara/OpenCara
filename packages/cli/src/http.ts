@@ -13,12 +13,19 @@ export class HttpError extends Error {
 
 export class ApiClient {
   private readonly debug: boolean;
+  private readonly apiKey: string | null;
 
   constructor(
     private readonly baseUrl: string,
-    debug?: boolean,
+    debugOrOptions?: boolean | { debug?: boolean; apiKey?: string | null },
   ) {
-    this.debug = debug ?? process.env.OPENCARA_DEBUG === '1';
+    if (typeof debugOrOptions === 'object' && debugOrOptions !== null) {
+      this.debug = debugOrOptions.debug ?? process.env.OPENCARA_DEBUG === '1';
+      this.apiKey = debugOrOptions.apiKey ?? null;
+    } else {
+      this.debug = debugOrOptions ?? process.env.OPENCARA_DEBUG === '1';
+      this.apiKey = null;
+    }
   }
 
   private log(msg: string): void {
@@ -26,9 +33,13 @@ export class ApiClient {
   }
 
   private headers(): Record<string, string> {
-    return {
+    const h: Record<string, string> = {
       'Content-Type': 'application/json',
     };
+    if (this.apiKey) {
+      h['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    return h;
   }
 
   async get<T>(path: string): Promise<T> {

@@ -42,9 +42,9 @@ export function buildApp(
   app.use(
     '/api/*',
     cors({
-      origin: '*', // No auth for now — open to all
+      origin: '*',
       allowMethods: ['GET', 'POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type'],
+      allowHeaders: ['Content-Type', 'Authorization'],
     }),
   );
 

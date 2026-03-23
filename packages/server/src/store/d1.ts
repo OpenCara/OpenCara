@@ -218,6 +218,20 @@ export class D1DataStore implements DataStore {
     return (result.results ?? []).map(rowToTask);
   }
 
+  async findActiveTaskForPR(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<ReviewTask | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?) LIMIT 1`,
+      )
+      .bind(owner, repo, prNumber, 'pending', 'reviewing')
+      .first<TaskRow>();
+    return row ? rowToTask(row) : null;
+  }
+
   async updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean> {
     const setClauses: string[] = [];
     const params: unknown[] = [];
@@ -355,6 +369,28 @@ export class D1DataStore implements DataStore {
       .prepare(`UPDATE claims SET ${setClauses.join(', ')} WHERE id = ?`)
       .bind(...params)
       .run();
+  }
+
+  // ── Review slot (atomic conditional increment) ──────────────
+
+  async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE tasks SET review_claims = review_claims + 1 WHERE id = ? AND review_claims < ?`,
+      )
+      .bind(taskId, maxSlots)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async releaseReviewSlot(taskId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > ?`,
+      )
+      .bind(taskId, 0)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   // ── Summary claim (atomic CAS) ──────────────────────────────

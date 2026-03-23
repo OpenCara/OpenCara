@@ -108,6 +108,45 @@ describe('MemoryDataStore', () => {
       expect(await store.updateTask('nope', { status: 'reviewing' })).toBe(false);
     });
 
+    it('findActiveTaskForPR returns matching pending task', async () => {
+      await store.createTask(makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 42 }));
+      const found = await store.findActiveTaskForPR('org', 'repo', 42);
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe('a');
+    });
+
+    it('findActiveTaskForPR returns matching reviewing task', async () => {
+      await store.createTask(
+        makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 42, status: 'reviewing' }),
+      );
+      const found = await store.findActiveTaskForPR('org', 'repo', 42);
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe('a');
+    });
+
+    it('findActiveTaskForPR returns null for completed task', async () => {
+      await store.createTask(
+        makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 42, status: 'completed' }),
+      );
+      expect(await store.findActiveTaskForPR('org', 'repo', 42)).toBeNull();
+    });
+
+    it('findActiveTaskForPR returns null when no match', async () => {
+      await store.createTask(makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 1 }));
+      expect(await store.findActiveTaskForPR('org', 'repo', 99)).toBeNull();
+    });
+
+    it('findActiveTaskForPR returns null for empty store', async () => {
+      expect(await store.findActiveTaskForPR('org', 'repo', 1)).toBeNull();
+    });
+
+    it('findActiveTaskForPR distinguishes by owner/repo/pr_number', async () => {
+      await store.createTask(makeTask({ id: 'a', owner: 'org-a', repo: 'repo', pr_number: 1 }));
+      await store.createTask(makeTask({ id: 'b', owner: 'org-b', repo: 'repo', pr_number: 1 }));
+      const found = await store.findActiveTaskForPR('org-a', 'repo', 1);
+      expect(found!.id).toBe('a');
+    });
+
     it('deletes a task and its claims', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
@@ -191,6 +230,82 @@ describe('MemoryDataStore', () => {
       await store.setAgentLastSeen('agent-1', 1000);
       await store.setAgentLastSeen('agent-1', 2000);
       expect(await store.getAgentLastSeen('agent-1')).toBe(2000);
+    });
+  });
+
+  // ── Review slot (atomic increment) ──────────────────────
+
+  describe('claimReviewSlot', () => {
+    it('claims slot when below max', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('rejects when at max slots', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
+    });
+
+    it('rejects when above max slots', async () => {
+      await store.createTask(makeTask({ review_claims: 3 }));
+      const result = await store.claimReviewSlot('task-1', 2);
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.claimReviewSlot('nonexistent', 2);
+      expect(result).toBe(false);
+    });
+
+    it('increments atomically up to max', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(true);
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(true);
+      expect(await store.claimReviewSlot('task-1', 2)).toBe(false);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(2);
+    });
+
+    it('handles undefined review_claims as 0', async () => {
+      await store.createTask(makeTask());
+      // review_claims not set in makeTask defaults → should be treated as 0
+      const result = await store.claimReviewSlot('task-1', 1);
+      expect(result).toBe(true);
+    });
+  });
+
+  describe('releaseReviewSlot', () => {
+    it('decrements review_claims', async () => {
+      await store.createTask(makeTask({ review_claims: 2 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(1);
+    });
+
+    it('returns false when review_claims is 0', async () => {
+      await store.createTask(makeTask({ review_claims: 0 }));
+      const result = await store.releaseReviewSlot('task-1');
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.releaseReviewSlot('nonexistent');
+      expect(result).toBe(false);
+    });
+
+    it('claim then release returns to original count', async () => {
+      await store.createTask(makeTask({ review_claims: 1 }));
+      await store.claimReviewSlot('task-1', 3);
+      expect((await store.getTask('task-1'))?.review_claims).toBe(2);
+      await store.releaseReviewSlot('task-1');
+      expect((await store.getTask('task-1'))?.review_claims).toBe(1);
     });
   });
 

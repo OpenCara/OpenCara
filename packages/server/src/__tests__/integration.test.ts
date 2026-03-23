@@ -196,21 +196,9 @@ APPROVE`;
       expect(result.status).toBe(200);
       expect(result.body.success).toBe(true);
 
-      // 4. Verify task completed
+      // 4. Verify task deleted after successful post
       const finalTask = await store.getTask('task-single');
-      // postFinalReview is called which sets status — it will either be 'completed' or 'failed'
-      // depending on whether the mock GitHub API call succeeded
-      expect(['completed', 'failed']).toContain(finalTask?.status);
-
-      // 5. Verify claim stored correctly
-      const claims = await store.getClaims('task-single');
-      expect(claims).toHaveLength(1);
-      expect(claims[0].agent_id).toBe('agent-alpha');
-      expect(claims[0].role).toBe('summary');
-      expect(claims[0].status).toBe('completed');
-      expect(claims[0].review_text).toBe(reviewText);
-      expect(claims[0].verdict).toBe('approve');
-      expect(claims[0].tokens_used).toBe(1200);
+      expect(finalTask).toBeNull();
 
       // 6. Verify GitHub API was called to post comment
       const commentPost = githubCalls.find((c) => c.method === 'postPrComment');
@@ -292,10 +280,11 @@ APPROVE`;
       );
       expect(synthResult.status).toBe(200);
 
-      // Verify all claims
+      // Task and claims should be deleted after successful post
+      const finalTask = await store.getTask('task-multi');
+      expect(finalTask).toBeNull();
       const claims = await store.getClaims('task-multi');
-      expect(claims).toHaveLength(3);
-      expect(claims.filter((c) => c.status === 'completed')).toHaveLength(3);
+      expect(claims).toHaveLength(0);
     });
 
     it('third agent cannot claim review when all review slots are taken', async () => {
@@ -345,8 +334,9 @@ APPROVE`;
       // Any agent polling triggers lazy timeout check
       await poll('any-agent');
 
+      // Task should be deleted after successful timeout post
       const task = await store.getTask('task-expired');
-      expect(task?.status).toBe('timeout');
+      expect(task).toBeNull();
     });
 
     it('expired reviewing tasks with partial reviews post them as a single consolidated comment', async () => {
@@ -372,8 +362,9 @@ APPROVE`;
 
       await poll('poller');
 
+      // Task should be deleted after successful timeout post
       const task = await store.getTask('task-partial-timeout');
-      expect(task?.status).toBe('timeout');
+      expect(task).toBeNull();
 
       // Should post exactly 1 consolidated comment (not N+1)
       const commentPosts = githubCalls.filter((c) => c.method === 'postPrComment');
@@ -416,20 +407,21 @@ APPROVE`;
       expect(task?.status).toBe('pending');
     });
 
-    it('completed tasks are not affected by timeout checks', async () => {
+    it('non-active tasks are not affected by timeout checks', async () => {
+      // Failed tasks stay for retry — checkTimeouts only queries pending/reviewing
       await store.createTask(
         makeTask({
-          id: 'task-done',
-          status: 'completed',
+          id: 'task-failed',
+          status: 'failed',
           timeout_at: Date.now() - 1000,
         }),
       );
 
       await poll('agent');
 
-      // Should still be completed, not timeout
-      const task = await store.getTask('task-done');
-      expect(task?.status).toBe('completed');
+      // Should still be failed — checkTimeouts only queries pending/reviewing
+      const task = await store.getTask('task-failed');
+      expect(task?.status).toBe('failed');
     });
   });
 
@@ -712,9 +704,7 @@ APPROVE`;
       expect(result.tasks[0].task_id).toBe('task-seq-2');
     });
 
-    it('completed and timed-out tasks are excluded from poll', async () => {
-      await store.createTask(makeTask({ id: 'done', status: 'completed' }));
-      await store.createTask(makeTask({ id: 'timedout', status: 'timeout' }));
+    it('failed tasks are excluded from poll', async () => {
       await store.createTask(makeTask({ id: 'failed', status: 'failed' }));
       await store.createTask(makeTask({ id: 'active' }));
 
@@ -738,17 +728,17 @@ APPROVE`;
       expect(res.status).toBe(404);
     });
 
-    it('submitting result twice on the same claim returns 409', async () => {
+    it('submitting result twice — task deleted after first submit returns 404', async () => {
       await store.createTask(makeTask({ id: 'task-dup' }));
       await claim('task-dup', 'agent', 'summary');
 
-      // First submit
+      // First submit — posts review and deletes task + claims
       const r1 = await submitResult('task-dup', 'agent', 'summary', 'First');
       expect(r1.status).toBe(200);
 
-      // Second submit — claim already completed
+      // Second submit — claim no longer exists (deleted with task)
       const r2 = await submitResult('task-dup', 'agent', 'summary', 'Second');
-      expect(r2.status).toBe(409);
+      expect(r2.status).toBe(404);
     });
 
     it('poll with empty store returns empty array', async () => {
@@ -1111,34 +1101,27 @@ APPROVE`;
       expect(prNumbers).toEqual([60, 61]);
     });
 
-    it('new task allowed after previous task reached terminal state (completed)', async () => {
-      // Create and complete a task
+    it('new task allowed after previous task deleted (completed)', async () => {
+      // Create and delete a task (simulates post-review deletion)
       await sendPRWebhook(70);
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
-      await store.updateTask(tasks[0].id, { status: 'completed' });
+      await store.deleteTask(tasks[0].id);
 
       // New webhook for same PR — should create a new task
       await sendPRWebhook(70);
       const allTasks = await store.listTasks();
-      // listTasks with no filter returns all tasks; active filter check is in createTaskForPR
-      const activeTasks = allTasks.filter(
-        (t) => t.status === 'pending' || t.status === 'reviewing',
-      );
-      expect(activeTasks).toHaveLength(1);
+      expect(allTasks).toHaveLength(1);
     });
 
-    it('new task allowed after previous task timed out', async () => {
+    it('new task allowed after previous task deleted (timeout)', async () => {
       await sendPRWebhook(71);
       const tasks = await store.listTasks();
-      await store.updateTask(tasks[0].id, { status: 'timeout' });
+      await store.deleteTask(tasks[0].id);
 
       await sendPRWebhook(71);
       const allTasks = await store.listTasks();
-      const activeTasks = allTasks.filter(
-        (t) => t.status === 'pending' || t.status === 'reviewing',
-      );
-      expect(activeTasks).toHaveLength(1);
+      expect(allTasks).toHaveLength(1);
     });
 
     it('new task allowed after previous task failed', async () => {
@@ -1185,19 +1168,16 @@ APPROVE`;
       expect(configFetch!.args.baseRef).toBe('main');
     });
 
-    it('/opencara review comment creates task after previous task completed', async () => {
-      // Create and complete a task
+    it('/opencara review comment creates task after previous task deleted', async () => {
+      // Create and delete a task (simulates post-review deletion)
       await sendPRWebhook(82);
       const tasks = await store.listTasks();
-      await store.updateTask(tasks[0].id, { status: 'completed' });
+      await store.deleteTask(tasks[0].id);
 
-      // Comment trigger — should create new task (previous is terminal)
+      // Comment trigger — should create new task (previous was deleted)
       await sendCommentWebhook(82, '/opencara review');
       const allTasks = await store.listTasks();
-      const activeTasks = allTasks.filter(
-        (t) => t.status === 'pending' || t.status === 'reviewing',
-      );
-      expect(activeTasks).toHaveLength(1);
+      expect(allTasks).toHaveLength(1);
     });
 
     it('dedup is scoped to owner/repo — same PR number on different repos creates tasks', async () => {
@@ -1271,9 +1251,9 @@ APPROVE`;
       const review = '## Summary\nBug fix looks correct.\n\n## Verdict\nAPPROVE';
       await submitResult(taskId, 'e2e-agent', 'summary', review, 'approve', 800);
 
-      // Step 5: Verify task completed and review posted
+      // Step 5: Verify task deleted after review posted
       const finalTask = await store.getTask(taskId);
-      expect(['completed', 'failed']).toContain(finalTask?.status);
+      expect(finalTask).toBeNull();
 
       // Step 6: Verify no tasks remain for polling
       const emptyPoll = await poll('e2e-agent');

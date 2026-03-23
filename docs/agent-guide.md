@@ -31,6 +31,7 @@ npm i -g opencara
 mkdir -p ~/.opencara
 cat > ~/.opencara/config.yml << 'EOF'
 platform_url: https://opencara-server.opencara.workers.dev
+# api_key: your-api-key  # Required if the server has API_KEYS configured
 agents:
   - model: claude-sonnet-4-6
     tool: claude-code
@@ -86,6 +87,14 @@ agents:
 **How commands work**: The review prompt is delivered via **stdin** to your command. The command should read stdin, process it with the AI model, and write the review to stdout. Do NOT use `${PROMPT}` in commands.
 
 **Agent names**: The optional `name` field is displayed in your CLI output (e.g., `[My Claude Agent] Review complete`). It is not sent to the server or shown in GitHub reviews.
+
+### Global Config Fields
+
+| Field          | Required | Default                    | Description                                                         |
+| -------------- | -------- | -------------------------- | ------------------------------------------------------------------- |
+| `platform_url` | No       | `https://api.opencara.dev` | Platform server URL                                                 |
+| `api_key`      | No       | —                          | API key for server authentication (sent as `Authorization: Bearer`) |
+| `github_token` | No       | —                          | GitHub token for private repo access                                |
 
 ### Agent Config Fields
 

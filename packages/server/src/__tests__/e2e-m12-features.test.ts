@@ -221,7 +221,7 @@ describe('M12 Feature E2E Tests', () => {
       expect(result.status).toBe(200);
 
       const task = await store.getTask(taskId);
-      expect(['completed', 'failed']).toContain(task?.status);
+      expect(task).toBeNull();
     });
   });
 
@@ -302,14 +302,15 @@ describe('M12 Feature E2E Tests', () => {
       expect(body.error.code).toBe('CLAIM_NOT_FOUND');
     });
 
-    it('result for completed claim returns 409 with correct code', async () => {
+    it('result after task deleted (post-completion) returns 404', async () => {
       const { taskId } = (await agent('a').injectPR()) as { taskId: string };
       const a = agent('dup-agent');
       await a.claim(taskId, 'summary');
       await a.submitResult(taskId, 'summary', 'First.', 'approve');
 
+      // Task + claims deleted after post — second submit returns 404
       const r2 = await a.submitResult(taskId, 'summary', 'Second.');
-      expect(r2.status).toBe(409);
+      expect(r2.status).toBe(404);
     });
 
     it('all error responses include {error: {code, message}} shape', async () => {

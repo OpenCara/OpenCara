@@ -43,6 +43,24 @@ export class MemoryDataStore implements DataStore {
     return results.map((t) => ({ ...t }));
   }
 
+  async findActiveTaskForPR(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<ReviewTask | null> {
+    for (const task of this.tasks.values()) {
+      if (
+        task.owner === owner &&
+        task.repo === repo &&
+        task.pr_number === prNumber &&
+        (task.status === 'pending' || task.status === 'reviewing')
+      ) {
+        return { ...task };
+      }
+    }
+    return null;
+  }
+
   async updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean> {
     const task = this.tasks.get(id);
     if (!task) return false;
@@ -97,6 +115,24 @@ export class MemoryDataStore implements DataStore {
     if (claim) {
       Object.assign(claim, updates);
     }
+  }
+
+  // Review slot — atomic check-and-increment
+
+  async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    const current = task.review_claims ?? 0;
+    if (current >= maxSlots) return false;
+    task.review_claims = current + 1;
+    return true;
+  }
+
+  async releaseReviewSlot(taskId: string): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task || (task.review_claims ?? 0) <= 0) return false;
+    task.review_claims = (task.review_claims ?? 0) - 1;
+    return true;
   }
 
   // Summary claim — atomic compare-and-swap (replaces locks)
