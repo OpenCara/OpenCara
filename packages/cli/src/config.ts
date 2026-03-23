@@ -259,7 +259,7 @@ export function loadConfig(): CliConfig {
     platformUrl:
       envPlatformUrl ||
       (typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL),
-    apiKey: typeof data.api_key === 'string' ? data.api_key : null,
+    apiKey: typeof data.api_key === 'string' ? data.api_key.trim() || null : null,
     maxDiffSizeKb:
       overrides.maxDiffSizeKb ??
       (typeof data.max_diff_size_kb === 'number'

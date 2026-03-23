@@ -2,17 +2,43 @@ import type { MiddlewareHandler } from 'hono';
 import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 
+/** Cache parsed key sets to avoid re-parsing on every request within an isolate. */
+const keySetCache = new Map<string, Set<string> | null>();
+
 /**
- * Parse the API_KEYS env var into a Set for O(1) lookup.
+ * Parse the API_KEYS env var into a Set for lookup.
  * Returns null when no keys are configured (open mode).
+ * Results are cached per raw string value.
  */
 function parseApiKeys(raw: string | undefined): Set<string> | null {
-  if (!raw || raw.trim() === '') return null;
+  const cacheKey = raw ?? '';
+  const cached = keySetCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  if (!raw || raw.trim() === '') {
+    keySetCache.set(cacheKey, null);
+    return null;
+  }
   const keys = raw
     .split(',')
     .map((k) => k.trim())
     .filter((k) => k.length > 0);
-  return keys.length > 0 ? new Set(keys) : null;
+  const result = keys.length > 0 ? new Set(keys) : null;
+  keySetCache.set(cacheKey, result);
+  return result;
+}
+
+/**
+ * Constant-time string comparison to prevent timing side-channel attacks.
+ * Always compares all characters regardless of mismatch position.
+ */
+function timingSafeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 /**
@@ -52,8 +78,15 @@ export function requireApiKey(): MiddlewareHandler<{
       );
     }
 
-    const token = match[1];
-    if (!validKeys.has(token)) {
+    const token = match[1].trim();
+
+    // Timing-safe comparison against all valid keys
+    let valid = false;
+    for (const key of validKeys) {
+      if (timingSafeEquals(key, token)) valid = true;
+    }
+
+    if (!valid) {
       return c.json<ErrorResponse>(
         { error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } },
         401,
@@ -62,4 +95,9 @@ export function requireApiKey(): MiddlewareHandler<{
 
     await next();
   };
+}
+
+/** Reset the key set cache. Test-only. */
+export function resetKeySetCache(): void {
+  keySetCache.clear();
 }
