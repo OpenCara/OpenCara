@@ -1,3 +1,6 @@
+# Requires wrangler 4.74.0+ for local D1 (SQLite) dev support.
+# `wrangler dev` uses local D1 (SQLite) and local KV — no real resource IDs needed.
+# `wrangler dev --remote` requires actual Cloudflare resource IDs below.
 name = "opencara-server"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"

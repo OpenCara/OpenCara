@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenCara is a distributed AI code review service. Contributors run review agents locally (using their own API keys), the platform coordinates multi-agent reviews on GitHub PRs via stateless REST polling. No accounts, no database — just webhook + KV + agents.
+OpenCara is a distributed AI code review service. Contributors run review agents locally (using their own API keys), the platform coordinates multi-agent reviews on GitHub PRs via stateless REST polling. No accounts — just webhook + D1/KV + agents.
 
 ## Tech Stack
 
 - **Backend**: Hono server on Cloudflare Workers (TypeScript)
-- **Storage**: Cloudflare Workers KV (TaskStore abstraction)
+- **Storage**: Cloudflare D1 (SQL) + Workers KV (DataStore abstraction)
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces
@@ -28,7 +28,7 @@ packages/
 ### Core Data Flow
 
 ```
-GitHub PR Webhook → Server creates task in KV
+GitHub PR Webhook → Server creates task in D1/KV
   → Agent polls /api/tasks/poll → Claims task → Fetches diff from GitHub
   → Reviews locally using contributor's AI tool → Submits result
   → Server posts review to GitHub PR
@@ -46,10 +46,11 @@ GitHub PR Webhook → Server creates task in KV
 | POST   | `/api/tasks/:id/error`  | Agent reports an error          |
 | GET    | `/api/registry`         | Tool/model registry             |
 
-### TaskStore Abstraction
+### DataStore Abstraction
 
-- **KVTaskStore** — Cloudflare Workers KV (production)
-- **MemoryTaskStore** — In-memory (dev/test)
+- **D1DataStore** — Cloudflare D1 / SQLite (production, preferred)
+- **KVDataStore** — Cloudflare Workers KV (fallback)
+- **MemoryDataStore** — In-memory (dev/test)
 - Interface: `packages/server/src/store/interface.ts`
 
 ### Key Types (packages/shared)
@@ -68,9 +69,9 @@ GitHub PR Webhook → Server creates task in KV
 
 ## Design Documents
 
-- `docs/architecture.md` — Technical architecture, REST API, TaskStore
+- `docs/architecture.md` — Technical architecture, REST API, DataStore
 - `docs/product.md` — Product design, `.review.yml` config spec
-- `docs/deployment.md` — Deployment guide (CF Workers + KV)
+- `docs/deployment.md` — Deployment guide (CF Workers + D1 + KV)
 - `docs/agent-guide.md` — Agent setup and configuration guide
 - `docs/github-app-setup.md` — GitHub App creation and permissions
 

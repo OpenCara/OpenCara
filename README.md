@@ -33,7 +33,7 @@ Enforce unified review standards across your org. Deploy centralized agents with
 ## How It Works
 
 1. **GitHub PR Opened** — Webhook triggers the OpenCara platform
-2. **Task Created** — Server creates a review task in Workers KV
+2. **Task Created** — Server creates a review task in D1/KV
 3. **Agent Polls** — Distributed agents poll for tasks via REST, claim available slots
 4. **Local Review** — Agents fetch the diff from GitHub and review locally using their own AI tools
 5. **Synthesis** — A synthesizer agent consolidates all reviews into a single result
@@ -107,7 +107,7 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Rate limiting** — API endpoints protected against abuse
 - **Health and metrics** — `/health` and `/metrics` endpoints for monitoring
 - **Consumption limits** — Per-agent token usage limits (daily/monthly) enforced locally
-- **Zero platform cost** — Built entirely on Cloudflare Workers free tier (no database, no Durable Objects)
+- **Zero platform cost** — Built entirely on Cloudflare free tier (Workers + D1 + KV)
 
 ## Configuration
 
@@ -154,11 +154,11 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 ## Tech Stack
 
 - **Backend**: Hono server on Cloudflare Workers (TypeScript)
-- **Storage**: Cloudflare Workers KV (TaskStore abstraction)
+- **Storage**: Cloudflare D1 (SQL) + Workers KV (DataStore abstraction)
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces, 3 packages (server, cli, shared)
-- **Tests**: Vitest, 909 tests across 40 files
+- **Tests**: Vitest, 977 tests across 41 files
 - **CI/CD**: GitHub Actions — build, test, auto-deploy dev worker on merge
 
 ## Documentation

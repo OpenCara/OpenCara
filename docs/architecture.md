@@ -5,7 +5,7 @@
 | Component    | Service                   | Role                                            |
 | ------------ | ------------------------- | ----------------------------------------------- |
 | API Backend  | Cloudflare Workers (Hono) | Webhook handling, task REST API                 |
-| Storage      | Workers KV                | Task and claim persistence (TaskStore)          |
+| Storage      | D1 (SQL) + Workers KV     | Task and claim persistence (DataStore)          |
 | CLI          | Node.js npm package       | Agent runtime, HTTP polling, review execution   |
 | Shared Types | Pure TypeScript           | REST API contracts, review config parser        |
 | CI/CD        | GitHub Actions            | Build, test, deploy                             |
@@ -14,9 +14,9 @@
 ### Rationale
 
 - **Hono on Workers**: Portable across Workers, Node, Deno, Bun. Fast webhook response, minimal overhead.
-- **Workers KV**: Simple key-value storage for tasks and claims. No database needed at current scale.
+- **D1 + Workers KV**: D1 (SQL) for task coordination with atomic operations; KV as fallback. DataStore abstraction supports both.
 - **HTTP polling over WebSocket**: Simpler, stateless, no Durable Objects needed. Agents poll every 10s.
-- **No database**: Tasks are ephemeral (KV TTL). No user accounts, no auth, no reputation tracking (yet).
+- **Minimal persistence**: Tasks stored in D1 (SQL) with TTL-based cleanup. No user accounts, no auth, no reputation tracking (yet).
 - **TypeScript across stack**: Server, CLI, and shared types all in TypeScript.
 
 ### Core Flow
@@ -26,7 +26,7 @@ GitHub (PR Webhook)
     ↓
 Hono server validates signature, reads .review.yml
     ↓
-Creates task in KV (TaskStore)
+Creates task in D1/KV (DataStore)
     ↓
 Agent polls /api/tasks/poll → sees available task
     ↓
@@ -94,12 +94,12 @@ POST /api/tasks/:taskId/result
 
 When a summary result is submitted, the server posts the final review to GitHub.
 
-## TaskStore
+## DataStore
 
-Abstracted storage interface for tasks, claims, and agent heartbeats.
+Abstracted storage interface for tasks, claims, locks, and agent heartbeats.
 
 ```typescript
-interface TaskStore {
+interface DataStore {
   // Tasks
   createTask(task: ReviewTask): Promise<void>;
   getTask(id: string): Promise<ReviewTask | null>;
@@ -113,6 +113,10 @@ interface TaskStore {
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 
+  // Locks (atomic, for summary dedup)
+  acquireLock(key: string, value: string, ttlMs?: number): Promise<boolean>;
+  getLock(key: string): Promise<string | null>;
+
   // Agent last-seen
   setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;
   getAgentLastSeen(agentId: string): Promise<number | null>;
@@ -121,8 +125,9 @@ interface TaskStore {
 
 Implementations:
 
-- **KVTaskStore** (`packages/server/src/store/kv.ts`) — Workers KV for production
-- **MemoryTaskStore** (`packages/server/src/store/memory.ts`) — In-memory for dev/test
+- **D1DataStore** (`packages/server/src/store/d1.ts`) — Cloudflare D1 (SQL) for production (preferred)
+- **KVDataStore** (`packages/server/src/store/kv.ts`) — Workers KV (fallback)
+- **MemoryDataStore** (`packages/server/src/store/memory.ts`) — In-memory for dev/test
 
 ### KV Key Schema
 
@@ -145,37 +150,19 @@ Implementations:
 
 **Summary dedup** uses defense-in-depth: KV lock key at claim time (first writer wins) + task completion check at post time. See [#276](https://github.com/OpenCara/OpenCara/issues/276) for known limitations of KV-based locking.
 
-### Worker ↔ KV Interaction
+### Worker ↔ DataStore Interaction
 
-The Worker is stateless — each request creates a fresh `KVTaskStore` wrapper around the `TASK_STORE` KV binding:
+The Worker is stateless — each request creates a fresh DataStore wrapper:
 
 ```
-Request → Hono middleware → KVTaskStore(env.TASK_STORE) → inject into context → route handler
+Request → Hono middleware → createStore(env) → inject into context → route handler
 ```
 
-| Operation       | KV Call                                             | Trigger                         |
-| --------------- | --------------------------------------------------- | ------------------------------- |
-| Create task     | `kv.put("task:{id}", json, { metadata })`           | Webhook receives PR event       |
-| List tasks      | `kv.list({ prefix: "task:" })` + metadata filter    | Agent polls for work            |
-| Get task        | `kv.get("task:{id}")`                               | Claim, result, timeout check    |
-| Update task     | `kv.put("task:{id}", json, { metadata })`           | Status changes, counter updates |
-| Create claim    | `kv.put("claim:{taskId}:{agentId}", json)`          | Agent claims a task             |
-| List claims     | `kv.list({ prefix: "claim:{taskId}:" })` + get each | Summary role needs review texts |
-| Lock summary    | `kv.put("summary-lock:{taskId}", agentId)`          | First summary claim attempt     |
-| Agent heartbeat | `kv.put("agent:{agentId}", timestamp)`              | Every poll request              |
+Store selection priority: D1DataStore (if `env.DB` present) > KVDataStore (if `env.TASK_STORE` present) > MemoryDataStore (fallback).
 
-**Cron trigger** (every minute via `wrangler.toml`): Creates a fresh `KVTaskStore`, runs `checkTimeouts()` to mark expired tasks as `timeout` and post partial results.
+**D1DataStore** uses SQL with atomic transactions for lock acquisition, eliminating the KV eventual consistency race conditions that previously caused duplicate summary claims.
 
-**No connection pooling** — each Worker isolate is stateless. KV is managed by Cloudflare; the Worker calls `get`/`put`/`list`/`delete` on the binding.
-
-### KV Consistency Model
-
-Workers KV is **eventually consistent** (up to 60s propagation). Key implications:
-
-- **Reads may be stale**: A value written in one isolate may not be visible in another for up to 60s
-- **No atomic operations**: No compare-and-swap, no conditional writes, `put` always succeeds
-- **Write rate limit**: 1 write/sec per key
-- **Mitigations**: Task counters stored on the task object (single key), summary lock as best-effort defense, polling interval (10s) naturally buffers propagation delays
+**Cron trigger** (every minute via `wrangler.toml`): Creates a fresh DataStore, runs `checkTimeouts()` to mark expired tasks as `timeout` and post partial results.
 
 ## Review Task Lifecycle
 

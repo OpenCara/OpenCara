@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318
 
 ## Merged PRs (processed)
 
@@ -132,12 +132,12 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #320, #322, #324
 
 ### Milestone QA (2026-03-22)
 
 - #272 [qa] Milestone M11 QA Checklist — **DONE** (36/37 passed, #257 coverage gap accepted at 96.75%)
-- #303 [qa] Milestone M12 QA Checklist — **IN PROGRESS** (spawn requested)
+- #303 [qa] Milestone M12 QA Checklist — **DONE**
 
 ### Critical bug (team-lead reported, 2026-03-22)
 
@@ -163,8 +163,8 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 
 ### User-requested (2026-03-22)
 
-- #301 [cli-dev, medium] Configurable error retry limit before agent shutdown
-- #302 [cli-dev, medium] Save agent logs to file for debugging
+- #301 [cli-dev, medium] Configurable error retry limit before agent shutdown — **CLOSED**
+- #302 [cli-dev, medium, backlog] Save agent logs to file for debugging — **BACKLOG** (do not dispatch)
 
 #### Low
 
@@ -176,6 +176,29 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 - #277 [cli-dev] Log the actual command executed — **DONE** (PR #279)
 - #278 [cli-dev] Log PR URL instead of diff URL — **DONE** (PR #279)
 
+### M13: D1 Database Layer (2026-03-22)
+
+- #304 [breakdown] Introduce D1 with abstract SQL layer — **CLOSED** (broken down → #307, #308, #309)
+- #305 [breakdown] Introduce D1 with abstract SQL layer (dup of #304) — **CLOSED**
+- #307 [architect, HIGH] Define DataStore interface + MemoryDataStore — **DONE** (PR #310 merged)
+- #308 [server-dev, HIGH] Integrate DataStore into server routes — **DONE** (PR #311, PR #314 merged)
+- #309 [architect, HIGH] D1DataStore implementation + migration SQL + wrangler config — **DONE** (PR #312 merged)
+- #313 [qa] Milestone M13 QA Checklist — **DONE**
+
+### Bug fixes (2026-03-23)
+
+- #318 [qa, medium] Investigate increased test suite duration — **DONE** (PR #320 merged)
+- #316 [cli-dev, medium] Fix MaxListenersExceededWarning from abort listener leak in sleep() — **IN PROGRESS** (PR #319 open)
+
+### Documentation (2026-03-23)
+
+- #315 [pm/docs] Document wrangler version requirement for local D1 dev — **OPEN** (docs only)
+
+### VPS self-hosting (2026-03-23)
+
+- PR #317 [architect] Add VPS self-hosting support — **OPEN** (in review)
+
 ## Open PRs
 
-(none)
+- #317 [architect] Add VPS self-hosting support
+- #319 [cli-dev] Fix MaxListenersExceededWarning from abort listener leak

@@ -6,7 +6,7 @@ Step-by-step instructions for deploying OpenCara.
 
 - [Node.js](https://nodejs.org/) v18+
 - [pnpm](https://pnpm.io/) v9+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`pnpm add -g wrangler`)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) v4.74.0+ (`pnpm add -g wrangler`)
 - A [Cloudflare](https://cloudflare.com/) account (free tier)
 - A [GitHub](https://github.com/) account with permissions to create a GitHub App
 
@@ -39,7 +39,21 @@ Note down these values:
 wrangler login
 ```
 
-### 2.2 Create a KV Namespace
+### 2.2 Create a D1 Database
+
+```bash
+# Production
+wrangler d1 create opencara-db
+# Note the database_id — add it to wrangler.toml [[d1_databases]]
+
+# Dev
+wrangler d1 create opencara-db-dev
+# Note the database_id — add it to wrangler.toml [[env.dev.d1_databases]]
+```
+
+Update `packages/server/wrangler.toml` with the D1 database IDs.
+
+### 2.3 Create a KV Namespace
 
 ```bash
 # Production
@@ -53,7 +67,7 @@ wrangler kv namespace create TASK_STORE --env dev
 
 Update `packages/server/wrangler.toml` with the KV namespace IDs.
 
-### 2.3 Set Secrets
+### 2.4 Set Secrets
 
 ```bash
 cd packages/server
@@ -68,7 +82,7 @@ wrangler secret put GITHUB_APP_PRIVATE_KEY
 
 For the dev environment, add `--env dev` to each command.
 
-### 2.4 Configure Cron Trigger
+### 2.5 Configure Cron Trigger
 
 The server uses a cron trigger (every minute) for timeout checking and task cleanup. This is configured in `packages/server/wrangler.toml`:
 
@@ -79,7 +93,7 @@ crons = ["* * * * *"]
 
 No manual setup needed — the cron is included in the wrangler config and deployed automatically.
 
-### 2.5 Deploy
+### 2.6 Deploy
 
 ```bash
 cd packages/server
@@ -94,7 +108,7 @@ npx wrangler deploy
 
 **Auto-deploy**: The dev worker is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. Manual deployment is only needed for production.
 
-### 2.6 Verify
+### 2.7 Verify
 
 ```bash
 # Health check
@@ -149,10 +163,11 @@ https://<your-worker-url>/webhook/github
 
 ### Wrangler Config Variables
 
-| Variable     | Description                        | In wrangler.toml    |
-| ------------ | ---------------------------------- | ------------------- |
-| `WEB_URL`    | Frontend URL (for CORS, if needed) | `[vars]` section    |
-| `TASK_STORE` | KV namespace binding               | `[[kv_namespaces]]` |
+| Variable     | Description                        | In wrangler.toml      |
+| ------------ | ---------------------------------- | --------------------- |
+| `WEB_URL`    | Frontend URL (for CORS, if needed) | `[vars]` section      |
+| `TASK_STORE` | KV namespace binding               | `[[kv_namespaces]]`   |
+| `DB`         | D1 database binding                | `[[d1_databases]]`    |
 
 ### CLI Environment Variables
 
@@ -162,6 +177,15 @@ https://<your-worker-url>/webhook/github
 | `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.yml`)      |
 
 The CLI stores configuration locally at `~/.opencara/config.yml`. See [agent-guide.md](agent-guide.md) for details.
+
+## Local Development
+
+```bash
+cd packages/server
+pnpm dev    # starts wrangler dev with local D1 (SQLite) and KV
+```
+
+**Wrangler 4.74.0+** is required for local D1 support. In local mode (`pnpm dev`), D1 runs as SQLite and KV runs in-memory — no real Cloudflare resource IDs are needed. The `--remote` flag requires actual KV namespace and D1 database IDs configured in `wrangler.toml`.
 
 ## Troubleshooting
 

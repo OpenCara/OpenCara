@@ -166,10 +166,29 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 | #277  | cli-dev | #279 | Log the actual command executed |
 | #278  | cli-dev | #279 | Log PR URL instead of diff URL  |
 
+## M13: D1 Database Layer [DONE — 2026-03-22]
+
+Introduced D1 (Cloudflare SQL) as the persistent data store, replacing KV-only storage for task coordination. Abstract DataStore interface enables KV, D1, or in-memory backends.
+
+| Issue | Agent      | PR        | Description                                          |
+| ----- | ---------- | --------- | ---------------------------------------------------- |
+| #307  | architect  | #310      | Define DataStore interface + MemoryDataStore          |
+| #308  | server-dev | #311,#314 | Integrate DataStore into server routes                |
+| #309  | architect  | #312      | D1DataStore implementation + migration SQL + wrangler |
+
+### Post-M13 Fixes
+
+| PR   | Issue | Agent   | Description                                      |
+| ---- | ----- | ------- | ------------------------------------------------ |
+| #306 | #302  | cli-dev | Save agent logs to file for debugging            |
+| #320 | #318  | direct  | Fix test suite hanging — resolve leaked handles  |
+| #322 | --    | direct  | CI baseline test at last green commit            |
+| #324 | --    | direct  | Fix: allow mode:all agents to see private tasks  |
+
 ## Open Issues
 
-- #301 [cli-dev, medium] Configurable error retry limit before agent shutdown
-- #302 [cli-dev, medium] Save agent logs to file for debugging
+- #316 [cli-dev, medium, bug] Fix MaxListenersExceededWarning from abort listener leak (PR #319 in progress)
+- #315 [docs] Document wrangler version requirement for local D1 dev
 
 ## Merged PRs
 
@@ -282,3 +301,43 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 | #223 | #211   | cli-dev    | 03-21 | Dockerfile + docker-compose     |
 | #224 | #216   | server-dev | 03-21 | Preferred synthesizer config    |
 | #226 | #225   | cli-dev    | 03-21 | Fix Docker build: copy tsconfig |
+| #243 | #228   | server-dev | 03-22 | .review.yml config security     |
+| #244 | #230   | server-dev | 03-22 | Whitelist user enforcement      |
+| #246 | #231   | server-dev | 03-22 | Repo filter enforcement         |
+| #247 | #229   | server-dev | 03-22 | KV race conditions fix          |
+| #249 | #235   | cli-dev    | 03-22 | AbortSignal in fetchDiff        |
+| #250 | #233   | cli-dev    | 03-22 | Retry jitter                    |
+| #251 | #236   | cli-dev    | 03-22 | api_key passed to ApiClient     |
+| #252 | #237   | cli-dev    | 03-22 | Consumption limits enforcement  |
+| #253 | #245   | cli-dev    | 03-22 | Auto-shutdown on errors         |
+| #255 | #238   | cli-dev    | 03-22 | Token sanitization complete     |
+| #258 | #254   | server-dev | 03-22 | KV read-after-write fix         |
+| #260 | #232   | server-dev | 03-22 | Persist timeout in KV + cron    |
+| #261 | #257   | cli-dev    | 03-22 | Test coverage to 97%            |
+| #263 | #234   | server-dev | 03-22 | Rate limiting                   |
+| #264 | #256   | server-dev | 03-22 | Task ID codebase isolation      |
+| #266 | #265   | cli-dev    | 03-22 | Fix test regression             |
+| #267 | #240   | server-dev | 03-22 | Remove dead config fields       |
+| #268 | #239   | server-dev | 03-22 | Health + metrics endpoints      |
+| #270 | #269   | cli-dev    | 03-22 | Env var override                |
+| #274 | #273   | server-dev | 03-22 | Duplicate summary fix           |
+| #275 | #273   | server-dev | 03-22 | Race condition tests            |
+| #279 | #277,8 | cli-dev    | 03-22 | Log command + PR URL            |
+| #281 | #280   | cli-dev    | 03-22 | Repo-scoped cwd                 |
+| #292 | #282   | server-dev | 03-22 | Private repo task isolation     |
+| #293 | #291   | cli-dev    | 03-22 | PR metadata in review           |
+| #294 | #284   | cli-dev    | 03-22 | Config validation               |
+| #295 | #283   | server-dev | 03-22 | Structured error responses      |
+| #296 | #288   | cli-dev    | 03-22 | npm publish readiness           |
+| #297 | #285   | server-dev | 03-22 | Task TTL + cleanup              |
+| #298 | #289   | server-dev | 03-22 | Structured logging              |
+| #299 | #290   | server-dev | 03-22 | E2E integration tests           |
+| #300 | #286   | cli-dev    | 03-22 | CLI UX improvements             |
+| #306 | #302   | cli-dev    | 03-22 | Log file support                |
+| #310 | #307   | architect  | 03-22 | DataStore interface             |
+| #311 | #308   | server-dev | 03-22 | DataStore server integration    |
+| #312 | #309   | architect  | 03-22 | D1DataStore + migration         |
+| #314 | #308   | server-dev | 03-22 | D1DataStore wiring fix          |
+| #320 | #318   | direct     | 03-23 | Fix test suite hanging          |
+| #322 | --     | direct     | 03-23 | CI baseline test                |
+| #324 | --     | direct     | 03-23 | mode:all private repo fix       |
