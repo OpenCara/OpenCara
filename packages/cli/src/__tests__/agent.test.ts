@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
+import { startAgent, computeRoles, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import type { RouterRelay } from '../router.js';
 import { createSessionTracker } from '../consumption.js';
+import type { LocalAgentConfig } from '../config.js';
 
 vi.mock('../tool-executor.js', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -783,5 +784,220 @@ describe('agent poll loop', () => {
     expect(console.error).not.toHaveBeenCalledWith(
       expect.stringContaining('Too many consecutive errors'),
     );
+  });
+
+  it('sends roles, github_username, and synthesize_repos in poll request', async () => {
+    let pollCount = 0;
+    const fetchCalls: { url: string; body: Record<string, unknown> }[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.body) {
+        fetchCalls.push({ url, body: JSON.parse(init.body as string) });
+      }
+      if (typeof url === 'string' && url.includes('/api/tasks/poll')) {
+        pollCount++;
+        if (pollCount >= 2) {
+          // Force exit via auth error after we've captured the first poll
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            json: () =>
+              Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
+          });
+        }
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+        maxConsecutiveErrors: 1,
+        roles: ['review', 'summary'],
+        githubUsername: 'octocat',
+        synthesizeRepos: { mode: 'whitelist', list: ['org/repo'] },
+      },
+    );
+
+    // Let the first poll fire (testCommand dry-run + poll)
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Find the poll request
+    const pollCall = fetchCalls.find((c) => c.url.includes('/api/tasks/poll'));
+    expect(pollCall).toBeDefined();
+    expect(pollCall!.body.roles).toEqual(['review', 'summary']);
+    expect(pollCall!.body.github_username).toBe('octocat');
+    expect(pollCall!.body.synthesize_repos).toEqual({
+      mode: 'whitelist',
+      list: ['org/repo'],
+    });
+
+    // Advance to let the loop exit on the next error
+    await vi.advanceTimersByTimeAsync(200);
+    await promise;
+  });
+
+  it('sends github_username in claim request', async () => {
+    let pollCount = 0;
+    const fetchCalls: { url: string; body: Record<string, unknown> }[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.body) {
+        fetchCalls.push({ url, body: JSON.parse(init.body as string) });
+      }
+      if (typeof url === 'string' && url.includes('/api/tasks/poll')) {
+        pollCount++;
+        if (pollCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                tasks: [
+                  {
+                    task_id: 'task-1',
+                    owner: 'org',
+                    repo: 'repo',
+                    pr_number: 42,
+                    diff_url: 'https://github.com/org/repo/pull/42.diff',
+                    timeout_seconds: 300,
+                    prompt: 'Review this',
+                    role: 'review',
+                  },
+                ],
+              }),
+          });
+        }
+        // Exit on second poll
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
+        });
+      }
+      if (typeof url === 'string' && url.includes('/claim')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ claimed: true }),
+        });
+      }
+      // diff fetch
+      if (typeof url === 'string' && url.includes('github.com')) {
+        return Promise.resolve({
+          ok: true,
+          text: () => Promise.resolve('diff content'),
+        });
+      }
+      // result submission
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+        maxConsecutiveErrors: 1,
+        githubUsername: 'octocat',
+      },
+    );
+
+    // Let the poll + claim cycle complete
+    await vi.advanceTimersByTimeAsync(0);
+    // Allow microtasks for claim/review to complete
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+
+    // Find the claim request
+    const claimCall = fetchCalls.find((c) => c.url.includes('/claim'));
+    expect(claimCall).toBeDefined();
+    expect(claimCall!.body.github_username).toBe('octocat');
+  });
+
+  it('does not send github_username in poll when not provided', async () => {
+    let pollCount = 0;
+    const fetchCalls: { url: string; body: Record<string, unknown> }[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.body) {
+        fetchCalls.push({ url, body: JSON.parse(init.body as string) });
+      }
+      if (typeof url === 'string' && url.includes('/api/tasks/poll')) {
+        pollCount++;
+        if (pollCount >= 2) {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            json: () =>
+              Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }),
+          });
+        }
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ tasks: [] }),
+      });
+    });
+
+    const { reviewDeps, consumptionDeps } = makeDeps();
+
+    const promise = startAgent(
+      'test-agent',
+      'https://api.test.com',
+      { model: 'test-model', tool: 'test-tool' },
+      reviewDeps,
+      consumptionDeps,
+      {
+        pollIntervalMs: 100,
+        maxConsecutiveErrors: 1,
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    const pollCall = fetchCalls.find((c) => c.url.includes('/api/tasks/poll'));
+    expect(pollCall).toBeDefined();
+    expect(pollCall!.body.github_username).toBeUndefined();
+    expect(pollCall!.body.roles).toBeUndefined();
+    expect(pollCall!.body.synthesize_repos).toBeUndefined();
+
+    // Let the loop exit
+    await vi.advanceTimersByTimeAsync(200);
+    await promise;
+  });
+});
+
+describe('computeRoles', () => {
+  it('returns ["review"] for review_only agent', () => {
+    const agent: LocalAgentConfig = { model: 'claude-opus-4-6', tool: 'claude', review_only: true };
+    expect(computeRoles(agent)).toEqual(['review']);
+  });
+
+  it('returns ["summary"] for synthesizer_only agent', () => {
+    const agent: LocalAgentConfig = {
+      model: 'claude-opus-4-6',
+      tool: 'claude',
+      synthesizer_only: true,
+    };
+    expect(computeRoles(agent)).toEqual(['summary']);
+  });
+
+  it('returns ["review", "summary"] for agent with neither flag', () => {
+    const agent: LocalAgentConfig = { model: 'claude-opus-4-6', tool: 'claude' };
+    expect(computeRoles(agent)).toEqual(['review', 'summary']);
   });
 });

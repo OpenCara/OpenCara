@@ -18,6 +18,7 @@ import {
   ensureConfigDir,
   resolveCodebaseDir,
   resolveGithubToken,
+  resolveGithubUsername,
   RepoConfigError,
   ConfigValidationError,
   CONFIG_DIR,
@@ -61,6 +62,7 @@ describe('config', () => {
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
       expect(config.githubToken).toBeNull();
+      expect(config.githubUsername).toBeNull();
       expect(config.codebaseDir).toBeNull();
       expect(config.agentCommand).toBeNull();
     });
@@ -256,6 +258,7 @@ describe('config', () => {
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       githubToken: null as string | null,
+      githubUsername: null as string | null,
       codebaseDir: null as string | null,
 
       agentCommand: null as string | null,
@@ -383,6 +386,7 @@ describe('config', () => {
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
@@ -399,6 +403,7 @@ describe('config', () => {
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -432,6 +437,7 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude-sonnet-4-6', tool: 'claude', name: 'MyBot' }],
@@ -707,6 +713,7 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -756,6 +763,7 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: 'ghp_xyz789',
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -771,6 +779,7 @@ agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -864,6 +873,7 @@ anonymous_agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: '~/.opencara/repos',
         agentCommand: null,
         agents: null,
@@ -879,6 +889,7 @@ anonymous_agents:
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -1171,6 +1182,247 @@ agents:
         );
         warnSpy.mockRestore();
       });
+    });
+  });
+
+  describe('synthesizer_only config', () => {
+    it('parses synthesizer_only: true from agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    synthesizer_only: true
+  - model: glm-5
+    tool: qwen
+`);
+      const config = loadConfig();
+      expect(config.agents).toHaveLength(2);
+      expect(config.agents![0].synthesizer_only).toBe(true);
+      expect(config.agents![1].synthesizer_only).toBeUndefined();
+    });
+
+    it('ignores synthesizer_only: false', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    synthesizer_only: false
+`);
+      const config = loadConfig();
+      expect(config.agents![0].synthesizer_only).toBeUndefined();
+    });
+
+    it('throws ConfigValidationError when both review_only and synthesizer_only are true', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    review_only: true
+    synthesizer_only: true
+`);
+      expect(() => loadConfig()).toThrow(ConfigValidationError);
+      expect(() => loadConfig()).toThrow('review_only and synthesizer_only cannot both be true');
+    });
+
+    it('allows review_only: true without synthesizer_only', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    review_only: true
+`);
+      const config = loadConfig();
+      expect(config.agents![0].review_only).toBe(true);
+      expect(config.agents![0].synthesizer_only).toBeUndefined();
+    });
+
+    it('allows synthesizer_only: true without review_only', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    synthesizer_only: true
+`);
+      const config = loadConfig();
+      expect(config.agents![0].synthesizer_only).toBe(true);
+      expect(config.agents![0].review_only).toBeUndefined();
+    });
+  });
+
+  describe('synthesize_repos config', () => {
+    it('parses synthesize_repos with mode: whitelist', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    synthesize_repos:
+      mode: whitelist
+      list:
+        - OpenCara/OpenCara
+`);
+      const config = loadConfig();
+      expect(config.agents![0].synthesize_repos).toEqual({
+        mode: 'whitelist',
+        list: ['OpenCara/OpenCara'],
+      });
+    });
+
+    it('defaults to undefined synthesize_repos when omitted', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+`);
+      const config = loadConfig();
+      expect(config.agents![0].synthesize_repos).toBeUndefined();
+    });
+
+    it('throws RepoConfigError for invalid synthesize_repos mode', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    synthesize_repos:
+      mode: invalid
+`);
+      expect(() => loadConfig()).toThrow(RepoConfigError);
+      expect(() => loadConfig()).toThrow('synthesize_repos.mode must be one of');
+    });
+
+    it('allows both repos and synthesize_repos on same agent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+agents:
+  - model: claude-opus-4-6
+    tool: claude
+    repos:
+      mode: all
+    synthesize_repos:
+      mode: whitelist
+      list:
+        - org/repo
+`);
+      const config = loadConfig();
+      expect(config.agents![0].repos).toEqual({ mode: 'all' });
+      expect(config.agents![0].synthesize_repos).toEqual({
+        mode: 'whitelist',
+        list: ['org/repo'],
+      });
+    });
+  });
+
+  describe('github_username config', () => {
+    it('parses github_username from config file', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('github_username: octocat\n');
+
+      const config = loadConfig();
+      expect(config.githubUsername).toBe('octocat');
+    });
+
+    it('returns null for non-string github_username', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('github_username: 123\n');
+
+      const config = loadConfig();
+      expect(config.githubUsername).toBeNull();
+    });
+
+    it('returns null when github_username is absent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://test.dev\n');
+
+      const config = loadConfig();
+      expect(config.githubUsername).toBeNull();
+    });
+
+    it('saveConfig writes github_username when present', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        githubToken: null,
+        githubUsername: 'octocat',
+        codebaseDir: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('github_username: octocat');
+    });
+
+    it('saveConfig omits github_username when null', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        githubToken: null,
+        githubUsername: null,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('github_username');
+    });
+  });
+
+  describe('resolveGithubUsername', () => {
+    it('returns null when token is null', async () => {
+      const result = await resolveGithubUsername(null);
+      expect(result).toBeNull();
+    });
+
+    it('returns username on successful API call', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ login: 'octocat' }),
+      });
+      const result = await resolveGithubUsername(
+        'ghp_test123',
+        mockFetch as unknown as typeof fetch,
+      );
+      expect(result).toBe('octocat');
+      expect(mockFetch).toHaveBeenCalledWith('https://api.github.com/user', {
+        headers: {
+          Authorization: 'Bearer ghp_test123',
+          Accept: 'application/vnd.github+json',
+        },
+      });
+    });
+
+    it('returns null on API error', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+      });
+      const result = await resolveGithubUsername('bad-token', mockFetch as unknown as typeof fetch);
+      expect(result).toBeNull();
+    });
+
+    it('returns null on network error', async () => {
+      const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'));
+      const result = await resolveGithubUsername('ghp_test', mockFetch as unknown as typeof fetch);
+      expect(result).toBeNull();
+    });
+
+    it('returns null when API response has no login field', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: 123 }),
+      });
+      const result = await resolveGithubUsername('ghp_test', mockFetch as unknown as typeof fetch);
+      expect(result).toBeNull();
     });
   });
 });

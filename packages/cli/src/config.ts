@@ -12,6 +12,8 @@ export interface LocalAgentConfig {
   command?: string;
   router?: boolean;
   review_only?: boolean;
+  synthesizer_only?: boolean;
+  synthesize_repos?: RepoConfig;
   github_token?: string;
   codebase_dir?: string;
   repos?: RepoConfig;
@@ -22,6 +24,7 @@ export interface CliConfig {
   maxDiffSizeKb: number;
   maxConsecutiveErrors: number;
   githubToken: string | null;
+  githubUsername: string | null;
   codebaseDir: string | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
@@ -66,22 +69,26 @@ const TOOL_ALIASES: Record<string, string> = {
   'claude-code': 'claude',
 };
 
-function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfig | undefined {
-  const raw = obj.repos;
+function parseRepoConfig(
+  obj: Record<string, unknown>,
+  index: number,
+  field: string = 'repos',
+): RepoConfig | undefined {
+  const raw = obj[field];
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== 'object') {
-    throw new RepoConfigError(`agents[${index}].repos must be an object`);
+    throw new RepoConfigError(`agents[${index}].${field} must be an object`);
   }
 
   const reposObj = raw as Record<string, unknown>;
   const mode = reposObj.mode;
 
   if (mode === undefined) {
-    throw new RepoConfigError(`agents[${index}].repos.mode is required`);
+    throw new RepoConfigError(`agents[${index}].${field}.mode is required`);
   }
   if (typeof mode !== 'string' || !VALID_REPO_MODES.includes(mode as RepoFilterMode)) {
     throw new RepoConfigError(
-      `agents[${index}].repos.mode must be one of: ${VALID_REPO_MODES.join(', ')}`,
+      `agents[${index}].${field}.mode must be one of: ${VALID_REPO_MODES.join(', ')}`,
     );
   }
 
@@ -91,7 +98,7 @@ function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfi
   if (mode === 'whitelist' || mode === 'blacklist') {
     if (!Array.isArray(list) || list.length === 0) {
       throw new RepoConfigError(
-        `agents[${index}].repos.list is required and must be non-empty for mode '${mode}'`,
+        `agents[${index}].${field}.list is required and must be non-empty for mode '${mode}'`,
       );
     }
   }
@@ -99,7 +106,7 @@ function parseRepoConfig(obj: Record<string, unknown>, index: number): RepoConfi
     for (let j = 0; j < list.length; j++) {
       if (typeof list[j] !== 'string' || !REPO_PATTERN.test(list[j])) {
         throw new RepoConfigError(
-          `agents[${index}].repos.list[${j}] must match 'owner/repo' format`,
+          `agents[${index}].${field}.list[${j}] must match 'owner/repo' format`,
         );
       }
     }
@@ -149,10 +156,18 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;
     if (obj.review_only === true) agent.review_only = true;
+    if (obj.synthesizer_only === true) agent.synthesizer_only = true;
+    if (agent.review_only && agent.synthesizer_only) {
+      throw new ConfigValidationError(
+        `agents[${i}]: review_only and synthesizer_only cannot both be true`,
+      );
+    }
     if (typeof obj.github_token === 'string') agent.github_token = obj.github_token;
     if (typeof obj.codebase_dir === 'string') agent.codebase_dir = obj.codebase_dir;
     const repoConfig = parseRepoConfig(obj, i);
     if (repoConfig) agent.repos = repoConfig;
+    const synthesizeRepoConfig = parseRepoConfig(obj, i, 'synthesize_repos');
+    if (synthesizeRepoConfig) agent.synthesize_repos = synthesizeRepoConfig;
     agents.push(agent);
   }
   return agents;
@@ -219,6 +234,7 @@ export function loadConfig(): CliConfig {
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     githubToken: null,
+    githubUsername: null,
     codebaseDir: null,
     agentCommand: null,
     agents: null,
@@ -252,6 +268,7 @@ export function loadConfig(): CliConfig {
         ? data.max_consecutive_errors
         : DEFAULT_MAX_CONSECUTIVE_ERRORS),
     githubToken: typeof data.github_token === 'string' ? data.github_token : null,
+    githubUsername: typeof data.github_username === 'string' ? data.github_username : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
@@ -265,6 +282,9 @@ export function saveConfig(config: CliConfig): void {
   };
   if (config.githubToken) {
     data.github_token = config.githubToken;
+  }
+  if (config.githubUsername) {
+    data.github_username = config.githubUsername;
   }
   if (config.codebaseDir) {
     data.codebase_dir = config.codebaseDir;
@@ -308,4 +328,28 @@ export function resolveCodebaseDir(
     return path.join(os.homedir(), raw.slice(1));
   }
   return path.resolve(raw);
+}
+
+/**
+ * Resolve GitHub username from a token by calling the GitHub API.
+ * Returns null if the token is missing or the API call fails.
+ */
+export async function resolveGithubUsername(
+  githubToken: string | null,
+  fetchFn: typeof fetch = fetch,
+): Promise<string | null> {
+  if (!githubToken) return null;
+  try {
+    const response = await fetchFn('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { login?: string };
+    return typeof data.login === 'string' ? data.login : null;
+  } catch {
+    return null;
+  }
 }

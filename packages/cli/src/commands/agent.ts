@@ -16,6 +16,7 @@ import {
   loadConfig,
   resolveCodebaseDir,
   resolveGithubToken as resolveConfigToken,
+  resolveGithubUsername,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   CONFIG_DIR,
   type LocalAgentConfig,
@@ -70,6 +71,15 @@ function toApiDiffUrl(webUrl: string): string | null {
   if (!match) return null;
   const [, owner, repo, prNumber] = match;
   return `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+}
+
+/**
+ * Compute the roles this agent is willing to take based on its config.
+ */
+export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
+  if (agent.review_only) return ['review'];
+  if (agent.synthesizer_only) return ['summary'];
+  return ['review', 'summary'];
 }
 
 /**
@@ -141,11 +151,23 @@ async function pollLoop(
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
+    roles?: ClaimRole[];
+    synthesizeRepos?: RepoConfig;
+    githubUsername?: string;
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const { pollIntervalMs, maxConsecutiveErrors, routerRelay, reviewOnly, repoConfig, signal } =
-    options;
+  const {
+    pollIntervalMs,
+    maxConsecutiveErrors,
+    routerRelay,
+    reviewOnly,
+    repoConfig,
+    roles,
+    synthesizeRepos,
+    githubUsername,
+    signal,
+  } = options;
   const { log, logError, logWarn } = logger;
 
   log(`${icons.polling} Polling every ${pollIntervalMs / 1000}s...`);
@@ -160,10 +182,13 @@ async function pollLoop(
       // Poll for tasks — include declared repos so server can return matching private tasks.
       // Server validates permissions; sending repos here doesn't bypass access control.
       const pollBody: Record<string, unknown> = { agent_id: agentId };
+      if (githubUsername) pollBody.github_username = githubUsername;
+      if (roles) pollBody.roles = roles;
       if (reviewOnly) pollBody.review_only = true;
       if (repoConfig?.list?.length) {
         pollBody.repos = repoConfig.list;
       }
+      if (synthesizeRepos) pollBody.synthesize_repos = synthesizeRepos;
       const pollResponse = await client.post<PollResponse>('/api/tasks/poll', pollBody);
 
       consecutiveAuthErrors = 0;
@@ -189,6 +214,7 @@ async function pollLoop(
           agentSession,
           routerRelay,
           signal,
+          githubUsername,
         );
         if (result.diffFetchFailed) {
           agentSession.errorsEncountered++;
@@ -269,6 +295,7 @@ async function handleTask(
   agentSession: AgentSessionStats,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
+  githubUsername?: string,
 ): Promise<HandleTaskResult> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
@@ -281,14 +308,15 @@ async function handleTask(
   // which the ApiClient converts to an HttpError.
   let claimResponse: ClaimResponse;
   try {
+    const claimBody: Record<string, unknown> = {
+      agent_id: agentId,
+      role,
+      model: agentInfo.model,
+      tool: agentInfo.tool,
+    };
+    if (githubUsername) claimBody.github_username = githubUsername;
     claimResponse = await withRetry(
-      () =>
-        client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, {
-          agent_id: agentId,
-          role,
-          model: agentInfo.model,
-          tool: agentInfo.tool,
-        }),
+      () => client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, claimBody),
       { maxAttempts: 2 },
       signal,
     );
@@ -765,6 +793,9 @@ export async function startAgent(
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
+    roles?: ClaimRole[];
+    synthesizeRepos?: RepoConfig;
+    githubUsername?: string;
     label?: string;
   },
 ): Promise<void> {
@@ -812,6 +843,9 @@ export async function startAgent(
     routerRelay: options?.routerRelay,
     reviewOnly: options?.reviewOnly,
     repoConfig: options?.repoConfig,
+    roles: options?.roles,
+    synthesizeRepos: options?.synthesizeRepos,
+    githubUsername: options?.githubUsername,
     signal: abortController.signal,
   });
 
@@ -845,6 +879,13 @@ export async function startAgentRouter(): Promise<void> {
   const logger = createLogger(agentConfig?.name ?? 'agent[0]');
   logAuthMethod(auth.method, logger.log);
 
+  // Resolve GitHub username from token for identity
+  const githubUsername =
+    config.githubUsername ?? (await resolveGithubUsername(auth.token)) ?? undefined;
+  if (githubUsername) {
+    logger.log(`GitHub identity: ${githubUsername}`);
+  }
+
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
@@ -858,6 +899,7 @@ export async function startAgentRouter(): Promise<void> {
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
   const label = agentConfig?.name ?? 'agent[0]';
+  const roles = agentConfig ? computeRoles(agentConfig) : undefined;
 
   await startAgent(
     agentId,
@@ -873,6 +915,9 @@ export async function startAgentRouter(): Promise<void> {
       routerRelay: router,
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,
+      roles,
+      synthesizeRepos: agentConfig?.synthesize_repos,
+      githubUsername,
       label,
     },
   );
@@ -896,6 +941,7 @@ function startAgentByIndex(
   agentIndex: number,
   pollIntervalMs: number,
   auth: GithubAuthResult,
+  githubUsername?: string,
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
   let commandTemplate: string | undefined;
@@ -952,6 +998,7 @@ function startAgentByIndex(
   const session = createSessionTracker();
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
+  const roles = agentConfig ? computeRoles(agentConfig) : undefined;
 
   const agentPromise = startAgent(
     agentId,
@@ -965,6 +1012,9 @@ function startAgentByIndex(
       routerRelay,
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,
+      roles,
+      synthesizeRepos: agentConfig?.synthesize_repos,
+      githubUsername,
       label,
     },
   ).finally(() => {
@@ -991,6 +1041,13 @@ agentCommand
     const auth = resolveGithubToken(configToken);
     logAuthMethod(auth.method, console.log.bind(console));
 
+    // Resolve GitHub username from token for identity
+    const githubUsername =
+      config.githubUsername ?? (await resolveGithubUsername(auth.token)) ?? undefined;
+    if (githubUsername) {
+      console.log(`GitHub identity: ${githubUsername}`);
+    }
+
     if (opts.all) {
       // Start all agents concurrently
       if (!config.agents || config.agents.length === 0) {
@@ -1004,7 +1061,7 @@ agentCommand
       const promises: Promise<void>[] = [];
       let startFailed = false;
       for (let i = 0; i < config.agents.length; i++) {
-        const p = startAgentByIndex(config, i, pollIntervalMs, auth);
+        const p = startAgentByIndex(config, i, pollIntervalMs, auth, githubUsername);
         if (p) {
           promises.push(p);
         } else {
@@ -1048,7 +1105,7 @@ agentCommand
         process.exit(1);
         return;
       }
-      const p = startAgentByIndex(config, agentIndex, pollIntervalMs, auth);
+      const p = startAgentByIndex(config, agentIndex, pollIntervalMs, auth, githubUsername);
       if (!p) {
         // startAgentByIndex already logged the specific reason
         process.exit(1);

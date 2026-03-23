@@ -18,6 +18,7 @@ vi.mock('../config.js', () => ({
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 3,
     githubToken: 'config-token',
+    githubUsername: null,
     codebaseDir: null,
     agentCommand: 'echo test',
     agents: [
@@ -29,6 +30,7 @@ vi.mock('../config.js', () => ({
   resolveGithubToken: vi.fn(
     (agentToken?: string, globalToken?: string | null) => agentToken ?? globalToken ?? null,
   ),
+  resolveGithubUsername: vi.fn(async () => null),
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 10,
 }));
 
@@ -136,6 +138,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude', tool: 'cli' }],
@@ -163,6 +166,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: 'nonexistent-tool review',
         agents: [{ model: 'claude', tool: 'cli', command: 'nonexistent-tool review' }],
@@ -186,6 +190,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -211,6 +216,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -233,6 +239,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
@@ -292,6 +299,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -317,6 +325,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -345,6 +354,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -369,6 +379,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
@@ -390,6 +401,7 @@ describe('Agent CLI tests', () => {
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
         githubToken: null,
+        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
