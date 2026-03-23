@@ -96,6 +96,74 @@ describe('Task Routes', () => {
       expect(body.tasks).toHaveLength(0);
     });
 
+    it('skips summary tasks where agent has a pending summary claim', async () => {
+      // Simulate claim-release cycle: task back in summary queue, agent already has a claim
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.createClaim({
+        id: 'task-1:agent-1:summary',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('skips summary tasks where agent has a completed summary claim', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.createClaim({
+        id: 'task-1:agent-1:summary',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'completed',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('returns summary tasks where agent has an error summary claim', async () => {
+      // Agents with terminal error claims should be able to re-claim
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.createClaim({
+        id: 'task-1:agent-1:summary',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'error',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('summary');
+    });
+
+    it('returns summary tasks where agent has a rejected summary claim', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.createClaim({
+        id: 'task-1:agent-1:summary',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'rejected',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('summary');
+    });
+
     it('does not return timed-out tasks', async () => {
       await store.createTask(makeTask({ timeout_at: Date.now() - 1000 }));
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
