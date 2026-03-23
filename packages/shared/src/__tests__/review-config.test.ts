@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   parseReviewConfig,
+  parseEntityList,
+  isEntityMatch,
   validateReviewConfig,
   DEFAULT_REVIEW_CONFIG,
   type ReviewConfig,
@@ -238,9 +240,9 @@ describe('summarizer.preferred parsing', () => {
     expect(config.summarizer.preferred).toEqual([]);
   });
 
-  it('filters out entries without agent field', () => {
+  it('filters out entries without agent or github field', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - user: alice\n    - notanagent: true',
+      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - notanagent: true',
     ) as ReviewConfig;
     expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }]);
   });
@@ -323,5 +325,181 @@ describe('validateReviewConfig', () => {
 
   it('returns false for object with wrong types', () => {
     expect(validateReviewConfig({ version: 'one', prompt: 'test' })).toBe(false);
+  });
+});
+
+// ── New tests for #326 ─────────────────────────────────────────
+
+describe('GitHub entity entries in entity lists', () => {
+  it('parses github entries in whitelist', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - github: alice\n    - agent: agent-abc',
+    ) as ReviewConfig;
+    expect(config.reviewer.whitelist).toEqual([{ github: 'alice' }, { agent: 'agent-abc' }]);
+  });
+
+  it('parses github entries in blacklist', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  blacklist:\n    - github: mallory',
+    ) as ReviewConfig;
+    expect(config.summarizer.blacklist).toEqual([{ github: 'mallory' }]);
+  });
+
+  it('parses entries with both agent and github', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-a\n      github: alice',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([{ agent: 'agent-a', github: 'alice' }]);
+  });
+
+  it('parses github entries in summarizer preferred list', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - github: alice\n    - github: bob',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([{ github: 'alice' }, { github: 'bob' }]);
+  });
+});
+
+describe('parseEntityList', () => {
+  it('returns empty array for non-array input', () => {
+    expect(parseEntityList('not-an-array')).toEqual([]);
+    expect(parseEntityList(null)).toEqual([]);
+    expect(parseEntityList(undefined)).toEqual([]);
+  });
+
+  it('skips non-object items', () => {
+    expect(parseEntityList(['string', 123, true])).toEqual([]);
+  });
+
+  it('parses agent entries', () => {
+    expect(parseEntityList([{ agent: 'a1' }])).toEqual([{ agent: 'a1' }]);
+  });
+
+  it('parses github entries', () => {
+    expect(parseEntityList([{ github: 'alice' }])).toEqual([{ github: 'alice' }]);
+  });
+
+  it('parses mixed entries', () => {
+    expect(parseEntityList([{ agent: 'a1' }, { github: 'alice' }])).toEqual([
+      { agent: 'a1' },
+      { github: 'alice' },
+    ]);
+  });
+
+  it('skips entries without agent or github', () => {
+    expect(parseEntityList([{ unknown: 'value' }])).toEqual([]);
+  });
+
+  it('warns on user-only entries', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(parseEntityList([{ user: 'bob' }])).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Ignoring "user" entry'));
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn on user entry when github is also present', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(parseEntityList([{ user: 'bob', github: 'bob' }])).toEqual([{ github: 'bob' }]);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('summarizer shorthand parsing', () => {
+  it('parses string shorthand as preferred github username', () => {
+    const config = parseReviewConfig('version: 1\nprompt: test\nsummarizer: alice') as ReviewConfig;
+    expect(config.summarizer.preferred).toEqual([{ github: 'alice' }]);
+    expect(config.summarizer.whitelist).toEqual([]);
+    expect(config.summarizer.blacklist).toEqual([]);
+  });
+
+  it('parses "only" string as whitelist with single github entry', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  only: alice',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }]);
+    expect(config.summarizer.preferred).toEqual([]);
+    expect(config.summarizer.blacklist).toEqual([]);
+  });
+
+  it('parses "only" list as whitelist with multiple github entries', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  only: [alice, bob]',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }, { github: 'bob' }]);
+    expect(config.summarizer.preferred).toEqual([]);
+    expect(config.summarizer.blacklist).toEqual([]);
+  });
+
+  it('parses full object form (backward compatible)', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  whitelist:\n    - agent: agent-a\n  blacklist:\n    - github: mallory\n  preferred:\n    - github: alice',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-a' }]);
+    expect(config.summarizer.blacklist).toEqual([{ github: 'mallory' }]);
+    expect(config.summarizer.preferred).toEqual([{ github: 'alice' }]);
+  });
+
+  it('returns defaults when summarizer is not present', () => {
+    const config = parseReviewConfig(MINIMAL_CONFIG) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([]);
+    expect(config.summarizer.blacklist).toEqual([]);
+    expect(config.summarizer.preferred).toEqual([]);
+  });
+
+  it('returns defaults when "only" has invalid value', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  only: 123',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([]);
+    expect(config.summarizer.preferred).toEqual([]);
+  });
+
+  it('filters non-string entries in "only" list', () => {
+    const config = parseReviewConfig(
+      'version: 1\nprompt: test\nsummarizer:\n  only:\n    - alice\n    - 123\n    - bob',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }, { github: 'bob' }]);
+  });
+});
+
+describe('isEntityMatch', () => {
+  it('matches by agent ID', () => {
+    expect(isEntityMatch({ agent: 'agent-abc' }, 'agent-abc')).toBe(true);
+  });
+
+  it('does not match different agent ID', () => {
+    expect(isEntityMatch({ agent: 'agent-abc' }, 'agent-xyz')).toBe(false);
+  });
+
+  it('matches by github username', () => {
+    expect(isEntityMatch({ github: 'alice' }, undefined, 'alice')).toBe(true);
+  });
+
+  it('matches github username case-insensitively', () => {
+    expect(isEntityMatch({ github: 'Alice' }, undefined, 'alice')).toBe(true);
+    expect(isEntityMatch({ github: 'alice' }, undefined, 'ALICE')).toBe(true);
+  });
+
+  it('does not match different github username', () => {
+    expect(isEntityMatch({ github: 'alice' }, undefined, 'bob')).toBe(false);
+  });
+
+  it('matches when either agent or github matches', () => {
+    expect(isEntityMatch({ agent: 'a1', github: 'alice' }, 'a1', 'bob')).toBe(true);
+    expect(isEntityMatch({ agent: 'a1', github: 'alice' }, 'a2', 'alice')).toBe(true);
+  });
+
+  it('does not match when neither matches', () => {
+    expect(isEntityMatch({ agent: 'a1', github: 'alice' }, 'a2', 'bob')).toBe(false);
+  });
+
+  it('does not match when identifiers are undefined', () => {
+    expect(isEntityMatch({ agent: 'a1' }, undefined, undefined)).toBe(false);
+    expect(isEntityMatch({ github: 'alice' }, undefined, undefined)).toBe(false);
+  });
+
+  it('handles entry with no fields', () => {
+    expect(isEntityMatch({}, 'a1', 'alice')).toBe(false);
   });
 });

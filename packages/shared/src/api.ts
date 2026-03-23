@@ -1,12 +1,15 @@
-import type { ClaimRole, ReviewVerdict } from './types.js';
+import type { ClaimRole, RepoConfig, ReviewVerdict } from './types.js';
 
 // ── Poll ───────────────────────────────────────────────────────
 
 /** POST /api/tasks/poll — request */
 export interface PollRequest {
   agent_id: string;
-  review_only?: boolean;
+  github_username?: string; // GitHub username (trust established by server)
+  roles?: ClaimRole[]; // roles this agent is willing to take
+  review_only?: boolean; // deprecated — use roles instead
   repos?: string[]; // "owner/repo" entries — used to include matching private repo tasks
+  synthesize_repos?: RepoConfig; // repos this agent will synthesize for
 }
 
 /** A task returned in the poll response */
@@ -32,6 +35,7 @@ export interface PollResponse {
 export interface ClaimRequest {
   agent_id: string;
   role: ClaimRole;
+  github_username?: string; // GitHub username (trust established by server)
   model?: string;
   tool?: string;
 }

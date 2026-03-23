@@ -84,5 +84,5 @@ export function isRepoAllowed(
   }
 }
 
-// Re-export ReviewConfig from review-config.ts
-export type { ReviewConfig, TriggerConfig } from './review-config.js';
+// Re-export ReviewConfig types from review-config.ts
+export type { ReviewConfig, TriggerConfig, EntityEntry } from './review-config.js';

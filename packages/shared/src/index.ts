@@ -37,8 +37,11 @@ export { DEFAULT_REGISTRY } from './api.js';
 // Review configuration types and parser
 export {
   parseReviewConfig,
+  parseEntityList,
+  isEntityMatch,
   validateReviewConfig,
   DEFAULT_REVIEW_CONFIG,
   type ReviewConfig,
   type TriggerConfig,
+  type EntityEntry,
 } from './review-config.js';
