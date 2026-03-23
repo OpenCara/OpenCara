@@ -6,6 +6,9 @@ export interface TriggerConfig {
   skip: string[];
 }
 
+/** An entry in a whitelist/blacklist/preferred list — identifies by agent ID or GitHub username */
+export type EntityEntry = { agent?: string; github?: string };
+
 export interface ReviewConfig {
   version: number;
   prompt: string;
@@ -16,14 +19,14 @@ export interface ReviewConfig {
     preferredTools: string[];
   };
   reviewer: {
-    whitelist: Array<{ agent: string }>;
-    blacklist: Array<{ agent: string }>;
+    whitelist: EntityEntry[];
+    blacklist: EntityEntry[];
     allowAnonymous: boolean;
   };
   summarizer: {
-    whitelist: Array<{ agent: string }>;
-    blacklist: Array<{ agent: string }>;
-    preferred: Array<{ agent: string }>;
+    whitelist: EntityEntry[];
+    blacklist: EntityEntry[];
+    preferred: EntityEntry[];
   };
   timeout: string;
 }
@@ -34,30 +37,59 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseEntityList(value: unknown): Array<{ agent: string }> {
+export function parseEntityList(value: unknown): EntityEntry[] {
   if (!Array.isArray(value)) return [];
-  const entries: Array<{ agent: string }> = [];
+  const entries: EntityEntry[] = [];
   for (const item of value) {
     if (!isObject(item)) continue;
-    if (typeof item.user === 'string' && typeof item.agent !== 'string') {
+    if (
+      typeof item.user === 'string' &&
+      typeof item.agent !== 'string' &&
+      typeof item.github !== 'string'
+    ) {
       console.warn(
-        `Ignoring "user" entry in whitelist/blacklist: "${item.user}". Only "agent" entries are supported.`,
+        `Ignoring "user" entry in whitelist/blacklist: "${item.user}". Use "agent" or "github" entries instead.`,
       );
       continue;
     }
-    if (typeof item.agent === 'string') {
-      entries.push({ agent: item.agent });
+    const entry: EntityEntry = {};
+    if (typeof item.agent === 'string') entry.agent = item.agent;
+    if (typeof item.github === 'string') entry.github = item.github;
+    if (entry.agent !== undefined || entry.github !== undefined) {
+      entries.push(entry);
     }
   }
   return entries;
 }
 
-function parsePreferredList(value: unknown): Array<{ agent: string }> {
+function parsePreferredList(value: unknown): EntityEntry[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter(isObject)
-    .filter((item) => typeof item.agent === 'string')
-    .map((item) => ({ agent: item.agent as string }));
+  const entries: EntityEntry[] = [];
+  for (const item of value) {
+    if (!isObject(item)) continue;
+    const entry: EntityEntry = {};
+    if (typeof item.agent === 'string') entry.agent = item.agent;
+    if (typeof item.github === 'string') entry.github = item.github;
+    if (entry.agent !== undefined || entry.github !== undefined) {
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+/**
+ * Check if an agent/user matches an entity entry.
+ * Matches if the entry's agent field equals agentId OR the entry's github field equals githubUsername.
+ */
+export function isEntityMatch(
+  entry: EntityEntry,
+  agentId?: string,
+  githubUsername?: string,
+): boolean {
+  if (entry.agent !== undefined && agentId !== undefined && entry.agent === agentId) return true;
+  if (entry.github !== undefined && githubUsername !== undefined && entry.github === githubUsername)
+    return true;
+  return false;
 }
 
 function parseTimeout(value: unknown): string {
@@ -111,6 +143,58 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   timeout: '10m',
 };
 
+/**
+ * Parse a shorthand string into a GitHub entity entry.
+ * Used for summarizer shorthand: "alice" → { github: "alice" }
+ */
+function toGithubEntity(name: string): EntityEntry {
+  return { github: name };
+}
+
+/**
+ * Parse the summarizer section, supporting shorthand forms:
+ *
+ * 1. String shorthand: `summarizer: alice` → preferred: [{ github: "alice" }]
+ * 2. Object with `only` string: `summarizer: { only: alice }` → whitelist: [{ github: "alice" }]
+ * 3. Object with `only` list: `summarizer: { only: [alice, bob] }` → whitelist: [{ github: "alice" }, { github: "bob" }]
+ * 4. Full object (existing): `summarizer: { whitelist: [...], blacklist: [...], preferred: [...] }`
+ */
+function parseSummarizerSection(raw: unknown): ReviewConfig['summarizer'] {
+  const defaults: ReviewConfig['summarizer'] = {
+    whitelist: [],
+    blacklist: [],
+    preferred: [],
+  };
+
+  // String shorthand: "alice" → preferred with github username
+  if (typeof raw === 'string') {
+    return { ...defaults, preferred: [toGithubEntity(raw)] };
+  }
+
+  if (!isObject(raw)) return defaults;
+
+  // Object with "only" key — whitelist-only mode
+  if (raw.only !== undefined) {
+    if (typeof raw.only === 'string') {
+      return { ...defaults, whitelist: [toGithubEntity(raw.only)] };
+    }
+    if (Array.isArray(raw.only)) {
+      const entries = raw.only
+        .filter((v: unknown) => typeof v === 'string')
+        .map((v: unknown) => toGithubEntity(v as string));
+      return { ...defaults, whitelist: entries };
+    }
+    return defaults;
+  }
+
+  // Full object (existing behavior)
+  return {
+    whitelist: parseEntityList(raw.whitelist),
+    blacklist: parseEntityList(raw.blacklist),
+    preferred: parsePreferredList(raw.preferred),
+  };
+}
+
 export function parseReviewConfig(yaml: string): ParseResult {
   let raw: unknown;
   try {
@@ -140,7 +224,6 @@ export function parseReviewConfig(yaml: string): ParseResult {
   const triggerRaw = isObject(raw.trigger) ? raw.trigger : {};
   const agentsRaw = isObject(raw.agents) ? raw.agents : {};
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
-  const summarizerRaw = isObject(raw.summarizer) ? raw.summarizer : {};
 
   const config: ReviewConfig = {
     version: raw.version,
@@ -174,11 +257,7 @@ export function parseReviewConfig(yaml: string): ParseResult {
       allowAnonymous:
         typeof reviewerRaw.allow_anonymous === 'boolean' ? reviewerRaw.allow_anonymous : true,
     },
-    summarizer: {
-      whitelist: parseEntityList(summarizerRaw.whitelist),
-      blacklist: parseEntityList(summarizerRaw.blacklist),
-      preferred: parsePreferredList(summarizerRaw.preferred),
-    },
+    summarizer: parseSummarizerSection(raw.summarizer),
     timeout: parseTimeout(raw.timeout),
   };
 
