@@ -799,6 +799,35 @@ describe('D1DataStore', () => {
     });
   });
 
+  // ── Completed reviews (atomic increment) ────────────────
+
+  describe('incrementCompletedReviews', () => {
+    it('increments completed_reviews and returns new count and queue', async () => {
+      await store.createTask(makeTask({ completed_reviews: 0, queue: 'review' }));
+      const result = await store.incrementCompletedReviews('task-1');
+      expect(result).toEqual({ newCount: 1, queue: 'review' });
+      const task = await store.getTask('task-1');
+      expect(task?.completed_reviews).toBe(1);
+    });
+
+    it('returns null for nonexistent task', async () => {
+      const result = await store.incrementCompletedReviews('nonexistent');
+      expect(result).toBeNull();
+    });
+
+    it('increments from existing count', async () => {
+      await store.createTask(makeTask({ completed_reviews: 2, queue: 'summary' }));
+      const result = await store.incrementCompletedReviews('task-1');
+      expect(result).toEqual({ newCount: 3, queue: 'summary' });
+    });
+
+    it('returns current queue state (not just review)', async () => {
+      await store.createTask(makeTask({ completed_reviews: 1, queue: 'finished' }));
+      const result = await store.incrementCompletedReviews('task-1');
+      expect(result).toEqual({ newCount: 2, queue: 'finished' });
+    });
+  });
+
   // ── Review slot (atomic conditional increment) ──────────
 
   describe('claimReviewSlot', () => {

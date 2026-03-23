@@ -991,4 +991,139 @@ describe('E2E Scenarios', () => {
       expect(commentBody).not.toContain('stale-tool');
     });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Late Review Results (Issue #370)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('Late Review Results', () => {
+    it('late review after queue=summary does not overwrite queue back to summary', async () => {
+      // Setup: reviewCount=3 → 2 review slots
+      const taskId = await injectPR({ reviewCount: 3 });
+      const r1 = agent('reviewer-1');
+      const r2 = agent('reviewer-2');
+      const r3 = agent('late-reviewer');
+
+      // Both reviewers claim
+      await r1.claim(taskId, 'review');
+      await r2.claim(taskId, 'review');
+
+      // r1 submits — 1 of 2 done, still in review queue
+      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
+      let task = await store.getTask(taskId);
+      expect(task?.queue).toBe('review');
+
+      // r2 submits — 2 of 2 done, queue transitions to summary
+      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+      task = await store.getTask(taskId);
+      expect(task?.queue).toBe('summary');
+      const originalCompletedAt = task?.reviews_completed_at;
+      expect(originalCompletedAt).toBeDefined();
+
+      // Simulate late reviewer: manually create a claim and submit result
+      // (in practice this happens when a claim was created before slots filled,
+      // but result arrives after queue already moved to summary)
+      await store.createClaim({
+        id: `${taskId}:late-reviewer:review`,
+        task_id: taskId,
+        agent_id: 'late-reviewer',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Late review submits — queue should NOT change from summary
+      await r3.submitResult(taskId, 'review', 'Late review', 'approve', 400);
+      task = await store.getTask(taskId);
+      expect(task?.queue).toBe('summary');
+      // reviews_completed_at should not have been reset
+      expect(task?.reviews_completed_at).toBe(originalCompletedAt);
+    });
+
+    it('late review after queue=finished does not overwrite queue', async () => {
+      const taskId = await injectPR({ reviewCount: 3 });
+      const r1 = agent('reviewer-1');
+      const r2 = agent('reviewer-2');
+      const r3 = agent('late-reviewer');
+      const synth = agent('synthesizer');
+
+      // Both reviewers claim and submit
+      await r1.claim(taskId, 'review');
+      await r2.claim(taskId, 'review');
+      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
+      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+
+      // Synthesizer claims — queue moves to 'finished'
+      await synth.claim(taskId, 'summary');
+      let task = await store.getTask(taskId);
+      expect(task?.queue).toBe('finished');
+
+      // Simulate late review claim
+      await store.createClaim({
+        id: `${taskId}:late-reviewer:review`,
+        task_id: taskId,
+        agent_id: 'late-reviewer',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Late review submits — queue should stay 'finished'
+      await r3.submitResult(taskId, 'review', 'Late review', 'approve', 400);
+      task = await store.getTask(taskId);
+      expect(task?.queue).toBe('finished');
+    });
+
+    it('completed_reviews increments correctly even with late reviews', async () => {
+      const taskId = await injectPR({ reviewCount: 3 });
+      const r1 = agent('reviewer-1');
+      const r2 = agent('reviewer-2');
+      const r3 = agent('late-reviewer');
+
+      await r1.claim(taskId, 'review');
+      await r2.claim(taskId, 'review');
+      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
+      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+
+      let task = await store.getTask(taskId);
+      expect(task?.completed_reviews).toBe(2);
+
+      // Simulate late review claim
+      await store.createClaim({
+        id: `${taskId}:late-reviewer:review`,
+        task_id: taskId,
+        agent_id: 'late-reviewer',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      await r3.submitResult(taskId, 'review', 'Late review', 'approve', 400);
+      task = await store.getTask(taskId);
+      // Count should be 3 (incremented, but queue not changed)
+      expect(task?.completed_reviews).toBe(3);
+      expect(task?.queue).toBe('summary');
+    });
+
+    it('queue transitions to summary only once on the review that crosses threshold', async () => {
+      const taskId = await injectPR({ reviewCount: 3 });
+      const r1 = agent('reviewer-1');
+      const r2 = agent('reviewer-2');
+
+      await r1.claim(taskId, 'review');
+      await r2.claim(taskId, 'review');
+
+      // First review: 1 of 2 — should not transition
+      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
+      let task = await store.getTask(taskId);
+      expect(task?.queue).toBe('review');
+      expect(task?.reviews_completed_at).toBeUndefined();
+
+      // Second review: 2 of 2 — should transition exactly once
+      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+      task = await store.getTask(taskId);
+      expect(task?.queue).toBe('summary');
+      expect(task?.reviews_completed_at).toBeDefined();
+    });
+  });
 });
