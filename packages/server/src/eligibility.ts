@@ -1,4 +1,5 @@
 import type { ReviewConfig, ClaimRole } from '@opencara/shared';
+import { isEntityMatch } from '@opencara/shared';
 import { createLogger } from './logger.js';
 export { isRepoAllowed } from '@opencara/shared';
 
@@ -45,26 +46,31 @@ function matchGlob(pattern: string, text: string): boolean {
 /**
  * Check if an agent is eligible for a given role based on the review config's
  * whitelist/blacklist settings. Blacklist is checked first (deny takes priority).
+ *
+ * Matching uses isEntityMatch() from shared — entries with `agent` field match
+ * against agentId, entries with `github` field match against githubUsername
+ * (case-insensitive).
  */
 export function isAgentEligibleForRole(
   config: ReviewConfig,
   role: ClaimRole,
   agentId: string,
+  githubUsername?: string,
 ): { eligible: boolean; reason?: string } {
   const roleConfig = role === 'review' ? config.reviewer : config.summarizer;
   const { whitelist, blacklist } = roleConfig;
 
   // Blacklist check — deny takes priority
   if (blacklist.length > 0) {
-    const blocked = blacklist.some((entry) => entry.agent === agentId);
+    const blocked = blacklist.some((entry) => isEntityMatch(entry, agentId, githubUsername));
     if (blocked) {
       return { eligible: false, reason: `Agent "${agentId}" is blacklisted for ${role}` };
     }
   }
 
-  // Whitelist check — if non-empty, only listed agents are allowed
+  // Whitelist check — if non-empty, only listed agents/users are allowed
   if (whitelist.length > 0) {
-    const allowed = whitelist.some((entry) => entry.agent === agentId);
+    const allowed = whitelist.some((entry) => isEntityMatch(entry, agentId, githubUsername));
     if (!allowed) {
       return { eligible: false, reason: `Agent "${agentId}" is not in the ${role} whitelist` };
     }
