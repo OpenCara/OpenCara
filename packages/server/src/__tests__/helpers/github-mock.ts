@@ -1,10 +1,13 @@
 /**
- * Reusable GitHub API fetch mock for tests.
+ * Reusable GitHub API mocks for tests.
  *
- * Intercepts globalThis.fetch and routes GitHub API calls to stub responses.
- * Tracks all calls for assertion.
+ * - createGitHubMock(): Intercepts globalThis.fetch (legacy, for webhook tests)
+ * - MockGitHubService: Implements GitHubService interface with call tracking
  */
 import { vi } from 'vitest';
+import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import type { ReviewConfig } from '@opencara/shared';
+import type { GitHubService, PrDetails } from '../../github/service.js';
 
 export interface GitHubCall {
   url: string;
@@ -102,4 +105,69 @@ export function createGitHubMock(): GitHubMock {
   }
 
   return { calls, install, restore };
+}
+
+/**
+ * GitHubService implementation for tests — tracks all calls for assertion.
+ * No real HTTP, no globalThis.fetch interception.
+ */
+export interface GitHubServiceCall {
+  method: string;
+  args: Record<string, unknown>;
+}
+
+export class MockGitHubService implements GitHubService {
+  readonly calls: GitHubServiceCall[] = [];
+
+  reset(): void {
+    this.calls.length = 0;
+  }
+
+  async getInstallationToken(installationId: number): Promise<string> {
+    this.calls.push({ method: 'getInstallationToken', args: { installationId } });
+    return 'ghs_mock_token';
+  }
+
+  async postPrComment(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+    token: string,
+  ): Promise<string> {
+    this.calls.push({ method: 'postPrComment', args: { owner, repo, prNumber, body, token } });
+    return `https://github.com/${owner}/${repo}/pull/${prNumber}#comment-mock`;
+  }
+
+  async fetchPrDetails(owner: string, repo: string, prNumber: number): Promise<PrDetails | null> {
+    this.calls.push({ method: 'fetchPrDetails', args: { owner, repo, prNumber } });
+    return {
+      number: prNumber,
+      html_url: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+      diff_url: `https://github.com/${owner}/${repo}/pull/${prNumber}.diff`,
+      base: { ref: 'main' },
+      head: { ref: 'feat/test' },
+      draft: false,
+      labels: [],
+    };
+  }
+
+  async loadReviewConfig(
+    owner: string,
+    repo: string,
+    baseRef: string,
+    prNumber: number,
+    token: string,
+  ): Promise<{ config: ReviewConfig; parseError: boolean }> {
+    this.calls.push({
+      method: 'loadReviewConfig',
+      args: { owner, repo, baseRef, prNumber, token },
+    });
+    return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+  }
+
+  /** Count postPrComment calls (convenience for assertions). */
+  get commentCount(): number {
+    return this.calls.filter((c) => c.method === 'postPrComment').length;
+  }
 }

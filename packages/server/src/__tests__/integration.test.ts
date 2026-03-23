@@ -5,7 +5,7 @@
  * Everything else (Hono routing, DataStore, review parsing, formatting)
  * runs for real.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import type { ReviewTask } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
@@ -13,6 +13,7 @@ import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
+import { MockGitHubService, type GitHubServiceCall } from './helpers/github-mock.js';
 import type { Env } from '../types.js';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -76,21 +77,14 @@ async function signPayload(body: string, secret: string): Promise<string> {
   return `sha256=${hex}`;
 }
 
-/** GitHub API call log entry */
-interface GitHubCall {
-  url: string;
-  method: string;
-  body?: unknown;
-}
-
 // ── Test suite ─────────────────────────────────────────────────
 
 describe('Integration: full E2E flows', () => {
   let store: MemoryDataStore;
   let app: ReturnType<typeof createApp>;
   let mockEnv: Env;
-  let githubCalls: GitHubCall[];
-  const originalFetch = globalThis.fetch;
+  let github: MockGitHubService;
+  let githubCalls: GitHubServiceCall[];
 
   /** Send a JSON request to the Hono app. */
   function api(method: string, path: string, body?: unknown) {
@@ -146,63 +140,10 @@ describe('Integration: full E2E flows', () => {
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
-    app = createApp(store);
+    github = new MockGitHubService();
+    app = createApp(store, github);
     mockEnv = getMockEnv();
-    githubCalls = [];
-
-    // Mock fetch — intercept all GitHub API calls
-    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      const method = init?.method ?? 'GET';
-
-      githubCalls.push({
-        url,
-        method,
-        body: init?.body ? JSON.parse(init.body as string) : undefined,
-      });
-
-      // Installation token
-      if (url.includes('/access_tokens')) {
-        return new Response(JSON.stringify({ token: 'ghs_mock_token' }), { status: 200 });
-      }
-
-      // Fetch .review.yml — return 404 (use defaults)
-      if (url.includes('/contents/.review.yml')) {
-        return new Response('Not Found', { status: 404 });
-      }
-
-      // Post PR comment (issue comment)
-      if (url.includes('/issues/') && url.includes('/comments') && method === 'POST') {
-        return new Response(
-          JSON.stringify({ html_url: 'https://github.com/acme/widget/pull/42#comment-456' }),
-          { status: 200 },
-        );
-      }
-
-      // Fetch PR details (for issue_comment trigger)
-      if (url.includes('/pulls/') && !url.includes('/reviews') && method === 'GET') {
-        return new Response(
-          JSON.stringify({
-            number: 42,
-            html_url: 'https://github.com/acme/widget/pull/42',
-            diff_url: 'https://github.com/acme/widget/pull/42.diff',
-            base: { ref: 'main' },
-            head: { ref: 'feat/awesome' },
-            draft: false,
-            labels: [],
-          }),
-          { status: 200 },
-        );
-      }
-
-      // Default 404 for anything else
-      return new Response('Not Found', { status: 404 });
-    }) as typeof fetch;
-  });
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
+    githubCalls = github.calls;
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -273,13 +214,10 @@ APPROVE`;
       expect(claims[0].tokens_used).toBe(1200);
 
       // 6. Verify GitHub API was called to post comment
-      const commentPost = githubCalls.find(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPost = githubCalls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
-      expect(commentPost!.body).toBeDefined();
       // Body should contain the formatted review text with verdict
-      expect((commentPost!.body as Record<string, unknown>).body).toBeDefined();
+      expect(commentPost!.args.body).toBeDefined();
     });
 
     it('second agent sees nothing after task is claimed', async () => {
@@ -439,15 +377,13 @@ APPROVE`;
       expect(task?.status).toBe('timeout');
 
       // Should have tried to post the partial review + timeout comment as issue comments
-      const commentPosts = githubCalls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPosts = githubCalls.filter((c) => c.method === 'postPrComment');
       // At least 2: one for the partial review, one for the timeout message
       expect(commentPosts.length).toBeGreaterThanOrEqual(2);
 
       // Verify the timeout comment mentions partial reviews
       const timeoutComment = commentPosts.find((c) =>
-        ((c.body as Record<string, unknown>)?.body as string)?.includes('timed out'),
+        (c.args.body as string)?.includes('timed out'),
       );
       expect(timeoutComment).toBeDefined();
     });
@@ -469,19 +405,10 @@ APPROVE`;
         }),
       );
 
-      // Override fetch to fail on installation token request with 401 (not retried)
-      const failingFetch = vi.fn(async (input: string | URL | Request) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-        // Fail on installation token request — simulates auth failure
-        if (url.includes('/access_tokens')) {
-          return new Response('Unauthorized', { status: 401 });
-        }
-
-        return new Response('Not Found', { status: 404 });
-      }) as typeof fetch;
-      globalThis.fetch = failingFetch;
+      // Override MockGitHubService to fail on installation token — simulates auth failure
+      github.getInstallationToken = async () => {
+        throw new Error('Unauthorized');
+      };
 
       // Trigger timeout check via poll
       await poll('any-agent');
@@ -709,9 +636,7 @@ APPROVE`;
       const winner = winners[0]!;
 
       // Count GitHub comment calls before
-      const commentsBefore = githubCalls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      ).length;
+      const commentsBefore = githubCalls.filter((c) => c.method === 'postPrComment').length;
 
       // Winner submits result — should post to GitHub
       await submitResult(
@@ -723,9 +648,7 @@ APPROVE`;
       );
 
       // Only 1 comment should have been posted
-      const commentsAfter = githubCalls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      ).length;
+      const commentsAfter = githubCalls.filter((c) => c.method === 'postPrComment').length;
       expect(commentsAfter - commentsBefore).toBe(1);
     });
   });
@@ -972,11 +895,10 @@ APPROVE`;
         mockEnv,
       );
 
-      // The .review.yml fetch should use base ref (main), not head ref (feat/malicious-config)
-      const configFetch = githubCalls.find((c) => c.url.includes('/contents/.review.yml'));
+      // The loadReviewConfig call should use base ref (main), not head ref (feat/malicious-config)
+      const configFetch = githubCalls.find((c) => c.method === 'loadReviewConfig');
       expect(configFetch).toBeDefined();
-      expect(configFetch!.url).toContain('ref=main');
-      expect(configFetch!.url).not.toContain('ref=feat/malicious-config');
+      expect(configFetch!.args.baseRef).toBe('main');
     });
 
     it('invalid signature is rejected with 401', async () => {
@@ -1259,11 +1181,10 @@ APPROVE`;
       await sendCommentWebhook(83, '/opencara review');
 
       // The mock returns PR details with base: { ref: 'main' } and head: { ref: 'feat/test' }
-      // .review.yml should be fetched using base ref (main), not head ref
-      const configFetch = githubCalls.find((c) => c.url.includes('/contents/.review.yml'));
+      // loadReviewConfig should be called with base ref (main), not head ref
+      const configFetch = githubCalls.find((c) => c.method === 'loadReviewConfig');
       expect(configFetch).toBeDefined();
-      expect(configFetch!.url).toContain('ref=main');
-      expect(configFetch!.url).not.toContain('ref=feat/test');
+      expect(configFetch!.args.baseRef).toBe('main');
     });
 
     it('/opencara review comment creates task after previous task completed', async () => {

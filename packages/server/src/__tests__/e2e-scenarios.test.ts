@@ -14,7 +14,7 @@ import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import type { Env } from '../types.js';
 import { createTestApp } from './helpers/test-server.js';
-import { createGitHubMock } from './helpers/github-mock.js';
+import { MockGitHubService } from './helpers/github-mock.js';
 import { MockAgent } from './helpers/mock-agent.js';
 
 // ── Setup ────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ describe('E2E Scenarios', () => {
   let store: MemoryDataStore;
   let app: ReturnType<typeof createTestApp>;
   let env: Env;
-  let github: ReturnType<typeof createGitHubMock>;
+  let github: MockGitHubService;
 
   /** Helper: inject a PR event via test routes. */
   async function injectPR(opts?: {
@@ -86,14 +86,9 @@ describe('E2E Scenarios', () => {
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
-    app = createTestApp(store);
+    github = new MockGitHubService();
+    app = createTestApp(store, github);
     env = getMockEnv();
-    github = createGitHubMock();
-    github.install();
-  });
-
-  afterEach(() => {
-    github.restore();
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -138,9 +133,7 @@ describe('E2E Scenarios', () => {
       expect(['completed', 'failed']).toContain(finalTask?.status);
 
       // GitHub comment was posted
-      const commentPost = github.calls.find(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
 
       // No more tasks for polling
@@ -438,9 +431,7 @@ describe('E2E Scenarios', () => {
       const synthB = agent('synth-b');
 
       // Count GitHub comment calls before
-      const commentsBefore = github.calls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      ).length;
+      const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
 
       // Agent A submits summary — is summary_agent_id, should post
       await synthA.submitResult(taskId, 'summary', '## Summary\nFirst.', 'approve');
@@ -449,9 +440,7 @@ describe('E2E Scenarios', () => {
       await synthB.submitResult(taskId, 'summary', '## Summary\nDuplicate.', 'approve');
 
       // Only 1 new comment should have been posted (not 2)
-      const commentsAfter = github.calls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      ).length;
+      const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
       const newComments = commentsAfter - commentsBefore;
       expect(newComments).toBe(1);
     });
@@ -505,17 +494,13 @@ describe('E2E Scenarios', () => {
       const winner = claimAgents[winnerIdx]!;
 
       // Count GitHub comment calls before
-      const commentsBefore = github.calls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      ).length;
+      const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
 
       // Winner submits result
       await winner.submitResult(taskId, 'summary', '## Summary\nLooks good.', 'approve');
 
       // Exactly 1 GitHub comment posted
-      const commentsAfter = github.calls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      ).length;
+      const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
       expect(commentsAfter - commentsBefore).toBe(1);
 
       // Task should be in terminal state
@@ -570,9 +555,7 @@ describe('E2E Scenarios', () => {
       expect(task?.status).toBe('timeout');
 
       // Partial review + timeout comment should have been posted as issue comments
-      const commentPosts = github.calls.filter(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPosts = github.calls.filter((c) => c.method === 'postPrComment');
       // At least 2: one for the partial review, one for the timeout message
       expect(commentPosts.length).toBeGreaterThanOrEqual(2);
     });
@@ -750,12 +733,10 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
 
       // GitHub comment should have been posted (not a review)
-      const commentPost = github.calls.find(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       // Verdict is in the comment body text
-      expect((commentPost!.body as { body?: string }).body).toContain('APPROVE');
+      expect(commentPost!.args.body as string).toContain('APPROVE');
     });
 
     it('mixed-case verdict is included in comment body text', async () => {
@@ -774,10 +755,10 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
 
       const commentPost = github.calls.find(
-        (c) => c.url.includes('/issues/2/comments') && c.method === 'POST',
+        (c) => c.method === 'postPrComment' && c.args.prNumber === 2,
       );
       expect(commentPost).toBeDefined();
-      expect((commentPost!.body as { body?: string }).body).toContain('request_changes');
+      expect(commentPost!.args.body as string).toContain('request_changes');
     });
   });
 
@@ -943,12 +924,9 @@ describe('E2E Scenarios', () => {
       expect(finalTask?.status).toBe('completed');
 
       // GitHub comment was posted with the correct review text
-      const commentPost = github.calls.find(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
-      expect(commentPost!.body).toBeDefined();
-      const commentBody = (commentPost!.body as { body: string }).body;
+      const commentBody = commentPost!.args.body as string;
       expect(commentBody).toContain('This should still be posted.');
     });
 
@@ -995,11 +973,9 @@ describe('E2E Scenarios', () => {
 
       // GitHub comment should use the model/tool from the claim (set at claim time),
       // not the stale KV re-read
-      const commentPost = github.calls.find(
-        (c) => c.url.includes('/issues/') && c.url.includes('/comments') && c.method === 'POST',
-      );
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
-      const commentBody = (commentPost!.body as { body: string }).body;
+      const commentBody = commentPost!.args.body as string;
       // Should contain correct model/tool (formatted as `model/tool`) and NOT stale ones
       expect(commentBody).toContain('claude-3/opencara-cli');
       expect(commentBody).not.toContain('stale-model');

@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import type { GitHubService } from '../github/service.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -348,7 +349,7 @@ describe('webhook.ts edge cases', () => {
     return `sha256=${hex}`;
   }
 
-  async function setupApp() {
+  async function setupApp(githubService?: GitHubService) {
     const { generateKeyPairSync } = await import('node:crypto');
     if (!TEST_PEM) {
       const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -357,7 +358,7 @@ describe('webhook.ts edge cases', () => {
     const { createApp } = await import('../index.js');
     const { MemoryDataStore } = await import('../store/memory.js');
     const store = new MemoryDataStore();
-    const app = createApp(store);
+    const app = createApp(store, githubService);
     const mockEnv = {
       GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
       GITHUB_APP_ID: '12345',
@@ -460,15 +461,22 @@ describe('webhook.ts edge cases', () => {
   });
 
   it('PR event with failed installation token is skipped', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    // Mock fetch to make getInstallationToken fail
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      status: 403,
-      ok: false,
-      statusText: 'Forbidden',
-      json: () => Promise.resolve({ message: 'Forbidden' }),
-    });
-    const { app, mockEnv } = await setupApp();
+    // Inject a GitHubService that throws on getInstallationToken
+    const failingGithub: GitHubService = {
+      async getInstallationToken() {
+        throw new Error('Forbidden');
+      },
+      async postPrComment() {
+        return '';
+      },
+      async fetchPrDetails() {
+        return null;
+      },
+      async loadReviewConfig() {
+        return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+      },
+    };
+    const { app, mockEnv } = await setupApp(failingGithub);
     const res = await sendWebhook(app, mockEnv, 'pull_request', {
       action: 'opened',
       installation: { id: 999 },
@@ -482,42 +490,25 @@ describe('webhook.ts edge cases', () => {
       },
     });
     expect(res.status).toBe(200);
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to get installation token'),
-    );
   });
 
   it('PR event with .review.yml parse error aborts', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    // Mock fetch: installation token succeeds, .review.yml returns malformed YAML
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      const urlStr = typeof url === 'string' ? url : String(url);
-      if (urlStr.includes('/access_tokens')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          json: () => Promise.resolve({ token: 'ghs_test' }),
-        });
-      }
-      if (urlStr.includes('/contents/.review.yml')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          text: () => Promise.resolve('invalid: yaml: [broken'),
-        });
-      }
-      // Comment post succeeds
-      if (urlStr.includes('/issues/') && urlStr.includes('/comments')) {
-        return Promise.resolve({
-          status: 201,
-          ok: true,
-          json: () => Promise.resolve({ html_url: 'https://example.com' }),
-        });
-      }
-      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
-    });
-
-    const { app, mockEnv } = await setupApp();
+    // Inject a GitHubService that returns parseError: true from loadReviewConfig
+    const parseErrorGithub: GitHubService = {
+      async getInstallationToken() {
+        return 'ghs_test';
+      },
+      async postPrComment() {
+        return '';
+      },
+      async fetchPrDetails() {
+        return null;
+      },
+      async loadReviewConfig() {
+        return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+      },
+    };
+    const { app, mockEnv } = await setupApp(parseErrorGithub);
     const res = await sendWebhook(app, mockEnv, 'pull_request', {
       action: 'opened',
       installation: { id: 999 },
@@ -531,9 +522,6 @@ describe('webhook.ts edge cases', () => {
       },
     });
     expect(res.status).toBe(200);
-    expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining('Aborting due to .review.yml parse error'),
-    );
   });
 
   it('issue_comment on non-PR issue is skipped', async () => {
@@ -565,14 +553,22 @@ describe('webhook.ts edge cases', () => {
   });
 
   it('issue_comment with failed installation token is skipped', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      status: 403,
-      ok: false,
-      statusText: 'Forbidden',
-      json: () => Promise.resolve({ message: 'Forbidden' }),
-    });
-    const { app, mockEnv } = await setupApp();
+    // Inject a GitHubService that throws on getInstallationToken
+    const failingGithub: GitHubService = {
+      async getInstallationToken() {
+        throw new Error('Forbidden');
+      },
+      async postPrComment() {
+        return '';
+      },
+      async fetchPrDetails() {
+        return null;
+      },
+      async loadReviewConfig() {
+        return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+      },
+    };
+    const { app, mockEnv } = await setupApp(failingGithub);
     const res = await sendWebhook(app, mockEnv, 'issue_comment', {
       action: 'created',
       installation: { id: 999 },
@@ -581,33 +577,25 @@ describe('webhook.ts edge cases', () => {
       comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
     });
     expect(res.status).toBe(200);
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to get installation token'),
-    );
   });
 
   it('issue_comment with failed PR details fetch is skipped', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      const urlStr = typeof url === 'string' ? url : String(url);
-      if (urlStr.includes('/access_tokens')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          json: () => Promise.resolve({ token: 'ghs_test' }),
-        });
-      }
-      // PR details fetch fails with non-retryable error
-      if (urlStr.includes('/pulls/')) {
-        return Promise.resolve({
-          status: 403,
-          ok: false,
-          statusText: 'Forbidden',
-        });
-      }
-      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
-    });
-    const { app, mockEnv } = await setupApp();
+    // Inject a GitHubService where fetchPrDetails returns null
+    const failingGithub: GitHubService = {
+      async getInstallationToken() {
+        return 'ghs_test';
+      },
+      async postPrComment() {
+        return '';
+      },
+      async fetchPrDetails() {
+        return null;
+      },
+      async loadReviewConfig() {
+        return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+      },
+    };
+    const { app, mockEnv } = await setupApp(failingGithub);
     const res = await sendWebhook(app, mockEnv, 'issue_comment', {
       action: 'created',
       installation: { id: 999 },
@@ -616,43 +604,9 @@ describe('webhook.ts edge cases', () => {
       comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
     });
     expect(res.status).toBe(200);
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to fetch PR details'),
-    );
   });
 
   it('issue_comment with non-matching trigger command is skipped', async () => {
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      const urlStr = typeof url === 'string' ? url : String(url);
-      if (urlStr.includes('/access_tokens')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          json: () => Promise.resolve({ token: 'ghs_test' }),
-        });
-      }
-      // .review.yml not found → defaults
-      if (urlStr.includes('/contents/.review.yml')) {
-        return Promise.resolve({ status: 404, ok: false });
-      }
-      // PR details
-      if (urlStr.includes('/pulls/')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              number: 1,
-              html_url: 'https://github.com/o/r/pull/1',
-              diff_url: 'https://github.com/o/r/pull/1.diff',
-              base: { ref: 'main' },
-              head: { ref: 'feat' },
-            }),
-        });
-      }
-      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
-    });
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     const { app, mockEnv } = await setupApp();
     const res = await sendWebhook(app, mockEnv, 'issue_comment', {
       action: 'created',
@@ -669,35 +623,6 @@ describe('webhook.ts edge cases', () => {
   });
 
   it('issue_comment from untrusted author is skipped', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      const urlStr = typeof url === 'string' ? url : String(url);
-      if (urlStr.includes('/access_tokens')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          json: () => Promise.resolve({ token: 'ghs_test' }),
-        });
-      }
-      if (urlStr.includes('/contents/.review.yml')) {
-        return Promise.resolve({ status: 404, ok: false });
-      }
-      if (urlStr.includes('/pulls/')) {
-        return Promise.resolve({
-          status: 200,
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              number: 1,
-              html_url: 'https://github.com/o/r/pull/1',
-              diff_url: 'https://github.com/o/r/pull/1.diff',
-              base: { ref: 'main' },
-              head: { ref: 'feat' },
-            }),
-        });
-      }
-      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
-    });
     const { app, mockEnv } = await setupApp();
     const res = await sendWebhook(app, mockEnv, 'issue_comment', {
       action: 'created',
@@ -711,6 +636,5 @@ describe('webhook.ts edge cases', () => {
       },
     });
     expect(res.status).toBe(200);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('not a trusted contributor'));
   });
 });

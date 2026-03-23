@@ -2,9 +2,8 @@ import { Hono } from 'hono';
 import type { ReviewConfig } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
+import type { GitHubService } from '../github/service.js';
 import type { Logger } from '../logger.js';
-import { getInstallationToken } from '../github/app.js';
-import { loadReviewConfig, fetchPrDetails } from '../github/config.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
@@ -153,6 +152,7 @@ export function webhookRoutes() {
 
   app.post('/webhook/github', rateLimitByIP({ maxRequests: 60, windowMs: 60_000 }), async (c) => {
     const store = c.get('store');
+    const github = c.get('github');
     const logger = c.get('logger');
     const body = await c.req.text();
     const signature = c.req.header('X-Hub-Signature-256') ?? null;
@@ -175,7 +175,7 @@ export function webhookRoutes() {
     switch (event) {
       case 'pull_request':
         return handlePullRequest(
-          c.env,
+          github,
           store,
           payload as unknown as PullRequestPayload,
           action,
@@ -184,7 +184,7 @@ export function webhookRoutes() {
       case 'issue_comment':
         if (action === 'created') {
           return handleIssueComment(
-            c.env,
+            github,
             store,
             payload as unknown as IssueCommentPayload,
             logger,
@@ -203,7 +203,7 @@ export function webhookRoutes() {
 }
 
 async function handlePullRequest(
-  env: Env,
+  github: GitHubService,
   store: DataStore,
   payload: PullRequestPayload,
   action: string,
@@ -232,7 +232,7 @@ async function handlePullRequest(
 
   let token: string;
   try {
-    token = await getInstallationToken(installation.id, env);
+    token = await github.getInstallationToken(installation.id);
   } catch (err) {
     logger.error('Failed to get installation token', {
       error: err instanceof Error ? err.message : String(err),
@@ -241,13 +241,12 @@ async function handlePullRequest(
   }
 
   const baseRef = pull_request.base.ref;
-  const { config, parseError } = await loadReviewConfig(
+  const { config, parseError } = await github.loadReviewConfig(
     owner,
     repo,
     baseRef,
     prNumber,
     token,
-    logger,
   );
 
   if (parseError) {
@@ -293,7 +292,7 @@ async function handlePullRequest(
 }
 
 async function handleIssueComment(
-  env: Env,
+  github: GitHubService,
   store: DataStore,
   payload: IssueCommentPayload,
   logger: Logger,
@@ -315,7 +314,7 @@ async function handleIssueComment(
 
   let token: string;
   try {
-    token = await getInstallationToken(installation.id, env);
+    token = await github.getInstallationToken(installation.id);
   } catch (err) {
     logger.error('Failed to get installation token', {
       error: err instanceof Error ? err.message : String(err),
@@ -323,13 +322,13 @@ async function handleIssueComment(
     return new Response('OK', { status: 200 });
   }
 
-  const pr = await fetchPrDetails(owner, repo, prNumber, token, logger);
+  const pr = await github.fetchPrDetails(owner, repo, prNumber, token);
   if (!pr) {
     logger.error('Failed to fetch PR details', { owner, repo, prNumber });
     return new Response('OK', { status: 200 });
   }
 
-  const { config } = await loadReviewConfig(owner, repo, pr.base.ref, prNumber, token);
+  const { config } = await github.loadReviewConfig(owner, repo, pr.base.ref, prNumber, token);
 
   const triggerCommand = config.trigger.comment;
   if (!comment.body.trim().toLowerCase().startsWith(triggerCommand.toLowerCase())) {
