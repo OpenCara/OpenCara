@@ -32,7 +32,6 @@ function getMockEnv(): Env {
     GITHUB_WEBHOOK_SECRET: 'test-secret',
     GITHUB_APP_ID: '12345',
     GITHUB_APP_PRIVATE_KEY: TEST_PEM,
-    TASK_STORE: {} as KVNamespace,
     WEB_URL: 'https://test.opencara.com',
   };
 }
