@@ -738,15 +738,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
       return;
     }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -799,22 +799,24 @@ export async function startAgent(
 
   const abortController = new AbortController();
 
-  // Handle graceful shutdown
-  process.on('SIGINT', () => {
-    abortController.abort();
-  });
-  process.on('SIGTERM', () => {
-    abortController.abort();
-  });
+  // Handle graceful shutdown — named handler so it can be removed in finally
+  const onSignal = () => abortController.abort();
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
-  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, agentSession, {
-    pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    maxConsecutiveErrors: options?.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
-    routerRelay: options?.routerRelay,
-    reviewOnly: options?.reviewOnly,
-    repoConfig: options?.repoConfig,
-    signal: abortController.signal,
-  });
+  try {
+    await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, agentSession, {
+      pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      maxConsecutiveErrors: options?.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
+      routerRelay: options?.routerRelay,
+      reviewOnly: options?.reviewOnly,
+      repoConfig: options?.repoConfig,
+      signal: abortController.signal,
+    });
+  } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  }
 
   log(formatExitSummary(agentSession));
 }

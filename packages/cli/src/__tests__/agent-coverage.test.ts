@@ -96,6 +96,7 @@ describe('Agent Coverage Tests', () => {
 
   afterEach(() => {
     server.restore();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
