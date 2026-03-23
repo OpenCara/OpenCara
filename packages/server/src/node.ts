@@ -87,7 +87,15 @@ function runMigrations(): void {
     if (existing) continue;
 
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
-    rawDb.exec(sql);
+    try {
+      rawDb.exec(sql);
+    } catch (err) {
+      logger.error('Migration failed', {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(1);
+    }
 
     rawDb.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)').run(file, Date.now());
 

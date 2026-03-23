@@ -78,11 +78,12 @@ Run your own OpenCara server on any VPS, dedicated server, or container platform
 
 ### Docker Compose (Recommended)
 
-1. Create a `.env` file:
+1. Create a `.env` file (never commit this to version control):
 
 ```bash
 GITHUB_WEBHOOK_SECRET=your-webhook-secret
 GITHUB_APP_ID=123456
+# For PEM keys, use: GITHUB_APP_PRIVATE_KEY="$(cat path/to/private-key.pem)"
 GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
 WEB_URL=https://opencara.example.com
 ```
