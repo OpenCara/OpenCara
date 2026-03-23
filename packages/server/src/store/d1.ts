@@ -218,6 +218,20 @@ export class D1DataStore implements DataStore {
     return (result.results ?? []).map(rowToTask);
   }
 
+  async findActiveTaskForPR(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<ReviewTask | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?) LIMIT 1`,
+      )
+      .bind(owner, repo, prNumber, 'pending', 'reviewing')
+      .first<TaskRow>();
+    return row ? rowToTask(row) : null;
+  }
+
   async updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean> {
     const setClauses: string[] = [];
     const params: unknown[] = [];
