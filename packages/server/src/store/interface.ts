@@ -2,8 +2,8 @@ import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 
 /**
- * DataStore — abstracted storage for tasks, claims, locks, heartbeats, and meta.
- * Implementations: MemoryDataStore (dev/test), KVDataStore (Workers KV), D1DataStore (future).
+ * DataStore — abstracted storage for tasks, claims, heartbeats, and meta.
+ * Implementations: MemoryDataStore (dev/test), D1DataStore (production).
  */
 export interface DataStore {
   // Tasks
@@ -19,13 +19,11 @@ export interface DataStore {
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 
-  // Locks — atomic acquire-or-fail
-  acquireLock(key: string, holder: string): Promise<boolean>;
-  /** Check if the given holder holds the lock. */
-  checkLock(key: string, holder: string): Promise<boolean>;
-  /** Check if the lock is held by anyone. */
-  isLockHeld(key: string): Promise<boolean>;
-  releaseLock(key: string): Promise<void>;
+  // Summary claim — atomic compare-and-swap (replaces locks)
+  /** Atomically claim summary: sets queue='finished' + summary_agent_id only if queue='summary'. Returns true if claimed. */
+  claimSummarySlot(taskId: string, agentId: string): Promise<boolean>;
+  /** Release summary slot: sets queue='summary' + clears summary_agent_id. Used by reject/error/failure paths. */
+  releaseSummarySlot(taskId: string): Promise<void>;
 
   // Agent heartbeats
   setAgentLastSeen(agentId: string, timestamp: number): Promise<void>;

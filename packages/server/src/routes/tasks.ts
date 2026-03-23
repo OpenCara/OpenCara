@@ -235,12 +235,8 @@ async function postFinalReview(
       error: err instanceof Error ? err.message : String(err),
     });
     // On failure, move task back to summary queue so another agent can retry
-    await store.releaseLock(`summary:${taskId}`);
-    await store.updateTask(taskId, {
-      status: 'reviewing',
-      queue: 'summary',
-      summary_agent_id: undefined,
-    });
+    await store.releaseSummarySlot(taskId);
+    await store.updateTask(taskId, { status: 'reviewing' });
   }
 }
 
@@ -420,15 +416,14 @@ export function taskRoutes() {
       }
     }
 
-    // For summary claims, acquire a lock to prevent concurrent claims.
-    // The lock is atomic (synchronous in MemoryDataStore, conditional-put in KV/D1)
-    // and prevents the race where multiple agents pass the queue check above
-    // but haven't yet updated the queue to 'finished'.
+    // For summary claims, use atomic CAS to prevent concurrent claims.
+    // claimSummarySlot atomically sets queue='finished' + summary_agent_id
+    // only if queue='summary', preventing the race where multiple agents
+    // pass the queue check above.
     if (role === 'summary') {
-      const lockKey = `summary:${taskId}`;
-      const locked = await store.acquireLock(lockKey, agent_id);
-      if (!locked) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'Summary already claimed by another agent');
+      const claimed = await store.claimSummarySlot(taskId, agent_id);
+      if (!claimed) {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Unable to claim summary slot');
       }
     }
 
@@ -446,7 +441,7 @@ export function taskRoutes() {
     });
     if (!claimCreated) {
       if (role === 'summary') {
-        await store.releaseLock(`summary:${taskId}`);
+        await store.releaseSummarySlot(taskId);
       }
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
     }
@@ -458,11 +453,8 @@ export function taskRoutes() {
 
     if (role === 'review') {
       taskUpdates.review_claims = (task.review_claims ?? 0) + 1;
-    } else if (role === 'summary') {
-      // Move task from summary queue → finished queue
-      taskUpdates.queue = 'finished';
-      taskUpdates.summary_agent_id = agent_id;
     }
+    // Note: summary queue/agent updates are handled by claimSummarySlot above
 
     await store.updateTask(taskId, taskUpdates);
 
@@ -616,16 +608,13 @@ export function taskRoutes() {
     // Free the slot so another agent can claim it
     const task = await store.getTask(taskId);
     if (task) {
-      const updates: Partial<ReviewTask> = {};
       if (claim.role === 'review') {
-        updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
+        await store.updateTask(taskId, {
+          review_claims: Math.max(0, (task.review_claims ?? 0) - 1),
+        });
       } else if (claim.role === 'summary') {
-        // Move task back to summary queue from finished and release the lock
-        updates.queue = 'summary';
-        updates.summary_agent_id = undefined;
-        await store.releaseLock(`summary:${taskId}`);
+        await store.releaseSummarySlot(taskId);
       }
-      await store.updateTask(taskId, updates);
     }
 
     logger.error('Agent rejected task', {
@@ -667,16 +656,13 @@ export function taskRoutes() {
     // Free the slot so another agent can claim it
     const task = await store.getTask(taskId);
     if (task) {
-      const updates: Partial<ReviewTask> = {};
       if (claim.role === 'review') {
-        updates.review_claims = Math.max(0, (task.review_claims ?? 0) - 1);
+        await store.updateTask(taskId, {
+          review_claims: Math.max(0, (task.review_claims ?? 0) - 1),
+        });
       } else if (claim.role === 'summary') {
-        // Move task back to summary queue from finished and release the lock
-        updates.queue = 'summary';
-        updates.summary_agent_id = undefined;
-        await store.releaseLock(`summary:${taskId}`);
+        await store.releaseSummarySlot(taskId);
       }
-      await store.updateTask(taskId, updates);
     }
 
     logger.error('Agent reported error', {

@@ -36,11 +36,6 @@ const SCHEMAS: Record<string, TableSchema> = {
       { columns: ['task_id'], refTable: 'tasks', refColumns: ['id'], onDelete: 'CASCADE' },
     ],
   },
-  locks: {
-    primaryKey: 'key',
-    uniqueConstraints: [],
-    foreignKeys: [],
-  },
   agent_heartbeats: {
     primaryKey: 'agent_id',
     uniqueConstraints: [],
@@ -567,11 +562,10 @@ describe('D1DataStore', () => {
       expect(await store.getClaims('task-1')).toHaveLength(0);
     });
 
-    it('deleteTask also removes summary lock', async () => {
+    it('deleteTask is successful', async () => {
       await store.createTask(makeTask());
-      await store.acquireLock('summary:task-1', 'agent-a');
       await store.deleteTask('task-1');
-      expect(await store.checkLock('summary:task-1', 'agent-a')).toBe(false);
+      expect(await store.getTask('task-1')).toBeNull();
     });
   });
 
@@ -720,60 +714,72 @@ describe('D1DataStore', () => {
     });
   });
 
-  // ── Locks ─────────────────────────────────────────────────
+  // ── Summary claim (CAS) ─────────────────────────────────
 
-  describe('locks', () => {
-    it('acquires lock for first holder', async () => {
-      const result = await store.acquireLock('summary:task-1', 'agent-a');
+  describe('claimSummarySlot / releaseSummarySlot', () => {
+    it('claims summary slot when task is in summary queue', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
+      const result = await store.claimSummarySlot('task-1', 'agent-a');
       expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+      expect(task?.summary_agent_id).toBe('agent-a');
     });
 
-    it('rejects second holder when lock is held', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      const result = await store.acquireLock('summary:task-1', 'agent-b');
+    it('rejects second claim when already claimed', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.claimSummarySlot('task-1', 'agent-a');
+      const result = await store.claimSummarySlot('task-1', 'agent-b');
       expect(result).toBe(false);
     });
 
-    it('is idempotent for same holder', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      const result = await store.acquireLock('summary:task-1', 'agent-a');
+    it('rejects claim when task is not in summary queue', async () => {
+      await store.createTask(makeTask({ queue: 'review' }));
+      const result = await store.claimSummarySlot('task-1', 'agent-a');
+      expect(result).toBe(false);
+    });
+
+    it('rejects claim for nonexistent task', async () => {
+      const result = await store.claimSummarySlot('nonexistent', 'agent-a');
+      expect(result).toBe(false);
+    });
+
+    it('releaseSummarySlot returns task to summary queue', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.claimSummarySlot('task-1', 'agent-a');
+      await store.releaseSummarySlot('task-1');
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+      expect(task?.summary_agent_id).toBeUndefined();
+    });
+
+    it('releaseSummarySlot allows new claim', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
+      await store.claimSummarySlot('task-1', 'agent-a');
+      await store.releaseSummarySlot('task-1');
+      const result = await store.claimSummarySlot('task-1', 'agent-b');
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.summary_agent_id).toBe('agent-b');
+    });
+
+    it('claims are independent per task', async () => {
+      await store.createTask(makeTask({ id: 'task-1', queue: 'summary' }));
+      await store.createTask(makeTask({ id: 'task-2', queue: 'summary' }));
+      await store.claimSummarySlot('task-1', 'agent-a');
+      const result = await store.claimSummarySlot('task-2', 'agent-b');
       expect(result).toBe(true);
     });
 
-    it('checkLock returns true for lock holder', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      expect(await store.checkLock('summary:task-1', 'agent-a')).toBe(true);
+    it('releaseSummarySlot is no-op for nonexistent task', async () => {
+      await store.releaseSummarySlot('nonexistent'); // should not throw
     });
 
-    it('checkLock returns false for non-holder', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      expect(await store.checkLock('summary:task-1', 'agent-b')).toBe(false);
-    });
-
-    it('checkLock returns false when no lock exists', async () => {
-      expect(await store.checkLock('summary:task-1', 'agent-a')).toBe(false);
-    });
-
-    it('isLockHeld returns true when lock exists', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      expect(await store.isLockHeld('summary:task-1')).toBe(true);
-    });
-
-    it('isLockHeld returns false when no lock exists', async () => {
-      expect(await store.isLockHeld('summary:task-1')).toBe(false);
-    });
-
-    it('releaseLock allows new acquisition', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      await store.releaseLock('summary:task-1');
-      const result = await store.acquireLock('summary:task-1', 'agent-b');
-      expect(result).toBe(true);
-    });
-
-    it('locks are independent per key', async () => {
-      await store.acquireLock('summary:task-1', 'agent-a');
-      const result = await store.acquireLock('summary:task-2', 'agent-b');
-      expect(result).toBe(true);
+    it('releaseSummarySlot is no-op when task is not in finished queue', async () => {
+      await store.createTask(makeTask({ queue: 'review' }));
+      await store.releaseSummarySlot('task-1');
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('review');
     });
   });
 
@@ -862,13 +868,21 @@ describe('D1DataStore', () => {
       expect(await store.getClaims('old')).toEqual([]);
     });
 
-    it('also deletes associated summary locks', async () => {
+    it('also cleans up terminal tasks with summary slots', async () => {
       const oldTime = Date.now() - 8 * 24 * 60 * 60 * 1000;
-      await store.createTask(makeTask({ id: 'old', status: 'completed', created_at: oldTime }));
-      await store.acquireLock('summary:old', 'agent-1');
+      await store.createTask(
+        makeTask({
+          id: 'old',
+          status: 'completed',
+          created_at: oldTime,
+          queue: 'finished',
+          summary_agent_id: 'agent-1',
+        }),
+      );
 
-      await store.cleanupTerminalTasks();
-      expect(await store.checkLock('summary:old', 'agent-1')).toBe(false);
+      const deleted = await store.cleanupTerminalTasks();
+      expect(deleted).toBe(1);
+      expect(await store.getTask('old')).toBeNull();
     });
 
     it('returns 0 when no tasks exist', async () => {

@@ -3,7 +3,6 @@ import { cors } from 'hono/cors';
 import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from './types.js';
 import { MemoryDataStore } from './store/memory.js';
-import { KVDataStore } from './store/kv.js';
 import { D1DataStore } from './store/d1.js';
 import type { DataStore } from './store/interface.js';
 import type { GitHubService } from './github/service.js';
@@ -101,9 +100,8 @@ export function parseTtlDays(env: Env): number {
 /** @internal Exported for testing only. */
 export function createStore(env: Env): DataStore {
   const ttlDays = parseTtlDays(env);
-  // D1 (preferred) → KV (fallback) → Memory (dev/test)
+  // D1 (preferred) → Memory (dev/test)
   if (env.DB) return new D1DataStore(env.DB, ttlDays);
-  if (env.TASK_STORE) return new KVDataStore(env.TASK_STORE, ttlDays);
   return new MemoryDataStore(ttlDays);
 }
 

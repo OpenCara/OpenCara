@@ -1,7 +1,7 @@
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore } from './interface.js';
-import { DEFAULT_TTL_DAYS } from './kv.js';
+import { DEFAULT_TTL_DAYS } from './constants.js';
 
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
 
@@ -12,7 +12,6 @@ export class MemoryDataStore implements DataStore {
   private tasks = new Map<string, ReviewTask>();
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
-  private locks = new Map<string, string>();
   private readonly ttlMs: number;
 
   constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
@@ -53,8 +52,6 @@ export class MemoryDataStore implements DataStore {
 
   async deleteTask(id: string): Promise<void> {
     this.tasks.delete(id);
-    // Delete the summary lock for this task (exact key match to avoid substring collisions)
-    this.locks.delete(`summary:${id}`);
     // Also delete associated claims
     for (const [claimId, claim] of this.claims) {
       if (claim.task_id === id) {
@@ -102,27 +99,22 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
-  // Locks — atomic acquire-or-fail
+  // Summary claim — atomic compare-and-swap (replaces locks)
 
-  async acquireLock(key: string, holder: string): Promise<boolean> {
-    const existing = this.locks.get(key);
-    if (existing) {
-      return existing === holder; // Idempotent for same holder
-    }
-    this.locks.set(key, holder);
+  async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task || task.queue !== 'summary') return false;
+    task.queue = 'finished';
+    task.summary_agent_id = agentId;
     return true;
   }
 
-  async checkLock(key: string, holder: string): Promise<boolean> {
-    return this.locks.get(key) === holder;
-  }
-
-  async isLockHeld(key: string): Promise<boolean> {
-    return this.locks.has(key);
-  }
-
-  async releaseLock(key: string): Promise<void> {
-    this.locks.delete(key);
+  async releaseSummarySlot(taskId: string): Promise<void> {
+    const task = this.tasks.get(taskId);
+    if (task && task.queue === 'finished') {
+      task.queue = 'summary';
+      task.summary_agent_id = undefined;
+    }
   }
 
   // Agent last-seen
@@ -155,7 +147,6 @@ export class MemoryDataStore implements DataStore {
     for (const [id, task] of this.tasks) {
       if (TERMINAL_STATUSES.includes(task.status) && task.created_at <= cutoff) {
         this.tasks.delete(id);
-        this.locks.delete(`summary:${id}`);
         for (const [claimId, claim] of this.claims) {
           if (claim.task_id === id) {
             this.claims.delete(claimId);
@@ -172,7 +163,6 @@ export class MemoryDataStore implements DataStore {
     this.tasks.clear();
     this.claims.clear();
     this.agentLastSeen.clear();
-    this.locks.clear();
     this.timeoutLastCheck = 0;
   }
 }

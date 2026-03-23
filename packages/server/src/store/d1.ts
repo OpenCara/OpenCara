@@ -1,7 +1,7 @@
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore } from './interface.js';
-import { DEFAULT_TTL_DAYS } from './kv.js';
+import { DEFAULT_TTL_DAYS } from './constants.js';
 
 /** Terminal task statuses eligible for cleanup. */
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
@@ -267,11 +267,7 @@ export class D1DataStore implements DataStore {
 
   async deleteTask(id: string): Promise<void> {
     // Claims are deleted via ON DELETE CASCADE.
-    // Delete associated summary lock explicitly.
-    await this.db.batch([
-      this.db.prepare('DELETE FROM locks WHERE key = ?').bind(`summary:${id}`),
-      this.db.prepare('DELETE FROM tasks WHERE id = ?').bind(id),
-    ]);
+    await this.db.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
   }
 
   // ── Claims ─────────────────────────────────────────────────────
@@ -361,44 +357,21 @@ export class D1DataStore implements DataStore {
       .run();
   }
 
-  // ── Locks ─────────────────────────────────────────────────────
+  // ── Summary claim (atomic CAS) ──────────────────────────────
 
-  async acquireLock(key: string, holder: string): Promise<boolean> {
-    // Try atomic insert — fails silently if key already exists
+  async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {
     const result = await this.db
-      .prepare('INSERT OR IGNORE INTO locks (key, holder, created_at) VALUES (?, ?, ?)')
-      .bind(key, holder, Date.now())
+      .prepare(`UPDATE tasks SET queue = ?, summary_agent_id = ? WHERE id = ? AND queue = ?`)
+      .bind('finished', agentId, taskId, 'summary')
       .run();
-
-    if ((result.meta?.changes ?? 0) > 0) return true;
-
-    // Key exists — check if same holder (idempotent)
-    const existing = await this.db
-      .prepare('SELECT holder FROM locks WHERE key = ?')
-      .bind(key)
-      .first<{ holder: string }>();
-
-    return existing?.holder === holder;
+    return (result.meta?.changes ?? 0) > 0;
   }
 
-  async checkLock(key: string, holder: string): Promise<boolean> {
-    const row = await this.db
-      .prepare('SELECT holder FROM locks WHERE key = ?')
-      .bind(key)
-      .first<{ holder: string }>();
-    return row?.holder === holder;
-  }
-
-  async isLockHeld(key: string): Promise<boolean> {
-    const row = await this.db
-      .prepare('SELECT 1 FROM locks WHERE key = ?')
-      .bind(key)
-      .first<Record<string, unknown>>();
-    return row !== null;
-  }
-
-  async releaseLock(key: string): Promise<void> {
-    await this.db.prepare('DELETE FROM locks WHERE key = ?').bind(key).run();
+  async releaseSummarySlot(taskId: string): Promise<void> {
+    await this.db
+      .prepare(`UPDATE tasks SET queue = ?, summary_agent_id = ? WHERE id = ? AND queue = ?`)
+      .bind('summary', null, taskId, 'finished')
+      .run();
   }
 
   // ── Agent heartbeats ──────────────────────────────────────────
@@ -446,17 +419,6 @@ export class D1DataStore implements DataStore {
   async cleanupTerminalTasks(): Promise<number> {
     const cutoff = Date.now() - this.ttlMs;
     const statusPlaceholders = TERMINAL_STATUSES.map(() => '?').join(',');
-
-    // Delete locks for terminal tasks
-    await this.db
-      .prepare(
-        `DELETE FROM locks WHERE key IN (
-        SELECT 'summary:' || id FROM tasks
-        WHERE status IN (${statusPlaceholders}) AND created_at <= ?
-      )`,
-      )
-      .bind(...TERMINAL_STATUSES, cutoff)
-      .run();
 
     // Delete tasks (claims cascade via ON DELETE CASCADE)
     const result = await this.db

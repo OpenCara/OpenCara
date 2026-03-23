@@ -249,23 +249,27 @@ describe('SqliteD1Adapter', () => {
       expect(reclaim).toBe(true);
     });
 
-    it('acquires and checks locks', async () => {
-      const acquired = await store.acquireLock('test-lock', 'holder-1');
-      expect(acquired).toBe(true);
+    it('claims and releases summary slots', async () => {
+      await store.createTask(makeTask({ queue: 'summary' }));
 
-      const duplicate = await store.acquireLock('test-lock', 'holder-2');
+      const claimed = await store.claimSummarySlot('task-1', 'agent-a');
+      expect(claimed).toBe(true);
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+      expect(task?.summary_agent_id).toBe('agent-a');
+
+      // Second claim should fail
+      const duplicate = await store.claimSummarySlot('task-1', 'agent-b');
       expect(duplicate).toBe(false);
 
-      // Same holder is idempotent
-      const same = await store.acquireLock('test-lock', 'holder-1');
-      expect(same).toBe(true);
+      // Release and re-claim
+      await store.releaseSummarySlot('task-1');
+      const released = await store.getTask('task-1');
+      expect(released?.queue).toBe('summary');
 
-      expect(await store.checkLock('test-lock', 'holder-1')).toBe(true);
-      expect(await store.checkLock('test-lock', 'holder-2')).toBe(false);
-      expect(await store.isLockHeld('test-lock')).toBe(true);
-
-      await store.releaseLock('test-lock');
-      expect(await store.isLockHeld('test-lock')).toBe(false);
+      const reclaimed = await store.claimSummarySlot('task-1', 'agent-b');
+      expect(reclaimed).toBe(true);
     });
 
     it('handles agent heartbeats', async () => {

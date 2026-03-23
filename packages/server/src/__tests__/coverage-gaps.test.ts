@@ -1,11 +1,9 @@
 /**
  * Tests covering server source gaps:
- * - review-formatter.ts: formatSummaryComment edge cases (lines 17-19, 41)
- * - github/config.ts: loadReviewConfig error paths (lines 51, 57-61, 81-83, 90-108)
- * - github/reviews.ts: postPrComment error path (lines 31-32)
- * - store/kv.ts: setAgentLastSeen and getAgentLastSeen (lines 183-190),
- *   updateTask returns false for non-existent (lines 105-106)
- * - index.ts: error handler and 404 (lines 49-50, 66)
+ * - review-formatter.ts: formatSummaryComment edge cases
+ * - github/config.ts: loadReviewConfig error paths
+ * - github/reviews.ts: postPrComment error path
+ * - index.ts: error handler and 404
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
@@ -269,74 +267,7 @@ describe('github/reviews.ts edge cases', () => {
   });
 });
 
-// ── store/kv.ts agent last-seen ──────────────────────────────
-
-describe('KVDataStore agent last-seen', () => {
-  class MockKV {
-    private data = new Map<string, { value: string; metadata?: unknown }>();
-    putCalls: Array<{ key: string; value: string; options?: unknown }> = [];
-
-    async get(key: string): Promise<string | null> {
-      const entry = this.data.get(key);
-      return entry?.value ?? null;
-    }
-    async put(key: string, value: string, options?: unknown): Promise<void> {
-      this.putCalls.push({ key, value, options });
-      this.data.set(key, { value, metadata: (options as { metadata?: unknown })?.metadata });
-    }
-    async delete(key: string): Promise<void> {
-      this.data.delete(key);
-    }
-    async list(opts: {
-      prefix: string;
-    }): Promise<{ keys: Array<{ name: string; metadata?: unknown }> }> {
-      const keys: Array<{ name: string; metadata?: unknown }> = [];
-      for (const [k, entry] of this.data.entries()) {
-        if (k.startsWith(opts.prefix)) {
-          keys.push({ name: k, metadata: entry.metadata });
-        }
-      }
-      return { keys };
-    }
-  }
-
-  it('setAgentLastSeen stores timestamp and getAgentLastSeen retrieves it', async () => {
-    const { KVDataStore } = await import('../store/kv.js');
-    const kv = new MockKV();
-    const store = new KVDataStore(kv as unknown as KVNamespace);
-
-    await store.setAgentLastSeen('agent-1', 1234567890);
-    const result = await store.getAgentLastSeen('agent-1');
-    expect(result).toBe(1234567890);
-  });
-
-  it('getAgentLastSeen returns null for unknown agent', async () => {
-    const { KVDataStore } = await import('../store/kv.js');
-    const kv = new MockKV();
-    const store = new KVDataStore(kv as unknown as KVNamespace);
-
-    const result = await store.getAgentLastSeen('unknown-agent');
-    expect(result).toBeNull();
-  });
-
-  it('updateTask returns false for non-existent task', async () => {
-    const { KVDataStore } = await import('../store/kv.js');
-    const kv = new MockKV();
-    const store = new KVDataStore(kv as unknown as KVNamespace);
-
-    const result = await store.updateTask('nonexistent', { status: 'completed' });
-    expect(result).toBe(false);
-  });
-
-  it('updateClaim does nothing for non-existent claim', async () => {
-    const { KVDataStore } = await import('../store/kv.js');
-    const kv = new MockKV();
-    const store = new KVDataStore(kv as unknown as KVNamespace);
-
-    await store.updateClaim('nonexistent:agent', { status: 'completed' });
-    expect(kv.putCalls).toHaveLength(0);
-  });
-});
+// KVDataStore tests removed — KV store was removed in #357.
 
 // ── index.ts edge cases ──────────────────────────────────────
 
@@ -354,7 +285,6 @@ describe('Server app edge cases', () => {
         GITHUB_WEBHOOK_SECRET: 'test',
         GITHUB_APP_ID: '1',
         GITHUB_APP_PRIVATE_KEY: 'key',
-        TASK_STORE: {} as KVNamespace,
         WEB_URL: 'https://test.com',
       },
     );
@@ -398,7 +328,6 @@ describe('webhook.ts edge cases', () => {
       GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
       GITHUB_APP_ID: '12345',
       GITHUB_APP_PRIVATE_KEY: TEST_PEM,
-      TASK_STORE: {} as KVNamespace,
       WEB_URL: 'https://test.com',
     };
     return { app, store, mockEnv };

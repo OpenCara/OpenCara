@@ -1,5 +1,5 @@
 # Requires wrangler 4.74.0+ for local D1 (SQLite) dev support.
-# `wrangler dev` uses local D1 (SQLite) and local KV — no real resource IDs needed.
+# `wrangler dev` uses local D1 (SQLite) — no real resource IDs needed.
 # `wrangler dev --remote` requires actual Cloudflare resource IDs below.
 name = "opencara-server"
 main = "src/index.ts"
@@ -18,10 +18,6 @@ compatibility_date = "2024-12-01"
 WEB_URL = "https://opencara.com"
 TASK_TTL_DAYS = "7"
 
-[[kv_namespaces]]
-binding = "TASK_STORE"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "opencara-db"
@@ -38,10 +34,6 @@ name = "opencara-server-dev"
 [env.dev.vars]
 WEB_URL = "https://dev.opencara.com"
 TASK_TTL_DAYS = "7"
-
-[[env.dev.kv_namespaces]]
-binding = "TASK_STORE"
-id = "REPLACE_WITH_DEV_KV_NAMESPACE_ID"
 
 [[env.dev.d1_databases]]
 binding = "DB"
