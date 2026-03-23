@@ -185,10 +185,33 @@ Introduced D1 (Cloudflare SQL) as the persistent data store, replacing KV-only s
 | #322 | --    | direct  | CI baseline test at last green commit           |
 | #324 | --    | direct  | Fix: allow mode:all agents to see private tasks |
 
+## M14: Agent Identity & Role Configuration [DONE — 2026-03-23]
+
+GitHub-backed agent identity for synthesizer access control, plus role-based agent configuration.
+
+| Issue | Agent      | PR   | Description                                                        |
+| ----- | ---------- | ---- | ------------------------------------------------------------------ |
+| #326  | architect  | #329 | Add GitHub identity and role fields to API types [DONE]            |
+| #327  | server-dev | #337 | Enforce GitHub identity in synthesizer eligibility [DONE]          |
+| #328  | cli-dev    | #338 | Add synthesizer_only config and send identity in poll/claim [DONE] |
+
+Dependency: #326 → (#327 + #328 in parallel)
+
+### Related Fixes (2026-03-23)
+
+| Issue | Agent      | PR   | Description                                                    |
+| ----- | ---------- | ---- | -------------------------------------------------------------- |
+| #316  | cli-dev    | #319 | Fix abort listener leak in sleep() [DONE]                      |
+| #330  | server-dev | #334 | Bug: reviewer agents cannot claim summary role [DONE]          |
+| #331  | server-dev | #334 | Refactor task claim flow to queue-based model [DONE]           |
+| #333  | server-dev | #335 | Extract GitHubService interface for dev/prod [DONE]            |
+| #317  | architect  | #317 | VPS self-hosting support [DONE]                                |
+| #332  | server-dev | #340 | Consolidate timeout partial reviews into single comment [DONE] |
+| #336  | cli-dev    | #339 | Fix tsc --build overwriting CLI tsup output [DONE]             |
+
 ## Open Issues
 
-- #316 [cli-dev, medium, bug] Fix MaxListenersExceededWarning from abort listener leak (PR #319 in progress)
-- #315 [docs] Document wrangler version requirement for local D1 dev
+(none — all dispatched issues complete, M14 QA pending)
 
 ## Merged PRs
 
@@ -341,3 +364,12 @@ Introduced D1 (Cloudflare SQL) as the persistent data store, replacing KV-only s
 | #320 | #318   | direct     | 03-23 | Fix test suite hanging          |
 | #322 | --     | direct     | 03-23 | CI baseline test                |
 | #324 | --     | direct     | 03-23 | mode:all private repo fix       |
+| #317 | --     | architect  | 03-23 | VPS self-hosting support        |
+| #319 | #316   | cli-dev    | 03-23 | Fix abort listener leak         |
+| #329 | #326   | architect  | 03-23 | GitHub identity API types       |
+| #334 | #331   | server-dev | 03-23 | Queue-based task claim flow     |
+| #335 | #333   | server-dev | 03-23 | GitHubService interface extract |
+| #337 | #327   | server-dev | 03-23 | GitHub identity in eligibility  |
+| #338 | #328   | cli-dev    | 03-23 | Synthesizer config + identity   |
+| #339 | #336   | cli-dev    | 03-23 | Fix tsc --build CLI dist        |
+| #340 | #332   | server-dev | 03-23 | Timeout review consolidation    |

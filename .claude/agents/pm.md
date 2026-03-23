@@ -210,13 +210,13 @@ PM manages issue lifecycle status via the GitHub Project board (project #1, owne
 
 ### Status Definitions
 
-| Status | Meaning | When to set |
-|--------|---------|-------------|
-| **Backlog** | Won't be addressed now | All new ideas, proposals, and feature requests start here |
-| **Ready** | Next milestone, can be picked up | **Only the team lead** can move issues to Ready — PM must never do this |
-| **In progress** | Agent actively working | Agent spawned and implementing |
-| **In review** | Code merged, awaiting QA | PR merged to main, QA not yet run or pending |
-| **Done** | QA verified | QA passed on the merged code |
+| Status          | Meaning                          | When to set                                                             |
+| --------------- | -------------------------------- | ----------------------------------------------------------------------- |
+| **Backlog**     | Won't be addressed now           | All new ideas, proposals, and feature requests start here               |
+| **Ready**       | Next milestone, can be picked up | **Only the team lead** can move issues to Ready — PM must never do this |
+| **In progress** | Agent actively working           | Agent spawned and implementing                                          |
+| **In review**   | Code merged, awaiting QA         | PR merged to main, QA not yet run or pending                            |
+| **Done**        | QA verified                      | QA passed on the merged code                                            |
 
 ### Status Transitions
 
@@ -253,13 +253,13 @@ gh project item-edit --project-id PVT_kwDOEAYvm84BSjju --id "$ITEM_ID" --field-i
 
 **Status option IDs:**
 
-| Status | Option ID |
-|--------|-----------|
-| Backlog | `f75ad846` |
-| Ready | `61e4505c` |
+| Status      | Option ID  |
+| ----------- | ---------- |
+| Backlog     | `f75ad846` |
+| Ready       | `61e4505c` |
 | In progress | `47fc9ee4` |
-| In review | `df73e18b` |
-| Done | `98236657` |
+| In review   | `df73e18b` |
+| Done        | `98236657` |
 
 ### When to Update
 
@@ -273,6 +273,7 @@ gh project item-edit --project-id PVT_kwDOEAYvm84BSjju --id "$ITEM_ID" --field-i
 ### Polling Sync
 
 During each polling loop, verify that project statuses match reality:
+
 - Issues with active agents should be "In progress"
 - Issues with merged PRs awaiting QA should be "In review"
 - Issues that QA has verified should be "Done"
