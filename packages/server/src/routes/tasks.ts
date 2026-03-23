@@ -423,7 +423,7 @@ export function taskRoutes() {
     if (role === 'summary') {
       const claimed = await store.claimSummarySlot(taskId, agent_id);
       if (!claimed) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'Summary already claimed by another agent');
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Unable to claim summary slot');
       }
     }
 

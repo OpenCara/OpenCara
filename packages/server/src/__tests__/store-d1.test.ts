@@ -770,6 +770,17 @@ describe('D1DataStore', () => {
       const result = await store.claimSummarySlot('task-2', 'agent-b');
       expect(result).toBe(true);
     });
+
+    it('releaseSummarySlot is no-op for nonexistent task', async () => {
+      await store.releaseSummarySlot('nonexistent'); // should not throw
+    });
+
+    it('releaseSummarySlot is no-op when task is not in finished queue', async () => {
+      await store.createTask(makeTask({ queue: 'review' }));
+      await store.releaseSummarySlot('task-1');
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('review');
+    });
   });
 
   // ── Timeout check throttle ────────────────────────────────

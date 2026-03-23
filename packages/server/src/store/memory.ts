@@ -111,7 +111,7 @@ export class MemoryDataStore implements DataStore {
 
   async releaseSummarySlot(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
-    if (task) {
+    if (task && task.queue === 'finished') {
       task.queue = 'summary';
       task.summary_agent_id = undefined;
     }

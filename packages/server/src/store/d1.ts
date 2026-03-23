@@ -369,8 +369,8 @@ export class D1DataStore implements DataStore {
 
   async releaseSummarySlot(taskId: string): Promise<void> {
     await this.db
-      .prepare(`UPDATE tasks SET queue = ?, summary_agent_id = ? WHERE id = ?`)
-      .bind('summary', null, taskId)
+      .prepare(`UPDATE tasks SET queue = ?, summary_agent_id = ? WHERE id = ? AND queue = ?`)
+      .bind('summary', null, taskId, 'finished')
       .run();
   }
 
