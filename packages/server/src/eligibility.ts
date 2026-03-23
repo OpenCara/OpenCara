@@ -60,6 +60,12 @@ export function isAgentEligibleForRole(
   const roleConfig = role === 'review' ? config.reviewer : config.summarizer;
   const { whitelist, blacklist } = roleConfig;
 
+  // Anonymous gate — reviewer only, unconditional (even whitelisted agents must identify).
+  // Uses strict === false so that undefined/absent defaults to allowing anonymous agents.
+  if (role === 'review' && config.reviewer.allowAnonymous === false && !githubUsername) {
+    return { eligible: false, reason: 'Anonymous agents not allowed (allow_anonymous: false)' };
+  }
+
   // Blacklist check — deny takes priority
   if (blacklist.length > 0) {
     const blocked = blacklist.some((entry) => isEntityMatch(entry, agentId, githubUsername));
