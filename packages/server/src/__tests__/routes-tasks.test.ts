@@ -212,6 +212,141 @@ describe('Task Routes', () => {
       const ids = body.tasks.map((t: { task_id: string }) => t.task_id).sort();
       expect(ids).toEqual(['private-match', 'public-task']);
     });
+
+    // ── Roles filtering ────────────────────────────────────
+
+    it('filters tasks by roles — review only', async () => {
+      await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
+      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['review'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('review-task');
+      expect(body.tasks[0].role).toBe('review');
+    });
+
+    it('filters tasks by roles — summary only', async () => {
+      await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
+      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['summary'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('summary-task');
+      expect(body.tasks[0].role).toBe('summary');
+    });
+
+    it('returns both roles when roles includes both', async () => {
+      await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
+      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['review', 'summary'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+    });
+
+    it('returns all tasks when roles is omitted (backward compatible)', async () => {
+      await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
+      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+    });
+
+    it('roles takes precedence over review_only', async () => {
+      await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
+      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      // roles says summary, review_only says true — roles wins
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['summary'],
+        review_only: true,
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('summary');
+    });
+
+    // ── synthesize_repos filtering ─────────────────────────
+
+    it('filters summary tasks by synthesize_repos whitelist', async () => {
+      await store.createTask(
+        makeTask({ id: 'task-a', review_count: 1, queue: 'summary', owner: 'org', repo: 'repo-a' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'task-b', review_count: 1, queue: 'summary', owner: 'org', repo: 'repo-b' }),
+      );
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        synthesize_repos: { mode: 'whitelist', list: ['org/repo-a'] },
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('task-a');
+    });
+
+    it('does not filter review tasks by synthesize_repos', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'review-task',
+          review_count: 3,
+          queue: 'review',
+          owner: 'org',
+          repo: 'repo-x',
+        }),
+      );
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        synthesize_repos: { mode: 'whitelist', list: ['org/repo-other'] },
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('review');
+    });
+
+    it('returns all summary tasks when synthesize_repos is omitted', async () => {
+      await store.createTask(
+        makeTask({ id: 'task-a', review_count: 1, queue: 'summary', owner: 'org', repo: 'repo-a' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'task-b', review_count: 1, queue: 'summary', owner: 'org', repo: 'repo-b' }),
+      );
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+    });
+
+    // ── github_username in poll ─────────────────────────────
+
+    it('passes github_username to eligibility check during poll', async () => {
+      const config = {
+        ...DEFAULT_REVIEW_CONFIG,
+        summarizer: {
+          whitelist: [{ github: 'alice' }],
+          blacklist: [],
+          preferred: [],
+        },
+      };
+      await store.createTask(makeTask({ config }));
+      // Without github_username — not eligible
+      const res1 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body1 = await res1.json();
+      expect(body1.tasks).toHaveLength(0);
+      // With matching github_username — eligible
+      const res2 = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        github_username: 'alice',
+      });
+      const body2 = await res2.json();
+      expect(body2.tasks).toHaveLength(1);
+    });
   });
 
   // ── Rate Limiting ────────────────────────────────────────
@@ -378,6 +513,51 @@ describe('Task Routes', () => {
       });
       const body = await res.json();
       expect(body.claimed).toBe(true);
+    });
+
+    it('passes github_username to eligibility check during claim', async () => {
+      const config = {
+        ...DEFAULT_REVIEW_CONFIG,
+        summarizer: {
+          whitelist: [{ github: 'alice' }],
+          blacklist: [],
+          preferred: [],
+        },
+      };
+      await store.createTask(makeTask({ config }));
+      // Claim without github_username — rejected (not in whitelist)
+      const res1 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+      });
+      expect(res1.status).toBe(409);
+      // Claim with matching github_username — allowed
+      const res2 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+        github_username: 'alice',
+      });
+      const body2 = await res2.json();
+      expect(body2.claimed).toBe(true);
+    });
+
+    it('rejects claim when github_username is blacklisted', async () => {
+      const config = {
+        ...DEFAULT_REVIEW_CONFIG,
+        summarizer: {
+          ...DEFAULT_REVIEW_CONFIG.summarizer,
+          blacklist: [{ github: 'blocked' }],
+        },
+      };
+      await store.createTask(makeTask({ config }));
+      const res = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+        github_username: 'blocked',
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
   });
 

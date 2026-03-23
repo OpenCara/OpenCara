@@ -251,4 +251,130 @@ describe('isAgentEligibleForRole', () => {
       expect(result.eligible).toBe(true);
     });
   });
+
+  describe('GitHub username matching', () => {
+    it('allows agent matching by github username in whitelist', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ github: 'alice' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-unknown', 'alice');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('blocks agent when github username not in whitelist', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ github: 'alice' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-unknown', 'bob');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('not in the review whitelist');
+    });
+
+    it('blocks agent matching by github username in blacklist', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          blacklist: [{ github: 'spammer' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-good', 'spammer');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('blacklisted');
+    });
+
+    it('matches github username case-insensitively', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ github: 'Alice' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-unknown', 'alice');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('matches mixed agent + github entries in whitelist', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ agent: 'agent-abc' }, { github: 'bob' }],
+        },
+      };
+      // Agent ID match
+      expect(isAgentEligibleForRole(config, 'review', 'agent-abc').eligible).toBe(true);
+      // GitHub username match
+      expect(isAgentEligibleForRole(config, 'review', 'agent-unknown', 'bob').eligible).toBe(true);
+      // Neither matches
+      expect(isAgentEligibleForRole(config, 'review', 'agent-other', 'charlie').eligible).toBe(
+        false,
+      );
+    });
+
+    it('blacklist github takes priority over whitelist agent', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ agent: 'agent-abc' }],
+          blacklist: [{ github: 'blocked-user' }],
+        },
+      };
+      // Agent is whitelisted but github user is blacklisted
+      const result = isAgentEligibleForRole(config, 'review', 'agent-abc', 'blocked-user');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('blacklisted');
+    });
+
+    it('allows agent without github_username when whitelist has only agent entries', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ agent: 'agent-abc' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-abc');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('does not match when github_username is not provided and whitelist has only github entries', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ github: 'alice' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'review', 'agent-abc');
+      expect(result.eligible).toBe(false);
+    });
+
+    it('works for summarizer role with github entries', () => {
+      const config = {
+        ...baseConfig,
+        summarizer: {
+          whitelist: [{ github: 'synth-user' }],
+          blacklist: [],
+          preferred: [],
+        },
+      };
+      expect(isAgentEligibleForRole(config, 'summary', 'agent-x', 'synth-user').eligible).toBe(
+        true,
+      );
+      expect(isAgentEligibleForRole(config, 'summary', 'agent-x', 'other-user').eligible).toBe(
+        false,
+      );
+    });
+  });
 });

@@ -12,6 +12,7 @@ import type {
   ReviewVerdict,
   ReviewTask,
 } from '@opencara/shared';
+import { isRepoAllowed, isEntityMatch } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
@@ -38,11 +39,15 @@ export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
  * - If the agent is NOT preferred, summary is only available after the grace period
  *   has elapsed since the task entered the summary queue.
  */
-function isSummaryVisibleToAgent(task: ReviewTask, agentId: string): boolean {
+function isSummaryVisibleToAgent(
+  task: ReviewTask,
+  agentId: string,
+  githubUsername?: string,
+): boolean {
   const preferred = task.config?.summarizer?.preferred ?? [];
   if (preferred.length === 0) return true;
 
-  const isPreferred = preferred.some((p) => p.agent === agentId);
+  const isPreferred = preferred.some((p) => isEntityMatch(p, agentId, githubUsername));
   if (isPreferred) return true;
 
   // Non-preferred agent: check if grace period has elapsed
@@ -261,11 +266,19 @@ export function taskRoutes() {
     const github = c.get('github');
     const logger = c.get('logger');
     const body = await c.req.json<PollRequest>();
-    const { agent_id, review_only, repos } = body;
+    const { agent_id, github_username, roles, review_only, repos, synthesize_repos } = body;
 
     if (!agent_id) {
       return apiError(c, 400, 'INVALID_REQUEST', 'agent_id is required');
     }
+
+    // Determine which roles this agent will accept
+    // `roles` takes precedence over deprecated `review_only`
+    const acceptedRoles: Set<string> | null = roles
+      ? new Set(roles)
+      : review_only
+        ? new Set(['review'])
+        : null; // null = accept all roles
 
     // Build a set of repos the agent declares for fast lookup
     const agentRepos = repos && repos.length > 0 ? new Set(repos) : null;
@@ -291,11 +304,21 @@ export function taskRoutes() {
 
       // Queue-based role assignment
       if (task.queue === 'summary') {
-        // Summary queue — check eligibility and grace period
-        if (review_only) continue;
-        const { eligible } = isAgentEligibleForRole(task.config, 'summary', agent_id);
+        // Summary queue — check role filter, eligibility, grace period, and repo preference
+        if (acceptedRoles && !acceptedRoles.has('summary')) continue;
+        const { eligible } = isAgentEligibleForRole(
+          task.config,
+          'summary',
+          agent_id,
+          github_username,
+        );
         if (!eligible) continue;
-        if (!isSummaryVisibleToAgent(task, agent_id)) continue;
+        if (!isSummaryVisibleToAgent(task, agent_id, github_username)) continue;
+
+        // synthesize_repos filter — if provided, only offer summary tasks for matching repos
+        if (synthesize_repos) {
+          if (!isRepoAllowed(synthesize_repos, task.owner, task.repo)) continue;
+        }
 
         available.push({
           task_id: task.id,
@@ -308,12 +331,18 @@ export function taskRoutes() {
           role: 'summary',
         });
       } else if (task.queue === 'review') {
-        // Review queue — check if review slots are available
+        // Review queue — check role filter and review slots
+        if (acceptedRoles && !acceptedRoles.has('review')) continue;
         const reviewSlots = task.review_count - 1;
         const reviewClaims = task.review_claims ?? 0;
         if (reviewClaims >= reviewSlots) continue;
 
-        const { eligible } = isAgentEligibleForRole(task.config, 'review', agent_id);
+        const { eligible } = isAgentEligibleForRole(
+          task.config,
+          'review',
+          agent_id,
+          github_username,
+        );
         if (!eligible) continue;
 
         // Check if agent already has a review claim on this task
@@ -349,7 +378,7 @@ export function taskRoutes() {
     const store = c.get('store');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ClaimRequest>();
-    const { agent_id, role, model, tool } = body;
+    const { agent_id, role, github_username, model, tool } = body;
 
     if (!agent_id || !role) {
       return apiError(c, 400, 'INVALID_REQUEST', 'agent_id and role are required');
@@ -369,7 +398,7 @@ export function taskRoutes() {
     }
 
     // Check whitelist/blacklist eligibility before slot availability
-    const eligibility = isAgentEligibleForRole(task.config, role, agent_id);
+    const eligibility = isAgentEligibleForRole(task.config, role, agent_id, github_username);
     if (!eligibility.eligible) {
       return apiError(
         c,
@@ -394,7 +423,7 @@ export function taskRoutes() {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
       // Check preferred synthesizer grace period
-      if (!isSummaryVisibleToAgent(task, agent_id)) {
+      if (!isSummaryVisibleToAgent(task, agent_id, github_username)) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
     }
