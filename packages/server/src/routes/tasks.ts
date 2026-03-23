@@ -32,6 +32,38 @@ import { apiError } from '../errors.js';
 /** Default grace period (ms) for preferred synthesizer agents. */
 export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
 
+/** Grace period (ms) for preferred review agents (model/tool matching). */
+export const PREFERRED_REVIEW_GRACE_PERIOD_MS = 30_000;
+
+/**
+ * Check if an agent's model/tool matches the review preferences in the config.
+ * Returns true if no preferences are set (backward compatible) or if the agent matches.
+ */
+function isReviewPreferredAgent(
+  config: ReviewTask['config'],
+  model?: string,
+  tool?: string,
+): boolean {
+  const { preferredModels, preferredTools } = config.agents;
+  if (preferredModels.length === 0 && preferredTools.length === 0) return true;
+  if (model && preferredModels.includes(model)) return true;
+  if (tool && preferredTools.includes(tool)) return true;
+  return false;
+}
+
+/**
+ * Check if a review queue task is visible to the given agent, considering
+ * the preferred model/tool grace period.
+ *
+ * - If no preferred list is configured, review is available immediately.
+ * - If the agent matches a preferred model/tool, review is available immediately.
+ * - If the agent does NOT match, review is only available after the grace period.
+ */
+function isReviewVisibleToAgent(task: ReviewTask, model?: string, tool?: string): boolean {
+  if (isReviewPreferredAgent(task.config, model, tool)) return true;
+  return Date.now() - task.created_at >= PREFERRED_REVIEW_GRACE_PERIOD_MS;
+}
+
 /**
  * Check if a summary queue task is visible to the given agent, considering
  * the preferred synthesizer grace period.
@@ -285,6 +317,7 @@ export function taskRoutes() {
 
     // Find available tasks — only active tasks (pending/reviewing)
     const tasks = await store.listTasks({ status: ['pending', 'reviewing'] });
+    const tasksById = new Map(tasks.map((t) => [t.id, t]));
     const available: PollTask[] = [];
 
     for (const task of tasks) {
@@ -339,6 +372,9 @@ export function taskRoutes() {
         );
         if (!eligible) continue;
 
+        // Preferred model/tool grace period — non-preferred agents wait
+        if (!isReviewVisibleToAgent(task, body.model, body.tool)) continue;
+
         // Check if agent already has a review claim on this task
         const existingClaim = await store.getClaim(`${task.id}:${agent_id}:review`);
         if (
@@ -362,6 +398,21 @@ export function taskRoutes() {
       }
       // Tasks in 'finished' or 'completed' queue are not pollable
     }
+
+    // Sort preferred tasks first (only applies to review-role tasks)
+    available.sort((a, b) => {
+      if (a.role !== 'review' && b.role !== 'review') return 0;
+      if (a.role !== 'review') return 1;
+      if (b.role !== 'review') return -1;
+
+      const aTask = tasksById.get(a.task_id);
+      const bTask = tasksById.get(b.task_id);
+      const aPref = aTask ? isReviewPreferredAgent(aTask.config, body.model, body.tool) : false;
+      const bPref = bTask ? isReviewPreferredAgent(bTask.config, body.model, body.tool) : false;
+      if (aPref && !bPref) return -1;
+      if (!aPref && bPref) return 1;
+      return 0;
+    });
 
     return c.json<PollResponse>({ tasks: available });
   });

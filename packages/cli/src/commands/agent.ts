@@ -189,6 +189,8 @@ async function pollLoop(
         pollBody.repos = repoConfig.list;
       }
       if (synthesizeRepos) pollBody.synthesize_repos = synthesizeRepos;
+      if (agentInfo.model) pollBody.model = agentInfo.model;
+      if (agentInfo.tool) pollBody.tool = agentInfo.tool;
       const pollResponse = await client.post<PollResponse>('/api/tasks/poll', pollBody);
 
       consecutiveAuthErrors = 0;

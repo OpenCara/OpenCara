@@ -5,6 +5,7 @@ import { createApp } from '../index.js';
 import {
   resetTimeoutThrottle,
   PREFERRED_SYNTH_GRACE_PERIOD_MS,
+  PREFERRED_REVIEW_GRACE_PERIOD_MS,
   TIMEOUT_CHECK_INTERVAL_MS,
 } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
@@ -1757,6 +1758,232 @@ describe('Task Routes', () => {
         const body = await res.json();
         expect(body.tasks).toHaveLength(1);
         expect(body.tasks[0].role).toBe('summary');
+      });
+    });
+  });
+
+  // ── Preferred review models/tools (#355) ───────────────
+
+  describe('preferred review models/tools (#355)', () => {
+    function makePreferredReviewConfig(
+      preferredModels: string[] = [],
+      preferredTools: string[] = [],
+    ) {
+      return {
+        ...DEFAULT_REVIEW_CONFIG,
+        agents: {
+          ...DEFAULT_REVIEW_CONFIG.agents,
+          reviewCount: 3,
+          preferredModels,
+          preferredTools,
+        },
+      };
+    }
+
+    describe('grace period filtering', () => {
+      it('preferred model agent sees review task immediately', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'claude-sonnet-4-6',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('review');
+      });
+
+      it('preferred tool agent sees review task immediately', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig([], ['claude']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          tool: 'claude',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('review');
+      });
+
+      it('non-preferred agent is held during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'gemini-2.5-pro',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+
+      it('non-preferred agent sees review after grace period expires', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
+            created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'gemini-2.5-pro',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('review');
+      });
+
+      it('agent with no model/tool is non-preferred during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+    });
+
+    describe('no preferences configured', () => {
+      it('all agents see review tasks immediately when no preferred list', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig([], []),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'any-model',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('review');
+      });
+    });
+
+    describe('sorting preferred first', () => {
+      it('preferred tasks are sorted before non-preferred', async () => {
+        // Task A: prefers gemini (not matching our agent)
+        await store.createTask(
+          makeTask({
+            id: 'task-a',
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['gemini-2.5-pro'], []),
+            created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        // Task B: prefers claude-sonnet-4-6 (matching our agent)
+        await store.createTask(
+          makeTask({
+            id: 'task-b',
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
+            created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        // Agent with claude-sonnet-4-6 — task-b (preferred) should be sorted before task-a
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'claude-sonnet-4-6',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(2);
+        expect(body.tasks[0].task_id).toBe('task-b');
+        expect(body.tasks[1].task_id).toBe('task-a');
+      });
+
+      it('non-preferred agent sees preferred tasks sorted last', async () => {
+        // Task A: no preferences (everyone is "preferred")
+        await store.createTask(
+          makeTask({
+            id: 'task-a',
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig([], []),
+            created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        // Task B: prefers claude-sonnet-4-6
+        await store.createTask(
+          makeTask({
+            id: 'task-b',
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
+            created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        // Agent with gemini — task-a should be first (preferred for it),
+        // task-b should be last (not preferred)
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'gemini-2.5-pro',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(2);
+        expect(body.tasks[0].task_id).toBe('task-a');
+        expect(body.tasks[1].task_id).toBe('task-b');
+      });
+    });
+
+    describe('model and tool combined matching', () => {
+      it('matches on tool when model does not match', async () => {
+        await store.createTask(
+          makeTask({
+            review_count: 3,
+            queue: 'review',
+            config: makePreferredReviewConfig(['claude-sonnet-4-6'], ['gemini']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-1',
+          model: 'gemini-2.5-pro',
+          tool: 'gemini',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
       });
     });
   });
