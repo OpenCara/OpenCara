@@ -18,6 +18,9 @@ export class ToolTimeoutError extends Error {
   }
 }
 
+/** Grace period (ms) before escalating SIGTERM to SIGKILL */
+export const SIGKILL_GRACE_MS = 5_000;
+
 /** Minimum stdout length to treat a non-zero exit as a partial success */
 const MIN_PARTIAL_RESULT_LENGTH = 50;
 
@@ -197,11 +200,22 @@ export function executeTool(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
+
+    function scheduleKillEscalation(): void {
+      child.kill('SIGTERM');
+      // Clear any existing SIGKILL timer to prevent leaks
+      if (sigkillTimer) clearTimeout(sigkillTimer);
+      // Escalate to SIGKILL after grace period if process hasn't exited
+      sigkillTimer = setTimeout(() => {
+        if (!settled) {
+          child.kill('SIGKILL');
+        }
+      }, SIGKILL_GRACE_MS);
+    }
 
     // Timeout handling via manual timer since spawn doesn't support timeout
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-    }, timeoutMs);
+    const timer = setTimeout(scheduleKillEscalation, timeoutMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -220,14 +234,13 @@ export function executeTool(
     // Set up abort signal handler (stored for cleanup)
     let onAbort: (() => void) | undefined;
     if (signal) {
-      onAbort = () => {
-        child.kill();
-      };
+      onAbort = scheduleKillEscalation;
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
     function cleanup(): void {
       clearTimeout(timer);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       if (onAbort && signal) {
         signal.removeEventListener('abort', onAbort);
       }
