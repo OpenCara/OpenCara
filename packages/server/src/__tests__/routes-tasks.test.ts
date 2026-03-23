@@ -966,7 +966,7 @@ describe('Task Routes', () => {
       // Create an expired task — first poll will process it
       await store.createTask(makeTask({ id: 'task-a', timeout_at: Date.now() - 1000 }));
 
-      // First poll — triggers checkTimeouts (task-a moves to timeout but GitHub post fails gracefully)
+      // First poll — triggers checkTimeouts (task-a is deleted after timeout post)
       await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
 
       // Create another expired task after the first poll
@@ -991,8 +991,9 @@ describe('Task Routes', () => {
       // Poll again — should now run checkTimeouts
       await request('POST', '/api/tasks/poll', { agent_id: 'agent-2' });
 
+      // Task should be deleted after timeout post succeeded
       const task = await store.getTask('task-delayed');
-      expect(task).toBeDefined();
+      expect(task).toBeNull();
     });
 
     it('persists throttle timestamp in store, not module memory', async () => {

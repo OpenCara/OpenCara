@@ -144,9 +144,11 @@ export async function checkTimeouts(
       const body = formatTimeoutComment(timeoutMinutes, reviews);
       await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
-      // Only mark timeout AFTER posting succeeds — if posting fails,
+      // Only delete AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
-      await store.updateTask(task.id, { status: 'timeout' });
+      // If deleteTask fails after post succeeds, cleanupTerminalTasks
+      // will eventually clean up the orphaned task.
+      await store.deleteTask(task.id);
     } catch (err) {
       log.error('Timeout post failed', {
         taskId: task.id,
@@ -221,8 +223,8 @@ async function postFinalReview(
 
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
-    await store.updateTask(taskId, { status: 'completed', queue: 'completed' });
-    logger.info('Review posted to GitHub', {
+    await store.deleteTask(taskId);
+    logger.info('Review posted to GitHub — task deleted', {
       taskId,
       owner: task.owner,
       repo: task.repo,
