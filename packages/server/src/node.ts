@@ -7,9 +7,10 @@
  * Environment variables:
  *   PORT                    — HTTP port (default: 3000)
  *   DATABASE_PATH           — SQLite database file path (default: ./data/opencara.db)
+ *   DEV_MODE                — Set to 'true' to skip GitHub credentials and mount test routes
  *   GITHUB_WEBHOOK_SECRET   — GitHub App webhook secret
- *   GITHUB_APP_ID           — GitHub App ID
- *   GITHUB_APP_PRIVATE_KEY  — GitHub App private key (PEM format)
+ *   GITHUB_APP_ID           — GitHub App ID (optional when DEV_MODE=true)
+ *   GITHUB_APP_PRIVATE_KEY  — GitHub App private key, PEM (optional when DEV_MODE=true)
  *   WEB_URL                 — Public URL for the server (default: http://localhost:3000)
  *   TASK_TTL_DAYS           — TTL in days for terminal tasks (default: 7)
  */
@@ -21,13 +22,17 @@ import { SqliteD1Adapter } from './adapters/sqlite.js';
 import { D1DataStore } from './store/d1.js';
 import { buildApp, parseTtlDays } from './index.js';
 import { checkTimeouts } from './routes/tasks.js';
+import { testRoutes } from './routes/test.js';
 import { createLogger } from './logger.js';
+import { RealGitHubService, NoOpGitHubService } from './github/service.js';
+import type { GitHubService } from './github/service.js';
 import type { Env } from './types.js';
 
 const logger = createLogger();
 
 // ── Environment ─────────────────────────────────────────────────────
 
+const DEV_MODE = process.env.DEV_MODE === 'true';
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const DATABASE_PATH = process.env.DATABASE_PATH ?? './data/opencara.db';
 
@@ -40,11 +45,23 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const GITHUB_WEBHOOK_SECRET = requiredEnv('GITHUB_WEBHOOK_SECRET');
-const GITHUB_APP_ID = requiredEnv('GITHUB_APP_ID');
-const GITHUB_APP_PRIVATE_KEY = requiredEnv('GITHUB_APP_PRIVATE_KEY');
+const GITHUB_WEBHOOK_SECRET = DEV_MODE
+  ? (process.env.GITHUB_WEBHOOK_SECRET ?? 'dev-secret')
+  : requiredEnv('GITHUB_WEBHOOK_SECRET');
+const GITHUB_APP_ID = DEV_MODE
+  ? (process.env.GITHUB_APP_ID ?? 'dev-app-id')
+  : requiredEnv('GITHUB_APP_ID');
+const GITHUB_APP_PRIVATE_KEY = DEV_MODE
+  ? (process.env.GITHUB_APP_PRIVATE_KEY ?? 'dev-private-key')
+  : requiredEnv('GITHUB_APP_PRIVATE_KEY');
 const WEB_URL = process.env.WEB_URL ?? `http://localhost:${PORT}`;
 const TASK_TTL_DAYS = process.env.TASK_TTL_DAYS;
+
+// ── GitHub service ──────────────────────────────────────────────────
+
+const githubService: GitHubService = DEV_MODE
+  ? new NoOpGitHubService(logger)
+  : new RealGitHubService(GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, logger);
 
 // ── Database setup ──────────────────────────────────────────────────
 
@@ -117,14 +134,33 @@ const nodeEnv: Env = {
 const ttlDays = parseTtlDays(nodeEnv);
 const store = new D1DataStore(sqliteAdapter, ttlDays);
 
-const app = buildApp(() => store);
+const app = buildApp(
+  () => store,
+  () => githubService,
+);
+
+// Inject nodeEnv into c.env so route handlers can access env vars
+app.use('*', async (c, next) => {
+  Object.assign(c.env, nodeEnv);
+  await next();
+});
+
+// Mount test routes in dev mode
+if (DEV_MODE) {
+  app.route('/', testRoutes());
+  logger.info('Dev mode enabled — test routes mounted at /test/*');
+}
 
 // ── Start ───────────────────────────────────────────────────────────
 
 runMigrations();
 
 const server = serve({ fetch: app.fetch, port: PORT }, () => {
-  logger.info('OpenCara server started', { port: PORT, database: DATABASE_PATH });
+  logger.info('OpenCara server started', {
+    port: PORT,
+    database: DATABASE_PATH,
+    devMode: DEV_MODE,
+  });
 });
 
 // ── Scheduled tasks (replaces CF Cron Triggers) ─────────────────────
@@ -136,7 +172,7 @@ cron.schedule('* * * * *', async () => {
   cronRunning = true;
   try {
     await store.setTimeoutLastCheck(Date.now());
-    await checkTimeouts(store, nodeEnv);
+    await checkTimeouts(store, githubService, logger);
   } catch (err) {
     logger.error('Scheduled timeout check failed', {
       action: 'check_timeouts',

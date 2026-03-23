@@ -2,10 +2,13 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 RUN corepack enable
+# Install build tools for native modules (better-sqlite3)
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY tsconfig.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/server/package.json packages/server/
+COPY packages/cli/package.json packages/cli/
 RUN pnpm install --frozen-lockfile
 COPY packages/shared/ packages/shared/
 COPY packages/server/ packages/server/
@@ -15,11 +18,14 @@ RUN pnpm --filter @opencara/server... build
 FROM node:20-slim
 WORKDIR /app
 RUN corepack enable
+# Install build tools for native modules (better-sqlite3 rebuild)
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/packages/server/dist packages/server/dist
 COPY --from=builder /app/packages/server/migrations packages/server/migrations
 COPY --from=builder /app/packages/server/package.json packages/server/
 COPY --from=builder /app/packages/shared/dist packages/shared/dist
 COPY --from=builder /app/packages/shared/package.json packages/shared/
+COPY --from=builder /app/packages/cli/package.json packages/cli/
 COPY --from=builder /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/package.json ./
 ENV NODE_ENV=production
 RUN pnpm install --frozen-lockfile --prod

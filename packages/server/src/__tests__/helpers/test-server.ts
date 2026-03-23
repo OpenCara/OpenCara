@@ -5,6 +5,8 @@ import { Hono } from 'hono';
 import type { ErrorResponse } from '@opencara/shared';
 import type { Env, AppVariables } from '../../types.js';
 import type { DataStore } from '../../store/interface.js';
+import type { GitHubService } from '../../github/service.js';
+import { NoOpGitHubService } from '../../github/service.js';
 import { webhookRoutes } from '../../routes/webhook.js';
 import { taskRoutes } from '../../routes/tasks.js';
 import { registryRoutes } from '../../routes/registry.js';
@@ -18,15 +20,17 @@ type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
  * Unlike `createApp()` from index.ts, this also mounts `/test/*` endpoints
  * that bypass webhook signature verification.
  */
-export function createTestApp(store: DataStore): HonoApp {
+export function createTestApp(store: DataStore, githubService?: GitHubService): HonoApp {
+  const github = githubService ?? new NoOpGitHubService();
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // Generate request ID and attach structured logger
   app.use('*', requestIdMiddleware());
 
-  // Inject store
+  // Inject store and GitHub service
   app.use('*', async (c, next) => {
     c.set('store', store);
+    c.set('github', github);
     await next();
   });
 

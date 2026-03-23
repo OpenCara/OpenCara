@@ -14,10 +14,9 @@ import type {
 } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
+import type { GitHubService } from '../github/service.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
-import { getInstallationToken } from '../github/app.js';
-import { postPrComment } from '../github/reviews.js';
 import {
   formatSummaryComment,
   formatIndividualReviewComment,
@@ -72,20 +71,28 @@ export function resetTimeoutThrottle(): void {
   // no-op — throttle state is now in DataStore, not module-level
 }
 
-async function maybeCheckTimeouts(store: DataStore, env: Env): Promise<void> {
+async function maybeCheckTimeouts(
+  store: DataStore,
+  github: GitHubService,
+  logger: Logger,
+): Promise<void> {
   const now = Date.now();
   const lastCheck = await store.getTimeoutLastCheck();
   if (now - lastCheck < TIMEOUT_CHECK_INTERVAL_MS) return;
   await store.setTimeoutLastCheck(now);
-  await checkTimeouts(store, env);
+  await checkTimeouts(store, github, logger);
 }
 
 /**
  * Check for timed-out tasks and handle them.
  * Exported for use by the scheduled event handler (Cron Trigger).
  */
-export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
-  const logger = createLogger();
+export async function checkTimeouts(
+  store: DataStore,
+  github: GitHubService,
+  logger?: Logger,
+): Promise<void> {
+  const log = logger ?? createLogger();
   const now = Date.now();
   const expired = await store.listTasks({
     status: ['pending', 'reviewing'],
@@ -93,7 +100,7 @@ export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
   });
 
   for (const task of expired) {
-    logger.info('Task timed out', {
+    log.info('Task timed out', {
       taskId: task.id,
       owner: task.owner,
       repo: task.repo,
@@ -105,7 +112,7 @@ export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
 
     // Log structured errors for each pending claim that timed out
     for (const claim of claims.filter((c) => c.status === 'pending')) {
-      logger.error('Agent claim timed out', {
+      log.error('Agent claim timed out', {
         agentId: claim.agent_id,
         taskId: task.id,
         action: 'timeout',
@@ -117,7 +124,7 @@ export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
     );
 
     try {
-      const token = await getInstallationToken(task.github_installation_id, env);
+      const token = await github.getInstallationToken(task.github_installation_id);
 
       if (completedReviews.length > 0) {
         for (const claim of completedReviews) {
@@ -127,11 +134,11 @@ export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
             (claim.verdict as ReviewVerdict) ?? 'comment',
             claim.review_text!,
           );
-          await postPrComment(task.owner, task.repo, task.pr_number, body, token);
+          await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
         }
       }
 
-      await postPrComment(
+      await github.postPrComment(
         task.owner,
         task.repo,
         task.pr_number,
@@ -143,7 +150,7 @@ export async function checkTimeouts(store: DataStore, env: Env): Promise<void> {
       // leave task in current state so next checkTimeouts() retries.
       await store.updateTask(task.id, { status: 'timeout' });
     } catch (err) {
-      logger.error('Timeout post failed', {
+      log.error('Timeout post failed', {
         taskId: task.id,
         action: 'timeout_post_failed',
         error: err instanceof Error ? err.message : String(err),
@@ -170,7 +177,7 @@ export interface SummaryData {
  */
 async function postFinalReview(
   store: DataStore,
-  env: Env,
+  github: GitHubService,
   taskId: string,
   summaryAgentId: string,
   summaryData: SummaryData,
@@ -191,7 +198,7 @@ async function postFinalReview(
   const claims = await store.getClaims(taskId);
 
   try {
-    const token = await getInstallationToken(task.github_installation_id, env);
+    const token = await github.getInstallationToken(task.github_installation_id);
 
     // Build agent info from claims
     const reviewClaims = claims.filter((c) => c.role === 'review' && c.status === 'completed');
@@ -214,7 +221,7 @@ async function postFinalReview(
       body = formatSummaryComment(summaryData.review_text, reviewerAgents, synthAgent);
     }
 
-    await postPrComment(task.owner, task.repo, task.pr_number, body, token);
+    await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.updateTask(taskId, { status: 'completed', queue: 'completed' });
     logger.info('Review posted to GitHub', {
@@ -251,6 +258,8 @@ export function taskRoutes() {
 
   app.post('/api/tasks/poll', rateLimitByAgent(POLL_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const github = c.get('github');
+    const logger = c.get('logger');
     const body = await c.req.json<PollRequest>();
     const { agent_id, review_only, repos } = body;
 
@@ -265,7 +274,7 @@ export function taskRoutes() {
     await store.setAgentLastSeen(agent_id, Date.now());
 
     // Check timeouts lazily (throttled to every 30s per isolate)
-    await maybeCheckTimeouts(store, c.env);
+    await maybeCheckTimeouts(store, github, logger);
 
     // Find available tasks — only active tasks (pending/reviewing)
     const tasks = await store.listTasks({ status: ['pending', 'reviewing'] });
@@ -456,6 +465,7 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/result', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const github = c.get('github');
     const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await c.req.json<ResultRequest>();
@@ -525,7 +535,7 @@ export function taskRoutes() {
       // Summary submitted — post the final review to GitHub
       await postFinalReview(
         store,
-        c.env,
+        github,
         taskId,
         agent_id,
         {

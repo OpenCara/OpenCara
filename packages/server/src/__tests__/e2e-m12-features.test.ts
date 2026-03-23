@@ -8,7 +8,7 @@
  * - Task TTL cleanup (#285)
  * - Structured logging / X-Request-Id header (#289)
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryDataStore } from '../store/memory.js';
@@ -16,7 +16,7 @@ import { resetTimeoutThrottle, POLL_RATE_LIMIT } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import type { Env } from '../types.js';
 import { createTestApp } from './helpers/test-server.js';
-import { createGitHubMock } from './helpers/github-mock.js';
+import { MockGitHubService } from './helpers/github-mock.js';
 import { MockAgent } from './helpers/mock-agent.js';
 
 // ── Setup ────────────────────────────────────────────────────
@@ -41,8 +41,6 @@ describe('M12 Feature E2E Tests', () => {
   let store: MemoryDataStore;
   let app: ReturnType<typeof createTestApp>;
   let env: Env;
-  let github: ReturnType<typeof createGitHubMock>;
-
   function agent(id: string): MockAgent {
     return new MockAgent(id, app, env);
   }
@@ -51,14 +49,8 @@ describe('M12 Feature E2E Tests', () => {
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
-    app = createTestApp(store);
+    app = createTestApp(store, new MockGitHubService());
     env = getMockEnv();
-    github = createGitHubMock();
-    github.install();
-  });
-
-  afterEach(() => {
-    github.restore();
   });
 
   // ═══════════════════════════════════════════════════════════

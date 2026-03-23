@@ -1,5 +1,6 @@
 import type { D1Database } from './store/d1.js';
 import type { DataStore } from './store/interface.js';
+import type { GitHubService } from './github/service.js';
 import type { Logger } from './logger.js';
 
 /**
@@ -35,6 +36,7 @@ export interface Env {
 /** Hono context variables (set per-request via middleware) */
 export interface AppVariables {
   store: DataStore;
+  github: GitHubService;
   logger: Logger;
   requestId: string;
 }
