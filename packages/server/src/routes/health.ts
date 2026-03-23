@@ -13,6 +13,9 @@ export function healthRoutes() {
    * Only active tasks (pending/reviewing) remain in the store — completed
    * and timed-out tasks are deleted immediately after the review is posted
    * to GitHub. Failed tasks stay briefly for retry by checkTimeouts.
+   *
+   * `completed` and `timeout` are kept at 0 for backward compatibility
+   * with existing monitoring dashboards.
    */
   app.get('/metrics', async (c) => {
     const store = c.get('store');
@@ -32,6 +35,8 @@ export function healthRoutes() {
         total: tasks.length,
         pending,
         reviewing,
+        completed: 0, // deprecated — tasks deleted after post
+        timeout: 0, // deprecated — tasks deleted after post
         failed,
       },
     });

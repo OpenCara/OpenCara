@@ -644,7 +644,7 @@ describe('E2E Scenarios', () => {
       const t3 = await injectPR({ prNumber: 3 });
       await injectPR({ prNumber: 4 }); // stays active
 
-      // Completed/timeout tasks are deleted immediately; simulate that
+      // Simulate post-review deletion (completed/timeout tasks are deleted immediately)
       await store.deleteTask(t1);
       await store.deleteTask(t2);
       await store.updateTask(t3, { status: 'failed' });

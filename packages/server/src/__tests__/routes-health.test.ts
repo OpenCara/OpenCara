@@ -54,12 +54,16 @@ describe('Health Routes', () => {
           total: number;
           pending: number;
           reviewing: number;
+          completed: number;
+          timeout: number;
           failed: number;
         };
       };
       expect(body.tasks.total).toBe(0);
       expect(body.tasks.pending).toBe(0);
       expect(body.tasks.reviewing).toBe(0);
+      expect(body.tasks.completed).toBe(0);
+      expect(body.tasks.timeout).toBe(0);
       expect(body.tasks.failed).toBe(0);
     });
 
@@ -78,12 +82,16 @@ describe('Health Routes', () => {
           total: number;
           pending: number;
           reviewing: number;
+          completed: number;
+          timeout: number;
           failed: number;
         };
       };
       expect(body.tasks.total).toBe(4);
       expect(body.tasks.pending).toBe(2);
       expect(body.tasks.reviewing).toBe(1);
+      expect(body.tasks.completed).toBe(0);
+      expect(body.tasks.timeout).toBe(0);
       expect(body.tasks.failed).toBe(1);
     });
   });

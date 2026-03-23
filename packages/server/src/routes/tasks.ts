@@ -145,6 +145,8 @@ export async function checkTimeouts(
 
       // Only delete AFTER posting succeeds — if posting fails,
       // leave task in current state so next checkTimeouts() retries.
+      // If deleteTask fails after post succeeds, cleanupTerminalTasks
+      // will eventually clean up the orphaned task.
       await store.deleteTask(task.id);
     } catch (err) {
       log.error('Timeout post failed', {
