@@ -1,4 +1,19 @@
 services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - '3000:3000'
+    volumes:
+      - server-data:/data
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+      - DATABASE_PATH=/data/opencara.db
+    restart: unless-stopped
+
   agent:
     build: .
     volumes:
@@ -6,3 +21,6 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+
+volumes:
+  server-data:

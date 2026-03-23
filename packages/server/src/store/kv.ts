@@ -1,5 +1,5 @@
 import type { ReviewTask, TaskClaim, TaskStatus } from '@opencara/shared';
-import type { TaskFilter } from '../types.js';
+import type { TaskFilter, KVNamespace } from '../types.js';
 import type { DataStore } from './interface.js';
 import { createLogger } from '../logger.js';
 

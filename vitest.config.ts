@@ -20,6 +20,8 @@ export default defineConfig({
         '**/__tests__/**',
         // CLI entry point — Commander.js invocation, tested via e2e
         'packages/cli/src/index.ts',
+        // Server Node.js entry point — startup orchestration, tested via integration
+        'packages/server/src/node.ts',
       ],
     },
   },

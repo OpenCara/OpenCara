@@ -23,6 +23,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Inject infrastructure IDs
+        run: |
+          sed -i "s/REPLACE_WITH_DEV_KV_NAMESPACE_ID/${{ secrets.CF_DEV_KV_ID }}/" packages/server/wrangler.toml
+          sed -i "s/REPLACE_WITH_DEV_D1_DATABASE_ID/${{ secrets.CF_DEV_D1_ID }}/" packages/server/wrangler.toml
+      - name: Run D1 migrations
+        run: pnpm exec wrangler d1 migrations apply opencara-db-dev --env dev --remote
+        working-directory: packages/server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Deploy dev worker
         run: pnpm exec wrangler deploy --env dev
         working-directory: packages/server
