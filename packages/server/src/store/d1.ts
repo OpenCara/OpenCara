@@ -225,7 +225,7 @@ export class D1DataStore implements DataStore {
   ): Promise<ReviewTask | null> {
     const row = await this.db
       .prepare(
-        `SELECT * FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?)`,
+        `SELECT * FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?) LIMIT 1`,
       )
       .bind(owner, repo, prNumber, 'pending', 'reviewing')
       .first<TaskRow>();

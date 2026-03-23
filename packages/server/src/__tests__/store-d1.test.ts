@@ -276,7 +276,9 @@ class MockD1Statement implements D1PreparedStatement {
   }
 
   private _extractWhere(sql: string): string | null {
-    const match = sql.match(/WHERE\s+(.+?)(?:\s*$)/is);
+    // Strip LIMIT/ORDER BY clauses before extracting WHERE
+    const cleaned = sql.replace(/\s+LIMIT\s+\d+/gi, '').replace(/\s+ORDER\s+BY\s+.+$/gi, '');
+    const match = cleaned.match(/WHERE\s+(.+?)(?:\s*$)/is);
     return match?.[1]?.trim() ?? null;
   }
 
