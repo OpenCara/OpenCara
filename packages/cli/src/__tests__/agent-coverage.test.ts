@@ -107,6 +107,7 @@ describe('Agent Coverage Tests', () => {
       repoConfig?: import('@opencara/shared').RepoConfig;
       githubToken?: string;
       codebaseDir?: string;
+      githubUsername?: string;
     },
   ): Promise<void> {
     const deps = makeDeps(agentId);
@@ -123,7 +124,12 @@ describe('Agent Coverage Tests', () => {
       { model: 'test-model', tool: 'test-tool' },
       reviewDeps,
       deps.consumptionDeps,
-      { pollIntervalMs: 100, reviewOnly: opts?.reviewOnly, repoConfig: opts?.repoConfig },
+      {
+        pollIntervalMs: 100,
+        reviewOnly: opts?.reviewOnly,
+        repoConfig: opts?.repoConfig,
+        githubUsername: opts?.githubUsername,
+      },
     );
   }
 
@@ -1430,6 +1436,76 @@ describe('Agent Coverage Tests', () => {
         await promise;
       } finally {
         globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Contributor attribution in review submissions
+  // ═══════════════════════════════════════════════════════════
+
+  describe('Contributor attribution', () => {
+    it('appends attribution to review text when githubUsername is configured', async () => {
+      const taskId = await server.injectTask({ reviewCount: 1 });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('attrib-agent', { githubUsername: 'octocat' });
+        await advanceTime(2000);
+
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.review_text).toContain(
+          '---\nContributed by [@octocat](https://github.com/octocat)',
+        );
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
+      }
+    });
+
+    it('does not append attribution when githubUsername is not configured', async () => {
+      const taskId = await server.injectTask({ reviewCount: 1 });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('no-attrib-agent');
+        await advanceTime(2000);
+
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.review_text).not.toContain('Contributed by');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
       }
     });
   });

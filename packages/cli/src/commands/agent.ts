@@ -182,6 +182,15 @@ function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Arra
 const MAX_DIFF_FETCH_ATTEMPTS = 3;
 
 /**
+ * Append contributor attribution to review/summary text when github_username is configured.
+ * Anonymous agents (no github_username) return text unchanged.
+ */
+export function appendContributorAttribution(text: string, githubUsername?: string): string {
+  if (!githubUsername) return text;
+  return `${text}\n\n---\nContributed by [@${githubUsername}](https://github.com/${githubUsername})`;
+}
+
+/**
  * Poll → Claim → Review → Submit loop for a single agent.
  */
 async function pollLoop(
@@ -479,6 +488,7 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
+        githubUsername,
       );
     } else {
       await executeReviewTask(
@@ -497,6 +507,7 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
+        githubUsername,
       );
     }
     agentSession.tasksCompleted++;
@@ -586,6 +597,7 @@ async function executeReviewTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
+  githubUsername?: string,
 ): Promise<void> {
   let reviewText: string;
   let verdict: ReviewVerdict;
@@ -635,7 +647,7 @@ async function executeReviewTask(
   }
 
   // Sanitize review text before submission to prevent token leakage
-  const sanitizedReview = sanitizeTokens(reviewText);
+  const sanitizedReview = appendContributorAttribution(sanitizeTokens(reviewText), githubUsername);
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
@@ -673,6 +685,7 @@ async function executeSummaryTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
+  githubUsername?: string,
 ): Promise<void> {
   if (reviews.length === 0) {
     // Single-agent mode (review_count=1): this IS the review, run it as a regular
@@ -722,7 +735,10 @@ async function executeSummaryTask(
       tokensUsed = result.tokensUsed;
     }
 
-    const sanitizedReview = sanitizeTokens(reviewText);
+    const sanitizedReview = appendContributorAttribution(
+      sanitizeTokens(reviewText),
+      githubUsername,
+    );
 
     await withRetry(
       () =>
@@ -794,7 +810,10 @@ async function executeSummaryTask(
     tokensUsed = result.tokensUsed;
   }
 
-  const sanitizedSummary = sanitizeTokens(summaryText);
+  const sanitizedSummary = appendContributorAttribution(
+    sanitizeTokens(summaryText),
+    githubUsername,
+  );
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
