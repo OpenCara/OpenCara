@@ -27,7 +27,7 @@ QA's primary job is to verify issues that are in **In review** status on the Git
 Query the project board for **In review** issues:
 
 ```bash
-gh project item-list 1 --owner OpenCara --format json | jq '[.items[] | select(.status == "In review") | {number: .content.number, title: .content.title}]'
+scripts/list-issues-by-status.sh in-review
 ```
 
 ### Per-Issue Verification

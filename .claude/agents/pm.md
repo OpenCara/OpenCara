@@ -25,20 +25,19 @@ Agent completion messages are the **faster path** — PM should act on them imme
 
 ## GitHub Polling
 
-Use `gh` to check for new or changed issues and PRs:
+Use `scripts/poll-github.sh` to check for new or changed issues and PRs:
 
 ```bash
-# List open issues not yet processed
-gh issue list --state open --json number,title,labels,createdAt,body --limit 50
+# Returns JSON with: open_issues, closed_issues, open_prs, merged_prs, board
+scripts/poll-github.sh
+```
 
-# List recently closed issues
-gh issue list --state closed --json number,title,labels,closedAt --limit 20
+To query issues by project board status:
 
-# List open PRs
-gh pr list --state open --json number,title,labels,createdAt --limit 20
-
-# List recently merged PRs
-gh pr list --state merged --json number,title,labels,mergedAt --limit 20
+```bash
+# Returns JSON array of {number, title} for issues in the given status
+scripts/list-issues-by-status.sh <STATUS>
+# STATUS: backlog | ready | in-progress | in-review | done
 ```
 
 Compare results against `.claude/pm-notebook.md` to identify unprocessed items.
