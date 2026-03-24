@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { startAgent, computeRoles, type ConsumptionDeps } from '../commands/agent.js';
+import {
+  startAgent,
+  computeRoles,
+  appendContributorAttribution,
+  type ConsumptionDeps,
+} from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import type { RouterRelay } from '../router.js';
 import { createSessionTracker } from '../consumption.js';
@@ -999,5 +1004,27 @@ describe('computeRoles', () => {
   it('returns ["review", "summary"] for agent with neither flag', () => {
     const agent: LocalAgentConfig = { model: 'claude-opus-4-6', tool: 'claude' };
     expect(computeRoles(agent)).toEqual(['review', 'summary']);
+  });
+});
+
+describe('appendContributorAttribution', () => {
+  it('appends GitHub profile link when username is provided', () => {
+    const text = 'Review looks good.';
+    const result = appendContributorAttribution(text, 'octocat');
+    expect(result).toBe(
+      'Review looks good.\n\n---\nContributed by [@octocat](https://github.com/octocat)',
+    );
+  });
+
+  it('returns text unchanged when username is undefined', () => {
+    const text = 'Review looks good.';
+    const result = appendContributorAttribution(text, undefined);
+    expect(result).toBe('Review looks good.');
+  });
+
+  it('returns text unchanged when username is empty string', () => {
+    const text = 'Review looks good.';
+    const result = appendContributorAttribution(text, '');
+    expect(result).toBe('Review looks good.');
   });
 });
