@@ -11,20 +11,36 @@ export class HttpError extends Error {
   }
 }
 
+export class UpgradeRequiredError extends Error {
+  constructor(
+    public readonly currentVersion: string,
+    public readonly minimumVersion?: string,
+  ) {
+    const minPart = minimumVersion ? ` Minimum required: ${minimumVersion}` : '';
+    super(
+      `Your CLI version (${currentVersion}) is outdated.${minPart} Please upgrade: npm update -g opencara`,
+    );
+    this.name = 'UpgradeRequiredError';
+  }
+}
+
 export class ApiClient {
   private readonly debug: boolean;
   private readonly apiKey: string | null;
+  private readonly cliVersion: string | null;
 
   constructor(
     private readonly baseUrl: string,
-    debugOrOptions?: boolean | { debug?: boolean; apiKey?: string | null },
+    debugOrOptions?: boolean | { debug?: boolean; apiKey?: string | null; cliVersion?: string },
   ) {
     if (typeof debugOrOptions === 'object' && debugOrOptions !== null) {
       this.debug = debugOrOptions.debug ?? process.env.OPENCARA_DEBUG === '1';
       this.apiKey = debugOrOptions.apiKey ?? null;
+      this.cliVersion = debugOrOptions.cliVersion ?? null;
     } else {
       this.debug = debugOrOptions ?? process.env.OPENCARA_DEBUG === '1';
       this.apiKey = null;
+      this.cliVersion = null;
     }
   }
 
@@ -38,6 +54,9 @@ export class ApiClient {
     };
     if (this.apiKey) {
       h['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    if (this.cliVersion) {
+      h['X-OpenCara-CLI-Version'] = this.cliVersion;
     }
     return h;
   }
@@ -65,17 +84,25 @@ export class ApiClient {
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
       let errorCode: ErrorCode | undefined;
+      let minimumVersion: string | undefined;
       try {
-        const body = (await res.json()) as ErrorResponse;
+        const body = (await res.json()) as ErrorResponse & { minimum_version?: string };
         if (body.error && typeof body.error === 'object' && 'code' in body.error) {
-          // Structured error response
           errorCode = body.error.code;
           message = body.error.message;
+        }
+        if (body.minimum_version) {
+          minimumVersion = body.minimum_version;
         }
       } catch {
         // ignore parse errors — keep generic message
       }
       this.log(`${res.status} ${message} (${path})`);
+
+      if (res.status === 426) {
+        throw new UpgradeRequiredError(this.cliVersion ?? 'unknown', minimumVersion);
+      }
+
       throw new HttpError(res.status, message, errorCode);
     }
     this.log(`${res.status} OK (${path})`);

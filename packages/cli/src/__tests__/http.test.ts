@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ApiClient, HttpError } from '../http.js';
+import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 
 describe('ApiClient', () => {
   const originalFetch = globalThis.fetch;
@@ -152,5 +152,90 @@ describe('ApiClient', () => {
     expect(debugSpy).toHaveBeenCalledWith('[ApiClient] GET /missing');
     expect(debugSpy).toHaveBeenCalledWith('[ApiClient] 404 Task not found (/missing)');
     debugSpy.mockRestore();
+  });
+
+  it('sends X-OpenCara-CLI-Version header when cliVersion is set', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', { cliVersion: '1.2.3' });
+    await client.get('/test');
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders['X-OpenCara-CLI-Version']).toBe('1.2.3');
+  });
+
+  it('sends X-OpenCara-CLI-Version header on POST requests', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ id: '1' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', { cliVersion: '0.14.0' });
+    await client.post('/api/tasks/poll', { agent_id: 'a1' });
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders['X-OpenCara-CLI-Version']).toBe('0.14.0');
+  });
+
+  it('does not send X-OpenCara-CLI-Version header when cliVersion is not set', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com');
+    await client.get('/test');
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders).not.toHaveProperty('X-OpenCara-CLI-Version');
+  });
+
+  it('throws UpgradeRequiredError on 426 response', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 426,
+      json: () =>
+        Promise.resolve({
+          error: { code: 'CLI_OUTDATED', message: 'CLI version too old' },
+          minimum_version: '0.15.0',
+        }),
+    });
+
+    const client = new ApiClient('https://api.test.com', { cliVersion: '0.14.0' });
+    const err = await client.get('/test').catch((e: UpgradeRequiredError) => e);
+    expect(err).toBeInstanceOf(UpgradeRequiredError);
+    expect(err.currentVersion).toBe('0.14.0');
+    expect(err.minimumVersion).toBe('0.15.0');
+    expect(err.message).toContain('0.14.0');
+    expect(err.message).toContain('0.15.0');
+    expect(err.message).toContain('npm update -g opencara');
+  });
+
+  it('throws UpgradeRequiredError on 426 even without minimum_version', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 426,
+      json: () => Promise.reject(new Error('not json')),
+    });
+
+    const client = new ApiClient('https://api.test.com', { cliVersion: '0.14.0' });
+    const err = await client.get('/test').catch((e: UpgradeRequiredError) => e);
+    expect(err).toBeInstanceOf(UpgradeRequiredError);
+    expect(err.currentVersion).toBe('0.14.0');
+    expect(err.minimumVersion).toBeUndefined();
+  });
+
+  it('UpgradeRequiredError has correct name and properties', () => {
+    const err = new UpgradeRequiredError('0.14.0', '0.15.0');
+    expect(err.name).toBe('UpgradeRequiredError');
+    expect(err.currentVersion).toBe('0.14.0');
+    expect(err.minimumVersion).toBe('0.15.0');
+
+    const err2 = new UpgradeRequiredError('0.14.0');
+    expect(err2.minimumVersion).toBeUndefined();
+    expect(err2.message).not.toContain('Minimum required');
   });
 });
