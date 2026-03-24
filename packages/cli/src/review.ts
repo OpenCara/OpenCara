@@ -18,7 +18,6 @@ export interface ReviewRequest {
   timeout: number;
   reviewMode: ReviewMode;
   contextBlock?: string;
-  meta?: ReviewMetadata;
 }
 
 export interface ReviewResponse {
@@ -195,7 +194,6 @@ export async function executeReview(
     );
 
     const { verdict, review } = extractVerdict(result.stdout);
-    const header = buildMetadataHeader(verdict, req.meta);
     // Only add input estimate when tokens were estimated (not parsed from tool output)
     const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
     const detail = result.tokenDetail;
@@ -208,7 +206,7 @@ export async function executeReview(
           parsed: false,
         };
     return {
-      review: header + review,
+      review,
       verdict,
       tokensUsed: result.tokensUsed + inputTokens,
       tokensEstimated: !result.tokensParsed,

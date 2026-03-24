@@ -26,11 +26,11 @@ export interface SummaryRequest {
   timeout: number;
   diffContent: string;
   contextBlock?: string;
-  meta?: ReviewMetadata;
 }
 
 export interface SummaryResponse {
   summary: string;
+  verdict: ReviewVerdict;
   tokensUsed: number;
   tokensEstimated: boolean;
   tokenDetail: TokenUsageDetail;
@@ -170,12 +170,6 @@ export async function executeSummary(
   }, effectiveTimeout);
 
   try {
-    const summaryMeta = req.meta
-      ? {
-          ...req.meta,
-          reviewerModels: req.reviews.map((r) => `${r.model}/${r.tool}`),
-        }
-      : undefined;
     const systemPrompt = buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length);
     const userMessage = buildSummaryUserMessage(
       req.prompt,
@@ -195,7 +189,6 @@ export async function executeSummary(
     );
 
     const { verdict, review } = extractVerdict(result.stdout);
-    const header = buildSummaryMetadataHeader(verdict, summaryMeta);
     // Only add input estimate when tokens were estimated (not parsed from tool output)
     const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
     const detail = result.tokenDetail;
@@ -208,7 +201,8 @@ export async function executeSummary(
           parsed: false,
         };
     return {
-      summary: header + review,
+      summary: review,
+      verdict,
       tokensUsed: result.tokensUsed + inputTokens,
       tokensEstimated: !result.tokensParsed,
       tokenDetail,

@@ -29,10 +29,12 @@ import { withRetry, NonRetryableError } from '../retry.js';
 import {
   executeReview,
   DiffTooLargeError,
+  buildMetadataHeader,
+  extractVerdict,
   type ReviewExecutorDeps,
   type ReviewMetadata,
 } from '../review.js';
-import { executeSummary, InputTooLargeError } from '../summary.js';
+import { executeSummary, buildSummaryMetadataHeader, InputTooLargeError } from '../summary.js';
 import { validateCommandBinary, estimateTokens, testCommand } from '../tool-executor.js';
 import { RouterRelay } from '../router.js';
 import {
@@ -665,7 +667,6 @@ async function executeReviewTask(
   } else {
     // Direct mode: execute tool locally
     logger.log(`  ${icons.running} Executing review: ${reviewDeps.commandTemplate}`);
-    const meta: ReviewMetadata = { model: agentInfo.model, tool: agentInfo.tool, githubUsername };
     const result = await executeReview(
       {
         taskId,
@@ -677,7 +678,6 @@ async function executeReviewTask(
         timeout: timeoutSeconds,
         reviewMode: 'full',
         contextBlock,
-        meta,
       },
       reviewDeps,
     );
@@ -692,8 +692,16 @@ async function executeReviewTask(
     };
   }
 
+  // Prepend metadata header (covers both router and direct paths)
+  const reviewMeta: ReviewMetadata = {
+    model: agentInfo.model,
+    tool: agentInfo.tool,
+    githubUsername,
+  };
+  const headerReview = buildMetadataHeader(verdict, reviewMeta);
+
   // Sanitize review text before submission to prevent token leakage
-  const sanitizedReview = sanitizeTokens(reviewText);
+  const sanitizedReview = sanitizeTokens(headerReview + reviewText);
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
@@ -791,7 +799,6 @@ async function executeSummaryTask(
           timeout: timeoutSeconds,
           reviewMode: 'full',
           contextBlock,
-          meta,
         },
         reviewDeps,
       );
@@ -806,7 +813,9 @@ async function executeSummaryTask(
       };
     }
 
-    const sanitizedReview = sanitizeTokens(reviewText);
+    // Prepend metadata header (covers both router and direct paths)
+    const headerSingle = buildMetadataHeader(verdict ?? 'comment', meta);
+    const sanitizedReview = sanitizeTokens(headerSingle + reviewText);
 
     await withRetry(
       () =>
@@ -845,6 +854,7 @@ async function executeSummaryTask(
   }));
 
   let summaryText: string;
+  let summaryVerdict: ReviewVerdict;
   let tokensUsed: number;
   let usageOpts: RecordUsageOptions;
 
@@ -864,7 +874,9 @@ async function executeSummaryTask(
       fullPrompt,
       timeoutSeconds,
     );
-    summaryText = response;
+    const parsed = extractVerdict(response);
+    summaryText = parsed.review;
+    summaryVerdict = parsed.verdict;
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
     usageOpts = {
       inputTokens: estimateTokens(fullPrompt),
@@ -885,11 +897,11 @@ async function executeSummaryTask(
         timeout: timeoutSeconds,
         diffContent,
         contextBlock,
-        meta,
       },
       reviewDeps,
     );
     summaryText = result.summary;
+    summaryVerdict = result.verdict;
     tokensUsed = result.tokensUsed;
     usageOpts = {
       inputTokens: result.tokenDetail.input,
@@ -899,7 +911,13 @@ async function executeSummaryTask(
     };
   }
 
-  const sanitizedSummary = sanitizeTokens(summaryText);
+  // Prepend metadata header (covers both router and direct paths)
+  const summaryMeta = {
+    ...meta,
+    reviewerModels: summaryReviews.map((r) => `${r.model}/${r.tool}`),
+  };
+  const headerSummary = buildSummaryMetadataHeader(summaryVerdict, summaryMeta);
+  const sanitizedSummary = sanitizeTokens(headerSummary + summaryText);
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
@@ -908,6 +926,7 @@ async function executeSummaryTask(
         agent_id: agentId,
         type: 'summary' as ClaimRole,
         review_text: sanitizedSummary,
+        verdict: summaryVerdict,
         tokens_used: tokensUsed,
       }),
     { maxAttempts: 3 },

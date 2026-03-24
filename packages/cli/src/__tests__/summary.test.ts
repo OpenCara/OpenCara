@@ -251,18 +251,16 @@ describe('executeSummary', () => {
     );
   });
 
-  it('prepends metadata header when meta is provided', async () => {
+  it('returns clean summary without metadata header (header added at submission)', async () => {
     const mockRunTool = createMockRunTool('## Summary\nAll good.\n\n## Verdict\nAPPROVE');
-    const meta = { model: 'claude-opus-4-6', tool: 'claude-code', githubUsername: 'octocat' };
-    const request = { ...defaultRequest, meta };
 
-    const result = await executeSummary(request, defaultDeps, mockRunTool);
+    const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
-    expect(result.summary).toContain('**Reviewers**:');
-    expect(result.summary).toContain('**Synthesizer**: `claude-opus-4-6/claude-code`');
-    expect(result.summary).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
-    expect(result.summary).toContain('**Verdict**: \u2705 approve');
-    expect(result.summary).toContain('## Summary\nAll good.');
+    expect(result.summary).toBe('## Summary\nAll good.');
+    expect(result.verdict).toBe('approve');
+    // No metadata header — header injection is done in agent.ts at submission time
+    expect(result.summary).not.toContain('**Reviewers**');
+    expect(result.summary).not.toContain('**Synthesizer**');
   });
 
   it('includes all reviews in the prompt', async () => {
