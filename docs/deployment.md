@@ -79,7 +79,7 @@ crons = ["* * * * *"]
 
 No manual setup needed — the cron is included in the wrangler config and deployed automatically.
 
-### 2.5 Deploy
+### 2.5 Deploy (Dev)
 
 ```bash
 cd packages/server
@@ -87,19 +87,88 @@ cd packages/server
 # Dev environment
 pnpm build
 npx wrangler deploy --env dev
-
-# Production (team lead only)
-npx wrangler deploy
 ```
 
-**Auto-deploy**: The dev worker is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. Manual deployment is only needed for production.
+**Auto-deploy**: The dev worker is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. No manual deployment needed for dev.
 
-### 2.6 Verify
+### 2.6 Deploy (Production)
+
+Production uses Cloudflare Workers [Versions & Deployments](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/) for safe releases with instant rollback. The prod worker (`opencara-server`) stays on a single domain — no blue/green or domain swapping.
+
+#### Release Flow
+
+1. **Upload a new version** (does not deploy):
+
+   ```bash
+   cd packages/server
+   wrangler versions upload
+   ```
+
+   This creates a new version and outputs a version ID.
+
+2. **Test before deploying** (optional):
+
+   ```bash
+   # Hit the prod URL with a version override header to route your request to the new version
+   curl -H "Cloudflare-Workers-Version-Overrides: opencara-server=<version-id>" \
+     https://api.opencara.com/api/meta
+   ```
+
+3. **Deploy the version**:
+
+   ```bash
+   # Instant 100% cutover
+   wrangler versions deploy <version-id>@100%
+
+   # Or gradual rollout (e.g., 10% canary)
+   wrangler versions deploy <version-id>@10% <current-version-id>@90%
+   ```
+
+4. **Publish CLI** (if CLI changes are included):
+
+   ```bash
+   cd packages/cli
+   npm version <version> --no-git-tag-version
+   git tag v<version>
+   git push origin v<version>   # Triggers publish-cli.yml
+   ```
+
+5. **Rollback** (if something goes wrong):
+   ```bash
+   cd packages/server
+   wrangler rollback
+   ```
+   Rollback is instant and supports up to 100 previous versions.
+
+#### Automated Release Script
+
+Use `scripts/release.sh` for the full release workflow:
+
+```bash
+scripts/release.sh 0.16.0          # Full release: upload → deploy → tag → publish
+scripts/release.sh 0.16.0 --test   # Upload + test instructions, pause before deploy
+scripts/release.sh rollback        # Instant rollback to previous version
+```
+
+#### CI Workflow
+
+The `publish-cli.yml` GitHub Actions workflow runs on version tags (`v*.*.*`):
+
+1. Uploads a new worker version via `wrangler versions upload`
+2. Deploys at 100% via `wrangler versions deploy`
+3. Publishes the CLI to npm
+4. Creates a GitHub release
+
+### 2.7 Verify
 
 ```bash
 # Health check
 curl https://<your-worker-url>/health
 # Expected: {"status":"ok","version":"..."}
+
+# Server metadata and version info
+curl https://<your-worker-url>/api/meta
+# Expected: {"server_version":"0.16.0","min_cli_version":"0.15.0","features":[]}
 
 # Metrics
 curl https://<your-worker-url>/metrics
@@ -136,6 +205,30 @@ https://<your-worker-url>/webhook/github
    ```
 3. Start an agent: `opencara agent start --all`
 4. Open a PR — the server should create a task, the agent should review and post a PR comment
+
+## D1 Migration Rules
+
+Since both dev and prod share the same schema (and the prod worker may roll back to a previous version), all D1 migrations must follow these rules:
+
+1. **Additive only** — never drop or rename columns in a single release
+2. **Expand-contract pattern** for breaking schema changes:
+   - Release N: add new column (old code ignores it)
+   - Release N+1: backfill data, switch code to use new column
+   - Release N+2: remove old column (optional)
+3. **Server N must support CLI N-1** — old CLIs in the wild must continue working after a server upgrade
+
+These rules ensure instant rollback is always safe and old CLIs degrade gracefully.
+
+## Version Compatibility
+
+The server enforces CLI version compatibility via the `X-OpenCara-CLI-Version` header:
+
+- CLI sends its version in every API request
+- Server returns `426 Upgrade Required` if the CLI version is below `MIN_CLI_VERSION`
+- If the header is missing (old CLIs), the request is allowed for backward compatibility
+- The `/api/meta` endpoint returns the current `server_version` and `min_cli_version`
+
+Update `MIN_CLI_VERSION` in `packages/server/src/version.ts` when a server release introduces breaking API changes.
 
 ## Environment Variables Reference
 
