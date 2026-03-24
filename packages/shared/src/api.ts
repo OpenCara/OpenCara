@@ -191,6 +191,15 @@ export const DEFAULT_REGISTRY: RegistryResponse = {
   ],
 };
 
+// ── Meta ──────────────────────────────────────────────────────
+
+/** GET /api/meta — response */
+export interface MetaResponse {
+  server_version: string;
+  min_cli_version: string;
+  features: string[];
+}
+
 // ── Common ─────────────────────────────────────────────────────
 
 /** Standardized API error codes for programmatic error handling. */
@@ -202,7 +211,8 @@ export type ErrorCode =
   | 'INVALID_REQUEST'
   | 'RATE_LIMITED'
   | 'INTERNAL_ERROR'
-  | 'SUMMARY_LOCKED';
+  | 'SUMMARY_LOCKED'
+  | 'CLI_OUTDATED';
 
 /** Standard error response — structured format with error code. */
 export interface ErrorResponse {

@@ -10,8 +10,10 @@ import { RealGitHubService, NoOpGitHubService } from './github/service.js';
 import { webhookRoutes } from './routes/webhook.js';
 import { taskRoutes, checkTimeouts } from './routes/tasks.js';
 import { registryRoutes } from './routes/registry.js';
+import { metaRoutes } from './routes/meta.js';
 import { healthRoutes } from './routes/health.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
+import { versionCheck } from './middleware/version-check.js';
 import { createLogger } from './logger.js';
 
 export type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
@@ -44,9 +46,12 @@ export function buildApp(
     cors({
       origin: '*',
       allowMethods: ['GET', 'POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Authorization'],
+      allowHeaders: ['Content-Type', 'Authorization', 'X-OpenCara-CLI-Version'],
     }),
   );
+
+  // Version check on task endpoints — reject outdated CLIs
+  app.use('/api/tasks/*', versionCheck());
 
   // Health check
   app.get('/', (c) => c.json({ status: 'ok', service: 'opencara-server' }));
@@ -55,6 +60,7 @@ export function buildApp(
   app.route('/', webhookRoutes());
   app.route('/', taskRoutes());
   app.route('/', registryRoutes());
+  app.route('/', metaRoutes());
   app.route('/', healthRoutes());
 
   // 404

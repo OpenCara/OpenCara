@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import type { ErrorCode, ErrorResponse } from '@opencara/shared';
 
-type StatusCode = 400 | 401 | 403 | 404 | 409 | 429 | 500;
+type StatusCode = 400 | 401 | 403 | 404 | 409 | 426 | 429 | 500;
 
 /**
  * Return a standardized JSON error response.
