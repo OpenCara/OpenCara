@@ -1,5 +1,9 @@
 import type { ReviewVerdict } from '@opencara/shared';
 
+const REVIEW_HEADER = '## OpenCara Review';
+const REVIEW_FOOTER =
+  '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>';
+
 const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
   approve: '\u2705',
   request_changes: '\u274C',
@@ -15,14 +19,19 @@ export interface TimeoutReview {
 }
 
 /**
+ * Wrap review text with the standard OpenCara header and footer.
+ * Used for normal review comments posted to GitHub.
+ */
+export function wrapReviewComment(reviewText: string): string {
+  return `${REVIEW_HEADER}\n\n${reviewText}\n\n---\n${REVIEW_FOOTER}`;
+}
+
+/**
  * Format a consolidated timeout comment containing all partial reviews
  * and the timeout message in a single GitHub comment.
- *
- * This is the only server-side formatter — normal reviews are pre-formatted
- * by the CLI and posted as-is.
  */
 export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutReview[]): string {
-  const parts: string[] = ['## OpenCara Review', ''];
+  const parts: string[] = [REVIEW_HEADER, ''];
 
   if (reviews.length === 0) {
     parts.push(`> Review timed out after ${timeoutMinutes} minutes.`);
@@ -44,7 +53,7 @@ export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutRev
 
   parts.push('');
   parts.push('---');
-  parts.push('<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>');
+  parts.push(REVIEW_FOOTER);
 
   return parts.join('\n');
 }

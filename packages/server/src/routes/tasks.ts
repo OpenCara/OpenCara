@@ -13,7 +13,11 @@ import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
-import { formatTimeoutComment, type TimeoutReview } from '../review-formatter.js';
+import {
+  formatTimeoutComment,
+  wrapReviewComment,
+  type TimeoutReview,
+} from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
@@ -226,14 +230,9 @@ async function postFinalReview(
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
 
-    // Post review_text as-is — CLI pre-formats with header/footer
-    await github.postPrComment(
-      task.owner,
-      task.repo,
-      task.pr_number,
-      summaryData.review_text,
-      token,
-    );
+    // Wrap review_text with consistent branding header/footer
+    const body = wrapReviewComment(summaryData.review_text);
+    await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.deleteTask(taskId);
     logger.info('Review posted to GitHub — task deleted', {

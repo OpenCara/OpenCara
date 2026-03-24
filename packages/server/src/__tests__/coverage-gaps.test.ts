@@ -61,6 +61,14 @@ describe('review-formatter edge cases', () => {
     expect(result).toContain('Minor suggestions');
     expect(result).toContain('<sub>Reviewed by');
   });
+
+  it('wrapReviewComment wraps text with header and footer', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('LGTM, no issues.');
+    expect(result).toBe(
+      '## OpenCara Review\n\nLGTM, no issues.\n\n---\n<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>',
+    );
+  });
 });
 
 // ── github/config.ts ─────────────────────────────────────────

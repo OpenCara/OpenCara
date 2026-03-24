@@ -939,23 +939,30 @@ describe('E2E Scenarios', () => {
       expect(commentBody).toContain('This should still be posted.');
     });
 
-    it('server posts review_text as-is without re-formatting', async () => {
+    it('server wraps review_text with title header and footer', async () => {
       const taskId = await injectPR();
       const a = agent('passthrough-agent');
 
       await a.claim(taskId, 'summary');
 
-      // CLI pre-formats the review_text with header/footer
-      const preformatted =
-        '## OpenCara Review\n\n**Reviewer**: `claude-3/opencara-cli`\n**Verdict**: approve\n\n---\nLooks good.\n---\n<sub>Reviewed by OpenCara</sub>';
-      const result = await a.submitResult(taskId, 'summary', preformatted, 'approve', 500);
+      // CLI submits raw review_text without header/footer
+      const rawReview = 'Looks good. No issues found.';
+      const result = await a.submitResult(taskId, 'summary', rawReview, 'approve', 500);
       expect(result.status).toBe(200);
 
-      // Server should post the exact pre-formatted text without modification
+      // Server should wrap with exact header and footer structure
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
-      expect(commentBody).toBe(preformatted);
+      const expected = [
+        '## OpenCara Review',
+        '',
+        rawReview,
+        '',
+        '---',
+        '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>',
+      ].join('\n');
+      expect(commentBody).toBe(expected);
     });
   });
 
