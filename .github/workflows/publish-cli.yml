@@ -63,10 +63,7 @@ jobs:
         run: |
           OUTPUT="$(pnpm exec wrangler versions upload 2>&1)"
           echo "$OUTPUT"
-          VERSION_ID="$(echo "$OUTPUT" | grep -oP 'Version ID:\s*\K[a-f0-9-]+' || true)"
-          if [ -z "$VERSION_ID" ]; then
-            VERSION_ID="$(echo "$OUTPUT" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | tail -1 || true)"
-          fi
+          VERSION_ID="$(echo "$OUTPUT" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | tail -1 || true)"
           if [ -z "$VERSION_ID" ]; then
             echo "ERROR: Failed to extract version ID from wrangler output"
             exit 1
@@ -83,8 +80,8 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 5
-          RESPONSE="$(curl -sf https://opencara-server.opencara.workers.dev/api/meta || true)"
-          if [ -n "$RESPONSE" ]; then
+          RESPONSE="$(curl -sf --max-time 10 https://opencara-server.opencara.workers.dev/api/meta || true)"
+          if echo "$RESPONSE" | grep -q '"server_version"'; then
             echo "Deployment verified: ${RESPONSE}"
           else
             echo "WARNING: Could not verify deployment — check manually"
@@ -92,7 +89,7 @@ jobs:
 
   create-release:
     needs: [publish, deploy-prod]
-    if: ${{ !cancelled() }}
+    if: ${{ needs.deploy-prod.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

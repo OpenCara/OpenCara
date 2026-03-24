@@ -26,6 +26,11 @@ confirm() {
   [[ "$response" =~ ^[Yy]$ ]]
 }
 
+# Cleanup handler to restore wrangler.toml on exit/failure
+cleanup() {
+  git checkout -- "${SERVER_DIR}/wrangler.toml" 2>/dev/null || true
+}
+
 # ── Rollback ─────────────────────────────────────────────────────
 
 if [[ "${1:-}" == "rollback" ]]; then
@@ -72,6 +77,8 @@ info "Pre-flight checks passed."
 
 # ── Inject infrastructure IDs ────────────────────────────────────
 
+trap cleanup EXIT
+
 info "Injecting infrastructure IDs..."
 
 if [[ -z "${CF_PROD_D1_ID:-}" ]]; then
@@ -93,22 +100,14 @@ info "Uploading new version..."
 UPLOAD_OUTPUT="$(cd "$SERVER_DIR" && npx wrangler versions upload 2>&1)"
 echo "$UPLOAD_OUTPUT"
 
-# Extract version ID from wrangler output
-VERSION_ID="$(echo "$UPLOAD_OUTPUT" | grep -oP 'Version ID:\s*\K[a-f0-9-]+' || true)"
-if [[ -z "$VERSION_ID" ]]; then
-  # Try alternative output format
-  VERSION_ID="$(echo "$UPLOAD_OUTPUT" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | tail -1 || true)"
-fi
+# Extract version ID (UUID) from wrangler output
+VERSION_ID="$(echo "$UPLOAD_OUTPUT" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | tail -1 || true)"
 
 if [[ -z "$VERSION_ID" ]]; then
   die "Failed to extract version ID from wrangler output. Check output above."
 fi
 
 info "Uploaded version: ${VERSION_ID}"
-
-# ── Restore wrangler.toml (undo sed) ────────────────────────────
-
-git checkout -- "${SERVER_DIR}/wrangler.toml"
 
 # ── Pre-deploy test ──────────────────────────────────────────────
 
@@ -118,12 +117,12 @@ if [[ "$TEST_MODE" == true ]]; then
   echo ""
   echo "Test the new version against prod without deploying:"
   echo ""
-  echo "  curl -H 'Cloudflare-Workers-Version-Overrides: ${WORKER_NAME}=${VERSION_ID}' \\"
+  echo "  curl -H 'Cloudflare-Workers-Version-Overrides: ${WORKER_NAME}=\"${VERSION_ID}\"' \\"
   echo "       ${PROD_URL}/api/meta"
   echo ""
   echo "Run a health check:"
   echo ""
-  echo "  curl -sf -H 'Cloudflare-Workers-Version-Overrides: ${WORKER_NAME}=${VERSION_ID}' \\"
+  echo "  curl -sf -H 'Cloudflare-Workers-Version-Overrides: ${WORKER_NAME}=\"${VERSION_ID}\"' \\"
   echo "       ${PROD_URL}/api/meta | jq ."
   echo ""
 
@@ -141,7 +140,7 @@ info "Deploying version ${VERSION_ID} to 100% traffic..."
 
 # Verify deployment
 info "Verifying deployment..."
-META_RESPONSE="$(curl -sf "${PROD_URL}/api/meta" 2>/dev/null || true)"
+META_RESPONSE="$(curl -sf --max-time 10 "${PROD_URL}/api/meta" 2>/dev/null || true)"
 if [[ -n "$META_RESPONSE" ]]; then
   echo "  /api/meta response: ${META_RESPONSE}"
 else
@@ -163,8 +162,8 @@ info "Creating git tag v${VERSION}..."
 git tag "v${VERSION}"
 
 info "Pushing tag v${VERSION} (triggers publish-cli.yml for npm publish)..."
-git push origin main
 git push origin "v${VERSION}"
+git push origin main
 
 # ── Done ─────────────────────────────────────────────────────────
 
