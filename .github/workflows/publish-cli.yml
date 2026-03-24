@@ -33,15 +33,13 @@ jobs:
       - name: Publish opencara CLI
         working-directory: packages/cli
         run: npm publish --access public --provenance
-      - name: Create GitHub release
-        run: gh release create "${{ github.ref_name }}" --generate-notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy-prod:
     needs: publish
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    outputs:
+      version_id: ${{ steps.upload.outputs.version_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,14 +52,53 @@ jobs:
       - name: Inject infrastructure IDs
         run: |
           sed -i "s/REPLACE_WITH_PROD_D1_DATABASE_ID/${{ secrets.CF_PROD_D1_ID }}/" packages/server/wrangler.toml
-          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/${{ secrets.CF_PROD_KV_ID }}/" packages/server/wrangler.toml
       - name: Run D1 migrations
         run: pnpm exec wrangler d1 migrations apply opencara-db --remote
         working-directory: packages/server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      - name: Deploy prod worker
-        run: pnpm exec wrangler deploy
+      - name: Upload new version
+        id: upload
         working-directory: packages/server
+        run: |
+          OUTPUT="$(pnpm exec wrangler versions upload 2>&1)"
+          echo "$OUTPUT"
+          VERSION_ID="$(echo "$OUTPUT" | grep -oP 'Version ID:\s*\K[a-f0-9-]+' || true)"
+          if [ -z "$VERSION_ID" ]; then
+            VERSION_ID="$(echo "$OUTPUT" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | tail -1 || true)"
+          fi
+          if [ -z "$VERSION_ID" ]; then
+            echo "ERROR: Failed to extract version ID from wrangler output"
+            exit 1
+          fi
+          echo "version_id=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+          echo "Uploaded version: ${VERSION_ID}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Deploy version to 100% traffic
+        working-directory: packages/server
+        run: pnpm exec wrangler versions deploy "${{ steps.upload.outputs.version_id }}@100%"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Verify deployment
+        run: |
+          sleep 5
+          RESPONSE="$(curl -sf https://opencara-server.opencara.workers.dev/api/meta || true)"
+          if [ -n "$RESPONSE" ]; then
+            echo "Deployment verified: ${RESPONSE}"
+          else
+            echo "WARNING: Could not verify deployment — check manually"
+          fi
+
+  create-release:
+    needs: [publish, deploy-prod]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub release
+        run: gh release create "${{ github.ref_name }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
