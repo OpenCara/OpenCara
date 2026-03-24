@@ -40,6 +40,7 @@ jobs:
 
   deploy-prod:
     needs: publish
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +52,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Inject infrastructure IDs
-        run: sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/${{ secrets.CF_PROD_KV_ID }}/" packages/server/wrangler.toml
+        run: |
+          sed -i "s/REPLACE_WITH_PROD_D1_DATABASE_ID/${{ secrets.CF_PROD_D1_ID }}/" packages/server/wrangler.toml
+          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/${{ secrets.CF_PROD_KV_ID }}/" packages/server/wrangler.toml
       - name: Run D1 migrations
         run: pnpm exec wrangler d1 migrations apply opencara-db --remote
         working-directory: packages/server
