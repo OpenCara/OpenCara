@@ -13,7 +13,11 @@ import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
-import { formatTimeoutComment, type TimeoutReview } from '../review-formatter.js';
+import {
+  formatTimeoutComment,
+  wrapReviewComment,
+  type TimeoutReview,
+} from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
@@ -227,7 +231,7 @@ async function postFinalReview(
     const token = await github.getInstallationToken(task.github_installation_id);
 
     // Wrap review_text with consistent branding header/footer
-    const body = `## OpenCara Review\n\n${summaryData.review_text}\n\n---\n<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>`;
+    const body = wrapReviewComment(summaryData.review_text);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.deleteTask(taskId);

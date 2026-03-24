@@ -950,21 +950,19 @@ describe('E2E Scenarios', () => {
       const result = await a.submitResult(taskId, 'summary', rawReview, 'approve', 500);
       expect(result.status).toBe(200);
 
-      // Server should wrap with header and footer
+      // Server should wrap with exact header and footer structure
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
-      expect(commentBody).toContain('## OpenCara Review');
-      expect(commentBody).toContain(rawReview);
-      expect(commentBody).toContain(
+      const expected = [
+        '## OpenCara Review',
+        '',
+        rawReview,
+        '',
+        '---',
         '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>',
-      );
-      // Verify structure: header first, then review, then footer
-      const headerIdx = commentBody.indexOf('## OpenCara Review');
-      const reviewIdx = commentBody.indexOf(rawReview);
-      const footerIdx = commentBody.indexOf('<sub>Reviewed by');
-      expect(headerIdx).toBeLessThan(reviewIdx);
-      expect(reviewIdx).toBeLessThan(footerIdx);
+      ].join('\n');
+      expect(commentBody).toBe(expected);
     });
   });
 
