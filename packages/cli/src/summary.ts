@@ -1,4 +1,5 @@
 import type { ReviewExecutorDeps, ReviewMetadata } from './review.js';
+import { extractVerdict } from './review.js';
 import {
   executeTool,
   estimateTokens,
@@ -48,18 +49,17 @@ export interface SummaryMetadata extends ReviewMetadata {
   reviewerModels: string[];
 }
 
-const VERDICT_FORMAT_INSTRUCTION = `Format the verdict line with an emoji prefix:
-- APPROVE → ✅ approve
-- REQUEST_CHANGES → ❌ request_changes
-- COMMENT → 💬 comment`;
+const VERDICT_EMOJI: Record<string, string> = {
+  approve: '\u2705',
+  request_changes: '\u274C',
+  comment: '\uD83D\uDCAC',
+};
 
-function buildSummaryMetadataHeaderInstruction(meta?: SummaryMetadata): string {
+export function buildSummaryMetadataHeader(verdict: string, meta?: SummaryMetadata): string {
   if (!meta) return '';
+  const emoji = VERDICT_EMOJI[verdict] ?? '';
   const reviewersList = meta.reviewerModels.map((r) => `\`${r}\``).join(', ');
   const lines: string[] = [
-    '',
-    'At the very beginning of your response, include this metadata header:',
-    '',
     `**Reviewers**: ${reviewersList}`,
     `**Synthesizer**: \`${meta.model}/${meta.tool}\``,
   ];
@@ -68,24 +68,11 @@ function buildSummaryMetadataHeaderInstruction(meta?: SummaryMetadata): string {
       `**Contributors**: [@${meta.githubUsername}](https://github.com/${meta.githubUsername})`,
     );
   }
-  lines.push('**Verdict**: {verdict_emoji} {verdict}');
-  lines.push('');
-  lines.push(
-    'Replace {verdict_emoji} {verdict} with the actual verdict using the emoji format below.',
-  );
-  lines.push(VERDICT_FORMAT_INSTRUCTION);
-  lines.push('');
-  lines.push('Then continue with the rest of the review.');
-  return lines.join('\n');
+  lines.push(`**Verdict**: ${emoji} ${verdict}`);
+  return lines.join('\n') + '\n\n';
 }
 
-export function buildSummarySystemPrompt(
-  owner: string,
-  repo: string,
-  reviewCount: number,
-  meta?: SummaryMetadata,
-): string {
-  const metadataHeader = buildSummaryMetadataHeaderInstruction(meta);
+export function buildSummarySystemPrompt(owner: string, repo: string, reviewCount: number): string {
   return `You are a senior code reviewer and lead synthesizer for the ${owner}/${repo} repository.
 
 You will receive a pull request diff and ${reviewCount} review${reviewCount !== 1 ? 's' : ''} from other agents.
@@ -96,7 +83,7 @@ Your job:
 3. Deduplicate overlapping findings but preserve every unique insight
 4. Provide detailed explanations and actionable fix suggestions for each issue
 5. Produce ONE comprehensive, detailed review
-${metadataHeader}
+
 Format your response as:
 
 ## Summary
@@ -194,12 +181,7 @@ export async function executeSummary(
           reviewerModels: req.reviews.map((r) => `${r.model}/${r.tool}`),
         }
       : undefined;
-    const systemPrompt = buildSummarySystemPrompt(
-      req.owner,
-      req.repo,
-      req.reviews.length,
-      summaryMeta,
-    );
+    const systemPrompt = buildSummarySystemPrompt(req.owner, req.repo, req.reviews.length);
     const userMessage = buildSummaryUserMessage(
       req.prompt,
       req.reviews,
@@ -217,6 +199,8 @@ export async function executeSummary(
       deps.codebaseDir ?? undefined,
     );
 
+    const { verdict, review } = extractVerdict(result.stdout);
+    const header = buildSummaryMetadataHeader(verdict, summaryMeta);
     // Only add input estimate when tokens were estimated (not parsed from tool output)
     const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
     const detail = result.tokenDetail;
@@ -229,7 +213,7 @@ export async function executeSummary(
           parsed: false,
         };
     return {
-      summary: result.stdout,
+      summary: header + review,
       tokensUsed: result.tokensUsed + inputTokens,
       tokensEstimated: !result.tokensParsed,
       tokenDetail,

@@ -37,38 +37,9 @@ export interface ReviewMetadata {
   githubUsername?: string;
 }
 
-const VERDICT_FORMAT_INSTRUCTION = `Format the verdict line with an emoji prefix:
-- APPROVE → ✅ approve
-- REQUEST_CHANGES → ❌ request_changes
-- COMMENT → 💬 comment`;
-
-function buildMetadataHeaderInstruction(meta?: ReviewMetadata): string {
-  if (!meta) return '';
-  const lines: string[] = [
-    '',
-    'At the very beginning of your response, include this metadata header:',
-    '',
-    `**Reviewer**: \`${meta.model}/${meta.tool}\``,
-  ];
-  if (meta.githubUsername) {
-    lines.push(
-      `**Contributors**: [@${meta.githubUsername}](https://github.com/${meta.githubUsername})`,
-    );
-  }
-  lines.push('**Verdict**: {verdict_emoji} {verdict}');
-  lines.push('');
-  lines.push(
-    'Replace {verdict_emoji} {verdict} with the actual verdict using the emoji format below.',
-  );
-  lines.push(VERDICT_FORMAT_INSTRUCTION);
-  lines.push('');
-  lines.push('Then continue with the rest of the review.');
-  return lines.join('\n');
-}
-
 const FULL_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and provide a structured review.
-{metadata_header}
+
 Format your response as:
 
 ## Summary
@@ -87,7 +58,7 @@ APPROVE | REQUEST_CHANGES | COMMENT`;
 
 const COMPACT_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and return a compact, structured assessment.
-{metadata_header}
+
 Format your response as:
 
 ## Summary
@@ -101,19 +72,26 @@ Severities: critical, major, minor, suggestion
 ## Verdict
 APPROVE | REQUEST_CHANGES | COMMENT`;
 
-export function buildSystemPrompt(
-  owner: string,
-  repo: string,
-  mode: ReviewMode = 'full',
-  meta?: ReviewMetadata,
-): string {
+export function buildSystemPrompt(owner: string, repo: string, mode: ReviewMode = 'full'): string {
   const template =
     mode === 'compact' ? COMPACT_SYSTEM_PROMPT_TEMPLATE : FULL_SYSTEM_PROMPT_TEMPLATE;
-  const metadataHeader = buildMetadataHeaderInstruction(meta);
-  return template
-    .replace('{owner}', owner)
-    .replace('{repo}', repo)
-    .replace('{metadata_header}', metadataHeader);
+  return template.replace('{owner}', owner).replace('{repo}', repo);
+}
+
+const VERDICT_EMOJI: Record<string, string> = {
+  approve: '\u2705',
+  request_changes: '\u274C',
+  comment: '\uD83D\uDCAC',
+};
+
+export function buildMetadataHeader(verdict: ReviewVerdict, meta?: ReviewMetadata): string {
+  if (!meta) return '';
+  const emoji = VERDICT_EMOJI[verdict] ?? '';
+  const lines: string[] = [
+    `**Reviewer**: \`${meta.model}/${meta.tool}\``,
+    `**Verdict**: ${emoji} ${verdict}`,
+  ];
+  return lines.join('\n') + '\n\n';
 }
 
 export function buildUserMessage(
@@ -200,7 +178,7 @@ export async function executeReview(
   }, effectiveTimeout);
 
   try {
-    const systemPrompt = buildSystemPrompt(req.owner, req.repo, req.reviewMode, req.meta);
+    const systemPrompt = buildSystemPrompt(req.owner, req.repo, req.reviewMode);
     const userMessage = buildUserMessage(req.prompt, req.diffContent, req.contextBlock);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 
@@ -214,6 +192,7 @@ export async function executeReview(
     );
 
     const { verdict, review } = extractVerdict(result.stdout);
+    const header = buildMetadataHeader(verdict, req.meta);
     // Only add input estimate when tokens were estimated (not parsed from tool output)
     const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
     const detail = result.tokenDetail;
@@ -226,7 +205,7 @@ export async function executeReview(
           parsed: false,
         };
     return {
-      review,
+      review: header + review,
       verdict,
       tokensUsed: result.tokensUsed + inputTokens,
       tokensEstimated: !result.tokensParsed,
