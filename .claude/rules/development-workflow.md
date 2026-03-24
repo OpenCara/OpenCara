@@ -60,23 +60,28 @@ The OpenCara GitHub App is installed on this repo with `.review.yml` configured 
 
 1. After creating the PR, wait for the OpenCara bot review to appear:
    ```bash
-   # Poll for bot review (check every 30s, up to 10 minutes)
+   # Poll for bot review (check every 30s, up to 20 minutes)
    # Check both PR reviews and issue comments — the bot may use either
-   for i in $(seq 1 20); do
+   for i in $(seq 1 40); do
      PR_REVIEWS=$(gh api repos/OpenCara/OpenCara/pulls/<PR_NUMBER>/reviews --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
      COMMENTS=$(gh api repos/OpenCara/OpenCara/issues/<PR_NUMBER>/comments --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
      TOTAL=$((PR_REVIEWS + COMMENTS))
      if [ "$TOTAL" -gt 0 ]; then echo "Bot review found ($PR_REVIEWS review(s), $COMMENTS comment(s))"; break; fi
-     echo "Waiting for bot review... ($i/20)"
+     echo "Waiting for bot review... ($i/40)"
      sleep 30
    done
    ```
-2. If no review after 10 minutes, trigger manually with `/opencara review` and wait another 2 minutes:
+2. If no review after 20 minutes, trigger manually with `/opencara review` and wait another 5 minutes:
    ```bash
    gh pr comment <PR_NUMBER> --body "/opencara review"
-   sleep 120
+   sleep 300
    ```
-3. **NEVER merge without at least checking for the bot review.** If the bot truly cannot review (no agents online), document this in the PR and proceed with self-review only.
+3. If still no review after the manual trigger, request a second manual review before proceeding:
+   ```bash
+   gh pr comment <PR_NUMBER> --body "/opencara review"
+   sleep 300
+   ```
+4. **NEVER merge without at least checking for the bot review.** If the bot truly cannot review after both attempts (no agents online), document this in the PR and proceed with self-review only.
 
 ### Step 2: Fix & Re-review (max 3 iterations)
 
@@ -153,7 +158,7 @@ If any check fails, fix it before pushing. Never push broken code to main.
 - **Shared types are the contract** — `packages/shared` defines REST API types used by all packages
 - **Zero runtime dependencies in shared** — `packages/shared` is pure TypeScript types and utilities
 - **REST-only, no WebSocket** — stateless HTTP polling, no Durable Objects, no persistent connections
-- **No database** — all state in Workers KV via TaskStore abstraction
+- **D1 (SQL) is the primary data store** — DataStore abstraction supports D1 and in-memory backends; KVDataStore was removed
 - **CLI is a polling client** — polls server for tasks, executes reviews locally, submits results via REST
 
 ## Common Guidelines

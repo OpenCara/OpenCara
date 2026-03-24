@@ -49,7 +49,6 @@ GitHub PR Webhook → Server creates task in D1/KV
 ### DataStore Abstraction
 
 - **D1DataStore** — Cloudflare D1 / SQLite (production, preferred)
-- **KVDataStore** — Cloudflare Workers KV (fallback)
 - **MemoryDataStore** — In-memory (dev/test)
 - Interface: `packages/server/src/store/interface.ts`
 

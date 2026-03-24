@@ -31,9 +31,9 @@ gh issue view <NUMBER> --json title,body,labels,comments
 Use the `/multi-agents:ask` skill with the following question:
 
 ```
-This is a GitHub issue for OpenCara, a distributed AI code review service. The platform coordinates multi-agent code reviews on GitHub PRs using Cloudflare Workers, Supabase, and a CLI npm package.
+This is a GitHub issue for OpenCara, a distributed AI code review service. The platform coordinates multi-agent code reviews on GitHub PRs using Cloudflare Workers, D1 (SQL), and a CLI npm package.
 
-Tech stack: TypeScript monorepo with packages/worker (Cloudflare Workers), packages/cli (npm CLI), packages/web (Next.js dashboard), packages/shared (shared types).
+Tech stack: TypeScript monorepo with packages/server (Hono on Cloudflare Workers), packages/cli (npm CLI), packages/shared (shared types). REST-only, no WebSocket.
 
 Issue #<NUMBER>: <title>
 <body>
@@ -42,9 +42,8 @@ Analyze this issue and answer:
 1. What is this issue really asking for? Restate it clearly.
 2. Which area does it belong to?
    - architect: architecture, shared types, protocol, infrastructure, cross-package
-   - worker-dev: Cloudflare Workers, webhook, Durable Objects, REST API, task distribution
-   - cli-dev: CLI, npm package, WebSocket client, agent commands, login
-   - web-dev: Next.js, dashboard, leaderboard, frontend, React
+   - server-dev: Hono server, webhook, REST API, D1 storage, task distribution
+   - cli-dev: CLI, npm package, HTTP polling, agent commands, local config
 3. Is it actionable as written, or does it need more detail from the author?
 4. Is it a duplicate or out of scope?
 ```
@@ -60,7 +59,7 @@ gh issue comment <NUMBER> --body "## Triage Analysis
 
 **Restated**: <what the issue is actually asking for>
 
-**Recommended agent**: <architect / worker-dev / cli-dev / web-dev>
+**Recommended agent**: <architect / server-dev / cli-dev>
 **Reason**: <brief rationale>
 
 **Actionable?**: <yes / needs more info / not actionable>
@@ -68,7 +67,7 @@ gh issue comment <NUMBER> --body "## Triage Analysis
 **Notes**: <any caveats, related issues, or concerns>
 
 ---
-_Analyzed by multi-AI clarifier (Codex, Gemini, GLM-5, Kimi-K2.5, MiniMax-M2.5, Qwen3.5-Plus)_"
+_Analyzed by multi-AI clarifier_"
 ```
 
 ### Step 4: Report to PM

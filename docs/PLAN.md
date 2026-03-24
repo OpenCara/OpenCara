@@ -209,9 +209,65 @@ Dependency: #326 → (#327 + #328 in parallel)
 | #332  | server-dev | #340 | Consolidate timeout partial reviews into single comment [DONE] |
 | #336  | cli-dev    | #339 | Fix tsc --build overwriting CLI tsup output [DONE]             |
 
+## M15: Production Readiness [DONE — 2026-03-23]
+
+Security hardening, correctness fixes, and observability improvements identified by multi-agent codebase analysis (Codex, GLM-5, Kimi-K2.5, Qwen3.5-Plus) and PM review.
+
+### High Priority (security + correctness) [ALL DONE]
+
+| Issue | Agent      | PR   | Description                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------- |
+| #343  | server-dev | #364 | API key authentication for task endpoints                       |
+| #344  | server-dev | #366 | Runtime request validation with Zod schemas                     |
+| #345  | server-dev | #363 | Atomic review-slot counting to prevent oversubscription         |
+| #346  | server-dev | #359 | Enforce `allow_anonymous: false` in reviewer eligibility        |
+
+### Medium Priority (resilience + observability)
+
+| Issue | Agent      | PR   | Description                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------- |
+| #350  | cli-dev    | #358 | SIGKILL escalation after SIGTERM timeout [DONE]                 |
+| #352  | server-dev | #361 | Add composite DB index for webhook dedup query [DONE]           |
+| #355  | server-dev | #362 | Enforce preferred_models/preferred_tools in task polling [DONE]  |
+| #356  | server-dev | #365 | Delete task and claims immediately after review posted [DONE]    |
+| #357  | server-dev | #360 | Remove KVDataStore and Workers KV fallback [DONE]               |
+| #351  | cli-dev    | #375 | Streaming diff size guard to prevent OOM on large diffs [DONE]  |
+| #347  | server-dev | --   | Heartbeat-based claim expiry and lock TTL [BACKLOG]             |
+| #348  | server-dev | --   | Webhook event log for delivery visibility [BACKLOG]             |
+| #349  | server-dev | --   | Agent activity endpoint with heartbeats and claim history [BACKLOG] |
+
+### Bug Fixes [ALL DONE]
+
+| Issue | Agent      | PR   | Description                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------- |
+| #367  | server-dev | #369 | Fix CLAIM_CONFLICT spam: filter already-claimed summary tasks   |
+| #370  | server-dev | #371 | Fix late review results overwriting summary queue state         |
+
+### New Features
+
+| Issue | Agent      | PR   | Description                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------- |
+| #368  | cli-dev    | #374 | Display contributor GitHub profile link in review report [DONE]  |
+| #373  | cli-dev    | #376 | Per-day review cap, token budget, and accurate token tracking [DONE] |
+
+### Low Priority (operational)
+
+| Issue | Agent      | Description                                                     |
+| ----- | ---------- | --------------------------------------------------------------- |
+| #353  | architect  | Production deploy CI workflow — CLOSED (already exists)         |
+| #354  | cli-dev    | Add `opencara status` command for diagnostics [BACKLOG]         |
+| #302  | cli-dev    | Save agent logs to file for debugging [BACKLOG]                 |
+
 ## Open Issues
 
-(none — all dispatched issues complete, M14 QA pending)
+- #347 [server-dev, medium, Backlog] Heartbeat-based claim expiry and lock TTL
+- #348 [server-dev, medium, Backlog] Webhook event log for delivery visibility
+- #349 [server-dev, medium, Backlog] Agent activity endpoint with heartbeats and claim history
+- #354 [cli-dev, low, Backlog] Add opencara status command for diagnostics
+- #302 [cli-dev, medium, Backlog] Save agent logs to file for debugging
+- #378 [server-dev, medium, Done] Refine review report format: remove server-side formatting, post CLI text as-is (PR #379)
+- #380 [cli-dev, medium, Backlog] Prompt reviewers/synthesizers to include metadata headers in output
+- #381 [server-dev, medium, Backlog] Wrap review_text with title header and footer
 
 ## Merged PRs
 
@@ -373,3 +429,19 @@ Dependency: #326 → (#327 + #328 in parallel)
 | #338 | #328   | cli-dev    | 03-23 | Synthesizer config + identity   |
 | #339 | #336   | cli-dev    | 03-23 | Fix tsc --build CLI dist        |
 | #340 | #332   | server-dev | 03-23 | Timeout review consolidation    |
+| #342 | --     | direct     | 03-23 | Inject prod KV namespace in CI  |
+| #358 | #350   | cli-dev    | 03-23 | SIGKILL escalation on timeout   |
+| #359 | #346   | server-dev | 03-23 | Enforce allow_anonymous: false   |
+| #360 | #357   | server-dev | 03-23 | Remove KVDataStore + KV fallback|
+| #361 | #352   | server-dev | 03-23 | Composite DB index for dedup    |
+| #362 | #355   | server-dev | 03-23 | Enforce preferred_models/tools  |
+| #363 | #345   | server-dev | 03-23 | Atomic review-slot counting     |
+| #364 | #343   | server-dev | 03-23 | API key authentication          |
+| #365 | #356   | server-dev | 03-23 | Delete task after review posted |
+| #366 | #344   | server-dev | 03-23 | Zod request validation          |
+| #369 | #367   | server-dev | 03-23 | Fix CLAIM_CONFLICT poll filter  |
+| #371 | #370   | server-dev | 03-23 | Fix late review queue overwrite |
+| #374 | #368   | cli-dev    | 03-24 | Contributor profile link        |
+| #375 | #351   | cli-dev    | 03-24 | Streaming diff size guard       |
+| #376 | #373   | cli-dev    | 03-24 | Usage limits + token tracking   |
+| #379 | #378   | server-dev | 03-24 | Remove server-side formatting   |

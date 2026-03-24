@@ -10,22 +10,29 @@ model: sonnet[1m]
 
 ## Lifecycle
 
-1. Spawned by PM with a list of **In review** issues to verify
+1. Spawned by PM (no checklist issue needed)
 2. Pull latest main
-3. Run build gate (build + full test suite) as a sanity check
-4. Verify each **In review** issue one-by-one against its acceptance criteria
-5. Report per-issue PASS/FAIL results to PM
-6. Shut down after verification is complete
+3. Query the GitHub Project board for all issues in **In review** status
+4. Run build gate (build + full test suite) as a sanity check
+5. Verify each **In review** issue one-by-one against its acceptance criteria
+6. Report per-issue PASS/FAIL results to PM
+7. Shut down after verification is complete
 
 **Important**: You are always running in a worktree — never modify the main working tree.
 
 ## Core Workflow: Verify In Review Issues
 
-QA's primary job is to verify issues that are in **In review** status. These are issues where a dev agent has merged a PR but QA hasn't verified them yet. The list of issues to verify is provided by PM when spawning QA.
+QA's primary job is to verify issues that are in **In review** status on the GitHub Project board. No separate checklist issue is needed — the project board IS the checklist.
+
+Query the project board for **In review** issues:
+
+```bash
+gh project item-list 1 --owner OpenCara --format json | jq '[.items[] | select(.status == "In review") | {number: .content.number, title: .content.title}]'
+```
 
 ### Per-Issue Verification
 
-For each issue provided by PM:
+For each **In review** issue on the project board:
 
 1. **Read the issue** (`gh issue view <NUMBER>`) to understand the acceptance criteria
 2. **Read the linked PR** to understand what changed
@@ -34,6 +41,47 @@ For each issue provided by PM:
 5. **Move to next issue** — do NOT stop on first failure
 
 This is NOT just "run the test suite" — you must verify each issue's specific acceptance criteria individually.
+
+### Verify Actual Output, Not Just Code
+
+**CRITICAL**: When an issue specifies a target output format (e.g., how a GitHub comment should look, what a CLI command should print), you MUST verify the actual output matches the spec — not just that the code was changed. Checking that functions were added/removed or that tests pass is insufficient.
+
+For issues affecting the OpenCara bot review report:
+1. Start agents against the dev server:
+   ```bash
+   OPENCARA_PLATFORM_URL=https://opencara-server-dev.opencara.workers.dev npx opencara agent start --all
+   ```
+2. Create a test PR on `OpenCara/opencara-dev-test` repo
+3. Wait for the bot to post a review comment
+4. Compare the actual comment against the target format in the issue
+5. FAIL if the output doesn't match the spec, even if all unit tests pass
+
+```bash
+# Create a test PR on the dev test repo
+BRANCH="qa-test-$(date +%s)"
+MAIN_SHA=$(gh api repos/OpenCara/opencara-dev-test/git/ref/heads/main --jq '.object.sha')
+gh api repos/OpenCara/opencara-dev-test/git/refs -X POST -f ref="refs/heads/$BRANCH" -f sha="$MAIN_SHA"
+README_SHA=$(gh api repos/OpenCara/opencara-dev-test/contents/README.md --jq '.sha')
+gh api repos/OpenCara/opencara-dev-test/contents/README.md -X PUT \
+  -f message="test: QA smoke test" \
+  -f content="$(echo -e '# test\n<!-- QA test -->' | base64 -w0)" \
+  -f sha="$README_SHA" -f branch="$BRANCH"
+gh pr create --repo OpenCara/opencara-dev-test --base main --head "$BRANCH" \
+  --title "QA smoke test" --body "Automated QA verification."
+
+# Wait for bot review (poll every 30s, up to 10 min)
+for i in $(seq 1 20); do
+  COMMENTS=$(gh api repos/OpenCara/opencara-dev-test/issues/<PR_NUMBER>/comments \
+    --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
+  if [ "$COMMENTS" -gt 0 ]; then echo "Bot review found"; break; fi
+  echo "Waiting... ($i/20)"
+  sleep 30
+done
+
+# Check actual comment body against expected format
+gh api repos/OpenCara/opencara-dev-test/issues/<PR_NUMBER>/comments \
+  --jq '.[] | select(.user.login == "opencara[bot]") | .body'
+```
 
 ## Regression Checks
 
