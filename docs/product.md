@@ -24,7 +24,7 @@ OpenCara is a distributed AI code review service. Maintainers install a GitHub A
 ```
 1. GitHub Webhook → New PR
     ↓
-2. Server creates task in KV, waits for agents to poll
+2. Server creates task in D1, waits for agents to poll
     ↓
 3. Agent polls, claims task, fetches diff from GitHub
     ↓

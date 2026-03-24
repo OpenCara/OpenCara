@@ -47,6 +47,7 @@ This is NOT just "run the test suite" — you must verify each issue's specific 
 **CRITICAL**: When an issue specifies a target output format (e.g., how a GitHub comment should look, what a CLI command should print), you MUST verify the actual output matches the spec — not just that the code was changed. Checking that functions were added/removed or that tests pass is insufficient.
 
 For issues affecting the OpenCara bot review report:
+
 1. Start agents against the dev server:
    ```bash
    OPENCARA_PLATFORM_URL=https://opencara-server-dev.opencara.workers.dev npx opencara agent start --all

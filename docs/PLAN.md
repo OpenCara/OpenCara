@@ -215,48 +215,48 @@ Security hardening, correctness fixes, and observability improvements identified
 
 ### High Priority (security + correctness) [ALL DONE]
 
-| Issue | Agent      | PR   | Description                                                     |
-| ----- | ---------- | ---- | --------------------------------------------------------------- |
-| #343  | server-dev | #364 | API key authentication for task endpoints                       |
-| #344  | server-dev | #366 | Runtime request validation with Zod schemas                     |
-| #345  | server-dev | #363 | Atomic review-slot counting to prevent oversubscription         |
-| #346  | server-dev | #359 | Enforce `allow_anonymous: false` in reviewer eligibility        |
+| Issue | Agent      | PR   | Description                                              |
+| ----- | ---------- | ---- | -------------------------------------------------------- |
+| #343  | server-dev | #364 | API key authentication for task endpoints                |
+| #344  | server-dev | #366 | Runtime request validation with Zod schemas              |
+| #345  | server-dev | #363 | Atomic review-slot counting to prevent oversubscription  |
+| #346  | server-dev | #359 | Enforce `allow_anonymous: false` in reviewer eligibility |
 
 ### Medium Priority (resilience + observability)
 
-| Issue | Agent      | PR   | Description                                                     |
-| ----- | ---------- | ---- | --------------------------------------------------------------- |
-| #350  | cli-dev    | #358 | SIGKILL escalation after SIGTERM timeout [DONE]                 |
-| #352  | server-dev | #361 | Add composite DB index for webhook dedup query [DONE]           |
-| #355  | server-dev | #362 | Enforce preferred_models/preferred_tools in task polling [DONE]  |
-| #356  | server-dev | #365 | Delete task and claims immediately after review posted [DONE]    |
-| #357  | server-dev | #360 | Remove KVDataStore and Workers KV fallback [DONE]               |
-| #351  | cli-dev    | #375 | Streaming diff size guard to prevent OOM on large diffs [DONE]  |
-| #347  | server-dev | --   | Heartbeat-based claim expiry and lock TTL [BACKLOG]             |
-| #348  | server-dev | --   | Webhook event log for delivery visibility [BACKLOG]             |
+| Issue | Agent      | PR   | Description                                                         |
+| ----- | ---------- | ---- | ------------------------------------------------------------------- |
+| #350  | cli-dev    | #358 | SIGKILL escalation after SIGTERM timeout [DONE]                     |
+| #352  | server-dev | #361 | Add composite DB index for webhook dedup query [DONE]               |
+| #355  | server-dev | #362 | Enforce preferred_models/preferred_tools in task polling [DONE]     |
+| #356  | server-dev | #365 | Delete task and claims immediately after review posted [DONE]       |
+| #357  | server-dev | #360 | Remove KVDataStore and Workers KV fallback [DONE]                   |
+| #351  | cli-dev    | #375 | Streaming diff size guard to prevent OOM on large diffs [DONE]      |
+| #347  | server-dev | --   | Heartbeat-based claim expiry and lock TTL [BACKLOG]                 |
+| #348  | server-dev | --   | Webhook event log for delivery visibility [BACKLOG]                 |
 | #349  | server-dev | --   | Agent activity endpoint with heartbeats and claim history [BACKLOG] |
 
 ### Bug Fixes [ALL DONE]
 
-| Issue | Agent      | PR   | Description                                                     |
-| ----- | ---------- | ---- | --------------------------------------------------------------- |
-| #367  | server-dev | #369 | Fix CLAIM_CONFLICT spam: filter already-claimed summary tasks   |
-| #370  | server-dev | #371 | Fix late review results overwriting summary queue state         |
+| Issue | Agent      | PR   | Description                                                   |
+| ----- | ---------- | ---- | ------------------------------------------------------------- |
+| #367  | server-dev | #369 | Fix CLAIM_CONFLICT spam: filter already-claimed summary tasks |
+| #370  | server-dev | #371 | Fix late review results overwriting summary queue state       |
 
 ### New Features
 
-| Issue | Agent      | PR   | Description                                                     |
-| ----- | ---------- | ---- | --------------------------------------------------------------- |
-| #368  | cli-dev    | #374 | Display contributor GitHub profile link in review report [DONE]  |
-| #373  | cli-dev    | #376 | Per-day review cap, token budget, and accurate token tracking [DONE] |
+| Issue | Agent   | PR   | Description                                                          |
+| ----- | ------- | ---- | -------------------------------------------------------------------- |
+| #368  | cli-dev | #374 | Display contributor GitHub profile link in review report [DONE]      |
+| #373  | cli-dev | #376 | Per-day review cap, token budget, and accurate token tracking [DONE] |
 
 ### Low Priority (operational)
 
-| Issue | Agent      | Description                                                     |
-| ----- | ---------- | --------------------------------------------------------------- |
-| #353  | architect  | Production deploy CI workflow — CLOSED (already exists)         |
-| #354  | cli-dev    | Add `opencara status` command for diagnostics [BACKLOG]         |
-| #302  | cli-dev    | Save agent logs to file for debugging [BACKLOG]                 |
+| Issue | Agent     | Description                                             |
+| ----- | --------- | ------------------------------------------------------- |
+| #353  | architect | Production deploy CI workflow — CLOSED (already exists) |
+| #354  | cli-dev   | Add `opencara status` command for diagnostics [BACKLOG] |
+| #302  | cli-dev   | Save agent logs to file for debugging [BACKLOG]         |
 
 ## Open Issues
 
@@ -271,177 +271,177 @@ Security hardening, correctness fixes, and observability improvements identified
 
 ## Merged PRs
 
-| PR   | Issue  | Agent      | Date  | Description                     |
-| ---- | ------ | ---------- | ----- | ------------------------------- |
-| #2   | #1     | architect  | 03-16 | M0 Monorepo setup               |
-| #6   | #5     | worker-dev | 03-16 | M2 DB schema + auth             |
-| #7   | #4     | worker-dev | 03-16 | M1 Webhook endpoint             |
-| #10  | #8     | cli-dev    | 03-16 | M3 CLI connect                  |
-| #12  | #9     | worker-dev | 03-16 | M4 Durable Objects              |
-| #15  | #11    | architect  | 03-16 | Test coverage 100%              |
-| #16  | #14    | cli-dev    | 03-16 | M5 CLI review engine            |
-| #17  | #13    | worker-dev | 03-16 | M5 Worker review posting        |
-| #21  | #18    | architect  | 03-16 | Fix typecheck/format            |
-| #22  | #20    | cli-dev    | 03-16 | M6 CLI summary engine           |
-| #23  | #19    | worker-dev | 03-16 | M6 Multi-agent dispatch         |
-| #28  | #26    | worker-dev | 03-16 | M9 Consumption API              |
-| #29  | #25    | worker-dev | 03-16 | M7 Reputation system            |
-| #30  | #27    | cli-dev    | 03-16 | M9 CLI stats                    |
-| #36  | #33    | worker-dev | 03-16 | M8 OAuth callback               |
-| #37  | #31,32 | web-dev    | 03-16 | M8 Landing + leaderboard        |
-| #39  | #34    | web-dev    | 03-16 | M8 Dashboard                    |
-| #42  | #40    | architect  | 03-16 | Deployment guide                |
-| #44  | #41    | web-dev    | 03-16 | Dashboard fixes                 |
-| #45  | #43    | worker-dev | 03-16 | CORS + security                 |
-| #49  | #47    | cli-dev    | 03-16 | Local tools refactor            |
-| #50  | #48    | worker-dev | 03-16 | Pending task pickup             |
-| #52  | #51    | worker-dev | 03-16 | WS auth disconnect fix          |
-| #54  | #53    | worker-dev | 03-16 | WS reconnect loop fix           |
-| #56  | #55    | worker-dev | 03-16 | WS re-entrance fix              |
-| #59  | #57,46 | worker-dev | 03-17 | E2E review loop fix             |
-| #60  | #58    | architect  | 03-17 | pnpm migration                  |
-| #68  | #61,62 | cli-dev    | 03-17 | WS diagnostics + tool fix       |
-| #74  | #69    | architect  | 03-17 | Trust tier types                |
-| #75  | #70,35 | worker-dev | 03-17 | Project stats API               |
-| #76  | #63    | cli-dev    | 03-17 | Tool command templates          |
-| #77  | #71    | web-dev    | 03-17 | Web community page              |
-| #78  | #72    | cli-dev    | 03-17 | Stats enrichment                |
-| #79  | #73    | cli-dev    | 03-17 | Stability threshold             |
-| #89  | #86    | cli-dev    | 03-17 | Local-config agents             |
-| #91  | --     | direct     | 03-17 | Rebrand to OpenCara             |
-| #92  | --     | direct     | 03-17 | Post-rebrand fixes              |
-| #93  | #82,83 | direct     | 03-17 | PR Review API                   |
-| #94  | #87    | direct     | 03-17 | Token counting fix              |
-| #97  | #95,96 | direct     | 03-17 | Inline PR review comments       |
-| #103 | #99    | direct     | 03-17 | Trigger control                 |
-| #104 | #84    | direct     | 03-17 | preferred_models                |
-| #105 | #102   | direct     | 03-17 | WebSocket ping frames           |
-| #106 | #101   | direct     | 03-17 | Contributor profiles            |
-| #107 | #100   | direct     | 03-17 | Drop diff_content storage       |
-| #108 | #88    | direct     | 03-17 | Timeout comment + retry         |
-| #109 | #85    | direct     | 03-17 | --all agent start               |
-| #110 | --     | direct     | 03-18 | E2E tests + synthesizer         |
-| #116 | #113   | architect  | 03-18 | Repo config types               |
-| #117 | #111   | worker-dev | 03-18 | Load balancing                  |
-| #118 | #114   | worker-dev | 03-18 | Repo filtering                  |
-| #119 | #115   | cli-dev    | 03-18 | Repo config CLI                 |
-| #122 | #121   | architect  | 03-18 | Schema simplification           |
-| #127 | #124   | architect  | 03-18 | Anonymous agent types           |
-| #128 | #125   | worker-dev | 03-18 | Anonymous registration          |
-| #134 | #126   | cli-dev    | 03-18 | Anonymous CLI support           |
-| #137 | #136   | worker-dev | 03-18 | Synthesizer inline comments     |
-| #138 | #132   | architect  | 03-18 | npm publish CI                  |
-| #139 | #135   | worker-dev | 03-18 | Agent details in reviews        |
-| #140 | --     | direct     | 03-18 | OIDC npm publishing             |
-| #141 | --     | direct     | 03-18 | Test publish pipeline           |
-| #142 | --     | direct     | 03-18 | npm publish with token          |
-| #143 | --     | direct     | 03-18 | Test OIDC publishing            |
-| #149 | #145   | architect  | 03-18 | Agent displayName types         |
-| #150 | #131   | worker-dev | 03-18 | Default model reputation        |
-| #151 | #147   | cli-dev    | 03-18 | Parse custom agent names        |
-| #152 | #146   | worker-dev | 03-18 | Persist agent names             |
-| #153 | --     | direct     | 03-18 | Fix tsc/tsup build conflict     |
-| #158 | --     | direct     | 03-19 | Agent name display fixes        |
-| #161 | --     | direct     | 03-19 | Prefix CLI logs w/ name         |
-| #163 | #160   | worker-dev | 03-19 | Synthesizer retry on fail       |
-| #168 | #167   | cli-dev    | 03-19 | Stdin-based agent commands      |
-| #169 | #166   | cli-dev    | 03-19 | Router mode stdin/stdout        |
-| #171 | --     | direct     | 03-19 | Plain text router + guide       |
-| #172 | --     | direct     | 03-20 | Stateless REST polling          |
-| #186 | #175   | server-dev | 03-20 | Claim slot freeing              |
-| #187 | #176   | cli-dev    | 03-20 | CLI retry + error recovery      |
-| #188 | #173   | server-dev | 03-20 | KV hardening                    |
-| #189 | #174   | server-dev | 03-20 | GitHub API retry                |
-| #190 | #182   | server-dev | 03-20 | Webhook idempotency             |
-| #191 | #185   | server-dev | 03-20 | Role validation on results      |
-| #192 | #177   | cli-dev    | 03-20 | Model/tool info in claims       |
-| #193 | #178   | cli-dev    | 03-20 | RouterRelay error handling      |
-| #194 | #184   | server-dev | 03-20 | Optimize timeouts + app         |
-| #195 | #165   | cli-dev    | 03-20 | review_only config              |
-| #196 | --     | direct     | 03-20 | E2E test suite                  |
-| #197 | #164   | server-dev | 03-20 | Structured error logging        |
-| #198 | --     | direct     | 03-20 | CLI E2E test suite              |
-| #199 | #179   | server-dev | 03-20 | Review-parser robustness        |
-| #200 | #180   | cli-dev    | 03-20 | Dead code cleanup               |
-| #202 | #201   | qa         | 03-20 | Verdict case fix (qa)           |
-| #203 | #201   | server-dev | 03-20 | Verdict case fix (server)       |
-| #204 | --     | direct     | 03-20 | github_token for private repos  |
-| #205 | --     | direct     | 03-21 | --all flag for agent start      |
-| #206 | #130   | direct     | 03-21 | Clickable PR links in logs      |
-| #207 | #156   | architect  | 03-21 | CI/CD auto-deploy dev worker    |
-| #208 | --     | cli-dev    | 03-21 | Agent name prefix in CLI logs   |
-| #209 | --     | cli-dev    | 03-21 | Startup dry-run test command    |
-| #214 | #213   | server-dev | 03-21 | Whitelist/blacklist enforcement |
-| #215 | #212   | cli-dev    | 03-21 | Unified GitHub auth fallback    |
-| #218 | #217   | server-dev | 03-21 | Switch to issue comments        |
-| #219 | #210   | cli-dev    | 03-21 | Codebase clone for review       |
-| #220 | #210   | cli-dev    | 03-21 | cwd instead of CODEBASE_DIR     |
-| #222 | #221   | server-dev | 03-21 | Fix duplicate summary claims    |
-| #223 | #211   | cli-dev    | 03-21 | Dockerfile + docker-compose     |
-| #224 | #216   | server-dev | 03-21 | Preferred synthesizer config    |
-| #226 | #225   | cli-dev    | 03-21 | Fix Docker build: copy tsconfig |
-| #243 | #228   | server-dev | 03-22 | .review.yml config security     |
-| #244 | #230   | server-dev | 03-22 | Whitelist user enforcement      |
-| #246 | #231   | server-dev | 03-22 | Repo filter enforcement         |
-| #247 | #229   | server-dev | 03-22 | KV race conditions fix          |
-| #249 | #235   | cli-dev    | 03-22 | AbortSignal in fetchDiff        |
-| #250 | #233   | cli-dev    | 03-22 | Retry jitter                    |
-| #251 | #236   | cli-dev    | 03-22 | api_key passed to ApiClient     |
-| #252 | #237   | cli-dev    | 03-22 | Consumption limits enforcement  |
-| #253 | #245   | cli-dev    | 03-22 | Auto-shutdown on errors         |
-| #255 | #238   | cli-dev    | 03-22 | Token sanitization complete     |
-| #258 | #254   | server-dev | 03-22 | KV read-after-write fix         |
-| #260 | #232   | server-dev | 03-22 | Persist timeout in KV + cron    |
-| #261 | #257   | cli-dev    | 03-22 | Test coverage to 97%            |
-| #263 | #234   | server-dev | 03-22 | Rate limiting                   |
-| #264 | #256   | server-dev | 03-22 | Task ID codebase isolation      |
-| #266 | #265   | cli-dev    | 03-22 | Fix test regression             |
-| #267 | #240   | server-dev | 03-22 | Remove dead config fields       |
-| #268 | #239   | server-dev | 03-22 | Health + metrics endpoints      |
-| #270 | #269   | cli-dev    | 03-22 | Env var override                |
-| #274 | #273   | server-dev | 03-22 | Duplicate summary fix           |
-| #275 | #273   | server-dev | 03-22 | Race condition tests            |
-| #279 | #277,8 | cli-dev    | 03-22 | Log command + PR URL            |
-| #281 | #280   | cli-dev    | 03-22 | Repo-scoped cwd                 |
-| #292 | #282   | server-dev | 03-22 | Private repo task isolation     |
-| #293 | #291   | cli-dev    | 03-22 | PR metadata in review           |
-| #294 | #284   | cli-dev    | 03-22 | Config validation               |
-| #295 | #283   | server-dev | 03-22 | Structured error responses      |
-| #296 | #288   | cli-dev    | 03-22 | npm publish readiness           |
-| #297 | #285   | server-dev | 03-22 | Task TTL + cleanup              |
-| #298 | #289   | server-dev | 03-22 | Structured logging              |
-| #299 | #290   | server-dev | 03-22 | E2E integration tests           |
-| #300 | #286   | cli-dev    | 03-22 | CLI UX improvements             |
-| #306 | #302   | cli-dev    | 03-22 | Log file support                |
-| #310 | #307   | architect  | 03-22 | DataStore interface             |
-| #311 | #308   | server-dev | 03-22 | DataStore server integration    |
-| #312 | #309   | architect  | 03-22 | D1DataStore + migration         |
-| #314 | #308   | server-dev | 03-22 | D1DataStore wiring fix          |
-| #320 | #318   | direct     | 03-23 | Fix test suite hanging          |
-| #322 | --     | direct     | 03-23 | CI baseline test                |
-| #324 | --     | direct     | 03-23 | mode:all private repo fix       |
-| #317 | --     | architect  | 03-23 | VPS self-hosting support        |
-| #319 | #316   | cli-dev    | 03-23 | Fix abort listener leak         |
-| #329 | #326   | architect  | 03-23 | GitHub identity API types       |
-| #334 | #331   | server-dev | 03-23 | Queue-based task claim flow     |
-| #335 | #333   | server-dev | 03-23 | GitHubService interface extract |
-| #337 | #327   | server-dev | 03-23 | GitHub identity in eligibility  |
-| #338 | #328   | cli-dev    | 03-23 | Synthesizer config + identity   |
-| #339 | #336   | cli-dev    | 03-23 | Fix tsc --build CLI dist        |
-| #340 | #332   | server-dev | 03-23 | Timeout review consolidation    |
-| #342 | --     | direct     | 03-23 | Inject prod KV namespace in CI  |
-| #358 | #350   | cli-dev    | 03-23 | SIGKILL escalation on timeout   |
+| PR   | Issue  | Agent      | Date  | Description                      |
+| ---- | ------ | ---------- | ----- | -------------------------------- |
+| #2   | #1     | architect  | 03-16 | M0 Monorepo setup                |
+| #6   | #5     | worker-dev | 03-16 | M2 DB schema + auth              |
+| #7   | #4     | worker-dev | 03-16 | M1 Webhook endpoint              |
+| #10  | #8     | cli-dev    | 03-16 | M3 CLI connect                   |
+| #12  | #9     | worker-dev | 03-16 | M4 Durable Objects               |
+| #15  | #11    | architect  | 03-16 | Test coverage 100%               |
+| #16  | #14    | cli-dev    | 03-16 | M5 CLI review engine             |
+| #17  | #13    | worker-dev | 03-16 | M5 Worker review posting         |
+| #21  | #18    | architect  | 03-16 | Fix typecheck/format             |
+| #22  | #20    | cli-dev    | 03-16 | M6 CLI summary engine            |
+| #23  | #19    | worker-dev | 03-16 | M6 Multi-agent dispatch          |
+| #28  | #26    | worker-dev | 03-16 | M9 Consumption API               |
+| #29  | #25    | worker-dev | 03-16 | M7 Reputation system             |
+| #30  | #27    | cli-dev    | 03-16 | M9 CLI stats                     |
+| #36  | #33    | worker-dev | 03-16 | M8 OAuth callback                |
+| #37  | #31,32 | web-dev    | 03-16 | M8 Landing + leaderboard         |
+| #39  | #34    | web-dev    | 03-16 | M8 Dashboard                     |
+| #42  | #40    | architect  | 03-16 | Deployment guide                 |
+| #44  | #41    | web-dev    | 03-16 | Dashboard fixes                  |
+| #45  | #43    | worker-dev | 03-16 | CORS + security                  |
+| #49  | #47    | cli-dev    | 03-16 | Local tools refactor             |
+| #50  | #48    | worker-dev | 03-16 | Pending task pickup              |
+| #52  | #51    | worker-dev | 03-16 | WS auth disconnect fix           |
+| #54  | #53    | worker-dev | 03-16 | WS reconnect loop fix            |
+| #56  | #55    | worker-dev | 03-16 | WS re-entrance fix               |
+| #59  | #57,46 | worker-dev | 03-17 | E2E review loop fix              |
+| #60  | #58    | architect  | 03-17 | pnpm migration                   |
+| #68  | #61,62 | cli-dev    | 03-17 | WS diagnostics + tool fix        |
+| #74  | #69    | architect  | 03-17 | Trust tier types                 |
+| #75  | #70,35 | worker-dev | 03-17 | Project stats API                |
+| #76  | #63    | cli-dev    | 03-17 | Tool command templates           |
+| #77  | #71    | web-dev    | 03-17 | Web community page               |
+| #78  | #72    | cli-dev    | 03-17 | Stats enrichment                 |
+| #79  | #73    | cli-dev    | 03-17 | Stability threshold              |
+| #89  | #86    | cli-dev    | 03-17 | Local-config agents              |
+| #91  | --     | direct     | 03-17 | Rebrand to OpenCara              |
+| #92  | --     | direct     | 03-17 | Post-rebrand fixes               |
+| #93  | #82,83 | direct     | 03-17 | PR Review API                    |
+| #94  | #87    | direct     | 03-17 | Token counting fix               |
+| #97  | #95,96 | direct     | 03-17 | Inline PR review comments        |
+| #103 | #99    | direct     | 03-17 | Trigger control                  |
+| #104 | #84    | direct     | 03-17 | preferred_models                 |
+| #105 | #102   | direct     | 03-17 | WebSocket ping frames            |
+| #106 | #101   | direct     | 03-17 | Contributor profiles             |
+| #107 | #100   | direct     | 03-17 | Drop diff_content storage        |
+| #108 | #88    | direct     | 03-17 | Timeout comment + retry          |
+| #109 | #85    | direct     | 03-17 | --all agent start                |
+| #110 | --     | direct     | 03-18 | E2E tests + synthesizer          |
+| #116 | #113   | architect  | 03-18 | Repo config types                |
+| #117 | #111   | worker-dev | 03-18 | Load balancing                   |
+| #118 | #114   | worker-dev | 03-18 | Repo filtering                   |
+| #119 | #115   | cli-dev    | 03-18 | Repo config CLI                  |
+| #122 | #121   | architect  | 03-18 | Schema simplification            |
+| #127 | #124   | architect  | 03-18 | Anonymous agent types            |
+| #128 | #125   | worker-dev | 03-18 | Anonymous registration           |
+| #134 | #126   | cli-dev    | 03-18 | Anonymous CLI support            |
+| #137 | #136   | worker-dev | 03-18 | Synthesizer inline comments      |
+| #138 | #132   | architect  | 03-18 | npm publish CI                   |
+| #139 | #135   | worker-dev | 03-18 | Agent details in reviews         |
+| #140 | --     | direct     | 03-18 | OIDC npm publishing              |
+| #141 | --     | direct     | 03-18 | Test publish pipeline            |
+| #142 | --     | direct     | 03-18 | npm publish with token           |
+| #143 | --     | direct     | 03-18 | Test OIDC publishing             |
+| #149 | #145   | architect  | 03-18 | Agent displayName types          |
+| #150 | #131   | worker-dev | 03-18 | Default model reputation         |
+| #151 | #147   | cli-dev    | 03-18 | Parse custom agent names         |
+| #152 | #146   | worker-dev | 03-18 | Persist agent names              |
+| #153 | --     | direct     | 03-18 | Fix tsc/tsup build conflict      |
+| #158 | --     | direct     | 03-19 | Agent name display fixes         |
+| #161 | --     | direct     | 03-19 | Prefix CLI logs w/ name          |
+| #163 | #160   | worker-dev | 03-19 | Synthesizer retry on fail        |
+| #168 | #167   | cli-dev    | 03-19 | Stdin-based agent commands       |
+| #169 | #166   | cli-dev    | 03-19 | Router mode stdin/stdout         |
+| #171 | --     | direct     | 03-19 | Plain text router + guide        |
+| #172 | --     | direct     | 03-20 | Stateless REST polling           |
+| #186 | #175   | server-dev | 03-20 | Claim slot freeing               |
+| #187 | #176   | cli-dev    | 03-20 | CLI retry + error recovery       |
+| #188 | #173   | server-dev | 03-20 | KV hardening                     |
+| #189 | #174   | server-dev | 03-20 | GitHub API retry                 |
+| #190 | #182   | server-dev | 03-20 | Webhook idempotency              |
+| #191 | #185   | server-dev | 03-20 | Role validation on results       |
+| #192 | #177   | cli-dev    | 03-20 | Model/tool info in claims        |
+| #193 | #178   | cli-dev    | 03-20 | RouterRelay error handling       |
+| #194 | #184   | server-dev | 03-20 | Optimize timeouts + app          |
+| #195 | #165   | cli-dev    | 03-20 | review_only config               |
+| #196 | --     | direct     | 03-20 | E2E test suite                   |
+| #197 | #164   | server-dev | 03-20 | Structured error logging         |
+| #198 | --     | direct     | 03-20 | CLI E2E test suite               |
+| #199 | #179   | server-dev | 03-20 | Review-parser robustness         |
+| #200 | #180   | cli-dev    | 03-20 | Dead code cleanup                |
+| #202 | #201   | qa         | 03-20 | Verdict case fix (qa)            |
+| #203 | #201   | server-dev | 03-20 | Verdict case fix (server)        |
+| #204 | --     | direct     | 03-20 | github_token for private repos   |
+| #205 | --     | direct     | 03-21 | --all flag for agent start       |
+| #206 | #130   | direct     | 03-21 | Clickable PR links in logs       |
+| #207 | #156   | architect  | 03-21 | CI/CD auto-deploy dev worker     |
+| #208 | --     | cli-dev    | 03-21 | Agent name prefix in CLI logs    |
+| #209 | --     | cli-dev    | 03-21 | Startup dry-run test command     |
+| #214 | #213   | server-dev | 03-21 | Whitelist/blacklist enforcement  |
+| #215 | #212   | cli-dev    | 03-21 | Unified GitHub auth fallback     |
+| #218 | #217   | server-dev | 03-21 | Switch to issue comments         |
+| #219 | #210   | cli-dev    | 03-21 | Codebase clone for review        |
+| #220 | #210   | cli-dev    | 03-21 | cwd instead of CODEBASE_DIR      |
+| #222 | #221   | server-dev | 03-21 | Fix duplicate summary claims     |
+| #223 | #211   | cli-dev    | 03-21 | Dockerfile + docker-compose      |
+| #224 | #216   | server-dev | 03-21 | Preferred synthesizer config     |
+| #226 | #225   | cli-dev    | 03-21 | Fix Docker build: copy tsconfig  |
+| #243 | #228   | server-dev | 03-22 | .review.yml config security      |
+| #244 | #230   | server-dev | 03-22 | Whitelist user enforcement       |
+| #246 | #231   | server-dev | 03-22 | Repo filter enforcement          |
+| #247 | #229   | server-dev | 03-22 | KV race conditions fix           |
+| #249 | #235   | cli-dev    | 03-22 | AbortSignal in fetchDiff         |
+| #250 | #233   | cli-dev    | 03-22 | Retry jitter                     |
+| #251 | #236   | cli-dev    | 03-22 | api_key passed to ApiClient      |
+| #252 | #237   | cli-dev    | 03-22 | Consumption limits enforcement   |
+| #253 | #245   | cli-dev    | 03-22 | Auto-shutdown on errors          |
+| #255 | #238   | cli-dev    | 03-22 | Token sanitization complete      |
+| #258 | #254   | server-dev | 03-22 | KV read-after-write fix          |
+| #260 | #232   | server-dev | 03-22 | Persist timeout in KV + cron     |
+| #261 | #257   | cli-dev    | 03-22 | Test coverage to 97%             |
+| #263 | #234   | server-dev | 03-22 | Rate limiting                    |
+| #264 | #256   | server-dev | 03-22 | Task ID codebase isolation       |
+| #266 | #265   | cli-dev    | 03-22 | Fix test regression              |
+| #267 | #240   | server-dev | 03-22 | Remove dead config fields        |
+| #268 | #239   | server-dev | 03-22 | Health + metrics endpoints       |
+| #270 | #269   | cli-dev    | 03-22 | Env var override                 |
+| #274 | #273   | server-dev | 03-22 | Duplicate summary fix            |
+| #275 | #273   | server-dev | 03-22 | Race condition tests             |
+| #279 | #277,8 | cli-dev    | 03-22 | Log command + PR URL             |
+| #281 | #280   | cli-dev    | 03-22 | Repo-scoped cwd                  |
+| #292 | #282   | server-dev | 03-22 | Private repo task isolation      |
+| #293 | #291   | cli-dev    | 03-22 | PR metadata in review            |
+| #294 | #284   | cli-dev    | 03-22 | Config validation                |
+| #295 | #283   | server-dev | 03-22 | Structured error responses       |
+| #296 | #288   | cli-dev    | 03-22 | npm publish readiness            |
+| #297 | #285   | server-dev | 03-22 | Task TTL + cleanup               |
+| #298 | #289   | server-dev | 03-22 | Structured logging               |
+| #299 | #290   | server-dev | 03-22 | E2E integration tests            |
+| #300 | #286   | cli-dev    | 03-22 | CLI UX improvements              |
+| #306 | #302   | cli-dev    | 03-22 | Log file support                 |
+| #310 | #307   | architect  | 03-22 | DataStore interface              |
+| #311 | #308   | server-dev | 03-22 | DataStore server integration     |
+| #312 | #309   | architect  | 03-22 | D1DataStore + migration          |
+| #314 | #308   | server-dev | 03-22 | D1DataStore wiring fix           |
+| #320 | #318   | direct     | 03-23 | Fix test suite hanging           |
+| #322 | --     | direct     | 03-23 | CI baseline test                 |
+| #324 | --     | direct     | 03-23 | mode:all private repo fix        |
+| #317 | --     | architect  | 03-23 | VPS self-hosting support         |
+| #319 | #316   | cli-dev    | 03-23 | Fix abort listener leak          |
+| #329 | #326   | architect  | 03-23 | GitHub identity API types        |
+| #334 | #331   | server-dev | 03-23 | Queue-based task claim flow      |
+| #335 | #333   | server-dev | 03-23 | GitHubService interface extract  |
+| #337 | #327   | server-dev | 03-23 | GitHub identity in eligibility   |
+| #338 | #328   | cli-dev    | 03-23 | Synthesizer config + identity    |
+| #339 | #336   | cli-dev    | 03-23 | Fix tsc --build CLI dist         |
+| #340 | #332   | server-dev | 03-23 | Timeout review consolidation     |
+| #342 | --     | direct     | 03-23 | Inject prod KV namespace in CI   |
+| #358 | #350   | cli-dev    | 03-23 | SIGKILL escalation on timeout    |
 | #359 | #346   | server-dev | 03-23 | Enforce allow_anonymous: false   |
-| #360 | #357   | server-dev | 03-23 | Remove KVDataStore + KV fallback|
-| #361 | #352   | server-dev | 03-23 | Composite DB index for dedup    |
-| #362 | #355   | server-dev | 03-23 | Enforce preferred_models/tools  |
-| #363 | #345   | server-dev | 03-23 | Atomic review-slot counting     |
-| #364 | #343   | server-dev | 03-23 | API key authentication          |
-| #365 | #356   | server-dev | 03-23 | Delete task after review posted |
-| #366 | #344   | server-dev | 03-23 | Zod request validation          |
-| #369 | #367   | server-dev | 03-23 | Fix CLAIM_CONFLICT poll filter  |
-| #371 | #370   | server-dev | 03-23 | Fix late review queue overwrite |
-| #374 | #368   | cli-dev    | 03-24 | Contributor profile link        |
-| #375 | #351   | cli-dev    | 03-24 | Streaming diff size guard       |
-| #376 | #373   | cli-dev    | 03-24 | Usage limits + token tracking   |
-| #379 | #378   | server-dev | 03-24 | Remove server-side formatting   |
+| #360 | #357   | server-dev | 03-23 | Remove KVDataStore + KV fallback |
+| #361 | #352   | server-dev | 03-23 | Composite DB index for dedup     |
+| #362 | #355   | server-dev | 03-23 | Enforce preferred_models/tools   |
+| #363 | #345   | server-dev | 03-23 | Atomic review-slot counting      |
+| #364 | #343   | server-dev | 03-23 | API key authentication           |
+| #365 | #356   | server-dev | 03-23 | Delete task after review posted  |
+| #366 | #344   | server-dev | 03-23 | Zod request validation           |
+| #369 | #367   | server-dev | 03-23 | Fix CLAIM_CONFLICT poll filter   |
+| #371 | #370   | server-dev | 03-23 | Fix late review queue overwrite  |
+| #374 | #368   | cli-dev    | 03-24 | Contributor profile link         |
+| #375 | #351   | cli-dev    | 03-24 | Streaming diff size guard        |
+| #376 | #373   | cli-dev    | 03-24 | Usage limits + token tracking    |
+| #379 | #378   | server-dev | 03-24 | Remove server-side formatting    |

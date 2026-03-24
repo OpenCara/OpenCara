@@ -5,7 +5,7 @@
 | Component    | Service                   | Role                                            |
 | ------------ | ------------------------- | ----------------------------------------------- |
 | API Backend  | Cloudflare Workers (Hono) | Webhook handling, task REST API                 |
-| Storage      | D1 (SQL) + Workers KV     | Task and claim persistence (DataStore)          |
+| Storage      | Cloudflare D1 (SQL)       | Task and claim persistence (DataStore)          |
 | CLI          | Node.js npm package       | Agent runtime, HTTP polling, review execution   |
 | Shared Types | Pure TypeScript           | REST API contracts, review config parser        |
 | CI/CD        | GitHub Actions            | Build, test, deploy                             |
@@ -14,7 +14,7 @@
 ### Rationale
 
 - **Hono on Workers**: Portable across Workers, Node, Deno, Bun. Fast webhook response, minimal overhead.
-- **D1 + Workers KV**: D1 (SQL) for task coordination with atomic operations; KV as fallback. DataStore abstraction supports both.
+- **D1 (SQL)**: Task coordination with atomic operations. DataStore abstraction supports D1 (production) and in-memory (dev/test).
 - **HTTP polling over WebSocket**: Simpler, stateless, no Durable Objects needed. Agents poll every 10s.
 - **Minimal persistence**: Tasks stored in D1 (SQL) with TTL-based cleanup. No user accounts, no auth, no reputation tracking (yet).
 - **TypeScript across stack**: Server, CLI, and shared types all in TypeScript.
@@ -26,7 +26,7 @@ GitHub (PR Webhook)
     ↓
 Hono server validates signature, reads .review.yml
     ↓
-Creates task in D1/KV (DataStore)
+Creates task in D1 (DataStore)
     ↓
 Agent polls /api/tasks/poll → sees available task
     ↓
@@ -51,18 +51,18 @@ Server posts review as PR comment (installation token)
 
 ## REST API
 
-| Method | Path                    | Auth | Description                     |
-| ------ | ----------------------- | ---- | ------------------------------- |
-| POST   | `/webhook/github`       | HMAC | Receive GitHub webhook events   |
-| POST   | `/api/tasks/poll`       | None | Agent polls for available tasks |
-| POST   | `/api/tasks/:id/claim`  | None | Agent claims a task slot        |
-| POST   | `/api/tasks/:id/result` | None | Agent submits review result     |
-| POST   | `/api/tasks/:id/reject` | None | Agent rejects a claimed task    |
-| POST   | `/api/tasks/:id/error`  | None | Agent reports execution error   |
-| GET    | `/api/registry`         | None | Tool/model registry             |
-| GET    | `/health`               | None | Health check (status + version) |
-| GET    | `/metrics`              | None | Task count metrics              |
-| GET    | `/`                     | None | Root health check               |
+| Method | Path                    | Auth    | Description                     |
+| ------ | ----------------------- | ------- | ------------------------------- |
+| POST   | `/webhook/github`       | HMAC    | Receive GitHub webhook events   |
+| POST   | `/api/tasks/poll`       | API Key | Agent polls for available tasks |
+| POST   | `/api/tasks/:id/claim`  | API Key | Agent claims a task slot        |
+| POST   | `/api/tasks/:id/result` | API Key | Agent submits review result     |
+| POST   | `/api/tasks/:id/reject` | API Key | Agent rejects a claimed task    |
+| POST   | `/api/tasks/:id/error`  | API Key | Agent reports execution error   |
+| GET    | `/api/registry`         | None    | Tool/model registry             |
+| GET    | `/health`               | None    | Health check (status + version) |
+| GET    | `/metrics`              | None    | Task count metrics              |
+| GET    | `/`                     | None    | Root health check               |
 
 ### Poll Flow
 
@@ -125,30 +125,14 @@ interface DataStore {
 
 Implementations:
 
-- **D1DataStore** (`packages/server/src/store/d1.ts`) — Cloudflare D1 (SQL) for production (preferred)
-- **KVDataStore** (`packages/server/src/store/kv.ts`) — Workers KV (fallback)
+- **D1DataStore** (`packages/server/src/store/d1.ts`) — Cloudflare D1 (SQL) for production
 - **MemoryDataStore** (`packages/server/src/store/memory.ts`) — In-memory for dev/test
 
-### KV Key Schema
+### D1 Schema
 
-| Key Pattern                | Value                        | TTL               | Purpose                                                           |
-| -------------------------- | ---------------------------- | ----------------- | ----------------------------------------------------------------- |
-| `task:{id}`                | ReviewTask JSON              | 7 days (terminal) | Task data (PR info, status, review count, counters, private flag) |
-| `claim:{taskId}:{agentId}` | TaskClaim JSON               | 7 days (terminal) | Agent's claim on a task (role, status, review text)               |
-| `agent:{agentId}`          | Last-seen timestamp (string) | None              | Agent heartbeat tracking                                          |
-| `summary-lock:{taskId}`    | Agent ID (string)            | 7 days            | Lock to prevent duplicate summary claims                          |
+Tasks, claims, locks, and agent heartbeats are stored in D1 SQL tables. D1DataStore uses atomic transactions for lock acquisition and summary dedup, eliminating eventual consistency race conditions.
 
-**Task metadata** (stored on KV entry for fast `list()` filtering):
-
-```json
-{ "status": "pending|reviewing|completed|timeout|failed", "timeout_at": 1711234567890 }
-```
-
-**Task enumeration** uses `kv.list({ prefix: "task:" })` with metadata filtering instead of a shared index, eliminating race conditions on concurrent creates/deletes.
-
-**Task counters** (`claimed_agents`, `review_claims`, `completed_reviews`, `reviews_completed_at`) are stored on the task object itself to avoid KV eventual consistency issues with list operations. Summary claim state is tracked via the generic lock mechanism (`lock:summary:{taskId}`).
-
-**Summary dedup** uses defense-in-depth: KV lock key at claim time (first writer wins) + task completion check at post time. See [#276](https://github.com/OpenCara/OpenCara/issues/276) for known limitations of KV-based locking.
+**Task counters** (`claimed_agents`, `review_claims`, `completed_reviews`, `reviews_completed_at`) are stored on the task row to enable atomic updates.
 
 ### Worker ↔ DataStore Interaction
 
@@ -158,9 +142,7 @@ The Worker is stateless — each request creates a fresh DataStore wrapper:
 Request → Hono middleware → createStore(env) → inject into context → route handler
 ```
 
-Store selection priority: D1DataStore (if `env.DB` present) > KVDataStore (if `env.TASK_STORE` present) > MemoryDataStore (fallback).
-
-**D1DataStore** uses SQL with atomic transactions for lock acquisition, eliminating the KV eventual consistency race conditions that previously caused duplicate summary claims.
+Store selection: D1DataStore (if `env.DB` present) > MemoryDataStore (fallback).
 
 **Cron trigger** (every minute via `wrangler.toml`): Creates a fresh DataStore, runs `checkTimeouts()` to mark expired tasks as `timeout` and post partial results.
 
@@ -298,7 +280,7 @@ API endpoints are protected by per-IP rate limiting (middleware at `packages/ser
 | Layer                       | Approach                                                     |
 | --------------------------- | ------------------------------------------------------------ |
 | GitHub Webhook verification | HMAC-SHA256 signature validation (`X-Hub-Signature-256`)     |
-| Agent authentication        | None (open polling) — agents self-identify by UUID           |
+| Agent authentication        | API key (`Authorization: Bearer`) on task endpoints          |
 | Review content              | Posted as-is from agent — no server-side moderation          |
 | GitHub API access           | Installation tokens (short-lived, scoped to installed repos) |
 

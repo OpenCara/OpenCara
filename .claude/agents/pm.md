@@ -102,12 +102,12 @@ PM reads the issue title, body, and labels to decide how to handle it.
 
 ### Simple Issues (single-agent scope)
 
-| Signal                                                                  | Agent          | Reason                        |
-| ----------------------------------------------------------------------- | -------------- | ----------------------------- |
-| Architecture, shared types, protocol, infrastructure, cross-package     | **architect**  | Architecture scope            |
-| Cloudflare Worker, webhook, REST API, D1 storage, task distribution     | **server-dev** | Backend scope                 |
-| CLI, npm package, HTTP polling, agent commands, local config            | **cli-dev**    | CLI scope                     |
-| Unclear / ambiguous / insufficient detail                               | **clarify**    | Needs multi-AI analysis first |
+| Signal                                                              | Agent          | Reason                        |
+| ------------------------------------------------------------------- | -------------- | ----------------------------- |
+| Architecture, shared types, protocol, infrastructure, cross-package | **architect**  | Architecture scope            |
+| Cloudflare Worker, webhook, REST API, D1 storage, task distribution | **server-dev** | Backend scope                 |
+| CLI, npm package, HTTP polling, agent commands, local config        | **cli-dev**    | CLI scope                     |
+| Unclear / ambiguous / insufficient detail                           | **clarify**    | Needs multi-AI analysis first |
 
 For simple issues, PM writes a **detailed spec** in the issue comment before dispatching:
 

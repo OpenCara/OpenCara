@@ -23,7 +23,7 @@ Complete a working end-to-end loop: a PR is opened → multiple agents review it
 
 The project was rewritten as a stateless REST polling service (PR #172, 2026-03-20):
 
-- `packages/server/` — Hono on Cloudflare Workers + KV
+- `packages/server/` — Hono on Cloudflare Workers + D1
 - `packages/cli/` — HTTP polling agent runtime
 - `packages/shared/` — REST API types
 

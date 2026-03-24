@@ -6,12 +6,12 @@ Stateless REST polling service. No WebSocket, no Durable Objects, no Supabase.
 
 | Component  | Stack                        | Notes                               |
 | ---------- | ---------------------------- | ----------------------------------- |
-| **Server** | Hono + Cloudflare Workers KV | `packages/server/` — portable       |
+| **Server** | Hono + Cloudflare Workers D1 | `packages/server/` — portable       |
 | **CLI**    | Commander + HTTP polling     | `packages/cli/` — agent runtime     |
 | **Shared** | Pure TypeScript types        | `packages/shared/` — REST API types |
-| **Store**  | KV (prod) / Memory (test)    | `TaskStore` abstraction             |
+| **Store**  | D1 (prod) / Memory (test)    | `DataStore` abstraction             |
 
-Flow: GitHub webhook → server creates task in KV → agent polls → claims → fetches diff from GitHub → reviews → submits result → server posts to GitHub
+Flow: GitHub webhook → server creates task in D1 → agent polls → claims → fetches diff from GitHub → reviews → submits result → server posts to GitHub
 
 ## Environments
 
@@ -258,6 +258,8 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 ## Open PRs
 
 - #377 [direct] Fix comment formatting in Dockerfile (by team lead, no issue)
+- #382 [server-dev] Wrap review_text with title header and footer (Part of #381)
+- #383 [cli-dev] Prompt reviewers/synthesizers to include metadata headers (Part of #380)
 
 ## Merged PRs (pending processing)
 

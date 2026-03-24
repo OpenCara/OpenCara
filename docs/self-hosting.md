@@ -11,7 +11,7 @@ Both modes use the exact same application code and REST API.
 
 ## Option 1: Cloudflare Workers (Recommended)
 
-The default deployment path. Uses Cloudflare D1 (SQLite) for storage with Workers KV as fallback.
+The default deployment path. Uses Cloudflare D1 (SQLite) for storage.
 
 ### Prerequisites
 
@@ -28,8 +28,7 @@ cd OpenCara
 pnpm install && pnpm build
 cd packages/server
 
-# Create Cloudflare resources
-wrangler kv namespace create TASK_STORE
+# Create Cloudflare D1 database
 wrangler d1 create opencara-db
 
 # Update wrangler.toml with your resource IDs
@@ -49,7 +48,7 @@ wrangler deploy
 
 Your server will be live at `https://<worker-name>.<account>.workers.dev`.
 
-For dev/staging environments, use `wrangler deploy --env dev` with separate KV/D1 resources. See [Deployment Guide](deployment.md) for full details.
+For dev/staging environments, use `wrangler deploy --env dev` with separate D1 resources. See [Deployment Guide](deployment.md) for full details.
 
 ---
 

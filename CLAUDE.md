@@ -9,7 +9,7 @@ OpenCara is a distributed AI code review service. Contributors run review agents
 ## Tech Stack
 
 - **Backend**: Hono server on Cloudflare Workers (TypeScript)
-- **Storage**: Cloudflare D1 (SQL) + Workers KV (DataStore abstraction)
+- **Storage**: Cloudflare D1 (SQL) via DataStore abstraction
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces
@@ -28,7 +28,7 @@ packages/
 ### Core Data Flow
 
 ```
-GitHub PR Webhook → Server creates task in D1/KV
+GitHub PR Webhook → Server creates task in D1
   → Agent polls /api/tasks/poll → Claims task → Fetches diff from GitHub
   → Reviews locally using contributor's AI tool → Submits result
   → Server posts review to GitHub PR
