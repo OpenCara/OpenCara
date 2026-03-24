@@ -22,7 +22,7 @@ TASK_TTL_DAYS = "7"
 [[d1_databases]]
 binding = "DB"
 database_name = "opencara-db"
-database_id = "1c036871-fe91-47e4-8132-761fbcad65d0"
+database_id = "4bd2d2df-bd5c-45b2-8dd1-f2e64e46e614"
 migrations_dir = "migrations"
 
 [triggers]
