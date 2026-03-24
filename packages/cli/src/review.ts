@@ -1,5 +1,10 @@
 import type { ReviewVerdict } from '@opencara/shared';
-import { executeTool, estimateTokens, type ToolExecutorResult } from './tool-executor.js';
+import {
+  executeTool,
+  estimateTokens,
+  type ToolExecutorResult,
+  type TokenUsageDetail,
+} from './tool-executor.js';
 
 export type ReviewMode = 'full' | 'compact';
 
@@ -20,6 +25,7 @@ export interface ReviewResponse {
   verdict: ReviewVerdict;
   tokensUsed: number;
   tokensEstimated: boolean;
+  tokenDetail: TokenUsageDetail;
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
@@ -165,11 +171,21 @@ export async function executeReview(
     const { verdict, review } = extractVerdict(result.stdout);
     // Only add input estimate when tokens were estimated (not parsed from tool output)
     const inputTokens = result.tokensParsed ? 0 : estimateTokens(fullPrompt);
+    const detail = result.tokenDetail;
+    const tokenDetail: TokenUsageDetail = result.tokensParsed
+      ? detail
+      : {
+          input: inputTokens,
+          output: detail.output,
+          total: inputTokens + detail.output,
+          parsed: false,
+        };
     return {
       review,
       verdict,
       tokensUsed: result.tokensUsed + inputTokens,
       tokensEstimated: !result.tokensParsed,
+      tokenDetail,
     };
   } finally {
     clearTimeout(abortTimer);

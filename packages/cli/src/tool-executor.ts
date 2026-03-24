@@ -2,6 +2,13 @@ import { spawn, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+export interface TokenUsageDetail {
+  input: number;
+  output: number;
+  total: number;
+  parsed: boolean;
+}
+
 export interface ToolExecutorResult {
   stdout: string;
   stderr: string;
@@ -9,6 +16,8 @@ export interface ToolExecutorResult {
   /** True if tokensUsed was parsed from tool output (includes input+output).
    *  False if estimated from output text only (callers should add input estimate). */
   tokensParsed: boolean;
+  /** Detailed token breakdown when available. */
+  tokenDetail: TokenUsageDetail;
 }
 
 export class ToolTimeoutError extends Error {
@@ -130,37 +139,58 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function parseClaudeTokens(text: string): number | null {
+function parseClaudeTokens(text: string): { input: number; output: number } | null {
   const inputMatch = text.match(/"input_tokens"\s*:\s*(\d+)/);
   const outputMatch = text.match(/"output_tokens"\s*:\s*(\d+)/);
   if (inputMatch && outputMatch) {
-    return parseInt(inputMatch[1], 10) + parseInt(outputMatch[1], 10);
+    return {
+      input: parseInt(inputMatch[1], 10),
+      output: parseInt(outputMatch[1], 10),
+    };
   }
   return null;
+}
+
+export interface ParsedTokenUsage {
+  tokens: number;
+  parsed: boolean;
+  input: number;
+  output: number;
 }
 
 /**
  * Parse token usage from tool output. Tries tool-specific patterns first,
  * then falls back to character-based estimation.
  */
-export function parseTokenUsage(
-  stdout: string,
-  stderr: string,
-): { tokens: number; parsed: boolean } {
+export function parseTokenUsage(stdout: string, stderr: string): ParsedTokenUsage {
   // Codex: "tokens used 1,801" or "tokens used\n1,801" in stdout footer
   const codexMatch = stdout.match(/tokens\s+used[\s:]*([0-9,]+)/i);
-  if (codexMatch) return { tokens: parseInt(codexMatch[1].replace(/,/g, ''), 10), parsed: true };
+  if (codexMatch) {
+    const total = parseInt(codexMatch[1].replace(/,/g, ''), 10);
+    return { tokens: total, parsed: true, input: 0, output: total };
+  }
 
   // Claude JSON: "input_tokens" and "output_tokens" (order-independent)
-  const claudeTotal = parseClaudeTokens(stdout) ?? parseClaudeTokens(stderr);
-  if (claudeTotal !== null) return { tokens: claudeTotal, parsed: true };
+  const claudeResult = parseClaudeTokens(stdout) ?? parseClaudeTokens(stderr);
+  if (claudeResult !== null) {
+    return {
+      tokens: claudeResult.input + claudeResult.output,
+      parsed: true,
+      input: claudeResult.input,
+      output: claudeResult.output,
+    };
+  }
 
   // Qwen JSON stats: "tokens": {"total": N}
   const qwenMatch = stdout.match(/"tokens"\s*:\s*\{[^}]*"total"\s*:\s*(\d+)/);
-  if (qwenMatch) return { tokens: parseInt(qwenMatch[1], 10), parsed: true };
+  if (qwenMatch) {
+    const total = parseInt(qwenMatch[1], 10);
+    return { tokens: total, parsed: true, input: 0, output: total };
+  }
 
   // Fallback: estimate from output text length
-  return { tokens: estimateTokens(stdout), parsed: false };
+  const estimated = estimateTokens(stdout);
+  return { tokens: estimated, parsed: false, input: 0, output: estimated };
 }
 
 /**
@@ -286,7 +316,18 @@ export function executeTool(
             console.warn(`Tool stderr: ${stderr.slice(0, MAX_STDERR_LENGTH)}`);
           }
           const usage = parseTokenUsage(stdout, stderr);
-          resolve({ stdout, stderr, tokensUsed: usage.tokens, tokensParsed: usage.parsed });
+          resolve({
+            stdout,
+            stderr,
+            tokensUsed: usage.tokens,
+            tokensParsed: usage.parsed,
+            tokenDetail: {
+              input: usage.input,
+              output: usage.output,
+              total: usage.tokens,
+              parsed: usage.parsed,
+            },
+          });
           return;
         }
 
@@ -299,7 +340,18 @@ export function executeTool(
       }
 
       const usage = parseTokenUsage(stdout, stderr);
-      resolve({ stdout, stderr, tokensUsed: usage.tokens, tokensParsed: usage.parsed });
+      resolve({
+        stdout,
+        stderr,
+        tokensUsed: usage.tokens,
+        tokensParsed: usage.parsed,
+        tokenDetail: {
+          input: usage.input,
+          output: usage.output,
+          total: usage.tokens,
+          parsed: usage.parsed,
+        },
+      });
     });
   });
 }

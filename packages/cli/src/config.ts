@@ -19,6 +19,12 @@ export interface LocalAgentConfig {
   repos?: RepoConfig;
 }
 
+export interface UsageLimits {
+  maxReviewsPerDay: number | null;
+  maxTokensPerDay: number | null;
+  maxTokensPerReview: number | null;
+}
+
 export interface CliConfig {
   platformUrl: string;
   apiKey: string | null;
@@ -29,6 +35,7 @@ export interface CliConfig {
   codebaseDir: string | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
+  usageLimits: UsageLimits;
 }
 
 export const DEFAULT_PLATFORM_URL = 'https://api.opencara.dev';
@@ -224,7 +231,25 @@ function validateConfigData(
     overrides.maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS;
   }
 
+  // Validate usage limit fields
+  for (const field of [
+    'max_reviews_per_day',
+    'max_tokens_per_day',
+    'max_tokens_per_review',
+  ] as const) {
+    if (field in data && typeof data[field] === 'number' && (data[field] as number) <= 0) {
+      console.warn(
+        `\u26a0 Config warning: ${field} must be > 0, got ${data[field]}, ignoring (unlimited)`,
+      );
+    }
+  }
+
   return overrides;
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  return null;
 }
 
 export function loadConfig(): CliConfig {
@@ -240,6 +265,11 @@ export function loadConfig(): CliConfig {
     codebaseDir: null,
     agentCommand: null,
     agents: null,
+    usageLimits: {
+      maxReviewsPerDay: null,
+      maxTokensPerDay: null,
+      maxTokensPerReview: null,
+    },
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -275,6 +305,11 @@ export function loadConfig(): CliConfig {
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
+    usageLimits: {
+      maxReviewsPerDay: parsePositiveInt(data.max_reviews_per_day),
+      maxTokensPerDay: parsePositiveInt(data.max_tokens_per_day),
+      maxTokensPerReview: parsePositiveInt(data.max_tokens_per_review),
+    },
   };
 }
 
@@ -306,6 +341,15 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.agents !== null) {
     data.agents = config.agents;
+  }
+  if (config.usageLimits?.maxReviewsPerDay != null) {
+    data.max_reviews_per_day = config.usageLimits.maxReviewsPerDay;
+  }
+  if (config.usageLimits?.maxTokensPerDay != null) {
+    data.max_tokens_per_day = config.usageLimits.maxTokensPerDay;
+  }
+  if (config.usageLimits?.maxTokensPerReview != null) {
+    data.max_tokens_per_review = config.usageLimits.maxTokensPerReview;
   }
   fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
 }

@@ -25,6 +25,7 @@ vi.mock('../config.js', () => ({
       { model: 'claude', tool: 'claude-cli', name: 'agent-0', command: 'echo review' },
       { model: 'gpt-4', tool: 'codex', name: 'agent-1', command: 'echo codex' },
     ],
+    usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
   })),
   resolveCodebaseDir: vi.fn(() => null),
   resolveGithubToken: vi.fn(
@@ -32,6 +33,8 @@ vi.mock('../config.js', () => ({
   ),
   resolveGithubUsername: vi.fn(async () => null),
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 10,
+  CONFIG_DIR: '/tmp/test-opencara',
+  ensureConfigDir: vi.fn(),
 }));
 
 vi.mock('../github-auth.js', () => ({
@@ -46,6 +49,7 @@ vi.mock('../tool-executor.js', () => ({
     exitCode: 0,
     tokensUsed: 100,
     tokensParsed: true,
+    tokenDetail: { input: 0, output: 100, total: 100, parsed: true },
   })),
   estimateTokens: (text: string) => Math.ceil(text.length / 4),
   validateCommandBinary: vi.fn(() => true),
@@ -55,6 +59,22 @@ vi.mock('../tool-executor.js', () => ({
   }),
   testCommand: vi.fn(async () => ({ ok: true, elapsedMs: 100 })),
 }));
+
+vi.mock('../usage-tracker.js', () => {
+  class MockUsageTracker {
+    recordReview = vi.fn();
+    checkLimits = vi.fn(() => ({ allowed: true }));
+    checkPerReviewLimit = vi.fn(() => ({ allowed: true }));
+    formatSummary = vi.fn(() => 'Usage Summary:\n  Date: 2026-03-23\n  Reviews: 0');
+    getToday = vi.fn(() => ({
+      date: '2026-03-23',
+      reviews: 0,
+      tokens: { input: 0, output: 0, estimated: 0 },
+    }));
+    getData = vi.fn(() => ({ days: [] }));
+  }
+  return { UsageTracker: MockUsageTracker };
+});
 
 vi.mock('../router.js', () => {
   class MockRouterRelay {

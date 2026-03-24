@@ -170,7 +170,13 @@ describe('executeSummary', () => {
           cwd?: string,
         ) => Promise<ToolExecutorResult>
       >()
-      .mockResolvedValue({ stdout, stderr: '', tokensUsed, tokensParsed });
+      .mockResolvedValue({
+        stdout,
+        stderr: '',
+        tokensUsed,
+        tokensParsed,
+        tokenDetail: { input: 0, output: tokensUsed, total: tokensUsed, parsed: tokensParsed },
+      });
   }
 
   it('invokes tool subprocess and returns summary', async () => {
