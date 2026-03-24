@@ -552,7 +552,10 @@ async function executeReviewTask(
   signal?: AbortSignal,
   contextBlock?: string,
 ): Promise<void> {
-  // Check per-review token limit before executing (estimate from input size)
+  // Check per-review token limit before executing.
+  // Uses estimated *input* tokens only — output tokens are unpredictable and
+  // can't be known before execution. The limit acts as a guard against
+  // sending excessively large prompts to the AI tool.
   if (consumptionDeps.usageLimits?.maxTokensPerReview != null && consumptionDeps.usageTracker) {
     const estimatedInput = estimateTokens(diffContent + prompt + (contextBlock ?? ''));
     const perReviewCheck = consumptionDeps.usageTracker.checkPerReviewLimit(
@@ -901,15 +904,13 @@ export async function startAgent(
     maxTokensPerDay: null,
     maxTokensPerReview: null,
   };
-  const deps: ConsumptionDeps = consumptionDeps ?? {
-    agentId,
-    session,
-    usageTracker,
-    usageLimits,
-  };
-  // Ensure deps always have tracker/limits
-  deps.usageTracker = deps.usageTracker ?? usageTracker;
-  deps.usageLimits = deps.usageLimits ?? usageLimits;
+  const deps: ConsumptionDeps = consumptionDeps
+    ? {
+        ...consumptionDeps,
+        usageTracker: consumptionDeps.usageTracker ?? usageTracker,
+        usageLimits: consumptionDeps.usageLimits ?? usageLimits,
+      }
+    : { agentId, session, usageTracker, usageLimits };
   const logger = createLogger(options?.label);
   const { log, logError, logWarn } = logger;
 
