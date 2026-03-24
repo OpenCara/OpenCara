@@ -16,6 +16,7 @@ vi.mock('../tool-executor.js', async (importOriginal) => {
       exitCode: 0,
       tokensUsed: 100,
       tokensParsed: true,
+      tokenDetail: { input: 0, output: 100, total: 100, parsed: true },
     }),
   };
 });

@@ -24,6 +24,7 @@ vi.mock('../tool-executor.js', () => ({
     exitCode: 0,
     tokensUsed: 500,
     tokensParsed: true,
+    tokenDetail: { input: 0, output: 500, total: 500, parsed: true },
   })),
   estimateTokens: (text: string) => Math.ceil(text.length / 4),
   validateCommandBinary: () => true,
@@ -87,6 +88,7 @@ describe('CLI ↔ Server Integration', () => {
       exitCode: 0,
       tokensUsed: 500,
       tokensParsed: true,
+      tokenDetail: { input: 0, output: 500, total: 500, parsed: true },
     });
   });
 

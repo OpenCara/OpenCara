@@ -20,6 +20,7 @@ import {
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   CONFIG_DIR,
   type LocalAgentConfig,
+  type UsageLimits,
 } from '../config.js';
 import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.js';
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
@@ -34,7 +35,9 @@ import {
   recordSessionUsage,
   formatPostReviewStats,
   type SessionStats,
+  type RecordUsageOptions,
 } from '../consumption.js';
+import { UsageTracker } from '../usage-tracker.js';
 import { sanitizeTokens } from '../sanitize.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import {
@@ -49,6 +52,8 @@ import {
 export interface ConsumptionDeps {
   agentId: string;
   session: SessionStats;
+  usageTracker?: UsageTracker;
+  usageLimits?: UsageLimits;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
@@ -178,6 +183,18 @@ async function pollLoop(
   const diffFailCounts = new Map<string, number>();
 
   while (!signal?.aborted) {
+    // Check daily usage limits before polling
+    if (consumptionDeps.usageTracker && consumptionDeps.usageLimits) {
+      const limitStatus = consumptionDeps.usageTracker.checkLimits(consumptionDeps.usageLimits);
+      if (!limitStatus.allowed) {
+        log(`${icons.stop} ${limitStatus.reason}. Stopping.`);
+        break;
+      }
+      if (limitStatus.warning) {
+        logWarn(`${icons.warn} Approaching limits: ${limitStatus.warning}`);
+      }
+    }
+
     try {
       // Poll for tasks — include declared repos so server can return matching private tasks.
       // Server validates permissions; sending repos here doesn't bypass access control.
@@ -535,9 +552,22 @@ async function executeReviewTask(
   signal?: AbortSignal,
   contextBlock?: string,
 ): Promise<void> {
+  // Check per-review token limit before executing (estimate from input size)
+  if (consumptionDeps.usageLimits?.maxTokensPerReview != null && consumptionDeps.usageTracker) {
+    const estimatedInput = estimateTokens(diffContent + prompt + (contextBlock ?? ''));
+    const perReviewCheck = consumptionDeps.usageTracker.checkPerReviewLimit(
+      estimatedInput,
+      consumptionDeps.usageLimits,
+    );
+    if (!perReviewCheck.allowed) {
+      throw new Error(perReviewCheck.reason);
+    }
+  }
+
   let reviewText: string;
   let verdict: ReviewVerdict;
   let tokensUsed: number;
+  let usageOpts: RecordUsageOptions | undefined;
 
   if (routerRelay) {
     // Router mode: relay to external agent
@@ -560,6 +590,12 @@ async function executeReviewTask(
     reviewText = parsed.review;
     verdict = parsed.verdict as ReviewVerdict;
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
+    usageOpts = {
+      inputTokens: estimateTokens(fullPrompt),
+      outputTokens: estimateTokens(response),
+      totalTokens: tokensUsed,
+      estimated: true,
+    };
   } else {
     // Direct mode: execute tool locally
     logger.log(`  ${icons.running} Executing review: ${reviewDeps.commandTemplate}`);
@@ -580,6 +616,12 @@ async function executeReviewTask(
     reviewText = result.review;
     verdict = result.verdict;
     tokensUsed = result.tokensUsed;
+    usageOpts = {
+      inputTokens: result.tokenDetail.input,
+      outputTokens: result.tokenDetail.output,
+      totalTokens: result.tokensUsed,
+      estimated: result.tokensEstimated,
+    };
   }
 
   // Sanitize review text before submission to prevent token leakage
@@ -599,7 +641,15 @@ async function executeReviewTask(
     signal,
   );
 
-  recordSessionUsage(consumptionDeps.session, tokensUsed);
+  recordSessionUsage(consumptionDeps.session, usageOpts);
+  // Record to persistent usage tracker
+  if (consumptionDeps.usageTracker) {
+    consumptionDeps.usageTracker.recordReview({
+      input: usageOpts.inputTokens,
+      output: usageOpts.outputTokens,
+      estimated: usageOpts.estimated,
+    });
+  }
   logger.log(`  ${icons.success} Review submitted (${tokensUsed.toLocaleString()} tokens)`);
   logger.log(formatPostReviewStats(consumptionDeps.session));
 }
@@ -628,6 +678,7 @@ async function executeSummaryTask(
     let reviewText: string;
     let verdict: ReviewVerdict | undefined;
     let tokensUsed: number;
+    let usageOpts: RecordUsageOptions;
 
     if (routerRelay) {
       logger.log(`  ${icons.running} Executing summary: [router mode]`);
@@ -649,6 +700,12 @@ async function executeSummaryTask(
       reviewText = parsed.review;
       verdict = parsed.verdict as ReviewVerdict;
       tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
+      usageOpts = {
+        inputTokens: estimateTokens(fullPrompt),
+        outputTokens: estimateTokens(response),
+        totalTokens: tokensUsed,
+        estimated: true,
+      };
     } else {
       logger.log(`  ${icons.running} Executing summary: ${reviewDeps.commandTemplate}`);
       const result = await executeReview(
@@ -668,6 +725,12 @@ async function executeSummaryTask(
       reviewText = result.review;
       verdict = result.verdict;
       tokensUsed = result.tokensUsed;
+      usageOpts = {
+        inputTokens: result.tokenDetail.input,
+        outputTokens: result.tokenDetail.output,
+        totalTokens: result.tokensUsed,
+        estimated: result.tokensEstimated,
+      };
     }
 
     const sanitizedReview = sanitizeTokens(reviewText);
@@ -685,7 +748,14 @@ async function executeSummaryTask(
       signal,
     );
 
-    recordSessionUsage(consumptionDeps.session, tokensUsed);
+    recordSessionUsage(consumptionDeps.session, usageOpts);
+    if (consumptionDeps.usageTracker) {
+      consumptionDeps.usageTracker.recordReview({
+        input: usageOpts.inputTokens,
+        output: usageOpts.outputTokens,
+        estimated: usageOpts.estimated,
+      });
+    }
     logger.log(
       `  ${icons.success} Review submitted as summary (${tokensUsed.toLocaleString()} tokens)`,
     );
@@ -703,6 +773,7 @@ async function executeSummaryTask(
 
   let summaryText: string;
   let tokensUsed: number;
+  let usageOpts: RecordUsageOptions;
 
   if (routerRelay) {
     logger.log(`  ${icons.running} Executing summary: [router mode]`);
@@ -722,6 +793,12 @@ async function executeSummaryTask(
     );
     summaryText = response;
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
+    usageOpts = {
+      inputTokens: estimateTokens(fullPrompt),
+      outputTokens: estimateTokens(response),
+      totalTokens: tokensUsed,
+      estimated: true,
+    };
   } else {
     logger.log(`  ${icons.running} Executing summary: ${reviewDeps.commandTemplate}`);
     const result = await executeSummary(
@@ -740,6 +817,12 @@ async function executeSummaryTask(
     );
     summaryText = result.summary;
     tokensUsed = result.tokensUsed;
+    usageOpts = {
+      inputTokens: result.tokenDetail.input,
+      outputTokens: result.tokenDetail.output,
+      totalTokens: result.tokensUsed,
+      estimated: result.tokensEstimated,
+    };
   }
 
   const sanitizedSummary = sanitizeTokens(summaryText);
@@ -757,7 +840,14 @@ async function executeSummaryTask(
     signal,
   );
 
-  recordSessionUsage(consumptionDeps.session, tokensUsed);
+  recordSessionUsage(consumptionDeps.session, usageOpts);
+  if (consumptionDeps.usageTracker) {
+    consumptionDeps.usageTracker.recordReview({
+      input: usageOpts.inputTokens,
+      output: usageOpts.outputTokens,
+      estimated: usageOpts.estimated,
+    });
+  }
   logger.log(`  ${icons.success} Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
   logger.log(formatPostReviewStats(consumptionDeps.session));
 }
@@ -800,11 +890,26 @@ export async function startAgent(
     githubUsername?: string;
     label?: string;
     apiKey?: string | null;
+    usageLimits?: UsageLimits;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, { apiKey: options?.apiKey });
   const session = consumptionDeps?.session ?? createSessionTracker();
-  const deps = consumptionDeps ?? { agentId, session };
+  const usageTracker = consumptionDeps?.usageTracker ?? new UsageTracker();
+  const usageLimits = options?.usageLimits ?? {
+    maxReviewsPerDay: null,
+    maxTokensPerDay: null,
+    maxTokensPerReview: null,
+  };
+  const deps: ConsumptionDeps = consumptionDeps ?? {
+    agentId,
+    session,
+    usageTracker,
+    usageLimits,
+  };
+  // Ensure deps always have tracker/limits
+  deps.usageTracker = deps.usageTracker ?? usageTracker;
+  deps.usageLimits = deps.usageLimits ?? usageLimits;
   const logger = createLogger(options?.label);
   const { log, logError, logWarn } = logger;
 
@@ -852,6 +957,10 @@ export async function startAgent(
     signal: abortController.signal,
   });
 
+  // Print usage summary on shutdown
+  if (deps.usageTracker) {
+    log(deps.usageTracker.formatSummary(deps.usageLimits ?? usageLimits));
+  }
   log(formatExitSummary(agentSession));
 }
 
@@ -898,6 +1007,7 @@ export async function startAgentRouter(): Promise<void> {
   };
 
   const session = createSessionTracker();
+  const usageTracker = new UsageTracker();
 
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
@@ -912,6 +1022,8 @@ export async function startAgentRouter(): Promise<void> {
     {
       agentId,
       session,
+      usageTracker,
+      usageLimits: config.usageLimits,
     },
     {
       maxConsecutiveErrors: config.maxConsecutiveErrors,
@@ -923,6 +1035,7 @@ export async function startAgentRouter(): Promise<void> {
       githubUsername,
       label,
       apiKey: config.apiKey,
+      usageLimits: config.usageLimits,
     },
   );
 
@@ -1000,6 +1113,7 @@ function startAgentByIndex(
   }
 
   const session = createSessionTracker();
+  const usageTracker = new UsageTracker();
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
   const roles = agentConfig ? computeRoles(agentConfig) : undefined;
@@ -1009,7 +1123,7 @@ function startAgentByIndex(
     config.platformUrl,
     { model, tool },
     reviewDeps,
-    { agentId, session },
+    { agentId, session, usageTracker, usageLimits: config.usageLimits },
     {
       pollIntervalMs,
       maxConsecutiveErrors: config.maxConsecutiveErrors,
@@ -1021,6 +1135,7 @@ function startAgentByIndex(
       githubUsername,
       label,
       apiKey: config.apiKey,
+      usageLimits: config.usageLimits,
     },
   ).finally(() => {
     routerRelay?.stop();

@@ -144,6 +144,7 @@ describe('executeReview', () => {
         stderr: '',
         tokensUsed: 0,
         tokensParsed: false,
+        tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
       });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -187,6 +188,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -201,6 +203,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -215,6 +218,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 150,
       tokensParsed: true,
+      tokenDetail: { input: 0, output: 150, total: 150, parsed: true },
     });
 
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -237,6 +241,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     await executeReview(defaultRequest, defaultDeps, mockRunTool);
@@ -252,6 +257,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     await executeReview(
@@ -269,6 +275,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     await executeReview(
@@ -287,6 +294,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     await executeReview(
@@ -306,6 +314,7 @@ describe('executeReview', () => {
       stderr: '',
       tokensUsed: 0,
       tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
     await executeReview(defaultRequest, defaultDeps, mockRunTool);
