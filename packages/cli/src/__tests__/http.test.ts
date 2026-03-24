@@ -228,6 +228,20 @@ describe('ApiClient', () => {
     expect(err.minimumVersion).toBeUndefined();
   });
 
+  it('throws UpgradeRequiredError with "unknown" version when cliVersion not set', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 426,
+      json: () => Promise.resolve({ minimum_version: '0.15.0' }),
+    });
+
+    const client = new ApiClient('https://api.test.com');
+    const err = await client.get('/test').catch((e: UpgradeRequiredError) => e);
+    expect(err).toBeInstanceOf(UpgradeRequiredError);
+    expect(err.currentVersion).toBe('unknown');
+    expect(err.minimumVersion).toBe('0.15.0');
+  });
+
   it('UpgradeRequiredError has correct name and properties', () => {
     const err = new UpgradeRequiredError('0.14.0', '0.15.0');
     expect(err.name).toBe('UpgradeRequiredError');
