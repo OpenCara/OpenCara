@@ -926,6 +926,7 @@ async function executeSummaryTask(
         agent_id: agentId,
         type: 'summary' as ClaimRole,
         review_text: sanitizedSummary,
+        verdict: summaryVerdict,
         tokens_used: tokensUsed,
       }),
     { maxAttempts: 3 },
