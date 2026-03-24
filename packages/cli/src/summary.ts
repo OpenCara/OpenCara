@@ -1,5 +1,6 @@
+import type { ReviewVerdict } from '@opencara/shared';
 import type { ReviewExecutorDeps, ReviewMetadata } from './review.js';
-import { extractVerdict } from './review.js';
+import { extractVerdict, VERDICT_EMOJI } from './review.js';
 import {
   executeTool,
   estimateTokens,
@@ -49,13 +50,7 @@ export interface SummaryMetadata extends ReviewMetadata {
   reviewerModels: string[];
 }
 
-const VERDICT_EMOJI: Record<string, string> = {
-  approve: '\u2705',
-  request_changes: '\u274C',
-  comment: '\uD83D\uDCAC',
-};
-
-export function buildSummaryMetadataHeader(verdict: string, meta?: SummaryMetadata): string {
+export function buildSummaryMetadataHeader(verdict: ReviewVerdict, meta?: SummaryMetadata): string {
   if (!meta) return '';
   const emoji = VERDICT_EMOJI[verdict] ?? '';
   const reviewersList = meta.reviewerModels.map((r) => `\`${r}\``).join(', ');

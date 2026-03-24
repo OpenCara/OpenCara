@@ -78,7 +78,7 @@ export function buildSystemPrompt(owner: string, repo: string, mode: ReviewMode 
   return template.replace('{owner}', owner).replace('{repo}', repo);
 }
 
-const VERDICT_EMOJI: Record<string, string> = {
+export const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
   approve: '\u2705',
   request_changes: '\u274C',
   comment: '\uD83D\uDCAC',
@@ -87,10 +87,13 @@ const VERDICT_EMOJI: Record<string, string> = {
 export function buildMetadataHeader(verdict: ReviewVerdict, meta?: ReviewMetadata): string {
   if (!meta) return '';
   const emoji = VERDICT_EMOJI[verdict] ?? '';
-  const lines: string[] = [
-    `**Reviewer**: \`${meta.model}/${meta.tool}\``,
-    `**Verdict**: ${emoji} ${verdict}`,
-  ];
+  const lines: string[] = [`**Reviewer**: \`${meta.model}/${meta.tool}\``];
+  if (meta.githubUsername) {
+    lines.push(
+      `**Contributors**: [@${meta.githubUsername}](https://github.com/${meta.githubUsername})`,
+    );
+  }
+  lines.push(`**Verdict**: ${emoji} ${verdict}`);
   return lines.join('\n') + '\n\n';
 }
 
