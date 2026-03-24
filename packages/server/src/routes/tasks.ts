@@ -226,14 +226,9 @@ async function postFinalReview(
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
 
-    // Post review_text as-is — CLI pre-formats with header/footer
-    await github.postPrComment(
-      task.owner,
-      task.repo,
-      task.pr_number,
-      summaryData.review_text,
-      token,
-    );
+    // Wrap review_text with consistent branding header/footer
+    const body = `## OpenCara Review\n\n${summaryData.review_text}\n\n---\n<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>`;
+    await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.deleteTask(taskId);
     logger.info('Review posted to GitHub — task deleted', {
