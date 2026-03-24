@@ -94,7 +94,10 @@ async function fetchDiff(
   diffUrl: string,
   githubToken?: string | null,
   signal?: AbortSignal,
+  maxDiffSizeKb?: number,
 ): Promise<string> {
+  const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
+
   return withRetry(
     async () => {
       const headers: Record<string, string> = {};
@@ -124,11 +127,60 @@ async function fetchDiff(
         }
         throw new Error(msg);
       }
+
+      // Fast path: check Content-Length header before reading body
+      if (maxBytes < Infinity) {
+        const contentLength = parseInt(response.headers.get('content-length') ?? '', 10);
+        if (!isNaN(contentLength) && contentLength > maxBytes) {
+          // Cancel the body to avoid downloading
+          if (response.body) {
+            response.body.cancel().catch(() => {});
+          }
+          throw new DiffTooLargeError(
+            `Diff too large (${Math.round(contentLength / 1024)}KB > ${maxDiffSizeKb}KB, from Content-Length)`,
+          );
+        }
+
+        // Stream with size limit — Content-Length may be absent or incorrect
+        if (response.body) {
+          const reader = response.body.getReader();
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              totalBytes += value.length;
+              if (totalBytes > maxBytes) {
+                reader.cancel().catch(() => {});
+                throw new DiffTooLargeError(`Diff too large (>${maxDiffSizeKb}KB)`);
+              }
+              chunks.push(value);
+            }
+          } catch (err) {
+            if (err instanceof DiffTooLargeError) throw err;
+            throw err;
+          }
+          return new TextDecoder().decode(concatUint8Arrays(chunks, totalBytes));
+        }
+      }
+
       return response.text();
     },
     { maxAttempts: 2 },
     signal,
   );
+}
+
+/** Concatenate Uint8Array chunks into a single buffer. */
+function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Array {
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 /** Max times an agent will attempt a task that fails diff fetch before skipping it. */
@@ -335,7 +387,12 @@ async function handleTask(
   // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
   try {
-    diffContent = await fetchDiff(diff_url, reviewDeps.githubToken, signal);
+    diffContent = await fetchDiff(
+      diff_url,
+      reviewDeps.githubToken,
+      signal,
+      reviewDeps.maxDiffSizeKb,
+    );
     log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
     logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
