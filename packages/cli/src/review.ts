@@ -18,6 +18,7 @@ export interface ReviewRequest {
   timeout: number;
   reviewMode: ReviewMode;
   contextBlock?: string;
+  meta?: ReviewMetadata;
 }
 
 export interface ReviewResponse {
@@ -30,9 +31,44 @@ export interface ReviewResponse {
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
 
+export interface ReviewMetadata {
+  model: string;
+  tool: string;
+  githubUsername?: string;
+}
+
+const VERDICT_FORMAT_INSTRUCTION = `Format the verdict line with an emoji prefix:
+- APPROVE → ✅ approve
+- REQUEST_CHANGES → ❌ request_changes
+- COMMENT → 💬 comment`;
+
+function buildMetadataHeaderInstruction(meta?: ReviewMetadata): string {
+  if (!meta) return '';
+  const lines: string[] = [
+    '',
+    'At the very beginning of your response, include this metadata header:',
+    '',
+    `**Reviewer**: \`${meta.model}/${meta.tool}\``,
+  ];
+  if (meta.githubUsername) {
+    lines.push(
+      `**Contributors**: [@${meta.githubUsername}](https://github.com/${meta.githubUsername})`,
+    );
+  }
+  lines.push('**Verdict**: {verdict_emoji} {verdict}');
+  lines.push('');
+  lines.push(
+    'Replace {verdict_emoji} {verdict} with the actual verdict using the emoji format below.',
+  );
+  lines.push(VERDICT_FORMAT_INSTRUCTION);
+  lines.push('');
+  lines.push('Then continue with the rest of the review.');
+  return lines.join('\n');
+}
+
 const FULL_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and provide a structured review.
-
+{metadata_header}
 Format your response as:
 
 ## Summary
@@ -51,7 +87,7 @@ APPROVE | REQUEST_CHANGES | COMMENT`;
 
 const COMPACT_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
 Review the following pull request diff and return a compact, structured assessment.
-
+{metadata_header}
 Format your response as:
 
 ## Summary
@@ -65,10 +101,19 @@ Severities: critical, major, minor, suggestion
 ## Verdict
 APPROVE | REQUEST_CHANGES | COMMENT`;
 
-export function buildSystemPrompt(owner: string, repo: string, mode: ReviewMode = 'full'): string {
+export function buildSystemPrompt(
+  owner: string,
+  repo: string,
+  mode: ReviewMode = 'full',
+  meta?: ReviewMetadata,
+): string {
   const template =
     mode === 'compact' ? COMPACT_SYSTEM_PROMPT_TEMPLATE : FULL_SYSTEM_PROMPT_TEMPLATE;
-  return template.replace('{owner}', owner).replace('{repo}', repo);
+  const metadataHeader = buildMetadataHeaderInstruction(meta);
+  return template
+    .replace('{owner}', owner)
+    .replace('{repo}', repo)
+    .replace('{metadata_header}', metadataHeader);
 }
 
 export function buildUserMessage(
@@ -155,7 +200,7 @@ export async function executeReview(
   }, effectiveTimeout);
 
   try {
-    const systemPrompt = buildSystemPrompt(req.owner, req.repo, req.reviewMode);
+    const systemPrompt = buildSystemPrompt(req.owner, req.repo, req.reviewMode, req.meta);
     const userMessage = buildUserMessage(req.prompt, req.diffContent, req.contextBlock);
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
 

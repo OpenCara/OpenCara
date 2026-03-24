@@ -26,7 +26,12 @@ import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
 import { ApiClient, HttpError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
-import { executeReview, DiffTooLargeError, type ReviewExecutorDeps } from '../review.js';
+import {
+  executeReview,
+  DiffTooLargeError,
+  type ReviewExecutorDeps,
+  type ReviewMetadata,
+} from '../review.js';
 import { executeSummary, InputTooLargeError } from '../summary.js';
 import { validateCommandBinary, estimateTokens, testCommand } from '../tool-executor.js';
 import { RouterRelay } from '../router.js';
@@ -185,15 +190,6 @@ function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Arra
 
 /** Max times an agent will attempt a task that fails diff fetch before skipping it. */
 const MAX_DIFF_FETCH_ATTEMPTS = 3;
-
-/**
- * Append contributor attribution to review/summary text when github_username is configured.
- * Anonymous agents (no github_username) return text unchanged.
- */
-export function appendContributorAttribution(text: string, githubUsername?: string): string {
-  if (!githubUsername) return text;
-  return `${text}\n\n---\nContributed by [@${githubUsername}](https://github.com/${githubUsername})`;
-}
 
 /**
  * Poll → Claim → Review → Submit loop for a single agent.
@@ -502,6 +498,7 @@ async function handleTask(
         taskReviewDeps,
         consumptionDeps,
         logger,
+        agentInfo,
         routerRelay,
         signal,
         contextBlock,
@@ -521,6 +518,7 @@ async function handleTask(
         taskReviewDeps,
         consumptionDeps,
         logger,
+        agentInfo,
         routerRelay,
         signal,
         contextBlock,
@@ -611,6 +609,7 @@ async function executeReviewTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   logger: Logger,
+  agentInfo: { model: string; tool: string },
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
@@ -666,6 +665,7 @@ async function executeReviewTask(
   } else {
     // Direct mode: execute tool locally
     logger.log(`  ${icons.running} Executing review: ${reviewDeps.commandTemplate}`);
+    const meta: ReviewMetadata = { model: agentInfo.model, tool: agentInfo.tool, githubUsername };
     const result = await executeReview(
       {
         taskId,
@@ -677,6 +677,7 @@ async function executeReviewTask(
         timeout: timeoutSeconds,
         reviewMode: 'full',
         contextBlock,
+        meta,
       },
       reviewDeps,
     );
@@ -692,7 +693,7 @@ async function executeReviewTask(
   }
 
   // Sanitize review text before submission to prevent token leakage
-  const sanitizedReview = appendContributorAttribution(sanitizeTokens(reviewText), githubUsername);
+  const sanitizedReview = sanitizeTokens(reviewText);
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
@@ -735,11 +736,14 @@ async function executeSummaryTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   logger: Logger,
+  agentInfo: { model: string; tool: string },
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
   githubUsername?: string,
 ): Promise<void> {
+  const meta: ReviewMetadata = { model: agentInfo.model, tool: agentInfo.tool, githubUsername };
+
   if (reviews.length === 0) {
     // Single-agent mode (review_count=1): this IS the review, run it as a regular
     // review but submit as 'summary' to match the claimed role.
@@ -787,6 +791,7 @@ async function executeSummaryTask(
           timeout: timeoutSeconds,
           reviewMode: 'full',
           contextBlock,
+          meta,
         },
         reviewDeps,
       );
@@ -801,10 +806,7 @@ async function executeSummaryTask(
       };
     }
 
-    const sanitizedReview = appendContributorAttribution(
-      sanitizeTokens(reviewText),
-      githubUsername,
-    );
+    const sanitizedReview = sanitizeTokens(reviewText);
 
     await withRetry(
       () =>
@@ -883,6 +885,7 @@ async function executeSummaryTask(
         timeout: timeoutSeconds,
         diffContent,
         contextBlock,
+        meta,
       },
       reviewDeps,
     );
@@ -896,10 +899,7 @@ async function executeSummaryTask(
     };
   }
 
-  const sanitizedSummary = appendContributorAttribution(
-    sanitizeTokens(summaryText),
-    githubUsername,
-  );
+  const sanitizedSummary = sanitizeTokens(summaryText);
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(

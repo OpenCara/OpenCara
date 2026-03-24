@@ -1446,8 +1446,11 @@ describe('Agent Coverage Tests', () => {
   // Contributor attribution in review submissions
   // ═══════════════════════════════════════════════════════════
 
-  describe('Contributor attribution', () => {
-    it('appends attribution to review text when githubUsername is configured', async () => {
+  describe('Contributor metadata in prompt', () => {
+    it('does not manually append contributor attribution to submitted review text', async () => {
+      // Contributor info is now included in the AI prompt (metadata headers) rather than
+      // appended post-hoc. The submitted review_text should be the raw AI output without
+      // the old "---\nContributed by" suffix.
       const taskId = await server.injectTask({ reviewCount: 1 });
 
       let resultBody: Record<string, unknown> | null = null;
@@ -1469,7 +1472,8 @@ describe('Agent Coverage Tests', () => {
         await advanceTime(2000);
 
         expect(resultBody).not.toBeNull();
-        expect(resultBody!.review_text).toContain(
+        // Old behavior appended "---\nContributed by" — now contributor info is in the prompt
+        expect(resultBody!.review_text).not.toContain(
           '---\nContributed by [@octocat](https://github.com/octocat)',
         );
 
@@ -1480,7 +1484,7 @@ describe('Agent Coverage Tests', () => {
       }
     });
 
-    it('does not append attribution when githubUsername is not configured', async () => {
+    it('submitted review text is unchanged when githubUsername is not configured', async () => {
       const taskId = await server.injectTask({ reviewCount: 1 });
 
       let resultBody: Record<string, unknown> | null = null;
