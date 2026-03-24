@@ -77,7 +77,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Deploy version to 100% traffic
         working-directory: packages/server
-        run: pnpm exec wrangler versions deploy "${{ steps.upload.outputs.version_id }}@100%"
+        run: pnpm exec wrangler versions deploy "${{ steps.upload.outputs.version_id }}@100%" --yes
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Verify deployment
