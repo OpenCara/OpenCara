@@ -8,6 +8,7 @@ import {
   MAX_INPUT_SIZE_BYTES,
   type SummaryRequest,
   type SummaryReviewInput,
+  type SummaryMetadata,
 } from '../summary.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import type { ToolExecutorResult } from '../tool-executor.js';
@@ -41,6 +42,37 @@ describe('buildSummarySystemPrompt', () => {
     const prompt = buildSummarySystemPrompt('org', 'repo', 1);
     expect(prompt).toContain('## Findings');
     expect(prompt).toContain('## Verdict');
+  });
+
+  it('includes metadata header when meta is provided', () => {
+    const meta: SummaryMetadata = {
+      model: 'claude-opus-4-6',
+      tool: 'claude-code',
+      githubUsername: 'octocat',
+      reviewerModels: ['claude-sonnet/claude-code', 'gpt-4/copilot'],
+    };
+    const prompt = buildSummarySystemPrompt('acme', 'widgets', 2, meta);
+    expect(prompt).toContain('**Reviewers**: `claude-sonnet/claude-code`, `gpt-4/copilot`');
+    expect(prompt).toContain('**Synthesizer**: `claude-opus-4-6/claude-code`');
+    expect(prompt).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(prompt).toContain('**Verdict**: {verdict_emoji} {verdict}');
+  });
+
+  it('omits Contributors line when githubUsername is not provided', () => {
+    const meta: SummaryMetadata = {
+      model: 'gpt-4',
+      tool: 'copilot',
+      reviewerModels: ['claude-sonnet/claude-code'],
+    };
+    const prompt = buildSummarySystemPrompt('acme', 'widgets', 1, meta);
+    expect(prompt).toContain('**Synthesizer**: `gpt-4/copilot`');
+    expect(prompt).not.toContain('**Contributors**');
+  });
+
+  it('does not include metadata header when meta is undefined', () => {
+    const prompt = buildSummarySystemPrompt('acme', 'widgets', 2);
+    expect(prompt).not.toContain('**Reviewers**');
+    expect(prompt).not.toContain('**Synthesizer**');
   });
 });
 

@@ -7,6 +7,7 @@ import {
   DiffTooLargeError,
   type ReviewRequest,
   type ReviewExecutorDeps,
+  type ReviewMetadata,
 } from '../review.js';
 import type { ToolExecutorResult } from '../tool-executor.js';
 
@@ -15,6 +16,40 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt('acme', 'widgets');
     expect(prompt).toContain('acme/widgets');
     expect(prompt).toContain('code reviewer');
+  });
+
+  it('includes metadata header when meta is provided', () => {
+    const meta: ReviewMetadata = {
+      model: 'claude-sonnet',
+      tool: 'claude-code',
+      githubUsername: 'octocat',
+    };
+    const prompt = buildSystemPrompt('acme', 'widgets', 'full', meta);
+    expect(prompt).toContain('**Reviewer**: `claude-sonnet/claude-code`');
+    expect(prompt).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(prompt).toContain('**Verdict**: {verdict_emoji} {verdict}');
+    expect(prompt).toContain('APPROVE');
+    expect(prompt).toContain('REQUEST_CHANGES');
+    expect(prompt).toContain('COMMENT');
+  });
+
+  it('omits Contributors line when githubUsername is not provided', () => {
+    const meta: ReviewMetadata = { model: 'gpt-4', tool: 'copilot' };
+    const prompt = buildSystemPrompt('acme', 'widgets', 'full', meta);
+    expect(prompt).toContain('**Reviewer**: `gpt-4/copilot`');
+    expect(prompt).not.toContain('**Contributors**');
+  });
+
+  it('does not include metadata header when meta is undefined', () => {
+    const prompt = buildSystemPrompt('acme', 'widgets');
+    expect(prompt).not.toContain('**Reviewer**');
+    expect(prompt).not.toContain('**Verdict**: {verdict_emoji}');
+  });
+
+  it('includes metadata header in compact mode', () => {
+    const meta: ReviewMetadata = { model: 'claude-sonnet', tool: 'claude-code' };
+    const prompt = buildSystemPrompt('acme', 'widgets', 'compact', meta);
+    expect(prompt).toContain('**Reviewer**: `claude-sonnet/claude-code`');
   });
 });
 
