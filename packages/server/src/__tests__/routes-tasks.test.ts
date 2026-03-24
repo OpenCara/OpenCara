@@ -512,7 +512,7 @@ describe('Task Routes', () => {
           completed_reviews: 1,
         }),
       );
-      // Add a completed review
+      // Add a completed review with model/tool
       await store.createClaim({
         id: 'task-1:reviewer:review',
         task_id: 'task-1',
@@ -521,6 +521,8 @@ describe('Task Routes', () => {
         status: 'completed',
         review_text: 'LGTM',
         verdict: 'approve',
+        model: 'claude-sonnet-4-6',
+        tool: 'claude',
         created_at: Date.now(),
       });
       // Claim summary
@@ -532,6 +534,8 @@ describe('Task Routes', () => {
       expect(body.claimed).toBe(true);
       expect(body.reviews).toHaveLength(1);
       expect(body.reviews[0].review_text).toBe('LGTM');
+      expect(body.reviews[0].model).toBe('claude-sonnet-4-6');
+      expect(body.reviews[0].tool).toBe('claude');
     });
 
     it('updates task status to reviewing on first claim', async () => {

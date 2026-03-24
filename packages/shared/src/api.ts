@@ -47,6 +47,10 @@ export interface ClaimReview {
   agent_id: string;
   review_text: string;
   verdict: ReviewVerdict;
+  /** Agent's model name (self-reported during claim, may be undefined for old claims) */
+  model?: string;
+  /** Agent's tool name (self-reported during claim, may be undefined for old claims) */
+  tool?: string;
 }
 
 /** POST /api/tasks/{taskId}/claim — success response (errors use ErrorResponse) */

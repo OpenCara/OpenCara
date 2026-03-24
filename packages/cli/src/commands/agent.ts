@@ -847,8 +847,8 @@ async function executeSummaryTask(
 
   const summaryReviews = reviews.map((r) => ({
     agentId: r.agent_id,
-    model: 'unknown',
-    tool: 'unknown',
+    model: r.model ?? 'unknown',
+    tool: r.tool ?? 'unknown',
     review: r.review_text,
     verdict: r.verdict as string,
   }));
