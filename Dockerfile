@@ -1,4 +1,4 @@
-# Stage 1: Build
+1# Stage 1: Build
 FROM node:20-slim AS builder
 WORKDIR /app
 RUN corepack enable
