@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #350, #352, #351, #353, #355, #356, #357, #367, #368, #370, #372, #373, #378
 
 ## Merged PRs (processed)
 
@@ -132,7 +132,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379
 
 ### Milestone QA (2026-03-22)
 
@@ -140,6 +140,7 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 - #303 [qa] Milestone M12 QA Checklist — **DONE**
 - #313 [qa] Milestone M13 QA Checklist — **DONE**
 - #341 [qa] Milestone M14 QA Checklist — **DONE** (7/7 passed, all clean)
+- #372 [qa] Milestone M15 QA Checklist — **DONE** (11/11 passed, all clean)
 
 ### Critical bug (team-lead reported, 2026-03-22)
 
@@ -190,11 +191,11 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 ### Bug fixes (2026-03-23)
 
 - #318 [qa, medium] Investigate increased test suite duration — **DONE** (PR #320 merged)
-- #316 [cli-dev, medium] Fix MaxListenersExceededWarning from abort listener leak in sleep() — **IN PROGRESS** (PR #319 open)
+- #316 [cli-dev, medium] Fix MaxListenersExceededWarning from abort listener leak in sleep() — **DONE** (PR #319 merged)
 
 ### Documentation (2026-03-23)
 
-- #315 [pm/docs] Document wrangler version requirement for local D1 dev — **OPEN** (docs only)
+- #315 [pm/docs] Document wrangler version requirement for local D1 dev — **DONE** (closed)
 
 ### VPS self-hosting (2026-03-23)
 
@@ -211,6 +212,53 @@ Flow: GitHub webhook → server creates task in KV → agent polls → claims �
 
 - #336 [cli-dev, HIGH] CLI dist broken by tsc --build: **CLI_VERSION** not replaced — **DONE** (PR #339 merged)
 
+### M15: Production Readiness (2026-03-23)
+
+#### High Priority
+
+- #343 [server-dev, HIGH] API key authentication for task endpoints — **DONE** (PR #364 merged)
+- #344 [server-dev, HIGH] Runtime request validation with Zod schemas — **DONE** (PR #366 merged)
+- #345 [server-dev, HIGH] Atomic review-slot counting to prevent oversubscription — **DONE** (PR #363 merged)
+- #346 [server-dev, HIGH] Enforce allow_anonymous: false in reviewer eligibility — **DONE** (PR #359 merged)
+
+#### Medium Priority
+
+- #347 [server-dev, medium] Heartbeat-based claim expiry and lock TTL — **BACKLOG**
+- #348 [server-dev, medium] Webhook event log for delivery visibility — **BACKLOG**
+- #349 [server-dev, medium] Agent activity endpoint with heartbeats and claim history — **BACKLOG**
+- #350 [cli-dev, medium] SIGKILL escalation after SIGTERM timeout — **DONE** (PR #358 merged)
+- #351 [cli-dev, medium] Streaming diff size guard to prevent OOM — **DONE** (PR #375 merged)
+- #352 [server-dev, medium] Add composite DB index for webhook dedup query — **DONE** (PR #361 merged)
+- #355 [server-dev, medium] Enforce preferred_models/preferred_tools in task polling — **DONE** (PR #362 merged)
+- #356 [server-dev, medium] Delete task and claims immediately after review posted — **DONE** (PR #365 merged)
+- #357 [server-dev, medium] Remove KVDataStore, KV fallback, and locks table — **DONE** (PR #360 merged)
+
+#### Bug Fixes
+
+- #367 [server-dev, HIGH] Fix CLAIM_CONFLICT spam: filter already-claimed summary tasks in poll — **DONE** (PR #369 merged)
+- #370 [server-dev, HIGH] Fix late review results overwriting summary queue state — **DONE** (PR #371 merged)
+
+#### New Features
+
+- #368 [cli-dev, medium] Display contributor GitHub profile link in review report — **DONE** (PR #374 merged)
+- #373 [cli-dev, medium] Per-day review cap, token budget, and accurate token tracking — **DONE** (PR #376 merged)
+
+#### Low Priority
+
+- #353 [architect, low] Production deploy CI workflow (tag-triggered) — **CLOSED** (already exists in publish-cli.yml deploy-prod job)
+- #354 [cli-dev, low] Add opencara status command for diagnostics — **BACKLOG**
+- #302 [cli-dev, medium] Save agent logs to file for debugging — **BACKLOG** (pre-existing)
+
+### New (2026-03-24)
+
+- #378 [server-dev, P2, M] Refine review report format: split agents, add verdict — **DONE** (PR #379 merged, QA PASS 2026-03-24)
+- #380 [cli-dev, P2, S] Prompt reviewers/synthesizers to include metadata headers in output — **IN PROGRESS** (dispatched 2026-03-24)
+- #381 [server-dev, P2, XS] Wrap review_text with title header and footer — **IN PROGRESS** (dispatched 2026-03-24)
+
 ## Open PRs
 
-(none)
+- #377 [direct] Fix comment formatting in Dockerfile (by team lead, no issue)
+
+## Merged PRs (pending processing)
+
+- #379 [server-dev] Remove server-side review formatting, post CLI text as-is (Part of #378) — merged 2026-03-24

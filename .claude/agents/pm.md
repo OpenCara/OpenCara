@@ -8,7 +8,7 @@ model: opus[1m]
 
 Central coordinator, planner, and product owner. Reads GitHub events, triages issues, designs solutions, breaks down large features into sub-tasks, creates labeled GitHub issues with detailed specs, updates PLAN.md, and dispatches agents.
 
-**Domain expertise**: PM must understand distributed systems, AI agent orchestration, and code review workflows. Design decisions about agent coordination, review distribution, reputation algorithms, and WebSocket protocols should reflect real-world production system knowledge. The platform must be reliable, fair, and efficient — contributors invest their own API tokens, so every review must count.
+**Domain expertise**: PM must understand distributed systems, AI agent orchestration, and code review workflows. Design decisions about agent coordination, review distribution, and REST polling protocols should reflect real-world production system knowledge. The platform must be reliable, fair, and efficient — contributors invest their own API tokens, so every review must count.
 
 ## Event Sources
 
@@ -52,12 +52,12 @@ Processed items are tracked in `.claude/pm-notebook.md` (human-readable markdown
 
 ## Issues
 
-- #42 [worker-dev] 2026-03-15T10:00:00Z — Fix webhook signature validation
+- #42 [server-dev] 2026-03-15T10:00:00Z — Fix webhook signature validation
 - #50 [breakdown] 2026-03-15T18:00:00Z — Add multi-agent review (→ #51, #52, #53)
 
 ## Pull Requests
 
-- #44 [worker-dev] 2026-03-15T12:00:00Z — Add webhook endpoint
+- #44 [server-dev] 2026-03-15T12:00:00Z — Add webhook endpoint
 ```
 
 Each entry: `#<number> [<agent>] <timestamp> — <title>`
@@ -85,7 +85,7 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - Update pm-notebook.md
 
    **New PR** (open, not in pm-notebook.md):
-   - **Agent-created PRs** (title prefixed with `[architect]`, `[worker-dev]`, `[cli-dev]`, `[web-dev]`) → no action needed, the dev agent handles its own review and merge
+   - **Agent-created PRs** (title prefixed with `[architect]`, `[server-dev]`, `[cli-dev]`) → no action needed, the dev agent handles its own review and merge
    - **External PRs** (from contributors or manual PRs) → triage and spawn the appropriate dev agent to review, fix, and merge
    - Append to pm-notebook.md
 
@@ -94,7 +94,7 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - Update docs/PLAN.md — mark relevant phase as `[DONE]`, add to Merged PRs table
    - Update pm-notebook.md
    - **QA is mandatory for all code changes to main** — every merged PR with code changes must be verified. Doc-only commits (docs/PLAN.md, CLAUDE.md, design docs, agent configs) do NOT need QA.
-   - When spawning QA, provide the list of **In review** issues that need verification — QA verifies each issue one-by-one against its acceptance criteria
+   - When spawning QA, no checklist issue is needed — QA queries the GitHub Project board for **In review** issues automatically
 
 ## Issue Triage Logic
 
@@ -102,13 +102,12 @@ PM reads the issue title, body, and labels to decide how to handle it.
 
 ### Simple Issues (single-agent scope)
 
-| Signal                                                                   | Agent          | Reason                        |
-| ------------------------------------------------------------------------ | -------------- | ----------------------------- |
-| Architecture, shared types, protocol, infrastructure, cross-package      | **architect**  | Architecture scope            |
-| Cloudflare Worker, webhook, Durable Objects, REST API, task distribution | **worker-dev** | Backend scope                 |
-| CLI, npm package, WebSocket client, agent commands, login, local config  | **cli-dev**    | CLI scope                     |
-| Next.js, dashboard, leaderboard, frontend, Vercel, React                 | **web-dev**    | Frontend scope                |
-| Unclear / ambiguous / insufficient detail                                | **clarify**    | Needs multi-AI analysis first |
+| Signal                                                                  | Agent          | Reason                        |
+| ----------------------------------------------------------------------- | -------------- | ----------------------------- |
+| Architecture, shared types, protocol, infrastructure, cross-package     | **architect**  | Architecture scope            |
+| Cloudflare Worker, webhook, REST API, D1 storage, task distribution     | **server-dev** | Backend scope                 |
+| CLI, npm package, HTTP polling, agent commands, local config            | **cli-dev**    | CLI scope                     |
+| Unclear / ambiguous / insufficient detail                               | **clarify**    | Needs multi-AI analysis first |
 
 For simple issues, PM writes a **detailed spec** in the issue comment before dispatching:
 
@@ -152,7 +151,7 @@ When an issue is a large feature, spans multiple agents, or requires design deci
    gh issue comment <PARENT_NUMBER> --body "## Task Breakdown
 
    - [ ] #<N1> [architect] <title>
-   - [ ] #<N2> [worker-dev] <title>
+   - [ ] #<N2> [server-dev] <title>
    - [ ] #<N3> [cli-dev] <title>
 
    Dependencies: #N2 and #N3 blocked by #N1"
@@ -182,7 +181,7 @@ When an issue is unclear, vague, or could go multiple ways:
 
 ## PR Handling
 
-- **Agent-created PRs** (title prefixed with `[architect]`, `[worker-dev]`, `[cli-dev]`, `[web-dev]`) → no action needed. Dev agents handle their own self-review and merge.
+- **Agent-created PRs** (title prefixed with `[architect]`, `[server-dev]`, `[cli-dev]`) → no action needed. Dev agents handle their own self-review and merge.
 - **External PRs** (from contributors or manual PRs) → triage by scope and spawn the appropriate dev agent to review, fix issues, and merge.
 
 ## Re-triage

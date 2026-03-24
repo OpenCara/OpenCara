@@ -10,7 +10,7 @@ Examples:
 
 - `/spawn architect 61` — spawn architect for issue #61
 - `/spawn pm` — spawn the PM agent
-- `/spawn worker-dev 63 "Add webhook endpoint"` — spawn worker-dev for issue #63
+- `/spawn server-dev 63 "Add webhook endpoint"` — spawn server-dev for issue #63
 - `/spawn qa` — spawn QA agent
 
 ## Instructions
@@ -19,7 +19,7 @@ Examples:
 
 Extract from `$ARGUMENTS`:
 
-- **agent-type** (required): one of the agent files in `.claude/agents/` (architect, pm, worker-dev, cli-dev, web-dev, qa, clarifier)
+- **agent-type** (required): one of the agent files in `.claude/agents/` (architect, pm, server-dev, cli-dev, qa, clarifier)
 - **issue-number** (optional): GitHub issue to work on
 - **extra-context** (optional): additional instructions
 
@@ -39,9 +39,8 @@ Read `.claude/agents/<agent-type>.md` to get the full agent definition.
 | ---------- | ------------------- | ---- |
 | pm         | none (root project) | auto |
 | architect  | worktree            | auto |
-| worker-dev | worktree            | auto |
+| server-dev | worktree            | auto |
 | cli-dev    | worktree            | auto |
-| web-dev    | worktree            | auto |
 | qa         | worktree            | auto |
 | clarifier  | none                | auto |
 
