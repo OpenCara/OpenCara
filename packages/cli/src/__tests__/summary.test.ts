@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   buildSummarySystemPrompt,
   buildSummaryUserMessage,
+  buildSummaryMetadataHeader,
   calculateInputSize,
   executeSummary,
   InputTooLargeError,
@@ -44,18 +45,28 @@ describe('buildSummarySystemPrompt', () => {
     expect(prompt).toContain('## Verdict');
   });
 
-  it('includes metadata header when meta is provided', () => {
+  it('does not include metadata header instructions', () => {
+    const prompt = buildSummarySystemPrompt('acme', 'widgets', 2);
+    expect(prompt).not.toContain('**Reviewers**');
+    expect(prompt).not.toContain('**Synthesizer**');
+    expect(prompt).not.toContain('metadata header');
+  });
+});
+
+describe('buildSummaryMetadataHeader', () => {
+  it('returns header with reviewers, synthesizer, contributors, and verdict', () => {
     const meta: SummaryMetadata = {
       model: 'claude-opus-4-6',
       tool: 'claude-code',
       githubUsername: 'octocat',
       reviewerModels: ['claude-sonnet/claude-code', 'gpt-4/copilot'],
     };
-    const prompt = buildSummarySystemPrompt('acme', 'widgets', 2, meta);
-    expect(prompt).toContain('**Reviewers**: `claude-sonnet/claude-code`, `gpt-4/copilot`');
-    expect(prompt).toContain('**Synthesizer**: `claude-opus-4-6/claude-code`');
-    expect(prompt).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
-    expect(prompt).toContain('**Verdict**: {verdict_emoji} {verdict}');
+    const header = buildSummaryMetadataHeader('approve', meta);
+    expect(header).toContain('**Reviewers**: `claude-sonnet/claude-code`, `gpt-4/copilot`');
+    expect(header).toContain('**Synthesizer**: `claude-opus-4-6/claude-code`');
+    expect(header).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(header).toContain('**Verdict**: \u2705 approve');
+    expect(header.endsWith('\n\n')).toBe(true);
   });
 
   it('omits Contributors line when githubUsername is not provided', () => {
@@ -64,15 +75,25 @@ describe('buildSummarySystemPrompt', () => {
       tool: 'copilot',
       reviewerModels: ['claude-sonnet/claude-code'],
     };
-    const prompt = buildSummarySystemPrompt('acme', 'widgets', 1, meta);
-    expect(prompt).toContain('**Synthesizer**: `gpt-4/copilot`');
-    expect(prompt).not.toContain('**Contributors**');
+    const header = buildSummaryMetadataHeader('request_changes', meta);
+    expect(header).toContain('**Synthesizer**: `gpt-4/copilot`');
+    expect(header).not.toContain('**Contributors**');
+    expect(header).toContain('**Verdict**: \u274C request_changes');
   });
 
-  it('does not include metadata header when meta is undefined', () => {
-    const prompt = buildSummarySystemPrompt('acme', 'widgets', 2);
-    expect(prompt).not.toContain('**Reviewers**');
-    expect(prompt).not.toContain('**Synthesizer**');
+  it('returns empty string when meta is undefined', () => {
+    const header = buildSummaryMetadataHeader('approve');
+    expect(header).toBe('');
+  });
+
+  it('shows correct emoji for comment verdict', () => {
+    const meta: SummaryMetadata = {
+      model: 'm',
+      tool: 't',
+      reviewerModels: ['r1'],
+    };
+    const header = buildSummaryMetadataHeader('comment', meta);
+    expect(header).toContain('**Verdict**: \uD83D\uDCAC comment');
   });
 });
 
@@ -211,11 +232,12 @@ describe('executeSummary', () => {
       });
   }
 
-  it('invokes tool subprocess and returns summary', async () => {
-    const mockRunTool = createMockRunTool('## Summary\nAll good.');
+  it('invokes tool subprocess and returns summary with verdict stripped', async () => {
+    const mockRunTool = createMockRunTool('## Summary\nAll good.\n\n## Verdict\nAPPROVE');
 
     const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
 
+    // Verdict section is stripped; no meta → no header prepended
     expect(result.summary).toBe('## Summary\nAll good.');
     // Includes input prompt estimate + output estimate
     expect(result.tokensUsed).toBeGreaterThan(0);
@@ -227,6 +249,20 @@ describe('executeSummary', () => {
       undefined,
       undefined,
     );
+  });
+
+  it('prepends metadata header when meta is provided', async () => {
+    const mockRunTool = createMockRunTool('## Summary\nAll good.\n\n## Verdict\nAPPROVE');
+    const meta = { model: 'claude-opus-4-6', tool: 'claude-code', githubUsername: 'octocat' };
+    const request = { ...defaultRequest, meta };
+
+    const result = await executeSummary(request, defaultDeps, mockRunTool);
+
+    expect(result.summary).toContain('**Reviewers**:');
+    expect(result.summary).toContain('**Synthesizer**: `claude-opus-4-6/claude-code`');
+    expect(result.summary).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(result.summary).toContain('**Verdict**: \u2705 approve');
+    expect(result.summary).toContain('## Summary\nAll good.');
   });
 
   it('includes all reviews in the prompt', async () => {

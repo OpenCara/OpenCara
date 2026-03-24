@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   buildSystemPrompt,
   buildUserMessage,
+  buildMetadataHeader,
   extractVerdict,
   executeReview,
   DiffTooLargeError,
@@ -18,38 +19,57 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('code reviewer');
   });
 
-  it('includes metadata header when meta is provided', () => {
+  it('does not include metadata header instructions', () => {
+    const prompt = buildSystemPrompt('acme', 'widgets');
+    expect(prompt).not.toContain('**Reviewer**');
+    expect(prompt).not.toContain('**Verdict**: {verdict_emoji}');
+    expect(prompt).not.toContain('metadata header');
+  });
+
+  it('supports compact mode', () => {
+    const prompt = buildSystemPrompt('acme', 'widgets', 'compact');
+    expect(prompt).toContain('acme/widgets');
+    expect(prompt).toContain('compact');
+  });
+});
+
+describe('buildMetadataHeader', () => {
+  it('returns header with reviewer and verdict', () => {
+    const meta: ReviewMetadata = { model: 'claude-sonnet', tool: 'claude-code' };
+    const header = buildMetadataHeader('approve', meta);
+    expect(header).toContain('**Reviewer**: `claude-sonnet/claude-code`');
+    expect(header).not.toContain('**Contributors**');
+    expect(header).toContain('**Verdict**: \u2705 approve');
+    expect(header.endsWith('\n\n')).toBe(true);
+  });
+
+  it('includes Contributors line when githubUsername is provided', () => {
     const meta: ReviewMetadata = {
       model: 'claude-sonnet',
       tool: 'claude-code',
       githubUsername: 'octocat',
     };
-    const prompt = buildSystemPrompt('acme', 'widgets', 'full', meta);
-    expect(prompt).toContain('**Reviewer**: `claude-sonnet/claude-code`');
-    expect(prompt).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
-    expect(prompt).toContain('**Verdict**: {verdict_emoji} {verdict}');
-    expect(prompt).toContain('APPROVE');
-    expect(prompt).toContain('REQUEST_CHANGES');
-    expect(prompt).toContain('COMMENT');
+    const header = buildMetadataHeader('approve', meta);
+    expect(header).toContain('**Reviewer**: `claude-sonnet/claude-code`');
+    expect(header).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(header).toContain('**Verdict**: \u2705 approve');
   });
 
-  it('omits Contributors line when githubUsername is not provided', () => {
+  it('shows correct emoji for request_changes', () => {
     const meta: ReviewMetadata = { model: 'gpt-4', tool: 'copilot' };
-    const prompt = buildSystemPrompt('acme', 'widgets', 'full', meta);
-    expect(prompt).toContain('**Reviewer**: `gpt-4/copilot`');
-    expect(prompt).not.toContain('**Contributors**');
+    const header = buildMetadataHeader('request_changes', meta);
+    expect(header).toContain('**Verdict**: \u274C request_changes');
   });
 
-  it('does not include metadata header when meta is undefined', () => {
-    const prompt = buildSystemPrompt('acme', 'widgets');
-    expect(prompt).not.toContain('**Reviewer**');
-    expect(prompt).not.toContain('**Verdict**: {verdict_emoji}');
+  it('shows correct emoji for comment', () => {
+    const meta: ReviewMetadata = { model: 'gpt-4', tool: 'copilot' };
+    const header = buildMetadataHeader('comment', meta);
+    expect(header).toContain('**Verdict**: \uD83D\uDCAC comment');
   });
 
-  it('includes metadata header in compact mode', () => {
-    const meta: ReviewMetadata = { model: 'claude-sonnet', tool: 'claude-code' };
-    const prompt = buildSystemPrompt('acme', 'widgets', 'compact', meta);
-    expect(prompt).toContain('**Reviewer**: `claude-sonnet/claude-code`');
+  it('returns empty string when meta is undefined', () => {
+    const header = buildMetadataHeader('approve');
+    expect(header).toBe('');
   });
 });
 
@@ -185,6 +205,7 @@ describe('executeReview', () => {
     const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.verdict).toBe('approve');
+    // No meta provided → no header prepended
     expect(result.review).toBe('Great code!');
     // Includes input prompt estimate + output estimate
     expect(result.tokensUsed).toBeGreaterThan(0);
@@ -200,6 +221,34 @@ describe('executeReview', () => {
     const prompt = mockRunTool.mock.calls[0][1];
     expect(prompt).toContain('Review this PR');
     expect(prompt).toContain('some diff');
+  });
+
+  it('prepends metadata header when meta is provided', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: APPROVE\nGreat code!',
+      stderr: '',
+      tokensUsed: 0,
+      tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
+    });
+
+    const meta: ReviewMetadata = {
+      model: 'claude-sonnet',
+      tool: 'claude-code',
+      githubUsername: 'octocat',
+    };
+    const request = { ...defaultRequest, meta };
+    const result = await executeReview(request, defaultDeps, mockRunTool);
+
+    expect(result.verdict).toBe('approve');
+    expect(result.review).toContain('**Reviewer**: `claude-sonnet/claude-code`');
+    expect(result.review).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(result.review).toContain('**Verdict**: \u2705 approve');
+    expect(result.review).toContain('Great code!');
+    // Header comes before the review content
+    const headerIdx = result.review.indexOf('**Reviewer**');
+    const contentIdx = result.review.indexOf('Great code!');
+    expect(headerIdx).toBeLessThan(contentIdx);
   });
 
   it('rejects diff that exceeds max size', async () => {
