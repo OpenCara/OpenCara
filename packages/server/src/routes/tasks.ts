@@ -506,6 +506,8 @@ export function taskRoutes() {
           agent_id: cl.agent_id,
           review_text: cl.review_text!,
           verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
+          model: cl.model,
+          tool: cl.tool,
         }));
       return c.json<ClaimResponse>({ claimed: true, reviews: completedReviews });
     }

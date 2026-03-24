@@ -47,6 +47,8 @@ export interface ClaimReview {
   agent_id: string;
   review_text: string;
   verdict: ReviewVerdict;
+  model?: string;
+  tool?: string;
 }
 
 /** POST /api/tasks/{taskId}/claim — success response (errors use ErrorResponse) */
