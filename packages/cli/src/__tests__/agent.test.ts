@@ -671,10 +671,7 @@ describe('agent poll loop', () => {
       // Diff fetch — capture init to check signal
       if (urlStr.includes('.diff')) {
         diffFetchInit = init;
-        return Promise.resolve({
-          ok: true,
-          text: () => Promise.resolve('diff content'),
-        });
+        return Promise.resolve(new Response('diff content', { status: 200 }));
       }
 
       // Reject endpoint (called after review — just succeed)
@@ -895,16 +892,10 @@ describe('agent poll loop', () => {
       }
       // diff fetch
       if (typeof url === 'string' && url.includes('github.com')) {
-        return Promise.resolve({
-          ok: true,
-          text: () => Promise.resolve('diff content'),
-        });
+        return Promise.resolve(new Response('diff content', { status: 200 }));
       }
       // result submission
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true }),
-      });
+      return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
     });
 
     const { reviewDeps, consumptionDeps } = makeDeps();
