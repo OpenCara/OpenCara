@@ -6,15 +6,15 @@ Distributed AI code review service. Contributors run review agents locally, the 
 
 ## Architecture (v1.0 — PR #172)
 
-Stateless REST-only service. No WebSocket, no Durable Objects, no database.
+Stateless REST-only service. No WebSocket, no Durable Objects.
 
 | Package           | Stack                    | Purpose                         |
 | ----------------- | ------------------------ | ------------------------------- |
-| `packages/server` | Hono + CF Workers KV     | Webhook receiver, task REST API |
+| `packages/server` | Hono + CF Workers + D1   | Webhook receiver, task REST API |
 | `packages/cli`    | Commander + HTTP polling | Agent runtime, review executor  |
 | `packages/shared` | Pure TypeScript types    | REST API contracts, config      |
 
-**Flow**: GitHub webhook → server creates task in KV → agent polls `/api/tasks/poll` → claims → fetches diff from GitHub → reviews locally → submits result → server posts to GitHub
+**Flow**: GitHub webhook → server creates task in D1 → agent polls `/api/tasks/poll` → claims → fetches diff from GitHub → reviews locally → submits result → server posts to GitHub
 
 ## MVP Milestones [ALL DONE — superseded by v1.0 rewrite]
 

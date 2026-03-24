@@ -59,28 +59,13 @@ For issues affecting the OpenCara bot review report:
 
 ```bash
 # Create a test PR on the dev test repo
-BRANCH="qa-test-$(date +%s)"
-MAIN_SHA=$(gh api repos/OpenCara/opencara-dev-test/git/ref/heads/main --jq '.object.sha')
-gh api repos/OpenCara/opencara-dev-test/git/refs -X POST -f ref="refs/heads/$BRANCH" -f sha="$MAIN_SHA"
-README_SHA=$(gh api repos/OpenCara/opencara-dev-test/contents/README.md --jq '.sha')
-gh api repos/OpenCara/opencara-dev-test/contents/README.md -X PUT \
-  -f message="test: QA smoke test" \
-  -f content="$(echo -e '# test\n<!-- QA test -->' | base64 -w0)" \
-  -f sha="$README_SHA" -f branch="$BRANCH"
-gh pr create --repo OpenCara/opencara-dev-test --base main --head "$BRANCH" \
-  --title "QA smoke test" --body "Automated QA verification."
+PR_NUM=$(scripts/create-test-pr.sh)
 
-# Wait for bot review (poll every 30s, up to 10 min)
-for i in $(seq 1 20); do
-  COMMENTS=$(gh api repos/OpenCara/opencara-dev-test/issues/<PR_NUMBER>/comments \
-    --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
-  if [ "$COMMENTS" -gt 0 ]; then echo "Bot review found"; break; fi
-  echo "Waiting... ($i/20)"
-  sleep 30
-done
+# Wait for bot review
+scripts/wait-bot-review.sh "$PR_NUM"
 
 # Check actual comment body against expected format
-gh api repos/OpenCara/opencara-dev-test/issues/<PR_NUMBER>/comments \
+gh api repos/OpenCara/opencara-dev-test/issues/$PR_NUM/comments \
   --jq '.[] | select(.user.login == "opencara[bot]") | .body'
 ```
 

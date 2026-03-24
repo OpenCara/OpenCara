@@ -58,30 +58,12 @@ After creating the PR, the OpenCara GitHub App (our own product) automatically r
 
 The OpenCara GitHub App is installed on this repo with `.review.yml` configured (review_count: 3). When you push and create a PR, the bot automatically dispatches review agents.
 
-1. After creating the PR, wait for the OpenCara bot review to appear:
+1. After creating the PR, run the bot review wait script:
    ```bash
-   # Poll for bot review (check every 30s, up to 20 minutes)
-   # Check both PR reviews and issue comments — the bot may use either
-   for i in $(seq 1 40); do
-     PR_REVIEWS=$(gh api repos/OpenCara/OpenCara/pulls/<PR_NUMBER>/reviews --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
-     COMMENTS=$(gh api repos/OpenCara/OpenCara/issues/<PR_NUMBER>/comments --jq '[.[] | select(.user.login == "opencara[bot]")] | length' 2>/dev/null || echo 0)
-     TOTAL=$((PR_REVIEWS + COMMENTS))
-     if [ "$TOTAL" -gt 0 ]; then echo "Bot review found ($PR_REVIEWS review(s), $COMMENTS comment(s))"; break; fi
-     echo "Waiting for bot review... ($i/40)"
-     sleep 30
-   done
+   scripts/wait-bot-review.sh <PR_NUMBER>
    ```
-2. If no review after 20 minutes, trigger manually with `/opencara review` and wait another 5 minutes:
-   ```bash
-   gh pr comment <PR_NUMBER> --body "/opencara review"
-   sleep 300
-   ```
-3. If still no review after the manual trigger, request a second manual review before proceeding:
-   ```bash
-   gh pr comment <PR_NUMBER> --body "/opencara review"
-   sleep 300
-   ```
-4. **NEVER merge without at least checking for the bot review.** If the bot truly cannot review after both attempts (no agents online), document this in the PR and proceed with self-review only.
+   The script polls for 20 minutes, then auto-triggers `/opencara review` up to 2 times (5 min wait each). Exit code 0 = review found, exit code 1 = no review after all attempts.
+2. **NEVER merge without at least running the wait script.** If the bot truly cannot review after all attempts (no agents online), document this in the PR and proceed with self-review only.
 
 ### Step 2: Fix & Re-review (max 3 iterations)
 
@@ -93,23 +75,13 @@ The OpenCara GitHub App is installed on this repo with `.review.yml` configured 
 
 ### Step 3: Pre-merge Verification
 
-**MANDATORY**: Before merging, pull latest main and run the full test suite locally:
+**MANDATORY**: Before merging, run the pre-merge check script:
 
 ```bash
-git fetch origin main
-git merge origin/main
-pnpm build && pnpm test && pnpm lint && pnpm run format:check && pnpm run typecheck
+scripts/pre-merge-check.sh <PR_NUMBER>
 ```
 
-If any check fails, fix the issue before merging. Do NOT merge with failing tests.
-
-After all checks pass, run coverage and post the report to the PR:
-
-````bash
-pnpm vitest run --coverage 2>&1 | tail -40 > /tmp/coverage-report.txt
-gh pr comment <PR_NUMBER> --body "$(printf '## Coverage Report\n\n```\n'; cat /tmp/coverage-report.txt; printf '```\n')"
-rm -f /tmp/coverage-report.txt
-````
+The script merges latest main, runs build + test + lint + format + typecheck, then posts a coverage report to the PR. If any check fails, fix the issue before merging.
 
 ### Step 4: Merge
 

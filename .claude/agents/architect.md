@@ -13,7 +13,7 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 ## Tech Stack
 
 - **Language**: TypeScript (strict mode)
-- **Backend**: Hono on Cloudflare Workers + KV
+- **Backend**: Hono on Cloudflare Workers + D1
 - **CLI**: Node.js (npm package)
 - **Monorepo**: pnpm workspaces
 
@@ -21,7 +21,7 @@ Follow the **Development Workflow** in `.claude/rules/development-workflow.md`.
 
 - Shared types and REST API contracts (`packages/shared`)
 - Cross-package infrastructure (CI/CD, TypeScript config, build scripts)
-- TaskStore interface design
+- DataStore interface design
 - API contract definitions
 - Refactoring and migration work that spans multiple packages
 - Design docs in `docs/`

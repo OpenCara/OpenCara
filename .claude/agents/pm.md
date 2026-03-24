@@ -240,25 +240,15 @@ Done → (closed)
 ### Commands
 
 ```bash
-# Add issue to project (do this for every new issue during triage)
-gh project item-add 1 --owner OpenCara --url https://github.com/OpenCara/OpenCara/issues/<NUMBER>
+# Set issue status (auto-adds to project if not already there)
+scripts/set-issue-status.sh <NUMBER> <STATUS>
+# STATUS: backlog | ready | in-progress | in-review | done
 
-# Get item ID for an issue already in the project
-ITEM_ID=$(gh project item-list 1 --owner OpenCara --format json | jq -r '.items[] | select(.content.number == <NUMBER>) | .id')
-
-# Set status (replace <OPTION_ID> with the appropriate value below)
-gh project item-edit --project-id PVT_kwDOEAYvm84BSjju --id "$ITEM_ID" --field-id PVTSSF_lADOEAYvm84BSjjuzhADgLE --single-select-option-id <OPTION_ID>
+# Examples:
+scripts/set-issue-status.sh 42 backlog
+scripts/set-issue-status.sh 42 in-progress
+scripts/set-issue-status.sh 42 done
 ```
-
-**Status option IDs:**
-
-| Status      | Option ID  |
-| ----------- | ---------- |
-| Backlog     | `f75ad846` |
-| Ready       | `61e4505c` |
-| In progress | `47fc9ee4` |
-| In review   | `df73e18b` |
-| Done        | `98236657` |
 
 ### When to Update
 
