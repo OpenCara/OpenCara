@@ -109,6 +109,7 @@ describe('Agent Coverage Tests', () => {
       repoConfig?: import('@opencara/shared').RepoConfig;
       githubToken?: string;
       codebaseDir?: string;
+      githubUsername?: string;
     },
   ): Promise<void> {
     const deps = makeDeps(agentId);
@@ -125,7 +126,12 @@ describe('Agent Coverage Tests', () => {
       { model: 'test-model', tool: 'test-tool' },
       reviewDeps,
       deps.consumptionDeps,
-      { pollIntervalMs: 100, reviewOnly: opts?.reviewOnly, repoConfig: opts?.repoConfig },
+      {
+        pollIntervalMs: 100,
+        reviewOnly: opts?.reviewOnly,
+        repoConfig: opts?.repoConfig,
+        githubUsername: opts?.githubUsername,
+      },
     );
   }
 
@@ -1164,6 +1170,344 @@ describe('Agent Coverage Tests', () => {
         await stopAgent(promise, server);
       } finally {
         globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Streaming diff size guard (issue #351)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('fetchDiff streaming size guard', () => {
+    it('aborts early when Content-Length exceeds maxDiffSizeKb', async () => {
+      const originalFetch = globalThis.fetch;
+      server.uninstallFetch();
+
+      let rejectCalled = false;
+      let rejectReason = '';
+
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+        if (url.includes('/api/tasks/poll')) {
+          return new Response(
+            JSON.stringify({
+              tasks: [
+                {
+                  task_id: 'task-cl-guard',
+                  owner: 'test-org',
+                  repo: 'test-repo',
+                  pr_number: 1,
+                  diff_url: 'https://github.com/test-org/test-repo/pull/1.diff',
+                  timeout_seconds: 300,
+                  prompt: 'Review',
+                  role: 'review',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('/claim')) {
+          return new Response(JSON.stringify({ claimed: true }), { status: 200 });
+        }
+
+        if (url.includes('.diff') || url.includes('/pull/')) {
+          // Return response with Content-Length far exceeding the 1KB limit
+          return new Response('small body', {
+            status: 200,
+            headers: { 'Content-Length': '204800' }, // 200KB
+          });
+        }
+
+        if (url.includes('/reject')) {
+          rejectCalled = true;
+          const body = JSON.parse((init?.body as string) ?? '{}');
+          rejectReason = body.reason ?? '';
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        if (url.includes('/result') || url.includes('/error')) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('cl-guard-agent');
+        // Set maxDiffSizeKb to 1KB — Content-Length of 200KB will exceed this
+        const reviewDeps: ReviewExecutorDeps = { ...deps.reviewDeps, maxDiffSizeKb: 1 };
+
+        const promise = startAgent(
+          'cl-guard-agent',
+          'http://fake-server',
+          { model: 'test', tool: 'test' },
+          reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        // The diff fetch should have been rejected due to Content-Length
+        expect(rejectCalled).toBe(true);
+        expect(rejectReason).toMatch(/Diff too large.*Content-Length/);
+
+        globalThis.fetch = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
+        });
+        await advanceTime(3000);
+        await promise;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('aborts mid-stream when accumulated bytes exceed maxDiffSizeKb', async () => {
+      const originalFetch = globalThis.fetch;
+      server.uninstallFetch();
+
+      let rejectCalled = false;
+      let rejectReason = '';
+
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+        if (url.includes('/api/tasks/poll')) {
+          return new Response(
+            JSON.stringify({
+              tasks: [
+                {
+                  task_id: 'task-stream-guard',
+                  owner: 'test-org',
+                  repo: 'test-repo',
+                  pr_number: 1,
+                  diff_url: 'https://github.com/test-org/test-repo/pull/1.diff',
+                  timeout_seconds: 300,
+                  prompt: 'Review',
+                  role: 'review',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('/claim')) {
+          return new Response(JSON.stringify({ claimed: true }), { status: 200 });
+        }
+
+        if (url.includes('.diff') || url.includes('/pull/')) {
+          // Return a large body without Content-Length header so the stream guard triggers
+          const largeBody = 'x'.repeat(3072); // 3KB
+          return new Response(largeBody, { status: 200 });
+        }
+
+        if (url.includes('/reject')) {
+          rejectCalled = true;
+          const body = JSON.parse((init?.body as string) ?? '{}');
+          rejectReason = body.reason ?? '';
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        if (url.includes('/result') || url.includes('/error')) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('stream-guard-agent');
+        // Set maxDiffSizeKb to 1KB — the 3KB body will exceed this during streaming
+        const reviewDeps: ReviewExecutorDeps = { ...deps.reviewDeps, maxDiffSizeKb: 1 };
+
+        const promise = startAgent(
+          'stream-guard-agent',
+          'http://fake-server',
+          { model: 'test', tool: 'test' },
+          reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        // The diff fetch should have been rejected due to streaming size
+        expect(rejectCalled).toBe(true);
+        expect(rejectReason).toMatch(/Diff too large/);
+
+        globalThis.fetch = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
+        });
+        await advanceTime(3000);
+        await promise;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('fetches diff normally when under maxDiffSizeKb limit', async () => {
+      const originalFetch = globalThis.fetch;
+      server.uninstallFetch();
+
+      let resultSubmitted = false;
+
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+        if (url.includes('/api/tasks/poll')) {
+          return new Response(
+            JSON.stringify({
+              tasks: [
+                {
+                  task_id: 'task-normal-diff',
+                  owner: 'test-org',
+                  repo: 'test-repo',
+                  pr_number: 1,
+                  diff_url: 'https://github.com/test-org/test-repo/pull/1.diff',
+                  timeout_seconds: 300,
+                  prompt: 'Review',
+                  role: 'review',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('/claim')) {
+          return new Response(JSON.stringify({ claimed: true }), { status: 200 });
+        }
+
+        if (url.includes('.diff') || url.includes('/pull/')) {
+          // Return a small diff — well under 500KB limit
+          return new Response('diff --git a/f b/f\n+small change', { status: 200 });
+        }
+
+        if (url.includes('/result')) {
+          resultSubmitted = true;
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        if (url.includes('/reject') || url.includes('/error')) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        // PR context endpoints
+        if (url.includes('api.github.com')) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('normal-diff-agent');
+        // maxDiffSizeKb is 500 (default from makeDeps), small diff should pass
+
+        const promise = startAgent(
+          'normal-diff-agent',
+          'http://fake-server',
+          { model: 'test', tool: 'test' },
+          deps.reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        // The review result should have been submitted (not rejected)
+        expect(resultSubmitted).toBe(true);
+
+        globalThis.fetch = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
+        });
+        await advanceTime(3000);
+        await promise;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Contributor attribution in review submissions
+  // ═══════════════════════════════════════════════════════════
+
+  describe('Contributor attribution', () => {
+    it('appends attribution to review text when githubUsername is configured', async () => {
+      const taskId = await server.injectTask({ reviewCount: 1 });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('attrib-agent', { githubUsername: 'octocat' });
+        await advanceTime(2000);
+
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.review_text).toContain(
+          '---\nContributed by [@octocat](https://github.com/octocat)',
+        );
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
+      }
+    });
+
+    it('does not append attribution when githubUsername is not configured', async () => {
+      const taskId = await server.injectTask({ reviewCount: 1 });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('no-attrib-agent');
+        await advanceTime(2000);
+
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.review_text).not.toContain('Contributed by');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
       }
     });
   });

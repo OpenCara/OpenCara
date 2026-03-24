@@ -99,7 +99,10 @@ async function fetchDiff(
   diffUrl: string,
   githubToken?: string | null,
   signal?: AbortSignal,
+  maxDiffSizeKb?: number,
 ): Promise<string> {
+  const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
+
   return withRetry(
     async () => {
       const headers: Record<string, string> = {};
@@ -129,6 +132,39 @@ async function fetchDiff(
         }
         throw new Error(msg);
       }
+
+      // Fast path: check Content-Length header before reading body
+      if (maxBytes < Infinity) {
+        const contentLength = parseInt(response.headers.get('content-length') ?? '', 10);
+        if (!isNaN(contentLength) && contentLength > maxBytes) {
+          // Cancel the body to avoid downloading
+          if (response.body) {
+            void response.body.cancel();
+          }
+          throw new DiffTooLargeError(
+            `Diff too large (${Math.round(contentLength / 1024)}KB > ${maxDiffSizeKb}KB, from Content-Length)`,
+          );
+        }
+
+        // Stream with size limit — Content-Length may be absent or incorrect
+        if (response.body) {
+          const reader = response.body.getReader();
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            totalBytes += value.length;
+            if (totalBytes > maxBytes) {
+              void reader.cancel();
+              throw new DiffTooLargeError(`Diff too large (>${maxDiffSizeKb}KB)`);
+            }
+            chunks.push(value);
+          }
+          return new TextDecoder().decode(concatUint8Arrays(chunks, totalBytes));
+        }
+      }
+
       return response.text();
     },
     { maxAttempts: 2 },
@@ -136,8 +172,28 @@ async function fetchDiff(
   );
 }
 
+/** Concatenate Uint8Array chunks into a single buffer. */
+function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Array {
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
 /** Max times an agent will attempt a task that fails diff fetch before skipping it. */
 const MAX_DIFF_FETCH_ATTEMPTS = 3;
+
+/**
+ * Append contributor attribution to review/summary text when github_username is configured.
+ * Anonymous agents (no github_username) return text unchanged.
+ */
+export function appendContributorAttribution(text: string, githubUsername?: string): string {
+  if (!githubUsername) return text;
+  return `${text}\n\n---\nContributed by [@${githubUsername}](https://github.com/${githubUsername})`;
+}
 
 /**
  * Poll → Claim → Review → Submit loop for a single agent.
@@ -352,7 +408,12 @@ async function handleTask(
   // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
   try {
-    diffContent = await fetchDiff(diff_url, reviewDeps.githubToken, signal);
+    diffContent = await fetchDiff(
+      diff_url,
+      reviewDeps.githubToken,
+      signal,
+      reviewDeps.maxDiffSizeKb,
+    );
     log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
     logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
@@ -444,6 +505,7 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
+        githubUsername,
       );
     } else {
       await executeReviewTask(
@@ -462,6 +524,7 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
+        githubUsername,
       );
     }
     agentSession.tasksCompleted++;
@@ -551,6 +614,7 @@ async function executeReviewTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
+  githubUsername?: string,
 ): Promise<void> {
   // Check per-review token limit before executing.
   // Uses estimated *input* tokens only — output tokens are unpredictable and
@@ -628,7 +692,7 @@ async function executeReviewTask(
   }
 
   // Sanitize review text before submission to prevent token leakage
-  const sanitizedReview = sanitizeTokens(reviewText);
+  const sanitizedReview = appendContributorAttribution(sanitizeTokens(reviewText), githubUsername);
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(
@@ -674,6 +738,7 @@ async function executeSummaryTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
+  githubUsername?: string,
 ): Promise<void> {
   if (reviews.length === 0) {
     // Single-agent mode (review_count=1): this IS the review, run it as a regular
@@ -736,7 +801,10 @@ async function executeSummaryTask(
       };
     }
 
-    const sanitizedReview = sanitizeTokens(reviewText);
+    const sanitizedReview = appendContributorAttribution(
+      sanitizeTokens(reviewText),
+      githubUsername,
+    );
 
     await withRetry(
       () =>
@@ -828,7 +896,10 @@ async function executeSummaryTask(
     };
   }
 
-  const sanitizedSummary = sanitizeTokens(summaryText);
+  const sanitizedSummary = appendContributorAttribution(
+    sanitizeTokens(summaryText),
+    githubUsername,
+  );
 
   // Submit result — retry up to 3 times (highest-risk operation)
   await withRetry(

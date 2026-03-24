@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { startAgent, computeRoles, type ConsumptionDeps } from '../commands/agent.js';
+import {
+  startAgent,
+  computeRoles,
+  appendContributorAttribution,
+  type ConsumptionDeps,
+} from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import type { RouterRelay } from '../router.js';
 import { createSessionTracker } from '../consumption.js';
@@ -667,10 +672,7 @@ describe('agent poll loop', () => {
       // Diff fetch — capture init to check signal
       if (urlStr.includes('.diff')) {
         diffFetchInit = init;
-        return Promise.resolve({
-          ok: true,
-          text: () => Promise.resolve('diff content'),
-        });
+        return Promise.resolve(new Response('diff content', { status: 200 }));
       }
 
       // Reject endpoint (called after review — just succeed)
@@ -891,16 +893,10 @@ describe('agent poll loop', () => {
       }
       // diff fetch
       if (typeof url === 'string' && url.includes('github.com')) {
-        return Promise.resolve({
-          ok: true,
-          text: () => Promise.resolve('diff content'),
-        });
+        return Promise.resolve(new Response('diff content', { status: 200 }));
       }
       // result submission
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true }),
-      });
+      return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
     });
 
     const { reviewDeps, consumptionDeps } = makeDeps();
@@ -1000,5 +996,27 @@ describe('computeRoles', () => {
   it('returns ["review", "summary"] for agent with neither flag', () => {
     const agent: LocalAgentConfig = { model: 'claude-opus-4-6', tool: 'claude' };
     expect(computeRoles(agent)).toEqual(['review', 'summary']);
+  });
+});
+
+describe('appendContributorAttribution', () => {
+  it('appends GitHub profile link when username is provided', () => {
+    const text = 'Review looks good.';
+    const result = appendContributorAttribution(text, 'octocat');
+    expect(result).toBe(
+      'Review looks good.\n\n---\nContributed by [@octocat](https://github.com/octocat)',
+    );
+  });
+
+  it('returns text unchanged when username is undefined', () => {
+    const text = 'Review looks good.';
+    const result = appendContributorAttribution(text, undefined);
+    expect(result).toBe('Review looks good.');
+  });
+
+  it('returns text unchanged when username is empty string', () => {
+    const text = 'Review looks good.';
+    const result = appendContributorAttribution(text, '');
+    expect(result).toBe('Review looks good.');
   });
 });
