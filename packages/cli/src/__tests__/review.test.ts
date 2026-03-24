@@ -223,7 +223,7 @@ describe('executeReview', () => {
     expect(prompt).toContain('some diff');
   });
 
-  it('prepends metadata header when meta is provided', async () => {
+  it('returns clean review without metadata header (header added at submission)', async () => {
     const mockRunTool = vi.fn().mockResolvedValue({
       stdout: 'VERDICT: APPROVE\nGreat code!',
       stderr: '',
@@ -232,23 +232,13 @@ describe('executeReview', () => {
       tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
     });
 
-    const meta: ReviewMetadata = {
-      model: 'claude-sonnet',
-      tool: 'claude-code',
-      githubUsername: 'octocat',
-    };
-    const request = { ...defaultRequest, meta };
-    const result = await executeReview(request, defaultDeps, mockRunTool);
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
 
     expect(result.verdict).toBe('approve');
-    expect(result.review).toContain('**Reviewer**: `claude-sonnet/claude-code`');
-    expect(result.review).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
-    expect(result.review).toContain('**Verdict**: \u2705 approve');
-    expect(result.review).toContain('Great code!');
-    // Header comes before the review content
-    const headerIdx = result.review.indexOf('**Reviewer**');
-    const contentIdx = result.review.indexOf('Great code!');
-    expect(headerIdx).toBeLessThan(contentIdx);
+    expect(result.review).toBe('Great code!');
+    // No metadata header — header injection is done in agent.ts at submission time
+    expect(result.review).not.toContain('**Reviewer**');
+    expect(result.review).not.toContain('**Verdict**');
   });
 
   it('rejects diff that exceeds max size', async () => {
