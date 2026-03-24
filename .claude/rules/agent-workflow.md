@@ -24,5 +24,5 @@ Dev agents escalate to architect (via issue comment) if cross-package changes ar
 - **Self-hosted runner model** — platform never touches contributor API keys; agents run locally
 - **Shared types are the contract** — `packages/shared` defines the REST API types used by all packages
 - **REST-only, no WebSocket** — stateless HTTP polling, no Durable Objects, no persistent connections
-- **No database** — all state in Workers KV via TaskStore abstraction
+- **D1 (SQL) is the primary data store** — DataStore abstraction supports D1 and in-memory backends; KVDataStore was removed
 - **Agents fetch diffs directly** — server never sends diff content, agents fetch from GitHub

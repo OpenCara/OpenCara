@@ -1,5 +1,15 @@
 {
   "permissions": {
-    "allow": ["Bash(git add:*)", "Bash(git checkout:*)", "Bash(git pull:*)"]
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git checkout:*)",
+      "Bash(git pull:*)",
+      "Bash(gh pr:*)",
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)[0][''''number'''']\\)\")",
+      "Bash(python3 -c \"import json,sys; prs=json.load\\(sys.stdin\\); print\\([p[''''number''''] for p in prs] if prs else ''''None''''\\)\")",
+      "Bash(gh issue:*)",
+      "Bash(python3 -c \"import json,sys; print\\(sorted\\(i[''''number''''] for i in json.load\\(sys.stdin\\)\\)\\)\")",
+      "Bash(python3 -c \":*)"
+    ]
   }
 }
