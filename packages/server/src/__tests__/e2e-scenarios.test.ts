@@ -939,56 +939,23 @@ describe('E2E Scenarios', () => {
       expect(commentBody).toContain('This should still be posted.');
     });
 
-    it('review uses model/tool from directly passed summary data, not stale KV', async () => {
-      // Use multi-agent mode so synthesizer model/tool appears in the comment
-      const taskId = await injectPR({ reviewCount: 2 });
-      const reviewer = agent('reviewer-agent');
-      const synth = agent('model-agent');
+    it('server posts review_text as-is without re-formatting', async () => {
+      const taskId = await injectPR();
+      const a = agent('passthrough-agent');
 
-      // Reviewer claims and completes the review
-      await reviewer.claim(taskId, 'review', { model: 'gpt-4', tool: 'other-cli' });
-      await reviewer.submitResult(taskId, 'review', 'LGTM', 'approve', 300);
+      await a.claim(taskId, 'summary');
 
-      // Synthesizer claims with correct model and tool
-      await synth.claim(taskId, 'summary', { model: 'claude-3', tool: 'opencara-cli' });
-
-      // Intercept getClaim to return stale data on the SECOND call (postFinalReview's
-      // observability check), not the first call (result handler's claim lookup)
-      const originalGetClaim = store.getClaim.bind(store);
-      let callCount = 0;
-      vi.spyOn(store, 'getClaim').mockImplementation(async (claimId: string) => {
-        const claim = await originalGetClaim(claimId);
-        if (claim && claimId === `${taskId}:model-agent:summary`) {
-          callCount++;
-          if (callCount > 1) {
-            // Second call (postFinalReview observability) — return stale data
-            return { ...claim, review_text: undefined, model: 'stale-model', tool: 'stale-tool' };
-          }
-        }
-        return claim;
-      });
-
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-      // Submit result
-      const result = await synth.submitResult(
-        taskId,
-        'summary',
-        '## Summary\nModel test.',
-        'approve',
-        500,
-      );
+      // CLI pre-formats the review_text with header/footer
+      const preformatted =
+        '## OpenCara Review\n\n**Reviewer**: `claude-3/opencara-cli`\n**Verdict**: approve\n\n---\nLooks good.\n---\n<sub>Reviewed by OpenCara</sub>';
+      const result = await a.submitResult(taskId, 'summary', preformatted, 'approve', 500);
       expect(result.status).toBe(200);
 
-      // GitHub comment should use the model/tool from the claim (set at claim time),
-      // not the stale KV re-read
+      // Server should post the exact pre-formatted text without modification
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
-      // Should contain correct model/tool (formatted as `model/tool`) and NOT stale ones
-      expect(commentBody).toContain('claude-3/opencara-cli');
-      expect(commentBody).not.toContain('stale-model');
-      expect(commentBody).not.toContain('stale-tool');
+      expect(commentBody).toBe(preformatted);
     });
   });
 

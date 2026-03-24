@@ -13,12 +13,7 @@ import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
-import {
-  formatSummaryComment,
-  formatTimeoutComment,
-  type ReviewAgentInfo,
-  type TimeoutReview,
-} from '../review-formatter.js';
+import { formatTimeoutComment, type TimeoutReview } from '../review-formatter.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
@@ -197,8 +192,6 @@ export async function checkTimeouts(
 /** Data passed directly from the result endpoint to avoid KV read-after-write staleness. */
 export interface SummaryData {
   review_text: string;
-  model?: string;
-  tool?: string;
 }
 
 /**
@@ -230,33 +223,17 @@ async function postFinalReview(
     return;
   }
 
-  const claims = await store.getClaims(taskId);
-
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
 
-    // Build agent info from claims
-    const reviewClaims = claims.filter((c) => c.role === 'review' && c.status === 'completed');
-    const reviewerAgents: ReviewAgentInfo[] = reviewClaims.map((c) => ({
-      model: c.model ?? 'unknown',
-      tool: c.tool ?? 'unknown',
-    }));
-    const synthAgent: ReviewAgentInfo = {
-      model: summaryData.model ?? 'unknown',
-      tool: summaryData.tool ?? 'unknown',
-    };
-
-    // Format the body — use summaryData.review_text directly (never re-read from KV)
-    let body: string;
-    if (task.review_count === 1) {
-      // Single agent — post directly
-      body = formatSummaryComment(summaryData.review_text, [], null);
-    } else {
-      // Multi-agent — include reviewer info in header
-      body = formatSummaryComment(summaryData.review_text, reviewerAgents, synthAgent);
-    }
-
-    await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
+    // Post review_text as-is — CLI pre-formats with header/footer
+    await github.postPrComment(
+      task.owner,
+      task.repo,
+      task.pr_number,
+      summaryData.review_text,
+      token,
+    );
 
     await store.deleteTask(taskId);
     logger.info('Review posted to GitHub — task deleted', {
@@ -606,18 +583,7 @@ export function taskRoutes() {
       }
 
       // Summary submitted — post the final review to GitHub
-      await postFinalReview(
-        store,
-        github,
-        taskId,
-        agent_id,
-        {
-          review_text,
-          model: claim.model,
-          tool: claim.tool,
-        },
-        logger,
-      );
+      await postFinalReview(store, github, taskId, agent_id, { review_text }, logger);
     } else {
       // Review submitted — atomically increment completed_reviews counter
       const result = await store.incrementCompletedReviews(taskId);

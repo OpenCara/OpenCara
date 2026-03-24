@@ -1,6 +1,6 @@
 /**
  * Tests covering server source gaps:
- * - review-formatter.ts: formatSummaryComment edge cases
+ * - review-formatter.ts: formatTimeoutComment edge cases
  * - github/config.ts: loadReviewConfig error paths
  * - github/reviews.ts: postPrComment error path
  * - index.ts: error handler and 404
@@ -19,60 +19,13 @@ afterEach(() => {
 // ── review-formatter.ts ──────────────────────────────────────
 
 describe('review-formatter edge cases', () => {
-  it('formatSummaryComment with no agents and no synthesizer', async () => {
-    const { formatSummaryComment } = await import('../review-formatter.js');
-    const result = formatSummaryComment('My summary text', [], null);
-    expect(result).toContain('My summary text');
-    expect(result).toContain('OpenCara Review');
-    // No agents line when both are empty
-    expect(result).not.toContain('**Agents**');
-  });
-
-  it('formatSummaryComment with agents and synthesizer', async () => {
-    const { formatSummaryComment } = await import('../review-formatter.js');
-    const result = formatSummaryComment(
-      'Summary',
-      [
-        { model: 'claude', tool: 'claude-cli' },
-        { model: 'gpt-4', tool: 'codex', displayName: 'My Agent' },
-      ],
-      { model: 'claude', tool: 'claude-cli', displayName: 'Synth' },
-    );
-    expect(result).toContain('`claude/claude-cli`');
-    expect(result).toContain('My Agent');
-    expect(result).toContain('synthesized by');
-    expect(result).toContain('Synth');
-  });
-
-  it('formatSummaryComment with synthesizer only (no review agents)', async () => {
-    const { formatSummaryComment } = await import('../review-formatter.js');
-    const result = formatSummaryComment('Summary', [], {
-      model: 'claude',
-      tool: 'claude-cli',
-    });
-    expect(result).toContain('**Agents**: `claude/claude-cli`');
-  });
-
-  it('formatIndividualReviewComment formats review with emoji', async () => {
-    const { formatIndividualReviewComment } = await import('../review-formatter.js');
-
-    const approve = formatIndividualReviewComment('claude', 'cli', 'approve', 'LGTM');
-    expect(approve).toContain('Agent: `claude` / `cli`');
-    expect(approve).toContain('approve');
-    expect(approve).toContain('LGTM');
-
-    const changes = formatIndividualReviewComment('gpt', 'codex', 'request_changes', 'Fix bugs');
-    expect(changes).toContain('request_changes');
-
-    const comment = formatIndividualReviewComment('gemini', 'tool', 'comment', 'Looks ok');
-    expect(comment).toContain('comment');
-  });
-
   it('formatTimeoutComment with no reviews returns simple timeout message', async () => {
     const { formatTimeoutComment } = await import('../review-formatter.js');
     const result = formatTimeoutComment(10, []);
-    expect(result).toBe('**OpenCara**: Review timed out after 10 minutes.');
+    expect(result).toContain('## OpenCara Review');
+    expect(result).toContain('> Review timed out after 10 minutes.');
     expect(result).not.toContain('partial review');
+    expect(result).toContain('<sub>Reviewed by');
   });
 
   it('formatTimeoutComment with reviews returns consolidated comment', async () => {
@@ -81,16 +34,19 @@ describe('review-formatter edge cases', () => {
       { model: 'claude', tool: 'cli', verdict: 'approve', review_text: 'LGTM' },
       { model: 'gemini', tool: 'codex', verdict: 'request_changes', review_text: 'Fix bugs' },
     ]);
+    expect(result).toContain('## OpenCara Review');
     expect(result).toContain('timed out after 10 minutes');
     expect(result).toContain('2 partial review(s) collected');
     expect(result).toContain('Review 1');
+    expect(result).toContain('`claude/cli`');
     expect(result).toContain('approve');
     expect(result).toContain('LGTM');
     expect(result).toContain('Review 2');
+    expect(result).toContain('`gemini/codex`');
     expect(result).toContain('request_changes');
     expect(result).toContain('Fix bugs');
-    // Verify sections are separated by horizontal rules
     expect(result).toContain('---');
+    expect(result).toContain('<sub>Reviewed by');
   });
 
   it('formatTimeoutComment with single review', async () => {
@@ -98,9 +54,12 @@ describe('review-formatter edge cases', () => {
     const result = formatTimeoutComment(5, [
       { model: 'gpt', tool: 'tool', verdict: 'comment', review_text: 'Minor suggestions' },
     ]);
+    expect(result).toContain('## OpenCara Review');
     expect(result).toContain('1 partial review(s) collected');
     expect(result).toContain('Review 1');
+    expect(result).toContain('`gpt/tool`');
     expect(result).toContain('Minor suggestions');
+    expect(result).toContain('<sub>Reviewed by');
   });
 });
 
