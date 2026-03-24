@@ -134,7 +134,7 @@ async function fetchDiff(
         if (!isNaN(contentLength) && contentLength > maxBytes) {
           // Cancel the body to avoid downloading
           if (response.body) {
-            response.body.cancel().catch(() => {});
+            void response.body.cancel();
           }
           throw new DiffTooLargeError(
             `Diff too large (${Math.round(contentLength / 1024)}KB > ${maxDiffSizeKb}KB, from Content-Length)`,
@@ -146,20 +146,15 @@ async function fetchDiff(
           const reader = response.body.getReader();
           const chunks: Uint8Array[] = [];
           let totalBytes = 0;
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              totalBytes += value.length;
-              if (totalBytes > maxBytes) {
-                reader.cancel().catch(() => {});
-                throw new DiffTooLargeError(`Diff too large (>${maxDiffSizeKb}KB)`);
-              }
-              chunks.push(value);
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            totalBytes += value.length;
+            if (totalBytes > maxBytes) {
+              void reader.cancel();
+              throw new DiffTooLargeError(`Diff too large (>${maxDiffSizeKb}KB)`);
             }
-          } catch (err) {
-            if (err instanceof DiffTooLargeError) throw err;
-            throw err;
+            chunks.push(value);
           }
           return new TextDecoder().decode(concatUint8Arrays(chunks, totalBytes));
         }
