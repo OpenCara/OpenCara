@@ -24,7 +24,7 @@ import {
 } from '../config.js';
 import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.js';
 import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
-import { ApiClient, HttpError } from '../http.js';
+import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
 import {
   executeReview,
@@ -55,6 +55,8 @@ import {
   type Logger,
   type AgentSessionStats,
 } from '../logger.js';
+
+declare const __CLI_VERSION__: string;
 
 export interface ConsumptionDeps {
   agentId: string;
@@ -300,6 +302,13 @@ async function pollLoop(
       }
     } catch (err) {
       if (signal?.aborted) break;
+
+      // 426 Upgrade Required — graceful shutdown, no retry
+      if (err instanceof UpgradeRequiredError) {
+        logWarn(`${icons.warn} ${err.message}`);
+        process.exitCode = 1;
+        break;
+      }
 
       agentSession.errorsEncountered++;
 
@@ -986,7 +995,10 @@ export async function startAgent(
     usageLimits?: UsageLimits;
   },
 ): Promise<void> {
-  const client = new ApiClient(platformUrl, { apiKey: options?.apiKey });
+  const client = new ApiClient(platformUrl, {
+    apiKey: options?.apiKey,
+    cliVersion: __CLI_VERSION__,
+  });
   const session = consumptionDeps?.session ?? createSessionTracker();
   const usageTracker = consumptionDeps?.usageTracker ?? new UsageTracker();
   const usageLimits = options?.usageLimits ?? {
