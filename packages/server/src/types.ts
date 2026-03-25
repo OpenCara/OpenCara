@@ -1,3 +1,4 @@
+import type { VerifiedIdentity } from '@opencara/shared';
 import type { D1Database } from './store/d1.js';
 import type { DataStore } from './store/interface.js';
 import type { GitHubService } from './github/service.js';
@@ -15,6 +16,12 @@ export interface Env {
   TASK_TTL_DAYS?: string;
   /** Comma-separated list of valid API keys. When set, task endpoints require Bearer auth. */
   API_KEYS?: string;
+  /** GitHub App client ID for OAuth token verification */
+  GITHUB_CLIENT_ID?: string;
+  /** GitHub App client secret for OAuth token verification */
+  GITHUB_CLIENT_SECRET?: string;
+  /** When 'true', enforce OAuth on all task endpoints (default: false, falls back to API key auth) */
+  OAUTH_REQUIRED?: string;
 }
 
 /** Hono context variables (set per-request via middleware) */
@@ -23,6 +30,8 @@ export interface AppVariables {
   github: GitHubService;
   logger: Logger;
   requestId: string;
+  /** Verified identity from OAuth token (set by oauth middleware) */
+  verifiedIdentity?: VerifiedIdentity;
 }
 
 /** Filter for querying tasks */

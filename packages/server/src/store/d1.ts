@@ -1,4 +1,4 @@
-import type { ReviewTask, TaskClaim } from '@opencara/shared';
+import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
@@ -672,6 +672,53 @@ export class D1DataStore implements DataStore {
       .bind(agentId, sinceMs)
       .first<{ cnt: number }>();
     return row?.cnt ?? 0;
+  }
+
+  // ── OAuth token cache ────────────────────────────────────────
+
+  async getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null> {
+    const row = await this.db
+      .prepare(
+        'SELECT github_user_id, github_username, verified_at FROM oauth_token_cache WHERE token_hash = ? AND expires_at > ?',
+      )
+      .bind(tokenHash, Date.now())
+      .first<{ github_user_id: number; github_username: string; verified_at: number }>();
+    if (!row) return null;
+    return {
+      github_user_id: row.github_user_id,
+      github_username: row.github_username,
+      verified_at: row.verified_at,
+    };
+  }
+
+  async setOAuthCache(tokenHash: string, identity: VerifiedIdentity, ttlMs: number): Promise<void> {
+    const expiresAt = Date.now() + ttlMs;
+    await this.db
+      .prepare(
+        `INSERT INTO oauth_token_cache (token_hash, github_user_id, github_username, verified_at, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(token_hash) DO UPDATE SET
+          github_user_id = excluded.github_user_id,
+          github_username = excluded.github_username,
+          verified_at = excluded.verified_at,
+          expires_at = excluded.expires_at`,
+      )
+      .bind(
+        tokenHash,
+        identity.github_user_id,
+        identity.github_username,
+        identity.verified_at,
+        expiresAt,
+      )
+      .run();
+  }
+
+  async cleanupExpiredOAuthCache(): Promise<number> {
+    const result = await this.db
+      .prepare('DELETE FROM oauth_token_cache WHERE expires_at <= ?')
+      .bind(Date.now())
+      .run();
+    return result.meta?.changes ?? 0;
   }
 
   // ── Cleanup ───────────────────────────────────────────────────
