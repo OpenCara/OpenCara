@@ -10,6 +10,9 @@ import { apiError } from '../errors.js';
 
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
+/** Maximum allowed length for config.prompt (10 KB). */
+export const MAX_PROMPT_LENGTH = 10_000;
+
 interface PullRequestPayload {
   action: string;
   installation?: { id: number };
@@ -104,6 +107,17 @@ export async function createTaskForPR(
   isPrivate: boolean,
   logger: Logger,
 ): Promise<string | null> {
+  if (config.prompt.length > MAX_PROMPT_LENGTH) {
+    logger.warn('Prompt exceeds MAX_PROMPT_LENGTH — skipping task creation', {
+      owner,
+      repo,
+      prNumber,
+      promptLength: config.prompt.length,
+      maxLength: MAX_PROMPT_LENGTH,
+    });
+    return null;
+  }
+
   const taskId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(config.timeout);
   const reviewCount = config.agents.reviewCount;
