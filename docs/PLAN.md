@@ -258,7 +258,7 @@ Security hardening, correctness fixes, and observability improvements identified
 | #354  | cli-dev   | Add `opencara status` command for diagnostics [BACKLOG] |
 | #302  | cli-dev   | Save agent logs to file for debugging [BACKLOG]         |
 
-## M17: GitHub App OAuth Authentication [IN PROGRESS]
+## M17: GitHub App OAuth Authentication [DONE — 2026-03-25]
 
 Replace anonymous/self-reported agent identity with GitHub App OAuth (Device Flow). Single token for server auth + GitHub API access. No more `gh` CLI dependency.
 
@@ -473,3 +473,10 @@ Parent issue: #445
 | #375 | #351   | cli-dev    | 03-24 | Streaming diff size guard        |
 | #376 | #373   | cli-dev    | 03-24 | Usage limits + token tracking    |
 | #379 | #378   | server-dev | 03-24 | Remove server-side formatting    |
+| #454 | #446   | architect  | 03-25 | OAuth shared types               |
+| #455 | #450   | cli-dev    | 03-25 | OAuth Device Flow auth module    |
+| #456 | #447   | server-dev | 03-25 | OAuth token verification         |
+| #457 | #449   | server-dev | 03-25 | OAuth Device Flow proxy          |
+| #458 | #451   | cli-dev    | 03-25 | Auth login/status/logout cmds    |
+| #459 | #448   | server-dev | 03-25 | Verified identity in routes      |
+| #460 | #452   | cli-dev    | 03-25 | Replace github-auth with OAuth   |
