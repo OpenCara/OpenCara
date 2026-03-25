@@ -583,4 +583,194 @@ describe('OAuth middleware integration', () => {
       expect(body.error.code).toBe('AUTH_REQUIRED');
     });
   });
+
+  describe('verified identity in task routes', () => {
+    function setupOAuthEnv() {
+      return createOAuthApp({
+        OAUTH_REQUIRED: 'true',
+        GITHUB_CLIENT_ID: 'cid',
+        GITHUB_CLIENT_SECRET: 'csecret',
+      });
+    }
+
+    function stubGitHubAuth(userId: number, username: string) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          status: 200,
+          json: () => Promise.resolve({ user: { id: userId, login: username } }),
+        }),
+      );
+    }
+
+    function oauthRequest(method: string, path: string, body: unknown, env: Env) {
+      return request(method, path, body, env, {
+        Authorization: 'Bearer ghu_valid_token',
+      });
+    }
+
+    it('poll uses verified github_username for eligibility (whitelist match)', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      // Task with a github-username whitelist
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              ...DEFAULT_REVIEW_CONFIG.summarizer,
+              whitelist: [{ github: 'octocat' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Agent matches via verified github_username
+      expect(body.tasks).toHaveLength(1);
+    });
+
+    it('poll filters out tasks when verified username not in whitelist', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              ...DEFAULT_REVIEW_CONFIG.summarizer,
+              whitelist: [{ github: 'alice' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Verified user 'octocat' is not in whitelist ['alice']
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('poll respects blacklist with verified github_username', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'blocked-user');
+
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              ...DEFAULT_REVIEW_CONFIG.summarizer,
+              blacklist: [{ github: 'blocked-user' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('claim stores github_user_id from verified identity', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      await store.createTask(makeTask());
+
+      const res = await oauthRequest(
+        'POST',
+        '/api/tasks/task-1/claim',
+        { agent_id: 'agent-1', role: 'summary' },
+        env,
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+
+      // Verify the claim record has github_user_id
+      const claim = await store.getClaim('task-1:agent-1:summary');
+      expect(claim).not.toBeNull();
+      expect(claim!.github_user_id).toBe(42);
+    });
+
+    it('claim uses verified github_username for eligibility checks', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              ...DEFAULT_REVIEW_CONFIG.summarizer,
+              whitelist: [{ github: 'octocat' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest(
+        'POST',
+        '/api/tasks/task-1/claim',
+        { agent_id: 'agent-1', role: 'summary' },
+        env,
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
+
+    it('claim rejects when verified username not eligible', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              ...DEFAULT_REVIEW_CONFIG.summarizer,
+              whitelist: [{ github: 'alice' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest(
+        'POST',
+        '/api/tasks/task-1/claim',
+        { agent_id: 'agent-1', role: 'summary' },
+        env,
+      );
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toContain('not in the summary whitelist');
+    });
+
+    it('claim stores no github_user_id when OAuth is not enforced', async () => {
+      // No OAUTH_REQUIRED — uses API key auth, verifiedIdentity is undefined
+      const env = createOAuthApp();
+      await store.createTask(makeTask());
+
+      const res = await request(
+        'POST',
+        '/api/tasks/task-1/claim',
+        { agent_id: 'agent-1', role: 'summary' },
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const claim = await store.getClaim('task-1:agent-1:summary');
+      expect(claim).not.toBeNull();
+      expect(claim!.github_user_id).toBeUndefined();
+    });
+  });
 });

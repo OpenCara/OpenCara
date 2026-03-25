@@ -60,6 +60,7 @@ export interface TaskClaim {
   review_text?: string; // filled on completion
   verdict?: ReviewVerdict; // filled on completion (review only)
   tokens_used?: number;
+  github_user_id?: number; // verified GitHub user ID from OAuth (optional for backward compat)
   created_at: number;
 }
 
