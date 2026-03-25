@@ -46,14 +46,15 @@ export interface DataStore {
   getAgentLastSeen(agentId: string): Promise<number | null>;
   /** List all agent heartbeats where last_seen >= sinceMs. */
   listAgentHeartbeats(sinceMs: number): Promise<Array<{ agent_id: string; last_seen: number }>>;
-  /** Get aggregated claim stats for a single agent. */
-  getAgentClaimStats(agentId: string): Promise<{
-    total: number;
-    completed: number;
-    rejected: number;
-    error: number;
-    pending: number;
-  }>;
+  /** Get aggregated claim stats for multiple agents in a single query. */
+  getAgentClaimStatsBatch(
+    agentIds: string[],
+  ): Promise<
+    Map<
+      string,
+      { total: number; completed: number; rejected: number; error: number; pending: number }
+    >
+  >;
 
   // Meta (timeout throttle, etc.)
   getTimeoutLastCheck(): Promise<number>;

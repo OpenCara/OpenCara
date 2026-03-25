@@ -496,38 +496,52 @@ export class D1DataStore implements DataStore {
     return result.results ?? [];
   }
 
-  async getAgentClaimStats(agentId: string): Promise<{
-    total: number;
-    completed: number;
-    rejected: number;
-    error: number;
-    pending: number;
-  }> {
+  async getAgentClaimStatsBatch(
+    agentIds: string[],
+  ): Promise<
+    Map<
+      string,
+      { total: number; completed: number; rejected: number; error: number; pending: number }
+    >
+  > {
+    const map = new Map<
+      string,
+      { total: number; completed: number; rejected: number; error: number; pending: number }
+    >();
+    if (agentIds.length === 0) return map;
+
+    const placeholders = agentIds.map(() => '?').join(',');
     const result = await this.db
       .prepare(
-        `SELECT
+        `SELECT agent_id,
           COUNT(*) as total,
           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
           SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
           SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as error,
           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
-        FROM claims WHERE agent_id = ?`,
+        FROM claims WHERE agent_id IN (${placeholders})
+        GROUP BY agent_id`,
       )
-      .bind(agentId)
-      .first<{
+      .bind(...agentIds)
+      .all<{
+        agent_id: string;
         total: number;
         completed: number;
         rejected: number;
         error: number;
         pending: number;
       }>();
-    return {
-      total: result?.total ?? 0,
-      completed: result?.completed ?? 0,
-      rejected: result?.rejected ?? 0,
-      error: result?.error ?? 0,
-      pending: result?.pending ?? 0,
-    };
+
+    for (const row of result.results ?? []) {
+      map.set(row.agent_id, {
+        total: Number(row.total),
+        completed: Number(row.completed),
+        rejected: Number(row.rejected),
+        error: Number(row.error),
+        pending: Number(row.pending),
+      });
+    }
+    return map;
   }
 
   // ── Meta ──────────────────────────────────────────────────────

@@ -43,18 +43,16 @@ export function agentRoutes() {
     }
 
     const heartbeats = await store.listAgentHeartbeats(sinceMs);
+    const agentIds = heartbeats.map((hb) => hb.agent_id);
+    const statsMap = await store.getAgentClaimStatsBatch(agentIds);
 
-    const agents: AgentActivity[] = await Promise.all(
-      heartbeats.map(async (hb) => {
-        const claims = await store.getAgentClaimStats(hb.agent_id);
-        return {
-          agent_id: hb.agent_id,
-          last_seen: hb.last_seen,
-          status: agentStatus(hb.last_seen, now),
-          claims,
-        };
-      }),
-    );
+    const emptyStats = { total: 0, completed: 0, rejected: 0, error: 0, pending: 0 };
+    const agents: AgentActivity[] = heartbeats.map((hb) => ({
+      agent_id: hb.agent_id,
+      last_seen: hb.last_seen,
+      status: agentStatus(hb.last_seen, now),
+      claims: statsMap.get(hb.agent_id) ?? { ...emptyStats },
+    }));
 
     return c.json<AgentsResponse>({ agents });
   });

@@ -184,23 +184,35 @@ export class MemoryDataStore implements DataStore {
     return results;
   }
 
-  async getAgentClaimStats(agentId: string): Promise<{
-    total: number;
-    completed: number;
-    rejected: number;
-    error: number;
-    pending: number;
-  }> {
-    const stats = { total: 0, completed: 0, rejected: 0, error: 0, pending: 0 };
+  async getAgentClaimStatsBatch(
+    agentIds: string[],
+  ): Promise<
+    Map<
+      string,
+      { total: number; completed: number; rejected: number; error: number; pending: number }
+    >
+  > {
+    const map = new Map<
+      string,
+      { total: number; completed: number; rejected: number; error: number; pending: number }
+    >();
+    if (agentIds.length === 0) return map;
+
+    const idSet = new Set(agentIds);
     for (const claim of this.claims.values()) {
-      if (claim.agent_id !== agentId) continue;
+      if (!idSet.has(claim.agent_id)) continue;
+      let stats = map.get(claim.agent_id);
+      if (!stats) {
+        stats = { total: 0, completed: 0, rejected: 0, error: 0, pending: 0 };
+        map.set(claim.agent_id, stats);
+      }
       stats.total++;
       if (claim.status === 'completed') stats.completed++;
       else if (claim.status === 'rejected') stats.rejected++;
       else if (claim.status === 'error') stats.error++;
       else if (claim.status === 'pending') stats.pending++;
     }
-    return stats;
+    return map;
   }
 
   // Timeout check throttle
