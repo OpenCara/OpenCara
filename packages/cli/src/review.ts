@@ -33,7 +33,6 @@ export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
 export interface ReviewMetadata {
   model: string;
   tool: string;
-  githubUsername?: string;
 }
 
 const FULL_SYSTEM_PROMPT_TEMPLATE = `You are a code reviewer for the {owner}/{repo} repository.
@@ -95,11 +94,6 @@ export function buildMetadataHeader(verdict: ReviewVerdict, meta?: ReviewMetadat
   if (!meta) return '';
   const emoji = VERDICT_EMOJI[verdict] ?? '';
   const lines: string[] = [`**Reviewer**: \`${meta.model}/${meta.tool}\``];
-  if (meta.githubUsername) {
-    lines.push(
-      `**Contributors**: [@${meta.githubUsername}](https://github.com/${meta.githubUsername})`,
-    );
-  }
   lines.push(`**Verdict**: ${emoji} ${verdict}`);
   return lines.join('\n') + '\n\n';
 }

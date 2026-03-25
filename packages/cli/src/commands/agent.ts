@@ -15,15 +15,13 @@ import { isRepoAllowed } from '@opencara/shared';
 import {
   loadConfig,
   resolveCodebaseDir,
-  resolveGithubToken as resolveConfigToken,
-  resolveGithubUsername,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   CONFIG_DIR,
   type LocalAgentConfig,
   type UsageLimits,
 } from '../config.js';
 import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.js';
-import { resolveGithubToken, logAuthMethod, type GithubAuthResult } from '../github-auth.js';
+import { getValidToken, loadAuth, AuthError } from '../auth.js';
 import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
 import {
@@ -221,7 +219,6 @@ async function pollLoop(
     repoConfig?: RepoConfig;
     roles?: ClaimRole[];
     synthesizeRepos?: RepoConfig;
-    githubUsername?: string;
     signal?: AbortSignal;
   },
 ): Promise<void> {
@@ -233,7 +230,6 @@ async function pollLoop(
     repoConfig,
     roles,
     synthesizeRepos,
-    githubUsername,
     signal,
   } = options;
   const { log, logError, logWarn } = logger;
@@ -296,7 +292,6 @@ async function pollLoop(
           agentSession,
           routerRelay,
           signal,
-          githubUsername,
         );
         if (result.diffFetchFailed) {
           agentSession.errorsEncountered++;
@@ -384,7 +379,6 @@ async function handleTask(
   agentSession: AgentSessionStats,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
-  githubUsername?: string,
 ): Promise<HandleTaskResult> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
@@ -539,7 +533,6 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
-        githubUsername,
       );
     } else {
       await executeReviewTask(
@@ -559,7 +552,6 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
-        githubUsername,
       );
     }
     agentSession.tasksCompleted++;
@@ -650,7 +642,6 @@ async function executeReviewTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
-  githubUsername?: string,
 ): Promise<void> {
   // Check per-review token limit before executing.
   // Uses estimated *input* tokens only — output tokens are unpredictable and
@@ -731,7 +722,6 @@ async function executeReviewTask(
   const reviewMeta: ReviewMetadata = {
     model: agentInfo.model,
     tool: agentInfo.tool,
-    githubUsername,
   };
   const headerReview = buildMetadataHeader(verdict, reviewMeta);
 
@@ -783,9 +773,8 @@ async function executeSummaryTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
-  githubUsername?: string,
 ): Promise<void> {
-  const meta: ReviewMetadata = { model: agentInfo.model, tool: agentInfo.tool, githubUsername };
+  const meta: ReviewMetadata = { model: agentInfo.model, tool: agentInfo.tool };
 
   if (reviews.length === 0) {
     // Single-agent mode (review_count=1): this IS the review, run it as a regular
@@ -1027,17 +1016,18 @@ export async function startAgent(
     repoConfig?: RepoConfig;
     roles?: ClaimRole[];
     synthesizeRepos?: RepoConfig;
-    githubUsername?: string;
     label?: string;
-    apiKey?: string | null;
+    authToken?: string | null;
+    onTokenRefresh?: () => Promise<string>;
     usageLimits?: UsageLimits;
     versionOverride?: string | null;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, {
-    apiKey: options?.apiKey,
+    authToken: options?.authToken,
     cliVersion: __CLI_VERSION__,
     versionOverride: options?.versionOverride,
+    onTokenRefresh: options?.onTokenRefresh,
   });
   const session = consumptionDeps?.session ?? createSessionTracker();
   const usageTracker = consumptionDeps?.usageTracker ?? new UsageTracker();
@@ -1099,7 +1089,6 @@ export async function startAgent(
     repoConfig: options?.repoConfig,
     roles: options?.roles,
     synthesizeRepos: options?.synthesizeRepos,
-    githubUsername: options?.githubUsername,
     signal: abortController.signal,
   });
 
@@ -1132,23 +1121,32 @@ export async function startAgentRouter(): Promise<void> {
   const router = new RouterRelay();
   router.start();
 
-  const configToken = resolveConfigToken(agentConfig?.github_token, config.githubToken);
-  const auth = resolveGithubToken(configToken);
   const logger = createLogger(agentConfig?.name ?? 'agent[0]');
-  logAuthMethod(auth.method, logger.log);
 
-  // Resolve GitHub username from token for identity
-  const githubUsername =
-    config.githubUsername ?? (await resolveGithubUsername(auth.token)) ?? undefined;
-  if (githubUsername) {
-    logger.log(`GitHub identity: ${githubUsername}`);
+  // Authenticate via OAuth
+  let oauthToken: string;
+  try {
+    oauthToken = await getValidToken(config.platformUrl);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      logger.logError(`${icons.error} ${err.message}`);
+      router.stop();
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
+
+  const storedAuth = loadAuth();
+  if (storedAuth) {
+    logger.log(`Authenticated as ${storedAuth.github_username}`);
   }
 
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
-    githubToken: auth.token,
+    githubToken: oauthToken,
     codebaseDir,
   };
 
@@ -1180,9 +1178,9 @@ export async function startAgentRouter(): Promise<void> {
       repoConfig: agentConfig?.repos,
       roles,
       synthesizeRepos: agentConfig?.synthesize_repos,
-      githubUsername,
       label,
-      apiKey: config.apiKey,
+      authToken: oauthToken,
+      onTokenRefresh: () => getValidToken(config.platformUrl),
       usageLimits: config.usageLimits,
       versionOverride,
     },
@@ -1198,16 +1196,13 @@ export async function startAgentRouter(): Promise<void> {
  * Returns a promise that resolves when the agent stops.
  * Returns null (with error logged) if the agent cannot be started.
  *
- * @param auth — pre-resolved GitHub auth (env/gh-cli/config fallback chain).
- *               When the auth method is 'config' or 'none', per-agent config
- *               token overrides the global config token.
+ * @param oauthToken — pre-resolved OAuth token from auth.ts.
  */
 function startAgentByIndex(
   config: ReturnType<typeof loadConfig>,
   agentIndex: number,
   pollIntervalMs: number,
-  auth: GithubAuthResult,
-  githubUsername?: string,
+  oauthToken: string,
   versionOverride?: string | null,
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
@@ -1235,23 +1230,11 @@ function startAgentByIndex(
     return null;
   }
 
-  // If auth was resolved from env or gh-cli, use that token for all agents.
-  // Otherwise, re-resolve per-agent config token (per-agent overrides global).
-  let githubToken: string | null;
-  if (auth.method === 'env' || auth.method === 'gh-cli') {
-    githubToken = auth.token;
-  } else {
-    const configToken = agentConfig
-      ? resolveConfigToken(agentConfig.github_token, config.githubToken)
-      : config.githubToken;
-    githubToken = configToken;
-  }
-
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
     maxDiffSizeKb: config.maxDiffSizeKb,
-    githubToken,
+    githubToken: oauthToken,
     codebaseDir,
   };
 
@@ -1282,9 +1265,9 @@ function startAgentByIndex(
       repoConfig: agentConfig?.repos,
       roles,
       synthesizeRepos: agentConfig?.synthesize_repos,
-      githubUsername,
       label,
-      apiKey: config.apiKey,
+      authToken: oauthToken,
+      onTokenRefresh: () => getValidToken(config.platformUrl),
       usageLimits: config.usageLimits,
       versionOverride,
     },
@@ -1318,16 +1301,22 @@ agentCommand
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
       const versionOverride = opts.versionOverride || process.env.OPENCARA_VERSION_OVERRIDE || null;
 
-      // Resolve GitHub auth once at startup (env → gh-cli → config → none)
-      const configToken = resolveConfigToken(undefined, config.githubToken);
-      const auth = resolveGithubToken(configToken);
-      logAuthMethod(auth.method, console.log.bind(console));
+      // Authenticate via OAuth
+      let oauthToken: string;
+      try {
+        oauthToken = await getValidToken(config.platformUrl);
+      } catch (err) {
+        if (err instanceof AuthError) {
+          console.error(err.message);
+          process.exit(1);
+          return;
+        }
+        throw err;
+      }
 
-      // Resolve GitHub username from token for identity
-      const githubUsername =
-        config.githubUsername ?? (await resolveGithubUsername(auth.token)) ?? undefined;
-      if (githubUsername) {
-        console.log(`GitHub identity: ${githubUsername}`);
+      const storedAuth = loadAuth();
+      if (storedAuth) {
+        console.log(`Authenticated as ${storedAuth.github_username}`);
       }
 
       if (opts.all) {
@@ -1343,14 +1332,7 @@ agentCommand
         const promises: Promise<void>[] = [];
         let startFailed = false;
         for (let i = 0; i < config.agents.length; i++) {
-          const p = startAgentByIndex(
-            config,
-            i,
-            pollIntervalMs,
-            auth,
-            githubUsername,
-            versionOverride,
-          );
+          const p = startAgentByIndex(config, i, pollIntervalMs, oauthToken, versionOverride);
           if (p) {
             promises.push(p);
           } else {
@@ -1398,8 +1380,7 @@ agentCommand
           config,
           agentIndex,
           pollIntervalMs,
-          auth,
-          githubUsername,
+          oauthToken,
           versionOverride,
         );
         if (!p) {

@@ -64,11 +64,6 @@ export function buildSummaryMetadataHeader(verdict: ReviewVerdict, meta?: Summar
     `**Reviewers**: ${reviewersList}`,
     `**Synthesizer**: \`${meta.model}/${meta.tool}\``,
   ];
-  if (meta.githubUsername) {
-    lines.push(
-      `**Contributors**: [@${meta.githubUsername}](https://github.com/${meta.githubUsername})`,
-    );
-  }
   lines.push(`**Verdict**: ${emoji} ${verdict}`);
   return lines.join('\n') + '\n\n';
 }

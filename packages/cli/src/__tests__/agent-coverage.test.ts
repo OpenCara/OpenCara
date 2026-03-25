@@ -109,7 +109,6 @@ describe('Agent Coverage Tests', () => {
       repoConfig?: import('@opencara/shared').RepoConfig;
       githubToken?: string;
       codebaseDir?: string;
-      githubUsername?: string;
     },
   ): Promise<void> {
     const deps = makeDeps(agentId);
@@ -130,7 +129,6 @@ describe('Agent Coverage Tests', () => {
         pollIntervalMs: 100,
         reviewOnly: opts?.reviewOnly,
         repoConfig: opts?.repoConfig,
-        githubUsername: opts?.githubUsername,
       },
     );
   }
@@ -1446,45 +1444,10 @@ describe('Agent Coverage Tests', () => {
   // Contributor attribution in review submissions
   // ═══════════════════════════════════════════════════════════
 
-  describe('Contributor metadata in prompt', () => {
-    it('does not manually append contributor attribution to submitted review text', async () => {
-      // Contributor info is now included in the AI prompt (metadata headers) rather than
-      // appended post-hoc. The submitted review_text should be the raw AI output without
-      // the old "---\nContributed by" suffix.
-      const taskId = await server.injectTask({ reviewCount: 1 });
-
-      let resultBody: Record<string, unknown> | null = null;
-      const savedFetch = globalThis.fetch;
-      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        if (url.includes(`/api/tasks/${taskId}/result`)) {
-          if (typeof init?.body === 'string') {
-            resultBody = JSON.parse(init.body);
-          }
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
-        }
-        return savedFetch(input, init);
-      }) as typeof fetch;
-
-      try {
-        const agentPromise = startTestAgent('attrib-agent', { githubUsername: 'octocat' });
-        await advanceTime(2000);
-
-        expect(resultBody).not.toBeNull();
-        // Old behavior appended "---\nContributed by" — now contributor info is in the prompt
-        expect(resultBody!.review_text).not.toContain(
-          '---\nContributed by [@octocat](https://github.com/octocat)',
-        );
-
-        await server.store.updateTask(taskId, { status: 'completed' });
-        await stopAgent(agentPromise, server);
-      } finally {
-        globalThis.fetch = savedFetch;
-      }
-    });
-
-    it('submitted review text is unchanged when githubUsername is not configured', async () => {
+  describe('Review submission (no contributor attribution)', () => {
+    it('submitted review text does not contain contributor attribution', async () => {
+      // With OAuth, identity is derived server-side from the token.
+      // The CLI no longer sends githubUsername or appends contributor info.
       const taskId = await server.injectTask({ reviewCount: 1 });
 
       let resultBody: Record<string, unknown> | null = null;
@@ -1507,6 +1470,7 @@ describe('Agent Coverage Tests', () => {
 
         expect(resultBody).not.toBeNull();
         expect(resultBody!.review_text).not.toContain('Contributed by');
+        expect(resultBody!.review_text).not.toContain('Contributors');
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(agentPromise, server);

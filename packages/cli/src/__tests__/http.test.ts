@@ -308,4 +308,124 @@ describe('ApiClient', () => {
     expect(err2.minimumVersion).toBeUndefined();
     expect(err2.message).not.toContain('Minimum required');
   });
+
+  it('sends Authorization header when authToken is set', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', { authToken: 'my-token' });
+    await client.get('/test');
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders['Authorization']).toBe('Bearer my-token');
+  });
+
+  describe('AUTH_TOKEN_EXPIRED token refresh', () => {
+    const expiredResponse = {
+      ok: false,
+      status: 401,
+      json: () =>
+        Promise.resolve({
+          error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token has expired' },
+        }),
+    };
+
+    const successResponse = {
+      ok: true,
+      json: () => Promise.resolve({ data: 'refreshed' }),
+    };
+
+    it('refreshes token and retries on AUTH_TOKEN_EXPIRED', async () => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValueOnce(expiredResponse)
+        .mockResolvedValueOnce(successResponse);
+
+      const onTokenRefresh = vi.fn().mockResolvedValue('new-token');
+      const client = new ApiClient('https://api.test.com', {
+        authToken: 'old-token',
+        onTokenRefresh,
+      });
+
+      const result = await client.get<{ data: string }>('/test');
+
+      expect(result).toEqual({ data: 'refreshed' });
+      expect(onTokenRefresh).toHaveBeenCalledOnce();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      // Second call should use the new token
+      const retryHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1][1].headers;
+      expect(retryHeaders['Authorization']).toBe('Bearer new-token');
+    });
+
+    it('refreshes token and retries POST with same body', async () => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValueOnce(expiredResponse)
+        .mockResolvedValueOnce(successResponse);
+
+      const onTokenRefresh = vi.fn().mockResolvedValue('new-token');
+      const client = new ApiClient('https://api.test.com', {
+        authToken: 'old-token',
+        onTokenRefresh,
+      });
+
+      const result = await client.post<{ data: string }>('/tasks/poll', { agent_id: 'a1' });
+
+      expect(result).toEqual({ data: 'refreshed' });
+      const retryCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(retryCall[1].method).toBe('POST');
+      expect(retryCall[1].body).toBe(JSON.stringify({ agent_id: 'a1' }));
+      expect(retryCall[1].headers['Authorization']).toBe('Bearer new-token');
+    });
+
+    it('throws HttpError when token refresh fails', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(expiredResponse);
+
+      const onTokenRefresh = vi.fn().mockRejectedValue(new Error('refresh failed'));
+      const client = new ApiClient('https://api.test.com', {
+        authToken: 'old-token',
+        onTokenRefresh,
+      });
+
+      const err = await client.get('/test').catch((e: HttpError) => e);
+      expect(err).toBeInstanceOf(HttpError);
+      expect(err.status).toBe(401);
+      expect(err.errorCode).toBe('AUTH_TOKEN_EXPIRED');
+    });
+
+    it('does not attempt refresh when onTokenRefresh is not set', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(expiredResponse);
+
+      const client = new ApiClient('https://api.test.com', { authToken: 'old-token' });
+
+      const err = await client.get('/test').catch((e: HttpError) => e);
+      expect(err).toBeInstanceOf(HttpError);
+      expect(err.status).toBe(401);
+      expect(err.errorCode).toBe('AUTH_TOKEN_EXPIRED');
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not attempt second refresh if retry also fails with expired token', async () => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValueOnce(expiredResponse)
+        .mockResolvedValueOnce(expiredResponse);
+
+      const onTokenRefresh = vi.fn().mockResolvedValue('new-token');
+      const client = new ApiClient('https://api.test.com', {
+        authToken: 'old-token',
+        onTokenRefresh,
+      });
+
+      const err = await client.get('/test').catch((e: HttpError) => e);
+      expect(err).toBeInstanceOf(HttpError);
+      expect(err.status).toBe(401);
+      expect(err.errorCode).toBe('AUTH_TOKEN_EXPIRED');
+      // Only one refresh attempt
+      expect(onTokenRefresh).toHaveBeenCalledOnce();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+  });
 });

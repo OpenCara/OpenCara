@@ -24,11 +24,15 @@ export class UpgradeRequiredError extends Error {
   }
 }
 
+/** Callback invoked when the server returns AUTH_TOKEN_EXPIRED. Returns a fresh token. */
+export type TokenRefreshFn = () => Promise<string>;
+
 export class ApiClient {
   private readonly debug: boolean;
-  private readonly apiKey: string | null;
+  private authToken: string | null;
   private readonly cliVersion: string | null;
   private readonly versionOverride: string | null;
+  private readonly onTokenRefresh: TokenRefreshFn | null;
 
   constructor(
     private readonly baseUrl: string,
@@ -36,21 +40,24 @@ export class ApiClient {
       | boolean
       | {
           debug?: boolean;
-          apiKey?: string | null;
+          authToken?: string | null;
           cliVersion?: string;
           versionOverride?: string | null;
+          onTokenRefresh?: TokenRefreshFn;
         },
   ) {
     if (typeof debugOrOptions === 'object' && debugOrOptions !== null) {
       this.debug = debugOrOptions.debug ?? process.env.OPENCARA_DEBUG === '1';
-      this.apiKey = debugOrOptions.apiKey ?? null;
+      this.authToken = debugOrOptions.authToken ?? null;
       this.cliVersion = debugOrOptions.cliVersion ?? null;
       this.versionOverride = debugOrOptions.versionOverride ?? null;
+      this.onTokenRefresh = debugOrOptions.onTokenRefresh ?? null;
     } else {
       this.debug = debugOrOptions ?? process.env.OPENCARA_DEBUG === '1';
-      this.apiKey = null;
+      this.authToken = null;
       this.cliVersion = null;
       this.versionOverride = null;
+      this.onTokenRefresh = null;
     }
   }
 
@@ -62,8 +69,8 @@ export class ApiClient {
     const h: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (this.apiKey) {
-      h['Authorization'] = `Bearer ${this.apiKey}`;
+    if (this.authToken) {
+      h['Authorization'] = `Bearer ${this.authToken}`;
     }
     if (this.cliVersion) {
       h['X-OpenCara-CLI-Version'] = this.cliVersion;
@@ -80,7 +87,7 @@ export class ApiClient {
       method: 'GET',
       headers: this.headers(),
     });
-    return this.handleResponse<T>(res, path);
+    return this.handleResponse<T>(res, path, 'GET');
   }
 
   async post<T>(path: string, body?: unknown): Promise<T> {
@@ -90,22 +97,27 @@ export class ApiClient {
       headers: this.headers(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    return this.handleResponse<T>(res, path);
+    return this.handleResponse<T>(res, path, 'POST', body);
   }
 
-  private async handleResponse<T>(res: Response, path: string): Promise<T> {
+  private async handleResponse<T>(
+    res: Response,
+    path: string,
+    method: string,
+    body?: unknown,
+  ): Promise<T> {
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
       let errorCode: ErrorCode | undefined;
       let minimumVersion: string | undefined;
       try {
-        const body = (await res.json()) as ErrorResponse & { minimum_version?: string };
-        if (body.error && typeof body.error === 'object' && 'code' in body.error) {
-          errorCode = body.error.code;
-          message = body.error.message;
+        const errBody = (await res.json()) as ErrorResponse & { minimum_version?: string };
+        if (errBody.error && typeof errBody.error === 'object' && 'code' in errBody.error) {
+          errorCode = errBody.error.code;
+          message = errBody.error.message;
         }
-        if (body.minimum_version) {
-          minimumVersion = body.minimum_version;
+        if (errBody.minimum_version) {
+          minimumVersion = errBody.minimum_version;
         }
       } catch {
         // ignore parse errors — keep generic message
@@ -116,9 +128,55 @@ export class ApiClient {
         throw new UpgradeRequiredError(this.cliVersion ?? 'unknown', minimumVersion);
       }
 
+      // Token expired — attempt refresh and retry once
+      if (errorCode === 'AUTH_TOKEN_EXPIRED' && this.onTokenRefresh) {
+        this.log('Token expired, attempting refresh...');
+        try {
+          this.authToken = await this.onTokenRefresh();
+          this.log('Token refreshed, retrying request');
+          const retryRes = await fetch(`${this.baseUrl}${path}`, {
+            method,
+            headers: this.headers(),
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+          });
+          return this.handleRetryResponse<T>(retryRes, path);
+        } catch (refreshErr) {
+          this.log(`Token refresh failed: ${(refreshErr as Error).message}`);
+          throw new HttpError(res.status, message, errorCode);
+        }
+      }
+
       throw new HttpError(res.status, message, errorCode);
     }
     this.log(`${res.status} OK (${path})`);
+    return (await res.json()) as T;
+  }
+
+  /** Handle response for a retry after token refresh — no second refresh attempt. */
+  private async handleRetryResponse<T>(res: Response, path: string): Promise<T> {
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      let errorCode: ErrorCode | undefined;
+      let minimumVersion: string | undefined;
+      try {
+        const errBody = (await res.json()) as ErrorResponse & { minimum_version?: string };
+        if (errBody.error && typeof errBody.error === 'object' && 'code' in errBody.error) {
+          errorCode = errBody.error.code;
+          message = errBody.error.message;
+        }
+        if (errBody.minimum_version) {
+          minimumVersion = errBody.minimum_version;
+        }
+      } catch {
+        // ignore parse errors
+      }
+      this.log(`${res.status} ${message} (${path}) [retry]`);
+      if (res.status === 426) {
+        throw new UpgradeRequiredError(this.cliVersion ?? 'unknown', minimumVersion);
+      }
+      throw new HttpError(res.status, message, errorCode);
+    }
+    this.log(`${res.status} OK (${path}) [retry]`);
     return (await res.json()) as T;
   }
 }

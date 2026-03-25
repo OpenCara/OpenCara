@@ -76,31 +76,18 @@ describe('buildSummarySystemPrompt', () => {
 });
 
 describe('buildSummaryMetadataHeader', () => {
-  it('returns header with reviewers, synthesizer, contributors, and verdict', () => {
+  it('returns header with reviewers, synthesizer, and verdict', () => {
     const meta: SummaryMetadata = {
       model: 'claude-opus-4-6',
       tool: 'claude-code',
-      githubUsername: 'octocat',
       reviewerModels: ['claude-sonnet/claude-code', 'gpt-4/copilot'],
     };
     const header = buildSummaryMetadataHeader('approve', meta);
     expect(header).toContain('**Reviewers**: `claude-sonnet/claude-code`, `gpt-4/copilot`');
     expect(header).toContain('**Synthesizer**: `claude-opus-4-6/claude-code`');
-    expect(header).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
+    expect(header).not.toContain('**Contributors**');
     expect(header).toContain('**Verdict**: \u2705 approve');
     expect(header.endsWith('\n\n')).toBe(true);
-  });
-
-  it('omits Contributors line when githubUsername is not provided', () => {
-    const meta: SummaryMetadata = {
-      model: 'gpt-4',
-      tool: 'copilot',
-      reviewerModels: ['claude-sonnet/claude-code'],
-    };
-    const header = buildSummaryMetadataHeader('request_changes', meta);
-    expect(header).toContain('**Synthesizer**: `gpt-4/copilot`');
-    expect(header).not.toContain('**Contributors**');
-    expect(header).toContain('**Verdict**: \u274C request_changes');
   });
 
   it('returns empty string when meta is undefined', () => {

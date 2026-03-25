@@ -4,10 +4,10 @@
  * resolution logic that doesn't go through startAgent directly.
  *
  * Covers:
- * - startAgentByIndex: no command, invalid binary, router mode, auth resolution
+ * - startAgentByIndex: no command, invalid binary, router mode, OAuth auth
  * - agentCommand CLI action: --all, --agent, error paths
  * - startAgent without reviewDeps
- * - Router relay paths in executeReviewTask and executeSummaryTask
+ * - OAuth token integration (getValidToken, AuthError)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -17,8 +17,6 @@ vi.mock('../config.js', () => ({
     platformUrl: 'http://test-server',
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 3,
-    githubToken: 'config-token',
-    githubUsername: null,
     codebaseDir: null,
     agentCommand: 'echo test',
     agents: [
@@ -28,18 +26,26 @@ vi.mock('../config.js', () => ({
     usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
   })),
   resolveCodebaseDir: vi.fn(() => null),
-  resolveGithubToken: vi.fn(
-    (agentToken?: string, globalToken?: string | null) => agentToken ?? globalToken ?? null,
-  ),
-  resolveGithubUsername: vi.fn(async () => null),
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 10,
   CONFIG_DIR: '/tmp/test-opencara',
   ensureConfigDir: vi.fn(),
 }));
 
-vi.mock('../github-auth.js', () => ({
-  resolveGithubToken: vi.fn(() => ({ token: 'test-token', method: 'config' as const })),
-  logAuthMethod: vi.fn(),
+vi.mock('../auth.js', () => ({
+  getValidToken: vi.fn(async () => 'oauth-test-token'),
+  loadAuth: vi.fn(() => ({
+    access_token: 'oauth-test-token',
+    refresh_token: 'refresh-token',
+    expires_at: Date.now() + 3600000,
+    github_username: 'testuser',
+    github_user_id: 12345,
+  })),
+  AuthError: class AuthError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'AuthError';
+    }
+  },
 }));
 
 vi.mock('../tool-executor.js', () => ({
@@ -90,7 +96,7 @@ vi.mock('../router.js', () => {
 
 import { loadConfig } from '../config.js';
 import { validateCommandBinary } from '../tool-executor.js';
-import { resolveGithubToken } from '../github-auth.js';
+import { getValidToken } from '../auth.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -157,24 +163,19 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude', tool: 'cli' }],
       });
 
-      // Import the command and invoke its action
       const { agentCommand } = await import('../commands/agent.js');
       const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
       expect(startCmd).toBeDefined();
 
-      // Mock process.exit to prevent it from actually exiting
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
       await startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
 
-      // It should have errored about no command
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('No command configured'));
       exitSpy.mockRestore();
     });
@@ -185,8 +186,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: 'nonexistent-tool review',
         agents: [{ model: 'claude', tool: 'cli', command: 'nonexistent-tool review' }],
@@ -209,8 +208,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -235,8 +232,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -258,8 +253,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
@@ -278,17 +271,11 @@ describe('Agent CLI tests', () => {
       exitSpy.mockRestore();
     });
 
-    it('uses env/gh-cli token for all agents', async () => {
-      vi.mocked(resolveGithubToken).mockReturnValue({
-        token: 'env-token',
-        method: 'env' as const,
-      });
-
+    it('uses OAuth token for all agents', async () => {
       vi.mocked(loadConfig).mockReturnValue({
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: 'config-token',
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -296,7 +283,6 @@ describe('Agent CLI tests', () => {
             model: 'claude',
             tool: 'cli',
             command: 'echo test',
-            github_token: 'agent-token',
           },
         ],
       });
@@ -307,9 +293,35 @@ describe('Agent CLI tests', () => {
       void startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
       await advanceTime(3000);
 
-      // The env token should be used (overriding agent-specific token)
-      // Verified by the fact that the agent started without errors
+      // The OAuth token should be used (verified by getValidToken being called)
+      expect(getValidToken).toHaveBeenCalledWith('http://test-server');
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Agent'));
+    });
+
+    it('exits with error when not authenticated', async () => {
+      const { AuthError } = await import('../auth.js');
+      vi.mocked(getValidToken).mockRejectedValueOnce(
+        new AuthError('Not authenticated. Run `opencara auth login` first.'),
+      );
+
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+
+      await startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
+
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Not authenticated'));
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      exitSpy.mockRestore();
     });
 
     it('--all with some agents failing to start continues with others', async () => {
@@ -318,8 +330,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -344,8 +354,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -373,8 +381,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -398,8 +404,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
@@ -420,8 +424,6 @@ describe('Agent CLI tests', () => {
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
         maxConsecutiveErrors: 3,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,

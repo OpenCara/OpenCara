@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import pc from 'picocolors';
 import { DEFAULT_REGISTRY } from '@opencara/shared';
 import { loadConfig, CONFIG_FILE, type LocalAgentConfig } from '../config.js';
+import { isAuthenticated, loadAuth } from '../auth.js';
 import { validateCommandBinary } from '../tool-executor.js';
 import { icons } from '../logger.js';
 
@@ -120,9 +121,15 @@ export async function runStatus(deps: {
   // Config section
   log(`Config:     ${pc.cyan(CONFIG_FILE)}`);
   log(`Platform:   ${pc.cyan(config.platformUrl)}`);
-  log(
-    `GitHub:     ${config.githubToken ? `${icons.success} token present` : `${icons.error} no token`}`,
-  );
+  const auth = loadAuth();
+  const authed = isAuthenticated();
+  if (authed && auth) {
+    log(`Auth:       ${icons.success} ${auth.github_username}`);
+  } else if (auth) {
+    log(`Auth:       ${icons.warn} token expired for ${auth.github_username}`);
+  } else {
+    log(`Auth:       ${icons.error} not authenticated (run: opencara auth login)`);
+  }
   log('');
 
   // Connectivity section
