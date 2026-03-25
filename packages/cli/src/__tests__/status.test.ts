@@ -145,6 +145,12 @@ describe('fetchMetrics', () => {
     const result = await fetchMetrics('https://example.com', fetchFn);
     expect(result).toBeNull();
   });
+
+  it('returns null on invalid response shape', async () => {
+    const fetchFn = makeFetchOk({ unexpected: 'data' });
+    const result = await fetchMetrics('https://example.com', fetchFn);
+    expect(result).toBeNull();
+  });
 });
 
 describe('runStatus', () => {
@@ -183,7 +189,7 @@ describe('runStatus', () => {
     expect(output).toContain('reviewer+synthesizer');
     expect(output).toContain('gemini-2.5-pro/gemini');
     expect(output).toContain('reviewer only');
-    expect(output).toContain('found in PATH');
+    expect(output).toContain('executable');
     expect(output).toContain('3 pending');
     expect(output).toContain('1 reviewing');
     expect(output).toContain('1 failed');
@@ -240,7 +246,7 @@ describe('runStatus', () => {
     });
 
     const output = lines.join('\n');
-    expect(output).toContain('gemini not found in PATH');
+    expect(output).toContain('gemini not found');
   });
 
   it('shows "No agents configured" when agents is null', async () => {

@@ -5,6 +5,9 @@ import { loadConfig, CONFIG_FILE, type LocalAgentConfig } from '../config.js';
 import { validateCommandBinary } from '../tool-executor.js';
 import { icons } from '../logger.js';
 
+/** Timeout for platform connectivity and metrics requests. */
+const REQUEST_TIMEOUT_MS = 10_000;
+
 /** Metrics shape returned by the platform /metrics endpoint. */
 interface PlatformMetrics {
   tasks: {
@@ -14,6 +17,19 @@ interface PlatformMetrics {
     completed: number;
     failed: number;
   };
+}
+
+/** Validate that a response matches the PlatformMetrics shape. */
+function isValidMetrics(data: unknown): data is PlatformMetrics {
+  if (!data || typeof data !== 'object') return false;
+  const obj = data as Record<string, unknown>;
+  if (!obj.tasks || typeof obj.tasks !== 'object') return false;
+  const tasks = obj.tasks as Record<string, unknown>;
+  return (
+    typeof tasks.pending === 'number' &&
+    typeof tasks.reviewing === 'number' &&
+    typeof tasks.failed === 'number'
+  );
 }
 
 /** Determine agent role label from config flags. */
@@ -29,11 +45,16 @@ export function resolveToolBinary(toolName: string): string {
   return entry?.binary ?? toolName;
 }
 
-/** Resolve the command template for a given agent. */
-function resolveCommand(agent: LocalAgentConfig): string {
+/**
+ * Resolve the command template for a given agent.
+ * Uses agent.command override, then falls back to registry template.
+ * Note: config.ts parseAgents already filters unknown tools, so the
+ * registry lookup should always succeed for valid config.
+ */
+function resolveCommand(agent: LocalAgentConfig): string | null {
   if (agent.command) return agent.command;
   const entry = DEFAULT_REGISTRY.tools.find((t) => t.name === agent.tool);
-  return entry?.commandTemplate ?? agent.tool;
+  return entry?.commandTemplate ?? null;
 }
 
 /** Check platform connectivity by hitting /health. Returns elapsed ms or error message. */
@@ -44,7 +65,7 @@ export async function checkConnectivity(
   const start = Date.now();
   try {
     const res = await fetchFn(`${platformUrl}/health`, {
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const ms = Date.now() - start;
     if (!res.ok) {
@@ -65,10 +86,12 @@ export async function fetchMetrics(
 ): Promise<PlatformMetrics | null> {
   try {
     const res = await fetchFn(`${platformUrl}/metrics`, {
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) return null;
-    return (await res.json()) as PlatformMetrics;
+    const data: unknown = await res.json();
+    if (!isValidMetrics(data)) return null;
+    return data;
   } catch {
     return null;
   }
@@ -125,12 +148,16 @@ export async function runStatus(deps: {
 
       // Binary check
       const commandTemplate = resolveCommand(agent);
-      const binaryOk = validateBinaryFn(commandTemplate);
-      const binary = resolveToolBinary(agent.tool);
-      if (binaryOk) {
-        log(`     Binary: ${icons.success} ${binary} found in PATH`);
+      if (commandTemplate) {
+        const binaryOk = validateBinaryFn(commandTemplate);
+        const binary = resolveToolBinary(agent.tool);
+        if (binaryOk) {
+          log(`     Binary: ${icons.success} ${binary} executable`);
+        } else {
+          log(`     Binary: ${icons.error} ${binary} not found`);
+        }
       } else {
-        log(`     Binary: ${icons.error} ${binary} not found in PATH`);
+        log(`     Binary: ${icons.warn} unknown tool "${agent.tool}"`);
       }
     }
   }
