@@ -83,7 +83,7 @@ for line in sys.stdin:
     elif e == 'pull_request' and a == 'closed' and r.get('merged', False):
         notifications.append(f'PR_MERGED|PR #{n} merged: {title}')
 
-    # Rule 5: Bot review posted
+    # Rule 5a: Bot review posted
     elif e == 'issue_comment' and a == 'created' and r.get('is_bot', False):
         bot_user = r.get('comment_user', '')
         notifications.append(f'BOT_REVIEW|Bot comment on #{n} by {bot_user}')
@@ -91,6 +91,17 @@ for line in sys.stdin:
         bot_user = r.get('review_user', '')
         state = r.get('review_state', '')
         notifications.append(f'BOT_REVIEW|Bot review on #{n} by {bot_user}: {state}')
+
+    # Rule 5b: Human comment on issue/PR → may need PM response
+    elif e == 'issue_comment' and a == 'created' and not r.get('is_bot', False):
+        comment_user = r.get('comment_user', '')
+        body_preview = r.get('comment_body', '')[:200]
+        notifications.append(f'HUMAN_COMMENT|Comment on #{n} by {comment_user}: {body_preview}')
+    elif e == 'pull_request_review' and a == 'submitted' and not r.get('is_bot', False):
+        review_user = r.get('review_user', '')
+        state = r.get('review_state', '')
+        body_preview = r.get('review_body', '')[:200]
+        notifications.append(f'HUMAN_REVIEW|Review on #{n} by {review_user} ({state}): {body_preview}')
 
     # Rule 6: CI failed
     elif e == 'workflow_run' and a == 'completed':
