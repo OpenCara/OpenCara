@@ -40,6 +40,7 @@ export async function verifyGitHubToken(
       Authorization: `Basic ${credentials}`,
       'Content-Type': 'application/json',
       Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
       'User-Agent': 'OpenCara-Server',
     },
     body: JSON.stringify({ access_token: token }),
@@ -122,16 +123,16 @@ export function requireOAuth(): MiddlewareHandler<{
     const tokenHash = await hashToken(token);
     const store = c.get('store');
 
-    // Check cache first
-    const cached = await store.getOAuthCache(tokenHash);
-    if (cached) {
-      c.set('verifiedIdentity', cached);
-      await next();
-      return;
-    }
-
-    // Cache miss — verify with GitHub
     try {
+      // Check cache first
+      const cached = await store.getOAuthCache(tokenHash);
+      if (cached) {
+        c.set('verifiedIdentity', cached);
+        await next();
+        return;
+      }
+
+      // Cache miss — verify with GitHub
       const result = await verifyGitHubToken(token, clientId, clientSecret);
 
       if (!result.valid) {
@@ -143,8 +144,14 @@ export function requireOAuth(): MiddlewareHandler<{
         return c.json<ErrorResponse>({ error: { code, message } }, 401);
       }
 
-      // Cache the verified identity
-      await store.setOAuthCache(tokenHash, result.identity, OAUTH_CACHE_TTL_MS);
+      // Cache the verified identity (best-effort — don't fail the request on write error)
+      try {
+        await store.setOAuthCache(tokenHash, result.identity, OAUTH_CACHE_TTL_MS);
+      } catch (cacheErr) {
+        c.get('logger').warn('OAuth cache write failed (non-fatal)', {
+          error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        });
+      }
       c.set('verifiedIdentity', result.identity);
       await next();
     } catch (err) {

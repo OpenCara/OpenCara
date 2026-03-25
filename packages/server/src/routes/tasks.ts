@@ -300,12 +300,11 @@ export function taskRoutes() {
   // Auth: OAuth when OAUTH_REQUIRED=true, otherwise fall back to API key auth.
   // During the transition period both can coexist — OAuth is checked first,
   // and API key is used as fallback when OAuth is not enforced.
+  // Pre-instantiate middleware to avoid allocating closures per request.
+  const oauthMiddleware = requireOAuth();
+  const apiKeyMiddleware = requireApiKey();
   app.use('/api/tasks/*', async (c, next) => {
-    if (c.env.OAUTH_REQUIRED === 'true') {
-      return requireOAuth()(c, next);
-    }
-    // Backward compatible: API key auth (skips when API_KEYS is not configured)
-    return requireApiKey()(c, next);
+    return c.env.OAUTH_REQUIRED === 'true' ? oauthMiddleware(c, next) : apiKeyMiddleware(c, next);
   });
 
   // ── Poll ─────────────────────────────────────────────────────

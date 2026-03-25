@@ -423,6 +423,53 @@ describe('OAuth middleware integration', () => {
       const body = await res.json();
       expect(body.error.code).toBe('INTERNAL_ERROR');
     });
+
+    it('returns structured INTERNAL_ERROR when cache read fails', async () => {
+      const env = createOAuthApp({
+        OAUTH_REQUIRED: 'true',
+        GITHUB_CLIENT_ID: 'cid',
+        GITHUB_CLIENT_SECRET: 'csecret',
+      });
+
+      // Make getOAuthCache throw to simulate D1 read failure
+      vi.spyOn(store, 'getOAuthCache').mockRejectedValueOnce(new Error('D1 read failed'));
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
+        Authorization: 'Bearer ghu_cache_read_fail',
+      });
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      // Should return structured error, not unstructured 500
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+    });
+
+    it('succeeds even when cache write fails (best-effort caching)', async () => {
+      const env = createOAuthApp({
+        OAUTH_REQUIRED: 'true',
+        GITHUB_CLIENT_ID: 'cid',
+        GITHUB_CLIENT_SECRET: 'csecret',
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          status: 200,
+          json: () => Promise.resolve({ user: { id: 42, login: 'octocat' } }),
+        }),
+      );
+
+      // Make setOAuthCache throw to simulate D1 write failure
+      const origSet = store.setOAuthCache.bind(store);
+      vi.spyOn(store, 'setOAuthCache').mockRejectedValueOnce(new Error('D1 write failed'));
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
+        Authorization: 'Bearer ghu_cache_fail',
+      });
+      // Request should still succeed despite cache write failure
+      expect(res.status).toBe(200);
+
+      // Restore for cleanup
+      vi.mocked(store.setOAuthCache).mockImplementation(origSet);
+    });
   });
 
   describe('backward compatibility (OAUTH_REQUIRED not set)', () => {
