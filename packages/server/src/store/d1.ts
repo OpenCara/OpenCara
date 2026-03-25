@@ -73,6 +73,7 @@ interface ClaimRow {
   review_text: string | null;
   verdict: string | null;
   tokens_used: number | null;
+  github_user_id: number | null;
   created_at: number;
 }
 
@@ -126,6 +127,7 @@ export function rowToClaim(row: ClaimRow): TaskClaim {
   if (row.review_text !== null) claim.review_text = row.review_text;
   if (row.verdict !== null) claim.verdict = row.verdict as TaskClaim['verdict'];
   if (row.tokens_used !== null) claim.tokens_used = row.tokens_used;
+  if (row.github_user_id !== null) claim.github_user_id = row.github_user_id;
 
   return claim;
 }
@@ -344,8 +346,8 @@ export class D1DataStore implements DataStore {
     const result = await this.db
       .prepare(
         `INSERT OR IGNORE INTO claims (id, task_id, agent_id, role, status, model, tool,
-        review_text, verdict, tokens_used, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        review_text, verdict, tokens_used, github_user_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         claim.id,
@@ -358,6 +360,7 @@ export class D1DataStore implements DataStore {
         claim.review_text ?? null,
         claim.verdict ?? null,
         claim.tokens_used ?? null,
+        claim.github_user_id ?? null,
         claim.created_at,
       )
       .run();
@@ -392,6 +395,7 @@ export class D1DataStore implements DataStore {
       'review_text',
       'verdict',
       'tokens_used',
+      'github_user_id',
     ];
 
     for (const field of fields) {

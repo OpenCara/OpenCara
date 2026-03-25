@@ -313,6 +313,7 @@ export function taskRoutes() {
     const store = c.get('store');
     const github = c.get('github');
     const logger = c.get('logger');
+    const verifiedIdentity = c.get('verifiedIdentity');
     const body = await parseBody(c, PollRequestSchema);
     if (body instanceof Response) return body;
     const { agent_id, roles, review_only, repos, synthesize_repos } = body;
@@ -363,7 +364,12 @@ export function taskRoutes() {
       if (task.queue === 'summary') {
         // Summary queue — check role filter, eligibility, grace period, and repo preference
         if (acceptedRoles && !acceptedRoles.has('summary')) continue;
-        const { eligible } = isAgentEligibleForRole(task.config, 'summary', agent_id);
+        const { eligible } = isAgentEligibleForRole(
+          task.config,
+          'summary',
+          agent_id,
+          verifiedIdentity?.github_username,
+        );
         if (!eligible) continue;
         if (!isSummaryVisibleToAgent(task, agent_id)) continue;
 
@@ -399,7 +405,12 @@ export function taskRoutes() {
         const reviewClaims = task.review_claims ?? 0;
         if (reviewClaims >= reviewSlots) continue;
 
-        const { eligible } = isAgentEligibleForRole(task.config, 'review', agent_id);
+        const { eligible } = isAgentEligibleForRole(
+          task.config,
+          'review',
+          agent_id,
+          verifiedIdentity?.github_username,
+        );
         if (!eligible) continue;
 
         // Preferred model/tool grace period — non-preferred agents wait
@@ -452,6 +463,7 @@ export function taskRoutes() {
   app.post('/api/tasks/:taskId/claim', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
     const logger = c.get('logger');
+    const verifiedIdentity = c.get('verifiedIdentity');
     const taskId = c.req.param('taskId');
     const body = await parseBody(c, ClaimRequestSchema);
     if (body instanceof Response) return body;
@@ -482,7 +494,12 @@ export function taskRoutes() {
     }
 
     // Check whitelist/blacklist eligibility before slot availability
-    const eligibility = isAgentEligibleForRole(task.config, role, agent_id);
+    const eligibility = isAgentEligibleForRole(
+      task.config,
+      role,
+      agent_id,
+      verifiedIdentity?.github_username,
+    );
     if (!eligibility.eligible) {
       return apiError(
         c,
@@ -534,6 +551,7 @@ export function taskRoutes() {
       status: 'pending',
       model,
       tool,
+      github_user_id: verifiedIdentity?.github_user_id,
       created_at: Date.now(),
     });
     if (!claimCreated) {
