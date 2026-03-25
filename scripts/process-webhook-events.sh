@@ -9,14 +9,12 @@
 # applies filter rules, and prints structured notifications to stdout.
 # Returns exit code 0 if there are notifications, 1 if none.
 #
-# Filter rules:
-#   1. Issue created → "TRIAGE: New issue #N: <title>"
-#   2. Board status → Ready → "DISPATCH: Issue #N moved to Ready: <title>"
-#   3. PR opened → "PR_OPENED: PR #N: <title>"
-#   4. PR merged → "PR_MERGED: PR #N merged: <title>"
-#   5. Bot review posted → "BOT_REVIEW: Review on PR #N by <user>"
-#   6. CI completed (failure) → "CI_FAILED: <workflow> failed on <branch>"
-#   7. Push to main → "PUSH: <count> commit(s) pushed to main"
+# Filter rules (PM-actionable only):
+#   1. Issue created → "TRIAGE|New issue #N: <title>"
+#   2. Board status → Ready → "DISPATCH|Issue moved to Ready"
+#   3. Human comment → "HUMAN_COMMENT|Comment on #N by <user>: <preview>"
+#   4. Human review → "HUMAN_REVIEW|Review on #N by <user>: <preview>"
+#   5. CI failed on main → "CI_FAILED|Workflow <name> failed on main"
 
 set -euo pipefail
 
@@ -75,24 +73,7 @@ for line in sys.stdin:
         if field == 'Status' and new_val in ('Ready', 'ready'):
             notifications.append(f'DISPATCH|Issue moved to Ready on board (by {user})')
 
-    # Rule 3: PR opened
-    elif e == 'pull_request' and a == 'opened':
-        notifications.append(f'PR_OPENED|PR #{n} opened: {title} (by {user})')
-
-    # Rule 4: PR merged
-    elif e == 'pull_request' and a == 'closed' and r.get('merged', False):
-        notifications.append(f'PR_MERGED|PR #{n} merged: {title}')
-
-    # Rule 5a: Bot review posted
-    elif e == 'issue_comment' and a == 'created' and r.get('is_bot', False):
-        bot_user = r.get('comment_user', '')
-        notifications.append(f'BOT_REVIEW|Bot comment on #{n} by {bot_user}')
-    elif e == 'pull_request_review' and a == 'submitted' and r.get('is_bot', False):
-        bot_user = r.get('review_user', '')
-        state = r.get('review_state', '')
-        notifications.append(f'BOT_REVIEW|Bot review on #{n} by {bot_user}: {state}')
-
-    # Rule 5b: Human comment on issue/PR → may need PM response
+    # Rule 3: Human comment on issue/PR → may need PM response
     elif e == 'issue_comment' and a == 'created' and not r.get('is_bot', False):
         comment_user = r.get('comment_user', '')
         body_preview = r.get('comment_body', '')[:200]
@@ -103,21 +84,13 @@ for line in sys.stdin:
         body_preview = r.get('review_body', '')[:200]
         notifications.append(f'HUMAN_REVIEW|Review on #{n} by {review_user} ({state}): {body_preview}')
 
-    # Rule 6: CI failed
+    # Rule 4: CI failed on main → needs investigation
     elif e == 'workflow_run' and a == 'completed':
         conclusion = r.get('conclusion', '')
-        if conclusion == 'failure':
-            wf = r.get('workflow_name', '')
-            branch = r.get('branch', '')
-            notifications.append(f'CI_FAILED|Workflow \"{wf}\" failed on {branch}')
-
-    # Rule 7: Push to main
-    elif e == 'push':
-        count = r.get('commit_count', 0)
         branch = r.get('branch', '')
-        commits = r.get('commits', [])
-        summary = '; '.join(c.get('message', '')[:60] for c in commits[:3])
-        notifications.append(f'PUSH|{count} commit(s) to {branch}: {summary}')
+        if conclusion == 'failure' and branch == 'main':
+            wf = r.get('workflow_name', '')
+            notifications.append(f'CI_FAILED|Workflow \"{wf}\" failed on main')
 
 if notifications:
     for n in notifications:
