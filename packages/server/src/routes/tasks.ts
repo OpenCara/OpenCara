@@ -27,6 +27,7 @@ import {
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
+import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
   parseBody,
@@ -296,8 +297,15 @@ export const MUTATION_RATE_LIMIT = { maxRequests: 30, windowMs: 60_000 };
 export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-  // API key auth — skips when API_KEYS is not configured (open mode)
-  app.use('/api/tasks/*', requireApiKey());
+  // Auth: OAuth when OAUTH_REQUIRED=true, otherwise fall back to API key auth.
+  // During the transition period both can coexist — OAuth is checked first,
+  // and API key is used as fallback when OAuth is not enforced.
+  // Pre-instantiate middleware to avoid allocating closures per request.
+  const oauthMiddleware = requireOAuth();
+  const apiKeyMiddleware = requireApiKey();
+  app.use('/api/tasks/*', async (c, next) => {
+    return c.env.OAUTH_REQUIRED === 'true' ? oauthMiddleware(c, next) : apiKeyMiddleware(c, next);
+  });
 
   // ── Poll ─────────────────────────────────────────────────────
 

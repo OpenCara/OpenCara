@@ -152,5 +152,20 @@ export default {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+
+    try {
+      const expired = await store.cleanupExpiredOAuthCache();
+      if (expired > 0) {
+        logger.info('Cleaned up expired OAuth cache entries', {
+          action: 'cleanup_oauth_cache',
+          expired,
+        });
+      }
+    } catch (err) {
+      logger.error('Scheduled OAuth cache cleanup failed', {
+        action: 'cleanup_oauth_cache',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   },
 };

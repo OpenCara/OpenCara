@@ -1,4 +1,4 @@
-import type { ReviewTask, TaskClaim } from '@opencara/shared';
+import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
@@ -13,6 +13,7 @@ export class MemoryDataStore implements DataStore {
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
   private agentRejections: Array<{ agent_id: string; reason: string; created_at: number }> = [];
+  private oauthCache = new Map<string, { identity: VerifiedIdentity; expires_at: number }>();
   private readonly ttlMs: number;
 
   constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
@@ -294,6 +295,33 @@ export class MemoryDataStore implements DataStore {
       .length;
   }
 
+  // OAuth token cache
+
+  async getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null> {
+    const entry = this.oauthCache.get(tokenHash);
+    if (!entry || entry.expires_at <= Date.now()) return null;
+    return { ...entry.identity };
+  }
+
+  async setOAuthCache(tokenHash: string, identity: VerifiedIdentity, ttlMs: number): Promise<void> {
+    this.oauthCache.set(tokenHash, {
+      identity: { ...identity },
+      expires_at: Date.now() + ttlMs,
+    });
+  }
+
+  async cleanupExpiredOAuthCache(): Promise<number> {
+    const now = Date.now();
+    let removed = 0;
+    for (const [key, entry] of this.oauthCache) {
+      if (entry.expires_at <= now) {
+        this.oauthCache.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   // Cleanup
 
   async cleanupTerminalTasks(): Promise<number> {
@@ -319,6 +347,7 @@ export class MemoryDataStore implements DataStore {
     this.claims.clear();
     this.agentLastSeen.clear();
     this.agentRejections = [];
+    this.oauthCache.clear();
     this.timeoutLastCheck = 0;
   }
 }

@@ -465,4 +465,61 @@ describe('SqliteD1Adapter', () => {
       expect(await store.countAgentRejections('agent-1', old - 1000)).toBe(2);
     });
   });
+
+  // ── OAuth token cache (D1) ─────────────────────────────────────
+
+  describe('OAuth token cache (D1)', () => {
+    let store: D1DataStore;
+
+    beforeEach(() => {
+      store = new D1DataStore(adapter);
+    });
+
+    it('returns null for missing cache entry', async () => {
+      const result = await store.getOAuthCache('nonexistent-hash');
+      expect(result).toBeNull();
+    });
+
+    it('stores and retrieves a cached identity', async () => {
+      const identity = { github_user_id: 42, github_username: 'octocat', verified_at: Date.now() };
+      await store.setOAuthCache('hash-abc', identity, 60_000);
+      const cached = await store.getOAuthCache('hash-abc');
+      expect(cached).toEqual(identity);
+    });
+
+    it('returns null for expired entries', async () => {
+      const identity = { github_user_id: 42, github_username: 'octocat', verified_at: Date.now() };
+      // Use a TTL of -1 to immediately expire
+      await store.setOAuthCache('hash-expired', identity, -1);
+      const cached = await store.getOAuthCache('hash-expired');
+      expect(cached).toBeNull();
+    });
+
+    it('upserts on conflict (same token_hash)', async () => {
+      const id1 = { github_user_id: 1, github_username: 'user1', verified_at: 100 };
+      const id2 = { github_user_id: 2, github_username: 'user2', verified_at: 200 };
+      await store.setOAuthCache('hash-upsert', id1, 60_000);
+      await store.setOAuthCache('hash-upsert', id2, 60_000);
+      const cached = await store.getOAuthCache('hash-upsert');
+      expect(cached?.github_user_id).toBe(2);
+      expect(cached?.github_username).toBe('user2');
+    });
+
+    it('cleanupExpiredOAuthCache removes expired entries and keeps valid ones', async () => {
+      const identity = { github_user_id: 42, github_username: 'octocat', verified_at: Date.now() };
+      await store.setOAuthCache('hash-expired', identity, -1);
+      await store.setOAuthCache('hash-valid', identity, 60_000);
+      const removed = await store.cleanupExpiredOAuthCache();
+      expect(removed).toBe(1);
+      expect(await store.getOAuthCache('hash-expired')).toBeNull();
+      expect(await store.getOAuthCache('hash-valid')).not.toBeNull();
+    });
+
+    it('cleanupExpiredOAuthCache returns 0 when no expired entries', async () => {
+      const identity = { github_user_id: 42, github_username: 'octocat', verified_at: Date.now() };
+      await store.setOAuthCache('hash-valid', identity, 60_000);
+      const removed = await store.cleanupExpiredOAuthCache();
+      expect(removed).toBe(0);
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import type { ReviewTask, TaskClaim } from '@opencara/shared';
+import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 
 /**
@@ -71,6 +71,14 @@ export interface DataStore {
   recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void>;
   /** Count rejections for an agent within a time window. */
   countAgentRejections(agentId: string, sinceMs: number): Promise<number>;
+
+  // OAuth token cache
+  /** Look up a cached verified identity by token hash. Returns null if not found or expired. */
+  getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null>;
+  /** Cache a verified identity with a TTL. */
+  setOAuthCache(tokenHash: string, identity: VerifiedIdentity, ttlMs: number): Promise<void>;
+  /** Delete expired OAuth cache entries. Returns the number of entries removed. */
+  cleanupExpiredOAuthCache(): Promise<number>;
 
   // Cleanup
   /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
