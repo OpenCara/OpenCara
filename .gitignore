@@ -17,3 +17,4 @@ audit.json
 .claude/github-events.process-cursor
 scripts/github-webhook.env
 supabase/.temp/
+__pycache__/

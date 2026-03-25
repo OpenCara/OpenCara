@@ -151,10 +151,10 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
           `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" is deprecated, using "${alias}" instead`,
         );
         resolvedTool = alias;
-      } else {
+      } else if (typeof obj.command !== 'string') {
         const toolNames = [...KNOWN_TOOL_NAMES].join(', ');
         console.warn(
-          `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" not in registry (known: ${toolNames}), skipping agent`,
+          `\u26a0 Config warning: agents[${i}].tool "${resolvedTool}" not in registry (known: ${toolNames}) and no custom command provided, skipping agent`,
         );
         continue;
       }
