@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #350, #352, #351, #353, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #350, #352, #351, #353, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396
 
 ## Merged PRs (processed)
 
@@ -132,7 +132,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400
 
 ### Milestone QA (2026-03-22)
 
@@ -255,17 +255,34 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 - #380 [cli-dev, P2, S] Prompt reviewers/synthesizers to include metadata headers in output — **DONE** (PR #383 merged, QA PASS 2026-03-24)
 - #381 [server-dev, P2, XS] Wrap review_text with title header and footer — **DONE** (PR #382 merged, QA PASS 2026-03-24)
 
+### Bug fixes (2026-03-24)
+
+- #386 [cli-dev, HIGH] Fix metadata headers missing from bot output (review prompts ignored by AI) — **DONE** (PR #387 merged, QA PASS 2026-03-24)
+- #388 [cli-dev, HIGH] Router-mode review paths missing metadata headers (follow-up to #386) — **DONE** (PR #389 merged, QA PASS 2026-03-24)
+
 ### Scriptify patterns (2026-03-24)
 
-- #384 [architect, low] Script: list-issues-by-status.sh — **BACKLOG**
-- #385 [architect, low] Script: poll-github.sh — **BACKLOG**
+- #384 [pm, low] Script: list-issues-by-status.sh — **DONE** (direct commit 2026-03-24)
+- #385 [pm, low] Script: poll-github.sh — **DONE** (direct commit 2026-03-24)
+
+### Release strategy (2026-03-24)
+
+- #391 [breakdown, HIGH] Adopt CF Workers Versions & Deployments for rolling releases — **DONE** (closed)
+  - #392 [server-dev, HIGH] Add /api/meta endpoint + CLI version check middleware — **DONE** (PR #398 merged)
+  - #393 [cli-dev, HIGH] Send X-OpenCara-CLI-Version header in all API requests — **DONE** (PR #399 merged)
+  - #394 [architect, HIGH] Create scripts/release.sh for CF Versions workflow — **DONE** (PR #400 merged)
+  - #395 [architect, medium] Add release-prod.yml CI workflow — **DONE** (PR #400 merged, combined with #394)
+  - #396 [pm, medium] Update docs/deployment.md with new release workflow — **DONE** (direct commit 4229aa8)
+  - #397 [cli-dev, low] Support Cloudflare-Workers-Version-Overrides header — **READY**
+
+### PM tooling (2026-03-24)
+
+- #401 [pm, medium] Local webhook receiver for real-time GitHub event notification — **READY**
 
 ## Open PRs
 
-- #377 [direct] Fix comment formatting in Dockerfile (by team lead, no issue)
+(none)
 
 ## Merged PRs (pending processing)
 
-- #379 [server-dev] Remove server-side review formatting, post CLI text as-is (Part of #378) — merged 2026-03-24
-- #382 [server-dev] Wrap review_text with title header and footer (Part of #381) — merged 2026-03-24
-- #383 [cli-dev] Prompt reviewers/synthesizers to include metadata headers (Part of #380) — merged 2026-03-24
+(none)
