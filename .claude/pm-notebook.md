@@ -341,7 +341,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
   - #450 [cli-dev, P1, L] OAuth Device Flow auth module with token storage and refresh — **DONE** (PR #455, QA PASS)
   - #451 [cli-dev, P1, S] Add opencara auth login/status/logout commands — **DONE** (PR #458, QA PASS)
   - #452 [cli-dev, P1, L] Replace github-auth.ts with OAuth token for diff fetch + API auth — **DONE** (PR #460, QA PASS)
-  - #453 [pm, P2, M] GitHub App OAuth configuration and documentation — **BACKLOG**
+  - #453 [pm, P2, M] GitHub App OAuth configuration and documentation — **DONE** (direct commit 4484116)
 
 ### QA pending (In review)
 

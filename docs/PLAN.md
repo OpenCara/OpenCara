@@ -286,11 +286,11 @@ Parent issue: #445
 | #451  | cli-dev | #458 | Add opencara auth login/status/logout commands                    |
 | #452  | cli-dev | #460 | Replace github-auth.ts with OAuth token for diff fetch + API auth |
 
-### Phase 4: Configuration & Docs
+### Phase 4: Configuration & Docs [DONE]
 
-| Issue | Agent | Description                                      |
-| ----- | ----- | ------------------------------------------------ |
-| #453  | pm    | GitHub App OAuth configuration and documentation |
+| Issue | Agent | PR     | Description                                      |
+| ----- | ----- | ------ | ------------------------------------------------ |
+| #453  | pm    | direct | GitHub App OAuth configuration and documentation |
 
 ## Open Issues
 
