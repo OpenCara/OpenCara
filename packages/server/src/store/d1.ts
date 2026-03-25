@@ -530,33 +530,39 @@ export class D1DataStore implements DataStore {
     const staleClaims = staleResult.results ?? [];
     if (staleClaims.length === 0) return 0;
 
-    const statements: D1PreparedStatement[] = [];
+    // Process each claim individually to guard against TOCTOU races.
+    // Between the SELECT above and these UPDATEs, a claim could transition
+    // from 'pending' to 'completed' if the agent wakes up and submits.
+    let freed = 0;
     for (const claim of staleClaims) {
-      // Mark claim as error
-      statements.push(
-        this.db.prepare(`UPDATE claims SET status = 'error' WHERE id = ?`).bind(claim.id),
-      );
-      // Release the review slot if this was a review claim
+      // Guard: only update if claim is still pending (prevents overwriting completed/rejected)
+      const result = await this.db
+        .prepare(`UPDATE claims SET status = 'error' WHERE id = ? AND status = 'pending'`)
+        .bind(claim.id)
+        .run();
+      const changed = result.meta?.changes ?? 0;
+      if (changed === 0) continue; // Claim was already resolved — skip slot release
+      freed++;
+      // Release the review slot only if we actually freed the claim
       if (claim.role === 'review') {
-        statements.push(
-          this.db
-            .prepare(
-              `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > 0`,
-            )
-            .bind(claim.task_id),
-        );
+        await this.db
+          .prepare(
+            `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > 0`,
+          )
+          .bind(claim.task_id)
+          .run();
       }
     }
 
-    await this.db.batch(statements);
-    return staleClaims.length;
+    return freed;
   }
 
   async reclaimAbandonedSummarySlots(staleThresholdMs: number): Promise<number> {
     const cutoff = Date.now() - staleThresholdMs;
 
     // Find tasks in 'finished' queue where summary agent is stale.
-    // If agent has no heartbeat, use task created_at as fallback.
+    // If agent has no heartbeat, use reviews_completed_at as fallback
+    // (when the task entered summary phase), falling back to created_at.
     const staleResult = await this.db
       .prepare(
         `SELECT t.id
@@ -566,7 +572,7 @@ export class D1DataStore implements DataStore {
            AND t.summary_agent_id IS NOT NULL
            AND (
              (h.last_seen IS NOT NULL AND h.last_seen < ?)
-             OR (h.last_seen IS NULL AND t.created_at < ?)
+             OR (h.last_seen IS NULL AND COALESCE(t.reviews_completed_at, t.created_at) < ?)
            )`,
       )
       .bind(cutoff, cutoff)
@@ -575,17 +581,20 @@ export class D1DataStore implements DataStore {
     const staleTasks = staleResult.results ?? [];
     if (staleTasks.length === 0) return 0;
 
-    const statements: D1PreparedStatement[] = [];
+    // Process individually with guards to prevent TOCTOU races.
+    // Between the SELECT and UPDATE, a stale agent could wake up and submit.
+    let freed = 0;
     for (const task of staleTasks) {
-      statements.push(
-        this.db
-          .prepare(`UPDATE tasks SET queue = 'summary', summary_agent_id = NULL WHERE id = ?`)
-          .bind(task.id),
-      );
+      const result = await this.db
+        .prepare(
+          `UPDATE tasks SET queue = 'summary', summary_agent_id = NULL WHERE id = ? AND queue = 'finished'`,
+        )
+        .bind(task.id)
+        .run();
+      if ((result.meta?.changes ?? 0) > 0) freed++;
     }
 
-    await this.db.batch(statements);
-    return staleTasks.length;
+    return freed;
   }
 
   // ── Cleanup ───────────────────────────────────────────────────

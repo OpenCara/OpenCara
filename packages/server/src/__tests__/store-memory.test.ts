@@ -683,13 +683,13 @@ describe('MemoryDataStore', () => {
       expect(task?.queue).toBe('finished');
     });
 
-    it('frees summary slot from agent with no heartbeat when task is old', async () => {
+    it('frees summary slot from agent with no heartbeat when reviews_completed_at is old', async () => {
       const now = Date.now();
       await store.createTask(
         makeTask({
           queue: 'finished',
           summary_agent_id: 'ghost',
-          created_at: now - 600_000, // task created 10 min ago
+          reviews_completed_at: now - 600_000, // entered summary 10 min ago
         }),
       );
       // No heartbeat
@@ -701,12 +701,27 @@ describe('MemoryDataStore', () => {
       expect(task?.queue).toBe('summary');
     });
 
-    it('does not free summary slot from agent with no heartbeat when task is recent', async () => {
+    it('falls back to created_at when reviews_completed_at is not set', async () => {
+      const now = Date.now();
       await store.createTask(
         makeTask({
           queue: 'finished',
           summary_agent_id: 'ghost',
-          created_at: Date.now(), // task just created
+          created_at: now - 600_000, // task created 10 min ago, no reviews_completed_at
+        }),
+      );
+      // No heartbeat
+
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+    });
+
+    it('does not free summary slot from agent with no heartbeat when summary phase is recent', async () => {
+      await store.createTask(
+        makeTask({
+          queue: 'finished',
+          summary_agent_id: 'ghost',
+          reviews_completed_at: Date.now(), // just entered summary phase
         }),
       );
       // No heartbeat

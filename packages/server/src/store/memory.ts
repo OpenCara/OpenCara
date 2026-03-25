@@ -194,8 +194,8 @@ export class MemoryDataStore implements DataStore {
     for (const claim of this.claims.values()) {
       if (claim.status !== 'pending') continue;
       const lastSeen = this.agentLastSeen.get(claim.agent_id);
-      // Only reclaim if agent has a heartbeat and it's stale.
-      // Agents without heartbeats are not yet tracked — use claim age as fallback.
+      // Reclaim if agent has a stale heartbeat, OR if no heartbeat exists
+      // and the claim itself is older than the threshold.
       if (lastSeen !== undefined) {
         if (lastSeen >= cutoff) continue; // Agent is active
       } else {
@@ -222,14 +222,15 @@ export class MemoryDataStore implements DataStore {
     for (const task of this.tasks.values()) {
       if (task.queue !== 'finished' || !task.summary_agent_id) continue;
       const lastSeen = this.agentLastSeen.get(task.summary_agent_id);
-      // Only reclaim if agent has a heartbeat and it's stale.
-      // If no heartbeat, check if the summary claim happened long enough ago
-      // by looking at reviews_completed_at (when the task entered summary phase).
+      // Reclaim if agent has a stale heartbeat, OR if no heartbeat exists
+      // and the task has been in summary phase longer than the threshold.
       if (lastSeen !== undefined) {
         if (lastSeen >= cutoff) continue;
       } else {
-        // No heartbeat — use task creation as fallback (conservative)
-        if (task.created_at >= cutoff) continue;
+        // No heartbeat — use reviews_completed_at (when task entered summary phase)
+        // as fallback, falling back to created_at for single-review tasks.
+        const fallbackTime = task.reviews_completed_at ?? task.created_at;
+        if (fallbackTime >= cutoff) continue;
       }
       task.queue = 'summary';
       task.summary_agent_id = undefined;
