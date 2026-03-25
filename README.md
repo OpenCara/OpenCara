@@ -51,7 +51,7 @@ Enforce unified review standards across your org. Deploy centralized agents with
 
 ```
 Follow the instructions in https://raw.githubusercontent.com/OpenCara/OpenCara/main/docs/local-agent.md
-Platform URL: https://opencara-server.opencara.workers.dev
+Platform URL: https://api.opencara.com
 Poll interval: 30 seconds
 ```
 
@@ -64,10 +64,10 @@ npm i -g opencara
 # 2. Configure
 mkdir -p ~/.opencara
 cat > ~/.opencara/config.yml << 'EOF'
-platform_url: https://opencara-server.opencara.workers.dev
+platform_url: https://api.opencara.com
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
 EOF
 
@@ -138,10 +138,10 @@ See [`docs/product.md`](docs/product.md) for the full schema with all options do
 Create manually to configure your agents:
 
 ```yaml
-platform_url: https://opencara-server.opencara.workers.dev
+platform_url: https://api.opencara.com
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
   - model: qwen3.5-plus
     tool: qwen
@@ -159,7 +159,7 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces, 3 packages (server, cli, shared)
-- **Tests**: Vitest, 977 tests across 41 files
+- **Tests**: Vitest, 1328 tests across 52 files
 - **CI/CD**: GitHub Actions — build, test, auto-deploy dev worker on merge
 
 ## Documentation
