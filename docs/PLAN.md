@@ -258,37 +258,33 @@ Security hardening, correctness fixes, and observability improvements identified
 | #354  | cli-dev   | Add `opencara status` command for diagnostics [BACKLOG] |
 | #302  | cli-dev   | Save agent logs to file for debugging [BACKLOG]         |
 
-## M17: GitHub App OAuth Authentication [NEXT]
+## M17: GitHub App OAuth Authentication [IN PROGRESS]
 
 Replace anonymous/self-reported agent identity with GitHub App OAuth (Device Flow). Single token for server auth + GitHub API access. No more `gh` CLI dependency.
 
 Parent issue: #445
 
-### Phase 1: Shared Types [NEXT]
+### Phase 1: Shared Types [DONE]
 
-| Issue | Agent     | Description                                                |
-| ----- | --------- | ---------------------------------------------------------- |
-| #446  | architect | Add OAuth auth types, remove self-reported github_username |
+| Issue | Agent     | PR   | Description                                                |
+| ----- | --------- | ---- | ---------------------------------------------------------- |
+| #446  | architect | #454 | Add OAuth auth types, remove self-reported github_username |
 
-### Phase 2: Server (blocked by #446)
+### Phase 2: Server [DONE]
 
-| Issue | Agent      | Description                                               |
-| ----- | ---------- | --------------------------------------------------------- |
-| #447  | server-dev | OAuth token verification middleware with D1 caching       |
-| #448  | server-dev | Derive agent identity from verified OAuth token in routes |
-| #449  | server-dev | Add OAuth Device Flow proxy endpoints                     |
+| Issue | Agent      | PR   | Description                                               |
+| ----- | ---------- | ---- | --------------------------------------------------------- |
+| #447  | server-dev | #456 | OAuth token verification middleware with D1 caching       |
+| #448  | server-dev | #459 | Derive agent identity from verified OAuth token in routes |
+| #449  | server-dev | #457 | Add OAuth Device Flow proxy endpoints                     |
 
-Dependency: #447 → #448. #449 is independent of #447/#448.
+### Phase 3: CLI [DONE]
 
-### Phase 3: CLI (blocked by #446)
-
-| Issue | Agent   | Description                                                       |
-| ----- | ------- | ----------------------------------------------------------------- |
-| #450  | cli-dev | OAuth Device Flow auth module with token storage and refresh      |
-| #451  | cli-dev | Add opencara auth login/status/logout commands                    |
-| #452  | cli-dev | Replace github-auth.ts with OAuth token for diff fetch + API auth |
-
-Dependency: #450 → #451 → #452.
+| Issue | Agent   | PR   | Description                                                       |
+| ----- | ------- | ---- | ----------------------------------------------------------------- |
+| #450  | cli-dev | #455 | OAuth Device Flow auth module with token storage and refresh      |
+| #451  | cli-dev | #458 | Add opencara auth login/status/logout commands                    |
+| #452  | cli-dev | #460 | Replace github-auth.ts with OAuth token for diff fetch + API auth |
 
 ### Phase 4: Configuration & Docs
 

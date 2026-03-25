@@ -334,13 +334,13 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 ### M17: GitHub App OAuth Authentication (2026-03-25)
 
 - #445 [breakdown] GitHub App OAuth Authentication — **ACTIVE** (sub-issues below)
-  - #446 [architect, P1, M] Add OAuth auth types and remove self-reported identity — **BACKLOG** (blocks all others)
-  - #447 [server-dev, P1, L] OAuth token verification middleware with D1 caching — **BACKLOG** (blocked by #446)
-  - #448 [server-dev, P1, M] Derive agent identity from verified OAuth token in routes — **BACKLOG** (blocked by #447)
-  - #449 [server-dev, P1, M] Add OAuth Device Flow proxy endpoints — **BACKLOG** (blocked by #446)
-  - #450 [cli-dev, P1, L] OAuth Device Flow auth module with token storage and refresh — **BACKLOG** (blocked by #446)
-  - #451 [cli-dev, P1, S] Add opencara auth login/status/logout commands — **BACKLOG** (blocked by #450)
-  - #452 [cli-dev, P1, L] Replace github-auth.ts with OAuth token for diff fetch + API auth — **BACKLOG** (blocked by #450, #451)
+  - #446 [architect, P1, M] Add OAuth auth types and remove self-reported identity — **DONE** (PR #454 merged)
+  - #447 [server-dev, P1, L] OAuth token verification middleware with D1 caching — **DONE** (PR #456 merged)
+  - #448 [server-dev, P1, M] Derive agent identity from verified OAuth token in routes — **DONE** (PR #459 merged)
+  - #449 [server-dev, P1, M] Add OAuth Device Flow proxy endpoints — **DONE** (PR #457 merged)
+  - #450 [cli-dev, P1, L] OAuth Device Flow auth module with token storage and refresh — **DONE** (PR #455 merged)
+  - #451 [cli-dev, P1, S] Add opencara auth login/status/logout commands — **DONE** (PR #458 merged)
+  - #452 [cli-dev, P1, L] Replace github-auth.ts with OAuth token for diff fetch + API auth — **DONE** (PR #460 merged)
   - #453 [pm, P2, M] GitHub App OAuth configuration and documentation — **BACKLOG**
 
 ### QA pending (In review)
