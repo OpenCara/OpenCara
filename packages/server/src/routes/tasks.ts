@@ -585,7 +585,8 @@ export function taskRoutes() {
     const logger = c.get('logger');
     const taskId = c.req.param('taskId');
 
-    // Parse raw JSON first so we can track review_text rejections with agent_id
+    // Manual JSON parsing (instead of parseBody) so we can extract agent_id
+    // for abuse tracking even when review_text validation fails.
     let raw: Record<string, unknown>;
     try {
       raw = await c.req.json();
@@ -600,12 +601,12 @@ export function taskRoutes() {
         return path ? `${path}: ${issue.message}` : issue.message;
       });
 
-      // Record rejection for abuse tracking if review_text was invalid
+      // Record rejection for abuse tracking if review_text was the invalid field.
+      // Only track when review_text is a string (non-string types are a different error).
       const agentId =
         typeof raw.agent_id === 'string' && raw.agent_id.length > 0 ? raw.agent_id : null;
-      if (agentId) {
-        const reviewText = typeof raw.review_text === 'string' ? raw.review_text : '';
-        const trimmed = reviewText.trim();
+      if (agentId && typeof raw.review_text === 'string') {
+        const trimmed = raw.review_text.trim();
         if (trimmed.length < REVIEW_TEXT_MIN_LENGTH || trimmed.length > REVIEW_TEXT_MAX_LENGTH) {
           const reason = trimmed.length < REVIEW_TEXT_MIN_LENGTH ? 'too_short' : 'too_long';
           await store.recordAgentRejection(agentId, reason, Date.now());
