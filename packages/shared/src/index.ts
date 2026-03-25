@@ -30,6 +30,10 @@ export type {
   ModelRegistryEntry,
   RegistryResponse,
   MetaResponse,
+  ConfigValidateRequest,
+  ConfigValidateSuccessResponse,
+  ConfigValidateErrorResponse,
+  ConfigValidateResponse,
   ErrorCode,
   ErrorResponse,
 } from './api.js';
