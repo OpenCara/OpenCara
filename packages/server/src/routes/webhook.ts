@@ -325,7 +325,22 @@ async function handleIssueComment(
     return new Response('OK', { status: 200 });
   }
 
-  const { config } = await github.loadReviewConfig(owner, repo, pr.base.ref, prNumber, token);
+  const { config, parseError } = await github.loadReviewConfig(
+    owner,
+    repo,
+    pr.base.ref,
+    prNumber,
+    token,
+  );
+
+  if (parseError) {
+    logger.info('Aborting comment trigger due to .review.yml parse error', {
+      owner,
+      repo,
+      prNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
 
   const triggerCommand = config.trigger.comment;
   if (!comment.body.trim().toLowerCase().startsWith(triggerCommand.toLowerCase())) {

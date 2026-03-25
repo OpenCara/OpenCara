@@ -455,6 +455,48 @@ describe('webhook.ts edge cases', () => {
     expect(res.status).toBe(200);
   });
 
+  it('issue_comment with .review.yml parse error aborts', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Inject a GitHubService that returns parseError: true from loadReviewConfig
+    const parseErrorGithub: GitHubService = {
+      async getInstallationToken() {
+        return 'ghs_test';
+      },
+      async postPrComment() {
+        return '';
+      },
+      async fetchPrDetails() {
+        return {
+          number: 1,
+          html_url: 'https://github.com/o/r/pull/1',
+          diff_url: 'https://github.com/o/r/pull/1.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat' },
+          draft: false,
+          labels: [],
+        };
+      },
+      async loadReviewConfig() {
+        return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+      },
+    };
+    const { app, store, mockEnv } = await setupApp(parseErrorGithub);
+    const res = await sendWebhook(app, mockEnv, 'issue_comment', {
+      action: 'created',
+      installation: { id: 999 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      issue: { number: 1, pull_request: { url: 'https://example.com' } },
+      comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
+    });
+    expect(res.status).toBe(200);
+    // Verify no task was created
+    const tasks = await store.listTasks({ status: 'pending' });
+    expect(tasks).toHaveLength(0);
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('Aborting comment trigger due to .review.yml parse error'),
+    );
+  });
+
   it('issue_comment on non-PR issue is skipped', async () => {
     const { app, mockEnv } = await setupApp();
     const res = await sendWebhook(app, mockEnv, 'issue_comment', {
