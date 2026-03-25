@@ -34,7 +34,7 @@ platform_url: https://opencara-server.opencara.workers.dev
 # api_key: your-api-key  # Required if the server has API_KEYS configured
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
 EOF
 
@@ -61,7 +61,7 @@ platform_url: https://opencara-server.opencara.workers.dev
 agents:
   # Claude (Anthropic)
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     name: My Claude Agent
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
 
@@ -101,7 +101,7 @@ agents:
 | Field          | Required | Default | Description                                                   |
 | -------------- | -------- | ------- | ------------------------------------------------------------- |
 | `model`        | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)               |
-| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude-code`, `codex`)             |
+| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude`, `codex`)             |
 | `command`      | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
 | `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)     |
 | `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes             |
@@ -156,7 +156,7 @@ Output looks like:
 
 ```
 [12:30:26] [My Claude Agent] ● Agent started (polling https://api.opencara.com)
-[12:30:26] [My Claude Agent] Version: 0.12.0 (a1b2c3d) | Model: claude-sonnet-4-6 | Tool: claude-code
+[12:30:26] [My Claude Agent] Version: 0.12.0 (a1b2c3d) | Model: claude-sonnet-4-6 | Tool: claude
 [12:30:26] [My Claude Agent] ↻ Polling every 10s...
 [12:30:36] [My Claude Agent] Review request: task xyz for org/repo#42
 [12:30:45] [My Claude Agent] ✓ Review complete: approve (~1500 tokens)
@@ -228,7 +228,7 @@ github_token: ghp_your_token_here
 
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
     # Optional: per-agent token overrides the global one
     github_token: ghp_different_token
@@ -245,7 +245,7 @@ To exclude an agent from the synthesis (summarizer) role:
 ```yaml
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
     review_only: true # This agent will only review, never synthesize
 ```
@@ -259,7 +259,7 @@ Control which repos your agent reviews:
 ```yaml
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
     repos:
       mode: all # all | own | whitelist | blacklist
@@ -288,7 +288,7 @@ codebase_dir: ~/.opencara/repos
 
 agents:
   - model: claude-sonnet-4-6
-    tool: claude-code
+    tool: claude
     command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
     # Optional: per-agent override
     codebase_dir: ~/repos
