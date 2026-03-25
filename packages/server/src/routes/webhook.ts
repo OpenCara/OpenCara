@@ -334,7 +334,11 @@ async function handleIssueComment(
   );
 
   if (parseError) {
-    logger.info('Aborting comment trigger due to .review.yml parse error', { owner, repo, prNumber });
+    logger.info('Aborting comment trigger due to .review.yml parse error', {
+      owner,
+      repo,
+      prNumber,
+    });
     return new Response('OK', { status: 200 });
   }
 
