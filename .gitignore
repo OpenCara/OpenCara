@@ -14,5 +14,6 @@ audit.json
 .vercel/
 .claude/github-events.jsonl
 .claude/github-events.cursor
+.claude/github-events.process-cursor
 scripts/github-webhook.env
 supabase/.temp/
