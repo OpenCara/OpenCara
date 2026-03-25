@@ -24,6 +24,22 @@ export class MemoryDataStore implements DataStore {
     this.tasks.set(task.id, { ...task });
   }
 
+  async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
+    // Check-and-insert in a single synchronous block (atomic in single-threaded JS)
+    for (const existing of this.tasks.values()) {
+      if (
+        existing.owner === task.owner &&
+        existing.repo === task.repo &&
+        existing.pr_number === task.pr_number &&
+        (existing.status === 'pending' || existing.status === 'reviewing')
+      ) {
+        return false;
+      }
+    }
+    this.tasks.set(task.id, { ...task });
+    return true;
+  }
+
   async getTask(id: string): Promise<ReviewTask | null> {
     const task = this.tasks.get(id);
     return task ? { ...task } : null;
@@ -41,24 +57,6 @@ export class MemoryDataStore implements DataStore {
     }
 
     return results.map((t) => ({ ...t }));
-  }
-
-  async findActiveTaskForPR(
-    owner: string,
-    repo: string,
-    prNumber: number,
-  ): Promise<ReviewTask | null> {
-    for (const task of this.tasks.values()) {
-      if (
-        task.owner === owner &&
-        task.repo === repo &&
-        task.pr_number === prNumber &&
-        (task.status === 'pending' || task.status === 'reviewing')
-      ) {
-        return { ...task };
-      }
-    }
-    return null;
   }
 
   async updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean> {
