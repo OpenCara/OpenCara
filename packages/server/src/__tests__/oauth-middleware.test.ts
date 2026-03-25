@@ -755,6 +755,76 @@ describe('OAuth middleware integration', () => {
       expect(body.error.message).toContain('not in the summary whitelist');
     });
 
+    it('poll uses verified github_username for review queue eligibility', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          queue: 'review',
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              whitelist: [{ github: 'octocat' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].role).toBe('review');
+    });
+
+    it('poll filters review tasks when verified username not in whitelist', async () => {
+      const env = setupOAuthEnv();
+      stubGitHubAuth(42, 'octocat');
+
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          queue: 'review',
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            reviewer: {
+              ...DEFAULT_REVIEW_CONFIG.reviewer,
+              whitelist: [{ github: 'alice' }],
+            },
+          },
+        }),
+      );
+
+      const res = await oauthRequest('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('poll works without OAuth when whitelist has only agent entries', async () => {
+      const env = createOAuthApp();
+
+      await store.createTask(
+        makeTask({
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            summarizer: {
+              ...DEFAULT_REVIEW_CONFIG.summarizer,
+              whitelist: [{ agent: 'agent-1' }],
+            },
+          },
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+    });
+
     it('claim stores no github_user_id when OAuth is not enforced', async () => {
       // No OAUTH_REQUIRED — uses API key auth, verifiedIdentity is undefined
       const env = createOAuthApp();
