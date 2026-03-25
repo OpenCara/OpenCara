@@ -21,7 +21,6 @@ export interface ReviewConfig {
   reviewer: {
     whitelist: EntityEntry[];
     blacklist: EntityEntry[];
-    allowAnonymous: boolean;
   };
   summarizer: {
     whitelist: EntityEntry[];
@@ -122,7 +121,6 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   reviewer: {
     whitelist: [],
     blacklist: [],
-    allowAnonymous: true,
   },
   summarizer: {
     whitelist: [],
@@ -214,6 +212,13 @@ export function parseReviewConfig(yaml: string): ParseResult {
   const agentsRaw = isObject(raw.agents) ? raw.agents : {};
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
 
+  // Deprecation warning: allow_anonymous is ignored with OAuth authentication
+  if (reviewerRaw.allow_anonymous !== undefined) {
+    console.warn(
+      'Deprecated: "reviewer.allow_anonymous" is ignored. All agents are now authenticated via OAuth.',
+    );
+  }
+
   const config: ReviewConfig = {
     version: raw.version,
     prompt: raw.prompt,
@@ -243,8 +248,6 @@ export function parseReviewConfig(yaml: string): ParseResult {
     reviewer: {
       whitelist: parseEntityList(reviewerRaw.whitelist),
       blacklist: parseEntityList(reviewerRaw.blacklist),
-      allowAnonymous:
-        typeof reviewerRaw.allow_anonymous === 'boolean' ? reviewerRaw.allow_anonymous : true,
     },
     summarizer: parseSummarizerSection(raw.summarizer),
     timeout: parseTimeout(raw.timeout),

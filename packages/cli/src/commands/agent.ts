@@ -262,7 +262,7 @@ async function pollLoop(
       // Poll for tasks — include declared repos so server can return matching private tasks.
       // Server validates permissions; sending repos here doesn't bypass access control.
       const pollBody: Record<string, unknown> = { agent_id: agentId };
-      if (githubUsername) pollBody.github_username = githubUsername;
+      // github_username removed — identity derived from OAuth token server-side
       if (roles) pollBody.roles = roles;
       if (reviewOnly) pollBody.review_only = true;
       if (repoConfig?.list?.length) {
@@ -403,7 +403,7 @@ async function handleTask(
       model: agentInfo.model,
       tool: agentInfo.tool,
     };
-    if (githubUsername) claimBody.github_username = githubUsername;
+    // github_username removed — identity derived from OAuth token server-side
     claimResponse = await withRetry(
       () => client.post<ClaimResponse>(`/api/tasks/${task_id}/claim`, claimBody),
       { maxAttempts: 2 },

@@ -83,15 +83,11 @@ function isReviewVisibleToAgent(task: ReviewTask, model?: string, tool?: string)
  * - If the agent is NOT preferred, summary is only available after the grace period
  *   has elapsed since the task entered the summary queue.
  */
-function isSummaryVisibleToAgent(
-  task: ReviewTask,
-  agentId: string,
-  githubUsername?: string,
-): boolean {
+function isSummaryVisibleToAgent(task: ReviewTask, agentId: string): boolean {
   const preferred = task.config?.summarizer?.preferred ?? [];
   if (preferred.length === 0) return true;
 
-  const isPreferred = preferred.some((p) => isEntityMatch(p, agentId, githubUsername));
+  const isPreferred = preferred.some((p) => isEntityMatch(p, agentId));
   if (isPreferred) return true;
 
   // Non-preferred agent: check if grace period has elapsed
@@ -311,7 +307,7 @@ export function taskRoutes() {
     const logger = c.get('logger');
     const body = await parseBody(c, PollRequestSchema);
     if (body instanceof Response) return body;
-    const { agent_id, github_username, roles, review_only, repos, synthesize_repos } = body;
+    const { agent_id, roles, review_only, repos, synthesize_repos } = body;
 
     // Block check — reject agents exceeding the rejection threshold
     if (await isAgentBlocked(store, agent_id)) {
@@ -359,14 +355,9 @@ export function taskRoutes() {
       if (task.queue === 'summary') {
         // Summary queue — check role filter, eligibility, grace period, and repo preference
         if (acceptedRoles && !acceptedRoles.has('summary')) continue;
-        const { eligible } = isAgentEligibleForRole(
-          task.config,
-          'summary',
-          agent_id,
-          github_username,
-        );
+        const { eligible } = isAgentEligibleForRole(task.config, 'summary', agent_id);
         if (!eligible) continue;
-        if (!isSummaryVisibleToAgent(task, agent_id, github_username)) continue;
+        if (!isSummaryVisibleToAgent(task, agent_id)) continue;
 
         // synthesize_repos filter — if provided, only offer summary tasks for matching repos
         if (synthesize_repos) {
@@ -400,12 +391,7 @@ export function taskRoutes() {
         const reviewClaims = task.review_claims ?? 0;
         if (reviewClaims >= reviewSlots) continue;
 
-        const { eligible } = isAgentEligibleForRole(
-          task.config,
-          'review',
-          agent_id,
-          github_username,
-        );
+        const { eligible } = isAgentEligibleForRole(task.config, 'review', agent_id);
         if (!eligible) continue;
 
         // Preferred model/tool grace period — non-preferred agents wait
@@ -461,7 +447,7 @@ export function taskRoutes() {
     const taskId = c.req.param('taskId');
     const body = await parseBody(c, ClaimRequestSchema);
     if (body instanceof Response) return body;
-    const { agent_id, role, github_username, model, tool } = body;
+    const { agent_id, role, model, tool } = body;
 
     // Block check — reject agents exceeding the rejection threshold
     if (await isAgentBlocked(store, agent_id)) {
@@ -488,7 +474,7 @@ export function taskRoutes() {
     }
 
     // Check whitelist/blacklist eligibility before slot availability
-    const eligibility = isAgentEligibleForRole(task.config, role, agent_id, github_username);
+    const eligibility = isAgentEligibleForRole(task.config, role, agent_id);
     if (!eligibility.eligible) {
       return apiError(
         c,
@@ -514,7 +500,7 @@ export function taskRoutes() {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
       // Check preferred synthesizer grace period
-      if (!isSummaryVisibleToAgent(task, agent_id, github_username)) {
+      if (!isSummaryVisibleToAgent(task, agent_id)) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
     }

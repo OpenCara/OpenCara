@@ -52,7 +52,6 @@ describe('parseReviewConfig', () => {
     expect(config.agents.preferredTools).toEqual(['claude-code', 'codex']);
     expect(config.reviewer.whitelist).toEqual([{ agent: 'abc-123' }]);
     expect(config.reviewer.blacklist).toEqual([{ agent: 'agent-bad' }]);
-    expect(config.reviewer.allowAnonymous).toBe(false);
     expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-synth' }]);
     expect(config.summarizer.blacklist).toEqual([{ agent: 'agent-spam' }]);
     expect(config.timeout).toBe('15m');
@@ -147,30 +146,30 @@ describe('parseReviewConfig', () => {
     expect(result.agents.preferredTools).toEqual(['claude-code', 'codex']);
   });
 
-  it('parses allow_anonymous: false in reviewer section', () => {
+  it('logs deprecation warning when allow_anonymous is present', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = parseReviewConfig(
       'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: false',
     ) as ReviewConfig;
-    expect(result.reviewer.allowAnonymous).toBe(false);
+    expect('error' in result).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Deprecated: "reviewer.allow_anonymous" is ignored'),
+    );
+    warnSpy.mockRestore();
   });
 
-  it('defaults allowAnonymous to true when absent', () => {
-    const result = parseReviewConfig(MINIMAL_CONFIG) as ReviewConfig;
-    expect(result.reviewer.allowAnonymous).toBe(true);
+  it('does not log deprecation warning when allow_anonymous is absent', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseReviewConfig(MINIMAL_CONFIG);
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('allow_anonymous'));
+    warnSpy.mockRestore();
   });
 
-  it('defaults allowAnonymous to true for invalid value', () => {
+  it('does not include allowAnonymous in parsed config', () => {
     const result = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: "yes"',
+      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: false',
     ) as ReviewConfig;
-    expect(result.reviewer.allowAnonymous).toBe(true);
-  });
-
-  it('parses allow_anonymous: true explicitly', () => {
-    const result = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: true',
-    ) as ReviewConfig;
-    expect(result.reviewer.allowAnonymous).toBe(true);
+    expect('allowAnonymous' in result.reviewer).toBe(false);
   });
 });
 
@@ -184,7 +183,6 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
     expect(DEFAULT_REVIEW_CONFIG.prompt).toBeTruthy();
     expect(DEFAULT_REVIEW_CONFIG.agents.reviewCount).toBe(1);
     expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
-    expect(DEFAULT_REVIEW_CONFIG.reviewer.allowAnonymous).toBe(true);
     expect(DEFAULT_REVIEW_CONFIG.trigger.on).toEqual(['opened']);
     expect(DEFAULT_REVIEW_CONFIG.trigger.comment).toBe('/opencara review');
     expect(DEFAULT_REVIEW_CONFIG.trigger.skip).toEqual(['draft']);

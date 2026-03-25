@@ -166,7 +166,6 @@ describe('POST /api/config/validate', () => {
     expect(body.config.trigger.comment).toBe('/review');
     expect(body.config.agents.reviewCount).toBe(5);
     expect(body.config.agents.preferredModels).toEqual(['claude-opus-4-6']);
-    expect(body.config.reviewer.allowAnonymous).toBe(false);
     expect(body.config.timeout).toBe('15m');
   });
 
