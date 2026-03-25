@@ -993,11 +993,13 @@ export async function startAgent(
     label?: string;
     apiKey?: string | null;
     usageLimits?: UsageLimits;
+    versionOverride?: string | null;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, {
     apiKey: options?.apiKey,
     cliVersion: __CLI_VERSION__,
+    versionOverride: options?.versionOverride,
   });
   const session = consumptionDeps?.session ?? createSessionTracker();
   const usageTracker = consumptionDeps?.usageTracker ?? new UsageTracker();
@@ -1020,6 +1022,9 @@ export async function startAgent(
 
   log(`${icons.start} Agent started (polling ${platformUrl})`);
   log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}`);
+  if (options?.versionOverride) {
+    log(`${icons.info} Version override active: ${options.versionOverride}`);
+  }
 
   if (!reviewDeps) {
     logError(`${icons.error} No review command configured. Set command in config.yml`);
@@ -1116,6 +1121,8 @@ export async function startAgentRouter(): Promise<void> {
   const tool = agentConfig?.tool ?? 'unknown';
   const label = agentConfig?.name ?? 'agent[0]';
   const roles = agentConfig ? computeRoles(agentConfig) : undefined;
+  // Router mode supports version override via env var only (no CLI flag in default mode)
+  const versionOverride = process.env.OPENCARA_VERSION_OVERRIDE || null;
 
   await startAgent(
     agentId,
@@ -1139,6 +1146,7 @@ export async function startAgentRouter(): Promise<void> {
       label,
       apiKey: config.apiKey,
       usageLimits: config.usageLimits,
+      versionOverride,
     },
   );
 
@@ -1162,6 +1170,7 @@ function startAgentByIndex(
   pollIntervalMs: number,
   auth: GithubAuthResult,
   githubUsername?: string,
+  versionOverride?: string | null,
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
   let commandTemplate: string | undefined;
@@ -1239,6 +1248,7 @@ function startAgentByIndex(
       label,
       apiKey: config.apiKey,
       usageLimits: config.usageLimits,
+      versionOverride,
     },
   ).finally(() => {
     routerRelay?.stop();
@@ -1255,85 +1265,111 @@ agentCommand
   .option('--poll-interval <seconds>', 'Poll interval in seconds', '10')
   .option('--agent <index>', 'Agent index from config.yml (0-based)', '0')
   .option('--all', 'Start all configured agents concurrently')
-  .action(async (opts: { pollInterval: string; agent: string; all?: boolean }) => {
-    const config = loadConfig();
-    const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
+  .option(
+    '--version-override <value>',
+    'Cloudflare Workers version override (e.g. opencara-server=abc123)',
+  )
+  .action(
+    async (opts: {
+      pollInterval: string;
+      agent: string;
+      all?: boolean;
+      versionOverride?: string;
+    }) => {
+      const config = loadConfig();
+      const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
+      const versionOverride = opts.versionOverride || process.env.OPENCARA_VERSION_OVERRIDE || null;
 
-    // Resolve GitHub auth once at startup (env → gh-cli → config → none)
-    const configToken = resolveConfigToken(undefined, config.githubToken);
-    const auth = resolveGithubToken(configToken);
-    logAuthMethod(auth.method, console.log.bind(console));
+      // Resolve GitHub auth once at startup (env → gh-cli → config → none)
+      const configToken = resolveConfigToken(undefined, config.githubToken);
+      const auth = resolveGithubToken(configToken);
+      logAuthMethod(auth.method, console.log.bind(console));
 
-    // Resolve GitHub username from token for identity
-    const githubUsername =
-      config.githubUsername ?? (await resolveGithubUsername(auth.token)) ?? undefined;
-    if (githubUsername) {
-      console.log(`GitHub identity: ${githubUsername}`);
-    }
-
-    if (opts.all) {
-      // Start all agents concurrently
-      if (!config.agents || config.agents.length === 0) {
-        console.error('No agents configured in ~/.opencara/config.yml');
-        process.exit(1);
-        return;
+      // Resolve GitHub username from token for identity
+      const githubUsername =
+        config.githubUsername ?? (await resolveGithubUsername(auth.token)) ?? undefined;
+      if (githubUsername) {
+        console.log(`GitHub identity: ${githubUsername}`);
       }
 
-      console.log(`Starting ${config.agents.length} agent(s)...`);
-
-      const promises: Promise<void>[] = [];
-      let startFailed = false;
-      for (let i = 0; i < config.agents.length; i++) {
-        const p = startAgentByIndex(config, i, pollIntervalMs, auth, githubUsername);
-        if (p) {
-          promises.push(p);
-        } else {
-          startFailed = true;
+      if (opts.all) {
+        // Start all agents concurrently
+        if (!config.agents || config.agents.length === 0) {
+          console.error('No agents configured in ~/.opencara/config.yml');
+          process.exit(1);
+          return;
         }
-      }
 
-      if (promises.length === 0) {
-        console.error('No agents could be started. Check your config.');
-        process.exit(1);
-        return;
-      }
+        console.log(`Starting ${config.agents.length} agent(s)...`);
 
-      if (startFailed) {
-        console.error(
-          'One or more agents could not start (see warnings above). Continuing with the rest.',
-        );
-      }
-
-      console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
-
-      // Use allSettled so one agent crashing doesn't orphan the others
-      const results = await Promise.allSettled(promises);
-      const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failures.length > 0) {
-        for (const f of failures) {
-          console.error(`Agent exited with error: ${f.reason}`);
+        const promises: Promise<void>[] = [];
+        let startFailed = false;
+        for (let i = 0; i < config.agents.length; i++) {
+          const p = startAgentByIndex(
+            config,
+            i,
+            pollIntervalMs,
+            auth,
+            githubUsername,
+            versionOverride,
+          );
+          if (p) {
+            promises.push(p);
+          } else {
+            startFailed = true;
+          }
         }
-        process.exit(1);
-      }
-    } else {
-      // Start a single agent by index
-      const maxIndex = (config.agents?.length ?? 0) - 1;
-      const agentIndex = Number(opts.agent);
-      if (!Number.isInteger(agentIndex) || agentIndex < 0 || agentIndex > maxIndex) {
-        console.error(
-          maxIndex >= 0
-            ? `--agent must be an integer between 0 and ${maxIndex}.`
-            : 'No agents configured in ~/.opencara/config.yml',
+
+        if (promises.length === 0) {
+          console.error('No agents could be started. Check your config.');
+          process.exit(1);
+          return;
+        }
+
+        if (startFailed) {
+          console.error(
+            'One or more agents could not start (see warnings above). Continuing with the rest.',
+          );
+        }
+
+        console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
+
+        // Use allSettled so one agent crashing doesn't orphan the others
+        const results = await Promise.allSettled(promises);
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        if (failures.length > 0) {
+          for (const f of failures) {
+            console.error(`Agent exited with error: ${f.reason}`);
+          }
+          process.exit(1);
+        }
+      } else {
+        // Start a single agent by index
+        const maxIndex = (config.agents?.length ?? 0) - 1;
+        const agentIndex = Number(opts.agent);
+        if (!Number.isInteger(agentIndex) || agentIndex < 0 || agentIndex > maxIndex) {
+          console.error(
+            maxIndex >= 0
+              ? `--agent must be an integer between 0 and ${maxIndex}.`
+              : 'No agents configured in ~/.opencara/config.yml',
+          );
+          process.exit(1);
+          return;
+        }
+        const p = startAgentByIndex(
+          config,
+          agentIndex,
+          pollIntervalMs,
+          auth,
+          githubUsername,
+          versionOverride,
         );
-        process.exit(1);
-        return;
+        if (!p) {
+          // startAgentByIndex already logged the specific reason
+          process.exit(1);
+          return;
+        }
+        await p;
       }
-      const p = startAgentByIndex(config, agentIndex, pollIntervalMs, auth, githubUsername);
-      if (!p) {
-        // startAgentByIndex already logged the specific reason
-        process.exit(1);
-        return;
-      }
-      await p;
-    }
-  });
+    },
+  );

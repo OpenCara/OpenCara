@@ -242,6 +242,62 @@ describe('ApiClient', () => {
     expect(err.minimumVersion).toBe('0.15.0');
   });
 
+  it('sends Cloudflare-Workers-Version-Overrides header when versionOverride is set', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', {
+      versionOverride: 'opencara-server=abc123',
+    });
+    await client.get('/test');
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders['Cloudflare-Workers-Version-Overrides']).toBe('opencara-server=abc123');
+  });
+
+  it('sends Cloudflare-Workers-Version-Overrides header on POST requests', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ id: '1' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', {
+      versionOverride: 'opencara-server=xyz789',
+    });
+    await client.post('/api/tasks/poll', { agent_id: 'a1' });
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders['Cloudflare-Workers-Version-Overrides']).toBe('opencara-server=xyz789');
+  });
+
+  it('does not send Cloudflare-Workers-Version-Overrides header when versionOverride is not set', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com');
+    await client.get('/test');
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders).not.toHaveProperty('Cloudflare-Workers-Version-Overrides');
+  });
+
+  it('does not send Cloudflare-Workers-Version-Overrides header when versionOverride is null', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: 'test' }),
+    });
+
+    const client = new ApiClient('https://api.test.com', { versionOverride: null });
+    await client.get('/test');
+
+    const calledHeaders = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders).not.toHaveProperty('Cloudflare-Workers-Version-Overrides');
+  });
+
   it('UpgradeRequiredError has correct name and properties', () => {
     const err = new UpgradeRequiredError('0.14.0', '0.15.0');
     expect(err.name).toBe('UpgradeRequiredError');
