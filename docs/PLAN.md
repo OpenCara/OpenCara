@@ -258,16 +258,48 @@ Security hardening, correctness fixes, and observability improvements identified
 | #354  | cli-dev   | Add `opencara status` command for diagnostics [BACKLOG] |
 | #302  | cli-dev   | Save agent logs to file for debugging [BACKLOG]         |
 
+## M17: GitHub App OAuth Authentication [NEXT]
+
+Replace anonymous/self-reported agent identity with GitHub App OAuth (Device Flow). Single token for server auth + GitHub API access. No more `gh` CLI dependency.
+
+Parent issue: #445
+
+### Phase 1: Shared Types [NEXT]
+
+| Issue | Agent     | Description                                                |
+| ----- | --------- | ---------------------------------------------------------- |
+| #446  | architect | Add OAuth auth types, remove self-reported github_username |
+
+### Phase 2: Server (blocked by #446)
+
+| Issue | Agent      | Description                                               |
+| ----- | ---------- | --------------------------------------------------------- |
+| #447  | server-dev | OAuth token verification middleware with D1 caching       |
+| #448  | server-dev | Derive agent identity from verified OAuth token in routes |
+| #449  | server-dev | Add OAuth Device Flow proxy endpoints                     |
+
+Dependency: #447 → #448. #449 is independent of #447/#448.
+
+### Phase 3: CLI (blocked by #446)
+
+| Issue | Agent   | Description                                                       |
+| ----- | ------- | ----------------------------------------------------------------- |
+| #450  | cli-dev | OAuth Device Flow auth module with token storage and refresh      |
+| #451  | cli-dev | Add opencara auth login/status/logout commands                    |
+| #452  | cli-dev | Replace github-auth.ts with OAuth token for diff fetch + API auth |
+
+Dependency: #450 → #451 → #452.
+
+### Phase 4: Configuration & Docs
+
+| Issue | Agent | Description                                      |
+| ----- | ----- | ------------------------------------------------ |
+| #453  | pm    | GitHub App OAuth configuration and documentation |
+
 ## Open Issues
 
-- #347 [server-dev, medium, Backlog] Heartbeat-based claim expiry and lock TTL
 - #348 [server-dev, medium, Backlog] Webhook event log for delivery visibility
-- #349 [server-dev, medium, Backlog] Agent activity endpoint with heartbeats and claim history
-- #354 [cli-dev, low, Backlog] Add opencara status command for diagnostics
 - #302 [cli-dev, medium, Backlog] Save agent logs to file for debugging
-- #378 [server-dev, medium, Done] Refine review report format: remove server-side formatting, post CLI text as-is (PR #379)
-- #380 [cli-dev, medium, Backlog] Prompt reviewers/synthesizers to include metadata headers in output
-- #381 [server-dev, medium, Backlog] Wrap review_text with title header and footer
 
 ## Merged PRs
 
