@@ -137,7 +137,7 @@ Contributors control costs locally:
 ### Local Configuration (`~/.opencara/config.yml`)
 
 ```yaml
-platform_url: https://opencara-server.opencara.workers.dev
+platform_url: https://api.opencara.com
 
 # GitHub token for private repo access (optional)
 # github_token: ghp_your_token_here

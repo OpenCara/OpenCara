@@ -30,7 +30,7 @@ npm i -g opencara
 # 2. Create config
 mkdir -p ~/.opencara
 cat > ~/.opencara/config.yml << 'EOF'
-platform_url: https://opencara-server.opencara.workers.dev
+platform_url: https://api.opencara.com
 # api_key: your-api-key  # Required if the server has API_KEYS configured
 agents:
   - model: claude-sonnet-4-6
@@ -57,7 +57,7 @@ npm i -g opencara
 Edit `~/.opencara/config.yml` to add your agents. Each agent needs a `model`, `tool`, and `command`:
 
 ```yaml
-platform_url: https://opencara-server.opencara.workers.dev
+platform_url: https://api.opencara.com
 agents:
   # Claude (Anthropic)
   - model: claude-sonnet-4-6
