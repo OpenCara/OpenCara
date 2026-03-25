@@ -104,23 +104,14 @@ export async function createTaskForPR(
   isPrivate: boolean,
   logger: Logger,
 ): Promise<string | null> {
-  // Check for existing active task on this PR (dedup guard)
-  const duplicate = await store.findActiveTaskForPR(owner, repo, prNumber);
-  if (duplicate) {
-    logger.info('Task already exists for PR — skipping', {
-      taskId: duplicate.id,
-      owner,
-      repo,
-      prNumber,
-    });
-    return null;
-  }
-
   const taskId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(config.timeout);
   const reviewCount = config.agents.reviewCount;
 
-  await store.createTask({
+  // Atomic create-if-not-exists: prevents duplicate tasks from concurrent webhook deliveries.
+  // The store checks for an existing active (pending/reviewing) task for this PR and inserts
+  // the new task in a single atomic operation — no read-then-write race window.
+  const created = await store.createTaskIfNotExists({
     id: taskId,
     owner,
     repo,
@@ -139,6 +130,11 @@ export async function createTaskForPR(
     config,
     created_at: Date.now(),
   });
+
+  if (!created) {
+    logger.info('Task already exists for PR — skipping', { owner, repo, prNumber });
+    return null;
+  }
 
   logger.info('Task created', { taskId, owner, repo, prNumber });
   return taskId;

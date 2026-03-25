@@ -8,6 +8,12 @@ import type { TaskFilter } from '../types.js';
 export interface DataStore {
   // Tasks
   createTask(task: ReviewTask): Promise<void>;
+  /**
+   * Atomically create a task only if no active (pending/reviewing) task exists
+   * for the same PR. Returns true if the task was created, false if a duplicate exists.
+   * This prevents race conditions from concurrent webhook deliveries.
+   */
+  createTaskIfNotExists(task: ReviewTask): Promise<boolean>;
   getTask(id: string): Promise<ReviewTask | null>;
   listTasks(filter?: TaskFilter): Promise<ReviewTask[]>;
   /** Find an active (pending/reviewing) task for a specific PR. Returns null if none exists. */

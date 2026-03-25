@@ -24,6 +24,22 @@ export class MemoryDataStore implements DataStore {
     this.tasks.set(task.id, { ...task });
   }
 
+  async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
+    // Check-and-insert in a single synchronous block (atomic in single-threaded JS)
+    for (const existing of this.tasks.values()) {
+      if (
+        existing.owner === task.owner &&
+        existing.repo === task.repo &&
+        existing.pr_number === task.pr_number &&
+        (existing.status === 'pending' || existing.status === 'reviewing')
+      ) {
+        return false;
+      }
+    }
+    this.tasks.set(task.id, { ...task });
+    return true;
+  }
+
   async getTask(id: string): Promise<ReviewTask | null> {
     const task = this.tasks.get(id);
     return task ? { ...task } : null;

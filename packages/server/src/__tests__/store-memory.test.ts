@@ -154,6 +154,67 @@ describe('MemoryDataStore', () => {
       expect(await store.getTask('task-1')).toBeNull();
       expect(await store.getClaims('task-1')).toHaveLength(0);
     });
+
+    // ── createTaskIfNotExists ────────────────────────────────
+
+    it('createTaskIfNotExists creates task when no active task exists', async () => {
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+      expect(await store.getTask('new-1')).not.toBeNull();
+    });
+
+    it('createTaskIfNotExists returns false when pending task exists for same PR', async () => {
+      await store.createTask(
+        makeTask({ id: 'existing', owner: 'org', repo: 'repo', pr_number: 10 }),
+      );
+      const task = makeTask({ id: 'dup', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(false);
+      expect(await store.getTask('dup')).toBeNull();
+    });
+
+    it('createTaskIfNotExists returns false when reviewing task exists for same PR', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'existing',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'reviewing',
+        }),
+      );
+      const task = makeTask({ id: 'dup', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(false);
+      expect(await store.getTask('dup')).toBeNull();
+    });
+
+    it('createTaskIfNotExists succeeds when existing task is completed', async () => {
+      await store.createTask(
+        makeTask({ id: 'old', owner: 'org', repo: 'repo', pr_number: 10, status: 'completed' }),
+      );
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+      expect(await store.getTask('new-1')).not.toBeNull();
+    });
+
+    it('createTaskIfNotExists succeeds when existing task is for different PR', async () => {
+      await store.createTask(makeTask({ id: 'other', owner: 'org', repo: 'repo', pr_number: 5 }));
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+    });
+
+    it('createTaskIfNotExists succeeds when existing task is for different repo', async () => {
+      await store.createTask(
+        makeTask({ id: 'other', owner: 'org', repo: 'other-repo', pr_number: 10 }),
+      );
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+    });
   });
 
   // ── Claims ─────────────────────────────────────────────────
