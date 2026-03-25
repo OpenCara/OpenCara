@@ -273,7 +273,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
   - #394 [architect, HIGH] Create scripts/release.sh for CF Versions workflow — **DONE** (PR #400 merged)
   - #395 [architect, medium] Add release-prod.yml CI workflow — **DONE** (PR #400 merged, combined with #394)
   - #396 [pm, medium] Update docs/deployment.md with new release workflow — **DONE** (direct commit 4229aa8)
-  - #397 [cli-dev, low] Support Cloudflare-Workers-Version-Overrides header — **READY**
+  - #397 [cli-dev, low] Support Cloudflare-Workers-Version-Overrides header — **DONE** (PR #402 merged)
 
 ### PM tooling (2026-03-24)
 

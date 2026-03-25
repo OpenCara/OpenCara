@@ -14,13 +14,5 @@ services:
       - DATABASE_PATH=/data/opencara.db
     restart: unless-stopped
 
-  agent:
-    build: .
-    volumes:
-      - ./config.yml:/root/.opencara/config.yml:ro
-    env_file:
-      - .env
-    restart: unless-stopped
-
 volumes:
   server-data:
