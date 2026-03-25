@@ -23,6 +23,7 @@ async function defaultConfirm(prompt: string): Promise<boolean> {
   const { createInterface } = await import('node:readline');
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
+    rl.on('close', () => resolve(false));
     rl.question(`${prompt} (y/N) `, (answer) => {
       rl.close();
       resolve(answer.trim().toLowerCase() === 'y');
@@ -53,6 +54,7 @@ export async function runLogin(deps: AuthCommandDeps = {}): Promise<void> {
   const loadAuthFn = deps.loadAuthFn ?? loadAuth;
   const loginFn = deps.loginFn ?? login;
   const loadConfigFn = deps.loadConfigFn ?? loadConfig;
+  const getAuthFilePathFn = deps.getAuthFilePathFn ?? getAuthFilePath;
   const log = deps.log ?? console.log;
   const logError = deps.logError ?? console.error;
   const confirmFn = deps.confirmFn ?? defaultConfirm;
@@ -72,11 +74,15 @@ export async function runLogin(deps: AuthCommandDeps = {}): Promise<void> {
   const config = loadConfigFn();
 
   try {
-    const auth = await loginFn(config.platformUrl, { log });
+    // Suppress the generic "Authenticated as" from login() since we log a richer version below
+    const loginLog = (msg: string) => {
+      if (!msg.includes('Authenticated as')) log(msg);
+    };
+    const auth = await loginFn(config.platformUrl, { log: loginLog });
     log(
       `${icons.success} Authenticated as ${pc.bold(`@${auth.github_username}`)} (ID: ${auth.github_user_id})`,
     );
-    log(`Token saved to ${pc.dim(getAuthFilePath())}`);
+    log(`Token saved to ${pc.dim(getAuthFilePathFn())}`);
   } catch (err) {
     if (err instanceof AuthError) {
       logError(`${icons.error} ${err.message}`);

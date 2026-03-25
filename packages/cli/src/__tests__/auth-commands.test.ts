@@ -58,11 +58,14 @@ describe('auth commands', () => {
         logError,
       });
 
-      expect(loginFn).toHaveBeenCalledWith('https://api.opencara.dev', { log });
+      expect(loginFn).toHaveBeenCalledWith(
+        'https://api.opencara.dev',
+        expect.objectContaining({ log: expect.any(Function) }),
+      );
       expect(log).toHaveBeenCalledWith(expect.stringContaining('Authenticated as'));
       expect(log).toHaveBeenCalledWith(expect.stringContaining('@octocat'));
       expect(log).toHaveBeenCalledWith(expect.stringContaining('12345'));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Token saved'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('/home/user/.opencara/auth.json'));
     });
 
     it('prompts for re-authentication when already logged in and user confirms', async () => {
@@ -147,7 +150,10 @@ describe('auth commands', () => {
         logError: vi.fn(),
       });
 
-      expect(loginFn).toHaveBeenCalledWith('https://custom.platform.io', expect.any(Object));
+      expect(loginFn).toHaveBeenCalledWith(
+        'https://custom.platform.io',
+        expect.objectContaining({ log: expect.any(Function) }),
+      );
     });
   });
 
