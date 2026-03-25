@@ -322,6 +322,37 @@ describe('ApiClient', () => {
     expect(calledHeaders['Authorization']).toBe('Bearer my-token');
   });
 
+  it('exposes currentToken getter that reflects refreshed token', async () => {
+    const client = new ApiClient('https://api.test.com', { authToken: 'initial-token' });
+    expect(client.currentToken).toBe('initial-token');
+
+    const expiredResponse = {
+      ok: false,
+      status: 401,
+      json: () =>
+        Promise.resolve({
+          error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token has expired' },
+        }),
+    };
+    const successResponse = {
+      ok: true,
+      json: () => Promise.resolve({ data: 'ok' }),
+    };
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(expiredResponse)
+      .mockResolvedValueOnce(successResponse);
+
+    const onTokenRefresh = vi.fn().mockResolvedValue('refreshed-token');
+    const client2 = new ApiClient('https://api.test.com', {
+      authToken: 'old-token',
+      onTokenRefresh,
+    });
+
+    await client2.get('/test');
+    expect(client2.currentToken).toBe('refreshed-token');
+  });
+
   describe('AUTH_TOKEN_EXPIRED token refresh', () => {
     const expiredResponse = {
       ok: false,

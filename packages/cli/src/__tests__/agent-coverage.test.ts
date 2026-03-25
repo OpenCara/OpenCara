@@ -107,7 +107,7 @@ describe('Agent Coverage Tests', () => {
       reviewOnly?: boolean;
       maxDiffSizeKb?: number;
       repoConfig?: import('@opencara/shared').RepoConfig;
-      githubToken?: string;
+      authToken?: string;
       codebaseDir?: string;
     },
   ): Promise<void> {
@@ -115,7 +115,6 @@ describe('Agent Coverage Tests', () => {
     const reviewDeps: ReviewExecutorDeps = {
       ...deps.reviewDeps,
       ...(opts?.maxDiffSizeKb != null ? { maxDiffSizeKb: opts.maxDiffSizeKb } : {}),
-      ...(opts?.githubToken != null ? { githubToken: opts.githubToken } : {}),
       ...(opts?.codebaseDir != null ? { codebaseDir: opts.codebaseDir } : {}),
     };
 
@@ -129,6 +128,7 @@ describe('Agent Coverage Tests', () => {
         pollIntervalMs: 100,
         reviewOnly: opts?.reviewOnly,
         repoConfig: opts?.repoConfig,
+        authToken: opts?.authToken,
       },
     );
   }
@@ -295,18 +295,14 @@ describe('Agent Coverage Tests', () => {
 
       try {
         const deps = makeDeps('token-agent');
-        const reviewDeps: ReviewExecutorDeps = {
-          ...deps.reviewDeps,
-          githubToken: 'gho_testtoken123',
-        };
 
         const promise = startAgent(
           'token-agent',
           'http://fake-server',
           { model: 'test', tool: 'test' },
-          reviewDeps,
+          deps.reviewDeps,
           deps.consumptionDeps,
-          { pollIntervalMs: 100 },
+          { pollIntervalMs: 100, authToken: 'gho_testtoken123' },
         );
 
         await advanceTime(500);
@@ -942,18 +938,14 @@ describe('Agent Coverage Tests', () => {
 
       try {
         const deps = makeDeps('nonapi-diff-agent');
-        const reviewDeps: ReviewExecutorDeps = {
-          ...deps.reviewDeps,
-          githubToken: 'gho_customtoken',
-        };
 
         const promise = startAgent(
           'nonapi-diff-agent',
           'http://fake-server',
           { model: 'test', tool: 'test' },
-          reviewDeps,
+          deps.reviewDeps,
           deps.consumptionDeps,
-          { pollIntervalMs: 100 },
+          { pollIntervalMs: 100, authToken: 'gho_customtoken' },
         );
 
         await advanceTime(500);

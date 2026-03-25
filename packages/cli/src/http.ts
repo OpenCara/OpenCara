@@ -61,6 +61,11 @@ export class ApiClient {
     }
   }
 
+  /** Get the current auth token (may have been refreshed since construction). */
+  get currentToken(): string | null {
+    return this.authToken;
+  }
+
   private log(msg: string): void {
     if (this.debug) console.debug(`[ApiClient] ${msg}`);
   }
@@ -79,6 +84,30 @@ export class ApiClient {
       h['Cloudflare-Workers-Version-Overrides'] = this.versionOverride;
     }
     return h;
+  }
+
+  /** Parse error body from a non-OK response. */
+  private async parseErrorBody(res: Response): Promise<{
+    message: string;
+    errorCode?: ErrorCode;
+    minimumVersion?: string;
+  }> {
+    let message = `HTTP ${res.status}`;
+    let errorCode: ErrorCode | undefined;
+    let minimumVersion: string | undefined;
+    try {
+      const errBody = (await res.json()) as ErrorResponse & { minimum_version?: string };
+      if (errBody.error && typeof errBody.error === 'object' && 'code' in errBody.error) {
+        errorCode = errBody.error.code;
+        message = errBody.error.message;
+      }
+      if (errBody.minimum_version) {
+        minimumVersion = errBody.minimum_version;
+      }
+    } catch {
+      // ignore parse errors — keep generic message
+    }
+    return { message, errorCode, minimumVersion };
   }
 
   async get<T>(path: string): Promise<T> {
@@ -107,21 +136,7 @@ export class ApiClient {
     body?: unknown,
   ): Promise<T> {
     if (!res.ok) {
-      let message = `HTTP ${res.status}`;
-      let errorCode: ErrorCode | undefined;
-      let minimumVersion: string | undefined;
-      try {
-        const errBody = (await res.json()) as ErrorResponse & { minimum_version?: string };
-        if (errBody.error && typeof errBody.error === 'object' && 'code' in errBody.error) {
-          errorCode = errBody.error.code;
-          message = errBody.error.message;
-        }
-        if (errBody.minimum_version) {
-          minimumVersion = errBody.minimum_version;
-        }
-      } catch {
-        // ignore parse errors — keep generic message
-      }
+      const { message, errorCode, minimumVersion } = await this.parseErrorBody(res);
       this.log(`${res.status} ${message} (${path})`);
 
       if (res.status === 426) {
@@ -155,21 +170,7 @@ export class ApiClient {
   /** Handle response for a retry after token refresh — no second refresh attempt. */
   private async handleRetryResponse<T>(res: Response, path: string): Promise<T> {
     if (!res.ok) {
-      let message = `HTTP ${res.status}`;
-      let errorCode: ErrorCode | undefined;
-      let minimumVersion: string | undefined;
-      try {
-        const errBody = (await res.json()) as ErrorResponse & { minimum_version?: string };
-        if (errBody.error && typeof errBody.error === 'object' && 'code' in errBody.error) {
-          errorCode = errBody.error.code;
-          message = errBody.error.message;
-        }
-        if (errBody.minimum_version) {
-          minimumVersion = errBody.minimum_version;
-        }
-      } catch {
-        // ignore parse errors
-      }
+      const { message, errorCode, minimumVersion } = await this.parseErrorBody(res);
       this.log(`${res.status} ${message} (${path}) [retry]`);
       if (res.status === 426) {
         throw new UpgradeRequiredError(this.cliVersion ?? 'unknown', minimumVersion);

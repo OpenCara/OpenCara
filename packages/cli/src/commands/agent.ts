@@ -140,7 +140,7 @@ async function fetchDiff(
         if (NON_RETRYABLE_STATUSES.has(response.status)) {
           const hint =
             response.status === 404
-              ? '. If this is a private repo, configure github_token in ~/.opencara/config.yml'
+              ? '. If this is a private repo, authenticate with: opencara auth login'
               : '';
           throw new NonRetryableError(`${msg}${hint}`);
         }
@@ -416,12 +416,7 @@ async function handleTask(
   // Fetch diff (retry up to 2 times via fetchDiff)
   let diffContent: string;
   try {
-    diffContent = await fetchDiff(
-      diff_url,
-      reviewDeps.githubToken,
-      signal,
-      reviewDeps.maxDiffSizeKb,
-    );
+    diffContent = await fetchDiff(diff_url, client.currentToken, signal, reviewDeps.maxDiffSizeKb);
     log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
     logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
@@ -445,7 +440,7 @@ async function handleTask(
         repo,
         pr_number,
         reviewDeps.codebaseDir,
-        reviewDeps.githubToken,
+        client.currentToken,
         task_id,
       );
       log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
@@ -480,7 +475,7 @@ async function handleTask(
   let contextBlock: string | undefined;
   try {
     const prContext = await fetchPRContext(owner, repo, pr_number, {
-      githubToken: reviewDeps.githubToken,
+      githubToken: client.currentToken,
       signal,
     });
     if (hasContent(prContext)) {
@@ -1146,7 +1141,6 @@ export async function startAgentRouter(): Promise<void> {
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
-    githubToken: oauthToken,
     codebaseDir,
   };
 
@@ -1234,7 +1228,6 @@ function startAgentByIndex(
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
     maxDiffSizeKb: config.maxDiffSizeKb,
-    githubToken: oauthToken,
     codebaseDir,
   };
 
