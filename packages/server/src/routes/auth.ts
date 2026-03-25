@@ -12,6 +12,26 @@ import { rateLimitByIP } from '../middleware/rate-limit.js';
 const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const GITHUB_OAUTH_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
+/** Safely fetch a URL, returning null on network errors. */
+async function safeFetch(url: string, init: RequestInit): Promise<Response | null> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    return null;
+  }
+}
+
+/** Validate that a token response from GitHub has the expected shape. */
+function isValidTokenResponse(
+  data: Record<string, unknown>,
+): data is { access_token: string; refresh_token: string; expires_in: number; token_type: string } {
+  return (
+    typeof data.access_token === 'string' &&
+    typeof data.token_type === 'string' &&
+    typeof data.expires_in === 'number'
+  );
+}
+
 /**
  * Auth proxy routes for GitHub Device Flow.
  *
@@ -22,10 +42,22 @@ const GITHUB_OAUTH_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export function authRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-  // Rate limits per IP per minute
-  const deviceInitLimit = rateLimitByIP({ maxRequests: 5, windowMs: 60_000 });
-  const deviceTokenLimit = rateLimitByIP({ maxRequests: 10, windowMs: 60_000 });
-  const refreshLimit = rateLimitByIP({ maxRequests: 10, windowMs: 60_000 });
+  // Rate limits per IP per minute — distinct prefixes prevent cross-endpoint contamination
+  const deviceInitLimit = rateLimitByIP({
+    maxRequests: 5,
+    windowMs: 60_000,
+    prefix: 'auth:device',
+  });
+  const deviceTokenLimit = rateLimitByIP({
+    maxRequests: 10,
+    windowMs: 60_000,
+    prefix: 'auth:device_token',
+  });
+  const refreshLimit = rateLimitByIP({
+    maxRequests: 10,
+    windowMs: 60_000,
+    prefix: 'auth:refresh',
+  });
 
   /**
    * POST /api/auth/device — Initiate GitHub Device Flow.
@@ -39,7 +71,7 @@ export function authRoutes() {
       return apiError(c, 500, 'INTERNAL_ERROR', 'OAuth not configured');
     }
 
-    const ghRes = await fetch(GITHUB_DEVICE_CODE_URL, {
+    const ghRes = await safeFetch(GITHUB_DEVICE_CODE_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -47,6 +79,12 @@ export function authRoutes() {
       },
       body: JSON.stringify({ client_id: clientId, scope: '' }),
     });
+
+    if (!ghRes) {
+      const logger = c.get('logger');
+      logger.error('GitHub device flow network error', { action: 'auth_device_init' });
+      return apiError(c, 500, 'INTERNAL_ERROR', 'Failed to initiate device flow');
+    }
 
     if (!ghRes.ok) {
       const logger = c.get('logger');
@@ -59,8 +97,24 @@ export function authRoutes() {
       return apiError(c, 500, 'INTERNAL_ERROR', 'Failed to initiate device flow');
     }
 
-    const data = (await ghRes.json()) as DeviceFlowInitResponse;
-    return c.json<DeviceFlowInitResponse>(data);
+    const data = (await ghRes.json()) as Record<string, unknown>;
+
+    // Validate response shape
+    if (typeof data.device_code !== 'string' || typeof data.user_code !== 'string') {
+      const logger = c.get('logger');
+      logger.error('GitHub returned invalid device flow response', {
+        action: 'auth_device_init',
+      });
+      return apiError(c, 500, 'INTERNAL_ERROR', 'Invalid response from GitHub');
+    }
+
+    return c.json<DeviceFlowInitResponse>({
+      device_code: data.device_code,
+      user_code: data.user_code,
+      verification_uri: data.verification_uri as string,
+      expires_in: data.expires_in as number,
+      interval: data.interval as number,
+    });
   });
 
   /**
@@ -78,7 +132,7 @@ export function authRoutes() {
       return apiError(c, 500, 'INTERNAL_ERROR', 'OAuth not configured');
     }
 
-    const ghRes = await fetch(GITHUB_OAUTH_TOKEN_URL, {
+    const ghRes = await safeFetch(GITHUB_OAUTH_TOKEN_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -90,6 +144,12 @@ export function authRoutes() {
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
       }),
     });
+
+    if (!ghRes) {
+      const logger = c.get('logger');
+      logger.error('GitHub device token network error', { action: 'auth_device_token' });
+      return apiError(c, 500, 'INTERNAL_ERROR', 'Failed to poll for token');
+    }
 
     if (!ghRes.ok) {
       const logger = c.get('logger');
@@ -115,11 +175,17 @@ export function authRoutes() {
       );
     }
 
+    if (!isValidTokenResponse(data)) {
+      const logger = c.get('logger');
+      logger.error('GitHub returned invalid token response', { action: 'auth_device_token' });
+      return apiError(c, 500, 'INTERNAL_ERROR', 'Invalid token response from GitHub');
+    }
+
     return c.json<DeviceFlowTokenResponse>({
-      access_token: data.access_token as string,
-      refresh_token: data.refresh_token as string,
-      expires_in: data.expires_in as number,
-      token_type: data.token_type as string,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_in: data.expires_in,
+      token_type: data.token_type,
     });
   });
 
@@ -139,7 +205,7 @@ export function authRoutes() {
       return apiError(c, 500, 'INTERNAL_ERROR', 'OAuth not configured');
     }
 
-    const ghRes = await fetch(GITHUB_OAUTH_TOKEN_URL, {
+    const ghRes = await safeFetch(GITHUB_OAUTH_TOKEN_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -152,6 +218,12 @@ export function authRoutes() {
         refresh_token: body.refresh_token,
       }),
     });
+
+    if (!ghRes) {
+      const logger = c.get('logger');
+      logger.error('GitHub token refresh network error', { action: 'auth_refresh' });
+      return apiError(c, 500, 'INTERNAL_ERROR', 'Failed to refresh token');
+    }
 
     if (!ghRes.ok) {
       const logger = c.get('logger');
@@ -177,11 +249,17 @@ export function authRoutes() {
       );
     }
 
+    if (!isValidTokenResponse(data)) {
+      const logger = c.get('logger');
+      logger.error('GitHub returned invalid token response', { action: 'auth_refresh' });
+      return apiError(c, 500, 'INTERNAL_ERROR', 'Invalid token response from GitHub');
+    }
+
     return c.json<RefreshTokenResponse>({
-      access_token: data.access_token as string,
-      refresh_token: data.refresh_token as string,
-      expires_in: data.expires_in as number,
-      token_type: data.token_type as string,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_in: data.expires_in,
+      token_type: data.token_type,
     });
   });
 

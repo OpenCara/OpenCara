@@ -100,7 +100,16 @@ describe('Auth Routes', () => {
 
     it('sends client_id from env, not from request', async () => {
       fetchSpy.mockResolvedValueOnce(
-        new Response(JSON.stringify({ device_code: 'dc' }), { status: 200 }),
+        new Response(
+          JSON.stringify({
+            device_code: 'dc',
+            user_code: 'UC',
+            verification_uri: 'u',
+            expires_in: 900,
+            interval: 5,
+          }),
+          { status: 200 },
+        ),
       );
 
       await postDevice(app);
@@ -130,6 +139,28 @@ describe('Auth Routes', () => {
       const body = await res.json();
       expect(body.error.code).toBe('INTERNAL_ERROR');
       expect(body.error.message).toBe('Failed to initiate device flow');
+    });
+
+    it('returns 500 on network error', async () => {
+      fetchSpy.mockRejectedValueOnce(new Error('DNS resolution failed'));
+
+      const res = await postDevice(app);
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(body.error.message).toBe('Failed to initiate device flow');
+    });
+
+    it('returns 500 when GitHub returns invalid response shape', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ unexpected: 'data' }), { status: 200 }),
+      );
+
+      const res = await postDevice(app);
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(body.error.message).toBe('Invalid response from GitHub');
     });
 
     it('rate limits after 5 requests per IP per minute', async () => {
@@ -295,6 +326,28 @@ describe('Auth Routes', () => {
       expect(body.error.code).toBe('INTERNAL_ERROR');
     });
 
+    it('returns 500 on network error', async () => {
+      fetchSpy.mockRejectedValueOnce(new Error('Connection refused'));
+
+      const res = await postDeviceToken(app, { device_code: 'dc-123' });
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(body.error.message).toBe('Failed to poll for token');
+    });
+
+    it('returns 500 when GitHub returns invalid token response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ unexpected: 'data' }), { status: 200 }),
+      );
+
+      const res = await postDeviceToken(app, { device_code: 'dc-123' });
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(body.error.message).toBe('Invalid token response from GitHub');
+    });
+
     it('rate limits after 10 requests per IP per minute', async () => {
       fetchSpy.mockImplementation(() =>
         Promise.resolve(
@@ -440,6 +493,28 @@ describe('Auth Routes', () => {
       expect(body.error.code).toBe('INTERNAL_ERROR');
     });
 
+    it('returns 500 on network error', async () => {
+      fetchSpy.mockRejectedValueOnce(new Error('Connection timeout'));
+
+      const res = await postRefresh(app, { refresh_token: 'ghr_old' });
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(body.error.message).toBe('Failed to refresh token');
+    });
+
+    it('returns 500 when GitHub returns invalid token response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ unexpected: 'data' }), { status: 200 }),
+      );
+
+      const res = await postRefresh(app, { refresh_token: 'ghr_old' });
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(body.error.message).toBe('Invalid token response from GitHub');
+    });
+
     it('rate limits after 10 requests per IP per minute', async () => {
       const ghResponse = {
         access_token: 'ghu_new',
@@ -505,9 +580,51 @@ describe('Auth Routes', () => {
       expect(text).not.toContain('client_secret');
     });
 
+    it('rate limits are isolated between endpoints', async () => {
+      const deviceResponse = {
+        device_code: 'dc',
+        user_code: 'UC',
+        verification_uri: 'u',
+        expires_in: 900,
+        interval: 5,
+      };
+      const tokenResponse = { error: 'authorization_pending' };
+
+      fetchSpy.mockImplementation((_url: string | URL | Request) => {
+        const url = typeof _url === 'string' ? _url : _url.toString();
+        if (url.includes('device/code')) {
+          return Promise.resolve(new Response(JSON.stringify(deviceResponse), { status: 200 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify(tokenResponse), { status: 200 }));
+      });
+
+      // Exhaust device init limit (5 requests)
+      for (let i = 0; i < 5; i++) {
+        const res = await postDevice(app);
+        expect(res.status).toBe(200);
+      }
+
+      // Device init should be rate limited
+      const res = await postDevice(app);
+      expect(res.status).toBe(429);
+
+      // But device token should still work (different bucket)
+      const tokenRes = await postDeviceToken(app, { device_code: 'dc-123' });
+      expect(tokenRes.status).toBe(200);
+    });
+
     it('device init sends scope as empty string', async () => {
       fetchSpy.mockResolvedValueOnce(
-        new Response(JSON.stringify({ device_code: 'dc' }), { status: 200 }),
+        new Response(
+          JSON.stringify({
+            device_code: 'dc',
+            user_code: 'UC',
+            verification_uri: 'u',
+            expires_in: 900,
+            interval: 5,
+          }),
+          { status: 200 },
+        ),
       );
 
       await postDevice(app);
