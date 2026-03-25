@@ -17,8 +17,6 @@ import {
   saveConfig,
   ensureConfigDir,
   resolveCodebaseDir,
-  resolveGithubToken,
-  resolveGithubUsername,
   RepoConfigError,
   ConfigValidationError,
   CONFIG_DIR,
@@ -61,8 +59,6 @@ describe('config', () => {
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
-      expect(config.githubToken).toBeNull();
-      expect(config.githubUsername).toBeNull();
       expect(config.codebaseDir).toBeNull();
       expect(config.agentCommand).toBeNull();
     });
@@ -259,8 +255,6 @@ describe('config', () => {
       apiKey: null as string | null,
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-      githubToken: null as string | null,
-      githubUsername: null as string | null,
       codebaseDir: null as string | null,
 
       agentCommand: null as string | null,
@@ -394,8 +388,6 @@ describe('config', () => {
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'glm-5', tool: 'qwen', command: 'qwen -y -m glm-5' }],
@@ -411,8 +403,6 @@ describe('config', () => {
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -445,8 +435,6 @@ agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude-sonnet-4-6', tool: 'claude', name: 'MyBot' }],
@@ -721,8 +709,6 @@ agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: [
@@ -741,98 +727,64 @@ agents:
     });
   });
 
-  describe('github_token config', () => {
-    it('parses global github_token', () => {
+  describe('deprecated config fields', () => {
+    it('logs deprecation warning for github_token', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue('github_token: ghp_abc123\n');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      const config = loadConfig();
-      expect(config.githubToken).toBe('ghp_abc123');
+      loadConfig();
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('github_token is deprecated'));
+      warnSpy.mockRestore();
     });
 
-    it('returns null for non-string github_token', () => {
+    it('logs deprecation warning for github_username', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('github_token: 123\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('github_username: octocat\n');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      const config = loadConfig();
-      expect(config.githubToken).toBeNull();
+      loadConfig();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('github_username is deprecated'),
+      );
+      warnSpy.mockRestore();
     });
 
-    it('returns null when github_token is absent', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
-
-      const config = loadConfig();
-      expect(config.githubToken).toBeNull();
-    });
-
-    it('saveConfig writes github_token when present', () => {
-      saveConfig({
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: 'ghp_xyz789',
-        githubUsername: null,
-        codebaseDir: null,
-        agentCommand: null,
-        agents: null,
-      });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('github_token: ghp_xyz789');
-    });
-
-    it('saveConfig omits github_token when null', () => {
-      saveConfig({
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
-        codebaseDir: null,
-        agentCommand: null,
-        agents: null,
-      });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).not.toContain('github_token');
-    });
-
-    it('parses per-agent github_token', () => {
+    it('logs deprecation warning for per-agent github_token', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 agents:
   - model: claude-opus-4-6
     tool: claude
     github_token: ghp_agent1
-  - model: glm-5
-    tool: qwen
 `);
-      const config = loadConfig();
-      expect(config.agents![0].github_token).toBe('ghp_agent1');
-      expect(config.agents![1].github_token).toBeUndefined();
-    });
-  });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-  describe('resolveGithubToken', () => {
-    it('returns null when both are null/undefined', () => {
-      expect(resolveGithubToken(undefined, null)).toBeNull();
-    });
+      loadConfig();
 
-    it('returns global token when agent has none', () => {
-      expect(resolveGithubToken(undefined, 'ghp_global')).toBe('ghp_global');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('agents[0].github_token is deprecated'),
+      );
+      warnSpy.mockRestore();
     });
 
-    it('returns agent token when global is null', () => {
-      expect(resolveGithubToken('ghp_agent', null)).toBe('ghp_agent');
-    });
+    it('saveConfig does not write github_token or github_username', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        apiKey: null,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: null,
+        usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
+      });
 
-    it('agent token overrides global', () => {
-      expect(resolveGithubToken('ghp_agent', 'ghp_global')).toBe('ghp_agent');
-    });
-
-    it('empty agent token falls back to global', () => {
-      expect(resolveGithubToken('', 'ghp_global')).toBe('ghp_global');
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('github_token');
+      expect(content).not.toContain('github_username');
     });
   });
 
@@ -881,8 +833,6 @@ anonymous_agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: '~/.opencara/repos',
         agentCommand: null,
         agents: null,
@@ -897,8 +847,6 @@ anonymous_agents:
         platformUrl: DEFAULT_PLATFORM_URL,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
         codebaseDir: null,
         agentCommand: null,
         agents: null,
@@ -1325,113 +1273,6 @@ agents:
         mode: 'whitelist',
         list: ['org/repo'],
       });
-    });
-  });
-
-  describe('github_username config', () => {
-    it('parses github_username from config file', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('github_username: octocat\n');
-
-      const config = loadConfig();
-      expect(config.githubUsername).toBe('octocat');
-    });
-
-    it('returns null for non-string github_username', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('github_username: 123\n');
-
-      const config = loadConfig();
-      expect(config.githubUsername).toBeNull();
-    });
-
-    it('returns null when github_username is absent', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://test.dev\n');
-
-      const config = loadConfig();
-      expect(config.githubUsername).toBeNull();
-    });
-
-    it('saveConfig writes github_username when present', () => {
-      saveConfig({
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: 'octocat',
-        codebaseDir: null,
-        agentCommand: null,
-        agents: null,
-      });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('github_username: octocat');
-    });
-
-    it('saveConfig omits github_username when null', () => {
-      saveConfig({
-        platformUrl: DEFAULT_PLATFORM_URL,
-        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
-        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-        githubToken: null,
-        githubUsername: null,
-        codebaseDir: null,
-        agentCommand: null,
-        agents: null,
-      });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).not.toContain('github_username');
-    });
-  });
-
-  describe('resolveGithubUsername', () => {
-    it('returns null when token is null', async () => {
-      const result = await resolveGithubUsername(null);
-      expect(result).toBeNull();
-    });
-
-    it('returns username on successful API call', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ login: 'octocat' }),
-      });
-      const result = await resolveGithubUsername(
-        'ghp_test123',
-        mockFetch as unknown as typeof fetch,
-      );
-      expect(result).toBe('octocat');
-      expect(mockFetch).toHaveBeenCalledWith('https://api.github.com/user', {
-        headers: {
-          Authorization: 'Bearer ghp_test123',
-          Accept: 'application/vnd.github+json',
-        },
-      });
-    });
-
-    it('returns null on API error', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 401,
-      });
-      const result = await resolveGithubUsername('bad-token', mockFetch as unknown as typeof fetch);
-      expect(result).toBeNull();
-    });
-
-    it('returns null on network error', async () => {
-      const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'));
-      const result = await resolveGithubUsername('ghp_test', mockFetch as unknown as typeof fetch);
-      expect(result).toBeNull();
-    });
-
-    it('returns null when API response has no login field', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ id: 123 }),
-      });
-      const result = await resolveGithubUsername('ghp_test', mockFetch as unknown as typeof fetch);
-      expect(result).toBeNull();
     });
   });
 });

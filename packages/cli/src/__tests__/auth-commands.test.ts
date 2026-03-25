@@ -17,8 +17,6 @@ function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
     apiKey: null,
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 10,
-    githubToken: null,
-    githubUsername: null,
     codebaseDir: null,
     agentCommand: null,
     agents: null,

@@ -14,7 +14,6 @@ export interface LocalAgentConfig {
   review_only?: boolean;
   synthesizer_only?: boolean;
   synthesize_repos?: RepoConfig;
-  github_token?: string;
   codebase_dir?: string;
   repos?: RepoConfig;
 }
@@ -30,8 +29,6 @@ export interface CliConfig {
   apiKey: string | null;
   maxDiffSizeKb: number;
   maxConsecutiveErrors: number;
-  githubToken: string | null;
-  githubUsername: string | null;
   codebaseDir: string | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
@@ -170,7 +167,11 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
         `agents[${i}]: review_only and synthesizer_only cannot both be true`,
       );
     }
-    if (typeof obj.github_token === 'string') agent.github_token = obj.github_token;
+    if (typeof obj.github_token === 'string') {
+      console.warn(
+        `\u26a0 Config warning: agents[${i}].github_token is deprecated. Use \`opencara auth login\` for authentication.`,
+      );
+    }
     if (typeof obj.codebase_dir === 'string') agent.codebase_dir = obj.codebase_dir;
     const repoConfig = parseRepoConfig(obj, i);
     if (repoConfig) agent.repos = repoConfig;
@@ -260,8 +261,6 @@ export function loadConfig(): CliConfig {
     apiKey: null,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
-    githubToken: null,
-    githubUsername: null,
     codebaseDir: null,
     agentCommand: null,
     agents: null,
@@ -285,6 +284,18 @@ export function loadConfig(): CliConfig {
 
   const overrides = validateConfigData(data, envPlatformUrl);
 
+  // Deprecation warnings for removed fields
+  if (typeof data.github_token === 'string') {
+    console.warn(
+      '\u26a0 Config warning: github_token is deprecated. Use `opencara auth login` for authentication.',
+    );
+  }
+  if (typeof data.github_username === 'string') {
+    console.warn(
+      '\u26a0 Config warning: github_username is deprecated. Identity is derived from OAuth token.',
+    );
+  }
+
   return {
     platformUrl:
       envPlatformUrl ||
@@ -300,8 +311,6 @@ export function loadConfig(): CliConfig {
       (typeof data.max_consecutive_errors === 'number'
         ? data.max_consecutive_errors
         : DEFAULT_MAX_CONSECUTIVE_ERRORS),
-    githubToken: typeof data.github_token === 'string' ? data.github_token : null,
-    githubUsername: typeof data.github_username === 'string' ? data.github_username : null,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
@@ -320,12 +329,6 @@ export function saveConfig(config: CliConfig): void {
   };
   if (config.apiKey) {
     data.api_key = config.apiKey;
-  }
-  if (config.githubToken) {
-    data.github_token = config.githubToken;
-  }
-  if (config.githubUsername) {
-    data.github_username = config.githubUsername;
   }
   if (config.codebaseDir) {
     data.codebase_dir = config.codebaseDir;
@@ -355,16 +358,6 @@ export function saveConfig(config: CliConfig): void {
 }
 
 /**
- * Resolve GitHub token: per-agent overrides global.
- */
-export function resolveGithubToken(
-  agentToken: string | undefined,
-  globalToken: string | null,
-): string | null {
-  return agentToken ? agentToken : globalToken;
-}
-
-/**
  * Resolve codebase_dir: per-agent overrides global.
  * Expands ~ to home directory.
  */
@@ -378,28 +371,4 @@ export function resolveCodebaseDir(
     return path.join(os.homedir(), raw.slice(1));
   }
   return path.resolve(raw);
-}
-
-/**
- * Resolve GitHub username from a token by calling the GitHub API.
- * Returns null if the token is missing or the API call fails.
- */
-export async function resolveGithubUsername(
-  githubToken: string | null,
-  fetchFn: typeof fetch = fetch,
-): Promise<string | null> {
-  if (!githubToken) return null;
-  try {
-    const response = await fetchFn('https://api.github.com/user', {
-      headers: {
-        Authorization: `Bearer ${githubToken}`,
-        Accept: 'application/vnd.github+json',
-      },
-    });
-    if (!response.ok) return null;
-    const data = (await response.json()) as { login?: string };
-    return typeof data.login === 'string' ? data.login : null;
-  } catch {
-    return null;
-  }
 }

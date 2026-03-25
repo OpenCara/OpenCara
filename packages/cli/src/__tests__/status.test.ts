@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../auth.js', () => ({
+  loadAuth: vi.fn(() => null),
+}));
+
 import {
   runStatus,
   agentRoleLabel,
@@ -8,6 +13,7 @@ import {
 } from '../commands/status.js';
 import type { CliConfig } from '../config.js';
 import { DEFAULT_PLATFORM_URL } from '../config.js';
+import { loadAuth } from '../auth.js';
 
 function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
   return {
@@ -15,8 +21,6 @@ function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
     apiKey: null,
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 10,
-    githubToken: null,
-    githubUsername: null,
     codebaseDir: null,
     agentCommand: null,
     agents: null,
@@ -163,8 +167,15 @@ describe('runStatus', () => {
   });
 
   it('shows full status with agents and connectivity', async () => {
+    vi.mocked(loadAuth).mockReturnValue({
+      access_token: 'test-token',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 3600000,
+      github_username: 'octocat',
+      github_user_id: 123,
+    });
+
     const config = makeConfig({
-      githubToken: 'ghp_test',
       agents: [
         { model: 'claude-sonnet-4-6', tool: 'claude' },
         { model: 'gemini-2.5-pro', tool: 'gemini', review_only: true },
@@ -182,7 +193,7 @@ describe('runStatus', () => {
 
     const output = lines.join('\n');
     expect(output).toContain('OpenCara Agent Status');
-    expect(output).toContain('token present');
+    expect(output).toContain('octocat');
     expect(output).toContain('OK');
     expect(output).toContain('2 configured');
     expect(output).toContain('claude-sonnet-4-6/claude');
@@ -283,8 +294,10 @@ describe('runStatus', () => {
     expect(output).toContain('No agents configured');
   });
 
-  it('shows no github token', async () => {
-    const config = makeConfig({ githubToken: null });
+  it('shows not authenticated when no auth', async () => {
+    vi.mocked(loadAuth).mockReturnValue(null);
+
+    const config = makeConfig();
     const fetchFn = makeFetchHealthAndMetrics({
       tasks: { total: 0, pending: 0, reviewing: 0, completed: 0, failed: 0 },
     });
@@ -297,7 +310,7 @@ describe('runStatus', () => {
     });
 
     const output = lines.join('\n');
-    expect(output).toContain('no token');
+    expect(output).toContain('not authenticated');
   });
 
   it('handles metrics fetch failure when connected', async () => {

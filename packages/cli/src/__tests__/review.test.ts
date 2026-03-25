@@ -64,18 +64,6 @@ describe('buildMetadataHeader', () => {
     expect(header.endsWith('\n\n')).toBe(true);
   });
 
-  it('includes Contributors line when githubUsername is provided', () => {
-    const meta: ReviewMetadata = {
-      model: 'claude-sonnet',
-      tool: 'claude-code',
-      githubUsername: 'octocat',
-    };
-    const header = buildMetadataHeader('approve', meta);
-    expect(header).toContain('**Reviewer**: `claude-sonnet/claude-code`');
-    expect(header).toContain('**Contributors**: [@octocat](https://github.com/octocat)');
-    expect(header).toContain('**Verdict**: \u2705 approve');
-  });
-
   it('shows correct emoji for request_changes', () => {
     const meta: ReviewMetadata = { model: 'gpt-4', tool: 'copilot' };
     const header = buildMetadataHeader('request_changes', meta);

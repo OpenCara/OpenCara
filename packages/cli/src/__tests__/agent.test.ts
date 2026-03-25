@@ -821,7 +821,7 @@ describe('agent poll loop', () => {
         pollIntervalMs: 100,
         maxConsecutiveErrors: 1,
         roles: ['review', 'summary'],
-        githubUsername: 'octocat',
+
         synthesizeRepos: { mode: 'whitelist', list: ['org/repo'] },
       },
     );
@@ -906,7 +906,6 @@ describe('agent poll loop', () => {
       {
         pollIntervalMs: 100,
         maxConsecutiveErrors: 1,
-        githubUsername: 'octocat',
       },
     );
 
