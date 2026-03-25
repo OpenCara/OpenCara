@@ -141,12 +141,14 @@ export function rateLimitByAgent(config: RateLimiterConfig): MiddlewareHandler {
 
 /**
  * Create a Hono middleware that rate-limits by client IP.
+ * Use `prefix` to isolate rate limit buckets per endpoint (e.g., 'auth:device').
  */
-export function rateLimitByIP(config: RateLimiterConfig): MiddlewareHandler {
+export function rateLimitByIP(config: RateLimiterConfig & { prefix?: string }): MiddlewareHandler {
   return async (c: HonoContext, next) => {
     const ip = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'unknown';
+    const key = config.prefix ? `${config.prefix}:ip:${ip}` : `ip:${ip}`;
 
-    const retryAfter = checkRateLimit(`ip:${ip}`, config);
+    const retryAfter = checkRateLimit(key, config);
     if (retryAfter !== null) {
       c.header('Retry-After', String(retryAfter));
       return c.json<ErrorResponse>(
