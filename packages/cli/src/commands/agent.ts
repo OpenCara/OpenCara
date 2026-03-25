@@ -34,7 +34,13 @@ import {
   type ReviewExecutorDeps,
   type ReviewMetadata,
 } from '../review.js';
-import { executeSummary, buildSummaryMetadataHeader, InputTooLargeError } from '../summary.js';
+import {
+  executeSummary,
+  buildSummaryMetadataHeader,
+  extractFlaggedReviews,
+  InputTooLargeError,
+  type FlaggedReview,
+} from '../summary.js';
 import { validateCommandBinary, estimateTokens, testCommand } from '../tool-executor.js';
 import { RouterRelay } from '../router.js';
 import {
@@ -46,6 +52,7 @@ import {
 } from '../consumption.js';
 import { UsageTracker } from '../usage-tracker.js';
 import { sanitizeTokens } from '../sanitize.js';
+import { detectSuspiciousPatterns } from '../prompt-guard.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import {
   createLogger,
@@ -492,6 +499,25 @@ async function handleTask(
     );
   }
 
+  // Check repo prompt for suspicious patterns (prompt injection attempts)
+  const guardResult = detectSuspiciousPatterns(prompt);
+  if (guardResult.suspicious) {
+    logWarn(
+      `  ${icons.warn} Suspicious patterns detected in repo prompt: ${guardResult.patterns.map((p) => p.name).join(', ')}`,
+    );
+    // Best-effort report to server — endpoint may not exist yet
+    try {
+      await client.post(`/api/tasks/${task_id}/report`, {
+        agent_id: agentId,
+        type: 'suspicious_prompt',
+        details: guardResult.patterns,
+      });
+    } catch {
+      // Server may not support this endpoint yet — log and continue
+      log('  (suspicious prompt report not sent — endpoint not available)');
+    }
+  }
+
   // Execute review or summary
   try {
     if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
@@ -866,6 +892,7 @@ async function executeSummaryTask(
   let summaryVerdict: ReviewVerdict;
   let tokensUsed: number;
   let usageOpts: RecordUsageOptions;
+  let flaggedReviews: FlaggedReview[] = [];
 
   if (routerRelay) {
     logger.log(`  ${icons.running} Executing summary: [router mode]`);
@@ -886,6 +913,7 @@ async function executeSummaryTask(
     const parsed = extractVerdict(response);
     summaryText = parsed.review;
     summaryVerdict = parsed.verdict;
+    flaggedReviews = extractFlaggedReviews(response);
     tokensUsed = estimateTokens(fullPrompt) + estimateTokens(response);
     usageOpts = {
       inputTokens: estimateTokens(fullPrompt),
@@ -911,6 +939,7 @@ async function executeSummaryTask(
     );
     summaryText = result.summary;
     summaryVerdict = result.verdict;
+    flaggedReviews = result.flaggedReviews;
     tokensUsed = result.tokensUsed;
     usageOpts = {
       inputTokens: result.tokenDetail.input,
@@ -918,6 +947,12 @@ async function executeSummaryTask(
       totalTokens: result.tokensUsed,
       estimated: result.tokensEstimated,
     };
+  }
+
+  if (flaggedReviews.length > 0) {
+    logger.logWarn(
+      `  ${icons.warn} Flagged reviews: ${flaggedReviews.map((f) => f.agentId).join(', ')}`,
+    );
   }
 
   // Prepend metadata header (covers both router and direct paths)
@@ -929,15 +964,18 @@ async function executeSummaryTask(
   const sanitizedSummary = sanitizeTokens(headerSummary + summaryText);
 
   // Submit result — retry up to 3 times (highest-risk operation)
+  const resultBody: Record<string, unknown> = {
+    agent_id: agentId,
+    type: 'summary' as ClaimRole,
+    review_text: sanitizedSummary,
+    verdict: summaryVerdict,
+    tokens_used: tokensUsed,
+  };
+  if (flaggedReviews.length > 0) {
+    resultBody.flagged_reviews = flaggedReviews;
+  }
   await withRetry(
-    () =>
-      client.post(`/api/tasks/${taskId}/result`, {
-        agent_id: agentId,
-        type: 'summary' as ClaimRole,
-        review_text: sanitizedSummary,
-        verdict: summaryVerdict,
-        tokens_used: tokensUsed,
-      }),
+    () => client.post(`/api/tasks/${taskId}/result`, resultBody),
     { maxAttempts: 3 },
     signal,
   );
