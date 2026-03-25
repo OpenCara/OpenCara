@@ -637,16 +637,11 @@ export function taskRoutes() {
 
     await store.updateClaim(claim.id, { status: 'rejected' });
 
-    // Free the slot so another agent can claim it
-    const task = await store.getTask(taskId);
-    if (task) {
-      if (claim.role === 'review') {
-        await store.updateTask(taskId, {
-          review_claims: Math.max(0, (task.review_claims ?? 0) - 1),
-        });
-      } else if (claim.role === 'summary') {
-        await store.releaseSummarySlot(taskId);
-      }
+    // Free the slot so another agent can claim it (atomic to avoid races)
+    if (claim.role === 'review') {
+      await store.releaseReviewSlot(taskId);
+    } else if (claim.role === 'summary') {
+      await store.releaseSummarySlot(taskId);
     }
 
     logger.error('Agent rejected task', {
@@ -686,16 +681,11 @@ export function taskRoutes() {
 
     await store.updateClaim(claim.id, { status: 'error' });
 
-    // Free the slot so another agent can claim it
-    const task = await store.getTask(taskId);
-    if (task) {
-      if (claim.role === 'review') {
-        await store.updateTask(taskId, {
-          review_claims: Math.max(0, (task.review_claims ?? 0) - 1),
-        });
-      } else if (claim.role === 'summary') {
-        await store.releaseSummarySlot(taskId);
-      }
+    // Free the slot so another agent can claim it (atomic to avoid races)
+    if (claim.role === 'review') {
+      await store.releaseReviewSlot(taskId);
+    } else if (claim.role === 'summary') {
+      await store.releaseSummarySlot(taskId);
     }
 
     logger.error('Agent reported error', {
