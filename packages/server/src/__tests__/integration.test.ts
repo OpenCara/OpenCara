@@ -309,7 +309,7 @@ APPROVE`;
       expect(pollSynth.tasks).toHaveLength(0);
 
       // Complete the review
-      await submitResult('task-partial', 'r1', 'review', 'Done', 'approve');
+      await submitResult('task-partial', 'r1', 'review', 'Done. Looks good overall', 'approve');
 
       // Now summary is available
       pollSynth = await poll('synth');
@@ -474,7 +474,7 @@ APPROVE`;
       expect(claimRes.claimed).toBe(true);
 
       // Agent 2 completes the review
-      await submitResult('task-reject-e2e', 'agent-2', 'review', 'Looks good', 'approve');
+      await submitResult('task-reject-e2e', 'agent-2', 'review', 'Looks good overall', 'approve');
 
       // Summary slot now available
       const pollSynth = await poll('agent-3');
@@ -696,7 +696,13 @@ APPROVE`;
 
       // Claim and finish first task
       await claim('task-seq-1', 'worker', 'summary');
-      await submitResult('task-seq-1', 'worker', 'summary', 'Review 1', 'approve');
+      await submitResult(
+        'task-seq-1',
+        'worker',
+        'summary',
+        'Review 1: Analysis complete',
+        'approve',
+      );
 
       // Poll again — should see only the second task
       const result = await poll('worker');
@@ -723,7 +729,7 @@ APPROVE`;
       const res = await api('POST', '/api/tasks/nonexistent/result', {
         agent_id: 'ghost',
         type: 'review',
-        review_text: 'Review of deleted task',
+        review_text: 'Review of deleted task - detailed analysis',
       });
       expect(res.status).toBe(404);
     });
@@ -733,11 +739,11 @@ APPROVE`;
       await claim('task-dup', 'agent', 'summary');
 
       // First submit — posts review and deletes task + claims
-      const r1 = await submitResult('task-dup', 'agent', 'summary', 'First');
+      const r1 = await submitResult('task-dup', 'agent', 'summary', 'First summary result');
       expect(r1.status).toBe(200);
 
       // Second submit — claim no longer exists (deleted with task)
-      const r2 = await submitResult('task-dup', 'agent', 'summary', 'Second');
+      const r2 = await submitResult('task-dup', 'agent', 'summary', 'Second summary result');
       expect(r2.status).toBe(404);
     });
 

@@ -44,10 +44,31 @@ export const ClaimRequestSchema = z.object({
   tool: z.string().optional(),
 });
 
+/** Minimum review_text length after trimming (rejects trivially short responses). */
+export const REVIEW_TEXT_MIN_LENGTH = 10;
+
+/** Maximum review_text length (rejects absurdly long responses — ~100KB). */
+export const REVIEW_TEXT_MAX_LENGTH = 100_000;
+
 export const ResultRequestSchema = z.object({
   agent_id: agentIdSchema,
   type: claimRoleSchema,
-  review_text: z.string().min(1, 'review_text must be a non-empty string'),
+  review_text: z
+    .string()
+    .min(1, 'review_text must be a non-empty string')
+    .transform((v) => v.trim())
+    .pipe(
+      z
+        .string()
+        .min(
+          REVIEW_TEXT_MIN_LENGTH,
+          `review_text must be at least ${REVIEW_TEXT_MIN_LENGTH} characters after trimming`,
+        )
+        .max(
+          REVIEW_TEXT_MAX_LENGTH,
+          `review_text must not exceed ${REVIEW_TEXT_MAX_LENGTH} characters`,
+        ),
+    ),
   verdict: reviewVerdictSchema.optional(),
   tokens_used: z.number().int().nonnegative().finite().optional(),
 });

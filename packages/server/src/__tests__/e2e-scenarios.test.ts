@@ -257,7 +257,12 @@ describe('E2E Scenarios', () => {
       expect(c2.claimed).toBe(true);
 
       // Agent 2 completes
-      const result = await a2.submitResult(taskId, 'summary', 'Done.', 'approve');
+      const result = await a2.submitResult(
+        taskId,
+        'summary',
+        'Done. Looks good overall.',
+        'approve',
+      );
       expect(result.status).toBe(200);
     });
 
@@ -777,7 +782,7 @@ describe('E2E Scenarios', () => {
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
-      await a.submitResult(taskId, 'summary', 'Done.', 'approve');
+      await a.submitResult(taskId, 'summary', 'Done. Looks good overall.', 'approve');
 
       // Task + claims are deleted after successful post — returns 404
       const rejectRes = await a.reject(taskId, 'Too late');
@@ -789,7 +794,7 @@ describe('E2E Scenarios', () => {
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
-      await a.submitResult(taskId, 'summary', 'Done.', 'approve');
+      await a.submitResult(taskId, 'summary', 'Done. Looks good overall.', 'approve');
 
       // Task + claims are deleted after successful post — returns 404
       const errRes = await a.reportError(taskId, 'Crash');
@@ -825,11 +830,11 @@ describe('E2E Scenarios', () => {
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
-      const r1 = await a.submitResult(taskId, 'summary', 'First');
+      const r1 = await a.submitResult(taskId, 'summary', 'First summary result');
       expect(r1.status).toBe(200);
 
       // Task + claims deleted after post — second submit returns 404
-      const r2 = await a.submitResult(taskId, 'summary', 'Second');
+      const r2 = await a.submitResult(taskId, 'summary', 'Second summary result');
       expect(r2.status).toBe(404);
     });
 
@@ -839,7 +844,7 @@ describe('E2E Scenarios', () => {
       const a2 = agent('agent-2');
 
       await a1.claim(taskId, 'summary');
-      await a1.submitResult(taskId, 'summary', 'Done', 'approve');
+      await a1.submitResult(taskId, 'summary', 'Done. Looks good overall.', 'approve');
 
       // Task deleted — returns 404 TASK_NOT_FOUND
       const c = await a2.claim(taskId, 'summary');
@@ -983,12 +988,12 @@ describe('E2E Scenarios', () => {
       await r2.claim(taskId, 'review');
 
       // r1 submits — 1 of 2 done, still in review queue
-      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
+      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
       let task = await store.getTask(taskId);
       expect(task?.queue).toBe('review');
 
       // r2 submits — 2 of 2 done, queue transitions to summary
-      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
       task = await store.getTask(taskId);
       expect(task?.queue).toBe('summary');
       const originalCompletedAt = task?.reviews_completed_at;
@@ -1007,7 +1012,7 @@ describe('E2E Scenarios', () => {
       });
 
       // Late review submits — queue should NOT change from summary
-      await r3.submitResult(taskId, 'review', 'Late review', 'approve', 400);
+      await r3.submitResult(taskId, 'review', 'Late review: Analysis complete', 'approve', 400);
       task = await store.getTask(taskId);
       expect(task?.queue).toBe('summary');
       // reviews_completed_at should not have been reset
@@ -1024,8 +1029,8 @@ describe('E2E Scenarios', () => {
       // Both reviewers claim and submit
       await r1.claim(taskId, 'review');
       await r2.claim(taskId, 'review');
-      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
-      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
+      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
 
       // Synthesizer claims — queue moves to 'finished'
       await synth.claim(taskId, 'summary');
@@ -1043,7 +1048,7 @@ describe('E2E Scenarios', () => {
       });
 
       // Late review submits — queue should stay 'finished'
-      await r3.submitResult(taskId, 'review', 'Late review', 'approve', 400);
+      await r3.submitResult(taskId, 'review', 'Late review: Analysis complete', 'approve', 400);
       task = await store.getTask(taskId);
       expect(task?.queue).toBe('finished');
     });
@@ -1056,8 +1061,8 @@ describe('E2E Scenarios', () => {
 
       await r1.claim(taskId, 'review');
       await r2.claim(taskId, 'review');
-      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
-      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
+      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
 
       let task = await store.getTask(taskId);
       expect(task?.completed_reviews).toBe(2);
@@ -1072,7 +1077,7 @@ describe('E2E Scenarios', () => {
         created_at: Date.now(),
       });
 
-      await r3.submitResult(taskId, 'review', 'Late review', 'approve', 400);
+      await r3.submitResult(taskId, 'review', 'Late review: Analysis complete', 'approve', 400);
       task = await store.getTask(taskId);
       // Count should be 3 (incremented, but queue not changed)
       expect(task?.completed_reviews).toBe(3);
@@ -1088,13 +1093,13 @@ describe('E2E Scenarios', () => {
       await r2.claim(taskId, 'review');
 
       // First review: 1 of 2 — should not transition
-      await r1.submitResult(taskId, 'review', 'Review 1', 'approve', 500);
+      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
       let task = await store.getTask(taskId);
       expect(task?.queue).toBe('review');
       expect(task?.reviews_completed_at).toBeUndefined();
 
       // Second review: 2 of 2 — should transition exactly once
-      await r2.submitResult(taskId, 'review', 'Review 2', 'approve', 600);
+      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
       task = await store.getTask(taskId);
       expect(task?.queue).toBe('summary');
       expect(task?.reviews_completed_at).toBeDefined();

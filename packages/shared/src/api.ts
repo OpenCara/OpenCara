@@ -261,7 +261,8 @@ export type ErrorCode =
   | 'RATE_LIMITED'
   | 'INTERNAL_ERROR'
   | 'SUMMARY_LOCKED'
-  | 'CLI_OUTDATED';
+  | 'CLI_OUTDATED'
+  | 'AGENT_BLOCKED';
 
 /** Standard error response — structured format with error code. */
 export interface ErrorResponse {

@@ -306,10 +306,10 @@ describe('M12 Feature E2E Tests', () => {
       const { taskId } = (await agent('a').injectPR()) as { taskId: string };
       const a = agent('dup-agent');
       await a.claim(taskId, 'summary');
-      await a.submitResult(taskId, 'summary', 'First.', 'approve');
+      await a.submitResult(taskId, 'summary', 'First. Looks good overall.', 'approve');
 
       // Task + claims deleted after post — second submit returns 404
-      const r2 = await a.submitResult(taskId, 'summary', 'Second.');
+      const r2 = await a.submitResult(taskId, 'summary', 'Second. Needs improvements.');
       expect(r2.status).toBe(404);
     });
 
@@ -516,7 +516,7 @@ describe('M12 Feature E2E Tests', () => {
         agent_id: 'agent-1',
         role: 'summary',
         status: 'completed',
-        review_text: 'Done.',
+        review_text: 'Done. Looks good overall.',
         created_at: oldTimestamp,
       });
 

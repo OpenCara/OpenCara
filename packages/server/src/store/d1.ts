@@ -655,6 +655,25 @@ export class D1DataStore implements DataStore {
     return freed;
   }
 
+  // ── Agent rejections (abuse tracking) ─────────────────────────
+
+  async recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void> {
+    await this.db
+      .prepare(`INSERT INTO agent_rejections (agent_id, reason, created_at) VALUES (?, ?, ?)`)
+      .bind(agentId, reason, timestamp)
+      .run();
+  }
+
+  async countAgentRejections(agentId: string, sinceMs: number): Promise<number> {
+    const row = await this.db
+      .prepare(
+        'SELECT COUNT(*) as cnt FROM agent_rejections WHERE agent_id = ? AND created_at >= ?',
+      )
+      .bind(agentId, sinceMs)
+      .first<{ cnt: number }>();
+    return row?.cnt ?? 0;
+  }
+
   // ── Cleanup ───────────────────────────────────────────────────
 
   async cleanupTerminalTasks(): Promise<number> {

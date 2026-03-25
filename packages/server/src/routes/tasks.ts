@@ -18,7 +18,12 @@ import {
   wrapReviewComment,
   type TimeoutReview,
 } from '../review-formatter.js';
-import { CLAIM_STALE_THRESHOLD_MS, SUMMARY_SLOT_STALE_THRESHOLD_MS } from '../store/constants.js';
+import {
+  CLAIM_STALE_THRESHOLD_MS,
+  SUMMARY_SLOT_STALE_THRESHOLD_MS,
+  AGENT_REJECTION_THRESHOLD,
+  AGENT_REJECTION_WINDOW_MS,
+} from '../store/constants.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
@@ -30,6 +35,8 @@ import {
   ResultRequestSchema,
   RejectRequestSchema,
   ErrorRequestSchema,
+  REVIEW_TEXT_MIN_LENGTH,
+  REVIEW_TEXT_MAX_LENGTH,
 } from '../schemas.js';
 
 /** Default grace period (ms) for preferred synthesizer agents. */
@@ -239,11 +246,24 @@ async function postFinalReview(
     return;
   }
 
+  // Final guard: validate review_text before posting to GitHub
+  const trimmed = summaryData.review_text.trim();
+  if (trimmed.length < REVIEW_TEXT_MIN_LENGTH) {
+    logger.error('Final review guard — review_text too short, skipping GitHub post', {
+      taskId,
+      agentId: summaryAgentId,
+      length: trimmed.length,
+    });
+    await store.releaseSummarySlot(taskId);
+    await store.updateTask(taskId, { status: 'reviewing' });
+    return;
+  }
+
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
 
     // Wrap review_text with consistent branding header/footer
-    const body = wrapReviewComment(summaryData.review_text);
+    const body = wrapReviewComment(trimmed);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.deleteTask(taskId);
@@ -266,6 +286,13 @@ async function postFinalReview(
   }
 }
 
+/** Check if an agent is blocked due to exceeding the rejection threshold. */
+async function isAgentBlocked(store: DataStore, agentId: string): Promise<boolean> {
+  const since = Date.now() - AGENT_REJECTION_WINDOW_MS;
+  const count = await store.countAgentRejections(agentId, since);
+  return count >= AGENT_REJECTION_THRESHOLD;
+}
+
 /** Rate limit configs for task endpoints. */
 export const POLL_RATE_LIMIT = { maxRequests: 12, windowMs: 60_000 };
 export const MUTATION_RATE_LIMIT = { maxRequests: 30, windowMs: 60_000 };
@@ -285,6 +312,17 @@ export function taskRoutes() {
     const body = await parseBody(c, PollRequestSchema);
     if (body instanceof Response) return body;
     const { agent_id, github_username, roles, review_only, repos, synthesize_repos } = body;
+
+    // Block check — reject agents exceeding the rejection threshold
+    if (await isAgentBlocked(store, agent_id)) {
+      logger.warn('Blocked agent attempted poll', { agentId: agent_id });
+      return apiError(
+        c,
+        403,
+        'AGENT_BLOCKED',
+        'Agent is temporarily blocked due to repeated review rejections',
+      );
+    }
 
     // Determine which roles this agent will accept
     // `roles` takes precedence over deprecated `review_only`
@@ -419,10 +457,22 @@ export function taskRoutes() {
 
   app.post('/api/tasks/:taskId/claim', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
     const store = c.get('store');
+    const logger = c.get('logger');
     const taskId = c.req.param('taskId');
     const body = await parseBody(c, ClaimRequestSchema);
     if (body instanceof Response) return body;
     const { agent_id, role, github_username, model, tool } = body;
+
+    // Block check — reject agents exceeding the rejection threshold
+    if (await isAgentBlocked(store, agent_id)) {
+      logger.warn('Blocked agent attempted claim', { agentId: agent_id, taskId });
+      return apiError(
+        c,
+        403,
+        'AGENT_BLOCKED',
+        'Agent is temporarily blocked due to repeated review rejections',
+      );
+    }
 
     const task = await store.getTask(taskId);
     if (!task) {
@@ -534,9 +584,43 @@ export function taskRoutes() {
     const github = c.get('github');
     const logger = c.get('logger');
     const taskId = c.req.param('taskId');
-    const body = await parseBody(c, ResultRequestSchema);
-    if (body instanceof Response) return body;
-    const { agent_id, type, review_text, verdict, tokens_used } = body;
+
+    // Parse raw JSON first so we can track review_text rejections with agent_id
+    let raw: Record<string, unknown>;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return apiError(c, 400, 'INVALID_REQUEST', 'Malformed JSON body');
+    }
+
+    const result = ResultRequestSchema.safeParse(raw);
+    if (!result.success) {
+      const messages = result.error.issues.map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join('.') : undefined;
+        return path ? `${path}: ${issue.message}` : issue.message;
+      });
+
+      // Record rejection for abuse tracking if review_text was invalid
+      const agentId =
+        typeof raw.agent_id === 'string' && raw.agent_id.length > 0 ? raw.agent_id : null;
+      if (agentId) {
+        const reviewText = typeof raw.review_text === 'string' ? raw.review_text : '';
+        const trimmed = reviewText.trim();
+        if (trimmed.length < REVIEW_TEXT_MIN_LENGTH || trimmed.length > REVIEW_TEXT_MAX_LENGTH) {
+          const reason = trimmed.length < REVIEW_TEXT_MIN_LENGTH ? 'too_short' : 'too_long';
+          await store.recordAgentRejection(agentId, reason, Date.now());
+          logger.warn('Review text rejected — abuse tracking recorded', {
+            agentId,
+            reason,
+            length: trimmed.length,
+          });
+        }
+      }
+
+      return apiError(c, 400, 'INVALID_REQUEST', messages.join('; '));
+    }
+
+    const { agent_id, type, review_text, verdict, tokens_used } = result.data;
 
     // Role-aware claim lookup
     const claimId = `${taskId}:${agent_id}:${type}`;
