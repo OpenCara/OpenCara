@@ -486,6 +486,50 @@ export class D1DataStore implements DataStore {
     return row?.last_seen ?? null;
   }
 
+  async listAgentHeartbeats(
+    sinceMs: number,
+  ): Promise<Array<{ agent_id: string; last_seen: number }>> {
+    const result = await this.db
+      .prepare('SELECT agent_id, last_seen FROM agent_heartbeats WHERE last_seen >= ?')
+      .bind(sinceMs)
+      .all<{ agent_id: string; last_seen: number }>();
+    return result.results ?? [];
+  }
+
+  async getAgentClaimStats(agentId: string): Promise<{
+    total: number;
+    completed: number;
+    rejected: number;
+    error: number;
+    pending: number;
+  }> {
+    const result = await this.db
+      .prepare(
+        `SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+          SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+          SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as error,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
+        FROM claims WHERE agent_id = ?`,
+      )
+      .bind(agentId)
+      .first<{
+        total: number;
+        completed: number;
+        rejected: number;
+        error: number;
+        pending: number;
+      }>();
+    return {
+      total: result?.total ?? 0,
+      completed: result?.completed ?? 0,
+      rejected: result?.rejected ?? 0,
+      error: result?.error ?? 0,
+      pending: result?.pending ?? 0,
+    };
+  }
+
   // ── Meta ──────────────────────────────────────────────────────
 
   async getTimeoutLastCheck(): Promise<number> {

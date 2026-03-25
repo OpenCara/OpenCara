@@ -172,6 +172,37 @@ export class MemoryDataStore implements DataStore {
     return this.agentLastSeen.get(agentId) ?? null;
   }
 
+  async listAgentHeartbeats(
+    sinceMs: number,
+  ): Promise<Array<{ agent_id: string; last_seen: number }>> {
+    const results: Array<{ agent_id: string; last_seen: number }> = [];
+    for (const [agent_id, last_seen] of this.agentLastSeen) {
+      if (last_seen >= sinceMs) {
+        results.push({ agent_id, last_seen });
+      }
+    }
+    return results;
+  }
+
+  async getAgentClaimStats(agentId: string): Promise<{
+    total: number;
+    completed: number;
+    rejected: number;
+    error: number;
+    pending: number;
+  }> {
+    const stats = { total: 0, completed: 0, rejected: 0, error: 0, pending: 0 };
+    for (const claim of this.claims.values()) {
+      if (claim.agent_id !== agentId) continue;
+      stats.total++;
+      if (claim.status === 'completed') stats.completed++;
+      else if (claim.status === 'rejected') stats.rejected++;
+      else if (claim.status === 'error') stats.error++;
+      else if (claim.status === 'pending') stats.pending++;
+    }
+    return stats;
+  }
+
   // Timeout check throttle
 
   private timeoutLastCheck = 0;

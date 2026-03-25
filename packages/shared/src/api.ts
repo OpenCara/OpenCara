@@ -191,6 +191,33 @@ export const DEFAULT_REGISTRY: RegistryResponse = {
   ],
 };
 
+// ── Agents ────────────────────────────────────────────────────
+
+/** Agent status based on last-seen timestamp */
+export type AgentStatus = 'active' | 'idle' | 'offline';
+
+/** Per-agent claim statistics */
+export interface AgentClaimStats {
+  total: number;
+  completed: number;
+  rejected: number;
+  error: number;
+  pending: number;
+}
+
+/** Single agent activity entry */
+export interface AgentActivity {
+  agent_id: string;
+  last_seen: number;
+  status: AgentStatus;
+  claims: AgentClaimStats;
+}
+
+/** GET /api/agents — response */
+export interface AgentsResponse {
+  agents: AgentActivity[];
+}
+
 // ── Meta ──────────────────────────────────────────────────────
 
 /** GET /api/meta — response */
