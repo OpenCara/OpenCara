@@ -435,4 +435,34 @@ describe('SqliteD1Adapter', () => {
       expect(created).toBe(false);
     });
   });
+
+  describe('agent rejections (D1)', () => {
+    let store: D1DataStore;
+
+    beforeEach(() => {
+      store = new D1DataStore(adapter);
+    });
+
+    it('recordAgentRejection inserts a row and countAgentRejections reads it', async () => {
+      const now = Date.now();
+      await store.recordAgentRejection('agent-1', 'too_short', now);
+      await store.recordAgentRejection('agent-1', 'too_long', now);
+      await store.recordAgentRejection('agent-2', 'too_short', now);
+
+      expect(await store.countAgentRejections('agent-1', now - 1000)).toBe(2);
+      expect(await store.countAgentRejections('agent-2', now - 1000)).toBe(1);
+      expect(await store.countAgentRejections('agent-3', now - 1000)).toBe(0);
+    });
+
+    it('countAgentRejections respects time window', async () => {
+      const old = Date.now() - 100_000;
+      const recent = Date.now();
+
+      await store.recordAgentRejection('agent-1', 'too_short', old);
+      await store.recordAgentRejection('agent-1', 'too_short', recent);
+
+      expect(await store.countAgentRejections('agent-1', recent - 1000)).toBe(1);
+      expect(await store.countAgentRejections('agent-1', old - 1000)).toBe(2);
+    });
+  });
 });

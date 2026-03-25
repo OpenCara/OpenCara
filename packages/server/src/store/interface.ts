@@ -66,6 +66,12 @@ export interface DataStore {
   /** Release summary slots held by agents not seen within staleThresholdMs. Returns count of freed slots. */
   reclaimAbandonedSummarySlots(staleThresholdMs: number): Promise<number>;
 
+  // Agent rejections (abuse tracking)
+  /** Record a review_text validation rejection for an agent. */
+  recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void>;
+  /** Count rejections for an agent within a time window. */
+  countAgentRejections(agentId: string, sinceMs: number): Promise<number>;
+
   // Cleanup
   /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
   cleanupTerminalTasks(): Promise<number>;

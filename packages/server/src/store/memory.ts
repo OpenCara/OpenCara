@@ -12,6 +12,7 @@ export class MemoryDataStore implements DataStore {
   private tasks = new Map<string, ReviewTask>();
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
+  private agentRejections: Array<{ agent_id: string; reason: string; created_at: number }> = [];
   private readonly ttlMs: number;
 
   constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
@@ -282,6 +283,17 @@ export class MemoryDataStore implements DataStore {
     return freed;
   }
 
+  // Agent rejections (abuse tracking)
+
+  async recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void> {
+    this.agentRejections.push({ agent_id: agentId, reason, created_at: timestamp });
+  }
+
+  async countAgentRejections(agentId: string, sinceMs: number): Promise<number> {
+    return this.agentRejections.filter((r) => r.agent_id === agentId && r.created_at >= sinceMs)
+      .length;
+  }
+
   // Cleanup
 
   async cleanupTerminalTasks(): Promise<number> {
@@ -306,6 +318,7 @@ export class MemoryDataStore implements DataStore {
     this.tasks.clear();
     this.claims.clear();
     this.agentLastSeen.clear();
+    this.agentRejections = [];
     this.timeoutLastCheck = 0;
   }
 }

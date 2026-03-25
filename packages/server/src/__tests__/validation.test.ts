@@ -185,7 +185,7 @@ describe('Request Validation (Zod)', () => {
     it('rejects missing agent_id', async () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         type: 'review',
-        review_text: 'good',
+        review_text: 'good review text content',
       });
       expect(res.status).toBe(400);
       const body = await res.json();
@@ -195,7 +195,7 @@ describe('Request Validation (Zod)', () => {
     it('rejects missing type', async () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'a1',
-        review_text: 'good',
+        review_text: 'good review text content',
       });
       expect(res.status).toBe(400);
     });
@@ -211,11 +211,77 @@ describe('Request Validation (Zod)', () => {
       expect(body.error.message).toContain('review_text');
     });
 
+    it('rejects whitespace-only review_text', async () => {
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'a1',
+        type: 'review',
+        review_text: '     \n\t   ',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.message).toContain('review_text');
+    });
+
+    it('rejects too-short review_text (< 10 chars after trimming)', async () => {
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'a1',
+        type: 'review',
+        review_text: 'LGTM',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.message).toContain('review_text');
+      expect(body.error.message).toContain('10 characters');
+    });
+
+    it('rejects too-long review_text (> 100K chars)', async () => {
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'a1',
+        type: 'review',
+        review_text: 'x'.repeat(100_001),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.message).toContain('review_text');
+      expect(body.error.message).toContain('100000');
+    });
+
+    it('trims review_text before length validation', async () => {
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'a1',
+        type: 'review',
+        review_text: '   short   ',
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.message).toContain('review_text');
+    });
+
+    it('accepts review_text at minimum length (10 chars)', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim({
+        id: 'task-1:agent-1:summary',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.updateTask('task-1', { summary_agent_id: 'agent-1', queue: 'finished' });
+
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-1',
+        type: 'summary',
+        review_text: 'Looks good!',
+      });
+      expect(res.status).toBe(200);
+    });
+
     it('rejects invalid type value', async () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'a1',
         type: 'admin',
-        review_text: 'test',
+        review_text: 'test review content',
       });
       expect(res.status).toBe(400);
     });
@@ -224,7 +290,7 @@ describe('Request Validation (Zod)', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'a1',
         type: 'review',
-        review_text: 'test',
+        review_text: 'test review content',
         verdict: 'merge_now',
       });
       expect(res.status).toBe(400);
@@ -236,7 +302,7 @@ describe('Request Validation (Zod)', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'a1',
         type: 'review',
-        review_text: 'test',
+        review_text: 'test review content',
         tokens_used: -5,
       });
       expect(res.status).toBe(400);
@@ -246,7 +312,7 @@ describe('Request Validation (Zod)', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'a1',
         type: 'review',
-        review_text: 'test',
+        review_text: 'test review content',
         tokens_used: 1.5,
       });
       expect(res.status).toBe(400);
@@ -282,7 +348,7 @@ describe('Request Validation (Zod)', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'a1',
         type: 'review',
-        review_text: 'test',
+        review_text: 'test review content',
         tokens_used: Infinity,
       });
       expect(res.status).toBe(400);

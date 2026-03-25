@@ -519,7 +519,7 @@ describe('Task Routes', () => {
         agent_id: 'reviewer',
         role: 'review',
         status: 'completed',
-        review_text: 'LGTM',
+        review_text: 'LGTM - looks good to me',
         verdict: 'approve',
         model: 'claude-sonnet-4-6',
         tool: 'claude',
@@ -533,7 +533,7 @@ describe('Task Routes', () => {
       const body = await res.json();
       expect(body.claimed).toBe(true);
       expect(body.reviews).toHaveLength(1);
-      expect(body.reviews[0].review_text).toBe('LGTM');
+      expect(body.reviews[0].review_text).toBe('LGTM - looks good to me');
       expect(body.reviews[0].model).toBe('claude-sonnet-4-6');
       expect(body.reviews[0].tool).toBe('claude');
     });
@@ -570,7 +570,7 @@ describe('Task Routes', () => {
       await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-a',
         type: 'review',
-        review_text: 'Review A',
+        review_text: 'Review A: Detailed analysis',
         verdict: 'approve',
       });
 
@@ -744,7 +744,7 @@ describe('Task Routes', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-unknown',
         type: 'review',
-        review_text: 'test',
+        review_text: 'test review content',
       });
       expect(res.status).toBe(404);
     });
@@ -803,7 +803,7 @@ describe('Task Routes', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
         type: 'summary',
-        review_text: 'test',
+        review_text: 'test review content',
       });
       expect(res.status).toBe(409);
     });
@@ -819,7 +819,7 @@ describe('Task Routes', () => {
       await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-a',
         type: 'review',
-        review_text: 'Looks good',
+        review_text: 'Looks good overall',
         verdict: 'approve',
       });
 
@@ -1327,7 +1327,7 @@ describe('Task Routes', () => {
       await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-unknown',
         type: 'review',
-        review_text: 'test',
+        review_text: 'test review content',
       });
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Result rejected'));
@@ -1350,7 +1350,7 @@ describe('Task Routes', () => {
       await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
         type: 'summary',
-        review_text: 'test',
+        review_text: 'test review content',
       });
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"Result rejected'));
@@ -1655,7 +1655,7 @@ describe('Task Routes', () => {
       await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-a',
         type: 'review',
-        review_text: 'Review A',
+        review_text: 'Review A: Detailed analysis',
         verdict: 'approve',
       });
 
@@ -1668,7 +1668,7 @@ describe('Task Routes', () => {
       await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-b',
         type: 'review',
-        review_text: 'Review B',
+        review_text: 'Review B: Detailed analysis',
         verdict: 'comment',
       });
 
@@ -1871,7 +1871,7 @@ describe('Task Routes', () => {
         await request('POST', '/api/tasks/task-1/result', {
           agent_id: 'agent-a',
           type: 'review',
-          review_text: 'Looks good',
+          review_text: 'Looks good overall',
           verdict: 'approve',
         });
 
@@ -1891,7 +1891,7 @@ describe('Task Routes', () => {
         await request('POST', '/api/tasks/task-1/result', {
           agent_id: 'agent-a',
           type: 'review',
-          review_text: 'Review A',
+          review_text: 'Review A: Detailed analysis',
           verdict: 'approve',
         });
 
