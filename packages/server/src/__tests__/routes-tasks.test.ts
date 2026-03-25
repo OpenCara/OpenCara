@@ -996,7 +996,51 @@ describe('Task Routes', () => {
       });
 
       const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(0); // Math.max(0, -1) = 0
+      expect(task?.review_claims).toBe(0); // underflow protected by releaseReviewSlot
+    });
+
+    it('concurrent rejections decrement review_claims correctly', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          queue: 'review',
+          review_claims: 2,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1:review',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.createClaim({
+        id: 'task-1:agent-2:review',
+        task_id: 'task-1',
+        agent_id: 'agent-2',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Both agents reject concurrently
+      const [res1, res2] = await Promise.all([
+        request('POST', '/api/tasks/task-1/reject', {
+          agent_id: 'agent-1',
+          reason: 'test',
+        }),
+        request('POST', '/api/tasks/task-1/reject', {
+          agent_id: 'agent-2',
+          reason: 'test',
+        }),
+      ]);
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(0); // both decrements applied atomically
     });
   });
 
@@ -1105,6 +1149,50 @@ describe('Task Routes', () => {
       const task = await store.getTask('task-1');
       expect(task?.queue).toBe('summary');
       expect(task?.summary_agent_id).toBeUndefined();
+    });
+
+    it('concurrent errors decrement review_claims correctly', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 3,
+          queue: 'review',
+          review_claims: 2,
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1:review',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.createClaim({
+        id: 'task-1:agent-2:review',
+        task_id: 'task-1',
+        agent_id: 'agent-2',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Both agents report error concurrently
+      const [res1, res2] = await Promise.all([
+        request('POST', '/api/tasks/task-1/error', {
+          agent_id: 'agent-1',
+          error: 'crash',
+        }),
+        request('POST', '/api/tasks/task-1/error', {
+          agent_id: 'agent-2',
+          error: 'crash',
+        }),
+      ]);
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(0); // both decrements applied atomically
     });
   });
 
