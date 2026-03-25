@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
-# Process new webhook events and output PM-actionable notifications.
-# Called by the PM polling cycle to react to real-time GitHub events.
-#
-# Usage:
-#   scripts/process-webhook-events.sh
-#
-# Reads unprocessed events from .claude/github-events.jsonl (cursor-tracked),
-# applies filter rules, and prints structured notifications to stdout.
-# Returns exit code 0 if there are notifications, 1 if none.
+# Process webhook events and output PM-actionable notifications.
+# Reads all events from .claude/github-events.jsonl, filters them,
+# prints notifications, then truncates the file.
+# Prints notifications to stdout if any; silent otherwise. Always exits 0.
 #
 # Filter rules (PM-actionable only):
 #   1. Issue created → "TRIAGE|New issue #N: <title>"
@@ -20,33 +15,20 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EVENTS_FILE="$REPO_ROOT/.claude/github-events.jsonl"
-CURSOR_FILE="$REPO_ROOT/.claude/github-events.process-cursor"
 
-if [ ! -f "$EVENTS_FILE" ]; then
-    exit 1
+if [ ! -f "$EVENTS_FILE" ] || [ ! -s "$EVENTS_FILE" ]; then
+    exit 0
 fi
 
-# Read cursor
-CURSOR=0
-if [ -f "$CURSOR_FILE" ]; then
-    CURSOR=$(cat "$CURSOR_FILE")
-fi
-
-TOTAL=$(wc -l < "$EVENTS_FILE")
-
-if [ "$CURSOR" -ge "$TOTAL" ]; then
-    exit 1
-fi
-
-# Process new events through filter rules
+# Process all events through filter rules
 HAS_OUTPUT=false
 
-tail -n +"$((CURSOR + 1))" "$EVENTS_FILE" | python3 -c "
+python3 -c "
 import sys, json
 
 notifications = []
 
-for line in sys.stdin:
+for line in open('$EVENTS_FILE'):
     line = line.strip()
     if not line:
         continue
@@ -97,26 +79,7 @@ if notifications:
         print(n)
 " && HAS_OUTPUT=true
 
-# Update cursor
-echo "$TOTAL" > "$CURSOR_FILE"
+# Truncate — all events consumed
+: > "$EVENTS_FILE"
 
-# Cleanup: truncate when all events are processed and file is large enough
-# Both cursors must be at TOTAL (all events consumed) and file > 50 lines
-READ_CURSOR_FILE="$REPO_ROOT/.claude/github-events.cursor"
-READ_CURSOR=0
-if [ -f "$READ_CURSOR_FILE" ]; then
-    READ_CURSOR=$(cat "$READ_CURSOR_FILE")
-fi
-PROCESS_CURSOR=$(cat "$CURSOR_FILE")
-
-if [ "$TOTAL" -ge 50 ] && [ "$PROCESS_CURSOR" -ge "$TOTAL" ] && [ "$READ_CURSOR" -ge "$TOTAL" ]; then
-    : > "$EVENTS_FILE"
-    echo "0" > "$CURSOR_FILE"
-    echo "0" > "$READ_CURSOR_FILE"
-fi
-
-if [ "$HAS_OUTPUT" = true ]; then
-    exit 0
-else
-    exit 1
-fi
+exit 0
