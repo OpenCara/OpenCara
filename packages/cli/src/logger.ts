@@ -8,6 +8,7 @@ export const icons = {
   success: pc.green('✓'),
   running: pc.blue('▶'),
   stop: pc.red('■'),
+  info: pc.blue('ℹ'),
   warn: pc.yellow('⚠'),
   error: pc.red('✗'),
 } as const;

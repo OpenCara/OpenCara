@@ -28,19 +28,29 @@ export class ApiClient {
   private readonly debug: boolean;
   private readonly apiKey: string | null;
   private readonly cliVersion: string | null;
+  private readonly versionOverride: string | null;
 
   constructor(
     private readonly baseUrl: string,
-    debugOrOptions?: boolean | { debug?: boolean; apiKey?: string | null; cliVersion?: string },
+    debugOrOptions?:
+      | boolean
+      | {
+          debug?: boolean;
+          apiKey?: string | null;
+          cliVersion?: string;
+          versionOverride?: string | null;
+        },
   ) {
     if (typeof debugOrOptions === 'object' && debugOrOptions !== null) {
       this.debug = debugOrOptions.debug ?? process.env.OPENCARA_DEBUG === '1';
       this.apiKey = debugOrOptions.apiKey ?? null;
       this.cliVersion = debugOrOptions.cliVersion ?? null;
+      this.versionOverride = debugOrOptions.versionOverride ?? null;
     } else {
       this.debug = debugOrOptions ?? process.env.OPENCARA_DEBUG === '1';
       this.apiKey = null;
       this.cliVersion = null;
+      this.versionOverride = null;
     }
   }
 
@@ -57,6 +67,9 @@ export class ApiClient {
     }
     if (this.cliVersion) {
       h['X-OpenCara-CLI-Version'] = this.cliVersion;
+    }
+    if (this.versionOverride) {
+      h['Cloudflare-Workers-Version-Overrides'] = this.versionOverride;
     }
     return h;
   }
