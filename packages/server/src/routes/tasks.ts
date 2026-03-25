@@ -18,6 +18,7 @@ import {
   wrapReviewComment,
   type TimeoutReview,
 } from '../review-formatter.js';
+import { CLAIM_STALE_THRESHOLD_MS, SUMMARY_SLOT_STALE_THRESHOLD_MS } from '../store/constants.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
@@ -134,6 +135,17 @@ export async function checkTimeouts(
   logger?: Logger,
 ): Promise<void> {
   const log = logger ?? createLogger();
+
+  // Reclaim abandoned claims and summary slots from stale agents
+  const freedClaims = await store.reclaimAbandonedClaims(CLAIM_STALE_THRESHOLD_MS);
+  if (freedClaims > 0) {
+    log.info('Reclaimed abandoned claims', { freedClaims });
+  }
+  const freedSlots = await store.reclaimAbandonedSummarySlots(SUMMARY_SLOT_STALE_THRESHOLD_MS);
+  if (freedSlots > 0) {
+    log.info('Reclaimed abandoned summary slots', { freedSlots });
+  }
+
   const now = Date.now();
   const expired = await store.listTasks({
     status: ['pending', 'reviewing'],

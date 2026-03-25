@@ -184,6 +184,61 @@ export class MemoryDataStore implements DataStore {
     this.timeoutLastCheck = timestamp;
   }
 
+  // Heartbeat-based reclaim
+
+  async reclaimAbandonedClaims(staleThresholdMs: number): Promise<number> {
+    const now = Date.now();
+    const cutoff = now - staleThresholdMs;
+    let freed = 0;
+
+    for (const claim of this.claims.values()) {
+      if (claim.status !== 'pending') continue;
+      const lastSeen = this.agentLastSeen.get(claim.agent_id);
+      // Reclaim if agent has a stale heartbeat, OR if no heartbeat exists
+      // and the claim itself is older than the threshold.
+      if (lastSeen !== undefined) {
+        if (lastSeen >= cutoff) continue; // Agent is active
+      } else {
+        // No heartbeat — only reclaim if the claim itself is old
+        if (claim.created_at >= cutoff) continue;
+      }
+      claim.status = 'error';
+      if (claim.role === 'review') {
+        const task = this.tasks.get(claim.task_id);
+        if (task && (task.review_claims ?? 0) > 0) {
+          task.review_claims = (task.review_claims ?? 0) - 1;
+        }
+      }
+      freed++;
+    }
+    return freed;
+  }
+
+  async reclaimAbandonedSummarySlots(staleThresholdMs: number): Promise<number> {
+    const now = Date.now();
+    const cutoff = now - staleThresholdMs;
+    let freed = 0;
+
+    for (const task of this.tasks.values()) {
+      if (task.queue !== 'finished' || !task.summary_agent_id) continue;
+      const lastSeen = this.agentLastSeen.get(task.summary_agent_id);
+      // Reclaim if agent has a stale heartbeat, OR if no heartbeat exists
+      // and the task has been in summary phase longer than the threshold.
+      if (lastSeen !== undefined) {
+        if (lastSeen >= cutoff) continue;
+      } else {
+        // No heartbeat — use reviews_completed_at (when task entered summary phase)
+        // as fallback, falling back to created_at for single-review tasks.
+        const fallbackTime = task.reviews_completed_at ?? task.created_at;
+        if (fallbackTime >= cutoff) continue;
+      }
+      task.queue = 'summary';
+      task.summary_agent_id = undefined;
+      freed++;
+    }
+    return freed;
+  }
+
   // Cleanup
 
   async cleanupTerminalTasks(): Promise<number> {
