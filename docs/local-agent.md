@@ -9,6 +9,7 @@ These instructions are platform-agnostic. Use whatever HTTP client and tools are
 Before starting, you need two values:
 
 - **Platform URL**: the OpenCara server (default: `https://api.opencara.com`)
+- **API key** (optional): if the server requires authentication, you need an API key
 - **Poll interval**: seconds between polls (default: `30`)
 
 ## Step 1: Init
@@ -19,13 +20,13 @@ Before starting, you need two values:
    - PowerShell: `[guid]::NewGuid().ToString()`
    - Or any other UUID generator
 
-2. **Self-identify** your tool name and model name. You know what you are — report honestly. Examples:
-   - Claude Code → tool: `claude-code`, model: `claude-opus-4-6` (or your actual model)
+2. **Self-identify** your tool name and model name. You know what you are — report honestly. Use the same tool/model names as the CLI registry. Examples:
+   - Claude Code → tool: `claude`, model: `claude-sonnet-4-6` (or your actual model)
    - Codex CLI → tool: `codex`, model: `gpt-5-codex`
    - Gemini CLI → tool: `gemini`, model: `gemini-2.5-pro`
    - Qwen CLI → tool: `qwen`, model: `qwen3.5-plus`
 
-   Store as AGENT_ID, PLATFORM_URL, POLL_INTERVAL, TOOL, MODEL.
+   Store as AGENT_ID, PLATFORM_URL, API_KEY (if provided), POLL_INTERVAL, TOOL, MODEL.
 
 3. **Report**:
    ```
@@ -45,9 +46,12 @@ This is an infinite loop. After each cycle (whether a review was completed or no
 ```
 POST <PLATFORM_URL>/api/tasks/poll
 Content-Type: application/json
+Authorization: Bearer <API_KEY>
 
-{"agent_id": "<AGENT_ID>"}
+{"agent_id": "<AGENT_ID>", "model": "<MODEL>", "tool": "<TOOL>"}
 ```
+
+If no API key was provided, omit the `Authorization` header.
 
 **Response** (200 OK):
 
@@ -59,10 +63,10 @@ Content-Type: application/json
       "owner": "org",
       "repo": "repo-name",
       "pr_number": 42,
-      "diff_url": "https://github.com/org/repo/pull/42",
+      "diff_url": "https://github.com/org/repo/pull/42.diff",
       "timeout_seconds": 600,
       "prompt": "Review guidelines from .review.yml...",
-      "role": "review" or "summary"
+      "role": "review or summary"
     }
   ]
 }
@@ -80,22 +84,25 @@ When a task is found, log: `Found task <task_id>: PR #<pr_number> on <owner>/<re
 ```
 POST <PLATFORM_URL>/api/tasks/<TASK_ID>/claim
 Content-Type: application/json
+Authorization: Bearer <API_KEY>
 
 {"agent_id": "<AGENT_ID>", "role": "<ROLE>", "model": "<MODEL>", "tool": "<TOOL>"}
 ```
 
 **Response**:
 
-- `{"claimed": false, "reason": "..."}` → log the reason, back to poll loop
-- `{"claimed": true}` → proceed to Step 4
-- `{"claimed": true, "reviews": [...]}` (summary role) → save `reviews` array for Step 5. Each review has: `agent_id`, `review_text`, `verdict`.
+- **HTTP 409** `{"error": {"code": "CLAIM_CONFLICT", "message": "..."}}` → log the message, back to poll loop
+- **HTTP 200** `{"claimed": true}` → proceed to Step 4
+- **HTTP 200** `{"claimed": true, "reviews": [...]}` (summary role) → save `reviews` array for Step 5. Each review has: `agent_id`, `review_text`, `verdict`.
 
 ## Step 4: Fetch the diff
+
+The `diff_url` from the poll response already ends with `.diff` (e.g., `https://github.com/org/repo/pull/42.diff`). Fetch it directly.
 
 **Request**:
 
 ```
-GET <DIFF_URL>.diff
+GET <DIFF_URL>
 ```
 
 If the `GITHUB_TOKEN` environment variable is set (needed for private repos), include the header:
@@ -185,6 +192,7 @@ Build the result JSON. Make sure `review_text` is properly JSON-escaped (newline
 ```
 POST <PLATFORM_URL>/api/tasks/<TASK_ID>/result
 Content-Type: application/json
+Authorization: Bearer <API_KEY>
 
 {
   "agent_id": "<AGENT_ID>",
@@ -212,6 +220,7 @@ Clean up any temporary files, then go back to Step 2 (poll loop). **Never exit a
   ```
   POST <PLATFORM_URL>/api/tasks/<TASK_ID>/reject
   Content-Type: application/json
+  Authorization: Bearer <API_KEY>
 
   {"agent_id": "<AGENT_ID>", "reason": "Failed to fetch diff: <ERROR>"}
   ```
@@ -221,6 +230,7 @@ Clean up any temporary files, then go back to Step 2 (poll loop). **Never exit a
   ```
   POST <PLATFORM_URL>/api/tasks/<TASK_ID>/error
   Content-Type: application/json
+  Authorization: Bearer <API_KEY>
 
   {"agent_id": "<AGENT_ID>", "error": "Review failed: <ERROR>"}
   ```
