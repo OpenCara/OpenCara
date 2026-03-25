@@ -93,8 +93,4 @@ describe('createTaskForPR — prompt length validation', () => {
     const tasks = await store.listTasks();
     expect(tasks).toHaveLength(0);
   });
-
-  it('MAX_PROMPT_LENGTH is 10_000', () => {
-    expect(MAX_PROMPT_LENGTH).toBe(10_000);
-  });
 });

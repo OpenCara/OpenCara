@@ -10,7 +10,7 @@ import { apiError } from '../errors.js';
 
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
-/** Maximum allowed length for config.prompt (10 KB). */
+/** Maximum allowed length for config.prompt (10,000 characters). */
 export const MAX_PROMPT_LENGTH = 10_000;
 
 interface PullRequestPayload {
