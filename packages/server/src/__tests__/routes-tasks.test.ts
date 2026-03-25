@@ -391,27 +391,23 @@ describe('Task Routes', () => {
       expect(body.tasks).toHaveLength(2);
     });
 
-    // ── github_username in poll ─────────────────────────────
+    // ── eligibility in poll (github_username removed — identity from OAuth) ──
 
-    it('passes github_username to eligibility check during poll', async () => {
+    it('filters tasks by agent eligibility during poll', async () => {
       const config = {
         ...DEFAULT_REVIEW_CONFIG,
-        summarizer: {
-          whitelist: [{ github: 'alice' }],
-          blacklist: [],
-          preferred: [],
+        reviewer: {
+          ...DEFAULT_REVIEW_CONFIG.reviewer,
+          whitelist: [{ agent: 'agent-allowed' }],
         },
       };
-      await store.createTask(makeTask({ config }));
-      // Without github_username — not eligible
+      await store.createTask(makeTask({ config, queue: 'review', review_count: 2 }));
+      // Non-whitelisted agent — not eligible
       const res1 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body1 = await res1.json();
       expect(body1.tasks).toHaveLength(0);
-      // With matching github_username — eligible
-      const res2 = await request('POST', '/api/tasks/poll', {
-        agent_id: 'agent-1',
-        github_username: 'alice',
-      });
+      // Whitelisted agent — eligible
+      const res2 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-allowed' });
       const body2 = await res2.json();
       expect(body2.tasks).toHaveLength(1);
     });
@@ -587,45 +583,43 @@ describe('Task Routes', () => {
       expect(body.claimed).toBe(true);
     });
 
-    it('passes github_username to eligibility check during claim', async () => {
+    it('filters claim by agent eligibility (agent-based whitelist)', async () => {
       const config = {
         ...DEFAULT_REVIEW_CONFIG,
         summarizer: {
-          whitelist: [{ github: 'alice' }],
+          whitelist: [{ agent: 'agent-allowed' }],
           blacklist: [],
           preferred: [],
         },
       };
       await store.createTask(makeTask({ config }));
-      // Claim without github_username — rejected (not in whitelist)
+      // Non-whitelisted agent — rejected
       const res1 = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
         role: 'summary',
       });
       expect(res1.status).toBe(409);
-      // Claim with matching github_username — allowed
+      // Whitelisted agent — allowed
       const res2 = await request('POST', '/api/tasks/task-1/claim', {
-        agent_id: 'agent-1',
+        agent_id: 'agent-allowed',
         role: 'summary',
-        github_username: 'alice',
       });
       const body2 = await res2.json();
       expect(body2.claimed).toBe(true);
     });
 
-    it('rejects claim when github_username is blacklisted', async () => {
+    it('rejects claim when agent is blacklisted', async () => {
       const config = {
         ...DEFAULT_REVIEW_CONFIG,
         summarizer: {
           ...DEFAULT_REVIEW_CONFIG.summarizer,
-          blacklist: [{ github: 'blocked' }],
+          blacklist: [{ agent: 'agent-blocked' }],
         },
       };
       await store.createTask(makeTask({ config }));
       const res = await request('POST', '/api/tasks/task-1/claim', {
-        agent_id: 'agent-1',
+        agent_id: 'agent-blocked',
         role: 'summary',
-        github_username: 'blocked',
       });
       expect(res.status).toBe(409);
       const body = await res.json();

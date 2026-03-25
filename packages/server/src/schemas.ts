@@ -27,7 +27,6 @@ const repoConfigSchema = z.object({
 
 export const PollRequestSchema = z.object({
   agent_id: agentIdSchema,
-  github_username: z.string().optional(),
   roles: z.array(claimRoleSchema).optional(),
   review_only: z.boolean().optional(),
   repos: z.array(z.string()).optional(),
@@ -39,7 +38,6 @@ export const PollRequestSchema = z.object({
 export const ClaimRequestSchema = z.object({
   agent_id: agentIdSchema,
   role: claimRoleSchema,
-  github_username: z.string().optional(),
   model: z.string().optional(),
   tool: z.string().optional(),
 });

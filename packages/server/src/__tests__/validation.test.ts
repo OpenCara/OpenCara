@@ -109,7 +109,6 @@ describe('Request Validation (Zod)', () => {
         repos: ['org/repo'],
         model: 'claude',
         tool: 'claude',
-        github_username: 'user1',
         synthesize_repos: { mode: 'whitelist', list: ['org/repo'] },
       });
       expect(res.status).toBe(200);

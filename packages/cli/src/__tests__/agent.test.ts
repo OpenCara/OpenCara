@@ -784,7 +784,7 @@ describe('agent poll loop', () => {
     );
   });
 
-  it('sends roles, github_username, and synthesize_repos in poll request', async () => {
+  it('sends roles and synthesize_repos in poll request (no github_username)', async () => {
     let pollCount = 0;
     const fetchCalls: { url: string; body: Record<string, unknown> }[] = [];
     globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
@@ -833,7 +833,8 @@ describe('agent poll loop', () => {
     const pollCall = fetchCalls.find((c) => c.url.includes('/api/tasks/poll'));
     expect(pollCall).toBeDefined();
     expect(pollCall!.body.roles).toEqual(['review', 'summary']);
-    expect(pollCall!.body.github_username).toBe('octocat');
+    // github_username is no longer sent in poll requests (identity from OAuth)
+    expect(pollCall!.body.github_username).toBeUndefined();
     expect(pollCall!.body.synthesize_repos).toEqual({
       mode: 'whitelist',
       list: ['org/repo'],
@@ -844,7 +845,7 @@ describe('agent poll loop', () => {
     await promise;
   });
 
-  it('sends github_username in claim request', async () => {
+  it('does not send github_username in claim request', async () => {
     let pollCount = 0;
     const fetchCalls: { url: string; body: Record<string, unknown> }[] = [];
     globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
@@ -915,10 +916,10 @@ describe('agent poll loop', () => {
     await vi.advanceTimersByTimeAsync(500);
     await promise;
 
-    // Find the claim request
+    // Find the claim request — github_username no longer sent (identity from OAuth)
     const claimCall = fetchCalls.find((c) => c.url.includes('/claim'));
     expect(claimCall).toBeDefined();
-    expect(claimCall!.body.github_username).toBe('octocat');
+    expect(claimCall!.body.github_username).toBeUndefined();
   });
 
   it('does not send github_username in poll when not provided', async () => {

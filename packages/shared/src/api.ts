@@ -5,7 +5,6 @@ import type { ClaimRole, RepoConfig, ReviewVerdict } from './types.js';
 /** POST /api/tasks/poll — request */
 export interface PollRequest {
   agent_id: string;
-  github_username?: string; // GitHub username (trust established by server)
   roles?: ClaimRole[]; // roles this agent is willing to take
   review_only?: boolean; // deprecated — use roles instead
   repos?: string[]; // "owner/repo" entries — used to include matching private repo tasks
@@ -37,7 +36,6 @@ export interface PollResponse {
 export interface ClaimRequest {
   agent_id: string;
   role: ClaimRole;
-  github_username?: string; // GitHub username (trust established by server)
   model?: string;
   tool?: string;
 }
@@ -249,6 +247,48 @@ export interface ConfigValidateErrorResponse {
 /** POST /api/config/validate — response (union) */
 export type ConfigValidateResponse = ConfigValidateSuccessResponse | ConfigValidateErrorResponse;
 
+// ── OAuth ────────────────────────────────────────────────────
+
+/** Verified identity extracted from OAuth token by server middleware */
+export interface VerifiedIdentity {
+  github_user_id: number;
+  github_username: string;
+  verified_at: number; // unix ms
+}
+
+/** POST /api/auth/device — initiate device flow (proxied through server) */
+export interface DeviceFlowInitResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+/** POST /api/auth/device/token — poll for device flow completion */
+export interface DeviceFlowTokenRequest {
+  device_code: string;
+}
+
+export interface DeviceFlowTokenResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  token_type: string;
+}
+
+/** POST /api/auth/refresh — refresh an expired token */
+export interface RefreshTokenRequest {
+  refresh_token: string;
+}
+
+export interface RefreshTokenResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  token_type: string;
+}
+
 // ── Common ─────────────────────────────────────────────────────
 
 /** Standardized API error codes for programmatic error handling. */
@@ -262,7 +302,10 @@ export type ErrorCode =
   | 'INTERNAL_ERROR'
   | 'SUMMARY_LOCKED'
   | 'CLI_OUTDATED'
-  | 'AGENT_BLOCKED';
+  | 'AGENT_BLOCKED'
+  | 'AUTH_TOKEN_EXPIRED'
+  | 'AUTH_TOKEN_REVOKED'
+  | 'AUTH_REQUIRED';
 
 /** Standard error response — structured format with error code. */
 export interface ErrorResponse {
