@@ -200,6 +200,28 @@ export interface MetaResponse {
   features: string[];
 }
 
+// ── Config Validate ──────────────────────────────────────────────
+
+/** POST /api/config/validate — request */
+export interface ConfigValidateRequest {
+  yaml: string;
+}
+
+/** POST /api/config/validate — success response */
+export interface ConfigValidateSuccessResponse {
+  valid: true;
+  config: import('./review-config.js').ReviewConfig;
+}
+
+/** POST /api/config/validate — failure response */
+export interface ConfigValidateErrorResponse {
+  valid: false;
+  error: string;
+}
+
+/** POST /api/config/validate — response (union) */
+export type ConfigValidateResponse = ConfigValidateSuccessResponse | ConfigValidateErrorResponse;
+
 // ── Common ─────────────────────────────────────────────────────
 
 /** Standardized API error codes for programmatic error handling. */
