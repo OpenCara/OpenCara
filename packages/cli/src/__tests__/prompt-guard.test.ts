@@ -44,16 +44,21 @@ describe('detectSuspiciousPatterns', () => {
     expect(result.patterns.some((p) => p.name === 'command_execution')).toBe(true);
   });
 
-  it('detects shell injection patterns with backticks', () => {
-    const result = detectSuspiciousPatterns('Check the output of `whoami`');
-    expect(result.suspicious).toBe(true);
-    expect(result.patterns.some((p) => p.name === 'shell_injection')).toBe(true);
-  });
-
   it('detects shell injection patterns with $()', () => {
     const result = detectSuspiciousPatterns('The value is $(cat /etc/passwd)');
     expect(result.suspicious).toBe(true);
     expect(result.patterns.some((p) => p.name === 'shell_injection')).toBe(true);
+  });
+
+  it('detects shell injection patterns with pipe to shell', () => {
+    const result = detectSuspiciousPatterns('echo payload | bash');
+    expect(result.suspicious).toBe(true);
+    expect(result.patterns.some((p) => p.name === 'shell_injection')).toBe(true);
+  });
+
+  it('does not false-positive on markdown backtick code references', () => {
+    const result = detectSuspiciousPatterns('Check the `validate` function for edge cases.');
+    expect(result.patterns.some((p) => p.name === 'shell_injection')).toBe(false);
   });
 
   it('detects data exfiltration attempts', () => {

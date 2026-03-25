@@ -51,8 +51,8 @@ const SUSPICIOUS_PATTERNS: PatternRule[] = [
   },
   {
     name: 'shell_injection',
-    description: 'Shell injection patterns (backticks, $(), pipes to shell)',
-    regex: /`[^`]*`|\$\([^)]+\)|\|\s*(bash|sh|zsh|cmd|powershell)\b/i,
+    description: 'Shell injection patterns (command substitution, pipes to shell)',
+    regex: /\$\([^)]+\)|\|\s*(bash|sh|zsh|cmd|powershell)\b/i,
   },
   {
     name: 'data_exfiltration',
