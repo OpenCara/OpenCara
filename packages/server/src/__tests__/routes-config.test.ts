@@ -75,7 +75,7 @@ describe('POST /api/config/validate', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(false);
-    expect(body.error).toContain('YAML object');
+    expect(body.error).toBe('Configuration must be a YAML object');
   });
 
   it('returns 400 when yaml field is missing', async () => {
