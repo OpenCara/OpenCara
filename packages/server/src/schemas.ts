@@ -81,6 +81,16 @@ export const ErrorRequestSchema = z.object({
   error: z.string().min(1, 'error must be a non-empty string'),
 });
 
+// ── Auth schemas ────────────────────────────────────────────────
+
+export const DeviceFlowTokenRequestSchema = z.object({
+  device_code: z.string().min(1, 'device_code must be a non-empty string'),
+});
+
+export const RefreshTokenRequestSchema = z.object({
+  refresh_token: z.string().min(1, 'refresh_token must be a non-empty string'),
+});
+
 // ── Helper ──────────────────────────────────────────────────────
 
 /**
