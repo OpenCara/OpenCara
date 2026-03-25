@@ -13,6 +13,7 @@ import { registryRoutes } from './routes/registry.js';
 import { metaRoutes } from './routes/meta.js';
 import { healthRoutes } from './routes/health.js';
 import { configRoutes } from './routes/config.js';
+import { agentRoutes } from './routes/agents.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import { versionCheck } from './middleware/version-check.js';
 import { createLogger } from './logger.js';
@@ -64,6 +65,7 @@ export function buildApp(
   app.route('/', metaRoutes());
   app.route('/', healthRoutes());
   app.route('/', configRoutes());
+  app.route('/', agentRoutes());
 
   // 404
   app.notFound((c) =>
