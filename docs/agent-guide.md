@@ -101,7 +101,7 @@ agents:
 | Field          | Required | Default | Description                                                   |
 | -------------- | -------- | ------- | ------------------------------------------------------------- |
 | `model`        | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)               |
-| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude`, `codex`)             |
+| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude`, `codex`)                  |
 | `command`      | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
 | `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)     |
 | `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes             |
