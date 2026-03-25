@@ -88,13 +88,35 @@ agents:
 
 **Agent names**: The optional `name` field is displayed in your CLI output (e.g., `[My Claude Agent] Review complete`). It is not sent to the server or shown in GitHub reviews.
 
+### Step 2b: Authenticate (required)
+
+OpenCara uses GitHub App OAuth for authentication. Run once:
+
+```bash
+opencara auth login
+```
+
+This opens your browser to authorize the OpenCara GitHub App. Once authorized:
+
+- Your token is stored in `~/.opencara/auth.json` (file permissions `0600`)
+- The same token is used for both the OpenCara platform and GitHub API access (diff fetching)
+- Private repos work automatically if the OpenCara App is installed on the repo
+
+Token management:
+
+```bash
+opencara auth status   # Check current auth state
+opencara auth logout   # Remove stored token
+```
+
+Tokens auto-refresh (8-hour access token, 6-month refresh token). If your refresh token expires, run `opencara auth login` again.
+
 ### Global Config Fields
 
 | Field          | Required | Default                    | Description                                                         |
 | -------------- | -------- | -------------------------- | ------------------------------------------------------------------- |
 | `platform_url` | No       | `https://api.opencara.dev` | Platform server URL                                                 |
-| `api_key`      | No       | —                          | API key for server authentication (sent as `Authorization: Bearer`) |
-| `github_token` | No       | —                          | GitHub token for private repo access                                |
+| `api_key`      | No       | —                          | API key for server authentication (fallback when OAuth is not used) |
 
 ### Agent Config Fields
 
@@ -105,7 +127,7 @@ agents:
 | `command`      | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
 | `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)     |
 | `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes             |
-| `github_token` | No       | —       | Per-agent GitHub token for private repos (overrides global)   |
+| `github_token` | No       | —       | **Deprecated** — use `opencara auth login` instead            |
 | `router`       | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)     |
 | `repos`        | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
 
@@ -215,28 +237,16 @@ The key difference from the CLI: instead of spawning a subprocess, the AI agent 
 
 ### Private Repos
 
-To review PRs on private repositories, provide a GitHub token. The CLI resolves tokens using a fallback chain (first match wins):
+Private repo access is handled automatically through OAuth authentication. After running `opencara auth login`, your OAuth token inherits the GitHub App's permissions, scoped to repos where:
 
-1. **`GITHUB_TOKEN` environment variable** — standard for CI/CD
-2. **`gh auth token`** — if GitHub CLI (`gh`) is installed and authenticated
-3. **`github_token` in config.yml** — global or per-agent
-4. **No auth** — only public repos accessible
+1. The OpenCara App is installed on the repository
+2. You have personal access (org membership, collaborator, etc.)
 
-```yaml
-# Global token — used by all agents
-github_token: ghp_your_token_here
+No separate GitHub token is needed. The same OAuth token is used for both platform authentication and diff fetching.
 
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    # Optional: per-agent token overrides the global one
-    github_token: ghp_different_token
-```
+Org admins may need to approve the OAuth app if the organization restricts third-party app access.
 
-Use a [fine-grained personal access token](https://github.com/settings/personal-access-tokens) with **Contents: Read** permission, or authenticate via `gh auth login` for automatic token management.
-
-Without any token, agents can only fetch diffs from public repos.
+> **Migration note**: The `github_token` config field and `GITHUB_TOKEN` environment variable are deprecated. If present, the CLI logs a deprecation warning. Remove them from your config and use `opencara auth login` instead.
 
 ### Review-Only Agents
 

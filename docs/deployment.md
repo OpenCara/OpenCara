@@ -62,6 +62,10 @@ cd packages/server
 wrangler secret put GITHUB_WEBHOOK_SECRET
 wrangler secret put GITHUB_APP_ID
 wrangler secret put GITHUB_APP_PRIVATE_KEY
+
+# OAuth Device Flow secrets (for agent authentication)
+wrangler secret put GITHUB_CLIENT_ID
+wrangler secret put GITHUB_CLIENT_SECRET
 ```
 
 > **Note**: For `GITHUB_APP_PRIVATE_KEY`, paste the full PEM content including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----` headers.
@@ -234,18 +238,21 @@ Update `MIN_CLI_VERSION` in `packages/server/src/version.ts` when a server relea
 
 ### Cloudflare Worker Secrets
 
-| Secret                   | Description                    | Source                 |
-| ------------------------ | ------------------------------ | ---------------------- |
-| `GITHUB_WEBHOOK_SECRET`  | Webhook signature verification | GitHub App settings    |
-| `GITHUB_APP_ID`          | GitHub App identifier          | GitHub App settings    |
-| `GITHUB_APP_PRIVATE_KEY` | RSA private key (PEM format)   | Downloaded from GitHub |
+| Secret                   | Description                     | Source                 |
+| ------------------------ | ------------------------------- | ---------------------- |
+| `GITHUB_WEBHOOK_SECRET`  | Webhook signature verification  | GitHub App settings    |
+| `GITHUB_APP_ID`          | GitHub App identifier           | GitHub App settings    |
+| `GITHUB_APP_PRIVATE_KEY` | RSA private key (PEM format)    | Downloaded from GitHub |
+| `GITHUB_CLIENT_ID`       | OAuth App Client ID (`Iv1.xxx`) | GitHub App settings    |
+| `GITHUB_CLIENT_SECRET`   | OAuth App Client Secret         | GitHub App settings    |
 
 ### Wrangler Config Variables
 
-| Variable  | Description                        | In wrangler.toml   |
-| --------- | ---------------------------------- | ------------------ |
-| `WEB_URL` | Frontend URL (for CORS, if needed) | `[vars]` section   |
-| `DB`      | D1 database binding                | `[[d1_databases]]` |
+| Variable         | Description                                    | In wrangler.toml   |
+| ---------------- | ---------------------------------------------- | ------------------ |
+| `WEB_URL`        | Frontend URL (for CORS, if needed)             | `[vars]` section   |
+| `DB`             | D1 database binding                            | `[[d1_databases]]` |
+| `OAUTH_REQUIRED` | Set to `"true"` to require OAuth on all agents | `[vars]` section   |
 
 ### CLI Environment Variables
 
