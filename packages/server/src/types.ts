@@ -16,9 +16,9 @@ export interface Env {
   TASK_TTL_DAYS?: string;
   /** Comma-separated list of valid API keys. When set, task endpoints require Bearer auth. */
   API_KEYS?: string;
-  /** GitHub App client ID for OAuth token verification */
+  /** GitHub App client ID — used for OAuth token verification and Device Flow proxy. */
   GITHUB_CLIENT_ID?: string;
-  /** GitHub App client secret for OAuth token verification */
+  /** GitHub App client secret — used for OAuth token verification and Device Flow proxy (never exposed to clients). */
   GITHUB_CLIENT_SECRET?: string;
   /** When 'true', enforce OAuth on all task endpoints (default: false, falls back to API key auth) */
   OAUTH_REQUIRED?: string;
