@@ -1121,7 +1121,8 @@ export async function startAgentRouter(): Promise<void> {
   const tool = agentConfig?.tool ?? 'unknown';
   const label = agentConfig?.name ?? 'agent[0]';
   const roles = agentConfig ? computeRoles(agentConfig) : undefined;
-  const versionOverride = process.env.OPENCARA_VERSION_OVERRIDE ?? null;
+  // Router mode supports version override via env var only (no CLI flag in default mode)
+  const versionOverride = process.env.OPENCARA_VERSION_OVERRIDE || null;
 
   await startAgent(
     agentId,
@@ -1277,7 +1278,7 @@ agentCommand
     }) => {
       const config = loadConfig();
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
-      const versionOverride = opts.versionOverride ?? process.env.OPENCARA_VERSION_OVERRIDE ?? null;
+      const versionOverride = opts.versionOverride || process.env.OPENCARA_VERSION_OVERRIDE || null;
 
       // Resolve GitHub auth once at startup (env → gh-cli → config → none)
       const configToken = resolveConfigToken(undefined, config.githubToken);
