@@ -147,6 +147,11 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
   while (Date.now() < deadline) {
     await delayFn(interval);
 
+    // Re-check deadline after delay to avoid unnecessary requests
+    if (Date.now() >= deadline) {
+      break;
+    }
+
     const tokenRes = await fetchFn(`${platformUrl}/api/auth/device/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -178,7 +183,7 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
     try {
       errorBody = (await tokenRes.json()) as ErrorResponse;
     } catch {
-      // ignore parse errors
+      // Unparseable response — continue polling (may be transient)
     }
 
     const errorCode = errorBody?.error?.code;
@@ -197,8 +202,7 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
       continue;
     }
 
-    // authorization_pending — continue polling
-    // For any unrecognized error, also continue polling until deadline
+    // authorization_pending or transient errors — continue polling until deadline
   }
 
   throw new AuthError('Authorization timed out, please try again');
@@ -253,7 +257,15 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
         message = errorBody.error.message;
       }
     } catch {
-      // ignore parse errors
+      // JSON parse failed — try text fallback
+      try {
+        const text = await refreshRes.text();
+        if (text) {
+          message = `Token refresh failed (${refreshRes.status}): ${text.slice(0, 200)}`;
+        }
+      } catch {
+        // ignore — keep generic message
+      }
     }
     throw new AuthError(`${message}. Run \`opencara auth login\` to re-authenticate.`);
   }

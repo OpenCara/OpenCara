@@ -394,6 +394,24 @@ describe('auth', () => {
       ).rejects.toThrow('Authorization timed out, please try again');
     });
 
+    it('re-checks deadline after delay to avoid unnecessary requests', async () => {
+      // Use a short expiry and a delay that "consumes" the remaining time
+      const shortExpiry = { ...DEVICE_RESPONSE, expires_in: 1, interval: 5 };
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse(shortExpiry));
+
+      // Simulate delay that takes longer than the deadline
+      const delayFn = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 1100)));
+
+      await expect(login(PLATFORM_URL, { fetchFn, delayFn, log: vi.fn() })).rejects.toThrow(
+        'Authorization timed out, please try again',
+      );
+
+      // Only the device initiation call should have been made, no token poll
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
     it('saves auth to file on success', async () => {
       const fetchFn = vi
         .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
@@ -568,7 +586,31 @@ describe('auth', () => {
       ).rejects.toThrow('Refresh token expired');
     });
 
-    it('handles unparseable refresh error response', async () => {
+    it('falls back to text body when refresh JSON parse fails', async () => {
+      const now = Date.now();
+      const auth = { ...MOCK_AUTH, expires_at: now - 1000 };
+
+      const badResponse = {
+        ok: false,
+        status: 502,
+        json: () => Promise.reject(new Error('bad json')),
+        text: () => Promise.resolve('Bad Gateway'),
+      } as unknown as Response;
+
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(badResponse);
+
+      await expect(
+        getValidToken(PLATFORM_URL, {
+          fetchFn,
+          loadAuthFn: () => auth,
+          nowFn: () => now,
+        }),
+      ).rejects.toThrow('Token refresh failed (502): Bad Gateway');
+    });
+
+    it('handles fully unparseable refresh error response', async () => {
       const now = Date.now();
       const auth = { ...MOCK_AUTH, expires_at: now - 1000 };
 
@@ -576,6 +618,7 @@ describe('auth', () => {
         ok: false,
         status: 500,
         json: () => Promise.reject(new Error('bad json')),
+        text: () => Promise.reject(new Error('text also failed')),
       } as unknown as Response;
 
       const fetchFn = vi
