@@ -100,6 +100,21 @@ if notifications:
 # Update cursor
 echo "$TOTAL" > "$CURSOR_FILE"
 
+# Cleanup: truncate when all events are processed and file is large enough
+# Both cursors must be at TOTAL (all events consumed) and file > 50 lines
+READ_CURSOR_FILE="$REPO_ROOT/.claude/github-events.cursor"
+READ_CURSOR=0
+if [ -f "$READ_CURSOR_FILE" ]; then
+    READ_CURSOR=$(cat "$READ_CURSOR_FILE")
+fi
+PROCESS_CURSOR=$(cat "$CURSOR_FILE")
+
+if [ "$TOTAL" -ge 50 ] && [ "$PROCESS_CURSOR" -ge "$TOTAL" ] && [ "$READ_CURSOR" -ge "$TOTAL" ]; then
+    : > "$EVENTS_FILE"
+    echo "0" > "$CURSOR_FILE"
+    echo "0" > "$READ_CURSOR_FILE"
+fi
+
 if [ "$HAS_OUTPUT" = true ]; then
     exit 0
 else
