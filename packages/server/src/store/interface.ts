@@ -16,8 +16,6 @@ export interface DataStore {
   createTaskIfNotExists(task: ReviewTask): Promise<boolean>;
   getTask(id: string): Promise<ReviewTask | null>;
   listTasks(filter?: TaskFilter): Promise<ReviewTask[]>;
-  /** Find an active (pending/reviewing) task for a specific PR. Returns null if none exists. */
-  findActiveTaskForPR(owner: string, repo: string, prNumber: number): Promise<ReviewTask | null>;
   updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean>;
   deleteTask(id: string): Promise<void>;
 

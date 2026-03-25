@@ -375,14 +375,41 @@ describe('SqliteD1Adapter', () => {
       expect(created).toBe(true);
     });
 
+    it('createTaskIfNotExists succeeds when existing task has timeout status', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'old',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'timeout',
+        }),
+      );
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+    });
+
+    it('createTaskIfNotExists succeeds when existing task has failed status', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'old',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'failed',
+        }),
+      );
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+    });
+
     it('partial unique index prevents duplicate active tasks at DB level', async () => {
-      // Insert directly to bypass application-level check
       await store.createTask(
         makeTask({ id: 'first', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
       );
 
-      // Direct INSERT should fail due to partial unique index on (owner, repo, pr_number)
-      // where status IN ('pending', 'reviewing')
       await expect(
         store.createTask(
           makeTask({
@@ -393,7 +420,19 @@ describe('SqliteD1Adapter', () => {
             status: 'pending',
           }),
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/UNIQUE constraint failed/);
+    });
+
+    it('createTaskIfNotExists returns false on constraint violation', async () => {
+      // Directly insert a pending task
+      await store.createTask(
+        makeTask({ id: 'first', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
+      );
+
+      // createTaskIfNotExists should return false (caught by WHERE NOT EXISTS)
+      const task = makeTask({ id: 'dup', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(false);
     });
   });
 });

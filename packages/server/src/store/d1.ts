@@ -187,47 +187,56 @@ export class D1DataStore implements DataStore {
   }
 
   async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
-    const result = await this.db
-      .prepare(
-        `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
-        review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
-        created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      WHERE NOT EXISTS (
-        SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?)
-      )`,
-      )
-      .bind(
-        task.id,
-        task.owner,
-        task.repo,
-        task.pr_number,
-        task.pr_url,
-        task.diff_url,
-        task.base_ref,
-        task.head_ref,
-        task.review_count,
-        task.prompt,
-        task.timeout_at,
-        task.status,
-        task.queue,
-        task.github_installation_id,
-        task.private ? 1 : 0,
-        JSON.stringify(task.config),
-        task.created_at,
-        task.review_claims ?? 0,
-        task.completed_reviews ?? 0,
-        task.reviews_completed_at ?? null,
-        task.summary_agent_id ?? null,
-        // WHERE NOT EXISTS params
-        task.owner,
-        task.repo,
-        task.pr_number,
-        'pending',
-        'reviewing',
-      )
-      .run();
-    return (result.meta?.changes ?? 0) > 0;
+    try {
+      const result = await this.db
+        .prepare(
+          `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
+          review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
+          created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?)
+        )`,
+        )
+        .bind(
+          task.id,
+          task.owner,
+          task.repo,
+          task.pr_number,
+          task.pr_url,
+          task.diff_url,
+          task.base_ref,
+          task.head_ref,
+          task.review_count,
+          task.prompt,
+          task.timeout_at,
+          task.status,
+          task.queue,
+          task.github_installation_id,
+          task.private ? 1 : 0,
+          JSON.stringify(task.config),
+          task.created_at,
+          task.review_claims ?? 0,
+          task.completed_reviews ?? 0,
+          task.reviews_completed_at ?? null,
+          task.summary_agent_id ?? null,
+          // WHERE NOT EXISTS params
+          task.owner,
+          task.repo,
+          task.pr_number,
+          'pending',
+          'reviewing',
+        )
+        .run();
+      return (result.meta?.changes ?? 0) > 0;
+    } catch (err) {
+      // The partial unique index is a safety net — if it fires (extremely rare race),
+      // treat it as a duplicate rather than propagating a 500 error.
+      if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
+        return false;
+      }
+      throw err;
+    }
   }
 
   async getTask(id: string): Promise<ReviewTask | null> {
@@ -260,20 +269,6 @@ export class D1DataStore implements DataStore {
       .all<TaskRow>();
 
     return (result.results ?? []).map(rowToTask);
-  }
-
-  async findActiveTaskForPR(
-    owner: string,
-    repo: string,
-    prNumber: number,
-  ): Promise<ReviewTask | null> {
-    const row = await this.db
-      .prepare(
-        `SELECT * FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?) LIMIT 1`,
-      )
-      .bind(owner, repo, prNumber, 'pending', 'reviewing')
-      .first<TaskRow>();
-    return row ? rowToTask(row) : null;
   }
 
   async updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean> {

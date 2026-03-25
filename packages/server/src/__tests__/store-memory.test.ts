@@ -108,45 +108,6 @@ describe('MemoryDataStore', () => {
       expect(await store.updateTask('nope', { status: 'reviewing' })).toBe(false);
     });
 
-    it('findActiveTaskForPR returns matching pending task', async () => {
-      await store.createTask(makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 42 }));
-      const found = await store.findActiveTaskForPR('org', 'repo', 42);
-      expect(found).not.toBeNull();
-      expect(found!.id).toBe('a');
-    });
-
-    it('findActiveTaskForPR returns matching reviewing task', async () => {
-      await store.createTask(
-        makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 42, status: 'reviewing' }),
-      );
-      const found = await store.findActiveTaskForPR('org', 'repo', 42);
-      expect(found).not.toBeNull();
-      expect(found!.id).toBe('a');
-    });
-
-    it('findActiveTaskForPR returns null for completed task', async () => {
-      await store.createTask(
-        makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 42, status: 'completed' }),
-      );
-      expect(await store.findActiveTaskForPR('org', 'repo', 42)).toBeNull();
-    });
-
-    it('findActiveTaskForPR returns null when no match', async () => {
-      await store.createTask(makeTask({ id: 'a', owner: 'org', repo: 'repo', pr_number: 1 }));
-      expect(await store.findActiveTaskForPR('org', 'repo', 99)).toBeNull();
-    });
-
-    it('findActiveTaskForPR returns null for empty store', async () => {
-      expect(await store.findActiveTaskForPR('org', 'repo', 1)).toBeNull();
-    });
-
-    it('findActiveTaskForPR distinguishes by owner/repo/pr_number', async () => {
-      await store.createTask(makeTask({ id: 'a', owner: 'org-a', repo: 'repo', pr_number: 1 }));
-      await store.createTask(makeTask({ id: 'b', owner: 'org-b', repo: 'repo', pr_number: 1 }));
-      const found = await store.findActiveTaskForPR('org-a', 'repo', 1);
-      expect(found!.id).toBe('a');
-    });
-
     it('deletes a task and its claims', async () => {
       await store.createTask(makeTask());
       await store.createClaim(makeClaim());
@@ -210,6 +171,24 @@ describe('MemoryDataStore', () => {
     it('createTaskIfNotExists succeeds when existing task is for different repo', async () => {
       await store.createTask(
         makeTask({ id: 'other', owner: 'org', repo: 'other-repo', pr_number: 10 }),
+      );
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+    });
+
+    it('createTaskIfNotExists succeeds when existing task has timeout status', async () => {
+      await store.createTask(
+        makeTask({ id: 'old', owner: 'org', repo: 'repo', pr_number: 10, status: 'timeout' }),
+      );
+      const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+    });
+
+    it('createTaskIfNotExists succeeds when existing task has failed status', async () => {
+      await store.createTask(
+        makeTask({ id: 'old', owner: 'org', repo: 'repo', pr_number: 10, status: 'failed' }),
       );
       const task = makeTask({ id: 'new-1', owner: 'org', repo: 'repo', pr_number: 10 });
       const created = await store.createTaskIfNotExists(task);
