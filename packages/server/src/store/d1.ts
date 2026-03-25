@@ -506,6 +506,88 @@ export class D1DataStore implements DataStore {
       .run();
   }
 
+  // ── Heartbeat-based reclaim ─────────────────────────────────
+
+  async reclaimAbandonedClaims(staleThresholdMs: number): Promise<number> {
+    const cutoff = Date.now() - staleThresholdMs;
+
+    // Find pending claims where the agent's heartbeat is stale, OR where the agent
+    // has no heartbeat and the claim itself is older than the threshold.
+    const staleResult = await this.db
+      .prepare(
+        `SELECT c.id, c.task_id, c.role, c.agent_id
+         FROM claims c
+         LEFT JOIN agent_heartbeats h ON c.agent_id = h.agent_id
+         WHERE c.status = 'pending'
+           AND (
+             (h.last_seen IS NOT NULL AND h.last_seen < ?)
+             OR (h.last_seen IS NULL AND c.created_at < ?)
+           )`,
+      )
+      .bind(cutoff, cutoff)
+      .all<{ id: string; task_id: string; role: string; agent_id: string }>();
+
+    const staleClaims = staleResult.results ?? [];
+    if (staleClaims.length === 0) return 0;
+
+    const statements: D1PreparedStatement[] = [];
+    for (const claim of staleClaims) {
+      // Mark claim as error
+      statements.push(
+        this.db.prepare(`UPDATE claims SET status = 'error' WHERE id = ?`).bind(claim.id),
+      );
+      // Release the review slot if this was a review claim
+      if (claim.role === 'review') {
+        statements.push(
+          this.db
+            .prepare(
+              `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > 0`,
+            )
+            .bind(claim.task_id),
+        );
+      }
+    }
+
+    await this.db.batch(statements);
+    return staleClaims.length;
+  }
+
+  async reclaimAbandonedSummarySlots(staleThresholdMs: number): Promise<number> {
+    const cutoff = Date.now() - staleThresholdMs;
+
+    // Find tasks in 'finished' queue where summary agent is stale.
+    // If agent has no heartbeat, use task created_at as fallback.
+    const staleResult = await this.db
+      .prepare(
+        `SELECT t.id
+         FROM tasks t
+         LEFT JOIN agent_heartbeats h ON t.summary_agent_id = h.agent_id
+         WHERE t.queue = 'finished'
+           AND t.summary_agent_id IS NOT NULL
+           AND (
+             (h.last_seen IS NOT NULL AND h.last_seen < ?)
+             OR (h.last_seen IS NULL AND t.created_at < ?)
+           )`,
+      )
+      .bind(cutoff, cutoff)
+      .all<{ id: string }>();
+
+    const staleTasks = staleResult.results ?? [];
+    if (staleTasks.length === 0) return 0;
+
+    const statements: D1PreparedStatement[] = [];
+    for (const task of staleTasks) {
+      statements.push(
+        this.db
+          .prepare(`UPDATE tasks SET queue = 'summary', summary_agent_id = NULL WHERE id = ?`)
+          .bind(task.id),
+      );
+    }
+
+    await this.db.batch(statements);
+    return staleTasks.length;
+  }
+
   // ── Cleanup ───────────────────────────────────────────────────
 
   async cleanupTerminalTasks(): Promise<number> {

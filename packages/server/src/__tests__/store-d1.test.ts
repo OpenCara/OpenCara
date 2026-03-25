@@ -1036,6 +1036,27 @@ describe('D1DataStore', () => {
       expect(deleted).toBe(0);
     });
   });
+
+  // ── reclaimAbandonedClaims ──────────────────────────────────
+  // Note: D1 implementation uses LEFT JOIN which the mock doesn't fully support.
+  // Business logic is thoroughly tested via MemoryDataStore tests.
+  // These tests verify the method exists and handles edge cases.
+
+  describe('reclaimAbandonedClaims', () => {
+    it('returns 0 when no claims exist', async () => {
+      const freed = await store.reclaimAbandonedClaims(180_000);
+      expect(freed).toBe(0);
+    });
+  });
+
+  // ── reclaimAbandonedSummarySlots ────────────────────────────
+
+  describe('reclaimAbandonedSummarySlots', () => {
+    it('returns 0 when no tasks exist', async () => {
+      const freed = await store.reclaimAbandonedSummarySlots(300_000);
+      expect(freed).toBe(0);
+    });
+  });
 });
 
 // ── Row conversion helpers ────────────────────────────────────

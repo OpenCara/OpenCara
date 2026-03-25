@@ -49,6 +49,12 @@ export interface DataStore {
   getTimeoutLastCheck(): Promise<number>;
   setTimeoutLastCheck(timestamp: number): Promise<void>;
 
+  // Heartbeat-based reclaim
+  /** Free pending claims from agents not seen within staleThresholdMs. Returns count of freed claims. */
+  reclaimAbandonedClaims(staleThresholdMs: number): Promise<number>;
+  /** Release summary slots held by agents not seen within staleThresholdMs. Returns count of freed slots. */
+  reclaimAbandonedSummarySlots(staleThresholdMs: number): Promise<number>;
+
   // Cleanup
   /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
   cleanupTerminalTasks(): Promise<number>;

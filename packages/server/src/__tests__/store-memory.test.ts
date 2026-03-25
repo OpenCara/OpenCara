@@ -534,4 +534,214 @@ describe('MemoryDataStore', () => {
       expect(deleted).toBe(0);
     });
   });
+
+  // ── reclaimAbandonedClaims ──────────────────────────────────
+
+  describe('reclaimAbandonedClaims', () => {
+    const STALE_THRESHOLD = 180_000; // 3 minutes
+
+    it('frees pending claims from stale agents', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({ id: 'task-1:stale-agent:review', agent_id: 'stale-agent', role: 'review' }),
+      );
+      // Agent last seen 5 minutes ago (stale)
+      await store.setAgentLastSeen('stale-agent', now - 300_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      const claim = await store.getClaim('task-1:stale-agent:review');
+      expect(claim?.status).toBe('error');
+
+      // Review slot should be released
+      const task = await store.getTask('task-1');
+      expect(task?.review_claims).toBe(0);
+    });
+
+    it('does not free claims from active agents', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({ id: 'task-1:active-agent:review', agent_id: 'active-agent', role: 'review' }),
+      );
+      // Agent last seen 1 minute ago (active)
+      await store.setAgentLastSeen('active-agent', now - 60_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+
+      const claim = await store.getClaim('task-1:active-agent:review');
+      expect(claim?.status).toBe('pending');
+    });
+
+    it('frees claims from agents with no heartbeat when claim is old', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:ghost:review',
+          agent_id: 'ghost',
+          role: 'review',
+          created_at: now - 300_000, // claim created 5 min ago
+        }),
+      );
+      // No setAgentLastSeen call — agent never seen
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      const claim = await store.getClaim('task-1:ghost:review');
+      expect(claim?.status).toBe('error');
+    });
+
+    it('does not free claims from agents with no heartbeat when claim is recent', async () => {
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:ghost:review',
+          agent_id: 'ghost',
+          role: 'review',
+          created_at: Date.now(), // claim just created
+        }),
+      );
+      // No heartbeat
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+
+      const claim = await store.getClaim('task-1:ghost:review');
+      expect(claim?.status).toBe('pending');
+    });
+
+    it('does not touch completed or error claims', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:agent-1:review',
+          agent_id: 'agent-1',
+          role: 'review',
+          status: 'completed',
+        }),
+      );
+      // Agent is stale
+      await store.setAgentLastSeen('agent-1', Date.now() - 300_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+    });
+
+    it('freed review slot can be re-claimed by another agent', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({ id: 'task-1:stale:review', agent_id: 'stale', role: 'review' }),
+      );
+      await store.setAgentLastSeen('stale', now - 300_000);
+
+      await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+
+      // Now another agent should be able to claim the slot
+      const slotClaimed = await store.claimReviewSlot('task-1', 1);
+      expect(slotClaimed).toBe(true);
+    });
+
+    it('returns 0 when no pending claims exist', async () => {
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+    });
+  });
+
+  // ── reclaimAbandonedSummarySlots ────────────────────────────
+
+  describe('reclaimAbandonedSummarySlots', () => {
+    const STALE_THRESHOLD = 300_000; // 5 minutes
+
+    it('frees summary slot from stale agent', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ queue: 'finished', summary_agent_id: 'stale-synth' }));
+      await store.setAgentLastSeen('stale-synth', now - 600_000);
+
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+      expect(task?.summary_agent_id).toBeUndefined();
+    });
+
+    it('does not free summary slot from active agent', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ queue: 'finished', summary_agent_id: 'active-synth' }));
+      await store.setAgentLastSeen('active-synth', now - 60_000);
+
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+    });
+
+    it('frees summary slot from agent with no heartbeat when task is old', async () => {
+      const now = Date.now();
+      await store.createTask(
+        makeTask({
+          queue: 'finished',
+          summary_agent_id: 'ghost',
+          created_at: now - 600_000, // task created 10 min ago
+        }),
+      );
+      // No heartbeat
+
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+    });
+
+    it('does not free summary slot from agent with no heartbeat when task is recent', async () => {
+      await store.createTask(
+        makeTask({
+          queue: 'finished',
+          summary_agent_id: 'ghost',
+          created_at: Date.now(), // task just created
+        }),
+      );
+      // No heartbeat
+
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+    });
+
+    it('freed summary slot can be claimed by another agent', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ queue: 'finished', summary_agent_id: 'stale' }));
+      await store.setAgentLastSeen('stale', now - 600_000);
+
+      await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+
+      // New agent should be able to claim summary
+      const claimed = await store.claimSummarySlot('task-1', 'new-agent');
+      expect(claimed).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.summary_agent_id).toBe('new-agent');
+    });
+
+    it('does not affect tasks not in finished queue', async () => {
+      await store.createTask(makeTask({ queue: 'review' }));
+
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+    });
+
+    it('returns 0 when no tasks exist', async () => {
+      const freed = await store.reclaimAbandonedSummarySlots(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+    });
+  });
 });
