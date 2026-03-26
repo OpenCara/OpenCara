@@ -128,8 +128,57 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
-  // Completed reviews — atomic increment
+  // ── Generic task claiming (new separate task model) ─────────
 
+  async claimTask(taskId: string): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== 'pending') return false;
+    task.status = 'reviewing';
+    return true;
+  }
+
+  async releaseTask(taskId: string): Promise<void> {
+    const task = this.tasks.get(taskId);
+    if (task && task.status === 'reviewing') {
+      task.status = 'pending';
+    }
+  }
+
+  // ── Group queries ──────────────────────────────────────────
+
+  async getTasksByGroup(groupId: string): Promise<ReviewTask[]> {
+    return [...this.tasks.values()].filter((t) => t.group_id === groupId).map((t) => ({ ...t }));
+  }
+
+  async countCompletedInGroup(groupId: string): Promise<number> {
+    return [...this.tasks.values()].filter(
+      (t) => t.group_id === groupId && t.status === 'completed',
+    ).length;
+  }
+
+  async countWorkerTasksInGroup(groupId: string): Promise<number> {
+    return [...this.tasks.values()].filter(
+      (t) => t.group_id === groupId && t.status === 'reviewing',
+    ).length;
+  }
+
+  async deleteTasksByGroup(groupId: string): Promise<void> {
+    for (const [id, task] of this.tasks) {
+      if (task.group_id === groupId) {
+        this.tasks.delete(id);
+        // Also delete associated claims (mirrors ON DELETE CASCADE)
+        for (const [claimId, claim] of this.claims) {
+          if (claim.task_id === id) {
+            this.claims.delete(claimId);
+          }
+        }
+      }
+    }
+  }
+
+  // ── Deprecated: Completed reviews — atomic increment ───────
+
+  /** @deprecated Use claimTask instead. */
   async incrementCompletedReviews(
     taskId: string,
   ): Promise<{ newCount: number; queue: string } | null> {
@@ -139,8 +188,9 @@ export class MemoryDataStore implements DataStore {
     return { newCount: task.completed_reviews, queue: task.queue };
   }
 
-  // Summary retry count — atomic increment
+  // Deprecated: Summary retry count — atomic increment
 
+  /** @deprecated */
   async incrementSummaryRetryCount(taskId: string): Promise<number | null> {
     const task = this.tasks.get(taskId);
     if (!task) return null;
@@ -148,8 +198,9 @@ export class MemoryDataStore implements DataStore {
     return task.summary_retry_count;
   }
 
-  // Review slot — atomic check-and-increment
+  // Deprecated: Review slot — atomic check-and-increment
 
+  /** @deprecated Use claimTask instead. */
   async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {
     const task = this.tasks.get(taskId);
     if (!task) return false;
@@ -159,6 +210,7 @@ export class MemoryDataStore implements DataStore {
     return true;
   }
 
+  /** @deprecated Use releaseTask instead. */
   async releaseReviewSlot(taskId: string): Promise<boolean> {
     const task = this.tasks.get(taskId);
     if (!task || (task.review_claims ?? 0) <= 0) return false;
@@ -166,8 +218,9 @@ export class MemoryDataStore implements DataStore {
     return true;
   }
 
-  // Summary claim — atomic compare-and-swap (replaces locks)
+  // Deprecated: Summary claim — atomic compare-and-swap (replaces locks)
 
+  /** @deprecated Use claimTask instead. */
   async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {
     const task = this.tasks.get(taskId);
     if (!task || task.queue !== 'summary') return false;
@@ -176,6 +229,7 @@ export class MemoryDataStore implements DataStore {
     return true;
   }
 
+  /** @deprecated Use releaseTask instead. */
   async releaseSummarySlot(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (task && task.queue === 'finished') {

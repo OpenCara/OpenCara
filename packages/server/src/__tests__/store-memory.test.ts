@@ -819,4 +819,138 @@ describe('MemoryDataStore', () => {
       expect(freed).toBe(0);
     });
   });
+
+  // ── claimTask / releaseTask ─────────────────────────────────
+
+  describe('claimTask', () => {
+    it('transitions pending task to reviewing', async () => {
+      await store.createTask(makeTask({ id: 'task-1', status: 'pending' }));
+      const result = await store.claimTask('task-1');
+      expect(result).toBe(true);
+      const task = await store.getTask('task-1');
+      expect(task?.status).toBe('reviewing');
+    });
+
+    it('returns false for already reviewing task', async () => {
+      await store.createTask(makeTask({ id: 'task-1', status: 'reviewing' }));
+      const result = await store.claimTask('task-1');
+      expect(result).toBe(false);
+    });
+
+    it('returns false for completed task', async () => {
+      await store.createTask(makeTask({ id: 'task-1', status: 'completed' }));
+      const result = await store.claimTask('task-1');
+      expect(result).toBe(false);
+    });
+
+    it('returns false for nonexistent task', async () => {
+      const result = await store.claimTask('nonexistent');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('releaseTask', () => {
+    it('transitions reviewing task back to pending', async () => {
+      await store.createTask(makeTask({ id: 'task-1', status: 'reviewing' }));
+      await store.releaseTask('task-1');
+      const task = await store.getTask('task-1');
+      expect(task?.status).toBe('pending');
+    });
+
+    it('is no-op for pending task', async () => {
+      await store.createTask(makeTask({ id: 'task-1', status: 'pending' }));
+      await store.releaseTask('task-1');
+      const task = await store.getTask('task-1');
+      expect(task?.status).toBe('pending');
+    });
+
+    it('is no-op for nonexistent task', async () => {
+      await store.releaseTask('nonexistent'); // should not throw
+    });
+  });
+
+  // ── Group queries ─────────────────────────────────────────
+
+  describe('getTasksByGroup', () => {
+    it('returns all tasks in a group', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1' }));
+      await store.createTask(makeTask({ id: 't2', group_id: 'grp-1' }));
+      await store.createTask(makeTask({ id: 't3', group_id: 'grp-2' }));
+      const tasks = await store.getTasksByGroup('grp-1');
+      expect(tasks).toHaveLength(2);
+      expect(tasks.map((t) => t.id).sort()).toEqual(['t1', 't2']);
+    });
+
+    it('returns empty array for nonexistent group', async () => {
+      const tasks = await store.getTasksByGroup('nonexistent');
+      expect(tasks).toEqual([]);
+    });
+
+    it('returns copies, not references', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1' }));
+      const a = await store.getTasksByGroup('grp-1');
+      const b = await store.getTasksByGroup('grp-1');
+      expect(a[0]).not.toBe(b[0]);
+    });
+  });
+
+  describe('countCompletedInGroup', () => {
+    it('counts only completed tasks', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1', status: 'completed' }));
+      await store.createTask(makeTask({ id: 't2', group_id: 'grp-1', status: 'pending' }));
+      await store.createTask(makeTask({ id: 't3', group_id: 'grp-1', status: 'completed' }));
+      const count = await store.countCompletedInGroup('grp-1');
+      expect(count).toBe(2);
+    });
+
+    it('returns 0 for empty group', async () => {
+      const count = await store.countCompletedInGroup('nonexistent');
+      expect(count).toBe(0);
+    });
+
+    it('does not count tasks from other groups', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1', status: 'completed' }));
+      await store.createTask(makeTask({ id: 't2', group_id: 'grp-2', status: 'completed' }));
+      const count = await store.countCompletedInGroup('grp-1');
+      expect(count).toBe(1);
+    });
+  });
+
+  describe('countWorkerTasksInGroup', () => {
+    it('counts only reviewing tasks', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1', status: 'reviewing' }));
+      await store.createTask(makeTask({ id: 't2', group_id: 'grp-1', status: 'pending' }));
+      await store.createTask(makeTask({ id: 't3', group_id: 'grp-1', status: 'reviewing' }));
+      const count = await store.countWorkerTasksInGroup('grp-1');
+      expect(count).toBe(2);
+    });
+
+    it('returns 0 for empty group', async () => {
+      const count = await store.countWorkerTasksInGroup('nonexistent');
+      expect(count).toBe(0);
+    });
+  });
+
+  describe('deleteTasksByGroup', () => {
+    it('deletes all tasks in a group', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1' }));
+      await store.createTask(makeTask({ id: 't2', group_id: 'grp-1' }));
+      await store.createTask(makeTask({ id: 't3', group_id: 'grp-2' }));
+      await store.deleteTasksByGroup('grp-1');
+      expect(await store.getTask('t1')).toBeNull();
+      expect(await store.getTask('t2')).toBeNull();
+      expect(await store.getTask('t3')).not.toBeNull();
+    });
+
+    it('also deletes associated claims', async () => {
+      await store.createTask(makeTask({ id: 't1', group_id: 'grp-1' }));
+      await store.createClaim(makeClaim({ id: 'c1', task_id: 't1', agent_id: 'a1' }));
+      await store.deleteTasksByGroup('grp-1');
+      expect(await store.getClaim('c1')).toBeNull();
+    });
+
+    it('is no-op for nonexistent group', async () => {
+      await store.deleteTasksByGroup('nonexistent'); // should not throw
+    });
+  });
 });
