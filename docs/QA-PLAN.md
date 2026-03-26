@@ -4,6 +4,18 @@ Cross-service integration test scenarios for the QA agent. Updated for the v1.0 
 
 **How to use**: QA agent runs these scenarios after code merges to verify cross-service integration beyond unit tests. Each scenario has setup, steps, and expected results.
 
+## REQUIRED: Live Smoke Test
+
+**Every QA run MUST include a live smoke test against the dev environment.** Unit tests and code review alone are not sufficient. This is mandatory for all code changes — no exceptions.
+
+1. Start agents: `OPENCARA_PLATFORM_URL=https://opencara-server-dev.opencara.workers.dev npx opencara agent start --all`
+2. Create a test PR: `PR_NUM=$(scripts/create-test-pr.sh)`
+3. Wait for bot review: `scripts/wait-bot-review.sh "$PR_NUM"`
+4. Verify the bot posted a review comment with expected structure
+5. Include smoke test evidence (PR number, bot comment excerpt) in the QA report
+
+**If the smoke test fails, the entire QA run is a FAIL** — even if all unit tests pass. If you skip the smoke test, PM will reject the QA report.
+
 ---
 
 ## S01: Cross-Package Build Pipeline
@@ -132,7 +144,7 @@ pnpm opencara agent --help
 2. Verify tests cover:
    - Valid config with all fields
    - Config with only required fields (defaults applied)
-   - Malformed YAML (graceful error)
+   - Malformed TOML (graceful error)
    - Missing file (defaults used)
 
 **Expected**: Parser returns valid config or uses defaults. No exceptions thrown.

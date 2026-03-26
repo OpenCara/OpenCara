@@ -59,42 +59,48 @@ This project uses TypeScript + React, following ESLint standards.
 
 # Agent requirements
 [agents]
-review_count = 3 # Total agents (reviewers + synthesizer)
-preferred_models = [] # Preferred AI models (informational)
-preferred_tools = [] # Preferred AI tools (informational)
+review_count = 3              # Total agents (reviewers + synthesizer)
+preferred_models = []         # Preferred AI models (e.g., "claude-sonnet-4-6")
+preferred_tools = []          # Preferred AI tools (e.g., "claude", "codex")
 
 # Timeout
-timeout = "10m" # Range: 1m-30m
+timeout = "10m"               # Range: 1m-30m
 
 # Trigger control
 [trigger]
-on = ["opened", "synchronize"] # PR events that trigger review
-comment = "/opencara review" # Manual trigger command
-skip = ["draft"] # Skip conditions: "draft", label names, branch names
+on = ["opened", "synchronize"]  # PR events that trigger review
+comment = "/opencara review"    # Manual trigger (both /opencara and @opencara work)
+skip = ["draft"]                # Skip conditions: "draft", "label:<name>", "branch:<pattern>"
 
 # Reviewer access control (enforced server-side)
 [reviewer]
-allow_anonymous = true # Allow agents without accounts
+# Note: allow_anonymous is deprecated and ignored — all agents are now
+# authenticated via GitHub OAuth. This field is accepted but has no effect.
 
 [[reviewer.whitelist]]
-agent = "agent-abc123" # Only these agents can review
+github = "trusted-contributor"  # Only these users can review
 
 [[reviewer.blacklist]]
-agent = "agent-spammy999" # Block specific agents
+github = "unreliable-reviewer"  # Block specific users
 
-# Summarizer (synthesizer) access control
+# Summarizer (synthesizer) access control — three forms supported:
+#
+# String shorthand:   summarizer = "alice"
+# Object with "only": [summarizer] only = "alice"   (or only = ["alice", "bob"])
+# Full object:        whitelist/blacklist/preferred lists (shown below)
+
 [[summarizer.whitelist]]
-agent = "agent-abc123" # Only these agents can synthesize
+github = "trusted-contributor"  # Only these users can synthesize
 
 [[summarizer.blacklist]]
-agent = "agent-spammy999" # Block specific agents
+github = "review-only-user"     # Block from synthesis role
 
 # Ordered preference for synthesis role
 [[summarizer.preferred]]
-agent = "agent-abc123" # First choice synthesizer
+github = "best-summarizer"      # First choice synthesizer
 
 [[summarizer.preferred]]
-agent = "agent-def456" # Fallback if first is unavailable
+github = "backup-summarizer"    # Fallback if first is unavailable
 ```
 
 ### Configuration Defaults
@@ -103,12 +109,14 @@ agent = "agent-def456" # Fallback if first is unavailable
 | -------------------------- | ---------------------------- |
 | `prompt`                   | Generic code review prompt   |
 | `agents.review_count`      | 1                            |
+| `agents.preferred_models`  | [] (no preference)           |
+| `agents.preferred_tools`   | [] (no preference)           |
 | `timeout`                  | 10m                          |
 | `trigger.on`               | [opened]                     |
 | `trigger.comment`          | /opencara review             |
 | `trigger.skip`             | [draft]                      |
-| `reviewer.allow_anonymous` | true                         |
-| `reviewer.whitelist`       | [] (all agents allowed)      |
+| `reviewer.whitelist`       | [] (all authenticated agents allowed) |
+| `reviewer.blacklist`       | [] (no agents blocked)       |
 | `summarizer.whitelist`     | [] (all agents allowed)      |
 | `summarizer.preferred`     | [] (first-come-first-served) |
 
@@ -146,22 +154,32 @@ Contributors control costs locally:
 ```toml
 platform_url = "https://api.opencara.com"
 
-# GitHub token for private repo access (optional)
-# github_token = "ghp_your_token_here"
+# Codebase context: clone repos locally for context-aware reviews
+# codebase_dir = "~/.opencara/repos"
+
+# Max PR diff size in KB (default: 100)
+# max_diff_size_kb = 200
+
+# Default command template (${MODEL} is replaced with the agent's model)
+# agent_command = "claude --model ${MODEL} --allowedTools '*' --print"
 
 [[agents]]
 model = "claude-sonnet-4-6"
 tool = "claude"
-name = "My Claude Agent" # Display name in CLI logs
+name = "My Claude Agent"                                         # Display name in CLI logs
 command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
-review_only = false # true = skip synthesis role
-# github_token = "ghp_per_agent_token"  # Per-agent token (overrides global)
+# thinking = "high"                                              # Reasoning level hint
+# review_only = true                                             # Never synthesize
+# synthesizer_only = true                                        # Never review (cannot combine with review_only)
+# codebase_dir = "~/repos"                                       # Per-agent clone dir override
 [agents.repos]
-mode = "all" # all | own | whitelist | blacklist
+mode = "all"                                                     # all | own | whitelist | blacklist
+# list = ["myorg/my-project"]                                    # Required for whitelist/blacklist
 
-max_diff_size_kb = 200
-
-# agent_command = "claude --model ${MODEL} --allowedTools '*' --print"  # Default command template
+# Usage limits (optional, enforced locally)
+# max_reviews_per_day = 50
+# max_tokens_per_day = 1000000
+# max_tokens_per_review = 50000
 ```
 
 ## Future Considerations

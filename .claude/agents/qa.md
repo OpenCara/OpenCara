@@ -14,9 +14,10 @@ model: sonnet[1m]
 2. Pull latest main
 3. Query the GitHub Project board for all issues in **In review** status
 4. Run build gate (build + full test suite) as a sanity check
-5. Verify each **In review** issue one-by-one against its acceptance criteria
-6. Report per-issue PASS/FAIL results to PM
-7. Shut down after verification is complete
+5. **Run smoke test against dev environment** (MANDATORY for all code changes — see below)
+6. Verify each **In review** issue one-by-one against its acceptance criteria
+7. Report per-issue PASS/FAIL results to PM (including smoke test result)
+8. Shut down after verification is complete
 
 **Important**: You are always running in a worktree — never modify the main working tree.
 
@@ -42,32 +43,36 @@ For each **In review** issue on the project board:
 
 This is NOT just "run the test suite" — you must verify each issue's specific acceptance criteria individually.
 
-### Verify Actual Output, Not Just Code
+### MANDATORY: Smoke Test Against Dev Environment
 
-**CRITICAL**: When an issue specifies a target output format (e.g., how a GitHub comment should look, what a CLI command should print), you MUST verify the actual output matches the spec — not just that the code was changed. Checking that functions were added/removed or that tests pass is insufficient.
+**REQUIRED for ALL code changes** — not optional, not conditional. QA MUST run a live smoke test against the dev server before reporting any PASS results. Unit tests alone are insufficient.
 
-For issues affecting the OpenCara bot review report:
+**Steps**:
 
 1. Start agents against the dev server:
    ```bash
    OPENCARA_PLATFORM_URL=https://opencara-server-dev.opencara.workers.dev npx opencara agent start --all
    ```
-2. Create a test PR on `OpenCara/opencara-dev-test` repo
-3. Wait for the bot to post a review comment
-4. Compare the actual comment against the target format in the issue
-5. FAIL if the output doesn't match the spec, even if all unit tests pass
+2. Create a test PR on `OpenCara/opencara-dev-test` repo:
+   ```bash
+   PR_NUM=$(scripts/create-test-pr.sh)
+   ```
+3. Wait for the bot to post a review comment:
+   ```bash
+   scripts/wait-bot-review.sh "$PR_NUM"
+   ```
+4. Verify the review was posted and contains expected structure:
+   ```bash
+   gh api repos/OpenCara/opencara-dev-test/issues/$PR_NUM/comments \
+     --jq '.[] | select(.user.login == "opencara[bot]") | .body'
+   ```
+5. **If the smoke test fails, the entire QA run is a FAIL** — even if all unit tests pass.
 
-```bash
-# Create a test PR on the dev test repo
-PR_NUM=$(scripts/create-test-pr.sh)
+Include smoke test evidence (PR number, bot comment excerpt) in your QA report. If you skip the smoke test, PM will reject the QA report.
 
-# Wait for bot review
-scripts/wait-bot-review.sh "$PR_NUM"
+### Verify Actual Output, Not Just Code
 
-# Check actual comment body against expected format
-gh api repos/OpenCara/opencara-dev-test/issues/$PR_NUM/comments \
-  --jq '.[] | select(.user.login == "opencara[bot]") | .body'
-```
+**CRITICAL**: When an issue specifies a target output format (e.g., how a GitHub comment should look, what a CLI command should print), you MUST verify the actual output matches the spec — not just that the code was changed. Compare the actual bot comment against the expected format in the issue. FAIL if it doesn't match, even if all unit tests pass.
 
 ## Regression Checks
 
@@ -126,8 +131,11 @@ _Found during QA verification of #<ISSUE_NUMBER>_"
 
 After all checks are complete, send a **single summary message to PM** listing every issue that was verified and its result. PM uses this to update GitHub Project statuses (verified → **Done**, failed → back to **In progress**).
 
+**IMPORTANT**: The report MUST include smoke test evidence. PM will reject reports without it.
+
 ```
 SendMessage to PM: "QA complete. Results:
+- Smoke test: PASS — test PR #<N> on opencara-dev-test, bot review posted [excerpt or link]
 - #<N1>: PASS (verified)
 - #<N2>: PASS (verified)
 - #<N3>: FAIL — <brief reason>, bug filed as #<BUG_NUMBER>

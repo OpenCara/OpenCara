@@ -343,14 +343,96 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
   - #452 [cli-dev, P1, L] Replace github-auth.ts with OAuth token for diff fetch + API auth — **DONE** (PR #460, QA PASS)
   - #453 [pm, P2, M] GitHub App OAuth configuration and documentation — **DONE** (direct commit 4484116)
 
+### M18: Config v2 — TOML + Modular Sections (2026-03-26)
+
+Parent: #424
+
+#### Phase 1: Foundation (blocks all)
+
+- #463 [architect, P1, M] Replace yaml with smol-toml, define ReviewConfigV2 types + TOML parser — **DONE** (PR #478 merged, QA PASS 2026-03-26)
+
+#### Phase 2: Server + CLI integration (parallel, after Phase 1)
+
+- #464 [server-dev, P1, M] Integrate TOML config v2 into server routes and webhook handler — **DONE** (already completed by PR #478, no separate PR needed)
+- #465 [cli-dev, P1, M] Migrate CLI config from YAML to TOML format — **DONE** (PR #479 merged, QA PASS 2026-03-26)
+
+#### Phase 3: Docs (after Phase 2)
+
+- #466 [pm, P2, S] Update all docs for TOML config v2 migration — **DONE** (already completed by PR #478, verified by PM)
+
+### Bug reports (2026-03-26)
+
+- #462 [server-dev, P1, M] Summary claim timeout causes stuck task — no retry — **DONE** (PR #467 merged, QA PASS 2026-03-26)
+- #468 [server-dev, P1, M] Validate summary report quality before posting — reject empty/too-short and re-queue — **DONE** (PR #472 merged, QA PASS 2026-03-26)
+- #469 [architect, P2, M] Add thinking level field alongside model and tool — **DONE** (PR #470 merged, QA PASS 2026-03-26)
+- ~~#471~~ [cli-dev] CLI: per-tool directory isolation — **CLOSED** (superseded by #473)
+- #473 [cli-dev, P2, M] CLI: persistent repo cache with git worktrees for review checkouts — **BACKLOG**
+- #474 [cli-dev, P1, M] CLI: 2-tier diff fetch (gh CLI → HTTP fallback) — **DONE** (PR #476 merged, QA PASS 2026-03-26)
+- ~~#475~~ [server-dev] Installation token in claim response — **CLOSED** (dropped, security concern)
+
+### Code review findings (#480 breakdown, 2026-03-26)
+
+Parent: #480
+
+#### High Priority (P1) — DONE (QA PASS 2026-03-26)
+
+- #481 [cli-dev, P1, S] Wrap untrusted PR context in anti-injection boundaries — **DONE** (PR #491 merged, QA PASS)
+- #482 [architect, P1, M] Add network timeouts to all outbound fetch calls — **DONE** (PR #493 merged, QA PASS)
+- #483 [server-dev, P1, S] Return 503 for transient webhook failures — **DONE** (PR #492 merged, QA PASS)
+- #484 [cli-dev, P1, S] Remove token from git clone URL — use credential helper or env approach — **DONE** (PR #491 merged, QA PASS)
+
+#### Medium Priority (P2) — DONE (QA PASS 2026-03-26)
+
+- #485 [server-dev, P2, M] Batch poll endpoint queries to eliminate N+1 pattern — **DONE** (PR #494 merged, QA PASS)
+- #486 [architect, P2, S] Unify OAuth token validation schema across server and CLI — **DONE** (PR #495 merged, QA PASS)
+- #487 [server-dev, P2, S] Use UPDATE...RETURNING for atomic read-after-write in D1 store — **DONE** (PR #494 merged, QA PASS)
+- #488 [architect, P2, M] Extract explicit task lifecycle state machine — **DONE** (PR #495 merged, QA PASS)
+- #489 [server-dev, P2, S] Fix timing-safe comparison to not leak API key length — **DONE** (PR #494 merged, QA PASS)
+- #490 [architect, P2, S] Fix duplicate migration number prefix (0010) — **DONE** (PR #495 merged, QA PASS)
+
+#### Low Priority (Deferred — not broken out)
+
+- Finding #11: Silent failures in rate limiter cleanup
+- Finding #12: Missing length limits on model/tool fields
+- Finding #13: Logger PII leakage
+- Finding #14: Hardcoded magic numbers
+
+### New features (2026-03-26)
+
+- @mention trigger alias (no issue) — **DONE** (PR #496 merged, QA PASS)
+
+### Bug reports (2026-03-26, batch 2)
+
+- #497 [cli-dev, P1, S] Codebase clone uses wrong token — should use gh CLI like diff fetch — **IN REVIEW** (PR #498 QA FAIL → PR #499 merged with `gh repo clone` fix)
+
+### Cleanup (2026-03-26)
+
+- #500 [architect, P2, M] Remove anonymous agent mode from codebase — **READY** (M17 cleanup)
+
 ### QA pending (In review)
 
-(none)
+- #497 — Codebase clone auth fix v2 (PR #499 merged)
 
 ## Open PRs
 
-- #461 [external/quabug] 2026-03-26T02:46:44Z — fix: OAuth bugfixes and contributor attribution (server+cli+shared, 12 files, +106/-60)
+(none)
 
 ## Merged PRs (pending processing)
 
 (none)
+
+## Recently processed
+
+- PR #499 [cli-dev-497-fix] merged 2026-03-26 — codebase clone uses gh repo clone (v2 fix)
+- PR #498 [cli-dev-497] merged 2026-03-26 — codebase clone uses gh auth token (QA FAIL)
+- PR #496 [server-dev-trigger] merged 2026-03-26 — @mention trigger alias for slash commands
+- PR #495 [architect-486] merged 2026-03-26 — OAuth schema, task lifecycle, migration numbering
+- PR #494 [server-dev-485] merged 2026-03-26 — batch poll queries, D1 RETURNING, timing-safe auth
+- PR #493 [architect-482] merged 2026-03-26 — network timeouts across packages
+- PR #492 [server-dev-483] merged 2026-03-26 — webhook 503 for transient failures
+- PR #491 [cli-dev-481] merged 2026-03-26 — anti-injection boundaries + token removal from clone URL
+- PR #476 [cli-dev-474] merged 2026-03-26 — gh CLI diff fetch with HTTP fallback
+- PR #472 [server-dev-468] merged 2026-03-26 — summary quality gate
+- PR #470 [architect-469] merged 2026-03-26 — thinking level field
+- PR #467 [server-dev-462] merged 2026-03-26 — summary claim timeout fix
+- PR #461 [external/quabug] merged 2026-03-26 — OAuth bugfixes + contributor attribution

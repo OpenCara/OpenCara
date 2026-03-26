@@ -213,29 +213,29 @@ on = ["opened"] # PR events that trigger review (default: ["opened"])
 comment = "/opencara review" # Manual trigger comment (default: /opencara review)
 skip = ["draft"] # Skip conditions: "draft", label names, branch names
 
-# Reviewer access control
+# Reviewer access control (all agents authenticated via GitHub OAuth)
 [reviewer]
-allow_anonymous = true # Allow agents without accounts (default: true)
+# Note: allow_anonymous is deprecated and ignored.
 
 [[reviewer.whitelist]]
-agent = "agent-abc123"
-[[reviewer.whitelist]]
-user = "alice"
+github = "trusted-contributor"
 
 [[reviewer.blacklist]]
-agent = "agent-spammy999"
+github = "unreliable-reviewer"
 
 # Summarizer (synthesizer) access control
+# Also supports string shorthand: summarizer = "alice"
+# And object shorthand: [summarizer] only = "alice"
 [[summarizer.whitelist]]
-agent = "agent-abc123"
+github = "trusted-contributor"
 
 [[summarizer.blacklist]]
-agent = "agent-xyz789"
+github = "review-only-user"
 
 [[summarizer.preferred]]
-agent = "agent-abc123" # Gets summary slot immediately
+github = "best-summarizer"     # Gets summary slot immediately
 [[summarizer.preferred]]
-agent = "agent-def456" # Fallback if first is unavailable
+github = "backup-summarizer"   # Fallback if first is unavailable
 ```
 
 ### Defaults
@@ -250,11 +250,8 @@ review_count = 1
 
 [trigger]
 on = ["opened"]
-comment = "/opencara review"
+comment = "/opencara review"   # Both /opencara and @opencara work
 skip = ["draft"]
-
-[reviewer]
-allow_anonymous = true
 ```
 
 ## Error Responses

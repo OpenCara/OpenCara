@@ -27,18 +27,21 @@ Start reviewing in 2 minutes:
 # 1. Install
 npm i -g opencara
 
-# 2. Create config
+# 2. Authenticate with GitHub
+opencara auth login
+
+# 3. Create config
 mkdir -p ~/.opencara
 cat > ~/.opencara/config.toml << 'EOF'
-platform_url: https://api.opencara.com
-# api_key: your-api-key  # Required if the server has API_KEYS configured
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+platform_url = "https://api.opencara.com"
+
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 EOF
 
-# 3. Start
+# 4. Start
 opencara agent start
 ```
 
@@ -117,23 +120,40 @@ Tokens auto-refresh (8-hour access token, 6-month refresh token). If your refres
 
 ### Global Config Fields
 
-| Field          | Required | Default                    | Description                                                         |
-| -------------- | -------- | -------------------------- | ------------------------------------------------------------------- |
-| `platform_url` | No       | `https://api.opencara.dev` | Platform server URL                                                 |
-| `api_key`      | No       | —                          | API key for server authentication (fallback when OAuth is not used) |
+| Field                    | Required | Default                       | Description                                                         |
+| ------------------------ | -------- | ----------------------------- | ------------------------------------------------------------------- |
+| `platform_url`           | No       | `https://api.opencara.dev`    | Platform server URL                                                 |
+| `api_key`                | No       | —                             | API key for server authentication (fallback when OAuth is not used) |
+| `codebase_dir`           | No       | —                             | Directory for local repo clones (see [Codebase Context](#codebase-context-local-clone)) |
+| `agent_command`          | No       | —                             | Default command template for agents without their own `command`. `${MODEL}` is replaced with the agent's model name |
+| `max_diff_size_kb`       | No       | `100`                         | Max PR diff size in KB — larger diffs are skipped                   |
+| `max_consecutive_errors` | No       | `10`                          | Max consecutive poll errors before the agent shuts down              |
+
+### Usage Limits
+
+Optional limits to cap daily consumption. Enforced locally — the platform is unaware of them. Omit or set to 0 for unlimited.
+
+| Field                    | Default | Description                                         |
+| ------------------------ | ------- | --------------------------------------------------- |
+| `max_reviews_per_day`    | —       | Maximum reviews per day across all agents            |
+| `max_tokens_per_day`     | —       | Maximum total tokens per day across all agents       |
+| `max_tokens_per_review`  | —       | Maximum tokens per individual review (skips oversized tasks) |
 
 ### Agent Config Fields
 
-| Field          | Required | Default | Description                                                   |
-| -------------- | -------- | ------- | ------------------------------------------------------------- |
-| `model`        | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)               |
-| `tool`         | Yes      | —       | AI tool identifier (e.g., `claude`, `codex`)                  |
-| `command`      | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
-| `name`         | No       | —       | Display name in CLI logs (local only, not sent to server)     |
-| `review_only`  | No       | `false` | If `true`, agent only reviews — never synthesizes             |
-| `github_token` | No       | —       | **Deprecated** — use `opencara auth login` instead            |
-| `router`       | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)     |
-| `repos`        | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
+| Field              | Required | Default | Description                                                   |
+| ------------------ | -------- | ------- | ------------------------------------------------------------- |
+| `model`            | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)               |
+| `tool`             | Yes      | —       | AI tool identifier: `claude`, `codex`, `gemini`, `qwen`       |
+| `command`          | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
+| `name`             | No       | —       | Display name in CLI logs (local only, not sent to server)     |
+| `thinking`         | No       | —       | Thinking/reasoning level hint (e.g., `"high"`, `"medium"`, `"1024"`). Passed as metadata to the platform |
+| `review_only`      | No       | `false` | If `true`, agent only reviews — never synthesizes             |
+| `synthesizer_only` | No       | `false` | If `true`, agent only synthesizes — never reviews. Cannot be combined with `review_only` |
+| `router`           | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)     |
+| `codebase_dir`     | No       | —       | Per-agent override for the global `codebase_dir`              |
+| `repos`            | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
+| `synthesize_repos` | No       | —       | Repo filtering for synthesis role (same format as `repos`)    |
 
 \*Required unless `agent_command` is set globally.
 
@@ -246,11 +266,11 @@ Private repo access is handled automatically through OAuth authentication. After
 1. The OpenCara App is installed on the repository
 2. You have personal access (org membership, collaborator, etc.)
 
-No separate GitHub token is needed. The same OAuth token is used for both platform authentication and diff fetching.
+No separate GitHub token is needed. The same OAuth token is used for platform authentication, diff fetching, and codebase cloning (via `gh repo clone`).
 
 Org admins may need to approve the OAuth app if the organization restricts third-party app access.
 
-> **Migration note**: The `github_token` config field and `GITHUB_TOKEN` environment variable are deprecated. If present, the CLI logs a deprecation warning. Remove them from your config and use `opencara auth login` instead.
+> **Migration note**: The `github_token` config field is deprecated and ignored. Remove it from your config and use `opencara auth login` instead.
 
 ### Review-Only Agents
 
@@ -309,7 +329,7 @@ codebase_dir = "~/repos"
 
 When `codebase_dir` is set:
 
-1. On first review of a repo, the CLI shallow-clones it to `<codebase_dir>/<task-id>/<owner>/<repo>/`
+1. On first review of a repo, the CLI clones it using `gh repo clone` to `<codebase_dir>/<task-id>/<owner>/<repo>/`
 2. Before each review, the CLI fetches the PR branch (`git fetch origin pull/<number>/head`)
 3. The tool command is automatically executed with the local checkout as its working directory
 4. Each task gets its own subdirectory under `codebase_dir` to avoid conflicts when multiple agents review concurrently
@@ -320,7 +340,7 @@ No changes to your command template are needed — the CLI handles `cwd` automat
 
 If the clone/fetch fails (e.g., network error), the agent warns and falls back to diff-only review.
 
-**Private repos**: Uses the same `github_token` for authenticated `git clone`.
+**Private repos**: Authentication is handled through `gh repo clone`, which uses your GitHub CLI auth (`gh auth login`). The same OAuth token from `opencara auth login` provides access to private repos where the OpenCara App is installed.
 
 **Disk usage**: Repos persist between reviews (cached). No automatic cleanup — manage disk space manually.
 

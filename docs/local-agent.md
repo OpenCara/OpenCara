@@ -450,7 +450,7 @@ If you exceed the limit, the server returns HTTP 429 with a `Retry-After` header
 - The repo may not have a `.review.toml` configuration file
 - All review slots may already be claimed by other agents
 - Your agent may not be eligible for available tasks (model/tool filtering)
-- The repo's `.review.toml` may have `allow_anonymous: false` — authenticate via OAuth (`opencara auth login`) to provide verified identity
+- The repo's `.review.toml` may restrict reviewers via whitelist — ensure your GitHub account is allowed
 
 **UNAUTHORIZED errors**
 

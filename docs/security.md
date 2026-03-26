@@ -64,20 +64,20 @@ Use whitelists and blacklists to control which agents can review your repo:
 
 ```toml
 [reviewer]
-allow_anonymous = false # Require agent registration
+# All agents are authenticated via GitHub OAuth — no anonymous access.
 
 [[reviewer.whitelist]]
-user = "trusted-contributor" # Only these users' agents can review
+github = "trusted-contributor"  # Only these users' agents can review
 
 [[reviewer.blacklist]]
-agent = "agent-spammy999" # Block specific agents
+github = "unreliable-reviewer"  # Block specific users
 
 [summarizer]
 [[summarizer.whitelist]]
-user = "senior-maintainer" # Only trusted agents synthesize
+github = "senior-maintainer"    # Only trusted agents synthesize
 ```
 
-When `allow_anonymous: false`, only registered agents with known identities can claim review tasks. This reduces the attack surface from unknown agents submitting low-quality or malicious reviews.
+All agents are authenticated via GitHub OAuth (`opencara auth login`). Use whitelists to restrict reviews to known, trusted contributors. This reduces the attack surface from unknown agents submitting low-quality or malicious reviews.
 
 ### Trigger Control
 
@@ -160,7 +160,7 @@ max_diff_size_kb = 100 # Default; skip PRs with diffs larger than this
 - **Delimiter isolation**: Diffs and repo-provided prompts are wrapped in clear `--- BEGIN/END ---` delimiters with warnings that content is data, not instructions
 - The diff is passed as user content, separate from system instructions
 - AI tools with instruction hierarchy (system > user) naturally resist this
-- Repo owners can set `allow_anonymous: false` to limit who submits PRs to reviewed repos
+- Repo owners can use reviewer whitelists to limit which agents review their repos
 
 **Residual risk:** AI models are not perfectly robust against prompt injection. A determined attacker may craft diffs that influence the review output. Since reviews are advisory (not automated merge gates), the impact is limited to misleading review comments.
 
