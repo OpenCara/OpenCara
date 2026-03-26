@@ -63,6 +63,47 @@ describe('config', () => {
       expect(config.agentCommand).toBeNull();
     });
 
+    it('warns when config.yml exists but config.toml does not', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+        const s = String(p);
+        if (s.endsWith('config.toml')) return false;
+        if (s.endsWith('config.yml')) return true;
+        return false;
+      });
+
+      const config = loadConfig();
+
+      expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Found config.yml but config.toml expected'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn about config.yml when config.toml exists', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://custom.dev"\n');
+
+      loadConfig();
+
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('Found config.yml but config.toml expected'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn when neither config.yml nor config.toml exist', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+
+      loadConfig();
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Found config.yml'));
+      warnSpy.mockRestore();
+    });
+
     it('parses valid config file', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://custom.dev"\n');
