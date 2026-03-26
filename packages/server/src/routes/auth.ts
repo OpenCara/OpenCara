@@ -29,13 +29,17 @@ async function safeFetch(url: string, init: RequestInit): Promise<Response | nul
 }
 
 /** Validate that a token response from GitHub has the expected shape. */
-function isValidTokenResponse(
-  data: Record<string, unknown>,
-): data is { access_token: string; refresh_token: string; expires_in: number; token_type: string } {
+function isValidTokenResponse(data: Record<string, unknown>): data is {
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  token_type: string;
+} {
   return (
     typeof data.access_token === 'string' &&
     typeof data.token_type === 'string' &&
     typeof data.expires_in === 'number'
+    // refresh_token is optional — GitHub Apps include it, but we don't require it
   );
 }
 

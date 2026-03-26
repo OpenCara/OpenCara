@@ -241,6 +241,22 @@ describe('Auth Routes', () => {
       expect(callBody.client_secret).toBeUndefined();
     });
 
+    it('returns token without refresh_token when GitHub omits it', async () => {
+      const ghResponse = {
+        access_token: 'ghu_abc123',
+        expires_in: 28800,
+        token_type: 'bearer',
+        // no refresh_token
+      };
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(ghResponse), { status: 200 }));
+
+      const res = await postDeviceToken(app, { device_code: 'dc-123' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.access_token).toBe('ghu_abc123');
+      expect(body.refresh_token).toBeUndefined();
+    });
+
     it('returns authorization_pending error from GitHub', async () => {
       fetchSpy.mockResolvedValueOnce(
         new Response(
@@ -431,6 +447,22 @@ describe('Auth Routes', () => {
       const text = await res.text();
       expect(text).not.toContain('test-client-secret');
       expect(text).not.toContain('client_secret');
+    });
+
+    it('returns token without refresh_token when GitHub omits it', async () => {
+      const ghResponse = {
+        access_token: 'ghu_new',
+        expires_in: 28800,
+        token_type: 'bearer',
+        // no refresh_token in response
+      };
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(ghResponse), { status: 200 }));
+
+      const res = await postRefresh(app, { refresh_token: 'ghr_old' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.access_token).toBe('ghu_new');
+      expect(body.refresh_token).toBeUndefined();
     });
 
     it('returns error when GitHub returns error response', async () => {

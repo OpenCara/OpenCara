@@ -12,7 +12,8 @@ import type {
 /** Stored auth token data persisted to ~/.opencara/auth.json */
 export interface StoredAuth {
   access_token: string;
-  refresh_token: string;
+  /** Optional — present for GitHub App tokens that support refresh. */
+  refresh_token?: string;
   expires_at: number; // unix ms
   github_username: string;
   github_user_id: number;
@@ -35,10 +36,10 @@ export function loadAuth(): StoredAuth | null {
     const data = JSON.parse(raw) as Record<string, unknown>;
     if (
       typeof data.access_token === 'string' &&
-      typeof data.refresh_token === 'string' &&
       typeof data.expires_at === 'number' &&
       typeof data.github_username === 'string' &&
       typeof data.github_user_id === 'number'
+      // refresh_token is optional — tolerate non-refreshable tokens
     ) {
       return data as unknown as StoredAuth;
     }
@@ -261,7 +262,13 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
     return auth.access_token;
   }
 
-  // Token expired or expiring soon — refresh
+  // Token expired or expiring soon — refresh (requires refresh_token)
+  if (!auth.refresh_token) {
+    throw new AuthError(
+      'Token expired and no refresh token available. Run `opencara auth login` to re-authenticate.',
+    );
+  }
+
   const refreshRes = await fetchFn(`${platformUrl}/api/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -294,7 +301,8 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
   const updated: StoredAuth = {
     ...auth,
     access_token: refreshData.access_token,
-    refresh_token: refreshData.refresh_token,
+    // Use new refresh_token if provided, otherwise keep existing
+    refresh_token: refreshData.refresh_token ?? auth.refresh_token,
     expires_at: nowFn() + refreshData.expires_in * 1000,
   };
 

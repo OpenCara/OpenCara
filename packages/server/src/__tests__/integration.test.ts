@@ -12,6 +12,7 @@ import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
+import { isTaskActive } from '../task-lifecycle.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import { MockGitHubService, type GitHubServiceCall } from './helpers/github-mock.js';
 import { VALID_SUMMARY_TEXT } from './helpers/test-constants.js';
@@ -1124,9 +1125,7 @@ describe('Integration: full E2E flows', () => {
 
       await sendPRWebhook(72);
       const allTasks = await store.listTasks();
-      const activeTasks = allTasks.filter(
-        (t) => t.status === 'pending' || t.status === 'reviewing',
-      );
+      const activeTasks = allTasks.filter(isTaskActive);
       expect(activeTasks).toHaveLength(1);
     });
 
