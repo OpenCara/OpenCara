@@ -212,13 +212,6 @@ export function parseReviewConfig(toml: string): ParseResult {
   const agentsRaw = isObject(raw.agents) ? raw.agents : {};
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
 
-  // Deprecation warning: allow_anonymous is ignored with OAuth authentication
-  if (reviewerRaw.allow_anonymous !== undefined) {
-    console.warn(
-      'Deprecated: "reviewer.allow_anonymous" is ignored. All agents are now authenticated via OAuth.',
-    );
-  }
-
   const config: ReviewConfig = {
     version: raw.version,
     prompt: raw.prompt,

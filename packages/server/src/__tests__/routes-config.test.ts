@@ -150,7 +150,6 @@ describe('POST /api/config/validate', () => {
       'preferred_tools = ["claude"]',
       '',
       '[reviewer]',
-      'allow_anonymous = false',
     ].join('\n');
     const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);

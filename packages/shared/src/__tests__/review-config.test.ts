@@ -22,7 +22,6 @@ preferred_models = ["claude-opus-4-6", "glm-5"]
 preferred_tools = ["claude-code", "codex"]
 
 [reviewer]
-allow_anonymous = false
 
 [[reviewer.whitelist]]
 agent = "abc-123"
@@ -152,29 +151,11 @@ describe('parseReviewConfig', () => {
     expect(result.agents.preferredTools).toEqual(['claude-code', 'codex']);
   });
 
-  it('logs deprecation warning when allow_anonymous is present', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('silently ignores allow_anonymous field in reviewer section', () => {
     const result = parseReviewConfig(
       'version = 1\nprompt = "test"\n[reviewer]\nallow_anonymous = false',
     ) as ReviewConfig;
     expect('error' in result).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Deprecated: "reviewer.allow_anonymous" is ignored'),
-    );
-    warnSpy.mockRestore();
-  });
-
-  it('does not log deprecation warning when allow_anonymous is absent', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    parseReviewConfig(MINIMAL_CONFIG);
-    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('allow_anonymous'));
-    warnSpy.mockRestore();
-  });
-
-  it('does not include allowAnonymous in parsed config', () => {
-    const result = parseReviewConfig(
-      'version = 1\nprompt = "test"\n[reviewer]\nallow_anonymous = false',
-    ) as ReviewConfig;
     expect('allowAnonymous' in result.reviewer).toBe(false);
   });
 });
