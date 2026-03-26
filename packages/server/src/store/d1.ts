@@ -70,6 +70,7 @@ interface ClaimRow {
   status: string;
   model: string | null;
   tool: string | null;
+  thinking: string | null;
   review_text: string | null;
   verdict: string | null;
   tokens_used: number | null;
@@ -125,6 +126,7 @@ export function rowToClaim(row: ClaimRow): TaskClaim {
 
   if (row.model !== null) claim.model = row.model;
   if (row.tool !== null) claim.tool = row.tool;
+  if (row.thinking !== null) claim.thinking = row.thinking;
   if (row.review_text !== null) claim.review_text = row.review_text;
   if (row.verdict !== null) claim.verdict = row.verdict as TaskClaim['verdict'];
   if (row.tokens_used !== null) claim.tokens_used = row.tokens_used;
@@ -347,9 +349,9 @@ export class D1DataStore implements DataStore {
 
     const result = await this.db
       .prepare(
-        `INSERT OR IGNORE INTO claims (id, task_id, agent_id, role, status, model, tool,
+        `INSERT OR IGNORE INTO claims (id, task_id, agent_id, role, status, model, tool, thinking,
         review_text, verdict, tokens_used, github_user_id, github_username, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         claim.id,
@@ -359,6 +361,7 @@ export class D1DataStore implements DataStore {
         claim.status,
         claim.model ?? null,
         claim.tool ?? null,
+        claim.thinking ?? null,
         claim.review_text ?? null,
         claim.verdict ?? null,
         claim.tokens_used ?? null,
@@ -395,6 +398,7 @@ export class D1DataStore implements DataStore {
       'status',
       'model',
       'tool',
+      'thinking',
       'review_text',
       'verdict',
       'tokens_used',

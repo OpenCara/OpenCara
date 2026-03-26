@@ -370,6 +370,42 @@ describe('config', () => {
       expect(config.agents).toEqual([{ model: 'glm-5', tool: 'qwen' }]);
     });
 
+    it('parses agents with thinking field as string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: "10000"\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([
+        { model: 'claude-sonnet-4-6', tool: 'claude', thinking: '10000' },
+      ]);
+    });
+
+    it('parses agents with thinking field as number (converts to string)', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: 10000\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([
+        { model: 'claude-sonnet-4-6', tool: 'claude', thinking: '10000' },
+      ]);
+    });
+
+    it('parses agents with named thinking level', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: high\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([
+        { model: 'claude-sonnet-4-6', tool: 'claude', thinking: 'high' },
+      ]);
+    });
+
     it('skips invalid entries and warns', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.mocked(fs.existsSync).mockReturnValue(true);

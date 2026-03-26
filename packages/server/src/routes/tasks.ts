@@ -187,6 +187,7 @@ export async function checkTimeouts(
       const reviews: TimeoutReview[] = completedReviews.map((claim) => ({
         model: claim.model ?? 'unknown',
         tool: claim.tool ?? 'unknown',
+        thinking: claim.thinking,
         verdict: (claim.verdict as ReviewVerdict) ?? 'comment',
         review_text: claim.review_text!,
       }));
@@ -476,7 +477,7 @@ export function taskRoutes() {
     const taskId = c.req.param('taskId');
     const body = await parseBody(c, ClaimRequestSchema);
     if (body instanceof Response) return body;
-    const { agent_id, role, model, tool } = body;
+    const { agent_id, role, model, tool, thinking } = body;
 
     // Block check — reject agents exceeding the rejection threshold
     if (await isAgentBlocked(store, agent_id)) {
@@ -560,6 +561,7 @@ export function taskRoutes() {
       status: 'pending',
       model,
       tool,
+      thinking,
       github_user_id: verifiedIdentity?.github_user_id,
       github_username: verifiedIdentity?.github_username,
       created_at: Date.now(),
@@ -592,6 +594,7 @@ export function taskRoutes() {
           verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
           model: cl.model,
           tool: cl.tool,
+          thinking: cl.thinking,
         }));
       return c.json<ClaimResponse>({ claimed: true, reviews: completedReviews });
     }

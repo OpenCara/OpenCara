@@ -208,7 +208,7 @@ async function pollLoop(
   agentId: string,
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
-  agentInfo: { model: string; tool: string },
+  agentInfo: { model: string; tool: string; thinking?: string },
   logger: Logger,
   agentSession: AgentSessionStats,
   options: {
@@ -267,6 +267,7 @@ async function pollLoop(
       if (synthesizeRepos) pollBody.synthesize_repos = synthesizeRepos;
       if (agentInfo.model) pollBody.model = agentInfo.model;
       if (agentInfo.tool) pollBody.tool = agentInfo.tool;
+      if (agentInfo.thinking) pollBody.thinking = agentInfo.thinking;
       const pollResponse = await client.post<PollResponse>('/api/tasks/poll', pollBody);
 
       consecutiveAuthErrors = 0;
@@ -374,7 +375,7 @@ async function handleTask(
   task: PollTask,
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
-  agentInfo: { model: string; tool: string },
+  agentInfo: { model: string; tool: string; thinking?: string },
   logger: Logger,
   agentSession: AgentSessionStats,
   routerRelay?: RouterRelay,
@@ -396,6 +397,7 @@ async function handleTask(
       role,
       model: agentInfo.model,
       tool: agentInfo.tool,
+      thinking: agentInfo.thinking,
     };
     // github_username removed — identity derived from OAuth token server-side
     claimResponse = await withRetry(
@@ -633,7 +635,7 @@ async function executeReviewTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   logger: Logger,
-  agentInfo: { model: string; tool: string },
+  agentInfo: { model: string; tool: string; thinking?: string },
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
@@ -764,7 +766,7 @@ async function executeSummaryTask(
   reviewDeps: ReviewExecutorDeps,
   consumptionDeps: ConsumptionDeps,
   logger: Logger,
-  agentInfo: { model: string; tool: string },
+  agentInfo: { model: string; tool: string; thinking?: string },
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
@@ -1000,7 +1002,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export async function startAgent(
   agentId: string,
   platformUrl: string,
-  agentInfo: { model: string; tool: string },
+  agentInfo: { model: string; tool: string; thinking?: string },
   reviewDeps?: ReviewExecutorDeps,
   consumptionDeps?: ConsumptionDeps,
   options?: {
@@ -1044,7 +1046,8 @@ export async function startAgent(
   const agentSession = createAgentSession();
 
   log(`${icons.start} Agent started (polling ${platformUrl})`);
-  log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}`);
+  const thinkingInfo = agentInfo.thinking ? ` | Thinking: ${agentInfo.thinking}` : '';
+  log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}${thinkingInfo}`);
   if (options?.versionOverride) {
     log(`${icons.info} Version override active: ${options.versionOverride}`);
   }
@@ -1149,6 +1152,7 @@ export async function startAgentRouter(): Promise<void> {
 
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
+  const thinking = agentConfig?.thinking;
   const label = agentConfig?.name ?? 'agent[0]';
   const roles = agentConfig ? computeRoles(agentConfig) : undefined;
   // Router mode supports version override via env var only (no CLI flag in default mode)
@@ -1157,7 +1161,7 @@ export async function startAgentRouter(): Promise<void> {
   await startAgent(
     agentId,
     config.platformUrl,
-    { model, tool },
+    { model, tool, thinking },
     reviewDeps,
     {
       agentId,
@@ -1242,12 +1246,13 @@ function startAgentByIndex(
   const usageTracker = new UsageTracker();
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
+  const thinking = agentConfig?.thinking;
   const roles = agentConfig ? computeRoles(agentConfig) : undefined;
 
   const agentPromise = startAgent(
     agentId,
     config.platformUrl,
-    { model, tool },
+    { model, tool, thinking },
     reviewDeps,
     { agentId, session, usageTracker, usageLimits: config.usageLimits },
     {

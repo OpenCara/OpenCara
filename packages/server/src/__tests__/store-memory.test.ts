@@ -251,6 +251,12 @@ describe('MemoryDataStore', () => {
       expect(claims).toHaveLength(1);
       expect(claims[0].agent_id).toBe('a');
     });
+
+    it('stores and retrieves thinking field on claims', async () => {
+      await store.createClaim(makeClaim({ model: 'claude', tool: 'claude', thinking: '10000' }));
+      const claims = await store.getClaims('task-1');
+      expect(claims[0].thinking).toBe('10000');
+    });
   });
 
   // ── Agent last-seen ────────────────────────────────────────

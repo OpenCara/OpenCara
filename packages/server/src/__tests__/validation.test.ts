@@ -109,6 +109,7 @@ describe('Request Validation (Zod)', () => {
         repos: ['org/repo'],
         model: 'claude',
         tool: 'claude',
+        thinking: '10000',
         synthesize_repos: { mode: 'whitelist', list: ['org/repo'] },
       });
       expect(res.status).toBe(200);
@@ -175,6 +176,20 @@ describe('Request Validation (Zod)', () => {
         tool: 'claude',
       });
       expect(res.status).toBe(200);
+    });
+
+    it('accepts claim request with thinking field', async () => {
+      await store.createTask(makeTask({ id: 'task-thinking' }));
+      const res = await request('POST', '/api/tasks/task-thinking/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+        model: 'claude',
+        tool: 'claude',
+        thinking: '10000',
+      });
+      expect(res.status).toBe(200);
+      const claim = await store.getClaim('task-thinking:agent-1:summary');
+      expect(claim?.thinking).toBe('10000');
     });
   });
 

@@ -8,6 +8,7 @@ import type { RepoConfig, RepoFilterMode } from '@opencara/shared';
 export interface LocalAgentConfig {
   model: string;
   tool: string;
+  thinking?: string;
   name?: string;
   command?: string;
   router?: boolean;
@@ -157,6 +158,8 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
       }
     }
     const agent: LocalAgentConfig = { model: obj.model, tool: resolvedTool };
+    if (typeof obj.thinking === 'string') agent.thinking = obj.thinking;
+    else if (typeof obj.thinking === 'number') agent.thinking = String(obj.thinking);
     if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;
