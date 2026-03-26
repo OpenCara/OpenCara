@@ -207,11 +207,37 @@ describe('Auth Routes', () => {
       const body = await res.json();
       expect(body).toEqual(ghResponse);
 
-      // Verify fetch was called with correct params — no client_secret
+      // Verify fetch was called with correct params (includes client_secret when configured)
       const callBody = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
       expect(callBody.client_id).toBe('test-client-id');
+      expect(callBody.client_secret).toBe('test-client-secret');
       expect(callBody.device_code).toBe('dc-123');
       expect(callBody.grant_type).toBe('urn:ietf:params:oauth:grant-type:device_code');
+    });
+
+    it('omits client_secret when GITHUB_CLIENT_SECRET is not configured', async () => {
+      const ghResponse = {
+        access_token: 'ghu_abc123',
+        refresh_token: 'ghr_xyz789',
+        expires_in: 28800,
+        token_type: 'bearer',
+      };
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(ghResponse), { status: 200 }));
+
+      const envWithoutSecret = { ...mockEnv, GITHUB_CLIENT_SECRET: undefined };
+      const res = await app.request(
+        '/api/auth/device/token',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_code: 'dc-123' }),
+        },
+        envWithoutSecret as unknown as typeof mockEnv,
+      );
+      expect(res.status).toBe(200);
+
+      const callBody = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+      expect(callBody.client_id).toBe('test-client-id');
       expect(callBody.client_secret).toBeUndefined();
     });
 

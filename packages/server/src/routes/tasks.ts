@@ -256,11 +256,22 @@ async function postFinalReview(
     return;
   }
 
+  // Collect unique contributors from all claims — non-fatal on failure
+  let contributors: string[] = [];
+  try {
+    const claims = await store.getClaims(taskId);
+    contributors = [
+      ...new Set(claims.map((c) => c.github_username).filter((u): u is string => !!u)),
+    ];
+  } catch {
+    // Non-fatal — post review without contributor attribution
+  }
+
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
 
     // Wrap review_text with consistent branding header/footer
-    const body = wrapReviewComment(trimmed);
+    const body = wrapReviewComment(trimmed, contributors.length > 0 ? contributors : undefined);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     await store.deleteTask(taskId);
@@ -298,8 +309,6 @@ export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
   // Auth: OAuth when OAUTH_REQUIRED=true, otherwise fall back to API key auth.
-  // During the transition period both can coexist — OAuth is checked first,
-  // and API key is used as fallback when OAuth is not enforced.
   // Pre-instantiate middleware to avoid allocating closures per request.
   const oauthMiddleware = requireOAuth();
   const apiKeyMiddleware = requireApiKey();
@@ -552,6 +561,7 @@ export function taskRoutes() {
       model,
       tool,
       github_user_id: verifiedIdentity?.github_user_id,
+      github_username: verifiedIdentity?.github_username,
       created_at: Date.now(),
     });
     if (!claimCreated) {

@@ -25,6 +25,6 @@ case "$STATUS" in
     ;;
 esac
 
-gh project item-list 1 --owner OpenCara --format json \
+gh project item-list 1 --owner OpenCara --format json --limit 100 \
   | jq --arg status "$DISPLAY_STATUS" \
     '[.items[] | select(.status == $status) | {number: .content.number, title: .content.title}]'

@@ -315,9 +315,10 @@ describe('auth', () => {
     });
 
     it('handles slow_down by increasing interval', async () => {
+      // Server proxies GitHub's error as 200 with error field
       const slowDownResponse = mockResponse(
-        { error: { code: 'RATE_LIMITED', message: 'slow_down' } },
-        429,
+        { error: 'slow_down', error_description: 'Too many requests' },
+        200,
       );
 
       const delays: number[] = [];
@@ -341,9 +342,10 @@ describe('auth', () => {
     });
 
     it('throws on expired_token', async () => {
+      // Server proxies GitHub's error as 200 with error field
       const expiredResponse = mockResponse(
-        { error: { code: 'AUTH_TOKEN_EXPIRED', message: 'expired' } },
-        400,
+        { error: 'expired_token', error_description: 'The device code has expired' },
+        200,
       );
 
       const fetchFn = vi
@@ -357,9 +359,10 @@ describe('auth', () => {
     });
 
     it('throws on access_denied', async () => {
+      // Server proxies GitHub's error as 200 with error field
       const deniedResponse = mockResponse(
-        { error: { code: 'AUTH_TOKEN_REVOKED', message: 'denied' } },
-        400,
+        { error: 'access_denied', error_description: 'User denied access' },
+        200,
       );
 
       const fetchFn = vi

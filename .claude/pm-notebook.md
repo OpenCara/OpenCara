@@ -349,7 +349,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 
 ## Open PRs
 
-(none)
+- #461 [external/quabug] 2026-03-26T02:46:44Z — fix: OAuth bugfixes and contributor attribution (server+cli+shared, 12 files, +106/-60)
 
 ## Merged PRs (pending processing)
 

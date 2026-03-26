@@ -12,6 +12,7 @@ assets/
 .claude/worktrees/
 audit.json
 .vercel/
+.claude/scheduled_tasks.lock
 .claude/github-events.jsonl
 .claude/github-events.cursor
 .claude/github-events.process-cursor

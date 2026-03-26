@@ -128,8 +128,19 @@ export function authRoutes() {
     if (body instanceof Response) return body;
 
     const clientId = c.env.GITHUB_CLIENT_ID;
+    const clientSecret = c.env.GITHUB_CLIENT_SECRET;
     if (!clientId) {
       return apiError(c, 500, 'INTERNAL_ERROR', 'OAuth not configured');
+    }
+
+    const tokenBody: Record<string, string> = {
+      client_id: clientId,
+      device_code: body.device_code,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    };
+    // Include client_secret if configured (required for GitHub Apps)
+    if (clientSecret) {
+      tokenBody.client_secret = clientSecret;
     }
 
     const ghRes = await safeFetch(GITHUB_OAUTH_TOKEN_URL, {
@@ -138,11 +149,7 @@ export function authRoutes() {
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
-      body: JSON.stringify({
-        client_id: clientId,
-        device_code: body.device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      }),
+      body: JSON.stringify(tokenBody),
     });
 
     if (!ghRes) {
