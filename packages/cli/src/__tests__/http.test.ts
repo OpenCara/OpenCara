@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
+import { ApiClient, HttpError, UpgradeRequiredError, API_TIMEOUT_MS } from '../http.js';
 
 describe('ApiClient', () => {
   const originalFetch = globalThis.fetch;
@@ -457,6 +457,60 @@ describe('ApiClient', () => {
       // Only one refresh attempt
       expect(onTokenRefresh).toHaveBeenCalledOnce();
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('timeout', () => {
+    it('passes AbortController signal to fetch calls', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: 'test' }),
+      });
+
+      const client = new ApiClient('https://api.test.com');
+      await client.get('/test');
+
+      const calledInit = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(calledInit.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('uses default timeout of API_TIMEOUT_MS', () => {
+      expect(API_TIMEOUT_MS).toBe(30_000);
+    });
+
+    it('accepts custom timeoutMs', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: 'test' }),
+      });
+
+      const client = new ApiClient('https://api.test.com', { timeoutMs: 5000 });
+      await client.get('/test');
+
+      const calledInit = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(calledInit.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('throws on timeout (AbortError propagated from fetch)', async () => {
+      globalThis.fetch = vi
+        .fn()
+        .mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+
+      const client = new ApiClient('https://api.test.com', { timeoutMs: 1 });
+      await expect(client.get('/test')).rejects.toThrow('aborted');
+    });
+
+    it('passes AbortController signal to POST fetch calls', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: '1' }),
+      });
+
+      const client = new ApiClient('https://api.test.com');
+      await client.post('/test', { data: 1 });
+
+      const calledInit = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(calledInit.signal).toBeInstanceOf(AbortSignal);
     });
   });
 });

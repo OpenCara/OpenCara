@@ -12,12 +12,19 @@ import { rateLimitByIP } from '../middleware/rate-limit.js';
 const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const GITHUB_OAUTH_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
-/** Safely fetch a URL, returning null on network errors. */
+/** Timeout for GitHub OAuth proxy calls (10 seconds). */
+const OAUTH_PROXY_TIMEOUT_MS = 10_000;
+
+/** Safely fetch a URL with timeout, returning null on network/timeout errors. */
 async function safeFetch(url: string, init: RequestInit): Promise<Response | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OAUTH_PROXY_TIMEOUT_MS);
   try {
-    return await fetch(url, init);
+    return await fetch(url, { ...init, signal: controller.signal });
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

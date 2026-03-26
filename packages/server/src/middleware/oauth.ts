@@ -5,6 +5,9 @@ import type { Env, AppVariables } from '../types.js';
 /** Default cache TTL: 1 hour in milliseconds. */
 export const OAUTH_CACHE_TTL_MS = 60 * 60 * 1000;
 
+/** Timeout for GitHub token verification API calls (10 seconds). */
+const OAUTH_VERIFY_TIMEOUT_MS = 10_000;
+
 /**
  * Hash a token using SHA-256. Returns hex-encoded digest.
  * Uses the Web Crypto API available in Cloudflare Workers and Node 18+.
@@ -34,17 +37,25 @@ export async function verifyGitHubToken(
   { identity: VerifiedIdentity; valid: true } | { valid: false; reason: 'revoked' | 'expired' }
 > {
   const credentials = btoa(`${clientId}:${clientSecret}`);
-  const response = await fetch(`https://api.github.com/applications/${clientId}/token`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'OpenCara-Server',
-    },
-    body: JSON.stringify({ access_token: token }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OAUTH_VERIFY_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`https://api.github.com/applications/${clientId}/token`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'OpenCara-Server',
+      },
+      body: JSON.stringify({ access_token: token }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (response.status === 200) {
     const data = (await response.json()) as { user?: { id: number; login: string } };

@@ -27,12 +27,16 @@ export class UpgradeRequiredError extends Error {
 /** Callback invoked when the server returns AUTH_TOKEN_EXPIRED. Returns a fresh token. */
 export type TokenRefreshFn = () => Promise<string>;
 
+/** Default timeout for platform API calls (30 seconds). */
+export const API_TIMEOUT_MS = 30_000;
+
 export class ApiClient {
   private readonly debug: boolean;
   private authToken: string | null;
   private readonly cliVersion: string | null;
   private readonly versionOverride: string | null;
   private readonly onTokenRefresh: TokenRefreshFn | null;
+  private readonly timeoutMs: number;
 
   constructor(
     private readonly baseUrl: string,
@@ -44,6 +48,8 @@ export class ApiClient {
           cliVersion?: string;
           versionOverride?: string | null;
           onTokenRefresh?: TokenRefreshFn;
+          /** Per-request timeout in milliseconds. Defaults to API_TIMEOUT_MS (30s). */
+          timeoutMs?: number;
         },
   ) {
     if (typeof debugOrOptions === 'object' && debugOrOptions !== null) {
@@ -52,12 +58,14 @@ export class ApiClient {
       this.cliVersion = debugOrOptions.cliVersion ?? null;
       this.versionOverride = debugOrOptions.versionOverride ?? null;
       this.onTokenRefresh = debugOrOptions.onTokenRefresh ?? null;
+      this.timeoutMs = debugOrOptions.timeoutMs ?? API_TIMEOUT_MS;
     } else {
       this.debug = debugOrOptions ?? process.env.OPENCARA_DEBUG === '1';
       this.authToken = null;
       this.cliVersion = null;
       this.versionOverride = null;
       this.onTokenRefresh = null;
+      this.timeoutMs = API_TIMEOUT_MS;
     }
   }
 
@@ -110,9 +118,20 @@ export class ApiClient {
     return { message, errorCode, minimumVersion };
   }
 
+  /** Fetch with AbortController-based timeout. Clears the timer on completion. */
+  private async timedFetch(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async get<T>(path: string): Promise<T> {
     this.log(`GET ${path}`);
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    const res = await this.timedFetch(`${this.baseUrl}${path}`, {
       method: 'GET',
       headers: this.headers(),
     });
@@ -121,7 +140,7 @@ export class ApiClient {
 
   async post<T>(path: string, body?: unknown): Promise<T> {
     this.log(`POST ${path}`);
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    const res = await this.timedFetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: this.headers(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -149,7 +168,7 @@ export class ApiClient {
         try {
           this.authToken = await this.onTokenRefresh();
           this.log('Token refreshed, retrying request');
-          const retryRes = await fetch(`${this.baseUrl}${path}`, {
+          const retryRes = await this.timedFetch(`${this.baseUrl}${path}`, {
             method,
             headers: this.headers(),
             body: body !== undefined ? JSON.stringify(body) : undefined,
