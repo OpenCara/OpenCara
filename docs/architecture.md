@@ -24,7 +24,7 @@
 ```
 GitHub (PR Webhook)
     ↓
-Hono server validates signature, reads .review.toml
+Hono server validates signature, reads .opencara.toml
     ↓
 Creates task in D1 (DataStore)
     ↓
@@ -165,9 +165,9 @@ pending ──→ reviewing ──→ completed
 
 ### Multi-Agent Flow
 
-For `review_count > 1` in `.review.toml`:
+For `agent_count > 1` in `.opencara.toml`:
 
-1. `review_count - 1` agents claim as `review` role
+1. `agent_count - 1` agents claim as `review` role
 2. After all reviews complete, one agent claims as `summary` role
    - If `summarizer.preferred` is set, preferred agents get the slot immediately
    - Non-preferred agents are held for a 60-second grace period to give preferred agents a chance
@@ -176,20 +176,20 @@ For `review_count > 1` in `.review.toml`:
 4. Summary agent synthesizes and submits final review
 5. Server posts synthesized review as a PR comment
 
-For `review_count = 1` (single agent):
+For `agent_count = 1` (single agent):
 
 1. One agent claims as `summary` role directly
 2. Agent reviews and submits
 3. Server posts review to GitHub
 
-## `.review.toml` Configuration
+## `.opencara.toml` Configuration
 
 Read from the repository's head branch on each PR webhook.
 
 | Scenario          | Behavior                           |
 | ----------------- | ---------------------------------- |
 | File not found    | Skip review — repo hasn't opted in |
-| Malformed YAML    | Skip review, log error             |
+| Malformed TOML    | Skip review, log error             |
 | Missing `version` | Error (required field)             |
 | Missing `prompt`  | Error (required field)             |
 
@@ -197,43 +197,40 @@ Read from the repository's head branch on each PR webhook.
 
 ```toml
 version = 1 # Required
+
+[review]
 prompt = """
 Review this PR for bugs and security issues.
 """ # Required — review instructions for agents
-
-[agents]
-review_count = 3 # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
+agent_count = 3 # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
 preferred_models = [] # Preferred AI models (informational, not enforced)
 preferred_tools = [] # Preferred AI tools (informational, not enforced)
-
 timeout = "10m" # Task timeout (1m-30m, default: 10m)
 
-[trigger]
+[review.trigger]
 on = ["opened"] # PR events that trigger review (default: ["opened"])
 comment = "/opencara review" # Manual trigger comment (default: /opencara review)
 skip = ["draft"] # Skip conditions: "draft", label names, branch names
 
-# Reviewer access control (all agents authenticated via GitHub OAuth)
-[reviewer]
-
-[[reviewer.whitelist]]
+# Reviewer access control
+[[review.reviewer.whitelist]]
 github = "trusted-contributor"
 
-[[reviewer.blacklist]]
+[[review.reviewer.blacklist]]
 github = "unreliable-reviewer"
 
 # Summarizer (synthesizer) access control
 # Also supports string shorthand: summarizer = "alice"
-# And object shorthand: [summarizer] only = "alice"
-[[summarizer.whitelist]]
+# And object shorthand: [review.summarizer] only = "alice"
+[[review.summarizer.whitelist]]
 github = "trusted-contributor"
 
-[[summarizer.blacklist]]
+[[review.summarizer.blacklist]]
 github = "review-only-user"
 
-[[summarizer.preferred]]
+[[review.summarizer.preferred]]
 github = "best-summarizer"     # Gets summary slot immediately
-[[summarizer.preferred]]
+[[review.summarizer.preferred]]
 github = "backup-summarizer"   # Fallback if first is unavailable
 ```
 
@@ -241,13 +238,13 @@ github = "backup-summarizer"   # Fallback if first is unavailable
 
 ```toml
 version = 1
+
+[review]
 prompt = "Review this pull request for bugs, security issues, and code quality."
+agent_count = 1
 timeout = "10m"
 
-[agents]
-review_count = 1
-
-[trigger]
+[review.trigger]
 on = ["opened"]
 comment = "/opencara review"   # Both /opencara and @opencara work
 skip = ["draft"]

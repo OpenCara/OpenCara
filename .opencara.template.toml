@@ -1,0 +1,214 @@
+# OpenCara Configuration
+# =====================
+#
+# Place this file as `.opencara.toml` in your repository root to customize
+# how OpenCara handles your PRs and issues.
+#
+# Only `version` and `[review] prompt` are required for code review.
+# Works without any `.opencara.toml` at all — OpenCara uses:
+#   1 review agent, trigger on PR opened, skip drafts, 10-minute timeout.
+#
+# Minimal config:
+#   version = 1
+#   [review]
+#   prompt = "Review this PR for bugs and code quality."
+#
+# Configuration examples at the end of this file.
+
+# ===========================================================================
+# REQUIRED: Schema version — must be 1 (the only supported version).
+# ===========================================================================
+version = 1
+
+# ===========================================================================
+# [review] — Code Review Configuration
+# ===========================================================================
+#
+# Controls how OpenCara reviews pull requests. The `prompt` field is required.
+[review]
+
+# The review prompt sent to all review agents. This is the primary instruction
+# agents receive, so be specific about what matters to your project.
+# Use TOML multiline strings (triple quotes) for longer prompts.
+#
+# Tips:
+#   - Mention your tech stack so agents understand the context
+#   - List specific things to watch for (security, performance, style)
+#   - Mention any project conventions (naming, patterns, test requirements)
+prompt = """
+Review this PR for bugs, security issues, and code quality.
+Focus on logic errors, edge cases, and potential performance problems.
+This project uses TypeScript + React, following ESLint standards.
+"""
+
+# Number of agents to review each PR (range: 1–10).
+# When agent_count = 1: the single agent's review is posted directly.
+# When agent_count > 1: individual reviews are collected, then a synthesizer
+#   agent merges them into a single consolidated comment.
+# Default: 1
+agent_count = 2
+
+# How long to wait for all review slots to be filled before synthesizing.
+# Format: "<minutes>m" (range: 1m–30m)
+# Default: "10m"
+timeout = "10m"
+
+# Prefer agents running these AI models (empty = no preference).
+# Matching agents are selected first when claiming review slots.
+# Default: []
+preferred_models = ["claude-sonnet-4-6", "qwen3.5-plus"]
+
+# Prefer agents using these tool types (empty = no preference).
+# Tool names: claude, codex, gemini, qwen
+# Default: []
+preferred_tools = []
+
+# ---------------------------------------------------------------------------
+# [review.trigger] — When to run reviews
+# ---------------------------------------------------------------------------
+[review.trigger]
+
+# PR actions that trigger a review. Default: ["opened"]
+on = ["opened", "synchronize"]
+
+# Comment command to manually request a review. Default: "/opencara review"
+comment = "/opencara review"
+
+# Conditions to skip reviews. Default: ["draft"]
+skip = ["draft"]
+# skip = ["draft", "label:no-review", "branch:release/*"]
+
+# ---------------------------------------------------------------------------
+# [review.reviewer] — Control who can review
+# ---------------------------------------------------------------------------
+[review.reviewer]
+
+# Whitelist: allow ONLY these users/agents to review.
+# Default: [] (empty = allow all authenticated agents)
+#
+# [[review.reviewer.whitelist]]
+# github = "trusted-contributor"
+#
+# [[review.reviewer.whitelist]]
+# agent = "3712d31f-..."
+
+# Blacklist: block specific users/agents from reviewing.
+# Default: []
+#
+# [[review.reviewer.blacklist]]
+# github = "unreliable-reviewer"
+
+# ---------------------------------------------------------------------------
+# [review.summarizer] — Control who produces the synthesis
+# ---------------------------------------------------------------------------
+#
+# When agent_count > 1, a synthesizer merges individual reviews.
+#
+# Supports three forms:
+#   1. String shorthand: summarizer = "alice"
+#   2. Object with "only": [review.summarizer] only = "alice"
+#   3. Full object: whitelist/blacklist/preferred lists
+[review.summarizer]
+# [[review.summarizer.preferred]]
+# github = "best-summarizer"
+
+# ---------------------------------------------------------------------------
+# [[review.agents]] — Per-agent slot overrides (optional)
+# ---------------------------------------------------------------------------
+#
+# Override the shared prompt or preferences for individual review slots.
+# If fewer entries than agent_count, remaining agents use the shared prompt.
+#
+# [[review.agents]]
+# prompt = "Focus specifically on security vulnerabilities."
+# preferred_models = ["claude-opus-4-6"]
+#
+# [[review.agents]]
+# prompt = "Focus on performance and optimization."
+
+# ===========================================================================
+# [dedup] — Duplicate Detection (optional, disabled by default)
+# ===========================================================================
+#
+# Detect duplicate PRs and issues before they accumulate.
+#
+# [dedup.prs]
+# prompt = "Check if this PR duplicates an existing one."
+# enabled = true
+# agent_count = 1
+# index_issue = 42   # Issue number tracking known PRs
+#
+# [dedup.issues]
+# prompt = "Check if this issue is a duplicate."
+# enabled = true
+# agent_count = 1
+# include_closed = true   # Also check closed issues
+
+# ===========================================================================
+# [triage] — Issue Triage (optional, disabled by default)
+# ===========================================================================
+#
+# Automatically triage new issues — add labels, suggest priority, etc.
+#
+# [triage]
+# prompt = "Triage this issue: categorize, assign priority, suggest labels."
+# enabled = true
+# default_mode = "comment"    # "comment" or "rewrite"
+# auto_label = true
+# agent_count = 1
+# triggers = ["bug", "feature", "question"]
+#
+# [triage.author_modes]
+# alice = "rewrite"    # Per-author mode overrides
+# bob = "comment"
+
+# ===========================================================================
+# CONFIGURATION EXAMPLES
+# ===========================================================================
+#
+# --- Example 1: Single agent, minimal config ---
+#
+#   version = 1
+#   [review]
+#   prompt = "Review for bugs and security issues."
+#
+# --- Example 2: Multi-agent with model preferences ---
+#
+#   version = 1
+#   [review]
+#   prompt = """
+#   Review this PR for our Python/Django backend.
+#   Focus on SQL injection, authentication bypass, and N+1 queries.
+#   """
+#   agent_count = 3
+#   preferred_models = ["claude-sonnet-4-6", "gpt-5.4-codex", "gemini-2.5-pro"]
+#   timeout = "15m"
+#   [review.trigger]
+#   on = ["opened", "synchronize"]
+#   skip = ["draft", "label:dependencies"]
+#
+# --- Example 3: Restricted access with dedicated summarizer ---
+#
+#   version = 1
+#   [review]
+#   prompt = "Security-focused review for our payment service."
+#   agent_count = 2
+#   timeout = "5m"
+#   [[review.reviewer.whitelist]]
+#   github = "security-team-member-1"
+#   [[review.reviewer.whitelist]]
+#   github = "security-team-member-2"
+#   [review.summarizer]
+#   only = "security-team-lead"
+#
+# --- Example 4: Per-agent prompt overrides ---
+#
+#   version = 1
+#   [review]
+#   prompt = "General code review."
+#   agent_count = 3
+#   [[review.agents]]
+#   prompt = "Focus on security vulnerabilities only."
+#   preferred_models = ["claude-opus-4-6"]
+#   [[review.agents]]
+#   prompt = "Focus on performance and efficiency."

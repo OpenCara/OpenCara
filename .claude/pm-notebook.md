@@ -68,12 +68,12 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 - #211 [cli-dev, medium] Dockerfile + docker-compose.yml for containerized agent deployment — **DONE** (PR #223 merged)
 - #212 [cli-dev, medium] Unified GitHub auth with 4-tier fallback chain — **DONE** (PR #215 merged)
 - #213 [server-dev, medium] Enforce reviewer/summarizer whitelist/blacklist with agent ID filtering — **DONE** (PR #214 merged)
-- #216 [server-dev, medium] Add preferred synthesizer config in .review.toml — **DONE** (PR #224 merged)
+- #216 [server-dev, medium] Add preferred synthesizer config in .opencara.toml — **DONE** (PR #224 merged)
 - #217 [server-dev, medium] Switch from PR Review API to issue comments — **DONE** (PR #218 merged)
 
 ### Code review audit (from external reports, 2026-03-21)
 
-- #228 [server-dev, HIGH] Security: .review.toml read from PR head branch allows config manipulation — **DONE** (PR #243 merged)
+- #228 [server-dev, HIGH] Security: .opencara.toml read from PR head branch allows config manipulation — **DONE** (PR #243 merged)
 - #229 [server-dev, HIGH] KV store race conditions: non-atomic read-modify-write operations — **DONE** (PR #247 merged)
 - #230 [server-dev, HIGH] Reviewer/summarizer whitelist: user field parsed but never enforced — **DONE** (PR #244 merged)
 - #231 [server-dev, HIGH] Repo filtering config parsed but not enforced in poll endpoint — **DONE** (PR #246 merged)
@@ -300,8 +300,8 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 
 ### New issues (2026-03-25)
 
-- #423 [server-dev, P2, M] Add model/tool constraint for synthesizer in .review.toml — **BACKLOG**
-- #424 [architect, P1, L] Reorganize .review.toml into modular feature sections (v2 config) — **BACKLOG**
+- #423 [server-dev, P2, M] Add model/tool constraint for synthesizer in .opencara.toml — **BACKLOG**
+- #424 [architect, P1, L] Reorganize .opencara.toml into modular feature sections (v2 config) — **BACKLOG**
 - #427 [cli-dev, P2, S] Add --verbose mode to log tool stdout/stderr — **BACKLOG**
 - #428 [architect, P2, S] Add amp to tool registry and update contributor docs — **BACKLOG** (deferred — amp -x requires paid credits, 402 error, closed)
 - #430 [pm, P3, XS] Update docs to use canonical tool names from registry — **DONE** (agent-guide.md claude-code→claude)
@@ -311,7 +311,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 
 #### PR Dedup
 
-- #432 [architect, P1, M] Add dedup+triage roles to shared types and .review.toml parser — **BACKLOG** (blocks all dedup and triage issues)
+- #432 [architect, P1, M] Add dedup+triage roles to shared types and .opencara.toml parser — **BACKLOG** (blocks all dedup and triage issues)
 - #433 [server-dev, P1, M] Create dedup tasks on PR webhook alongside review tasks — **BACKLOG** (blocked by #432)
 - #434 [server-dev, P1, L] Handle dedup role in claim/result endpoints and post dedup comment — **BACKLOG** (blocked by #432)
 - #435 [cli-dev, P1, L] Dedup agent execution: two-phase comparison and similarity report — **BACKLOG** (blocked by #432)

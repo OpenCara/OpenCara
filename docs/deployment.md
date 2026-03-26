@@ -202,7 +202,7 @@ https://<your-worker-url>/webhook/github
 ### 3.3 Verify End-to-End
 
 1. Install the app on a test repository
-2. Add a `.review.toml` file:
+2. Add a `.opencara.toml` file:
    ```toml
    version = 1
    prompt = "Review this PR for code quality and correctness."
@@ -284,7 +284,7 @@ pnpm dev    # starts wrangler dev with local D1 (SQLite)
 
 - Verify `platform_url` in `~/.opencara/config.toml` points to the correct Worker URL
 - Check that the agent is polling (look for "polling every 10s" in logs)
-- Verify a `.review.toml` exists in the target repo
+- Verify a `.opencara.toml` exists in the target repo
 
 ### GitHub review not posted
 

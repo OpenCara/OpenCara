@@ -144,7 +144,7 @@ describe('github/config.ts edge cases', () => {
 
     const { fetchReviewConfig } = await import('../github/config.js');
     await expect(fetchReviewConfig('owner', 'repo', 'main', 'token')).rejects.toThrow(
-      'Failed to fetch .review.toml',
+      'Failed to fetch .opencara.toml',
     );
   });
 
@@ -178,7 +178,7 @@ describe('github/config.ts edge cases', () => {
     expect(parseError).toBe(false);
   }, 15_000);
 
-  it('loadReviewConfig returns default when .review.toml is missing', async () => {
+  it('loadReviewConfig returns default when .opencara.toml is missing', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     globalThis.fetch = vi.fn().mockResolvedValue({
       status: 404,
@@ -189,7 +189,7 @@ describe('github/config.ts edge cases', () => {
     const { config, parseError } = await loadReviewConfig('owner', 'repo', 'main', 1, 'token');
     expect(config).toEqual(DEFAULT_REVIEW_CONFIG);
     expect(parseError).toBe(false);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No .review.toml found'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No .opencara.toml found'));
   });
 
   it('loadReviewConfig handles malformed TOML and posts comment', async () => {
@@ -199,8 +199,8 @@ describe('github/config.ts edge cases', () => {
     globalThis.fetch = vi.fn().mockImplementation((url: string, _init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : String(url);
 
-      // .review.toml fetch returns malformed TOML
-      if (urlStr.includes('/contents/.review.toml')) {
+      // .opencara.toml fetch returns malformed TOML
+      if (urlStr.includes('/contents/.opencara.toml')) {
         return Promise.resolve({
           status: 200,
           ok: true,
@@ -235,7 +235,7 @@ describe('github/config.ts edge cases', () => {
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       const urlStr = typeof url === 'string' ? url : String(url);
 
-      if (urlStr.includes('/contents/.review.toml')) {
+      if (urlStr.includes('/contents/.opencara.toml')) {
         return Promise.resolve({
           status: 200,
           ok: true,
@@ -472,7 +472,7 @@ describe('webhook.ts edge cases', () => {
     expect(res.status).toBe(503);
   });
 
-  it('PR event with .review.toml parse error returns 503', async () => {
+  it('PR event with .opencara.toml parse error returns 503', async () => {
     // Inject a GitHubService that returns parseError: true from loadReviewConfig
     const parseErrorGithub: GitHubService = {
       async getInstallationToken() {
@@ -504,7 +504,7 @@ describe('webhook.ts edge cases', () => {
     expect(res.status).toBe(503);
   });
 
-  it('issue_comment with .review.toml parse error returns 503', async () => {
+  it('issue_comment with .opencara.toml parse error returns 503', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     // Inject a GitHubService that returns parseError: true from loadReviewConfig
     const parseErrorGithub: GitHubService = {
@@ -542,7 +542,7 @@ describe('webhook.ts edge cases', () => {
     const tasks = await store.listTasks({ status: 'pending' });
     expect(tasks).toHaveLength(0);
     expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining('Aborting comment trigger due to .review.toml parse error'),
+      expect.stringContaining('Aborting comment trigger due to .opencara.toml parse error'),
     );
   });
 

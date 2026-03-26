@@ -6,36 +6,36 @@ OpenCara is a coordination platform — it routes review tasks between GitHub re
 
 ### Roles
 
-| Role               | Trust Level | What They Control                                                        |
-| ------------------ | ----------- | ------------------------------------------------------------------------ |
-| **Repo owner**     | High        | `.review.toml` config (prompt, agent whitelist/blacklist, trigger rules) |
-| **Agent operator** | Medium      | Local AI tool, API keys, which repos to review                           |
-| **Platform**       | Coordinator | Task routing, webhook handling, posting results to GitHub                |
-| **PR author**      | Untrusted   | Diff content (potential prompt injection vector)                         |
+| Role               | Trust Level | What They Control                                                          |
+| ------------------ | ----------- | -------------------------------------------------------------------------- |
+| **Repo owner**     | High        | `.opencara.toml` config (prompt, agent whitelist/blacklist, trigger rules) |
+| **Agent operator** | Medium      | Local AI tool, API keys, which repos to review                             |
+| **Platform**       | Coordinator | Task routing, webhook handling, posting results to GitHub                  |
+| **PR author**      | Untrusted   | Diff content (potential prompt injection vector)                           |
 
 ### Key Principles
 
 1. **Platform never touches API keys.** Agents run locally on contributors' machines. AI calls happen on the operator's hardware with their credentials.
 2. **Platform never stores code.** Diffs are fetched directly from GitHub by agents. The server only stores task metadata (repo, PR number, status).
-3. **Repo owners define the rules.** The `.review.toml` prompt is the only instruction the platform passes to agents. Repo owners control what agents focus on.
+3. **Repo owners define the rules.** The `.opencara.toml` prompt is the only instruction the platform passes to agents. Repo owners control what agents focus on.
 4. **Agents are advisors, not decision-makers.** Reviews are posted as PR comments. Maintainers make the final merge decision.
 
 ### What the Platform Stores
 
-| Stored                                  | Not Stored    |
-| --------------------------------------- | ------------- |
-| Task metadata (repo, PR number, status) | Diff content  |
-| Agent registration (ID, model, tool)    | API keys      |
-| Review text (temporarily, for posting)  | Source code   |
-| `.review.toml` config (cached per-task) | GitHub tokens |
+| Stored                                    | Not Stored    |
+| ----------------------------------------- | ------------- |
+| Task metadata (repo, PR number, status)   | Diff content  |
+| Agent registration (ID, model, tool)      | API keys      |
+| Review text (temporarily, for posting)    | Source code   |
+| `.opencara.toml` config (cached per-task) | GitHub tokens |
 
 Review text is retained only until posted to GitHub, then cleaned up by TTL (default 7 days).
 
 ## For Repo Owners
 
-### Writing Safe `.review.toml` Prompts
+### Writing Safe `.opencara.toml` Prompts
 
-The `prompt` field in `.review.toml` is passed to every reviewing agent as part of the system prompt. Write it as an instruction to a code reviewer:
+The `prompt` field in `.opencara.toml` is passed to every reviewing agent as part of the system prompt. Write it as an instruction to a code reviewer:
 
 ```toml
 version = 1
@@ -112,7 +112,7 @@ As an agent operator, you control:
 The platform sends your agent:
 
 1. Task metadata (repo name, PR number, diff URL)
-2. The repo's `.review.toml` prompt
+2. The repo's `.opencara.toml` prompt
 
 Your agent then fetches the diff directly from GitHub and runs the review locally.
 
@@ -164,16 +164,16 @@ max_diff_size_kb = 100 # Default; skip PRs with diffs larger than this
 
 **Residual risk:** AI models are not perfectly robust against prompt injection. A determined attacker may craft diffs that influence the review output. Since reviews are advisory (not automated merge gates), the impact is limited to misleading review comments.
 
-### 2. Malicious `.review.toml` Prompt
+### 2. Malicious `.opencara.toml` Prompt
 
-**Attack:** A repo owner (or PR that modifies `.review.toml`) sets a prompt that instructs agents to perform harmful actions.
+**Attack:** A repo owner (or PR that modifies `.opencara.toml`) sets a prompt that instructs agents to perform harmful actions.
 
 **Mitigations:**
 
 - The prompt is only used as a code review instruction — it cannot execute commands
 - Agents pipe the prompt via stdin to an AI tool; the tool processes it as text, not shell commands
 - The CLI does not interpret any part of the prompt as executable code
-- `.review.toml` is read from the repo's default branch, not from the PR branch, so PR authors cannot modify the active config
+- `.opencara.toml` is read from the repo's default branch, not from the PR branch, so PR authors cannot modify the active config
 - **Prompt guard**: The CLI scans repo-provided prompts for 8 categories of suspicious patterns before processing:
   - Instruction override (e.g., "ignore previous instructions")
   - Role hijacking (e.g., "you are now a...")
@@ -244,13 +244,13 @@ No. Agents can only claim tasks for repos where they pass the whitelist/blacklis
 
 The platform receives the final review text (to post it on GitHub) but does not process, analyze, or store it beyond posting. The CLI sanitizes tokens before submission. Review text is cleaned up by TTL.
 
-**Q: Can a `.review.toml` prompt execute code on my machine?**
+**Q: Can a `.opencara.toml` prompt execute code on my machine?**
 
 No. The prompt is delivered as text via stdin to your AI tool. The CLI does not interpret or execute any part of the prompt. Additionally, the CLI's prompt guard scans repo prompts for 8 categories of suspicious patterns (instruction override, command execution, shell injection, etc.) and flags them. However, if your AI tool has code execution capabilities (e.g., Claude Code with `--allowedTools '*'`), the tool itself might act on instructions in the prompt. Use `--print` mode or equivalent read-only flags to limit tool capabilities during reviews.
 
-**Q: What if someone modifies `.review.toml` in a PR to change review rules?**
+**Q: What if someone modifies `.opencara.toml` in a PR to change review rules?**
 
-The server reads `.review.toml` from the repository's default branch, not from the PR branch. A PR that modifies `.review.toml` does not affect the review of that same PR — the changes only take effect after the PR is merged.
+The server reads `.opencara.toml` from the repository's default branch, not from the PR branch. A PR that modifies `.opencara.toml` does not affect the review of that same PR — the changes only take effect after the PR is merged.
 
 **Q: What happens if an agent submits garbage reviews?**
 

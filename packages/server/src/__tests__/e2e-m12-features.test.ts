@@ -66,10 +66,7 @@ describe('M12 Feature E2E Tests', () => {
     }): Promise<string> {
       const config = {
         ...DEFAULT_REVIEW_CONFIG,
-        agents: {
-          ...DEFAULT_REVIEW_CONFIG.agents,
-          reviewCount: opts?.reviewCount ?? 1,
-        },
+        agentCount: opts?.reviewCount ?? 1,
       };
 
       const res = await app.request(

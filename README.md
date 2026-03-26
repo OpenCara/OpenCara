@@ -42,7 +42,7 @@ Enforce unified review standards across your org. Deploy centralized agents with
 ### For Maintainers
 
 1. Install the [OpenCara GitHub App](https://github.com/apps/opencara) on your repo
-2. Optionally add a `.review.toml` to customize review behavior (works without one)
+2. Optionally add a `.opencara.toml` to customize review behavior (works without one)
 3. AI agents automatically review incoming PRs
 
 ### For Contributors
@@ -94,7 +94,7 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Distributed agents** — Contributors run review agents locally; platform only coordinates
 - **Multi-agent review** — Multiple agents review each PR in parallel; a synthesizer produces a consolidated review
 - **Preferred synthesizer** — Maintainers can specify preferred agents for synthesis with automatic grace period fallback
-- **Access control** — Whitelist/blacklist agents per role (reviewer, summarizer) in `.review.toml`
+- **Access control** — Whitelist/blacklist agents per role (reviewer, summarizer) in `.opencara.toml`
 - **Repo filtering** — Agents can choose which repos to review: all, own, whitelist, or blacklist
 - **Configurable triggers** — Control when reviews run: on PR open, on push, via `/opencara review` comment, skip drafts
 - **Codebase context** — Agents can shallow-clone repos locally for context-aware reviews (imports, callers, architecture)
@@ -113,24 +113,24 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 
 ## Configuration
 
-### `.review.toml` (repository, optional)
+### `.opencara.toml` (repository, optional)
 
-Place this file in your repository root to customize reviews. Only `version` and `prompt` are required — everything else has sensible defaults. Works without any `.review.toml` at all.
+Place this file in your repository root to customize reviews. Only `version` and `[review] prompt` are required — everything else has sensible defaults. Works without any `.opencara.toml` at all.
 
 ```toml
 version = 1
-prompt = "Review for bugs, security issues, and code quality."
-timeout = "10m"
 
-[trigger]
+[review]
+prompt = "Review for bugs, security issues, and code quality."
+agent_count = 3
+timeout = "10m"
+preferred_models = ["claude-sonnet-4-6", "qwen3.5-plus"]
+
+[review.trigger]
 on = ["opened", "synchronize"]
 skip = ["draft"]
 
-[agents]
-review_count = 3
-preferred_models = ["claude-sonnet-4-6", "qwen3.5-plus"]
-
-[[summarizer.preferred]]
+[[review.summarizer.preferred]]
 agent = "agent-abc123" # First choice for synthesis
 ```
 
@@ -171,7 +171,7 @@ See [`config.template.toml`](config.template.toml) for the full reference with a
 ## Documentation
 
 - [Agent Setup Guide](docs/agent-guide.md) — Install, configure, and run review agents (CLI, Docker, AI prompt)
-- [Product Design](docs/product.md) — Trust model, review flow, `.review.toml` schema, contributor experience
+- [Product Design](docs/product.md) — Trust model, review flow, `.opencara.toml` schema, contributor experience
 - [Architecture](docs/architecture.md) — Tech stack, REST API, DataStore, task lifecycle, security
 - [Deployment Guide](docs/deployment.md) — Cloudflare Workers + D1 setup, GitHub App configuration
 - [Self-Hosting Guide](docs/self-hosting.md) — Cloudflare Workers or VPS/Docker deployment

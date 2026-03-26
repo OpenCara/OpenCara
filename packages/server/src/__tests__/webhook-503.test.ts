@@ -183,7 +183,7 @@ describe('Webhook 503 — transient failure responses', () => {
       expect(tasks).toHaveLength(0);
     });
 
-    it('returns 503 when .review.toml has a parse error', async () => {
+    it('returns 503 when .opencara.toml has a parse error', async () => {
       github.parseError = true;
       const res = await sendWebhook(app, 'pull_request', makePRPayload(), env);
       expect(res.status).toBe(503);
@@ -255,7 +255,7 @@ describe('Webhook 503 — transient failure responses', () => {
       expect(res.status).toBe(503);
     });
 
-    it('returns 503 when .review.toml has a parse error', async () => {
+    it('returns 503 when .opencara.toml has a parse error', async () => {
       github.parseError = true;
       const payload = makeCommentPayload('/opencara review');
       const res = await sendWebhook(app, 'issue_comment', payload, env);

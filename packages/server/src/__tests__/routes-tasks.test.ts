@@ -1927,12 +1927,9 @@ describe('Task Routes', () => {
     ) {
       return {
         ...DEFAULT_REVIEW_CONFIG,
-        agents: {
-          ...DEFAULT_REVIEW_CONFIG.agents,
-          reviewCount: 3,
-          preferredModels,
-          preferredTools,
-        },
+        agentCount: 3,
+        preferredModels,
+        preferredTools,
       };
     }
 

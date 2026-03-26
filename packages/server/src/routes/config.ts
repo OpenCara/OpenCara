@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { ConfigValidateResponse } from '@opencara/shared';
-import { parseReviewConfig } from '@opencara/shared';
+import { parseOpenCaraConfig } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
@@ -29,7 +29,7 @@ export function configRoutes() {
         return apiError(c, 400, 'INVALID_REQUEST', 'Field "toml" is required and must be a string');
       }
 
-      const result = parseReviewConfig(toml);
+      const result = parseOpenCaraConfig(toml);
 
       if ('error' in result) {
         return c.json<ConfigValidateResponse>({ valid: false, error: result.error }, 200);

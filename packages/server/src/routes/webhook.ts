@@ -120,7 +120,7 @@ export async function createTaskForPR(
 
   const taskId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(config.timeout);
-  const reviewCount = config.agents.reviewCount;
+  const reviewCount = config.agentCount;
 
   // Atomic create-if-not-exists: prevents duplicate tasks from concurrent webhook deliveries.
   // The store checks for an existing active (pending/reviewing) task for this PR and inserts
@@ -257,7 +257,7 @@ async function handlePullRequest(
   );
 
   if (parseError) {
-    logger.info('Aborting due to .review.toml parse error', { prNumber });
+    logger.info('Aborting due to .opencara.toml parse error', { prNumber });
     return new Response('Service Unavailable', { status: 503 });
   }
 
@@ -354,7 +354,7 @@ async function handleIssueComment(
   );
 
   if (parseError) {
-    logger.info('Aborting comment trigger due to .review.toml parse error', {
+    logger.info('Aborting comment trigger due to .opencara.toml parse error', {
       owner,
       repo,
       prNumber,

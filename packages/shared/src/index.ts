@@ -52,12 +52,24 @@ export { DEFAULT_REGISTRY } from './api.js';
 
 // Review configuration types and parser
 export {
+  parseOpenCaraConfig,
   parseReviewConfig,
   parseEntityList,
   isEntityMatch,
   validateReviewConfig,
+  validateOpenCaraConfig,
   DEFAULT_REVIEW_CONFIG,
+  DEFAULT_REVIEW_SECTION,
+  DEFAULT_OPENCARA_CONFIG,
+  type OpenCaraConfig,
+  type ReviewSectionConfig,
   type ReviewConfig,
   type TriggerConfig,
   type EntityEntry,
+  type FeatureConfig,
+  type AgentSlotConfig,
+  type DedupTargetConfig,
+  type DedupIssueTargetConfig,
+  type DedupConfig,
+  type TriageConfig,
 } from './review-config.js';

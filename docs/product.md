@@ -44,9 +44,9 @@ OpenCara is a distributed AI code review service. Maintainers install a GitHub A
 
 ## Project Configuration
 
-### `.review.toml` Format
+### `.opencara.toml` Format
 
-Each repository configures review standards via `.review.toml` in the repo root:
+Each repository configures review standards via `.opencara.toml` in the repo root:
 
 ```toml
 version = 1

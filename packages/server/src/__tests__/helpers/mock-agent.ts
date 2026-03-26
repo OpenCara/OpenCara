@@ -134,13 +134,9 @@ export class MockAgent {
     const config =
       opts?.reviewCount || opts?.timeout
         ? {
-            agents: {
-              ...{
-                reviewCount: opts.reviewCount ?? 1,
-                preferredModels: [],
-                preferredTools: [],
-              },
-            },
+            agentCount: opts.reviewCount ?? 1,
+            preferredModels: [] as string[],
+            preferredTools: [] as string[],
             ...(opts.timeout ? { timeout: opts.timeout } : {}),
           }
         : undefined;
