@@ -52,6 +52,7 @@ import {
 import { UsageTracker } from '../usage-tracker.js';
 import { sanitizeTokens } from '../sanitize.js';
 import { detectSuspiciousPatterns } from '../prompt-guard.js';
+import { executeDedupTask } from '../dedup.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import {
   createLogger,
@@ -616,9 +617,30 @@ async function handleTask(
     }
   }
 
-  // Execute review or summary
+  // Execute review, summary, or dedup
   try {
-    if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
+    if (role === 'dedup') {
+      await executeDedupTask(
+        client,
+        agentId,
+        task_id,
+        {
+          owner,
+          repo,
+          pr_number,
+          issue_title: task.issue_title,
+          issue_body: task.issue_body,
+          diff_url,
+          index_issue_body: task.index_issue_body,
+        },
+        diffContent,
+        timeout_seconds,
+        taskReviewDeps,
+        consumptionDeps,
+        logger,
+        signal,
+      );
+    } else if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
       await executeSummaryTask(
         client,
         agentId,
