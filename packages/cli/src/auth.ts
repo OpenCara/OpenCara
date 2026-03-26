@@ -38,8 +38,9 @@ export function loadAuth(): StoredAuth | null {
       typeof data.access_token === 'string' &&
       typeof data.expires_at === 'number' &&
       typeof data.github_username === 'string' &&
-      typeof data.github_user_id === 'number'
-      // refresh_token is optional — tolerate non-refreshable tokens
+      typeof data.github_user_id === 'number' &&
+      // refresh_token is optional — tolerate non-refreshable tokens, but validate type when present
+      (data.refresh_token === undefined || typeof data.refresh_token === 'string')
     ) {
       return data as unknown as StoredAuth;
     }

@@ -106,11 +106,18 @@ describe('task-lifecycle', () => {
 
   describe('isTimedOut', () => {
     it('returns true when timeout has passed', () => {
-      expect(isTimedOut(makeTask({ timeout_at: Date.now() - 1000 }))).toBe(true);
+      const now = 1000;
+      expect(isTimedOut(makeTask({ timeout_at: 500 }), now)).toBe(true);
     });
 
     it('returns false when timeout is in the future', () => {
-      expect(isTimedOut(makeTask({ timeout_at: Date.now() + 60_000 }))).toBe(false);
+      const now = 1000;
+      expect(isTimedOut(makeTask({ timeout_at: 2000 }), now)).toBe(false);
+    });
+
+    it('returns true when timeout equals now', () => {
+      const now = 1000;
+      expect(isTimedOut(makeTask({ timeout_at: 1000 }), now)).toBe(true);
     });
   });
 

@@ -44,7 +44,7 @@
  *   pending → error      (agent reported error or abandoned)
  */
 
-import type { ReviewTask, TaskClaim } from '@opencara/shared';
+import type { ReviewTask, TaskClaim, TaskQueue } from '@opencara/shared';
 
 // ── Task State Queries ──────────────────────────────────────────
 
@@ -53,7 +53,11 @@ export function isTaskActive(task: ReviewTask): boolean {
   return task.status === 'pending' || task.status === 'reviewing';
 }
 
-/** True if the task is done (already posted or about to be deleted). */
+/**
+ * True if the task is done (already posted or about to be deleted).
+ * Checks both status='completed' and queue='completed' as defense-in-depth —
+ * queue='completed' exists in the TaskQueue union but is not used in normal flows.
+ */
 export function isTaskTerminal(task: ReviewTask): boolean {
   return task.status === 'completed' || task.queue === 'completed';
 }
@@ -73,9 +77,9 @@ export function isSummaryClaimed(task: ReviewTask): boolean {
   return task.queue === 'finished';
 }
 
-/** True if the task has timed out. */
-export function isTimedOut(task: ReviewTask): boolean {
-  return task.timeout_at <= Date.now();
+/** True if the task has timed out. Accepts optional `now` for testability. */
+export function isTimedOut(task: ReviewTask, now: number = Date.now()): boolean {
+  return task.timeout_at <= now;
 }
 
 // ── Claim State Queries ─────────────────────────────────────────
@@ -109,7 +113,7 @@ export function isCompletedReview(claim: TaskClaim): boolean {
 export function shouldTransitionToSummary(
   completedReviews: number,
   reviewSlots: number,
-  currentQueue: string,
+  currentQueue: TaskQueue | string,
 ): boolean {
   return reviewSlots > 0 && completedReviews >= reviewSlots && currentQueue === 'review';
 }

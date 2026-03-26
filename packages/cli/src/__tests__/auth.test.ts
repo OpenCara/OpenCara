@@ -125,6 +125,19 @@ describe('auth', () => {
       expect(loadAuth()).toBeNull();
     });
 
+    it('returns null when refresh_token is present but not a string', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          access_token: 'ghu_test',
+          refresh_token: 42, // should be string or undefined
+          expires_at: Date.now() + 3600_000,
+          github_username: 'user',
+          github_user_id: 1,
+        }),
+      );
+      expect(loadAuth()).toBeNull();
+    });
+
     it('loads auth without refresh_token (non-refreshable token)', () => {
       const authWithoutRefresh = {
         access_token: 'ghu_test',
