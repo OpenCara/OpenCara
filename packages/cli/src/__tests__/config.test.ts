@@ -1289,6 +1289,121 @@ synthesizer_only = true
     });
   });
 
+  describe('agent roles config', () => {
+    it('parses roles array from agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+roles = ["review", "summary", "dedup"]
+`);
+      const config = loadConfig();
+      expect(config.agents![0].roles).toEqual(['review', 'summary', 'dedup']);
+    });
+
+    it('defaults to undefined roles when omitted', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+`);
+      const config = loadConfig();
+      expect(config.agents![0].roles).toBeUndefined();
+    });
+
+    it('parses roles with multiple valid entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+roles = ["review", "summary"]
+`);
+      const config = loadConfig();
+      expect(config.agents![0].roles).toEqual(['review', 'summary']);
+    });
+
+    it('does not set roles when array is empty', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+roles = []
+`);
+      const config = loadConfig();
+      expect(config.agents![0].roles).toBeUndefined();
+    });
+
+    it('warns when roles used alongside review_only', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+roles = ["review", "dedup"]
+review_only = true
+`);
+      const config = loadConfig();
+      expect(config.agents![0].roles).toEqual(['review', 'dedup']);
+      expect(config.agents![0].review_only).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("'roles' takes precedence"));
+      warnSpy.mockRestore();
+    });
+
+    it('warns when roles used alongside synthesizer_only', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+roles = ["summary"]
+synthesizer_only = true
+`);
+      const config = loadConfig();
+      expect(config.agents![0].roles).toEqual(['summary']);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("'roles' takes precedence"));
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn when roles used without review_only or synthesizer_only', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+roles = ["review", "summary", "triage"]
+`);
+      loadConfig();
+      const calls = warnSpy.mock.calls.map((c) => c[0] as string);
+      expect(calls.every((c) => !c.includes("'roles' takes precedence"))).toBe(true);
+      warnSpy.mockRestore();
+    });
+
+    it('saveConfig round-trips roles field', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        apiKey: null,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude-opus-4-6', tool: 'claude', roles: ['review', 'dedup'] }],
+        usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
+      });
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(written).toContain('roles');
+      expect(written).toContain('review');
+      expect(written).toContain('dedup');
+    });
+  });
+
   describe('synthesize_repos config', () => {
     it('parses synthesize_repos with mode: whitelist', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);

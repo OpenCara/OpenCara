@@ -166,6 +166,36 @@ export class MockGitHubService implements GitHubService {
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
+  async updateIssue(
+    owner: string,
+    repo: string,
+    number: number,
+    updates: { title?: string; body?: string; labels?: string[] },
+    token: string,
+  ): Promise<void> {
+    this.calls.push({ method: 'updateIssue', args: { owner, repo, number, updates, token } });
+  }
+
+  async fetchIssueBody(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<string | null> {
+    this.calls.push({ method: 'fetchIssueBody', args: { owner, repo, number, token } });
+    return `Mock issue body for #${number}`;
+  }
+
+  async createIssue(
+    owner: string,
+    repo: string,
+    fields: { title: string; body: string; labels?: string[] },
+    token: string,
+  ): Promise<number> {
+    this.calls.push({ method: 'createIssue', args: { owner, repo, fields, token } });
+    return 42;
+  }
+
   /** Count postPrComment calls (convenience for assertions). */
   get commentCount(): number {
     return this.calls.filter((c) => c.method === 'postPrComment').length;
