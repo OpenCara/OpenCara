@@ -393,14 +393,21 @@ export class D1DataStore implements DataStore {
     const map = new Map<string, TaskClaim>();
     if (claimIds.length === 0) return map;
 
-    const placeholders = claimIds.map(() => '?').join(',');
-    const result = await this.db
-      .prepare(`SELECT * FROM claims WHERE id IN (${placeholders})`)
-      .bind(...claimIds)
-      .all<ClaimRow>();
+    // SQLite/D1 limits bound parameters to 999. In practice, poll returns
+    // at most a few hundred candidates (active tasks × 1 role per task),
+    // so this is unlikely to be hit. Guard with chunking just in case.
+    const CHUNK_SIZE = 900;
+    for (let i = 0; i < claimIds.length; i += CHUNK_SIZE) {
+      const chunk = claimIds.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      const result = await this.db
+        .prepare(`SELECT * FROM claims WHERE id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<ClaimRow>();
 
-    for (const row of result.results ?? []) {
-      map.set(row.id, rowToClaim(row));
+      for (const row of result.results ?? []) {
+        map.set(row.id, rowToClaim(row));
+      }
     }
     return map;
   }

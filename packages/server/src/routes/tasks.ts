@@ -350,6 +350,13 @@ async function isAgentBlocked(store: DataStore, agentId: string): Promise<boolea
 export const POLL_RATE_LIMIT = { maxRequests: 12, windowMs: 60_000 };
 export const MUTATION_RATE_LIMIT = { maxRequests: 30, windowMs: 60_000 };
 
+/** A task that passed non-claim eligibility filters during poll, pending batch claim check. */
+interface PollCandidate {
+  task: ReviewTask;
+  role: 'review' | 'summary';
+  claimId: string;
+}
+
 export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
@@ -405,12 +412,7 @@ export function taskRoutes() {
     const tasksById = new Map(tasks.map((t) => [t.id, t]));
 
     // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
-    interface Candidate {
-      task: ReviewTask;
-      role: 'review' | 'summary';
-      claimId: string;
-    }
-    const candidates: Candidate[] = [];
+    const candidates: PollCandidate[] = [];
 
     for (const task of tasks) {
       // Private repo tasks: only return to agents declaring matching repos

@@ -298,7 +298,7 @@ class MockD1Statement implements D1PreparedStatement {
     const cleaned = sql
       .replace(/\s+LIMIT\s+\d+/gi, '')
       .replace(/\s+ORDER\s+BY\s+.+$/gi, '')
-      .replace(/\s+RETURNING\s+.+$/gi, '');
+      .replace(/\s+RETURNING\s+.+$/gis, '');
     const match = cleaned.match(/WHERE\s+(.+?)(?:\s*$)/is);
     return match?.[1]?.trim() ?? null;
   }
