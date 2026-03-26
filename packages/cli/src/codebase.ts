@@ -7,7 +7,7 @@ import { sanitizeTokens } from './sanitize.js';
 const VALID_NAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 /** Git credential helper arg that delegates to gh CLI */
-const GH_CREDENTIAL_HELPER = "!gh auth git-credential";
+const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
 
 export interface CloneOrUpdateResult {
   /** Absolute path to the local checkout */
@@ -67,9 +67,7 @@ export function cloneOrUpdate(
   }
 
   // Fetch the PR ref and checkout (--force handles force-pushed PRs)
-  const credArgs = ghAvailable
-    ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`]
-    : [];
+  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
   git(
     [...credArgs, 'fetch', '--force', '--depth', '1', 'origin', `pull/${prNumber}/head`],
     repoDir,
