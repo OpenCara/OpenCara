@@ -51,7 +51,8 @@ export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutRev
       const emoji = VERDICT_EMOJI[r.verdict];
       parts.push('');
       parts.push('---');
-      const thinkingSuffix = r.thinking ? `, thinking: ${r.thinking}` : '';
+      const safeThinking = r.thinking?.replace(/[`\n\r]/g, '') ?? '';
+      const thinkingSuffix = safeThinking ? `, thinking: ${safeThinking}` : '';
       parts.push(
         `### Review ${i + 1} — ${emoji} ${r.verdict} (\`${r.model}/${r.tool}\`${thinkingSuffix})`,
       );

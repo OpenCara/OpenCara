@@ -120,6 +120,16 @@ describe('Request Validation (Zod)', () => {
       expect(res.status).toBe(200);
     });
 
+    it('rejects thinking field exceeding 256 characters', async () => {
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        thinking: 'x'.repeat(257),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.code).toBe('INVALID_REQUEST');
+    });
+
     it('strips extra fields from poll request', async () => {
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',

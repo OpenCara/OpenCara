@@ -160,6 +160,11 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     const agent: LocalAgentConfig = { model: obj.model, tool: resolvedTool };
     if (typeof obj.thinking === 'string') agent.thinking = obj.thinking;
     else if (typeof obj.thinking === 'number') agent.thinking = String(obj.thinking);
+    else if (obj.thinking !== undefined) {
+      console.warn(
+        `\u26a0 Config warning: agents[${i}].thinking must be a string or number, got ${typeof obj.thinking}, ignoring`,
+      );
+    }
     if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;

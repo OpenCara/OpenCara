@@ -406,6 +406,19 @@ describe('config', () => {
       ]);
     });
 
+    it('warns on invalid thinking value type', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: true\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([{ model: 'claude-sonnet-4-6', tool: 'claude' }]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('thinking'));
+      warnSpy.mockRestore();
+    });
+
     it('skips invalid entries and warns', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.mocked(fs.existsSync).mockReturnValue(true);
