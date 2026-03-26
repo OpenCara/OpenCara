@@ -455,6 +455,13 @@ describe('webhook.ts edge cases', () => {
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
       },
+      async updateIssue() {},
+      async fetchIssueBody() {
+        return null;
+      },
+      async createIssue() {
+        return 0;
+      },
     };
     const { app, mockEnv } = await setupApp(failingGithub);
     const res = await sendWebhook(app, mockEnv, 'pull_request', {
@@ -486,6 +493,13 @@ describe('webhook.ts edge cases', () => {
       },
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+      },
+      async updateIssue() {},
+      async fetchIssueBody() {
+        return null;
+      },
+      async createIssue() {
+        return 0;
       },
     };
     const { app, mockEnv } = await setupApp(parseErrorGithub);
@@ -527,6 +541,13 @@ describe('webhook.ts edge cases', () => {
       },
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+      },
+      async updateIssue() {},
+      async fetchIssueBody() {
+        return null;
+      },
+      async createIssue() {
+        return 0;
       },
     };
     const { app, store, mockEnv } = await setupApp(parseErrorGithub);
@@ -589,6 +610,13 @@ describe('webhook.ts edge cases', () => {
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
       },
+      async updateIssue() {},
+      async fetchIssueBody() {
+        return null;
+      },
+      async createIssue() {
+        return 0;
+      },
     };
     const { app, mockEnv } = await setupApp(failingGithub);
     const res = await sendWebhook(app, mockEnv, 'issue_comment', {
@@ -615,6 +643,13 @@ describe('webhook.ts edge cases', () => {
       },
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+      },
+      async updateIssue() {},
+      async fetchIssueBody() {
+        return null;
+      },
+      async createIssue() {
+        return 0;
       },
     };
     const { app, mockEnv } = await setupApp(failingGithub);

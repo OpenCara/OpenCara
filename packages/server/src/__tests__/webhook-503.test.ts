@@ -90,6 +90,14 @@ class FailableGitHubService implements GitHubService {
   ): Promise<{ config: ReviewConfig; parseError: boolean }> {
     return { config: this.configOverride ?? DEFAULT_REVIEW_CONFIG, parseError: this.parseError };
   }
+
+  async updateIssue(): Promise<void> {}
+  async fetchIssueBody(): Promise<string | null> {
+    return null;
+  }
+  async createIssue(): Promise<number> {
+    return 0;
+  }
 }
 
 function makePRPayload(overrides: Record<string, unknown> = {}) {

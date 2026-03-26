@@ -2,6 +2,7 @@ import type { Env } from '../types.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
 import { getInstallationToken } from './app.js';
+import { githubFetch } from './fetch.js';
 import { postPrComment } from './reviews.js';
 import {
   fetchPrDetails,
@@ -42,6 +43,27 @@ export interface GitHubService {
     prNumber: number,
     token: string,
   ): Promise<{ config: ReviewConfig; parseError: boolean }>;
+
+  // Issue management
+  updateIssue(
+    owner: string,
+    repo: string,
+    number: number,
+    updates: { title?: string; body?: string; labels?: string[] },
+    token: string,
+  ): Promise<void>;
+  fetchIssueBody(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<string | null>;
+  createIssue(
+    owner: string,
+    repo: string,
+    fields: { title: string; body: string; labels?: string[] },
+    token: string,
+  ): Promise<number>;
 }
 
 /**
@@ -94,6 +116,74 @@ export class RealGitHubService implements GitHubService {
   ): Promise<{ config: ReviewConfig; parseError: boolean }> {
     return loadReviewConfigImpl(owner, repo, baseRef, prNumber, token, this.logger);
   }
+
+  async updateIssue(
+    owner: string,
+    repo: string,
+    number: number,
+    updates: { title?: string; body?: string; labels?: string[] },
+    token: string,
+  ): Promise<void> {
+    const response = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+      {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify(updates),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to update issue #${number}: ${response.status} ${response.statusText}`,
+      );
+    }
+  }
+
+  async fetchIssueBody(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<string | null> {
+    const response = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+      { token },
+    );
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch issue #${number}: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const data = (await response.json()) as { body: string | null };
+    return data.body ?? null;
+  }
+
+  async createIssue(
+    owner: string,
+    repo: string,
+    fields: { title: string; body: string; labels?: string[] },
+    token: string,
+  ): Promise<number> {
+    const response = await githubFetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(fields),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create issue: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as { number: number };
+    return data.number;
+  }
 }
 
 /**
@@ -144,5 +234,37 @@ export class NoOpGitHubService implements GitHubService {
   async loadReviewConfig(): Promise<{ config: ReviewConfig; parseError: boolean }> {
     this.logger.info('Dev mode — using default review config');
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+  }
+
+  async updateIssue(
+    owner: string,
+    repo: string,
+    number: number,
+    updates: { title?: string; body?: string; labels?: string[] },
+  ): Promise<void> {
+    this.logger.info('Dev mode — skipping issue update', {
+      owner,
+      repo,
+      number,
+      updates: Object.keys(updates),
+    });
+  }
+
+  async fetchIssueBody(owner: string, repo: string, number: number): Promise<string | null> {
+    this.logger.info('Dev mode — returning mock issue body', { owner, repo, number });
+    return `Mock issue body for #${number}`;
+  }
+
+  async createIssue(
+    owner: string,
+    repo: string,
+    fields: { title: string; body: string; labels?: string[] },
+  ): Promise<number> {
+    this.logger.info('Dev mode — skipping issue creation', {
+      owner,
+      repo,
+      title: fields.title,
+    });
+    return 0;
   }
 }
