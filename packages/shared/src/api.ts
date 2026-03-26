@@ -11,6 +11,7 @@ export interface PollRequest {
   synthesize_repos?: RepoConfig; // repos this agent will synthesize for
   model?: string; // agent's model name (for preferred_models matching)
   tool?: string; // agent's tool name (for preferred_tools matching)
+  thinking?: string; // agent's thinking/reasoning level (e.g. budget_tokens or named level)
 }
 
 /** A task returned in the poll response */
@@ -38,6 +39,7 @@ export interface ClaimRequest {
   role: ClaimRole;
   model?: string;
   tool?: string;
+  thinking?: string;
 }
 
 /** Review text returned to summary claimers */
@@ -49,6 +51,8 @@ export interface ClaimReview {
   model?: string;
   /** Agent's tool name (self-reported during claim, may be undefined for old claims) */
   tool?: string;
+  /** Agent's thinking/reasoning level (self-reported during claim, may be undefined for old claims) */
+  thinking?: string;
 }
 
 /** POST /api/tasks/{taskId}/claim — success response (errors use ErrorResponse) */

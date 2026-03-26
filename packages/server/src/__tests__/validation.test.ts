@@ -109,6 +109,7 @@ describe('Request Validation (Zod)', () => {
         repos: ['org/repo'],
         model: 'claude',
         tool: 'claude',
+        thinking: '10000',
         synthesize_repos: { mode: 'whitelist', list: ['org/repo'] },
       });
       expect(res.status).toBe(200);
@@ -117,6 +118,16 @@ describe('Request Validation (Zod)', () => {
     it('accepts valid poll request with minimal fields', async () => {
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       expect(res.status).toBe(200);
+    });
+
+    it('rejects thinking field exceeding 256 characters', async () => {
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        thinking: 'x'.repeat(257),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.code).toBe('INVALID_REQUEST');
     });
 
     it('strips extra fields from poll request', async () => {
@@ -175,6 +186,20 @@ describe('Request Validation (Zod)', () => {
         tool: 'claude',
       });
       expect(res.status).toBe(200);
+    });
+
+    it('accepts claim request with thinking field', async () => {
+      await store.createTask(makeTask({ id: 'task-thinking' }));
+      const res = await request('POST', '/api/tasks/task-thinking/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+        model: 'claude',
+        tool: 'claude',
+        thinking: '10000',
+      });
+      expect(res.status).toBe(200);
+      const claim = await store.getClaim('task-thinking:agent-1:summary');
+      expect(claim?.thinking).toBe('10000');
     });
   });
 

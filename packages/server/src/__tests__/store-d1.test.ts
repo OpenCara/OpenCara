@@ -717,6 +717,21 @@ describe('D1DataStore', () => {
       expect(claim?.tokens_used).toBe(1500);
     });
 
+    it('stores and retrieves thinking field on claims', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(makeClaim({ model: 'claude', tool: 'claude', thinking: '10000' }));
+      const claim = await store.getClaim('task-1:agent-1:review');
+      expect(claim?.thinking).toBe('10000');
+    });
+
+    it('updates thinking field on claims', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(makeClaim());
+      await store.updateClaim('task-1:agent-1:review', { thinking: 'high' });
+      const claim = await store.getClaim('task-1:agent-1:review');
+      expect(claim?.thinking).toBe('high');
+    });
+
     it('filters claims by taskId', async () => {
       await store.createTask(makeTask({ id: 'task-1' }));
       await store.createTask(makeTask({ id: 'task-2' }));

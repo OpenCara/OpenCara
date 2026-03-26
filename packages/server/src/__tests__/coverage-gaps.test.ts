@@ -62,6 +62,45 @@ describe('review-formatter edge cases', () => {
     expect(result).toContain('<sub>Reviewed by');
   });
 
+  it('formatTimeoutComment includes thinking level when present', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(10, [
+      {
+        model: 'claude',
+        tool: 'cli',
+        thinking: '10000',
+        verdict: 'approve',
+        review_text: 'LGTM with thinking',
+      },
+    ]);
+    expect(result).toContain('`claude/cli`, thinking: 10000');
+    expect(result).toContain('LGTM with thinking');
+  });
+
+  it('formatTimeoutComment omits thinking when not present', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(10, [
+      { model: 'claude', tool: 'cli', verdict: 'approve', review_text: 'LGTM' },
+    ]);
+    expect(result).toContain('`claude/cli`)');
+    expect(result).not.toContain('thinking');
+  });
+
+  it('formatTimeoutComment sanitizes thinking field (strips backticks and newlines)', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(10, [
+      {
+        model: 'claude',
+        tool: 'cli',
+        thinking: '`injected`\nheading',
+        verdict: 'approve',
+        review_text: 'LGTM',
+      },
+    ]);
+    expect(result).toContain('thinking: injectedheading');
+    expect(result).not.toContain('`injected`');
+  });
+
   it('wrapReviewComment wraps text with header and footer', async () => {
     const { wrapReviewComment } = await import('../review-formatter.js');
     const result = wrapReviewComment('LGTM, no issues.');

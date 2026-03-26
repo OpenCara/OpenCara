@@ -14,6 +14,7 @@ const VERDICT_EMOJI: Record<ReviewVerdict, string> = {
 export interface TimeoutReview {
   model: string;
   tool: string;
+  thinking?: string;
   verdict: ReviewVerdict;
   review_text: string;
 }
@@ -50,7 +51,11 @@ export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutRev
       const emoji = VERDICT_EMOJI[r.verdict];
       parts.push('');
       parts.push('---');
-      parts.push(`### Review ${i + 1} — ${emoji} ${r.verdict} (\`${r.model}/${r.tool}\`)`);
+      const safeThinking = r.thinking?.replace(/[`\n\r]/g, '') ?? '';
+      const thinkingSuffix = safeThinking ? `, thinking: ${safeThinking}` : '';
+      parts.push(
+        `### Review ${i + 1} — ${emoji} ${r.verdict} (\`${r.model}/${r.tool}\`${thinkingSuffix})`,
+      );
       parts.push('');
       parts.push(r.review_text);
     }

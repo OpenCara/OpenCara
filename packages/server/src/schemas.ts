@@ -33,6 +33,7 @@ export const PollRequestSchema = z.object({
   synthesize_repos: repoConfigSchema.optional(),
   model: z.string().optional(),
   tool: z.string().optional(),
+  thinking: z.string().max(256).optional(),
 });
 
 export const ClaimRequestSchema = z.object({
@@ -40,6 +41,7 @@ export const ClaimRequestSchema = z.object({
   role: claimRoleSchema,
   model: z.string().optional(),
   tool: z.string().optional(),
+  thinking: z.string().max(256).optional(),
 });
 
 /** Minimum review_text length after trimming (rejects trivially short responses). */
