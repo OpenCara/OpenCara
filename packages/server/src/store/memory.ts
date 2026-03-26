@@ -128,6 +128,15 @@ export class MemoryDataStore implements DataStore {
     return { newCount: task.completed_reviews, queue: task.queue };
   }
 
+  // Summary retry count — atomic increment
+
+  async incrementSummaryRetryCount(taskId: string): Promise<number | null> {
+    const task = this.tasks.get(taskId);
+    if (!task) return null;
+    task.summary_retry_count = (task.summary_retry_count ?? 0) + 1;
+    return task.summary_retry_count;
+  }
+
   // Review slot — atomic check-and-increment
 
   async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {

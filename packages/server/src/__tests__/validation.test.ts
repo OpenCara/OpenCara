@@ -4,6 +4,7 @@ import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
+import { VALID_SUMMARY_TEXT } from './helpers/test-constants.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -257,20 +258,19 @@ describe('Request Validation (Zod)', () => {
     });
 
     it('accepts review_text at minimum length (10 chars)', async () => {
-      await store.createTask(makeTask());
+      await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
       await store.createClaim({
-        id: 'task-1:agent-1:summary',
+        id: 'task-1:agent-1:review',
         task_id: 'task-1',
         agent_id: 'agent-1',
-        role: 'summary',
+        role: 'review',
         status: 'pending',
         created_at: Date.now(),
       });
-      await store.updateTask('task-1', { summary_agent_id: 'agent-1', queue: 'finished' });
 
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
-        type: 'summary',
+        type: 'review',
         review_text: 'Looks good!',
       });
       expect(res.status).toBe(200);
@@ -336,7 +336,7 @@ describe('Request Validation (Zod)', () => {
         const res = await request('POST', '/api/tasks/task-1/result', {
           agent_id: 'agent-1',
           type: 'summary',
-          review_text: 'Looks good.',
+          review_text: VALID_SUMMARY_TEXT,
           verdict,
         });
         expect(res.status).toBe(200);
@@ -369,7 +369,7 @@ describe('Request Validation (Zod)', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
         type: 'summary',
-        review_text: 'Looks good overall.',
+        review_text: VALID_SUMMARY_TEXT,
         verdict: 'approve',
         tokens_used: 1500,
       });

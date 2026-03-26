@@ -29,6 +29,10 @@ export interface DataStore {
   /** Atomically increment completed_reviews and return the new count plus the current queue state. */
   incrementCompletedReviews(taskId: string): Promise<{ newCount: number; queue: string } | null>;
 
+  // Summary retry count — atomic increment for quality gate failures
+  /** Atomically increment summary_retry_count and return the new count. */
+  incrementSummaryRetryCount(taskId: string): Promise<number | null>;
+
   // Review slot — atomic increment-if-below (prevents oversubscription)
   /** Atomically increment review_claims if review_claims < maxSlots (exclusive). Returns true if a slot was reserved. */
   claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean>;

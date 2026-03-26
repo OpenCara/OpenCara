@@ -18,6 +18,7 @@ import type { Env } from '../types.js';
 import { createTestApp } from './helpers/test-server.js';
 import { MockGitHubService } from './helpers/github-mock.js';
 import { MockAgent } from './helpers/mock-agent.js';
+import { VALID_SUMMARY_TEXT } from './helpers/test-constants.js';
 
 // ── Setup ────────────────────────────────────────────────────
 
@@ -217,7 +218,7 @@ describe('M12 Feature E2E Tests', () => {
       const claim = await a.claim(taskId, 'summary');
       expect(claim.claimed).toBe(true);
 
-      const result = await a.submitResult(taskId, 'summary', '## Summary\nLGTM.', 'approve', 500);
+      const result = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve', 500);
       expect(result.status).toBe(200);
 
       const task = await store.getTask(taskId);
@@ -306,10 +307,10 @@ describe('M12 Feature E2E Tests', () => {
       const { taskId } = (await agent('a').injectPR()) as { taskId: string };
       const a = agent('dup-agent');
       await a.claim(taskId, 'summary');
-      await a.submitResult(taskId, 'summary', 'First. Looks good overall.', 'approve');
+      await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Task + claims deleted after post — second submit returns 404
-      const r2 = await a.submitResult(taskId, 'summary', 'Second. Needs improvements.');
+      const r2 = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT);
       expect(r2.status).toBe(404);
     });
 

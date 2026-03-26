@@ -46,6 +46,7 @@ export interface ReviewTask {
   completed_reviews?: number; // number of completed review submissions
   reviews_completed_at?: number; // unix ms when all reviews completed (for grace period)
   summary_agent_id?: string; // agent that claimed summary (queue=finished)
+  summary_retry_count?: number; // number of failed summary quality evaluations
 }
 
 /** A claim on a task (review_result equivalent) */

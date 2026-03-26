@@ -60,6 +60,7 @@ interface TaskRow {
   completed_reviews: number;
   reviews_completed_at: number | null;
   summary_agent_id: string | null;
+  summary_retry_count: number;
 }
 
 interface ClaimRow {
@@ -107,6 +108,9 @@ export function rowToTask(row: TaskRow): ReviewTask {
   }
   if (row.summary_agent_id !== null) {
     task.summary_agent_id = row.summary_agent_id;
+  }
+  if (row.summary_retry_count > 0) {
+    task.summary_retry_count = row.summary_retry_count;
   }
 
   return task;
@@ -161,8 +165,9 @@ export class D1DataStore implements DataStore {
       .prepare(
         `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
         review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
-        created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
+        summary_retry_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         task.id,
@@ -186,6 +191,7 @@ export class D1DataStore implements DataStore {
         task.completed_reviews ?? 0,
         task.reviews_completed_at ?? null,
         task.summary_agent_id ?? null,
+        task.summary_retry_count ?? 0,
       )
       .run();
   }
@@ -196,8 +202,9 @@ export class D1DataStore implements DataStore {
         .prepare(
           `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
           review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
-          created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
+          summary_retry_count)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
           SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?)
         )`,
@@ -224,6 +231,7 @@ export class D1DataStore implements DataStore {
           task.completed_reviews ?? 0,
           task.reviews_completed_at ?? null,
           task.summary_agent_id ?? null,
+          task.summary_retry_count ?? 0,
           // WHERE NOT EXISTS params
           task.owner,
           task.repo,
@@ -301,6 +309,7 @@ export class D1DataStore implements DataStore {
       completed_reviews: (v) => v,
       reviews_completed_at: (v) => v ?? null,
       summary_agent_id: (v) => v ?? null,
+      summary_retry_count: (v) => v ?? 0,
     };
 
     for (const [field, transform] of Object.entries(columnMap)) {
@@ -432,6 +441,20 @@ export class D1DataStore implements DataStore {
       .first<{ completed_reviews: number; queue: string }>();
     if (!row) return null;
     return { newCount: row.completed_reviews, queue: row.queue };
+  }
+
+  // ── Summary retry count (atomic increment) ─────────────────
+
+  async incrementSummaryRetryCount(taskId: string): Promise<number | null> {
+    await this.db
+      .prepare(`UPDATE tasks SET summary_retry_count = summary_retry_count + 1 WHERE id = ?`)
+      .bind(taskId)
+      .run();
+    const row = await this.db
+      .prepare('SELECT summary_retry_count FROM tasks WHERE id = ?')
+      .bind(taskId)
+      .first<{ summary_retry_count: number }>();
+    return row ? row.summary_retry_count : null;
   }
 
   // ── Review slot (atomic conditional increment) ──────────────
