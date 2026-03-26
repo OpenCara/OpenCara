@@ -147,7 +147,7 @@ export function validateReviewConfig(config: unknown): config is ReviewConfig {
   return true;
 }
 
-/** Validate an OpenCaraConfig — requires version and at least a review section with prompt */
+/** Validate an OpenCaraConfig — requires version (all feature sections are optional) */
 export function validateOpenCaraConfig(config: unknown): config is OpenCaraConfig {
   if (!isObject(config)) return false;
   if (typeof config.version !== 'number') return false;

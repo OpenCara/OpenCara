@@ -126,6 +126,12 @@ export async function loadReviewConfig(
   }
 
   // Extract review section, falling back to defaults
+  if (!parsed.review) {
+    logger.info('.opencara.toml has no [review] section — using default review config', {
+      owner,
+      repo,
+    });
+  }
   return { config: parsed.review ?? DEFAULT_REVIEW_CONFIG, parseError: false };
 }
 
