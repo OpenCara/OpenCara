@@ -115,6 +115,9 @@ describe('Agent Routes', () => {
         created_at: now,
         review_claims: 1,
         completed_reviews: 0,
+        task_type: 'review',
+        feature: 'review',
+        group_id: 'group-1',
       });
 
       await store.createClaim({
@@ -146,6 +149,9 @@ describe('Agent Routes', () => {
         created_at: now,
         review_claims: 1,
         completed_reviews: 0,
+        task_type: 'review',
+        feature: 'review',
+        group_id: 'group-2',
       });
       await store.createClaim({
         id: 'claim-2',

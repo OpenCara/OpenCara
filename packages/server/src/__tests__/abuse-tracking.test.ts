@@ -26,6 +26,9 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
+    task_type: 'review',
+    feature: 'review',
+    group_id: 'group-1',
     ...overrides,
   };
 }

@@ -1,4 +1,4 @@
-import type { ReviewConfig, ClaimRole } from '@opencara/shared';
+import type { ReviewConfig, TaskRole } from '@opencara/shared';
 import { isEntityMatch } from '@opencara/shared';
 import { createLogger } from './logger.js';
 export { isRepoAllowed } from '@opencara/shared';
@@ -53,7 +53,7 @@ function matchGlob(pattern: string, text: string): boolean {
  */
 export function isAgentEligibleForRole(
   config: ReviewConfig,
-  role: ClaimRole,
+  role: TaskRole,
   agentId: string,
   githubUsername?: string,
 ): { eligible: boolean; reason?: string } {

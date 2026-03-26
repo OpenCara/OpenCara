@@ -482,6 +482,9 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     config: DEFAULT_REVIEW_CONFIG,
     queue: 'review',
     created_at: Date.now(),
+    task_type: 'review',
+    feature: 'review',
+    group_id: 'group-1',
     ...overrides,
   };
 }

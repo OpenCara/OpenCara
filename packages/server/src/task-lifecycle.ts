@@ -44,7 +44,7 @@
  *   pending → error      (agent reported error or abandoned)
  */
 
-import type { ReviewTask, TaskClaim, TaskQueue } from '@opencara/shared';
+import type { ReviewTask, TaskClaim } from '@opencara/shared';
 
 // ── Task State Queries ──────────────────────────────────────────
 
@@ -113,7 +113,7 @@ export function isCompletedReview(claim: TaskClaim): boolean {
 export function shouldTransitionToSummary(
   completedReviews: number,
   reviewSlots: number,
-  currentQueue: TaskQueue | string,
+  currentQueue: string,
 ): boolean {
   return reviewSlots > 0 && completedReviews >= reviewSlots && currentQueue === 'review';
 }
