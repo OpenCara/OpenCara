@@ -2,7 +2,7 @@
 # ====================================
 #
 # This file configures the OpenCara CLI agent. Place it at:
-#   ~/.opencara/config.yml
+#   ~/.opencara/config.toml
 #
 # Created automatically by `opencara login`. You can edit it manually
 # to add agents or configure repo filtering.
@@ -15,7 +15,7 @@
 
 # Platform URL — the OpenCara worker endpoint.
 # Set automatically by `opencara login`.
-platform_url: https://opencara-server.opencara.workers.dev
+platform_url = "https://opencara-server.opencara.workers.dev"
 
 # ---------------------------------------------------------------------------
 # GITHUB TOKEN (optional)
@@ -26,7 +26,7 @@ platform_url: https://opencara-server.opencara.workers.dev
 # This is the global token — per-agent tokens override it (see below).
 # Without a token, agents can only review public repos.
 
-# github_token: ghp_your_token_here
+# github_token = "ghp_your_token_here"
 
 # ---------------------------------------------------------------------------
 # AGENTS
@@ -52,68 +52,74 @@ platform_url: https://opencara-server.opencara.workers.dev
 #   github_token  (optional) — Per-agent GitHub token (overrides global)
 #   router        (optional) — If true, runs in router mode (stdin/stdout relay)
 #   repos         (optional) — Repo filtering config
-agents:
-  # Claude (Anthropic)
-  - model: claude-sonnet-4-6
-    tool: claude-code
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
 
-  # Qwen-compatible models (Alibaba Cloud)
-  - model: qwen3.5-plus
-    tool: qwen
-    command: qwen --model qwen3.5-plus -y
+# Claude (Anthropic)
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 
-  # - model: glm-5
-  #   tool: qwen
-  #   command: qwen --model glm-5 -y
+# Qwen-compatible models (Alibaba Cloud)
+[[agents]]
+model = "qwen3.5-plus"
+tool = "qwen"
+command = "qwen --model qwen3.5-plus -y"
 
-  # - model: kimi-k2.5
-  #   tool: qwen
-  #   command: qwen --model kimi-k2.5 -y
+# [[agents]]
+# model = "glm-5"
+# tool = "qwen"
+# command = "qwen --model glm-5 -y"
 
-  # Codex (OpenAI)
-  # - model: gpt-5.4-codex
-  #   tool: codex
-  #   command: codex --model gpt-5.4-codex exec
+# [[agents]]
+# model = "kimi-k2.5"
+# tool = "qwen"
+# command = "qwen --model kimi-k2.5 -y"
 
-  # Gemini (Google)
-  # - model: gemini-2.5-pro
-  #   tool: gemini
-  #   command: gemini -m gemini-2.5-pro
+# Codex (OpenAI)
+# [[agents]]
+# model = "gpt-5.4-codex"
+# tool = "codex"
+# command = "codex --model gpt-5.4-codex exec"
 
-  # Full example with all optional fields:
-  # - model: claude-sonnet-4-6
-  #   tool: claude-code
-  #   name: My Claude Reviewer
-  #   command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-  #   review_only: true              # Only review, never synthesize
-  #   github_token: ghp_per_agent    # Override global github_token
-  #   repos:
-  #     mode: whitelist              # all | own | whitelist | blacklist
-  #     list:
-  #       - myorg/my-project
-  #       - OpenCara/OpenCara
+# Gemini (Google)
+# [[agents]]
+# model = "gemini-2.5-pro"
+# tool = "gemini"
+# command = "gemini -m gemini-2.5-pro"
+
+# Full example with all optional fields:
+# [[agents]]
+# model = "claude-sonnet-4-6"
+# tool = "claude"
+# name = "My Claude Reviewer"
+# command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
+# review_only = true              # Only review, never synthesize
+# github_token = "ghp_per_agent"  # Override global github_token
+# [agents.repos]
+# mode = "whitelist"              # all | own | whitelist | blacklist
+# list = ["myorg/my-project", "OpenCara/OpenCara"]
+
 # ---------------------------------------------------------------------------
 # ADVANCED (optional)
 # ---------------------------------------------------------------------------
 
 # Default command template for agents that don't specify their own.
 # Prompt is delivered via stdin. ${MODEL} is optional.
-# agent_command: claude --model ${MODEL} --allowedTools '*' --print
+# agent_command = "claude --model ${MODEL} --allowedTools '*' --print"
 
 # Maximum PR diff size in KB. PRs larger than this are skipped.
 # Default: 100
-# max_diff_size_kb: 100
+# max_diff_size_kb = 100
 
 # Maximum consecutive poll errors before the agent shuts down.
 # Prevents infinite loops when the platform is unreachable.
 # Default: 10
-# max_consecutive_errors: 10
+# max_consecutive_errors = 10
 
 # Codebase context: clone repos locally for context-aware reviews.
 # When set, the CLI shallow-clones repos and runs tool commands from within
 # the local checkout. The tool command's cwd is set automatically.
-# codebase_dir: ~/.opencara/repos
+# codebase_dir = "~/.opencara/repos"
 
 # ---------------------------------------------------------------------------
 # ANONYMOUS AGENTS (managed by CLI, do not edit manually)
@@ -123,10 +129,10 @@ agents:
 # registers an anonymous agent and stores its credentials here.
 # After `opencara login`, you can link anonymous agents to your account.
 #
-# anonymous_agents:
-#   - agent_id: 3712d31f-200e-41cd-b9bd-7dc4df40cdf6
-#     api_key: cr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-#     model: claude-sonnet-4-6
-#     tool: claude
-#     repo_config:
-#       mode: all
+# [[anonymous_agents]]
+# agent_id = "3712d31f-200e-41cd-b9bd-7dc4df40cdf6"
+# api_key = "cr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# model = "claude-sonnet-4-6"
+# tool = "claude"
+# [anonymous_agents.repo_config]
+# mode = "all"

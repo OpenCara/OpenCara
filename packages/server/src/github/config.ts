@@ -4,7 +4,7 @@ import { postPrComment } from './reviews.js';
 import { createLogger, type Logger } from '../logger.js';
 
 /**
- * Fetch the .review.yml file from a repository at a specific ref.
+ * Fetch the .review.toml file from a repository at a specific ref.
  * Returns null if the file doesn't exist.
  */
 export async function fetchReviewConfig(
@@ -14,7 +14,7 @@ export async function fetchReviewConfig(
   token: string,
 ): Promise<string | null> {
   const response = await githubFetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/.review.yml?ref=${ref}`,
+    `https://api.github.com/repos/${owner}/${repo}/contents/.review.toml?ref=${ref}`,
     {
       token,
       accept: 'application/vnd.github.raw+json',
@@ -26,7 +26,7 @@ export async function fetchReviewConfig(
   }
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch .review.yml: ${response.status} ${response.statusText}`);
+    throw new Error(`Failed to fetch .review.toml: ${response.status} ${response.statusText}`);
   }
 
   return response.text();
@@ -69,8 +69,8 @@ export async function fetchPrDetails(
 }
 
 /**
- * Fetch .review.yml and parse config. Returns DEFAULT_REVIEW_CONFIG on error/missing.
- * Posts a PR comment if the YAML is malformed.
+ * Fetch .review.toml and parse config. Returns DEFAULT_REVIEW_CONFIG on error/missing.
+ * Posts a PR comment if the TOML is malformed.
  */
 export async function loadReviewConfig(
   owner: string,
@@ -80,11 +80,11 @@ export async function loadReviewConfig(
   token: string,
   logger: Logger = createLogger(),
 ): Promise<{ config: ReviewConfig; parseError: boolean }> {
-  let configYaml: string | null;
+  let configToml: string | null;
   try {
-    configYaml = await fetchReviewConfig(owner, repo, baseRef, token);
+    configToml = await fetchReviewConfig(owner, repo, baseRef, token);
   } catch (err) {
-    logger.error('Failed to fetch .review.yml', {
+    logger.error('Failed to fetch .review.toml', {
       owner,
       repo,
       error: err instanceof Error ? err.message : String(err),
@@ -92,20 +92,20 @@ export async function loadReviewConfig(
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
-  if (configYaml === null) {
-    logger.info('No .review.yml found — using default review config', { owner, repo });
+  if (configToml === null) {
+    logger.info('No .review.toml found — using default review config', { owner, repo });
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
-  const parsed = parseReviewConfig(configYaml);
+  const parsed = parseReviewConfig(configToml);
   if ('error' in parsed) {
-    logger.info('.review.yml parse error', { error: parsed.error });
+    logger.info('.review.toml parse error', { error: parsed.error });
     try {
       await postPrComment(
         owner,
         repo,
         prNumber,
-        `**OpenCara**: Failed to parse \`.review.yml\`: ${parsed.error}`,
+        `**OpenCara**: Failed to parse \`.review.toml\`: ${parsed.error}`,
         token,
       );
     } catch (err) {

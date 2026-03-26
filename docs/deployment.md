@@ -202,10 +202,10 @@ https://<your-worker-url>/webhook/github
 ### 3.3 Verify End-to-End
 
 1. Install the app on a test repository
-2. Add a `.review.yml` file:
-   ```yaml
-   version: 1
-   prompt: 'Review this PR for code quality and correctness.'
+2. Add a `.review.toml` file:
+   ```toml
+   version = 1
+   prompt = "Review this PR for code quality and correctness."
    ```
 3. Start an agent: `opencara agent start --all`
 4. Open a PR — the server should create a task, the agent should review and post a PR comment
@@ -259,9 +259,9 @@ Update `MIN_CLI_VERSION` in `packages/server/src/version.ts` when a server relea
 | Variable                | Description                                                             |
 | ----------------------- | ----------------------------------------------------------------------- |
 | `OPENCARA_PLATFORM_URL` | Override `platform_url` from config (useful for switching environments) |
-| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.yml`)      |
+| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.toml`)     |
 
-The CLI stores configuration locally at `~/.opencara/config.yml`. See [agent-guide.md](agent-guide.md) for details.
+The CLI stores configuration locally at `~/.opencara/config.toml`. See [agent-guide.md](agent-guide.md) for details.
 
 ## Local Development
 
@@ -282,9 +282,9 @@ pnpm dev    # starts wrangler dev with local D1 (SQLite)
 
 ### Agent not receiving tasks
 
-- Verify `platform_url` in `~/.opencara/config.yml` points to the correct Worker URL
+- Verify `platform_url` in `~/.opencara/config.toml` points to the correct Worker URL
 - Check that the agent is polling (look for "polling every 10s" in logs)
-- Verify a `.review.yml` exists in the target repo
+- Verify a `.review.toml` exists in the target repo
 
 ### GitHub review not posted
 

@@ -1,4 +1,4 @@
-import { parse as parseYaml } from 'yaml';
+import { parse as parseToml } from 'smol-toml';
 
 export interface TriggerConfig {
   on: string[];
@@ -101,7 +101,7 @@ export function validateReviewConfig(config: unknown): config is ReviewConfig {
 }
 
 /**
- * Default review configuration used when .review.yml is not present in the repo.
+ * Default review configuration used when .review.toml is not present in the repo.
  */
 const DEFAULT_TRIGGER: TriggerConfig = {
   on: ['opened'],
@@ -182,16 +182,16 @@ function parseSummarizerSection(raw: unknown): ReviewConfig['summarizer'] {
   };
 }
 
-export function parseReviewConfig(yaml: string): ParseResult {
+export function parseReviewConfig(toml: string): ParseResult {
   let raw: unknown;
   try {
-    raw = parseYaml(yaml);
+    raw = parseToml(toml);
   } catch {
-    return { error: 'Invalid YAML syntax' };
+    return { error: 'Invalid TOML syntax' };
   }
 
   if (!isObject(raw)) {
-    return { error: 'Configuration must be a YAML object' };
+    return { error: 'Configuration must be a TOML document' };
   }
 
   if (raw.version === undefined || raw.version === null) {

@@ -1,0 +1,114 @@
+# OpenCara Review Configuration Template
+# =======================================
+#
+# Place this file as `.review.toml` in your repository root to customize
+# how OpenCara reviews your PRs. Only `version` and `prompt` are required —
+# everything else falls back to sensible defaults.
+#
+# Works without any `.review.toml` at all — OpenCara uses defaults:
+#   1 agent, trigger on PR opened, skip drafts, 10-minute timeout.
+
+# ---------------------------------------------------------------------------
+# REQUIRED FIELDS
+# ---------------------------------------------------------------------------
+
+# Schema version (must be 1)
+version = 1
+
+# The review prompt sent to agents. This is the ONLY instruction agents
+# receive, so be specific about what matters to your project.
+# Use TOML multiline strings (triple quotes) for longer prompts.
+prompt = """
+Review this PR for bugs, security issues, and code quality.
+Focus on logic errors, edge cases, and potential performance problems.
+This project uses TypeScript + React, following ESLint standards.
+"""
+
+# ---------------------------------------------------------------------------
+# TRIGGER — when to run reviews (optional, all fields have defaults)
+# ---------------------------------------------------------------------------
+[trigger]
+# PR actions that trigger a review.
+# Values: opened, synchronize, reopened, ready_for_review
+#   opened           — new PR created
+#   synchronize      — new commits pushed to an existing PR
+#   reopened         — closed PR reopened
+#   ready_for_review — draft PR marked as ready
+# Default: ["opened"]
+on = ["opened", "synchronize"]
+
+# Comment command to manually request a review on any PR.
+# Post this as a PR comment to trigger a review on demand.
+# Default: "/opencara review"
+comment = "/opencara review"
+
+# Conditions to skip reviews automatically.
+# Values:
+#   draft            — skip draft PRs
+#   label:<name>     — skip PRs with this label (e.g., "label:wip")
+#   branch:<pattern> — skip PRs from matching branches (e.g., "branch:release/*")
+# Default: ["draft"]
+skip = ["draft"]
+# skip = ["draft", "label:no-review", "branch:release/*"]
+
+# ---------------------------------------------------------------------------
+# AGENTS — control which agents review and how many (optional)
+# ---------------------------------------------------------------------------
+[agents]
+# Number of agents to review each PR (1–10).
+# When review_count > 1, a synthesizer agent merges individual reviews
+# into a single consolidated comment with inline annotations.
+# Default: 1
+review_count = 2
+
+# Prefer agents running these AI models (empty = no preference).
+# Matching agents are selected first; others fill remaining slots.
+# See the model registry for available models: GET /api/registry
+# Default: []
+preferred_models = ["claude-sonnet-4-6", "qwen3.5-plus"]
+# preferred_models = ["glm-5", "kimi-k2.5", "gpt-5-codex", "gemini-2.5-pro"]
+
+# Prefer agents using these tool types (empty = no preference).
+# Default: []
+preferred_tools = []
+# preferred_tools = ["claude", "qwen", "codex"]
+
+# ---------------------------------------------------------------------------
+# REVIEWER — control who can review (optional)
+# ---------------------------------------------------------------------------
+[reviewer]
+# Whether anonymous (non-GitHub-authenticated) agents can review.
+# Default: true
+allow_anonymous = true
+
+# Allow only specific users or agents to review this repo.
+# Empty = allow all eligible agents (default).
+# [[reviewer.whitelist]]
+# user = "trusted-contributor"    # GitHub username
+# [[reviewer.whitelist]]
+# agent = "3712d31f-..."          # specific agent ID
+
+# Block specific users or agents from reviewing.
+# Default: []
+# [[reviewer.blacklist]]
+# user = "spammer"
+
+# ---------------------------------------------------------------------------
+# SUMMARIZER — control who produces the synthesis (optional)
+#
+# When review_count > 1, a synthesizer agent consolidates individual
+# reviews into one comment. Use these lists to control which agents
+# are eligible for summarization.
+# ---------------------------------------------------------------------------
+[summarizer]
+# [[summarizer.whitelist]]
+# [[summarizer.blacklist]]
+
+# ---------------------------------------------------------------------------
+# TIMEOUT — max wait time for reviews (optional)
+# ---------------------------------------------------------------------------
+
+# How long to wait for all reviews before synthesizing.
+# Format: "<minutes>m" (range: 1m–30m)
+# Default: "10m"
+timeout = "10m"

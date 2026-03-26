@@ -30,9 +30,9 @@ describe('POST /api/config/validate', () => {
     app = createApp(new MemoryDataStore());
   });
 
-  it('returns valid config for correct YAML', async () => {
-    const yaml = `version: 1\nprompt: "Review this PR"\nagents:\n  review_count: 3`;
-    const res = await postValidate(app, { yaml });
+  it('returns valid config for correct TOML', async () => {
+    const toml = 'version = 1\nprompt = "Review this PR"\n[agents]\nreview_count = 3';
+    const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
@@ -42,18 +42,18 @@ describe('POST /api/config/validate', () => {
     expect(body.config.agents.reviewCount).toBe(3);
   });
 
-  it('returns error for invalid YAML syntax', async () => {
-    const yaml = '{{invalid yaml';
-    const res = await postValidate(app, { yaml });
+  it('returns error for invalid TOML syntax', async () => {
+    const toml = '{{invalid toml';
+    const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(false);
-    expect(body.error).toBe('Invalid YAML syntax');
+    expect(body.error).toBe('Invalid TOML syntax');
   });
 
   it('returns error for missing required fields', async () => {
-    const yaml = 'version: 1';
-    const res = await postValidate(app, { yaml });
+    const toml = 'version = 1';
+    const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(false);
@@ -61,33 +61,24 @@ describe('POST /api/config/validate', () => {
   });
 
   it('returns error when version is missing', async () => {
-    const yaml = 'prompt: "hello"';
-    const res = await postValidate(app, { yaml });
+    const toml = 'prompt = "hello"';
+    const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(false);
     expect(body.error).toContain('version');
   });
 
-  it('returns error when YAML is not an object', async () => {
-    const yaml = '- item1\n- item2';
-    const res = await postValidate(app, { yaml });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.valid).toBe(false);
-    expect(body.error).toBe('Configuration must be a YAML object');
-  });
-
-  it('returns 400 when yaml field is missing', async () => {
+  it('returns 400 when toml field is missing', async () => {
     const res = await postValidate(app, {});
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe('INVALID_REQUEST');
-    expect(body.error.message).toContain('yaml');
+    expect(body.error.message).toContain('toml');
   });
 
-  it('returns 400 when yaml field is not a string', async () => {
-    const res = await postValidate(app, { yaml: 123 });
+  it('returns 400 when toml field is not a string', async () => {
+    const res = await postValidate(app, { toml: 123 });
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe('INVALID_REQUEST');
@@ -115,7 +106,7 @@ describe('POST /api/config/validate', () => {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify([{ yaml: 'test' }]),
+        body: JSON.stringify([{ toml: 'test' }]),
       },
       mockEnv,
     );
@@ -125,15 +116,15 @@ describe('POST /api/config/validate', () => {
   });
 
   it('does not require authentication', async () => {
-    const yaml = 'version: 1\nprompt: "test"';
-    const res = await postValidate(app, { yaml });
+    const toml = 'version = 1\nprompt = "test"';
+    const res = await postValidate(app, { toml });
     // No Authorization header — should still work
     expect(res.status).toBe(200);
   });
 
   it('fills in default values for optional fields', async () => {
-    const yaml = 'version: 1\nprompt: "Review this"';
-    const res = await postValidate(app, { yaml });
+    const toml = 'version = 1\nprompt = "Review this"';
+    const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
@@ -143,22 +134,25 @@ describe('POST /api/config/validate', () => {
   });
 
   it('parses full config with all sections', async () => {
-    const yaml = [
-      'version: 1',
-      'prompt: "Full review"',
-      'trigger:',
-      '  on: [opened, synchronize]',
-      '  comment: "/review"',
-      '  skip: [draft]',
-      'agents:',
-      '  review_count: 5',
-      '  preferred_models: [claude-opus-4-6]',
-      '  preferred_tools: [claude]',
-      'reviewer:',
-      '  allow_anonymous: false',
-      'timeout: 15m',
+    const toml = [
+      'version = 1',
+      'prompt = "Full review"',
+      'timeout = "15m"',
+      '',
+      '[trigger]',
+      'on = ["opened", "synchronize"]',
+      'comment = "/review"',
+      'skip = ["draft"]',
+      '',
+      '[agents]',
+      'review_count = 5',
+      'preferred_models = ["claude-opus-4-6"]',
+      'preferred_tools = ["claude"]',
+      '',
+      '[reviewer]',
+      'allow_anonymous = false',
     ].join('\n');
-    const res = await postValidate(app, { yaml });
+    const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
@@ -172,10 +166,10 @@ describe('POST /api/config/validate', () => {
   it('is rate limited by IP', async () => {
     // Send 60 requests to exhaust the limit
     for (let i = 0; i < 60; i++) {
-      await postValidate(app, { yaml: 'version: 1\nprompt: "test"' });
+      await postValidate(app, { toml: 'version = 1\nprompt = "test"' });
     }
     // 61st should be rate limited
-    const res = await postValidate(app, { yaml: 'version: 1\nprompt: "test"' });
+    const res = await postValidate(app, { toml: 'version = 1\nprompt = "test"' });
     expect(res.status).toBe(429);
     const body = await res.json();
     expect(body.error.code).toBe('RATE_LIMITED');

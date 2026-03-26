@@ -117,8 +117,8 @@ export class FakeServer {
           return new Response(JSON.stringify({ token: 'ghs_mock_token' }), { status: 200 });
         }
 
-        // Fetch .review.yml
-        if (url.includes('/contents/.review.yml')) {
+        // Fetch .review.toml
+        if (url.includes('/contents/.review.toml')) {
           return new Response('Not Found', { status: 404 });
         }
 

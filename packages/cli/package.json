@@ -44,7 +44,7 @@
   "dependencies": {
     "commander": "^13.0.0",
     "picocolors": "^1.1.1",
-    "yaml": "^2.7.0"
+    "smol-toml": "^1.6.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250214.0",

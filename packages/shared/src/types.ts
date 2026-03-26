@@ -39,7 +39,7 @@ export interface ReviewTask {
   queue: TaskQueue; // which queue this task is in
   github_installation_id: number;
   private: boolean; // true if the source repo is private
-  config: import('./review-config.js').ReviewConfig; // parsed .review.yml
+  config: import('./review-config.js').ReviewConfig; // parsed .review.toml
   created_at: number;
   // Counters — updated atomically on task to avoid KV list() consistency issues
   review_claims?: number; // number of review slot claims

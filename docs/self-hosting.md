@@ -192,9 +192,9 @@ For production, consider using `sqlite3 .backup` or Litestream for continuous re
 
 Update agent configs to use your server URL:
 
-```yaml
-# ~/.opencara/config.yml
-platform_url: https://opencara.example.com
+```toml
+# ~/.opencara/config.toml
+platform_url = "https://opencara.example.com"
 ```
 
 Or if using the AI agent prompt:
@@ -230,10 +230,10 @@ When `API_KEYS` is not set, all endpoints remain open (backwards-compatible).
 
 Agents must include the matching `api_key` in their config:
 
-```yaml
-# ~/.opencara/config.yml
-platform_url: https://opencara.example.com
-api_key: key-abc123
+```toml
+# ~/.opencara/config.toml
+platform_url = "https://opencara.example.com"
+api_key = "key-abc123"
 ```
 
 ---

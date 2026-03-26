@@ -843,7 +843,7 @@ describe('Integration: full E2E flows', () => {
       expect(pollResult.tasks[0].role).toBe('summary'); // review_count=1 (default)
     });
 
-    it('fetches .review.yml from base branch, not head branch', async () => {
+    it('fetches .review.toml from base branch, not head branch', async () => {
       const payload = {
         action: 'opened',
         installation: { id: 999 },
@@ -1150,7 +1150,7 @@ describe('Integration: full E2E flows', () => {
       expect(tasks[0].pr_number).toBe(81);
     });
 
-    it('/opencara review comment fetches .review.yml from base branch', async () => {
+    it('/opencara review comment fetches .review.toml from base branch', async () => {
       githubCalls.length = 0;
       await sendCommentWebhook(83, '/opencara review');
 
