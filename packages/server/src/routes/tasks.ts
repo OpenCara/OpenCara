@@ -31,6 +31,16 @@ import { requireApiKey } from '../middleware/auth.js';
 import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
+  isTaskActive,
+  isTaskTerminal,
+  isInReviewQueue,
+  isInSummaryQueue,
+  isClaimPending,
+  isClaimFailed,
+  isCompletedReview,
+  shouldTransitionToSummary,
+} from '../task-lifecycle.js';
+import {
   parseBody,
   PollRequestSchema,
   ClaimRequestSchema,
@@ -169,7 +179,7 @@ export async function checkTimeouts(
     const claims = await store.getClaims(task.id);
 
     // Log structured errors for each pending claim that timed out
-    for (const claim of claims.filter((c) => c.status === 'pending')) {
+    for (const claim of claims.filter(isClaimPending)) {
       log.error('Agent claim timed out', {
         agentId: claim.agent_id,
         taskId: task.id,
@@ -177,9 +187,7 @@ export async function checkTimeouts(
         role: claim.role,
       });
     }
-    const completedReviews = claims.filter(
-      (c) => c.role === 'review' && c.status === 'completed' && c.review_text,
-    );
+    const completedReviews = claims.filter(isCompletedReview);
 
     try {
       const token = await github.getInstallationToken(task.github_installation_id);
@@ -237,7 +245,7 @@ async function postFinalReview(
   if (!task) return;
 
   // Defense-in-depth: if task is already completed, another agent already posted.
-  if (task.status === 'completed' || task.queue === 'completed') {
+  if (isTaskTerminal(task)) {
     logger.info('Skipping duplicate post — task already completed', {
       taskId,
       agentId: summaryAgentId,
@@ -314,14 +322,12 @@ async function postFallbackConsolidatedReview(
     const token = await github.getInstallationToken(task.github_installation_id);
     const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
 
-    const reviews: TimeoutReview[] = claims
-      .filter((c) => c.role === 'review' && c.status === 'completed' && c.review_text)
-      .map((c) => ({
-        model: c.model ?? 'unknown',
-        tool: c.tool ?? 'unknown',
-        verdict: (c.verdict as ReviewVerdict) ?? 'comment',
-        review_text: c.review_text!,
-      }));
+    const reviews: TimeoutReview[] = claims.filter(isCompletedReview).map((c) => ({
+      model: c.model ?? 'unknown',
+      tool: c.tool ?? 'unknown',
+      verdict: (c.verdict as ReviewVerdict) ?? 'comment',
+      review_text: c.review_text!,
+    }));
 
     const body = formatTimeoutComment(timeoutMinutes, reviews);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
@@ -424,7 +430,8 @@ export function taskRoutes() {
       if (remainingMs <= 0) continue;
 
       // Queue-based role assignment
-      if (task.queue === 'summary') {
+      if (isInSummaryQueue(task)) {
+        // Summary queue — check role filter, eligibility, grace period, and repo preference
         if (acceptedRoles && !acceptedRoles.has('summary')) continue;
         const { eligible } = isAgentEligibleForRole(
           task.config,
@@ -444,7 +451,8 @@ export function taskRoutes() {
           role: 'summary',
           claimId: `${task.id}:${agent_id}:summary`,
         });
-      } else if (task.queue === 'review') {
+      } else if (isInReviewQueue(task)) {
+        // Review queue — check role filter and review slots
         if (acceptedRoles && !acceptedRoles.has('review')) continue;
         const reviewSlots = task.review_count - 1;
         const reviewClaims = task.review_claims ?? 0;
@@ -477,7 +485,7 @@ export function taskRoutes() {
     const available: PollTask[] = [];
     for (const { task, role, claimId } of candidates) {
       const existing = existingClaims.get(claimId);
-      if (existing && existing.status !== 'rejected' && existing.status !== 'error') {
+      if (existing && !isClaimFailed(existing)) {
         continue;
       }
 
@@ -539,7 +547,7 @@ export function taskRoutes() {
       return apiError(c, 404, 'TASK_NOT_FOUND', 'Task not found');
     }
 
-    if (task.status !== 'pending' && task.status !== 'reviewing') {
+    if (!isTaskActive(task)) {
       return apiError(c, 409, 'CLAIM_CONFLICT', `Task is ${task.status}`);
     }
 
@@ -565,7 +573,7 @@ export function taskRoutes() {
 
     // Queue-based claim validation
     if (role === 'review') {
-      if (task.queue !== 'review') {
+      if (!isInReviewQueue(task)) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
       }
       // Atomic slot reservation — prevents concurrent oversubscription
@@ -575,7 +583,7 @@ export function taskRoutes() {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
       }
     } else if (role === 'summary') {
-      if (task.queue !== 'summary') {
+      if (!isInSummaryQueue(task)) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
       // Check preferred synthesizer grace period
@@ -630,16 +638,14 @@ export function taskRoutes() {
     // If summary role, include completed review texts
     if (role === 'summary') {
       const claims = await store.getClaims(taskId);
-      const completedReviews = claims
-        .filter((cl) => cl.role === 'review' && cl.status === 'completed' && cl.review_text)
-        .map((cl) => ({
-          agent_id: cl.agent_id,
-          review_text: cl.review_text!,
-          verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
-          model: cl.model,
-          tool: cl.tool,
-          thinking: cl.thinking,
-        }));
+      const completedReviews = claims.filter(isCompletedReview).map((cl) => ({
+        agent_id: cl.agent_id,
+        review_text: cl.review_text!,
+        verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
+        model: cl.model,
+        tool: cl.tool,
+        thinking: cl.thinking,
+      }));
       return c.json<ClaimResponse>({ claimed: true, reviews: completedReviews });
     }
 
@@ -701,7 +707,7 @@ export function taskRoutes() {
       return apiError(c, 404, 'CLAIM_NOT_FOUND', 'No claim found for this agent on this task');
     }
 
-    if (claim.status !== 'pending') {
+    if (!isClaimPending(claim)) {
       logger.error('Result rejected — claim not pending', {
         agentId: agent_id,
         taskId,
@@ -751,9 +757,7 @@ export function taskRoutes() {
 
       // Quality gate: evaluate summary before posting to GitHub
       const claims = await store.getClaims(taskId);
-      const individualReviews = claims
-        .filter((cl) => cl.role === 'review' && cl.status === 'completed' && cl.review_text)
-        .map((cl) => cl.review_text!);
+      const individualReviews = claims.filter(isCompletedReview).map((cl) => cl.review_text!);
 
       const evaluation = evaluateSummaryQuality(review_text, individualReviews);
 
@@ -802,9 +806,9 @@ export function taskRoutes() {
       if (result) {
         const { newCount, queue } = result;
         const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
-        if (reviewSlots > 0 && newCount >= reviewSlots && queue === 'review') {
+        if (shouldTransitionToSummary(newCount, reviewSlots, queue)) {
           // All reviews done — move task to summary queue
-          // Guard: only transition if queue is still 'review' to prevent
+          // Guard: shouldTransitionToSummary checks queue is still 'review' to prevent
           // late review results from overwriting 'summary' or 'finished' state
           await store.updateTask(taskId, {
             queue: 'summary',
@@ -838,7 +842,7 @@ export function taskRoutes() {
       return apiError(c, 404, 'CLAIM_NOT_FOUND', 'Claim not found');
     }
 
-    if (claim.status !== 'pending') {
+    if (!isClaimPending(claim)) {
       // Idempotent: already rejected → return 200
       if (claim.status === 'rejected') {
         return c.json({ success: true });
@@ -882,7 +886,7 @@ export function taskRoutes() {
       return apiError(c, 404, 'CLAIM_NOT_FOUND', 'Claim not found');
     }
 
-    if (claim.status !== 'pending') {
+    if (!isClaimPending(claim)) {
       // Idempotent: already errored → return 200
       if (claim.status === 'error') {
         return c.json({ success: true });
@@ -923,11 +927,11 @@ async function findClaimForAgent(
 ): Promise<import('@opencara/shared').TaskClaim | null> {
   // Try summary claim first (higher priority to release)
   const summaryClaim = await store.getClaim(`${taskId}:${agentId}:summary`);
-  if (summaryClaim && summaryClaim.status === 'pending') return summaryClaim;
+  if (summaryClaim && isClaimPending(summaryClaim)) return summaryClaim;
 
   // Try review claim
   const reviewClaim = await store.getClaim(`${taskId}:${agentId}:review`);
-  if (reviewClaim && reviewClaim.status === 'pending') return reviewClaim;
+  if (reviewClaim && isClaimPending(reviewClaim)) return reviewClaim;
 
   // Return any found claim for idempotency checks (rejected/error/completed)
   if (summaryClaim) return summaryClaim;

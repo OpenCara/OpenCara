@@ -125,6 +125,32 @@ describe('auth', () => {
       expect(loadAuth()).toBeNull();
     });
 
+    it('returns null when refresh_token is present but not a string', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          access_token: 'ghu_test',
+          refresh_token: 42, // should be string or undefined
+          expires_at: Date.now() + 3600_000,
+          github_username: 'user',
+          github_user_id: 1,
+        }),
+      );
+      expect(loadAuth()).toBeNull();
+    });
+
+    it('loads auth without refresh_token (non-refreshable token)', () => {
+      const authWithoutRefresh = {
+        access_token: 'ghu_test',
+        expires_at: Date.now() + 3600_000,
+        github_username: 'user',
+        github_user_id: 1,
+      };
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(authWithoutRefresh));
+      const result = loadAuth();
+      expect(result).toEqual(authWithoutRefresh);
+      expect(result?.refresh_token).toBeUndefined();
+    });
+
     it('uses OPENCARA_AUTH_FILE env var for file path', () => {
       process.env.OPENCARA_AUTH_FILE = '/custom/auth.json';
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(MOCK_AUTH));
@@ -502,6 +528,52 @@ describe('auth', () => {
       await expect(getValidToken(PLATFORM_URL, { loadAuthFn: () => null })).rejects.toThrow(
         'Not authenticated',
       );
+    });
+
+    it('throws when token expired and no refresh_token available', async () => {
+      const now = Date.now();
+      const auth: StoredAuth = {
+        access_token: 'ghu_test',
+        expires_at: now - 1000, // expired
+        github_username: 'user',
+        github_user_id: 1,
+        // no refresh_token
+      };
+
+      await expect(
+        getValidToken(PLATFORM_URL, {
+          loadAuthFn: () => auth,
+          nowFn: () => now,
+        }),
+      ).rejects.toThrow('no refresh token available');
+    });
+
+    it('preserves existing refresh_token when refresh response omits it', async () => {
+      const now = Date.now();
+      const auth = { ...MOCK_AUTH, expires_at: now - 1000 };
+
+      const refreshResponse: RefreshTokenResponse = {
+        access_token: 'ghu_new',
+        expires_in: 28800,
+        token_type: 'bearer',
+        // no refresh_token in response
+      };
+
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse(refreshResponse));
+
+      const saveAuthFn = vi.fn();
+
+      await getValidToken(PLATFORM_URL, {
+        fetchFn,
+        loadAuthFn: () => auth,
+        saveAuthFn,
+        nowFn: () => now,
+      });
+
+      const saved = saveAuthFn.mock.calls[0][0] as StoredAuth;
+      expect(saved.refresh_token).toBe('ghr_test_refresh'); // preserved
     });
 
     it('refreshes token when within 5-minute buffer', async () => {

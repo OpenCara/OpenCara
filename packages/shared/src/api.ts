@@ -276,7 +276,8 @@ export interface DeviceFlowTokenRequest {
 
 export interface DeviceFlowTokenResponse {
   access_token: string;
-  refresh_token: string;
+  /** Optional — GitHub Apps always return this, but non-refreshable tokens may omit it. */
+  refresh_token?: string;
   expires_in: number;
   token_type: string;
 }
@@ -288,7 +289,8 @@ export interface RefreshTokenRequest {
 
 export interface RefreshTokenResponse {
   access_token: string;
-  refresh_token: string;
+  /** Optional — a refresh may return a new refresh_token or omit it. */
+  refresh_token?: string;
   expires_in: number;
   token_type: string;
 }
