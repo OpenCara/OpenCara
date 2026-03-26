@@ -244,7 +244,7 @@ async function handlePullRequest(
     logger.error('Failed to get installation token', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return new Response('OK', { status: 200 });
+    return new Response('Service Unavailable', { status: 503 });
   }
 
   const baseRef = pull_request.base.ref;
@@ -258,7 +258,7 @@ async function handlePullRequest(
 
   if (parseError) {
     logger.info('Aborting due to .review.toml parse error', { prNumber });
-    return new Response('OK', { status: 200 });
+    return new Response('Service Unavailable', { status: 503 });
   }
 
   if (!config.trigger.on.includes(action)) {
@@ -280,20 +280,30 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  await createTaskForPR(
-    store,
-    installation.id,
-    owner,
-    repo,
-    prNumber,
-    pull_request.html_url,
-    pull_request.diff_url,
-    pull_request.base.ref,
-    headRef,
-    config,
-    repository.private ?? false,
-    logger,
-  );
+  try {
+    await createTaskForPR(
+      store,
+      installation.id,
+      owner,
+      repo,
+      prNumber,
+      pull_request.html_url,
+      pull_request.diff_url,
+      pull_request.base.ref,
+      headRef,
+      config,
+      repository.private ?? false,
+      logger,
+    );
+  } catch (err) {
+    logger.error('Failed to create task for PR', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      prNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
 
   return new Response('OK', { status: 200 });
 }
@@ -326,13 +336,13 @@ async function handleIssueComment(
     logger.error('Failed to get installation token', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return new Response('OK', { status: 200 });
+    return new Response('Service Unavailable', { status: 503 });
   }
 
   const pr = await github.fetchPrDetails(owner, repo, prNumber, token);
   if (!pr) {
     logger.error('Failed to fetch PR details', { owner, repo, prNumber });
-    return new Response('OK', { status: 200 });
+    return new Response('Service Unavailable', { status: 503 });
   }
 
   const { config, parseError } = await github.loadReviewConfig(
@@ -349,7 +359,7 @@ async function handleIssueComment(
       repo,
       prNumber,
     });
-    return new Response('OK', { status: 200 });
+    return new Response('Service Unavailable', { status: 503 });
   }
 
   const triggerCommand = config.trigger.comment;
@@ -374,20 +384,30 @@ async function handleIssueComment(
     prNumber,
   });
 
-  await createTaskForPR(
-    store,
-    installation.id,
-    owner,
-    repo,
-    prNumber,
-    pr.html_url,
-    pr.diff_url,
-    pr.base.ref,
-    pr.head.ref,
-    config,
-    repository.private ?? false,
-    logger,
-  );
+  try {
+    await createTaskForPR(
+      store,
+      installation.id,
+      owner,
+      repo,
+      prNumber,
+      pr.html_url,
+      pr.diff_url,
+      pr.base.ref,
+      pr.head.ref,
+      config,
+      repository.private ?? false,
+      logger,
+    );
+  } catch (err) {
+    logger.error('Failed to create task for PR', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      prNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
 
   return new Response('OK', { status: 200 });
 }

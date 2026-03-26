@@ -440,7 +440,7 @@ describe('webhook.ts edge cases', () => {
     );
   });
 
-  it('PR event with failed installation token is skipped', async () => {
+  it('PR event with failed installation token returns 503', async () => {
     // Inject a GitHubService that throws on getInstallationToken
     const failingGithub: GitHubService = {
       async getInstallationToken() {
@@ -469,10 +469,10 @@ describe('webhook.ts edge cases', () => {
         head: { ref: 'feat' },
       },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
   });
 
-  it('PR event with .review.toml parse error aborts', async () => {
+  it('PR event with .review.toml parse error returns 503', async () => {
     // Inject a GitHubService that returns parseError: true from loadReviewConfig
     const parseErrorGithub: GitHubService = {
       async getInstallationToken() {
@@ -501,10 +501,10 @@ describe('webhook.ts edge cases', () => {
         head: { ref: 'feat' },
       },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
   });
 
-  it('issue_comment with .review.toml parse error aborts', async () => {
+  it('issue_comment with .review.toml parse error returns 503', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     // Inject a GitHubService that returns parseError: true from loadReviewConfig
     const parseErrorGithub: GitHubService = {
@@ -537,7 +537,7 @@ describe('webhook.ts edge cases', () => {
       issue: { number: 1, pull_request: { url: 'https://example.com' } },
       comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     // Verify no task was created
     const tasks = await store.listTasks({ status: 'pending' });
     expect(tasks).toHaveLength(0);
@@ -574,7 +574,7 @@ describe('webhook.ts edge cases', () => {
     );
   });
 
-  it('issue_comment with failed installation token is skipped', async () => {
+  it('issue_comment with failed installation token returns 503', async () => {
     // Inject a GitHubService that throws on getInstallationToken
     const failingGithub: GitHubService = {
       async getInstallationToken() {
@@ -598,10 +598,10 @@ describe('webhook.ts edge cases', () => {
       issue: { number: 1, pull_request: { url: 'https://example.com' } },
       comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
   });
 
-  it('issue_comment with failed PR details fetch is skipped', async () => {
+  it('issue_comment with failed PR details fetch returns 503', async () => {
     // Inject a GitHubService where fetchPrDetails returns null
     const failingGithub: GitHubService = {
       async getInstallationToken() {
@@ -625,7 +625,7 @@ describe('webhook.ts edge cases', () => {
       issue: { number: 1, pull_request: { url: 'https://example.com' } },
       comment: { body: '/opencara review', user: { login: 'u' }, author_association: 'OWNER' },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
   });
 
   it('issue_comment with non-matching trigger command is skipped', async () => {
