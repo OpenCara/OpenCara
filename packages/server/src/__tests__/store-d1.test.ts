@@ -216,14 +216,19 @@ class MockD1Statement implements D1PreparedStatement {
     const tableName = this._extractTableName(sql, 'UPDATE');
     const table = this.db._getTable(tableName);
 
-    // Extract SET and WHERE
+    // Extract SET and WHERE (stop at RETURNING if present)
     const setMatch = sql.match(/SET\s+(.+?)\s+WHERE/is);
     if (!setMatch) return { success: true, meta: { changes: 0 } };
 
     const setClauses = this._parseSetClauses(setMatch[1]);
     const whereClause = this._extractWhere(sql);
 
+    // Check for RETURNING clause
+    const returningMatch = sql.match(/RETURNING\s+(.+)$/is);
+    const returningCols = returningMatch ? returningMatch[1].split(',').map((c) => c.trim()) : null;
+
     let changes = 0;
+    const updatedRows: TableRow[] = [];
     for (const row of table) {
       if (whereClause && !this._matchWhere(row, whereClause)) continue;
       for (const clause of setClauses) {
@@ -236,9 +241,16 @@ class MockD1Statement implements D1PreparedStatement {
         }
       }
       changes++;
+      if (returningCols) {
+        const returned: TableRow = {};
+        for (const col of returningCols) {
+          returned[col] = row[col];
+        }
+        updatedRows.push(returned);
+      }
     }
 
-    return { success: true, results: [], meta: { changes } };
+    return { success: true, results: returningCols ? updatedRows : [], meta: { changes } };
   }
 
   private _handleDelete(sql: string): D1Result {
@@ -282,8 +294,11 @@ class MockD1Statement implements D1PreparedStatement {
   }
 
   private _extractWhere(sql: string): string | null {
-    // Strip LIMIT/ORDER BY clauses before extracting WHERE
-    const cleaned = sql.replace(/\s+LIMIT\s+\d+/gi, '').replace(/\s+ORDER\s+BY\s+.+$/gi, '');
+    // Strip LIMIT/ORDER BY/RETURNING clauses before extracting WHERE
+    const cleaned = sql
+      .replace(/\s+LIMIT\s+\d+/gi, '')
+      .replace(/\s+ORDER\s+BY\s+.+$/gi, '')
+      .replace(/\s+RETURNING\s+.+$/gis, '');
     const match = cleaned.match(/WHERE\s+(.+?)(?:\s*$)/is);
     return match?.[1]?.trim() ?? null;
   }
