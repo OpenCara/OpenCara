@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -93,6 +94,40 @@ function toApiDiffUrl(webUrl: string): string | null {
 }
 
 /**
+ * Try to fetch the PR diff using the `gh` CLI, which uses the user's own
+ * GitHub credentials and works for private repos without a platform token.
+ *
+ * Returns the diff string on success, or null if `gh` is not available or fails.
+ */
+export async function fetchDiffViaGh(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string | null> {
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        'gh',
+        [
+          'api',
+          `repos/${owner}/${repo}/pulls/${prNumber}`,
+          '-H',
+          'Accept: application/vnd.github.v3.diff',
+        ],
+        { maxBuffer: 50 * 1024 * 1024 }, // 50 MB
+        (err, stdout) => {
+          if (err) reject(err);
+          else resolve(stdout);
+        },
+      );
+    });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Compute the roles this agent is willing to take based on its config.
  */
 export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
@@ -105,19 +140,37 @@ export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
  * Fetch the PR diff directly from GitHub.
  * Agent fetches diff itself — server never sends it.
  *
- * When githubToken is provided, uses the GitHub API with Accept header
- * (required for private repos — web URLs don't accept OAuth tokens).
- * Falls back to the web .diff URL for unauthenticated public repo access.
+ * Strategy (in order):
+ * 1. Try `gh api` — uses the user's own GitHub credentials, works for private repos
+ * 2. Fall back to HTTP fetch with OAuth token (API URL for private, web URL for public)
  */
 async function fetchDiff(
   diffUrl: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
   githubToken?: string | null,
   signal?: AbortSignal,
   maxDiffSizeKb?: number,
-): Promise<string> {
+): Promise<{ diff: string; method: 'gh' | 'http' }> {
+  // Try gh CLI first — works for private repos without a platform token
+  const ghDiff = await fetchDiffViaGh(owner, repo, prNumber);
+  if (ghDiff !== null) {
+    if (maxDiffSizeKb) {
+      const maxBytes = maxDiffSizeKb * 1024;
+      if (ghDiff.length > maxBytes) {
+        throw new DiffTooLargeError(
+          `Diff too large (${Math.round(ghDiff.length / 1024)}KB > ${maxDiffSizeKb}KB)`,
+        );
+      }
+    }
+    return { diff: ghDiff, method: 'gh' };
+  }
+
+  // Fall back to HTTP fetch
   const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
 
-  return withRetry(
+  const diff = await withRetry(
     async () => {
       const headers: Record<string, string> = {};
       let url: string;
@@ -140,7 +193,7 @@ async function fetchDiff(
         if (NON_RETRYABLE_STATUSES.has(response.status)) {
           const hint =
             response.status === 404
-              ? '. If this is a private repo, authenticate with: opencara auth login'
+              ? '. If this is a private repo, ensure gh CLI is installed and authenticated: gh auth login'
               : '';
           throw new NonRetryableError(`${msg}${hint}`);
         }
@@ -184,6 +237,8 @@ async function fetchDiff(
     { maxAttempts: 2 },
     signal,
   );
+
+  return { diff, method: 'http' };
 }
 
 /** Concatenate Uint8Array chunks into a single buffer. */
@@ -415,11 +470,20 @@ async function handleTask(
     return {};
   }
 
-  // Fetch diff (retry up to 2 times via fetchDiff)
+  // Fetch diff — try gh CLI first, fall back to HTTP
   let diffContent: string;
   try {
-    diffContent = await fetchDiff(diff_url, client.currentToken, signal, reviewDeps.maxDiffSizeKb);
-    log(`  Diff fetched (${Math.round(diffContent.length / 1024)}KB)`);
+    const result = await fetchDiff(
+      diff_url,
+      owner,
+      repo,
+      pr_number,
+      client.currentToken,
+      signal,
+      reviewDeps.maxDiffSizeKb,
+    );
+    diffContent = result.diff;
+    log(`  Diff fetched via ${result.method} (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
     logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
     await safeReject(

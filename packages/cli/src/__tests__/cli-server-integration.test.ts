@@ -14,6 +14,24 @@ import { createSessionTracker } from '../consumption.js';
 import { executeTool } from '../tool-executor.js';
 import { FakeServer, FAKE_SERVER_URL } from './helpers/fake-server.js';
 
+// ── Mock child_process so fetchDiffViaGh falls back to HTTP ──
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb?: (err: Error) => void) => {
+      const callback = typeof _opts === 'function' ? _opts : cb;
+      if (callback) {
+        const err = new Error('gh not available in test');
+        (err as NodeJS.ErrnoException).code = 'ENOENT';
+        process.nextTick(() => callback(err));
+      }
+      return { pid: 0, kill: () => false };
+    }),
+  };
+});
+
 // ── Mock tool executor ───────────────────────────────────────
 
 vi.mock('../tool-executor.js', () => ({
