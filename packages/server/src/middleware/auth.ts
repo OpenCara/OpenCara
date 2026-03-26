@@ -30,13 +30,20 @@ function parseApiKeys(raw: string | undefined): Set<string> | null {
 
 /**
  * Constant-time string comparison to prevent timing side-channel attacks.
- * Always compares all characters regardless of mismatch position.
+ * Hashes both inputs to fixed-length (32-byte) SHA-256 digests before comparing,
+ * so comparison time does not leak the length of either input.
  */
-function timingSafeEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
+async function timingSafeEquals(a: string, b: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [hashA, hashB] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(a)),
+    crypto.subtle.digest('SHA-256', encoder.encode(b)),
+  ]);
+  const viewA = new Uint8Array(hashA);
+  const viewB = new Uint8Array(hashB);
   let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < viewA.length; i++) {
+    diff |= viewA[i] ^ viewB[i];
   }
   return diff === 0;
 }
@@ -83,7 +90,7 @@ export function requireApiKey(): MiddlewareHandler<{
     // Timing-safe comparison against all valid keys
     let valid = false;
     for (const key of validKeys) {
-      if (timingSafeEquals(key, token)) valid = true;
+      if (await timingSafeEquals(key, token)) valid = true;
     }
 
     if (!valid) {

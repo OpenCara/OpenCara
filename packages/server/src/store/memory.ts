@@ -106,6 +106,17 @@ export class MemoryDataStore implements DataStore {
     return claim ? { ...claim } : null;
   }
 
+  async getClaimsBatch(claimIds: string[]): Promise<Map<string, TaskClaim>> {
+    const map = new Map<string, TaskClaim>();
+    for (const id of claimIds) {
+      const claim = this.claims.get(id);
+      if (claim) {
+        map.set(id, { ...claim });
+      }
+    }
+    return map;
+  }
+
   async getClaims(taskId: string): Promise<TaskClaim[]> {
     return [...this.claims.values()].filter((c) => c.task_id === taskId).map((c) => ({ ...c }));
   }

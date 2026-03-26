@@ -403,7 +403,14 @@ export function taskRoutes() {
     // Find available tasks — only active tasks (pending/reviewing)
     const tasks = await store.listTasks({ status: ['pending', 'reviewing'] });
     const tasksById = new Map(tasks.map((t) => [t.id, t]));
-    const available: PollTask[] = [];
+
+    // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
+    interface Candidate {
+      task: ReviewTask;
+      role: 'review' | 'summary';
+      claimId: string;
+    }
+    const candidates: Candidate[] = [];
 
     for (const task of tasks) {
       // Private repo tasks: only return to agents declaring matching repos
@@ -416,7 +423,6 @@ export function taskRoutes() {
 
       // Queue-based role assignment
       if (task.queue === 'summary') {
-        // Summary queue — check role filter, eligibility, grace period, and repo preference
         if (acceptedRoles && !acceptedRoles.has('summary')) continue;
         const { eligible } = isAgentEligibleForRole(
           task.config,
@@ -427,33 +433,16 @@ export function taskRoutes() {
         if (!eligible) continue;
         if (!isSummaryVisibleToAgent(task, agent_id)) continue;
 
-        // synthesize_repos filter — if provided, only offer summary tasks for matching repos
         if (synthesize_repos) {
           if (!isRepoAllowed(synthesize_repos, task.owner, task.repo)) continue;
         }
 
-        // Check if agent already has a summary claim on this task
-        const existingSummaryClaim = await store.getClaim(`${task.id}:${agent_id}:summary`);
-        if (
-          existingSummaryClaim &&
-          existingSummaryClaim.status !== 'rejected' &&
-          existingSummaryClaim.status !== 'error'
-        ) {
-          continue;
-        }
-
-        available.push({
-          task_id: task.id,
-          owner: task.owner,
-          repo: task.repo,
-          pr_number: task.pr_number,
-          diff_url: task.diff_url,
-          timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
-          prompt: task.prompt,
+        candidates.push({
+          task,
           role: 'summary',
+          claimId: `${task.id}:${agent_id}:summary`,
         });
       } else if (task.queue === 'review') {
-        // Review queue — check role filter and review slots
         if (acceptedRoles && !acceptedRoles.has('review')) continue;
         const reviewSlots = task.review_count - 1;
         const reviewClaims = task.review_claims ?? 0;
@@ -467,31 +456,40 @@ export function taskRoutes() {
         );
         if (!eligible) continue;
 
-        // Preferred model/tool grace period — non-preferred agents wait
         if (!isReviewVisibleToAgent(task, body.model, body.tool)) continue;
 
-        // Check if agent already has a review claim on this task
-        const existingClaim = await store.getClaim(`${task.id}:${agent_id}:review`);
-        if (
-          existingClaim &&
-          existingClaim.status !== 'rejected' &&
-          existingClaim.status !== 'error'
-        ) {
-          continue;
-        }
-
-        available.push({
-          task_id: task.id,
-          owner: task.owner,
-          repo: task.repo,
-          pr_number: task.pr_number,
-          diff_url: task.diff_url,
-          timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
-          prompt: task.prompt,
+        candidates.push({
+          task,
           role: 'review',
+          claimId: `${task.id}:${agent_id}:review`,
         });
       }
       // Tasks in 'finished' or 'completed' queue are not pollable
+    }
+
+    // Batch-fetch all candidate claims in a single query (eliminates N+1)
+    const claimIds = candidates.map((c) => c.claimId);
+    const existingClaims = await store.getClaimsBatch(claimIds);
+
+    // Second pass: filter by existing claim status and build result
+    const available: PollTask[] = [];
+    for (const { task, role, claimId } of candidates) {
+      const existing = existingClaims.get(claimId);
+      if (existing && existing.status !== 'rejected' && existing.status !== 'error') {
+        continue;
+      }
+
+      const remainingMs = task.timeout_at - Date.now();
+      available.push({
+        task_id: task.id,
+        owner: task.owner,
+        repo: task.repo,
+        pr_number: task.pr_number,
+        diff_url: task.diff_url,
+        timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
+        prompt: task.prompt,
+        role,
+      });
     }
 
     // Sort preferred tasks first (only applies to review-role tasks)
