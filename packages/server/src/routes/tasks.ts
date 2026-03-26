@@ -24,6 +24,7 @@ import {
   AGENT_REJECTION_THRESHOLD,
   AGENT_REJECTION_WINDOW_MS,
 } from '../store/constants.js';
+import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
@@ -292,6 +293,49 @@ async function postFinalReview(
     // On failure, move task back to summary queue so another agent can retry
     await store.releaseSummarySlot(taskId);
     await store.updateTask(taskId, { status: 'reviewing' });
+  }
+}
+
+/**
+ * Post a fallback consolidated review to GitHub when all summary retries are exhausted.
+ * Uses the timeout-style format: individual reviews concatenated.
+ */
+async function postFallbackConsolidatedReview(
+  store: DataStore,
+  github: GitHubService,
+  taskId: string,
+  claims: import('@opencara/shared').TaskClaim[],
+  logger: Logger,
+): Promise<void> {
+  const task = await store.getTask(taskId);
+  if (!task) return;
+
+  try {
+    const token = await github.getInstallationToken(task.github_installation_id);
+    const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
+
+    const reviews: TimeoutReview[] = claims
+      .filter((c) => c.role === 'review' && c.status === 'completed' && c.review_text)
+      .map((c) => ({
+        model: c.model ?? 'unknown',
+        tool: c.tool ?? 'unknown',
+        verdict: (c.verdict as ReviewVerdict) ?? 'comment',
+        review_text: c.review_text!,
+      }));
+
+    const body = formatTimeoutComment(timeoutMinutes, reviews);
+    await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
+
+    await store.deleteTask(taskId);
+    logger.info('Fallback consolidated review posted — task deleted', {
+      taskId,
+      reviewCount: reviews.length,
+    });
+  } catch (err) {
+    logger.error('Failed to post fallback consolidated review', {
+      taskId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -703,6 +747,51 @@ export function taskRoutes() {
           agentId: agent_id,
         });
         return c.json<ResultResponse>({ success: true });
+      }
+
+      // Quality gate: evaluate summary before posting to GitHub
+      const claims = await store.getClaims(taskId);
+      const individualReviews = claims
+        .filter((cl) => cl.role === 'review' && cl.status === 'completed' && cl.review_text)
+        .map((cl) => cl.review_text!);
+
+      const evaluation = evaluateSummaryQuality(review_text, individualReviews);
+
+      if (!evaluation.pass) {
+        // Reject: revert claim, release slot, record rejection, increment retry count
+        await store.updateClaim(claimId, { status: 'rejected' });
+        await store.releaseSummarySlot(taskId);
+        await store.recordAgentRejection(
+          agent_id,
+          `summary_quality: ${evaluation.reason}`,
+          Date.now(),
+        );
+
+        const retryCount = await store.incrementSummaryRetryCount(taskId);
+
+        logger.warn('Summary quality rejected', {
+          taskId,
+          agentId: agent_id,
+          reason: evaluation.reason,
+          retryCount,
+        });
+
+        // If retries exhausted, fall back to timeout-style consolidated post
+        if (retryCount !== null && retryCount >= MAX_SUMMARY_RETRIES) {
+          logger.info('Summary retries exhausted — posting fallback consolidated reviews', {
+            taskId,
+            retryCount,
+          });
+          await postFallbackConsolidatedReview(store, github, taskId, claims, logger);
+          return c.json<ResultResponse>({ success: true });
+        }
+
+        return apiError(
+          c,
+          400,
+          'REVIEW_QUALITY_REJECTED',
+          `Summary rejected: ${evaluation.reason}`,
+        );
       }
 
       // Summary submitted — post the final review to GitHub

@@ -14,6 +14,7 @@ import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import { MockGitHubService, type GitHubServiceCall } from './helpers/github-mock.js';
+import { VALID_SUMMARY_TEXT } from './helpers/test-constants.js';
 import type { Env } from '../types.js';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -176,20 +177,11 @@ describe('Integration: full E2E flows', () => {
       expect(taskAfterClaim?.status).toBe('reviewing');
 
       // 3. Agent submits review
-      const reviewText = `## Summary
-This PR adds a new widget feature. Overall looks good.
-
-## Findings
-- **[minor]** \`src/index.ts:10\` — Unused import of \`foo\`
-
-## Verdict
-APPROVE`;
-
       const result = await submitResult(
         'task-single',
         'agent-alpha',
         'summary',
-        reviewText,
+        VALID_SUMMARY_TEXT,
         'approve',
         1200,
       );
@@ -246,12 +238,13 @@ APPROVE`;
       expect(poll3.tasks).toHaveLength(0); // reviews pending, summary not yet available
 
       // Phase 3: Reviewers submit
-      await submitResult('task-multi', 'reviewer-a', 'review', 'Review A: LGTM', 'approve', 500);
+      const reviewA = 'The implementation follows established patterns and conventions well.';
+      await submitResult('task-multi', 'reviewer-a', 'review', reviewA, 'approve', 500);
       await submitResult(
         'task-multi',
         'reviewer-b',
         'review',
-        '## Summary\nNeeds work\n## Verdict\nREQUEST_CHANGES',
+        'Error handling improvements needed throughout the modified code paths.',
         'request_changes',
         600,
       );
@@ -267,14 +260,14 @@ APPROVE`;
       const reviews = claimSynth.reviews as Array<Record<string, unknown>>;
       expect(reviews).toHaveLength(2);
       expect(reviews.map((r) => r.agent_id).sort()).toEqual(['reviewer-a', 'reviewer-b']);
-      expect(reviews.find((r) => r.agent_id === 'reviewer-a')?.review_text).toBe('Review A: LGTM');
+      expect(reviews.find((r) => r.agent_id === 'reviewer-a')?.review_text).toBe(reviewA);
 
       // Phase 6: Synthesizer submits
       const synthResult = await submitResult(
         'task-multi',
         'synthesizer',
         'summary',
-        '## Summary\nSynthesized review.\n## Verdict\nCOMMENT',
+        VALID_SUMMARY_TEXT,
         undefined,
         900,
       );
@@ -633,7 +626,7 @@ APPROVE`;
         'task-concurrent-post',
         winner.agentId,
         'summary',
-        '## Summary\nLooks good.',
+        VALID_SUMMARY_TEXT,
         'approve',
       );
 
@@ -696,13 +689,7 @@ APPROVE`;
 
       // Claim and finish first task
       await claim('task-seq-1', 'worker', 'summary');
-      await submitResult(
-        'task-seq-1',
-        'worker',
-        'summary',
-        'Review 1: Analysis complete',
-        'approve',
-      );
+      await submitResult('task-seq-1', 'worker', 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Poll again — should see only the second task
       const result = await poll('worker');
@@ -739,11 +726,11 @@ APPROVE`;
       await claim('task-dup', 'agent', 'summary');
 
       // First submit — posts review and deletes task + claims
-      const r1 = await submitResult('task-dup', 'agent', 'summary', 'First summary result');
+      const r1 = await submitResult('task-dup', 'agent', 'summary', VALID_SUMMARY_TEXT);
       expect(r1.status).toBe(200);
 
       // Second submit — claim no longer exists (deleted with task)
-      const r2 = await submitResult('task-dup', 'agent', 'summary', 'Second summary result');
+      const r2 = await submitResult('task-dup', 'agent', 'summary', VALID_SUMMARY_TEXT);
       expect(r2.status).toBe(404);
     });
 
@@ -1254,8 +1241,7 @@ APPROVE`;
       expect(claimRes.claimed).toBe(true);
 
       // Step 4: Agent submits review
-      const review = '## Summary\nBug fix looks correct.\n\n## Verdict\nAPPROVE';
-      await submitResult(taskId, 'e2e-agent', 'summary', review, 'approve', 800);
+      await submitResult(taskId, 'e2e-agent', 'summary', VALID_SUMMARY_TEXT, 'approve', 800);
 
       // Step 5: Verify task deleted after review posted
       const finalTask = await store.getTask(taskId);

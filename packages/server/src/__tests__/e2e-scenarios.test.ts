@@ -16,6 +16,7 @@ import type { Env } from '../types.js';
 import { createTestApp } from './helpers/test-server.js';
 import { MockGitHubService } from './helpers/github-mock.js';
 import { MockAgent } from './helpers/mock-agent.js';
+import { VALID_SUMMARY_TEXT } from './helpers/test-constants.js';
 
 // ── Setup ────────────────────────────────────────────────────
 
@@ -117,13 +118,7 @@ describe('E2E Scenarios', () => {
       expect(task?.status).toBe('reviewing');
 
       // Submit result
-      const result = await a.submitResult(
-        taskId,
-        'summary',
-        '## Summary\nLooks good.\n\n## Verdict\nAPPROVE',
-        'approve',
-        1000,
-      );
+      const result = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve', 1000);
       expect(result.status).toBe(200);
       expect(result.body.success).toBe(true);
 
@@ -179,14 +174,26 @@ describe('E2E Scenarios', () => {
       expect(synthTasks).toHaveLength(0);
 
       // Reviewer 1 submits
-      await r1.submitResult(taskId, 'review', 'Review 1: LGTM', 'approve', 500);
+      await r1.submitResult(
+        taskId,
+        'review',
+        'The implementation follows established patterns and conventions well.',
+        'approve',
+        500,
+      );
 
       // Still no summary (only 1 of 2 reviews done)
       synthTasks = await synth.poll();
       expect(synthTasks).toHaveLength(0);
 
       // Reviewer 2 submits
-      await r2.submitResult(taskId, 'review', 'Review 2: Needs work', 'request_changes', 600);
+      await r2.submitResult(
+        taskId,
+        'review',
+        'Error handling improvements needed throughout the modified code paths.',
+        'request_changes',
+        600,
+      );
 
       // Summary now available
       synthTasks = await synth.poll();
@@ -206,7 +213,7 @@ describe('E2E Scenarios', () => {
       const result = await synth.submitResult(
         taskId,
         'summary',
-        '## Summary\nSynthesized.\n\n## Verdict\nCOMMENT',
+        VALID_SUMMARY_TEXT,
         undefined,
         900,
       );
@@ -257,12 +264,7 @@ describe('E2E Scenarios', () => {
       expect(c2.claimed).toBe(true);
 
       // Agent 2 completes
-      const result = await a2.submitResult(
-        taskId,
-        'summary',
-        'Done. Looks good overall.',
-        'approve',
-      );
+      const result = await a2.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
       expect(result.status).toBe(200);
     });
 
@@ -439,10 +441,10 @@ describe('E2E Scenarios', () => {
       const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
 
       // Agent A submits summary — is summary_agent_id, should post
-      await synthA.submitResult(taskId, 'summary', '## Summary\nFirst.', 'approve');
+      await synthA.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Agent B submits summary — not summary_agent_id, result accepted but no GitHub post
-      await synthB.submitResult(taskId, 'summary', '## Summary\nDuplicate.', 'approve');
+      await synthB.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Only 1 new comment should have been posted (not 2)
       const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
@@ -502,7 +504,7 @@ describe('E2E Scenarios', () => {
       const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
 
       // Winner submits result
-      await winner.submitResult(taskId, 'summary', '## Summary\nLooks good.', 'approve');
+      await winner.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Exactly 1 GitHub comment posted
       const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
@@ -672,7 +674,7 @@ describe('E2E Scenarios', () => {
 
       await a.claim(taskId, 'review');
       // With role-aware claim IDs, the summary claim doesn't exist — returns 404
-      const result = await a.submitResult(taskId, 'summary', 'Synthesized review');
+      const result = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT);
       expect(result.status).toBe(404);
       expect(result.body.error.code).toBe('CLAIM_NOT_FOUND');
     });
@@ -736,7 +738,7 @@ describe('E2E Scenarios', () => {
       const result = await a.submitResult(
         taskId,
         'summary',
-        '## Summary\nLooks good.\n\n## Verdict\nAPPROVE',
+        VALID_SUMMARY_TEXT,
         'APPROVE' as never,
         1000,
       );
@@ -745,8 +747,8 @@ describe('E2E Scenarios', () => {
       // GitHub comment should have been posted (not a review)
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
-      // Verdict is in the comment body text
-      expect(commentPost!.args.body as string).toContain('APPROVE');
+      // Verify comment body contains the summary text
+      expect(commentPost!.args.body as string).toContain('important changes');
     });
 
     it('mixed-case verdict is included in comment body text', async () => {
@@ -758,7 +760,7 @@ describe('E2E Scenarios', () => {
       const result = await a.submitResult(
         taskId,
         'summary',
-        '## Summary\nNeeds changes.\n\n## Verdict\nrequest_changes',
+        VALID_SUMMARY_TEXT,
         'Request_Changes' as never,
         800,
       );
@@ -768,7 +770,7 @@ describe('E2E Scenarios', () => {
         (c) => c.method === 'postPrComment' && c.args.prNumber === 2,
       );
       expect(commentPost).toBeDefined();
-      expect(commentPost!.args.body as string).toContain('request_changes');
+      expect(commentPost!.args.body as string).toContain('important changes');
     });
   });
 
@@ -782,7 +784,7 @@ describe('E2E Scenarios', () => {
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
-      await a.submitResult(taskId, 'summary', 'Done. Looks good overall.', 'approve');
+      await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Task + claims are deleted after successful post — returns 404
       const rejectRes = await a.reject(taskId, 'Too late');
@@ -794,7 +796,7 @@ describe('E2E Scenarios', () => {
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
-      await a.submitResult(taskId, 'summary', 'Done. Looks good overall.', 'approve');
+      await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Task + claims are deleted after successful post — returns 404
       const errRes = await a.reportError(taskId, 'Crash');
@@ -830,11 +832,11 @@ describe('E2E Scenarios', () => {
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
-      const r1 = await a.submitResult(taskId, 'summary', 'First summary result');
+      const r1 = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT);
       expect(r1.status).toBe(200);
 
       // Task + claims deleted after post — second submit returns 404
-      const r2 = await a.submitResult(taskId, 'summary', 'Second summary result');
+      const r2 = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT);
       expect(r2.status).toBe(404);
     });
 
@@ -844,7 +846,7 @@ describe('E2E Scenarios', () => {
       const a2 = agent('agent-2');
 
       await a1.claim(taskId, 'summary');
-      await a1.submitResult(taskId, 'summary', 'Done. Looks good overall.', 'approve');
+      await a1.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Task deleted — returns 404 TASK_NOT_FOUND
       const c = await a2.claim(taskId, 'summary');
@@ -923,13 +925,7 @@ describe('E2E Scenarios', () => {
 
       // Submit result — should still post to GitHub despite stale getClaim
       // because review_text is passed directly from the result endpoint
-      const result = await a.submitResult(
-        taskId,
-        'summary',
-        '## Summary\nThis should still be posted.',
-        'approve',
-        500,
-      );
+      const result = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve', 500);
       expect(result.status).toBe(200);
       expect(result.body.success).toBe(true);
 
@@ -941,7 +937,7 @@ describe('E2E Scenarios', () => {
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
-      expect(commentBody).toContain('This should still be posted.');
+      expect(commentBody).toContain('important changes');
     });
 
     it('server wraps review_text with title header and footer', async () => {
@@ -951,7 +947,7 @@ describe('E2E Scenarios', () => {
       await a.claim(taskId, 'summary');
 
       // CLI submits raw review_text without header/footer
-      const rawReview = 'Looks good. No issues found.';
+      const rawReview = VALID_SUMMARY_TEXT;
       const result = await a.submitResult(taskId, 'summary', rawReview, 'approve', 500);
       expect(result.status).toBe(200);
 

@@ -5,6 +5,7 @@ import { createApp } from '../index.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import { AGENT_REJECTION_THRESHOLD, AGENT_REJECTION_WINDOW_MS } from '../store/constants.js';
+import { VALID_SUMMARY_TEXT } from './helpers/test-constants.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
   return {
@@ -119,7 +120,7 @@ describe('Abuse Tracking', () => {
       const res = await request('POST', '/api/tasks/task-1/result', {
         agent_id: 'agent-1',
         type: 'summary',
-        review_text: 'This is a perfectly valid review text.',
+        review_text: VALID_SUMMARY_TEXT,
         verdict: 'approve',
       });
       expect(res.status).toBe(200);
