@@ -149,11 +149,10 @@ export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
 }
 
 /** Diff fetch method identifier for logging. */
-type DiffMethod = 'installation-token' | 'gh' | 'http';
+type DiffMethod = 'gh' | 'http';
 
 /**
  * Fetch diff via HTTP with streaming size guard.
- * Shared by both the installation-token and public HTTP tiers.
  */
 async function fetchDiffHttp(
   url: string,
@@ -211,9 +210,8 @@ async function fetchDiffHttp(
  * Agent fetches diff itself — server never sends it.
  *
  * Strategy (in order):
- * 1. Installation token from claim response — short-lived GitHub App token, works for private repos
- * 2. `gh` CLI — uses the user's own GitHub credentials, works for private repos
- * 3. Public HTTP fetch — unauthenticated or with platform OAuth token, works for public repos
+ * 1. `gh` CLI — uses the user's own GitHub credentials, works for private repos
+ * 2. Public HTTP fetch — unauthenticated or with platform OAuth token, works for public repos
  */
 async function fetchDiff(
   diffUrl: string,
@@ -221,41 +219,14 @@ async function fetchDiff(
   repo: string,
   prNumber: number,
   opts: {
-    installationToken?: string | null;
     githubToken?: string | null;
     signal?: AbortSignal;
     maxDiffSizeKb?: number;
   },
 ): Promise<{ diff: string; method: DiffMethod }> {
-  const { installationToken, githubToken, signal, maxDiffSizeKb } = opts;
+  const { githubToken, signal, maxDiffSizeKb } = opts;
 
-  // Tier 1: Installation token from claim response (GitHub App, works for private repos)
-  if (installationToken) {
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
-    try {
-      const diff = await withRetry(
-        () =>
-          fetchDiffHttp(
-            apiUrl,
-            {
-              Authorization: `Bearer ${installationToken}`,
-              Accept: 'application/vnd.github.v3.diff',
-            },
-            signal,
-            maxDiffSizeKb,
-          ),
-        { maxAttempts: 2 },
-        signal,
-      );
-      return { diff, method: 'installation-token' };
-    } catch (err) {
-      // DiffTooLargeError should propagate — it's not a fetch failure
-      if (err instanceof DiffTooLargeError) throw err;
-      // Otherwise fall through to next tier
-    }
-  }
-
-  // Tier 2: gh CLI — uses user's own GitHub credentials
+  // Tier 1: gh CLI — uses user's own GitHub credentials
   const ghDiff = await fetchDiffViaGh(owner, repo, prNumber, signal);
   if (ghDiff !== null) {
     if (maxDiffSizeKb) {
@@ -269,7 +240,7 @@ async function fetchDiff(
     return { diff: ghDiff, method: 'gh' };
   }
 
-  // Tier 3: Public HTTP fetch (with platform OAuth token if available)
+  // Tier 2: Public HTTP fetch (with platform OAuth token if available)
   const diff = await withRetry(
     () => {
       const headers: Record<string, string> = {};
@@ -525,11 +496,10 @@ async function handleTask(
     return {};
   }
 
-  // Fetch diff — 3-tier: installation token → gh CLI → HTTP
+  // Fetch diff — gh CLI first, fall back to HTTP
   let diffContent: string;
   try {
     const result = await fetchDiff(diff_url, owner, repo, pr_number, {
-      installationToken: claimResponse.installation_token,
       githubToken: client.currentToken,
       signal,
       maxDiffSizeKb: reviewDeps.maxDiffSizeKb,
