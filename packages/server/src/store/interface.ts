@@ -27,24 +27,34 @@ export interface DataStore {
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 
-  // Completed reviews — atomic increment (prevents lost increments under concurrency)
-  /** Atomically increment completed_reviews and return the new count plus the current queue state. */
+  // ── Generic task claiming (new separate task model) ────────
+  /** Atomically transition a task from pending → reviewing. Returns true if claimed. */
+  claimTask(taskId: string): Promise<boolean>;
+  /** Release a claimed task: reviewing → pending. */
+  releaseTask(taskId: string): Promise<void>;
+
+  // ── Group queries (tasks linked by group_id) ──────────────
+  /** Get all tasks belonging to a group. */
+  getTasksByGroup(groupId: string): Promise<ReviewTask[]>;
+  /** Count completed tasks in a group. */
+  countCompletedInGroup(groupId: string): Promise<number>;
+  /** Count tasks currently being worked on (status=reviewing) in a group. */
+  countWorkerTasksInGroup(groupId: string): Promise<number>;
+  /** Delete all tasks in a group (cascade deletes claims). */
+  deleteTasksByGroup(groupId: string): Promise<void>;
+
+  // ── Deprecated slot-counting methods (will be removed) ────
+  /** @deprecated Use claimTask instead. Atomically increment completed_reviews. */
   incrementCompletedReviews(taskId: string): Promise<{ newCount: number; queue: string } | null>;
-
-  // Summary retry count — atomic increment for quality gate failures
-  /** Atomically increment summary_retry_count and return the new count. */
+  /** @deprecated Atomically increment summary_retry_count. */
   incrementSummaryRetryCount(taskId: string): Promise<number | null>;
-
-  // Review slot — atomic increment-if-below (prevents oversubscription)
-  /** Atomically increment review_claims if review_claims < maxSlots (exclusive). Returns true if a slot was reserved. */
+  /** @deprecated Use claimTask instead. Atomically increment review_claims if < maxSlots. */
   claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean>;
-  /** Atomically decrement review_claims (floor at 0). Used to release a slot on claim failure. */
+  /** @deprecated Use releaseTask instead. Atomically decrement review_claims. */
   releaseReviewSlot(taskId: string): Promise<boolean>;
-
-  // Summary claim — atomic compare-and-swap (replaces locks)
-  /** Atomically claim summary: sets queue='finished' + summary_agent_id only if queue='summary'. Returns true if claimed. */
+  /** @deprecated Use claimTask instead. Atomically claim summary slot. */
   claimSummarySlot(taskId: string, agentId: string): Promise<boolean>;
-  /** Release summary slot: sets queue='summary' + clears summary_agent_id. Used by reject/error/failure paths. */
+  /** @deprecated Use releaseTask instead. Release summary slot. */
   releaseSummarySlot(taskId: string): Promise<void>;
 
   // Agent heartbeats

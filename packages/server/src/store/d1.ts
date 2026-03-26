@@ -359,6 +359,16 @@ export class D1DataStore implements DataStore {
       reviews_completed_at: (v) => v ?? null,
       summary_agent_id: (v) => v ?? null,
       summary_retry_count: (v) => v ?? 0,
+      task_type: (v) => v,
+      feature: (v) => v,
+      group_id: (v) => v,
+      issue_number: (v) => v ?? null,
+      issue_url: (v) => v ?? null,
+      issue_title: (v) => v ?? null,
+      issue_body: (v) => v ?? null,
+      issue_author: (v) => v ?? null,
+      dedup_target: (v) => v ?? null,
+      index_issue_number: (v) => v ?? null,
     };
 
     for (const [field, transform] of Object.entries(columnMap)) {
@@ -500,8 +510,56 @@ export class D1DataStore implements DataStore {
       .run();
   }
 
-  // ── Completed reviews (atomic increment) ────────────────────
+  // ── Generic task claiming (new separate task model) ─────────
 
+  async claimTask(taskId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(`UPDATE tasks SET status = ? WHERE id = ? AND status = ?`)
+      .bind('reviewing', taskId, 'pending')
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async releaseTask(taskId: string): Promise<void> {
+    await this.db
+      .prepare(`UPDATE tasks SET status = ? WHERE id = ? AND status = ?`)
+      .bind('pending', taskId, 'reviewing')
+      .run();
+  }
+
+  // ── Group queries ──────────────────────────────────────────
+
+  async getTasksByGroup(groupId: string): Promise<ReviewTask[]> {
+    const result = await this.db
+      .prepare('SELECT * FROM tasks WHERE group_id = ?')
+      .bind(groupId)
+      .all<TaskRow>();
+    return (result.results ?? []).map(rowToTask);
+  }
+
+  async countCompletedInGroup(groupId: string): Promise<number> {
+    const row = await this.db
+      .prepare(`SELECT COUNT(*) as cnt FROM tasks WHERE group_id = ? AND status = ?`)
+      .bind(groupId, 'completed')
+      .first<{ cnt: number }>();
+    return row?.cnt ?? 0;
+  }
+
+  async countWorkerTasksInGroup(groupId: string): Promise<number> {
+    const row = await this.db
+      .prepare(`SELECT COUNT(*) as cnt FROM tasks WHERE group_id = ? AND status = ?`)
+      .bind(groupId, 'reviewing')
+      .first<{ cnt: number }>();
+    return row?.cnt ?? 0;
+  }
+
+  async deleteTasksByGroup(groupId: string): Promise<void> {
+    await this.db.prepare('DELETE FROM tasks WHERE group_id = ?').bind(groupId).run();
+  }
+
+  // ── Deprecated: Completed reviews (atomic increment) ───────
+
+  /** @deprecated Use claimTask instead. */
   async incrementCompletedReviews(
     taskId: string,
   ): Promise<{ newCount: number; queue: string } | null> {
@@ -515,8 +573,9 @@ export class D1DataStore implements DataStore {
     return { newCount: row.completed_reviews, queue: row.queue };
   }
 
-  // ── Summary retry count (atomic increment) ─────────────────
+  // ── Deprecated: Summary retry count (atomic increment) ─────
 
+  /** @deprecated */
   async incrementSummaryRetryCount(taskId: string): Promise<number | null> {
     const row = await this.db
       .prepare(
@@ -527,8 +586,9 @@ export class D1DataStore implements DataStore {
     return row ? row.summary_retry_count : null;
   }
 
-  // ── Review slot (atomic conditional increment) ──────────────
+  // ── Deprecated: Review slot (atomic conditional increment) ──
 
+  /** @deprecated Use claimTask instead. */
   async claimReviewSlot(taskId: string, maxSlots: number): Promise<boolean> {
     const result = await this.db
       .prepare(
@@ -539,6 +599,7 @@ export class D1DataStore implements DataStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** @deprecated Use releaseTask instead. */
   async releaseReviewSlot(taskId: string): Promise<boolean> {
     const result = await this.db
       .prepare(
@@ -549,8 +610,9 @@ export class D1DataStore implements DataStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  // ── Summary claim (atomic CAS) ──────────────────────────────
+  // ── Deprecated: Summary claim (atomic CAS) ─────────────────
 
+  /** @deprecated Use claimTask instead. */
   async claimSummarySlot(taskId: string, agentId: string): Promise<boolean> {
     const result = await this.db
       .prepare(`UPDATE tasks SET queue = ?, summary_agent_id = ? WHERE id = ? AND queue = ?`)
@@ -559,6 +621,7 @@ export class D1DataStore implements DataStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** @deprecated Use releaseTask instead. */
   async releaseSummarySlot(taskId: string): Promise<void> {
     await this.db
       .prepare(`UPDATE tasks SET queue = ?, summary_agent_id = ? WHERE id = ? AND queue = ?`)
