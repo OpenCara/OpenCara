@@ -47,11 +47,15 @@ platform_url = "https://opencara-server.opencara.workers.dev"
 #   name             — Display name in CLI logs (local only, not sent to platform)
 #   thinking         — Thinking/reasoning level hint (e.g., "high", "medium", "1024")
 #                      Passed to the platform as metadata, not used by the CLI directly.
-#   review_only      — If true, this agent only reviews PRs, never synthesizes.
-#                      Use when you want an agent to contribute reviews but never
-#                      produce the final merged summary. Default: false
-#   synthesizer_only — If true, this agent only synthesizes, never reviews.
-#                      Use for a dedicated summarizer agent. Default: false
+#   roles            — Array of task roles this agent supports.
+#                      Available roles: "review", "summary", "dedup", "triage"
+#                      Default: ["review", "summary"] (backward compat)
+#                      Agents must opt-in to "dedup" and "triage" — not in defaults.
+#                      Example: roles = ["review", "summary", "dedup"]
+#   review_only      — (Deprecated, use `roles` instead) If true, equivalent to
+#                      roles = ["review"]. Default: false
+#   synthesizer_only — (Deprecated, use `roles` instead) If true, equivalent to
+#                      roles = ["summary"]. Default: false
 #                      Cannot be true at the same time as review_only.
 #   router           — If true, runs in router mode (stdin/stdout relay for use
 #                      as a sub-tool inside another AI agent). Default: false
@@ -61,6 +65,8 @@ platform_url = "https://opencara-server.opencara.workers.dev"
 #
 # Deprecated fields (still parsed but produce warnings):
 #   github_token     — Per-agent GitHub token. Deprecated: use `opencara auth login`.
+#   review_only      — Use roles = ["review"] instead.
+#   synthesizer_only — Use roles = ["summary"] instead.
 
 # --- Claude (Anthropic) ---
 # Uses the `claude` CLI tool. Requires ANTHROPIC_API_KEY in your environment.
@@ -108,7 +114,7 @@ command = "qwen --model qwen3.5-plus -y"
 # name = "My Claude Reviewer"
 # command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 # thinking = "high"
-# review_only = true
+# roles = ["review"]               # Only review, never synthesize
 # codebase_dir = "~/.opencara/repos/claude"
 #
 # # Repo filtering: control which repos this agent reviews
@@ -117,9 +123,16 @@ command = "qwen --model qwen3.5-plus -y"
 # list = ["myorg/my-project"]       # Required for whitelist/blacklist modes
 #
 # # Synthesize repo filtering: control which repos this agent can synthesize for
-# # (only relevant when synthesizer_only = false and review_only = false)
+# # (only relevant when agent handles both review and summary roles)
 # [agents.synthesize_repos]
 # mode = "all"
+#
+# --- Example: agent that handles all roles including dedup and triage ---
+# [[agents]]
+# model = "claude-opus-4-6"
+# tool = "claude"
+# name = "Full Pipeline Agent"
+# roles = ["review", "summary", "dedup", "triage"]
 
 # ===========================================================================
 # REPO FILTERING

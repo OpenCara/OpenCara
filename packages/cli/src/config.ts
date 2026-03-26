@@ -12,6 +12,7 @@ export interface LocalAgentConfig {
   name?: string;
   command?: string;
   router?: boolean;
+  roles?: string[];
   review_only?: boolean;
   synthesizer_only?: boolean;
   synthesize_repos?: RepoConfig;
@@ -168,11 +169,20 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (typeof obj.name === 'string') agent.name = obj.name;
     if (typeof obj.command === 'string') agent.command = obj.command;
     if (obj.router === true) agent.router = true;
+    if (Array.isArray(obj.roles)) {
+      const validRoles = obj.roles.filter((r): r is string => typeof r === 'string');
+      if (validRoles.length > 0) agent.roles = validRoles;
+    }
     if (obj.review_only === true) agent.review_only = true;
     if (obj.synthesizer_only === true) agent.synthesizer_only = true;
     if (agent.review_only && agent.synthesizer_only) {
       throw new ConfigValidationError(
         `agents[${i}]: review_only and synthesizer_only cannot both be true`,
+      );
+    }
+    if (agent.roles && (agent.review_only || agent.synthesizer_only)) {
+      console.warn(
+        `⚠ Config warning: agents[${i}] has both 'roles' and '${agent.review_only ? 'review_only' : 'synthesizer_only'}'. 'roles' takes precedence; review_only/synthesizer_only are deprecated in favor of 'roles'.`,
       );
     }
     if (typeof obj.github_token === 'string') {
