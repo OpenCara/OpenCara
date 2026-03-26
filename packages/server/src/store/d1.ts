@@ -608,13 +608,22 @@ export class D1DataStore implements DataStore {
       const changed = result.meta?.changes ?? 0;
       if (changed === 0) continue; // Claim was already resolved — skip slot release
       freed++;
-      // Release the review slot only if we actually freed the claim
+      // Release the slot only if we actually freed the claim
       if (claim.role === 'review') {
         await this.db
           .prepare(
             `UPDATE tasks SET review_claims = review_claims - 1 WHERE id = ? AND review_claims > 0`,
           )
           .bind(claim.task_id)
+          .run();
+      } else if (claim.role === 'summary') {
+        // Release summary slot immediately so the task becomes re-claimable
+        // without waiting for the separate reclaimAbandonedSummarySlots pass.
+        await this.db
+          .prepare(
+            `UPDATE tasks SET queue = 'summary', summary_agent_id = NULL WHERE id = ? AND queue = 'finished' AND summary_agent_id = ?`,
+          )
+          .bind(claim.task_id, claim.agent_id)
           .run();
       }
     }
