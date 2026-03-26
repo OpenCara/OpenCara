@@ -59,7 +59,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
-    task_type: 'review',
+    task_type: reviewCount > 1 ? 'review' : 'summary',
     feature: 'review',
     group_id: 'group-1',
     ...overrides,
@@ -221,31 +221,31 @@ describe('Integration: full E2E flows', () => {
 
   describe('multi-agent review (review_count=3)', () => {
     it('full flow: 2 reviewers → synthesizer claims with review texts → submits', async () => {
-      await store.createTask(makeTask({ id: 'task-multi', review_count: 3 }));
+      // New separate task model: 2 worker tasks in the same group
+      await store.createTask(makeTask({ id: 'w1', review_count: 3, group_id: 'grp-multi' }));
+      await store.createTask(makeTask({ id: 'w2', review_count: 3, group_id: 'grp-multi' }));
 
-      // Phase 1: Two agents poll and claim review slots
+      // Phase 1: Two agents poll and claim separate worker tasks
       const poll1 = await poll('reviewer-a');
+      expect(poll1.tasks.length).toBeGreaterThanOrEqual(1);
       expect(poll1.tasks[0].role).toBe('review');
 
-      const poll2 = await poll('reviewer-b');
-      expect(poll2.tasks[0].role).toBe('review');
-
-      const claimA = await claim('task-multi', 'reviewer-a', 'review');
+      const claimA = await claim('w1', 'reviewer-a', 'review');
       expect(claimA.claimed).toBe(true);
       expect(claimA.reviews).toBeUndefined(); // reviews only included for summary claims
 
-      const claimB = await claim('task-multi', 'reviewer-b', 'review');
+      const claimB = await claim('w2', 'reviewer-b', 'review');
       expect(claimB.claimed).toBe(true);
 
-      // Phase 2: Both review slots taken — no more review slots
+      // Phase 2: Both worker tasks claimed — no more pending
       const poll3 = await poll('reviewer-c');
-      expect(poll3.tasks).toHaveLength(0); // reviews pending, summary not yet available
+      expect(poll3.tasks).toHaveLength(0); // both workers claimed, no summary yet
 
       // Phase 3: Reviewers submit
       const reviewA = 'The implementation follows established patterns and conventions well.';
-      await submitResult('task-multi', 'reviewer-a', 'review', reviewA, 'approve', 500);
+      await submitResult('w1', 'reviewer-a', 'review', reviewA, 'approve', 500);
       await submitResult(
-        'task-multi',
+        'w2',
         'reviewer-b',
         'review',
         'Error handling improvements needed throughout the modified code paths.',
@@ -253,13 +253,14 @@ describe('Integration: full E2E flows', () => {
         600,
       );
 
-      // Phase 4: Summary slot now available
+      // Phase 4: Summary task now available (auto-created when all workers completed)
       const pollSynth = await poll('synthesizer');
       expect(pollSynth.tasks).toHaveLength(1);
       expect(pollSynth.tasks[0].role).toBe('summary');
+      const summaryTaskId = pollSynth.tasks[0].task_id;
 
       // Phase 5: Synthesizer claims — receives prior reviews
-      const claimSynth = await claim('task-multi', 'synthesizer', 'summary');
+      const claimSynth = await claim(summaryTaskId, 'synthesizer', 'summary');
       expect(claimSynth.claimed).toBe(true);
       const reviews = claimSynth.reviews as Array<Record<string, unknown>>;
       expect(reviews).toHaveLength(2);
@@ -268,7 +269,7 @@ describe('Integration: full E2E flows', () => {
 
       // Phase 6: Synthesizer submits
       const synthResult = await submitResult(
-        'task-multi',
+        summaryTaskId,
         'synthesizer',
         'summary',
         VALID_SUMMARY_TEXT,
@@ -277,11 +278,9 @@ describe('Integration: full E2E flows', () => {
       );
       expect(synthResult.status).toBe(200);
 
-      // Task and claims should be deleted after successful post
-      const finalTask = await store.getTask('task-multi');
-      expect(finalTask).toBeNull();
-      const claims = await store.getClaims('task-multi');
-      expect(claims).toHaveLength(0);
+      // All tasks in group should be deleted after successful post
+      const tasks = await store.getTasksByGroup('grp-multi');
+      expect(tasks).toHaveLength(0);
     });
 
     it('third agent cannot claim review when all review slots are taken', async () => {
@@ -503,7 +502,7 @@ describe('Integration: full E2E flows', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('error flow', () => {
-    it('error claim is recorded correctly and frees slot', async () => {
+    it('error claim is recorded correctly and releases task', async () => {
       await store.createTask(makeTask({ id: 'task-error', review_count: 3 }));
 
       await claim('task-error', 'agent-crash', 'review');
@@ -516,11 +515,11 @@ describe('Integration: full E2E flows', () => {
       const errClaim = claims.find((c) => c.agent_id === 'agent-crash');
       expect(errClaim?.status).toBe('error');
 
-      // Slot should be freed — task counters updated
+      // Task should be released back to pending
       const task = await store.getTask('task-error');
-      expect(task?.review_claims).toBe(0);
+      expect(task?.status).toBe('pending');
 
-      // Another agent can now claim the freed slot
+      // Another agent can now claim the released task
       const pollRes = await poll('agent-replacement');
       expect(pollRes.tasks).toHaveLength(1);
       expect(pollRes.tasks[0].role).toBe('review');
@@ -561,20 +560,23 @@ describe('Integration: full E2E flows', () => {
       expect(r2.claimed).toBe(false);
     });
 
-    it('multiple agents can claim different review slots sequentially', async () => {
-      await store.createTask(makeTask({ id: 'task-multi-race', review_count: 4 }));
+    it('multiple agents can claim different review tasks sequentially', async () => {
+      // New model: 3 separate worker tasks in a group
+      await store.createTask(makeTask({ id: 'wr1', review_count: 4, group_id: 'grp-race' }));
+      await store.createTask(makeTask({ id: 'wr2', review_count: 4, group_id: 'grp-race' }));
+      await store.createTask(makeTask({ id: 'wr3', review_count: 4, group_id: 'grp-race' }));
 
-      // 3 agents claim review sequentially (3 review slots for review_count=4)
-      const c1 = await claim('task-multi-race', 'a1', 'review');
-      const c2 = await claim('task-multi-race', 'a2', 'review');
-      const c3 = await claim('task-multi-race', 'a3', 'review');
+      // 3 agents claim separate tasks
+      const c1 = await claim('wr1', 'a1', 'review');
+      const c2 = await claim('wr2', 'a2', 'review');
+      const c3 = await claim('wr3', 'a3', 'review');
 
       expect(c1.claimed).toBe(true);
       expect(c2.claimed).toBe(true);
       expect(c3.claimed).toBe(true);
 
-      // Fourth agent should be rejected (all 3 review slots taken)
-      const c4 = await claim('task-multi-race', 'a4', 'review');
+      // Fourth agent cannot claim already-claimed task
+      const c4 = await claim('wr1', 'a4', 'review');
       expect(c4.claimed).toBe(false);
     });
 
@@ -688,8 +690,8 @@ describe('Integration: full E2E flows', () => {
     });
 
     it('agent can work on tasks sequentially', async () => {
-      await store.createTask(makeTask({ id: 'task-seq-1', pr_number: 1 }));
-      await store.createTask(makeTask({ id: 'task-seq-2', pr_number: 2 }));
+      await store.createTask(makeTask({ id: 'task-seq-1', pr_number: 1, group_id: 'grp-seq-1' }));
+      await store.createTask(makeTask({ id: 'task-seq-2', pr_number: 2, group_id: 'grp-seq-2' }));
 
       // Claim and finish first task
       await claim('task-seq-1', 'worker', 'summary');

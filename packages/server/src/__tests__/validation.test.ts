@@ -25,7 +25,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
-    task_type: 'review',
+    task_type: 'summary',
     feature: 'review',
     group_id: 'group-1',
     ...overrides,
@@ -286,7 +286,7 @@ describe('Request Validation (Zod)', () => {
     });
 
     it('accepts review_text at minimum length (10 chars)', async () => {
-      await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
+      await store.createTask(makeTask({ review_count: 2, queue: 'review', task_type: 'review' }));
       await store.createClaim({
         id: 'task-1:agent-1:review',
         task_id: 'task-1',

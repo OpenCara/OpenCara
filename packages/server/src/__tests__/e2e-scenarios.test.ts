@@ -41,14 +41,14 @@ describe('E2E Scenarios', () => {
   let env: Env;
   let github: MockGitHubService;
 
-  /** Helper: inject a PR event via test routes. */
+  /** Helper: inject a PR event via test routes. Returns first task ID and group ID. */
   async function injectPR(opts?: {
     owner?: string;
     repo?: string;
     prNumber?: number;
     reviewCount?: number;
     timeout?: string;
-  }): Promise<string> {
+  }): Promise<{ taskId: string; groupId: string }> {
     const config = {
       ...DEFAULT_REVIEW_CONFIG,
       agentCount: opts?.reviewCount ?? 1,
@@ -69,9 +69,15 @@ describe('E2E Scenarios', () => {
       },
       env,
     );
-    const body = (await res.json()) as { created: boolean; task_id?: string };
+    const body = (await res.json()) as { created: boolean; task_id?: string; group_id?: string };
     expect(body.created).toBe(true);
-    return body.task_id!;
+    return { taskId: body.task_id!, groupId: body.group_id! };
+  }
+
+  /** Get all pending worker task IDs in a group. */
+  async function getWorkerTaskIds(groupId: string): Promise<string[]> {
+    const tasks = await store.getTasksByGroup(groupId);
+    return tasks.filter((t) => t.task_type !== 'summary' && t.status === 'pending').map((t) => t.id);
   }
 
   /** Create a MockAgent bound to the test app. */
@@ -94,7 +100,7 @@ describe('E2E Scenarios', () => {
 
   describe('A. Single-Agent Lifecycle', () => {
     it('PR event → poll → claim summary → submit → GitHub review posted', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('solo-agent');
 
       // Poll — sees task with summary role
@@ -133,7 +139,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('second agent sees nothing after task is claimed', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a1 = agent('agent-1');
       const a2 = agent('agent-2');
 
@@ -150,7 +156,7 @@ describe('E2E Scenarios', () => {
   describe('B. Multi-Agent Lifecycle', () => {
     it('2 reviewers each claim separate review tasks (new separate task model)', async () => {
       // reviewCount=3 → creates 2 separate review tasks (3-1=2)
-      await injectPR({ reviewCount: 3 });
+      const { groupId } = await injectPR({ reviewCount: 3 });
       const r1 = agent('reviewer-1');
       const r2 = agent('reviewer-2');
 
@@ -190,21 +196,31 @@ describe('E2E Scenarios', () => {
       expect(r2Result.status).toBe(200);
 
       // Both tasks share the same group_id (separate from task IDs)
-      const allTasks = await store.listTasks();
-      const groupIds = new Set(allTasks.map((t) => t.group_id));
-      expect(groupIds.size).toBe(1);
+      const allTasks = await store.getTasksByGroup(groupId);
+      // Should now include 2 completed worker tasks + 1 auto-created summary task
+      const workerTasks = allTasks.filter((t) => t.task_type !== 'summary');
+      expect(workerTasks).toHaveLength(2);
+      for (const t of workerTasks) {
+        expect(t.group_id).toBe(groupId);
+      }
     });
 
     it('third agent cannot claim review when all slots taken', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+      // reviewCount=3 → 2 separate review tasks
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      expect(workerIds).toHaveLength(2);
+
       const a1 = agent('a1');
       const a2 = agent('a2');
       const a3 = agent('a3');
 
-      await a1.claim(taskId, 'review');
-      await a2.claim(taskId, 'review');
+      // Claim both tasks
+      await a1.claim(workerIds[0], 'review');
+      await a2.claim(workerIds[1], 'review');
 
-      const c3 = await a3.claim(taskId, 'review');
+      // Third agent — no pending tasks left
+      const c3 = await a3.claim(workerIds[0], 'review');
       expect(c3.claimed).toBe(false);
     });
   });
@@ -215,7 +231,7 @@ describe('E2E Scenarios', () => {
 
   describe('C. Rejection & Reclaim', () => {
     it('claim → reject → slot freed → new agent claims → completes', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a1 = agent('agent-1');
       const a2 = agent('agent-2');
 
@@ -238,7 +254,8 @@ describe('E2E Scenarios', () => {
     });
 
     it('review reject in multi-agent flow → new agent takes freed slot', async () => {
-      const taskId = await injectPR({ reviewCount: 2 });
+      // reviewCount=2 → 1 review task
+      const { taskId } = await injectPR({ reviewCount: 2 });
       const a1 = agent('reviewer-1');
       const a2 = agent('reviewer-2');
 
@@ -256,7 +273,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('same agent can re-claim after rejection', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('retry-agent');
 
       await a.claim(taskId, 'summary');
@@ -278,7 +295,9 @@ describe('E2E Scenarios', () => {
   describe('D. Error Recovery', () => {
     it('claim → error → task freed → new agent claims → completes', async () => {
       // reviewCount=3 → 2 separate review tasks
-      const firstTaskId = await injectPR({ reviewCount: 3 });
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      const firstTaskId = workerIds[0];
       const crasher = agent('crasher');
       const replacement = agent('replacement');
 
@@ -300,16 +319,16 @@ describe('E2E Scenarios', () => {
     });
 
     it('summary error frees summary slot', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a1 = agent('err-agent');
       const a2 = agent('recovery-agent');
 
       await a1.claim(taskId, 'summary');
       await a1.reportError(taskId, 'OOM');
 
-      // Task should be back in summary queue after error
+      // Task should be back to pending after error
       const taskAfterError = await store.getTask(taskId);
-      expect(taskAfterError?.queue).toBe('summary');
+      expect(taskAfterError?.status).toBe('pending');
 
       const tasks = await a2.poll();
       expect(tasks).toHaveLength(1);
@@ -326,7 +345,7 @@ describe('E2E Scenarios', () => {
 
   describe('E. Concurrent Claims', () => {
     it('multiple agents claim same summary slot → only first succeeds', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const agents = [agent('fast'), agent('medium'), agent('slow')];
 
       const results = [];
@@ -340,44 +359,49 @@ describe('E2E Scenarios', () => {
       expect(rejected).toHaveLength(2);
     });
 
-    it('multiple agents can claim different review slots', async () => {
-      const taskId = await injectPR({ reviewCount: 4 });
+    it('multiple agents can claim different review tasks', async () => {
+      // reviewCount=4 → 3 separate review tasks
+      const { groupId } = await injectPR({ reviewCount: 4 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      expect(workerIds).toHaveLength(3);
+
       const agents = [agent('a1'), agent('a2'), agent('a3')];
 
+      // Each agent claims a different task
       const results = [];
-      for (const a of agents) {
-        results.push(await a.claim(taskId, 'review'));
+      for (let i = 0; i < agents.length; i++) {
+        results.push(await agents[i].claim(workerIds[i], 'review'));
       }
 
-      // All 3 should succeed (3 review slots for review_count=4)
+      // All 3 should succeed (each claims a unique task)
       expect(results.every((r) => r.claimed)).toBe(true);
 
-      // Fourth agent rejected
+      // Fourth agent — no pending tasks left
       const a4 = agent('a4');
-      const c4 = await a4.claim(taskId, 'review');
+      const c4 = await a4.claim(workerIds[0], 'review');
       expect(c4.claimed).toBe(false);
     });
 
-    it('duplicate summary claim rejected — task is in finished queue (#221)', async () => {
-      const taskId = await injectPR();
+    it('duplicate summary claim rejected — task already claimed', async () => {
+      const { taskId } = await injectPR();
       const a1 = agent('synth-1');
       const a2 = agent('synth-2');
 
-      // Agent 1 claims summary — moves task to finished queue
+      // Agent 1 claims summary — task moves to reviewing
       const c1 = await a1.claim(taskId, 'summary');
       expect(c1.claimed).toBe(true);
 
-      // Task is in finished queue now
+      // Task is in reviewing state now
       const task = await store.getTask(taskId);
-      expect(task?.queue).toBe('finished');
+      expect(task?.status).toBe('reviewing');
 
-      // Agent 2 tries to claim — rejected because task is in finished queue
+      // Agent 2 tries to claim — rejected because task is already claimed
       const c2 = await a2.claim(taskId, 'summary');
       expect(c2.claimed).toBe(false);
     });
 
     it('second summary result does not post duplicate GitHub comment (#221)', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
 
       // Manually create two summary claims — synth-a is the designated summary agent.
       // Verifies that only the summary_agent_id holder's result gets posted to GitHub.
@@ -422,13 +446,16 @@ describe('E2E Scenarios', () => {
     });
 
     it('same agent cannot double-claim', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+      // reviewCount=3 → 2 review tasks
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
       const a = agent('greedy');
 
-      const c1 = await a.claim(taskId, 'review');
+      const c1 = await a.claim(workerIds[0], 'review');
       expect(c1.claimed).toBe(true);
 
-      const c2 = await a.claim(taskId, 'review');
+      // Same agent tries to claim the same task again — rejected
+      const c2 = await a.claim(workerIds[0], 'review');
       expect(c2.claimed).toBe(false);
     });
 
@@ -437,7 +464,7 @@ describe('E2E Scenarios', () => {
     // logic at the API layer but cannot reproduce true I/O-level races that
     // occur with Cloudflare KV's eventual consistency.
     it('concurrent summary claims via Promise.all: exactly one wins (#273)', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
 
       // Fire 5 concurrent summary claims simultaneously
       const agents = Array.from({ length: 5 }, (_, i) => agent(`concurrent-${i}`));
@@ -459,7 +486,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('concurrent claims + results: only one GitHub comment posted (#273)', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
 
       // Fire 3 concurrent summary claims
       const claimAgents = [agent('race-a'), agent('race-b'), agent('race-c')];
@@ -491,43 +518,29 @@ describe('E2E Scenarios', () => {
 
   describe('F. Timeout with Partial Results', () => {
     it('some reviewers complete, timeout fires → partial results posted', async () => {
-      // Create task that's already expired
-      const config = {
-        ...DEFAULT_REVIEW_CONFIG,
-        agentCount: 3,
-      };
+      // Create task with reviewCount=3 → 2 separate review tasks
+      const { groupId } = await injectPR({ prNumber: 100, reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      expect(workerIds).toHaveLength(2);
 
-      const res = await app.request(
-        '/test/events/pr',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            owner: 'test-org',
-            repo: 'test-repo',
-            pr_number: 100,
-            config,
-          }),
-        },
-        env,
-      );
-      const { task_id: taskId } = (await res.json()) as { task_id: string };
-
-      // Simulate: one reviewer completed, then task expires
+      // Simulate: one reviewer completes, then all tasks expire
       const r1 = agent('reviewer-1');
-      await r1.claim(taskId, 'review');
-      await r1.submitResult(taskId, 'review', 'Partial review content', 'comment', 300);
+      await r1.claim(workerIds[0], 'review');
+      await r1.submitResult(workerIds[0], 'review', 'Partial review content', 'comment', 300);
 
-      // Manually expire the task
-      await store.updateTask(taskId, { timeout_at: Date.now() - 1000 });
+      // Manually expire all tasks in the group
+      const allTasks = await store.getTasksByGroup(groupId);
+      for (const t of allTasks) {
+        await store.updateTask(t.id, { timeout_at: Date.now() - 1000 });
+      }
 
       // Any agent polling triggers timeout check
       const poller = agent('poller');
       await poller.poll();
 
-      // Task should be deleted after successful timeout post
-      const task = await store.getTask(taskId);
-      expect(task).toBeNull();
+      // All tasks in group should be deleted after successful timeout post
+      const remaining = await store.getTasksByGroup(groupId);
+      expect(remaining).toHaveLength(0);
 
       // Should post exactly 1 consolidated comment (not N+1)
       const commentPosts = github.calls.filter((c) => c.method === 'postPrComment');
@@ -541,7 +554,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('claim rejected for expired task', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       await store.updateTask(taskId, { timeout_at: Date.now() - 1000 });
 
       const a = agent('late-agent');
@@ -587,11 +600,11 @@ describe('E2E Scenarios', () => {
     });
 
     it('new task allowed after previous task deleted', async () => {
-      const taskId = await injectPR({ prNumber: 50 });
+      const { taskId } = await injectPR({ prNumber: 50 });
       await store.deleteTask(taskId);
 
       // New event for same PR — should create new task
-      const newTaskId = await injectPR({ prNumber: 50 });
+      const { taskId: newTaskId } = await injectPR({ prNumber: 50 });
       expect(newTaskId).not.toBe(taskId);
     });
   });
@@ -602,7 +615,7 @@ describe('E2E Scenarios', () => {
 
   describe('H. Eligibility Filtering', () => {
     it('task with review_count=1 only offers summary role', async () => {
-      const taskId = await injectPR({ reviewCount: 1 });
+      const { taskId } = await injectPR({ reviewCount: 1 });
       const a = agent('agent');
 
       const tasks = await a.poll();
@@ -615,9 +628,9 @@ describe('E2E Scenarios', () => {
     });
 
     it('deleted and failed tasks excluded from poll', async () => {
-      const t1 = await injectPR({ prNumber: 1 });
-      const t2 = await injectPR({ prNumber: 2 });
-      const t3 = await injectPR({ prNumber: 3 });
+      const { taskId: t1 } = await injectPR({ prNumber: 1 });
+      const { taskId: t2 } = await injectPR({ prNumber: 2 });
+      const { taskId: t3 } = await injectPR({ prNumber: 3 });
       await injectPR({ prNumber: 4 }); // stays active
 
       // Simulate post-review deletion (completed/timeout tasks are deleted immediately)
@@ -638,18 +651,20 @@ describe('E2E Scenarios', () => {
 
   describe('I. Role Validation', () => {
     it('review claimer cannot submit as summary', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+      // reviewCount=3 → 2 review tasks
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
       const a = agent('confused-agent');
 
-      await a.claim(taskId, 'review');
+      await a.claim(workerIds[0], 'review');
       // With role-aware claim IDs, the summary claim doesn't exist — returns 404
-      const result = await a.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT);
+      const result = await a.submitResult(workerIds[0], 'summary', VALID_SUMMARY_TEXT);
       expect(result.status).toBe(404);
       expect(result.body.error.code).toBe('CLAIM_NOT_FOUND');
     });
 
     it('summary claimer cannot submit as review', async () => {
-      const taskId = await injectPR({ reviewCount: 1 });
+      const { taskId } = await injectPR({ reviewCount: 1 });
       const a = agent('confused-agent');
 
       await a.claim(taskId, 'summary');
@@ -701,7 +716,7 @@ describe('E2E Scenarios', () => {
 
   describe('Verdict in Comment Body', () => {
     it('uppercase verdict from agent is included in comment body text', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('agent-uppercase');
 
       await a.claim(taskId, 'summary');
@@ -723,7 +738,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('mixed-case verdict is included in comment body text', async () => {
-      const taskId = await injectPR({ prNumber: 2 });
+      const { taskId } = await injectPR({ prNumber: 2 });
       const a = agent('agent-mixed');
 
       await a.claim(taskId, 'summary');
@@ -751,7 +766,7 @@ describe('E2E Scenarios', () => {
 
   describe('K. State Machine', () => {
     it('cannot reject after task is deleted (post-completion)', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
@@ -763,7 +778,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('cannot error after task is deleted (post-completion)', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
@@ -775,31 +790,34 @@ describe('E2E Scenarios', () => {
     });
 
     it('idempotent reject — double reject returns 200', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+      // reviewCount=3 → 2 review tasks
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
       const a = agent('agent');
 
-      await a.claim(taskId, 'review');
-      const r1 = await a.reject(taskId, 'First');
+      await a.claim(workerIds[0], 'review');
+      const r1 = await a.reject(workerIds[0], 'First');
       expect(r1.status).toBe(200);
 
-      const r2 = await a.reject(taskId, 'Second');
+      const r2 = await a.reject(workerIds[0], 'Second');
       expect(r2.status).toBe(200);
     });
 
     it('idempotent error — double error returns 200', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
       const a = agent('agent');
 
-      await a.claim(taskId, 'review');
-      const e1 = await a.reportError(taskId, 'Crash 1');
+      await a.claim(workerIds[0], 'review');
+      const e1 = await a.reportError(workerIds[0], 'Crash 1');
       expect(e1.status).toBe(200);
 
-      const e2 = await a.reportError(taskId, 'Crash 2');
+      const e2 = await a.reportError(workerIds[0], 'Crash 2');
       expect(e2.status).toBe(200);
     });
 
     it('cannot submit result twice — task deleted after first submit', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('agent');
 
       await a.claim(taskId, 'summary');
@@ -812,7 +830,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('claim on deleted task (post-completion) is rejected', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a1 = agent('agent-1');
       const a2 = agent('agent-2');
 
@@ -857,11 +875,13 @@ describe('E2E Scenarios', () => {
     });
 
     it('GET /test/claims/:taskId returns claims for a task', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+      // reviewCount=3 → 2 review tasks
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
       const a = agent('agent');
-      await a.claim(taskId, 'review');
+      await a.claim(workerIds[0], 'review');
 
-      const res = await app.request(`/test/claims/${taskId}`, { method: 'GET' }, env);
+      const res = await app.request(`/test/claims/${workerIds[0]}`, { method: 'GET' }, env);
       const body = (await res.json()) as { claims: unknown[] };
       expect(body.claims).toHaveLength(1);
     });
@@ -877,7 +897,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('review is posted even when getClaim returns stale data without review_text', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('stale-agent');
 
       // Claim
@@ -912,7 +932,7 @@ describe('E2E Scenarios', () => {
     });
 
     it('server wraps review_text with title header and footer', async () => {
-      const taskId = await injectPR();
+      const { taskId } = await injectPR();
       const a = agent('passthrough-agent');
 
       await a.claim(taskId, 'summary');
@@ -941,135 +961,109 @@ describe('E2E Scenarios', () => {
   // ═══════════════════════════════════════════════════════════
   // Late Review Results (Issue #370)
   // ═══════════════════════════════════════════════════════════
+  //
+  // In the new separate-task model, each worker has its own task.
+  // "Late results" are handled gracefully: worker tasks that complete
+  // after the summary task has been created still get marked completed,
+  // but don't trigger duplicate summary creation.
 
   describe('Late Review Results', () => {
-    it('late review after queue=summary does not overwrite queue back to summary', async () => {
-      // Setup: reviewCount=3 → 2 review slots
-      const taskId = await injectPR({ reviewCount: 3 });
+    it('late worker completion after summary task exists does not create duplicate summary', async () => {
+      // Setup: reviewCount=3 → 2 worker tasks
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      expect(workerIds).toHaveLength(2);
+
       const r1 = agent('reviewer-1');
       const r2 = agent('reviewer-2');
-      const r3 = agent('late-reviewer');
 
-      // Both reviewers claim
-      await r1.claim(taskId, 'review');
-      await r2.claim(taskId, 'review');
+      // Both reviewers claim their tasks
+      await r1.claim(workerIds[0], 'review');
+      await r2.claim(workerIds[1], 'review');
 
-      // r1 submits — 1 of 2 done, still in review queue
-      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
-      let task = await store.getTask(taskId);
-      expect(task?.queue).toBe('review');
+      // r1 submits — 1 of 2 done, no summary yet
+      await r1.submitResult(workerIds[0], 'review', 'Review 1: Analysis complete', 'approve', 500);
+      let groupTasks = await store.getTasksByGroup(groupId);
+      let summaryTasks = groupTasks.filter((t) => t.task_type === 'summary');
+      expect(summaryTasks).toHaveLength(0);
 
-      // r2 submits — 2 of 2 done, queue transitions to summary
-      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
-      task = await store.getTask(taskId);
-      expect(task?.queue).toBe('summary');
-      const originalCompletedAt = task?.reviews_completed_at;
-      expect(originalCompletedAt).toBeDefined();
-
-      // Simulate late reviewer: manually create a claim and submit result
-      // (in practice this happens when a claim was created before slots filled,
-      // but result arrives after queue already moved to summary)
-      await store.createClaim({
-        id: `${taskId}:late-reviewer:review`,
-        task_id: taskId,
-        agent_id: 'late-reviewer',
-        role: 'review',
-        status: 'pending',
-        created_at: Date.now(),
-      });
-
-      // Late review submits — queue should NOT change from summary
-      await r3.submitResult(taskId, 'review', 'Late review: Analysis complete', 'approve', 400);
-      task = await store.getTask(taskId);
-      expect(task?.queue).toBe('summary');
-      // reviews_completed_at should not have been reset
-      expect(task?.reviews_completed_at).toBe(originalCompletedAt);
+      // r2 submits — 2 of 2 done, summary task auto-created
+      await r2.submitResult(workerIds[1], 'review', 'Review 2: Analysis complete', 'approve', 600);
+      groupTasks = await store.getTasksByGroup(groupId);
+      summaryTasks = groupTasks.filter((t) => t.task_type === 'summary');
+      expect(summaryTasks).toHaveLength(1);
     });
 
-    it('late review after queue=finished does not overwrite queue', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+    it('summary task is only created once even with extra completed workers', async () => {
+      // Setup: reviewCount=3 → 2 worker tasks + summary auto-created on completion
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+
       const r1 = agent('reviewer-1');
       const r2 = agent('reviewer-2');
-      const r3 = agent('late-reviewer');
-      const synth = agent('synthesizer');
 
-      // Both reviewers claim and submit
-      await r1.claim(taskId, 'review');
-      await r2.claim(taskId, 'review');
-      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
-      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
+      // Both claim and both submit
+      await r1.claim(workerIds[0], 'review');
+      await r2.claim(workerIds[1], 'review');
+      await r1.submitResult(workerIds[0], 'review', 'Review 1: Analysis complete', 'approve', 500);
+      await r2.submitResult(workerIds[1], 'review', 'Review 2: Analysis complete', 'approve', 600);
 
-      // Synthesizer claims — queue moves to 'finished'
-      await synth.claim(taskId, 'summary');
-      let task = await store.getTask(taskId);
-      expect(task?.queue).toBe('finished');
-
-      // Simulate late review claim
-      await store.createClaim({
-        id: `${taskId}:late-reviewer:review`,
-        task_id: taskId,
-        agent_id: 'late-reviewer',
-        role: 'review',
-        status: 'pending',
-        created_at: Date.now(),
-      });
-
-      // Late review submits — queue should stay 'finished'
-      await r3.submitResult(taskId, 'review', 'Late review: Analysis complete', 'approve', 400);
-      task = await store.getTask(taskId);
-      expect(task?.queue).toBe('finished');
+      // Exactly one summary task
+      const groupTasks = await store.getTasksByGroup(groupId);
+      const summaryTasks = groupTasks.filter((t) => t.task_type === 'summary');
+      expect(summaryTasks).toHaveLength(1);
+      expect(summaryTasks[0].status).toBe('pending');
     });
 
-    it('completed_reviews increments correctly even with late reviews', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+    it('worker task statuses are independent — each tracks its own lifecycle', async () => {
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+
       const r1 = agent('reviewer-1');
       const r2 = agent('reviewer-2');
-      const r3 = agent('late-reviewer');
 
-      await r1.claim(taskId, 'review');
-      await r2.claim(taskId, 'review');
-      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
-      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
+      // r1 claims and submits
+      await r1.claim(workerIds[0], 'review');
+      await r1.submitResult(workerIds[0], 'review', 'Review 1: Analysis complete', 'approve', 500);
 
-      let task = await store.getTask(taskId);
-      expect(task?.completed_reviews).toBe(2);
+      // r1's task is completed
+      const t1 = await store.getTask(workerIds[0]);
+      expect(t1?.status).toBe('completed');
 
-      // Simulate late review claim
-      await store.createClaim({
-        id: `${taskId}:late-reviewer:review`,
-        task_id: taskId,
-        agent_id: 'late-reviewer',
-        role: 'review',
-        status: 'pending',
-        created_at: Date.now(),
-      });
+      // r2's task is still pending
+      const t2 = await store.getTask(workerIds[1]);
+      expect(t2?.status).toBe('pending');
 
-      await r3.submitResult(taskId, 'review', 'Late review: Analysis complete', 'approve', 400);
-      task = await store.getTask(taskId);
-      // Count should be 3 (incremented, but queue not changed)
-      expect(task?.completed_reviews).toBe(3);
-      expect(task?.queue).toBe('summary');
+      // r2 claims and submits
+      await r2.claim(workerIds[1], 'review');
+      await r2.submitResult(workerIds[1], 'review', 'Review 2: Analysis complete', 'approve', 600);
+
+      // Both completed
+      const t1Final = await store.getTask(workerIds[0]);
+      const t2Final = await store.getTask(workerIds[1]);
+      expect(t1Final?.status).toBe('completed');
+      expect(t2Final?.status).toBe('completed');
     });
 
-    it('queue transitions to summary only once on the review that crosses threshold', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+    it('summary creation checks all workers in group, not just threshold count', async () => {
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      expect(workerIds).toHaveLength(2);
+
       const r1 = agent('reviewer-1');
       const r2 = agent('reviewer-2');
 
-      await r1.claim(taskId, 'review');
-      await r2.claim(taskId, 'review');
+      // First review: 1 of 2 — should not create summary
+      await r1.claim(workerIds[0], 'review');
+      await r1.submitResult(workerIds[0], 'review', 'Review 1: Analysis complete', 'approve', 500);
+      let groupTasks = await store.getTasksByGroup(groupId);
+      expect(groupTasks.filter((t) => t.task_type === 'summary')).toHaveLength(0);
 
-      // First review: 1 of 2 — should not transition
-      await r1.submitResult(taskId, 'review', 'Review 1: Analysis complete', 'approve', 500);
-      let task = await store.getTask(taskId);
-      expect(task?.queue).toBe('review');
-      expect(task?.reviews_completed_at).toBeUndefined();
-
-      // Second review: 2 of 2 — should transition exactly once
-      await r2.submitResult(taskId, 'review', 'Review 2: Analysis complete', 'approve', 600);
-      task = await store.getTask(taskId);
-      expect(task?.queue).toBe('summary');
-      expect(task?.reviews_completed_at).toBeDefined();
+      // Second review: 2 of 2 — should create summary exactly once
+      await r2.claim(workerIds[1], 'review');
+      await r2.submitResult(workerIds[1], 'review', 'Review 2: Analysis complete', 'approve', 600);
+      groupTasks = await store.getTasksByGroup(groupId);
+      expect(groupTasks.filter((t) => t.task_type === 'summary')).toHaveLength(1);
     });
   });
 });

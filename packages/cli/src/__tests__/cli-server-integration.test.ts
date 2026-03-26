@@ -65,7 +65,7 @@ function makeDeps(agentId = 'cli-agent'): {
   };
 }
 
-async function advanceTime(totalMs: number, stepMs = 100): Promise<void> {
+async function advanceTime(totalMs: number, stepMs = 50): Promise<void> {
   const steps = Math.ceil(totalMs / stepMs);
   for (let i = 0; i < steps; i++) {
     await vi.advanceTimersByTimeAsync(stepMs);
@@ -142,62 +142,72 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('A. CLI agent poll → claim → submit lifecycle', () => {
-    it('CLI agent claims review task and submits result via server API', async () => {
-      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
-      const taskId = await server.injectTask({ reviewCount: 3 });
+    it(
+      'CLI agent claims review task and submits result via server API',
+      async () => {
+        // reviewCount=3 → 2 worker tasks; agent claims first one
+        const taskId = await server.injectTask({ reviewCount: 3 });
 
-      const agentPromise = startTestAgent('cli-review-agent');
-      await advanceTime(500);
+        // Use reviewOnly to prevent agent from claiming summary tasks (which
+        // would trigger the quality gate and eventually delete the entire group)
+        const agentPromise = startTestAgent('cli-review-agent', { reviewOnly: true });
+        await advanceTime(2000);
 
-      // Verify claim was created in server store
-      const claims = await server.getClaims(taskId);
-      expect(claims).toHaveLength(1);
-      expect(claims[0].agent_id).toBe('cli-review-agent');
-      expect(claims[0].role).toBe('review');
-      expect(claims[0].status).toBe('completed');
-      expect(claims[0].model).toBe('test-model');
-      expect(claims[0].tool).toBe('test-tool');
-      expect(claims[0].review_text).toBeDefined();
-      expect(claims[0].tokens_used).toBe(500);
+        // Verify claim was created on the first worker task
+        const claims = await server.getClaims(taskId);
+        expect(claims).toHaveLength(1);
+        expect(claims[0].agent_id).toBe('cli-review-agent');
+        expect(claims[0].role).toBe('review');
+        expect(claims[0].status).toBe('completed');
+        expect(claims[0].model).toBe('test-model');
+        expect(claims[0].tool).toBe('test-tool');
+        expect(claims[0].review_text).toBeDefined();
+        expect(claims[0].tokens_used).toBe(500);
 
-      // Tool was called
-      expect(mockedExecuteTool).toHaveBeenCalled();
+        // Tool was called
+        expect(mockedExecuteTool).toHaveBeenCalled();
 
-      // Server task updated
-      const task = await server.getTask(taskId);
-      expect(task?.completed_reviews).toBe(1);
+        // First task completed
+        const task = await server.getTask(taskId);
+        expect(task?.status).toBe('completed');
 
-      await stopAgent(agentPromise, server);
-    });
+        await stopAgent(agentPromise, server);
+      },
+      15000,
+    );
 
-    it('two CLI agents complete review slots sequentially', async () => {
-      // reviewCount=4 → 3 review slots; after 2 reviews, task stays in review queue
-      const taskId = await server.injectTask({ reviewCount: 4 });
+    it(
+      'two CLI agents complete review slots sequentially',
+      async () => {
+        // reviewCount=4 → 3 separate worker tasks; agents claim different tasks
+        const taskId = await server.injectTask({ reviewCount: 4 });
 
-      // First agent completes review
-      const agent1Promise = startTestAgent('cli-r1');
-      await advanceTime(500);
+        // First agent completes first worker task (reviewOnly avoids summary)
+        const agent1Promise = startTestAgent('cli-r1', { reviewOnly: true });
+        await advanceTime(2000);
 
-      let claims = await server.getClaims(taskId);
-      expect(claims).toHaveLength(1);
-      expect(claims[0].status).toBe('completed');
+        const claims = await server.getClaims(taskId);
+        expect(claims).toHaveLength(1);
+        expect(claims[0].status).toBe('completed');
 
-      await stopAgent(agent1Promise, server);
-      server.install();
+        // First task is completed
+        const task1 = await server.getTask(taskId);
+        expect(task1?.status).toBe('completed');
 
-      // Second agent completes review
-      const agent2Promise = startTestAgent('cli-r2');
-      await advanceTime(500);
+        await stopAgent(agent1Promise, server);
+        server.install();
 
-      claims = await server.getClaims(taskId);
-      expect(claims).toHaveLength(2);
-      expect(claims.every((c) => c.status === 'completed')).toBe(true);
+        // Second agent claims a different pending worker task
+        const agent2Promise = startTestAgent('cli-r2', { reviewOnly: true });
+        await advanceTime(2000);
 
-      const task = await server.getTask(taskId);
-      expect(task?.completed_reviews).toBe(2);
+        // Verify the tool was called twice total (once per agent)
+        expect(mockedExecuteTool).toHaveBeenCalledTimes(2);
 
-      await stopAgent(agent2Promise, server);
-    });
+        await stopAgent(agent2Promise, server);
+      },
+      15000,
+    );
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -208,20 +218,8 @@ describe('CLI ↔ Server Integration', () => {
     it('CLI handles claim conflict gracefully (slot taken)', async () => {
       const taskId = await server.injectTask();
 
-      // Pre-claim the slot — move task to finished queue
-      await server.store.updateTask(taskId, {
-        queue: 'finished',
-        summary_agent_id: 'other-agent',
-        status: 'reviewing',
-      });
-      await server.store.createClaim({
-        id: `${taskId}:other-agent:summary`,
-        task_id: taskId,
-        agent_id: 'other-agent',
-        role: 'summary',
-        status: 'pending',
-        created_at: Date.now(),
-      });
+      // Pre-claim: move task to reviewing status (atomic CAS already done)
+      await server.store.updateTask(taskId, { status: 'reviewing' });
 
       const agentPromise = startTestAgent('late-cli-agent');
       await advanceTime(500);
@@ -249,19 +247,23 @@ describe('CLI ↔ Server Integration', () => {
       await stopAgent(agentPromise, server);
     });
 
-    it('CLI agent with reviewOnly claims review tasks', async () => {
-      const taskId = await server.injectTask({ reviewCount: 3 });
+    it(
+      'CLI agent with reviewOnly claims review tasks',
+      async () => {
+        const taskId = await server.injectTask({ reviewCount: 3 });
 
-      const agentPromise = startTestAgent('review-only-cli', { reviewOnly: true });
-      await advanceTime(500);
+        const agentPromise = startTestAgent('review-only-cli', { reviewOnly: true });
+        await advanceTime(2000);
 
-      const claims = await server.getClaims(taskId);
-      expect(claims).toHaveLength(1);
-      expect(claims[0].role).toBe('review');
-      expect(claims[0].status).toBe('completed');
+        const claims = await server.getClaims(taskId);
+        expect(claims).toHaveLength(1);
+        expect(claims[0].role).toBe('review');
+        expect(claims[0].status).toBe('completed');
 
-      await stopAgent(agentPromise, server);
-    });
+        await stopAgent(agentPromise, server);
+      },
+      15000,
+    );
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -282,21 +284,25 @@ describe('CLI ↔ Server Integration', () => {
       await stopAgent(agentPromise, server);
     });
 
-    it('CLI agent with matching whitelist claims the task', async () => {
-      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
-      const taskId = await server.injectTask({ reviewCount: 3 });
+    it(
+      'CLI agent with matching whitelist claims the task',
+      async () => {
+        // reviewCount=3 → 2 separate worker tasks; agent claims first one
+        await server.injectTask({ reviewCount: 3 });
 
-      const agentPromise = startTestAgent('filtered-cli', {
-        repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
-      });
-      await advanceTime(500);
+        const agentPromise = startTestAgent('filtered-cli', {
+          repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
+          reviewOnly: true,
+        });
+        await advanceTime(2000);
 
-      const claims = await server.getClaims(taskId);
-      expect(claims).toHaveLength(1);
-      expect(claims[0].status).toBe('completed');
+        // Tool was called — agent claimed and reviewed a task
+        expect(mockedExecuteTool).toHaveBeenCalled();
 
-      await stopAgent(agentPromise, server);
-    });
+        await stopAgent(agentPromise, server);
+      },
+      15000,
+    );
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -304,23 +310,27 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('E. Tool execution failure → error reported to server', () => {
-    it('tool crash reports error to server, slot is freed', async () => {
-      const taskId = await server.injectTask({ reviewCount: 2 });
-      mockedExecuteTool.mockRejectedValue(new Error('Tool SIGSEGV'));
+    it(
+      'tool crash reports error to server, slot is freed',
+      async () => {
+        const taskId = await server.injectTask({ reviewCount: 2 });
+        mockedExecuteTool.mockRejectedValue(new Error('Tool SIGSEGV'));
 
-      const agentPromise = startTestAgent('crash-cli');
-      await advanceTime(3000);
+        const agentPromise = startTestAgent('crash-cli');
+        await advanceTime(3000);
 
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error on task'));
+        expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error on task'));
 
-      // Slot freed — task should be re-claimable
-      const task = await server.getTask(taskId);
-      expect(task?.review_claims).toBe(0);
+        // Task should be back to pending (freed for re-claim)
+        const task = await server.getTask(taskId);
+        expect(task?.status).toBe('pending');
 
-      // Mark completed to stop loop
-      await server.store.updateTask(taskId, { status: 'completed' });
-      await stopAgent(agentPromise, server);
-    });
+        // Mark completed to stop loop
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      },
+      15000,
+    );
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -408,27 +418,31 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('G. Private repo tasks via CLI', () => {
-    it('CLI agent with repo whitelist can see and claim private tasks', async () => {
-      // reviewCount=3 → 2 review slots; after 1 review, task stays in review queue
-      const taskId = await server.injectTask({
-        owner: 'corp',
-        repo: 'secret',
-        reviewCount: 3,
-        private: true,
-      });
+    it(
+      'CLI agent with repo whitelist can see and claim private tasks',
+      async () => {
+        // reviewCount=3 → 2 worker tasks; agent claims first one
+        const taskId = await server.injectTask({
+          owner: 'corp',
+          repo: 'secret',
+          reviewCount: 3,
+          private: true,
+        });
 
-      const agentPromise = startTestAgent('private-cli-agent', {
-        repoConfig: { mode: 'whitelist', list: ['corp/secret'] },
-      });
-      await advanceTime(500);
+        const agentPromise = startTestAgent('private-cli-agent', {
+          repoConfig: { mode: 'whitelist', list: ['corp/secret'] },
+        });
+        await advanceTime(2000);
 
-      const claims = await server.getClaims(taskId);
-      expect(claims).toHaveLength(1);
-      expect(claims[0].status).toBe('completed');
-      expect(claims[0].agent_id).toBe('private-cli-agent');
+        const claims = await server.getClaims(taskId);
+        expect(claims).toHaveLength(1);
+        expect(claims[0].status).toBe('completed');
+        expect(claims[0].agent_id).toBe('private-cli-agent');
 
-      await stopAgent(agentPromise, server);
-    });
+        await stopAgent(agentPromise, server);
+      },
+      15000,
+    );
 
     it('CLI agent without repo whitelist cannot see private tasks', async () => {
       await server.injectTask({

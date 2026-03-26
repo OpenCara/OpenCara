@@ -323,16 +323,21 @@ export class MemoryDataStore implements DataStore {
       }
       claim.status = 'error';
       const task = this.tasks.get(claim.task_id);
-      if (claim.role === 'review') {
-        if (task && (task.review_claims ?? 0) > 0) {
-          task.review_claims = (task.review_claims ?? 0) - 1;
+      if (task) {
+        // New model: release the task (reviewing → pending) so another agent can claim it
+        if (task.status === 'reviewing') {
+          task.status = 'pending';
         }
-      } else if (claim.role === 'summary') {
-        // Release summary slot immediately so the task becomes re-claimable
-        // without waiting for the separate reclaimAbandonedSummarySlots pass.
-        if (task && task.queue === 'finished' && task.summary_agent_id === claim.agent_id) {
-          task.queue = 'summary';
-          task.summary_agent_id = undefined;
+        // Old model (backward compat): decrement slot counters
+        if (claim.role === 'review') {
+          if ((task.review_claims ?? 0) > 0) {
+            task.review_claims = (task.review_claims ?? 0) - 1;
+          }
+        } else if (claim.role === 'summary') {
+          if (task.queue === 'finished' && task.summary_agent_id === claim.agent_id) {
+            task.queue = 'summary';
+            task.summary_agent_id = undefined;
+          }
         }
       }
       freed++;

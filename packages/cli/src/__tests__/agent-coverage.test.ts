@@ -179,41 +179,44 @@ describe('Agent Coverage Tests', () => {
 
   describe('Multi-agent summary with reviews', () => {
     it('agent receives summary role with existing reviews and submits summary', async () => {
-      // Create a task with review_count=3 (2 reviewers + 1 synthesizer)
+      // Create a task with review_count=3 (2 worker tasks + summary auto-created)
       const taskId = await server.injectTask({ reviewCount: 3 });
 
-      // Manually complete 2 review claims so next agent gets summary
-      const _task = await server.getTask(taskId);
-      await server.store.updateTask(taskId, {
-        status: 'reviewing',
+      // Get the group ID from the first task
+      const firstTask = await server.getTask(taskId);
+      const groupId = firstTask!.group_id;
+
+      // Get worker tasks and complete them manually
+      const groupTasks = await server.store.getTasksByGroup(groupId);
+      const workerTasks = groupTasks.filter((t) => t.task_type !== 'summary');
+
+      for (let i = 0; i < workerTasks.length; i++) {
+        const wt = workerTasks[i];
+        await server.store.updateTask(wt.id, { status: 'completed' });
+        await server.store.createClaim({
+          id: `${wt.id}:reviewer-${i + 1}:review`,
+          task_id: wt.id,
+          agent_id: `reviewer-${i + 1}`,
+          role: 'review',
+          status: 'completed',
+          review_text: i === 0 ? '## Summary\nLGTM\n\n## Verdict\nAPPROVE' : '## Summary\nSome issues found\n\n## Verdict\nCOMMENT',
+          verdict: i === 0 ? 'approve' : 'comment',
+          model: `model-${i + 1}`,
+          tool: `tool-${i + 1}`,
+          created_at: Date.now(),
+        });
+      }
+
+      // Manually create the summary task (simulates what the result handler does)
+      const summaryTaskId = `summary-${groupId}`;
+      await server.store.createTask({
+        ...firstTask!,
+        id: summaryTaskId,
+        task_type: 'summary',
+        status: 'pending',
         queue: 'summary',
-        review_claims: 2,
-        completed_reviews: 2,
-        reviews_completed_at: Date.now(),
-      });
-      await server.store.createClaim({
-        id: `${taskId}:reviewer-1:review`,
-        task_id: taskId,
-        agent_id: 'reviewer-1',
-        role: 'review',
-        status: 'completed',
-        review_text: '## Summary\nLGTM\n\n## Verdict\nAPPROVE',
-        verdict: 'approve',
-        model: 'model-1',
-        tool: 'tool-1',
         created_at: Date.now(),
-      });
-      await server.store.createClaim({
-        id: `${taskId}:reviewer-2:review`,
-        task_id: taskId,
-        agent_id: 'reviewer-2',
-        role: 'review',
-        status: 'completed',
-        review_text: '## Summary\nSome issues found\n\n## Verdict\nCOMMENT',
-        verdict: 'comment',
-        model: 'model-2',
-        tool: 'tool-2',
-        created_at: Date.now(),
+        timeout_at: Date.now() + 600_000,
       });
 
       // Intercept result submission to avoid crypto.subtle issues
@@ -222,7 +225,7 @@ describe('Agent Coverage Tests', () => {
       globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url =
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        if (url.includes(`/api/tasks/${taskId}/result`)) {
+        if (url.includes(`/api/tasks/${summaryTaskId}/result`)) {
           if (typeof init?.body === 'string') {
             resultBody = JSON.parse(init.body);
           }
@@ -239,7 +242,7 @@ describe('Agent Coverage Tests', () => {
         expect(resultBody).not.toBeNull();
         expect(resultBody!.type).toBe('summary');
 
-        await server.store.updateTask(taskId, { status: 'completed' });
+        await server.store.updateTask(summaryTaskId, { status: 'completed' });
         await stopAgent(agentPromise, server);
       } finally {
         globalThis.fetch = originalFetch;
@@ -641,35 +644,41 @@ describe('Agent Coverage Tests', () => {
     it('rejects task when summary input exceeds limit', async () => {
       const taskId = await server.injectTask({ reviewCount: 3 });
 
-      // Set up completed reviews with very large review text
-      await server.store.updateTask(taskId, {
-        status: 'reviewing',
-        queue: 'summary',
-        review_claims: 2,
-        completed_reviews: 2,
-        reviews_completed_at: Date.now(),
-      });
+      // Get the group ID from the first task
+      const firstTask = await server.getTask(taskId);
+      const groupId = firstTask!.group_id;
+
+      // Complete worker tasks manually
+      const groupTasks = await server.store.getTasksByGroup(groupId);
+      const workerTasks = groupTasks.filter((t) => t.task_type !== 'summary');
+
       // Create review claims with huge text to exceed MAX_INPUT_SIZE_BYTES (200KB)
       const hugeReview = 'x'.repeat(150 * 1024);
-      await server.store.createClaim({
-        id: `${taskId}:r1:review`,
-        task_id: taskId,
-        agent_id: 'r1',
-        role: 'review',
-        status: 'completed',
-        review_text: hugeReview,
-        verdict: 'approve',
+      for (let i = 0; i < workerTasks.length; i++) {
+        const wt = workerTasks[i];
+        await server.store.updateTask(wt.id, { status: 'completed' });
+        await server.store.createClaim({
+          id: `${wt.id}:r${i + 1}:review`,
+          task_id: wt.id,
+          agent_id: `r${i + 1}`,
+          role: 'review',
+          status: 'completed',
+          review_text: hugeReview,
+          verdict: i === 0 ? 'approve' : 'comment',
+          created_at: Date.now(),
+        });
+      }
+
+      // Create summary task manually
+      const summaryTaskId = `summary-${groupId}`;
+      await server.store.createTask({
+        ...firstTask!,
+        id: summaryTaskId,
+        task_type: 'summary',
+        status: 'pending',
+        queue: 'summary',
         created_at: Date.now(),
-      });
-      await server.store.createClaim({
-        id: `${taskId}:r2:review`,
-        task_id: taskId,
-        agent_id: 'r2',
-        role: 'review',
-        status: 'completed',
-        review_text: hugeReview,
-        verdict: 'comment',
-        created_at: Date.now(),
+        timeout_at: Date.now() + 600_000,
       });
 
       const agentPromise = startTestAgent('large-summary-agent');
@@ -679,7 +688,7 @@ describe('Agent Coverage Tests', () => {
         expect.stringContaining('Summary input too large'),
       );
 
-      await server.store.updateTask(taskId, { status: 'completed' });
+      await server.store.updateTask(summaryTaskId, { status: 'completed' });
       await stopAgent(agentPromise, server);
     });
   });
@@ -817,41 +826,43 @@ describe('Agent Coverage Tests', () => {
     });
 
     it('executeSummaryTask uses routerRelay for multi-agent summary', async () => {
-      // review_count=3 → 2 reviewers + 1 synthesizer
+      // review_count=3 → 2 worker tasks; complete them manually and create summary task
       const taskId = await server.injectTask({ reviewCount: 3 });
       const mockRelay = createMockRouterRelay();
 
-      // Set up completed reviews so next agent gets summary role
-      await server.store.updateTask(taskId, {
-        status: 'reviewing',
+      // Get group and complete workers
+      const firstTask = await server.getTask(taskId);
+      const groupId = firstTask!.group_id;
+      const groupTasks = await server.store.getTasksByGroup(groupId);
+      const workerTasks = groupTasks.filter((t) => t.task_type !== 'summary');
+
+      for (let i = 0; i < workerTasks.length; i++) {
+        const wt = workerTasks[i];
+        await server.store.updateTask(wt.id, { status: 'completed' });
+        await server.store.createClaim({
+          id: `${wt.id}:reviewer-${i + 1}:review`,
+          task_id: wt.id,
+          agent_id: `reviewer-${i + 1}`,
+          role: 'review',
+          status: 'completed',
+          review_text: i === 0 ? '## Summary\nLGTM\n\n## Verdict\nAPPROVE' : '## Summary\nIssues found\n\n## Verdict\nCOMMENT',
+          verdict: i === 0 ? 'approve' : 'comment',
+          model: `model-${i + 1}`,
+          tool: `tool-${i + 1}`,
+          created_at: Date.now(),
+        });
+      }
+
+      // Create summary task
+      const summaryTaskId = `summary-${groupId}`;
+      await server.store.createTask({
+        ...firstTask!,
+        id: summaryTaskId,
+        task_type: 'summary',
+        status: 'pending',
         queue: 'summary',
-        review_claims: 2,
-        completed_reviews: 2,
-        reviews_completed_at: Date.now(),
-      });
-      await server.store.createClaim({
-        id: `${taskId}:reviewer-1:review`,
-        task_id: taskId,
-        agent_id: 'reviewer-1',
-        role: 'review',
-        status: 'completed',
-        review_text: '## Summary\nLGTM\n\n## Verdict\nAPPROVE',
-        verdict: 'approve',
-        model: 'model-1',
-        tool: 'tool-1',
         created_at: Date.now(),
-      });
-      await server.store.createClaim({
-        id: `${taskId}:reviewer-2:review`,
-        task_id: taskId,
-        agent_id: 'reviewer-2',
-        role: 'review',
-        status: 'completed',
-        review_text: '## Summary\nIssues found\n\n## Verdict\nCOMMENT',
-        verdict: 'comment',
-        model: 'model-2',
-        tool: 'tool-2',
-        created_at: Date.now(),
+        timeout_at: Date.now() + 600_000,
       });
 
       let resultBody: Record<string, unknown> | null = null;
@@ -859,7 +870,7 @@ describe('Agent Coverage Tests', () => {
       globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url =
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        if (url.includes(`/api/tasks/${taskId}/result`)) {
+        if (url.includes(`/api/tasks/${summaryTaskId}/result`)) {
           if (typeof init?.body === 'string') {
             resultBody = JSON.parse(init.body);
           }
@@ -886,14 +897,14 @@ describe('Agent Coverage Tests', () => {
         expect(mockRelay.buildSummaryPrompt).toHaveBeenCalled();
         expect(mockRelay.sendPrompt).toHaveBeenCalledWith(
           'summary_request',
-          taskId,
+          summaryTaskId,
           'router summary prompt',
           expect.any(Number),
         );
         expect(resultBody).not.toBeNull();
         expect(resultBody!.type).toBe('summary');
 
-        await server.store.updateTask(taskId, { status: 'completed' });
+        await server.store.updateTask(summaryTaskId, { status: 'completed' });
         await stopAgent(promise, server);
       } finally {
         globalThis.fetch = originalFetch;

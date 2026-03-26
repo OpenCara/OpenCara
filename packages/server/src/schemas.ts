@@ -6,7 +6,10 @@ import { apiError } from './errors.js';
 
 const agentIdSchema = z.string().min(1, 'agent_id must be a non-empty string');
 
-const claimRoleSchema = z.enum(['review', 'summary']);
+const taskRoleSchema = z.enum(['review', 'summary', 'dedup', 'triage']);
+
+/** @deprecated Use taskRoleSchema for new code. Kept for backward compat. */
+const claimRoleSchema = taskRoleSchema;
 
 const verdictValues = ['approve', 'request_changes', 'comment'] as const;
 
@@ -27,7 +30,7 @@ const repoConfigSchema = z.object({
 
 export const PollRequestSchema = z.object({
   agent_id: agentIdSchema,
-  roles: z.array(claimRoleSchema).optional(),
+  roles: z.array(taskRoleSchema).optional(),
   review_only: z.boolean().optional(),
   repos: z.array(z.string()).optional(),
   synthesize_repos: repoConfigSchema.optional(),
@@ -50,6 +53,30 @@ export const REVIEW_TEXT_MIN_LENGTH = 10;
 /** Maximum review_text length (rejects absurdly long responses — ~100KB). */
 export const REVIEW_TEXT_MAX_LENGTH = 100_000;
 
+// ── Report sub-schemas ─────────────────────────────────────────
+
+const dedupMatchSchema = z.object({
+  number: z.number().int(),
+  similarity: z.enum(['exact', 'high', 'partial']),
+  description: z.string(),
+});
+
+const dedupReportSchema = z.object({
+  duplicates: z.array(dedupMatchSchema),
+  index_entry: z.string(),
+});
+
+const triageReportSchema = z.object({
+  category: z.enum(['bug', 'feature', 'improvement', 'question', 'docs', 'chore']),
+  module: z.string().optional(),
+  priority: z.enum(['critical', 'high', 'medium', 'low']),
+  size: z.enum(['XS', 'S', 'M', 'L', 'XL']),
+  labels: z.array(z.string()),
+  summary: z.string().optional(),
+  body: z.string().optional(),
+  comment: z.string(),
+});
+
 export const ResultRequestSchema = z.object({
   agent_id: agentIdSchema,
   type: claimRoleSchema,
@@ -71,6 +98,8 @@ export const ResultRequestSchema = z.object({
     ),
   verdict: reviewVerdictSchema.optional(),
   tokens_used: z.number().int().nonnegative().finite().optional(),
+  dedup_report: dedupReportSchema.optional(),
+  triage_report: triageReportSchema.optional(),
 });
 
 export const RejectRequestSchema = z.object({

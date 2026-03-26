@@ -65,9 +65,10 @@ export class FakeServer {
     this.originalFetch = globalThis.fetch;
   }
 
-  /** Replace globalThis.fetch with interceptor. Resets rate limiter state. */
+  /** Replace globalThis.fetch with interceptor. Resets rate limiter and throttle state. */
   install(): void {
     resetRateLimits();
+    resetTimeoutThrottle();
     const { app, env, diffContent: _dc, diffFetchError: _de } = this;
     // Use closures to reference mutable properties
     const getDiffError = () => this.diffFetchError;
@@ -190,7 +191,7 @@ export class FakeServer {
     this.diffContent = CANNED_DIFF;
   }
 
-  /** Inject a task via test routes. Returns the task ID. */
+  /** Inject a task via test routes. Returns the first task ID and group ID. */
   async injectTask(opts?: {
     owner?: string;
     repo?: string;
@@ -220,7 +221,7 @@ export class FakeServer {
       },
       this.env,
     );
-    const body = (await res.json()) as { created: boolean; task_id?: string };
+    const body = (await res.json()) as { created: boolean; task_id?: string; group_id?: string };
     if (!body.created || !body.task_id) {
       throw new Error(`Failed to inject task: ${JSON.stringify(body)}`);
     }
@@ -235,5 +236,16 @@ export class FakeServer {
   /** Get claims for a task. */
   async getClaims(taskId: string): Promise<TaskClaim[]> {
     return this.store.getClaims(taskId);
+  }
+
+  /** Get all claims for an agent across all tasks in the store. */
+  async getClaimsByAgent(agentId: string): Promise<TaskClaim[]> {
+    const tasks = await this.store.listTasks();
+    const allClaims: TaskClaim[] = [];
+    for (const task of tasks) {
+      const claims = await this.store.getClaims(task.id);
+      allClaims.push(...claims.filter((c) => c.agent_id === agentId));
+    }
+    return allClaims;
   }
 }
