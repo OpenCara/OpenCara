@@ -554,6 +554,7 @@ export class D1DataStore implements DataStore {
   }
 
   async deleteTasksByGroup(groupId: string): Promise<void> {
+    // Claims are deleted via ON DELETE CASCADE (see 0001_initial.sql).
     await this.db.prepare('DELETE FROM tasks WHERE group_id = ?').bind(groupId).run();
   }
 
