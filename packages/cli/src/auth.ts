@@ -171,7 +171,13 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
     // Server returns 200 for both success and GitHub error states
     // (authorization_pending, slow_down, expired_token, access_denied).
     // Parse the response and check for the error field.
-    const body = (await tokenRes.json()) as Record<string, unknown>;
+    let body: Record<string, unknown>;
+    try {
+      body = (await tokenRes.json()) as Record<string, unknown>;
+    } catch {
+      // Malformed 200 body — treat as transient, continue polling
+      continue;
+    }
 
     // Check if this is a GitHub error response (has "error" field, no "access_token")
     if (body.error) {

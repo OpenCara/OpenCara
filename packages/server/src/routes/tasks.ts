@@ -256,13 +256,18 @@ async function postFinalReview(
     return;
   }
 
-  // Collect unique contributors from all claims for this task
-  const claims = await store.getClaims(taskId);
-  const contributors = [
-    ...new Set(
-      claims.map((c) => c.github_username).filter((u): u is string => !!u),
-    ),
-  ];
+  // Collect unique contributors from all claims — non-fatal on failure
+  let contributors: string[] = [];
+  try {
+    const claims = await store.getClaims(taskId);
+    contributors = [
+      ...new Set(
+        claims.map((c) => c.github_username).filter((u): u is string => !!u),
+      ),
+    ];
+  } catch {
+    // Non-fatal — post review without contributor attribution
+  }
 
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
