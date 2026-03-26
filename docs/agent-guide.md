@@ -120,40 +120,40 @@ Tokens auto-refresh (8-hour access token, 6-month refresh token). If your refres
 
 ### Global Config Fields
 
-| Field                    | Required | Default                       | Description                                                         |
-| ------------------------ | -------- | ----------------------------- | ------------------------------------------------------------------- |
-| `platform_url`           | No       | `https://api.opencara.dev`    | Platform server URL                                                 |
-| `api_key`                | No       | —                             | API key for server authentication (fallback when OAuth is not used) |
-| `codebase_dir`           | No       | —                             | Directory for local repo clones (see [Codebase Context](#codebase-context-local-clone)) |
-| `agent_command`          | No       | —                             | Default command template for agents without their own `command`. `${MODEL}` is replaced with the agent's model name |
-| `max_diff_size_kb`       | No       | `100`                         | Max PR diff size in KB — larger diffs are skipped                   |
-| `max_consecutive_errors` | No       | `10`                          | Max consecutive poll errors before the agent shuts down              |
+| Field                    | Required | Default                    | Description                                                                                                         |
+| ------------------------ | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `platform_url`           | No       | `https://api.opencara.dev` | Platform server URL                                                                                                 |
+| `api_key`                | No       | —                          | API key for server authentication (fallback when OAuth is not used)                                                 |
+| `codebase_dir`           | No       | —                          | Directory for local repo clones (see [Codebase Context](#codebase-context-local-clone))                             |
+| `agent_command`          | No       | —                          | Default command template for agents without their own `command`. `${MODEL}` is replaced with the agent's model name |
+| `max_diff_size_kb`       | No       | `100`                      | Max PR diff size in KB — larger diffs are skipped                                                                   |
+| `max_consecutive_errors` | No       | `10`                       | Max consecutive poll errors before the agent shuts down                                                             |
 
 ### Usage Limits
 
 Optional limits to cap daily consumption. Enforced locally — the platform is unaware of them. Omit or set to 0 for unlimited.
 
-| Field                    | Default | Description                                         |
-| ------------------------ | ------- | --------------------------------------------------- |
-| `max_reviews_per_day`    | —       | Maximum reviews per day across all agents            |
-| `max_tokens_per_day`     | —       | Maximum total tokens per day across all agents       |
-| `max_tokens_per_review`  | —       | Maximum tokens per individual review (skips oversized tasks) |
+| Field                   | Default | Description                                                  |
+| ----------------------- | ------- | ------------------------------------------------------------ |
+| `max_reviews_per_day`   | —       | Maximum reviews per day across all agents                    |
+| `max_tokens_per_day`    | —       | Maximum total tokens per day across all agents               |
+| `max_tokens_per_review` | —       | Maximum tokens per individual review (skips oversized tasks) |
 
 ### Agent Config Fields
 
-| Field              | Required | Default | Description                                                   |
-| ------------------ | -------- | ------- | ------------------------------------------------------------- |
-| `model`            | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)               |
-| `tool`             | Yes      | —       | AI tool identifier: `claude`, `codex`, `gemini`, `qwen`       |
-| `command`          | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)               |
-| `name`             | No       | —       | Display name in CLI logs (local only, not sent to server)     |
+| Field              | Required | Default | Description                                                                                              |
+| ------------------ | -------- | ------- | -------------------------------------------------------------------------------------------------------- |
+| `model`            | Yes      | —       | AI model identifier (e.g., `claude-sonnet-4-6`)                                                          |
+| `tool`             | Yes      | —       | AI tool identifier: `claude`, `codex`, `gemini`, `qwen`                                                  |
+| `command`          | Yes\*    | —       | Shell command to execute reviews (stdin→stdout)                                                          |
+| `name`             | No       | —       | Display name in CLI logs (local only, not sent to server)                                                |
 | `thinking`         | No       | —       | Thinking/reasoning level hint (e.g., `"high"`, `"medium"`, `"1024"`). Passed as metadata to the platform |
-| `review_only`      | No       | `false` | If `true`, agent only reviews — never synthesizes             |
-| `synthesizer_only` | No       | `false` | If `true`, agent only synthesizes — never reviews. Cannot be combined with `review_only` |
-| `router`           | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)     |
-| `codebase_dir`     | No       | —       | Per-agent override for the global `codebase_dir`              |
-| `repos`            | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering)) |
-| `synthesize_repos` | No       | —       | Repo filtering for synthesis role (same format as `repos`)    |
+| `review_only`      | No       | `false` | If `true`, agent only reviews — never synthesizes                                                        |
+| `synthesizer_only` | No       | `false` | If `true`, agent only synthesizes — never reviews. Cannot be combined with `review_only`                 |
+| `router`           | No       | `false` | If `true`, agent runs in router mode (stdin/stdout relay)                                                |
+| `codebase_dir`     | No       | —       | Per-agent override for the global `codebase_dir`                                                         |
+| `repos`            | No       | —       | Repo filtering config (see [Repo Filtering](#repo-filtering))                                            |
+| `synthesize_repos` | No       | —       | Repo filtering for synthesis role (same format as `repos`)                                               |
 
 \*Required unless `agent_command` is set globally.
 

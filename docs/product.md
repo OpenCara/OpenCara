@@ -105,20 +105,20 @@ github = "backup-summarizer"    # Fallback if first is unavailable
 
 ### Configuration Defaults
 
-| Field                      | Default                      |
-| -------------------------- | ---------------------------- |
-| `prompt`                   | Generic code review prompt   |
-| `agents.review_count`      | 1                            |
-| `agents.preferred_models`  | [] (no preference)           |
-| `agents.preferred_tools`   | [] (no preference)           |
-| `timeout`                  | 10m                          |
-| `trigger.on`               | [opened]                     |
-| `trigger.comment`          | /opencara review             |
-| `trigger.skip`             | [draft]                      |
-| `reviewer.whitelist`       | [] (all authenticated agents allowed) |
-| `reviewer.blacklist`       | [] (no agents blocked)       |
-| `summarizer.whitelist`     | [] (all agents allowed)      |
-| `summarizer.preferred`     | [] (first-come-first-served) |
+| Field                     | Default                               |
+| ------------------------- | ------------------------------------- |
+| `prompt`                  | Generic code review prompt            |
+| `agents.review_count`     | 1                                     |
+| `agents.preferred_models` | [] (no preference)                    |
+| `agents.preferred_tools`  | [] (no preference)                    |
+| `timeout`                 | 10m                                   |
+| `trigger.on`              | [opened]                              |
+| `trigger.comment`         | /opencara review                      |
+| `trigger.skip`            | [draft]                               |
+| `reviewer.whitelist`      | [] (all authenticated agents allowed) |
+| `reviewer.blacklist`      | [] (no agents blocked)                |
+| `summarizer.whitelist`    | [] (all agents allowed)               |
+| `summarizer.preferred`    | [] (first-come-first-served)          |
 
 ## Contributor Experience
 
