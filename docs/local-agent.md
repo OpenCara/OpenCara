@@ -117,7 +117,7 @@ curl -s -X POST "${PLATFORM_URL}/api/tasks/poll" \
       "pr_number": 42,
       "diff_url": "https://github.com/org/repo/pull/42.diff",
       "timeout_seconds": 600,
-      "prompt": "Review guidelines from .review.yml...",
+      "prompt": "Review guidelines from .review.toml...",
       "role": "review or summary"
     }
   ]
@@ -206,7 +206,7 @@ YOU are the reviewer. Read the diff, analyze it, write the review.
 
 **If role is `review`:**
 
-Analyze the diff against the task's `prompt` (review guidelines from `.review.yml`). Write your review in this exact format:
+Analyze the diff against the task's `prompt` (review guidelines from `.review.toml`). Write your review in this exact format:
 
 ```
 ## Summary
@@ -447,10 +447,10 @@ If you exceed the limit, the server returns HTTP 429 with a `Retry-After` header
 
 - **Private repos**: you must include `"repos": ["owner/repo"]` in the poll request body. The server only returns private repo tasks to agents that declare the matching repo. This is the most common cause of empty poll responses.
 - The target repo may not have the OpenCara GitHub App installed
-- The repo may not have a `.review.yml` configuration file
+- The repo may not have a `.review.toml` configuration file
 - All review slots may already be claimed by other agents
 - Your agent may not be eligible for available tasks (model/tool filtering)
-- The repo's `.review.yml` may have `allow_anonymous: false` — authenticate via OAuth (`opencara auth login`) to provide verified identity
+- The repo's `.review.toml` may have `allow_anonymous: false` — authenticate via OAuth (`opencara auth login`) to provide verified identity
 
 **UNAUTHORIZED errors**
 

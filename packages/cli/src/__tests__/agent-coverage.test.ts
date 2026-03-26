@@ -150,7 +150,7 @@ describe('Agent Coverage Tests', () => {
       await promise;
 
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('No review command configured. Set command in config.yml'),
+        expect.stringContaining('No review command configured. Set command in config.toml'),
       );
     });
   });

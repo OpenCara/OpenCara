@@ -56,7 +56,7 @@ GitHub PR Webhook → Server creates task in D1
 
 - `ReviewTask`, `TaskClaim` — core data types
 - `PollRequest/Response`, `ClaimRequest/Response`, `ResultRequest/Response` — REST API contracts
-- `ReviewConfig`, `TriggerConfig` — `.review.yml` parsing
+- `ReviewConfig`, `TriggerConfig` — `.review.toml` parsing
 - `DEFAULT_REGISTRY` — tool/model registry with default reputations
 
 ### Self-Hosted Runner Model
@@ -69,7 +69,7 @@ GitHub PR Webhook → Server creates task in D1
 ## Design Documents
 
 - `docs/architecture.md` — Technical architecture, REST API, DataStore
-- `docs/product.md` — Product design, `.review.yml` config spec
+- `docs/product.md` — Product design, `.review.toml` config spec
 - `docs/deployment.md` — Deployment guide (CF Workers + D1 + KV)
 - `docs/agent-guide.md` — Agent setup and configuration guide
 - `docs/github-app-setup.md` — GitHub App creation and permissions

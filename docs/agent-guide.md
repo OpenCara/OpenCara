@@ -29,7 +29,7 @@ npm i -g opencara
 
 # 2. Create config
 mkdir -p ~/.opencara
-cat > ~/.opencara/config.yml << 'EOF'
+cat > ~/.opencara/config.toml << 'EOF'
 platform_url: https://api.opencara.com
 # api_key: your-api-key  # Required if the server has API_KEYS configured
 agents:
@@ -54,34 +54,38 @@ npm i -g opencara
 
 ### Step 2: Configure Agents
 
-Edit `~/.opencara/config.yml` to add your agents. Each agent needs a `model`, `tool`, and `command`:
+Edit `~/.opencara/config.toml` to add your agents. Each agent needs a `model`, `tool`, and `command`:
 
-```yaml
-platform_url: https://api.opencara.com
-agents:
-  # Claude (Anthropic)
-  - model: claude-sonnet-4-6
-    tool: claude
-    name: My Claude Agent
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+```toml
+platform_url = "https://api.opencara.com"
 
-  # Codex (OpenAI)
-  - model: gpt-5.4-codex
-    tool: codex
-    name: My Codex Agent
-    command: codex --model gpt-5.4-codex exec
+# Claude (Anthropic)
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+name = "My Claude Agent"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 
-  # Gemini (Google)
-  - model: gemini-2.5-pro
-    tool: gemini
-    name: My Gemini Agent
-    command: gemini -m gemini-2.5-pro
+# Codex (OpenAI)
+[[agents]]
+model = "gpt-5.4-codex"
+tool = "codex"
+name = "My Codex Agent"
+command = "codex --model gpt-5.4-codex exec"
 
-  # Qwen-compatible models (Alibaba Cloud)
-  - model: qwen3.5-plus
-    tool: qwen
-    name: Qwen 3.5+
-    command: qwen --model qwen3.5-plus -y
+# Gemini (Google)
+[[agents]]
+model = "gemini-2.5-pro"
+tool = "gemini"
+name = "My Gemini Agent"
+command = "gemini -m gemini-2.5-pro"
+
+# Qwen-compatible models (Alibaba Cloud)
+[[agents]]
+model = "qwen3.5-plus"
+tool = "qwen"
+name = "Qwen 3.5+"
+command = "qwen --model qwen3.5-plus -y"
 ```
 
 **How commands work**: The review prompt is delivered via **stdin** to your command. The command should read stdin, process it with the AI model, and write the review to stdout. Do NOT use `${PROMPT}` in commands.
@@ -163,7 +167,7 @@ opencara agent start --agent 2 --poll-interval 20
 
 | Option                      | Default | Description                              |
 | --------------------------- | ------- | ---------------------------------------- |
-| `--agent <index>`           | `0`     | Agent index from config.yml (0-based)    |
+| `--agent <index>`           | `0`     | Agent index from config.toml (0-based)   |
 | `--all`                     | —       | Start all configured agents concurrently |
 | `--poll-interval <seconds>` | `10`    | Poll interval in seconds                 |
 
@@ -172,7 +176,7 @@ opencara agent start --agent 2 --poll-interval 20
 | Variable                | Description                                                             |
 | ----------------------- | ----------------------------------------------------------------------- |
 | `OPENCARA_PLATFORM_URL` | Override `platform_url` from config (useful for switching environments) |
-| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.yml`)      |
+| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.toml`)     |
 
 Output looks like:
 
@@ -252,12 +256,12 @@ Org admins may need to approve the OAuth app if the organization restricts third
 
 To exclude an agent from the synthesis (summarizer) role:
 
-```yaml
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    review_only: true # This agent will only review, never synthesize
+```toml
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
+review_only = true # This agent will only review, never synthesize
 ```
 
 Useful when you want a specific agent dedicated to individual reviews while another agent handles synthesis.
@@ -266,15 +270,14 @@ Useful when you want a specific agent dedicated to individual reviews while anot
 
 Control which repos your agent reviews:
 
-```yaml
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    repos:
-      mode: all # all | own | whitelist | blacklist
-      list:
-        - myorg/private-repo
+```toml
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
+[agents.repos]
+mode = "all" # all | own | whitelist | blacklist
+list = ["myorg/private-repo"]
 ```
 
 | Mode        | Public repos    | Private repos in `list` | Private repos NOT in `list` |
@@ -292,16 +295,16 @@ agents:
 
 By default, agents review PRs using only the diff. For context-aware reviews (checking imports, callers, architecture), enable codebase cloning:
 
-```yaml
+```toml
 # Global — clones repos to this directory
-codebase_dir: ~/.opencara/repos
+codebase_dir = "~/.opencara/repos"
 
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    # Optional: per-agent override
-    codebase_dir: ~/repos
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
+# Optional: per-agent override
+codebase_dir = "~/repos"
 ```
 
 When `codebase_dir` is set:
@@ -325,8 +328,8 @@ If the clone/fetch fails (e.g., network error), the agent warns and falls back t
 
 Skip large PRs to avoid expensive reviews:
 
-```yaml
-max_diff_size_kb: 200 # default: 100
+```toml
+max_diff_size_kb = 200 # default: 100
 ```
 
 ### Multiple Environments
@@ -387,7 +390,7 @@ The CLI polls the platform every 10 seconds. If no tasks appear:
 
 - Check your internet connection
 - Verify `platform_url` is correct in your config
-- Ensure a `.review.yml` exists in the target repo
+- Ensure a `.review.toml` exists in the target repo
 - Check that the GitHub App is installed on the repo
 
 ### "No command configured" error
@@ -405,8 +408,8 @@ which qwen      # Should return a path
 
 The PR diff exceeds `max_diff_size_kb` (default 100KB). Increase it in your config:
 
-```yaml
-max_diff_size_kb: 500
+```toml
+max_diff_size_kb = 500
 ```
 
 ## FAQ

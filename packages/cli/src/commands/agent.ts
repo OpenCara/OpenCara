@@ -1053,7 +1053,7 @@ export async function startAgent(
   }
 
   if (!reviewDeps) {
-    logError(`${icons.error} No review command configured. Set command in config.yml`);
+    logError(`${icons.error} No review command configured. Set command in config.toml`);
     return;
   }
 
@@ -1282,7 +1282,7 @@ agentCommand
   .command('start')
   .description('Start agents in polling mode')
   .option('--poll-interval <seconds>', 'Poll interval in seconds', '10')
-  .option('--agent <index>', 'Agent index from config.yml (0-based)', '0')
+  .option('--agent <index>', 'Agent index from config.toml (0-based)', '0')
   .option('--all', 'Start all configured agents concurrently')
   .option(
     '--version-override <value>',
@@ -1320,7 +1320,7 @@ agentCommand
       if (opts.all) {
         // Start all agents concurrently
         if (!config.agents || config.agents.length === 0) {
-          console.error('No agents configured in ~/.opencara/config.yml');
+          console.error('No agents configured in ~/.opencara/config.toml');
           process.exit(1);
           return;
         }
@@ -1369,7 +1369,7 @@ agentCommand
           console.error(
             maxIndex >= 0
               ? `--agent must be an integer between 0 and ${maxIndex}.`
-              : 'No agents configured in ~/.opencara/config.yml',
+              : 'No agents configured in ~/.opencara/config.toml',
           );
           process.exit(1);
           return;

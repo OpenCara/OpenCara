@@ -148,7 +148,7 @@ describe('Agent CLI tests', () => {
       await promise;
 
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('No review command configured. Set command in config.yml'),
+        expect.stringContaining('No review command configured. Set command in config.toml'),
       );
     });
   });
@@ -243,7 +243,7 @@ describe('Agent CLI tests', () => {
 
       await startCmd!.parseAsync(['--all'], { from: 'user' });
 
-      expect(console.error).toHaveBeenCalledWith('No agents configured in ~/.opencara/config.yml');
+      expect(console.error).toHaveBeenCalledWith('No agents configured in ~/.opencara/config.toml');
       expect(exitSpy).toHaveBeenCalledWith(1);
       exitSpy.mockRestore();
     });
@@ -435,7 +435,7 @@ describe('Agent CLI tests', () => {
 
       await startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
 
-      expect(console.error).toHaveBeenCalledWith('No agents configured in ~/.opencara/config.yml');
+      expect(console.error).toHaveBeenCalledWith('No agents configured in ~/.opencara/config.toml');
       exitSpy.mockRestore();
     });
   });

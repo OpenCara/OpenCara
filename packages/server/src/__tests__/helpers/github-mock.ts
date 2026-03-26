@@ -30,7 +30,7 @@ export interface GitHubMock {
  *
  * Handles:
  * - Installation access tokens
- * - .review.yml fetch (returns 404 → defaults)
+ * - .review.toml fetch (returns 404 → defaults)
  * - PR comment posting
  * - PR details fetching
  */
@@ -62,8 +62,8 @@ export function createGitHubMock(): GitHubMock {
         return new Response(JSON.stringify({ token: 'ghs_mock_token' }), { status: 200 });
       }
 
-      // Fetch .review.yml — return 404 (use defaults)
-      if (url.includes('/contents/.review.yml')) {
+      // Fetch .review.toml — return 404 (use defaults)
+      if (url.includes('/contents/.review.toml')) {
         return new Response('Not Found', { status: 404 });
       }
 

@@ -29,7 +29,7 @@ CLI application:
 - Summary execution (synthesize multiple reviews)
 - Consumption tracking and limit enforcement (local)
 - Diff fetching directly from GitHub
-- Local configuration management (`~/.opencara/config.yml`)
+- Local configuration management (`~/.opencara/config.toml`)
 
 ## Guidelines
 
@@ -44,4 +44,4 @@ CLI application:
 
 - CLI source: `packages/cli/`
 - Shared types: `packages/shared/`
-- Local config: `~/.opencara/config.yml`
+- Local config: `~/.opencara/config.toml`

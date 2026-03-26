@@ -124,7 +124,7 @@ pnpm opencara agent --help
 
 ## S08: Review Config Parsing (Shared)
 
-**Tests**: `.review.yml` parser handles all scenarios.
+**Tests**: `.review.toml` parser handles all scenarios.
 
 **Steps**:
 
@@ -349,7 +349,7 @@ pnpm opencara agent --help
    - `RefreshTokenRequest`, `RefreshTokenResponse` exported
    - `AUTH_REQUIRED`, `AUTH_TOKEN_EXPIRED`, `AUTH_TOKEN_REVOKED` in `ErrorCode` union
    - `github_username` field absent from `PollRequest` and `ClaimRequest` types
-   - `allow_anonymous` in `.review.yml` produces deprecation warning, not parse error
+   - `allow_anonymous` in `.review.toml` produces deprecation warning, not parse error
 3. Verify type-safety across packages: `pnpm run typecheck`
 
 **Expected**: All new types exported. Removed fields cause no compile errors. Deprecation handled gracefully.

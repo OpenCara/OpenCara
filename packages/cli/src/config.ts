@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { parse, stringify } from 'yaml';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { DEFAULT_REGISTRY } from '@opencara/shared';
 import type { RepoConfig, RepoFilterMode } from '@opencara/shared';
 
@@ -41,7 +41,7 @@ export const CONFIG_DIR = path.join(os.homedir(), '.opencara');
 export const CONFIG_FILE =
   process.env.OPENCARA_CONFIG && process.env.OPENCARA_CONFIG.trim()
     ? path.resolve(process.env.OPENCARA_CONFIG)
-    : path.join(CONFIG_DIR, 'config.yml');
+    : path.join(CONFIG_DIR, 'config.toml');
 
 export function ensureConfigDir(): void {
   const dir = path.dirname(CONFIG_FILE);
@@ -284,7 +284,12 @@ export function loadConfig(): CliConfig {
   }
 
   const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
-  const data = parse(raw) as Record<string, unknown> | null;
+  let data: Record<string, unknown>;
+  try {
+    data = parseToml(raw) as Record<string, unknown>;
+  } catch {
+    return defaults;
+  }
 
   if (!data || typeof data !== 'object') {
     return defaults;
@@ -362,7 +367,7 @@ export function saveConfig(config: CliConfig): void {
   if (config.usageLimits?.maxTokensPerReview != null) {
     data.max_tokens_per_review = config.usageLimits.maxTokensPerReview;
   }
-  fs.writeFileSync(CONFIG_FILE, stringify(data), { encoding: 'utf-8', mode: 0o600 });
+  fs.writeFileSync(CONFIG_FILE, stringifyToml(data), { encoding: 'utf-8', mode: 0o600 });
 }
 
 /**

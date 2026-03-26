@@ -35,8 +35,8 @@ describe('config', () => {
     expect(CONFIG_DIR).toContain('.opencara');
   });
 
-  it('CONFIG_FILE points to config.yml', () => {
-    expect(CONFIG_FILE).toContain('config.yml');
+  it('CONFIG_FILE points to config.toml', () => {
+    expect(CONFIG_FILE).toContain('config.toml');
   });
 
   it('DEFAULT_PLATFORM_URL is correct', () => {
@@ -65,7 +65,7 @@ describe('config', () => {
 
     it('parses valid config file', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://custom.dev\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://custom.dev"\n');
 
       const config = loadConfig();
 
@@ -74,7 +74,7 @@ describe('config', () => {
 
     it('parses max_diff_size_kb config field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: 200\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb = 200\n');
 
       const config = loadConfig();
 
@@ -83,7 +83,7 @@ describe('config', () => {
 
     it('parses max_consecutive_errors config field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: 5\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors = 5\n');
 
       const config = loadConfig();
 
@@ -92,7 +92,7 @@ describe('config', () => {
 
     it('returns default for non-number max_consecutive_errors', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: many\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors = "many"\n');
 
       const config = loadConfig();
       expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
@@ -100,7 +100,7 @@ describe('config', () => {
 
     it('returns defaults for non-number max_diff_size_kb', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: big\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb = "big"\n');
 
       const config = loadConfig();
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
@@ -109,7 +109,7 @@ describe('config', () => {
     it('silently ignores old anthropic_api_key and review_model fields, but parses api_key', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'anthropic_api_key: sk-ant-test\nreview_model: claude-opus-4-6\napi_key: cr_test\n',
+        'anthropic_api_key = "sk-ant-test"\nreview_model = "claude-opus-4-6"\napi_key = "cr_test"\n',
       );
 
       const config = loadConfig();
@@ -141,7 +141,7 @@ describe('config', () => {
 
     it('handles config with missing fields', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('some_other: value\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('some_other = "value"\n');
 
       const config = loadConfig();
 
@@ -150,7 +150,7 @@ describe('config', () => {
 
     it('handles config with non-string platform_url', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('platform_url: 123\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('platform_url = 123\n');
 
       const config = loadConfig();
 
@@ -159,7 +159,7 @@ describe('config', () => {
 
     it('parses agent_command config field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('agent_command: "ollama run codestral"\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('agent_command = "ollama run codestral"\n');
 
       const config = loadConfig();
 
@@ -168,7 +168,7 @@ describe('config', () => {
 
     it('returns null agentCommand for non-string values', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('agent_command: 123\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('agent_command = 123\n');
 
       const config = loadConfig();
 
@@ -177,7 +177,7 @@ describe('config', () => {
 
     it('returns null agentCommand when not present', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\n');
 
       const config = loadConfig();
 
@@ -194,7 +194,7 @@ describe('config', () => {
       it('env var overrides config file value', () => {
         process.env[ENV_KEY] = 'https://env-override.dev';
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://from-config.dev"\n');
 
         const config = loadConfig();
 
@@ -212,7 +212,7 @@ describe('config', () => {
 
       it('config file value used when env var is not set', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://from-config.dev"\n');
 
         const config = loadConfig();
 
@@ -230,7 +230,7 @@ describe('config', () => {
       it('empty env var falls back to config file', () => {
         process.env[ENV_KEY] = '';
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://from-config.dev"\n');
 
         const config = loadConfig();
 
@@ -240,7 +240,7 @@ describe('config', () => {
       it('whitespace-only env var falls back to config file', () => {
         process.env[ENV_KEY] = '   ';
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://from-config.dev\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://from-config.dev"\n');
 
         const config = loadConfig();
 
@@ -267,7 +267,7 @@ describe('config', () => {
       expect(fs.mkdirSync).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true });
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         CONFIG_FILE,
-        expect.stringContaining('platform_url: https://api.dev'),
+        expect.stringContaining('platform_url = "https://api.dev"'),
         { encoding: 'utf-8', mode: 0o600 },
       );
     });
@@ -285,14 +285,14 @@ describe('config', () => {
       saveConfig({ ...baseConfig, apiKey: 'cr_my_key' });
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('api_key: cr_my_key');
+      expect(content).toContain('api_key = "cr_my_key"');
     });
 
     it('saves max_diff_size_kb when non-default', () => {
       saveConfig({ ...baseConfig, maxDiffSizeKb: 200 });
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('max_diff_size_kb: 200');
+      expect(content).toContain('max_diff_size_kb = 200');
     });
 
     it('does not save max_diff_size_kb when default', () => {
@@ -306,7 +306,7 @@ describe('config', () => {
       saveConfig({ ...baseConfig, maxConsecutiveErrors: 5 });
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('max_consecutive_errors: 5');
+      expect(content).toContain('max_consecutive_errors = 5');
     });
 
     it('does not save max_consecutive_errors when default', () => {
@@ -320,7 +320,7 @@ describe('config', () => {
       saveConfig({ ...baseConfig, agentCommand: 'ollama run codestral' });
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('agent_command: ollama run codestral');
+      expect(content).toContain('agent_command = "ollama run codestral"');
     });
 
     it('does not save agent_command when null', () => {
@@ -334,7 +334,7 @@ describe('config', () => {
   describe('agents parsing', () => {
     it('returns null when agents key is absent', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\n');
 
       const config = loadConfig();
       expect(config.agents).toBeNull();
@@ -342,7 +342,7 @@ describe('config', () => {
 
     it('returns empty array when agents key is present but empty', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\nagents: []\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\nagents = []\n');
 
       const config = loadConfig();
       expect(config.agents).toEqual([]);
@@ -351,7 +351,7 @@ describe('config', () => {
     it('parses agents with model, tool, and command', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key: cr_test\nagents:\n  - model: claude-opus-4-6\n    tool: claude\n    command: claude -p\n',
+        'api_key = "cr_test"\n[[agents]]\nmodel = "claude-opus-4-6"\ntool = "claude"\ncommand = "claude -p"\n',
       );
 
       const config = loadConfig();
@@ -363,7 +363,7 @@ describe('config', () => {
     it('parses agents without command field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key: cr_test\nagents:\n  - model: glm-5\n    tool: qwen\n',
+        'api_key = "cr_test"\n[[agents]]\nmodel = "glm-5"\ntool = "qwen"\n',
       );
 
       const config = loadConfig();
@@ -373,7 +373,7 @@ describe('config', () => {
     it('parses agents with thinking field as string', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: "10000"\n',
+        '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nthinking = "10000"\n',
       );
 
       const config = loadConfig();
@@ -385,7 +385,7 @@ describe('config', () => {
     it('parses agents with thinking field as number (converts to string)', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: 10000\n',
+        '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nthinking = 10000\n',
       );
 
       const config = loadConfig();
@@ -397,7 +397,7 @@ describe('config', () => {
     it('parses agents with named thinking level', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: high\n',
+        '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nthinking = "high"\n',
       );
 
       const config = loadConfig();
@@ -410,7 +410,7 @@ describe('config', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'agents:\n  - model: claude-sonnet-4-6\n    tool: claude\n    thinking: true\n',
+        '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nthinking = true\n',
       );
 
       const config = loadConfig();
@@ -423,7 +423,7 @@ describe('config', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'agents:\n  - model: valid\n    tool: claude\n  - broken: true\n',
+        '[[agents]]\nmodel = "valid"\ntool = "claude"\n[[agents]]\nbroken = true\n',
       );
 
       const config = loadConfig();
@@ -466,12 +466,13 @@ describe('config', () => {
     it('parses name from agent entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - name: SecurityBot
-    model: claude-sonnet-4-6
-    tool: claude
-  - model: glm-5
-    tool: qwen
+[[agents]]
+name = "SecurityBot"
+model = "claude-sonnet-4-6"
+tool = "claude"
+[[agents]]
+model = "glm-5"
+tool = "qwen"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -490,7 +491,7 @@ agents:
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(written).toContain('name: MyBot');
+      expect(written).toContain('name = "MyBot"');
     });
   });
 
@@ -498,12 +499,13 @@ agents:
     it('parses review_only: true from agent entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: gpt-5-codex
-    tool: codex
-    review_only: true
-  - model: claude-sonnet-4-6
-    tool: claude
+[[agents]]
+model = "gpt-5-codex"
+tool = "codex"
+review_only = true
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -514,10 +516,10 @@ agents:
     it('ignores review_only: false', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    review_only: false
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+review_only = false
 `);
       const config = loadConfig();
       expect(config.agents![0].review_only).toBeUndefined();
@@ -528,12 +530,13 @@ agents:
     it('parses router: true from agent entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    router: true
-  - model: glm-5
-    tool: qwen
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+router = true
+[[agents]]
+model = "glm-5"
+tool = "qwen"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -544,10 +547,10 @@ agents:
     it('ignores router: false', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    router: false
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+router = false
 `);
       const config = loadConfig();
       expect(config.agents![0].router).toBeUndefined();
@@ -558,9 +561,9 @@ agents:
     it('defaults to undefined repos when omitted', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toBeUndefined();
@@ -569,11 +572,11 @@ agents:
     it('parses repos with mode: all', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: all
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "all"
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'all' });
@@ -582,11 +585,11 @@ agents:
     it('parses repos with mode: own', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: own
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "own"
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'own' });
@@ -595,14 +598,12 @@ agents:
     it('parses repos with mode: whitelist and list', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: whitelist
-      list:
-        - OpenCara/OpenCara
-        - myorg/my-project
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "whitelist"
+list = ["OpenCara/OpenCara", "myorg/my-project"]
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({
@@ -614,13 +615,12 @@ agents:
     it('parses repos with mode: blacklist and list', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: blacklist
-      list:
-        - spam-org/spam-repo
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "blacklist"
+list = ["spam-org/spam-repo"]
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({
@@ -632,11 +632,11 @@ agents:
     it('throws RepoConfigError for invalid mode', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: invalid
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "invalid"
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow('must be one of: all, own, whitelist, blacklist');
@@ -645,12 +645,11 @@ agents:
     it('throws RepoConfigError when mode is missing', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      list:
-        - foo/bar
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+list = ["foo/bar"]
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow('mode is required');
@@ -659,10 +658,10 @@ agents:
     it('throws RepoConfigError when repos is not an object', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos: just-a-string
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+repos = "just-a-string"
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow('must be an object');
@@ -671,11 +670,11 @@ agents:
     it('throws RepoConfigError when whitelist has no list', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: whitelist
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "whitelist"
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow('list is required and must be non-empty');
@@ -684,12 +683,12 @@ agents:
     it('throws RepoConfigError when blacklist has empty list', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: blacklist
-      list: []
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "blacklist"
+list = []
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow('list is required and must be non-empty');
@@ -698,13 +697,12 @@ agents:
     it('throws RepoConfigError for invalid owner/repo format', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: whitelist
-      list:
-        - invalid-format
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "whitelist"
+list = ["invalid-no-slash"]
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow("must match 'owner/repo' format");
@@ -713,13 +711,12 @@ agents:
     it('throws RepoConfigError for list entry with multiple slashes', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: whitelist
-      list:
-        - org/repo/extra
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "whitelist"
+list = ["a/b/c"]
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow("must match 'owner/repo' format");
@@ -728,11 +725,11 @@ agents:
     it('does not require list for mode: all', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: all
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "all"
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'all' });
@@ -742,11 +739,11 @@ agents:
     it('does not require list for mode: own', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: own
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "own"
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'own' });
@@ -779,7 +776,7 @@ agents:
   describe('deprecated config fields', () => {
     it('logs deprecation warning for github_token', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('github_token: ghp_abc123\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('github_token = "ghp_abc123"\n');
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       loadConfig();
@@ -790,7 +787,7 @@ agents:
 
     it('logs deprecation warning for github_username', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('github_username: octocat\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('github_username = "octocat"\n');
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       loadConfig();
@@ -804,10 +801,10 @@ agents:
     it('logs deprecation warning for per-agent github_token', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    github_token: ghp_agent1
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+github_token = "ghp_agent1"
 `);
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -841,11 +838,11 @@ agents:
     it('does not include anonymousAgents in config', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-anonymous_agents:
-  - agent_id: "a1b2c3d4"
-    api_key: "cr_abc123"
-    model: "claude-sonnet-4-6"
-    tool: "claude"
+[[anonymous_agents]]
+agent_id = "a1b2c3d4"
+api_key = "cr_abc123"
+model = "claude-sonnet-4-6"
+tool = "claude"
 `);
       const config = loadConfig();
       expect(config).not.toHaveProperty('anonymousAgents');
@@ -855,7 +852,7 @@ anonymous_agents:
   describe('codebase_dir config', () => {
     it('parses global codebase_dir', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('codebase_dir: ~/.opencara/repos\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('codebase_dir = "~/.opencara/repos"\n');
 
       const config = loadConfig();
       expect(config.codebaseDir).toBe('~/.opencara/repos');
@@ -863,7 +860,7 @@ anonymous_agents:
 
     it('returns null for non-string codebase_dir', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('codebase_dir: 123\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('codebase_dir = 123\n');
 
       const config = loadConfig();
       expect(config.codebaseDir).toBeNull();
@@ -871,7 +868,7 @@ anonymous_agents:
 
     it('returns null when codebase_dir is absent', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key: cr_test\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\n');
 
       const config = loadConfig();
       expect(config.codebaseDir).toBeNull();
@@ -888,7 +885,7 @@ anonymous_agents:
       });
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('codebase_dir: ~/.opencara/repos');
+      expect(content).toContain('codebase_dir = "~/.opencara/repos"');
     });
 
     it('saveConfig omits codebase_dir when null', () => {
@@ -908,12 +905,13 @@ anonymous_agents:
     it('parses per-agent codebase_dir', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    codebase_dir: ~/repos
-  - model: glm-5
-    tool: qwen
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+codebase_dir = "~/repos"
+[[agents]]
+model = "glm-5"
+tool = "qwen"
 `);
       const config = loadConfig();
       expect(config.agents![0].codebase_dir).toBe('~/repos');
@@ -961,7 +959,7 @@ agents:
     describe('platform_url validation', () => {
       it('throws ConfigValidationError for invalid URL', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: not-a-url\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "not-a-url"\n');
 
         expect(() => loadConfig()).toThrow(ConfigValidationError);
         expect(() => loadConfig()).toThrow('platform_url "not-a-url" is not a valid URL');
@@ -969,7 +967,7 @@ agents:
 
       it('accepts valid URL', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: https://example.com\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://example.com"\n');
 
         const config = loadConfig();
         expect(config.platformUrl).toBe('https://example.com');
@@ -978,7 +976,7 @@ agents:
       it('skips URL validation when env var overrides', () => {
         process.env.OPENCARA_PLATFORM_URL = 'https://env.dev';
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: not-a-url\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "not-a-url"\n');
 
         const config = loadConfig();
         expect(config.platformUrl).toBe('https://env.dev');
@@ -987,7 +985,7 @@ agents:
 
       it('does not throw for non-string platform_url (falls back to default)', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: 123\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = 123\n');
 
         const config = loadConfig();
         expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
@@ -995,7 +993,7 @@ agents:
 
       it('rejects non-HTTP URL schemes', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: file:///etc/passwd\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "file:///etc/passwd"\n');
 
         expect(() => loadConfig()).toThrow(ConfigValidationError);
         expect(() => loadConfig()).toThrow('is not a valid URL');
@@ -1003,7 +1001,7 @@ agents:
 
       it('accepts http URL', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('platform_url: http://localhost:8787\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "http://localhost:8787"\n');
 
         const config = loadConfig();
         expect(config.platformUrl).toBe('http://localhost:8787');
@@ -1014,7 +1012,7 @@ agents:
       it('warns and uses default for max_diff_size_kb <= 0', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: -5\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb = -5\n');
 
         const config = loadConfig();
         expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
@@ -1027,7 +1025,7 @@ agents:
       it('warns and uses default for max_diff_size_kb = 0', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: 0\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb = 0\n');
 
         const config = loadConfig();
         expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
@@ -1039,7 +1037,7 @@ agents:
 
       it('accepts positive max_diff_size_kb', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb: 200\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('max_diff_size_kb = 200\n');
 
         const config = loadConfig();
         expect(config.maxDiffSizeKb).toBe(200);
@@ -1048,7 +1046,7 @@ agents:
       it('warns and uses default for max_consecutive_errors <= 0', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: -1\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors = -1\n');
 
         const config = loadConfig();
         expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
@@ -1061,7 +1059,7 @@ agents:
       it('warns and uses default for max_consecutive_errors = 0', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: 0\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors = 0\n');
 
         const config = loadConfig();
         expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
@@ -1073,7 +1071,7 @@ agents:
 
       it('accepts positive max_consecutive_errors', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors: 5\n');
+        vi.mocked(fs.readFileSync).mockReturnValue('max_consecutive_errors = 5\n');
 
         const config = loadConfig();
         expect(config.maxConsecutiveErrors).toBe(5);
@@ -1085,11 +1083,12 @@ agents:
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: some-model
-    tool: invalid-tool
-  - model: claude-opus-4-6
-    tool: claude
+[[agents]]
+model = "some-model"
+tool = "invalid-tool"
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
 `);
 
         const config = loadConfig();
@@ -1104,15 +1103,18 @@ agents:
       it('accepts all valid registry tools', () => {
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-  - model: gpt-5-codex
-    tool: codex
-  - model: gemini-2.5-pro
-    tool: gemini
-  - model: qwen3.5-plus
-    tool: qwen
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[[agents]]
+model = "gpt-5-codex"
+tool = "codex"
+[[agents]]
+model = "gemini-2.5-pro"
+tool = "gemini"
+[[agents]]
+model = "qwen3.5-plus"
+tool = "qwen"
 `);
 
         const config = loadConfig();
@@ -1123,9 +1125,9 @@ agents:
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude-code
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude-code"
 `);
 
         const config = loadConfig();
@@ -1141,9 +1143,9 @@ agents:
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: m
-    tool: unknown
+[[agents]]
+model = "m"
+tool = "unknown"
 `);
 
         loadConfig();
@@ -1157,18 +1159,18 @@ agents:
     });
 
     describe('agent entry validation', () => {
-      it('warns with correct format for non-object agent entry', () => {
+      it('warns with correct format for agent entry missing model/tool', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - just a string
+[[agents]]
+broken = true
 `);
 
         const config = loadConfig();
         expect(config.agents).toEqual([]);
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Config warning: agents[0] is not an object'),
+          expect.stringContaining('Config warning: agents[0] missing required model/tool fields'),
         );
         warnSpy.mockRestore();
       });
@@ -1177,8 +1179,8 @@ agents:
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.mocked(fs.existsSync).mockReturnValue(true);
         vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - name: incomplete
+[[agents]]
+name = "incomplete"
 `);
 
         const config = loadConfig();
@@ -1195,12 +1197,13 @@ agents:
     it('parses synthesizer_only: true from agent entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    synthesizer_only: true
-  - model: glm-5
-    tool: qwen
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+synthesizer_only = true
+[[agents]]
+model = "glm-5"
+tool = "qwen"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -1211,10 +1214,10 @@ agents:
     it('ignores synthesizer_only: false', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    synthesizer_only: false
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+synthesizer_only = false
 `);
       const config = loadConfig();
       expect(config.agents![0].synthesizer_only).toBeUndefined();
@@ -1223,11 +1226,11 @@ agents:
     it('throws ConfigValidationError when both review_only and synthesizer_only are true', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    review_only: true
-    synthesizer_only: true
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+review_only = true
+synthesizer_only = true
 `);
       expect(() => loadConfig()).toThrow(ConfigValidationError);
       expect(() => loadConfig()).toThrow('review_only and synthesizer_only cannot both be true');
@@ -1236,10 +1239,10 @@ agents:
     it('allows review_only: true without synthesizer_only', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    review_only: true
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+review_only = true
 `);
       const config = loadConfig();
       expect(config.agents![0].review_only).toBe(true);
@@ -1249,10 +1252,10 @@ agents:
     it('allows synthesizer_only: true without review_only', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    synthesizer_only: true
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+synthesizer_only = true
 `);
       const config = loadConfig();
       expect(config.agents![0].synthesizer_only).toBe(true);
@@ -1264,13 +1267,12 @@ agents:
     it('parses synthesize_repos with mode: whitelist', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    synthesize_repos:
-      mode: whitelist
-      list:
-        - OpenCara/OpenCara
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.synthesize_repos]
+mode = "whitelist"
+list = ["OpenCara/OpenCara"]
 `);
       const config = loadConfig();
       expect(config.agents![0].synthesize_repos).toEqual({
@@ -1282,9 +1284,9 @@ agents:
     it('defaults to undefined synthesize_repos when omitted', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
 `);
       const config = loadConfig();
       expect(config.agents![0].synthesize_repos).toBeUndefined();
@@ -1293,11 +1295,11 @@ agents:
     it('throws RepoConfigError for invalid synthesize_repos mode', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    synthesize_repos:
-      mode: invalid
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.synthesize_repos]
+mode = "invalid"
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
       expect(() => loadConfig()).toThrow('synthesize_repos.mode must be one of');
@@ -1306,15 +1308,14 @@ agents:
     it('allows both repos and synthesize_repos on same agent', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
-agents:
-  - model: claude-opus-4-6
-    tool: claude
-    repos:
-      mode: all
-    synthesize_repos:
-      mode: whitelist
-      list:
-        - org/repo
+[[agents]]
+model = "claude-opus-4-6"
+tool = "claude"
+[agents.repos]
+mode = "all"
+[agents.synthesize_repos]
+mode = "whitelist"
+list = ["org/repo"]
 `);
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'all' });

@@ -19,12 +19,13 @@ npm i -g opencara
 
 # 2. Create config
 mkdir -p ~/.opencara
-cat > ~/.opencara/config.yml << 'EOF'
-platform_url: https://opencara-server.opencara.workers.dev
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+cat > ~/.opencara/config.toml << 'EOF'
+platform_url = "https://opencara-server.opencara.workers.dev"
+
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 EOF
 
 # 3. Start
@@ -46,19 +47,20 @@ Each tool requires its own API key configured per its documentation.
 
 ## Configuration
 
-Edit `~/.opencara/config.yml`:
+Edit `~/.opencara/config.toml`:
 
-```yaml
-platform_url: https://opencara-server.opencara.workers.dev
+```toml
+platform_url = "https://opencara-server.opencara.workers.dev"
 
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 
-  - model: gemini-2.5-pro
-    tool: gemini
-    command: gemini -m gemini-2.5-pro
+[[agents]]
+model = "gemini-2.5-pro"
+tool = "gemini"
+command = "gemini -m gemini-2.5-pro"
 ```
 
 Review prompts are delivered via **stdin** to your command. The command reads stdin, processes it with the AI model, and writes the review to stdout.
@@ -101,17 +103,17 @@ Review prompts are delivered via **stdin** to your command. The command reads st
 
 | Option                      | Default | Description                              |
 | --------------------------- | ------- | ---------------------------------------- |
-| `--agent <index>`           | `0`     | Agent index from config.yml (0-based)    |
+| `--agent <index>`           | `0`     | Agent index from config.toml (0-based)   |
 | `--all`                     | --      | Start all configured agents concurrently |
 | `--poll-interval <seconds>` | `10`    | Poll interval in seconds                 |
 
 ## Environment Variables
 
-| Variable                | Description                                                        |
-| ----------------------- | ------------------------------------------------------------------ |
-| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.yml`) |
-| `OPENCARA_PLATFORM_URL` | Override the platform URL from config                              |
-| `GITHUB_TOKEN`          | GitHub token (fallback for private repo access)                    |
+| Variable                | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| `OPENCARA_CONFIG`       | Path to alternate config file (overrides `~/.opencara/config.toml`) |
+| `OPENCARA_PLATFORM_URL` | Override the platform URL from config                               |
+| `GITHUB_TOKEN`          | GitHub token (fallback for private repo access)                     |
 
 ## Private Repos
 
@@ -119,7 +121,7 @@ The CLI resolves GitHub tokens using a fallback chain:
 
 1. `GITHUB_TOKEN` environment variable
 2. `gh auth token` (if GitHub CLI is installed)
-3. `github_token` in config.yml (global or per-agent)
+3. `github_token` in config.toml (global or per-agent)
 
 ## License
 

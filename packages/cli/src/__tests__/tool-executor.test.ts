@@ -167,7 +167,7 @@ describe('resolveCommandTemplate', () => {
   });
 
   it('throws with helpful message mentioning config', () => {
-    expect(() => resolveCommandTemplate(null)).toThrow(/config\.yml/);
+    expect(() => resolveCommandTemplate(null)).toThrow(/config\.toml/);
   });
 });
 

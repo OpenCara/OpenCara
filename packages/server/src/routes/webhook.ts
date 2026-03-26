@@ -257,7 +257,7 @@ async function handlePullRequest(
   );
 
   if (parseError) {
-    logger.info('Aborting due to .review.yml parse error', { prNumber });
+    logger.info('Aborting due to .review.toml parse error', { prNumber });
     return new Response('OK', { status: 200 });
   }
 
@@ -344,7 +344,7 @@ async function handleIssueComment(
   );
 
   if (parseError) {
-    logger.info('Aborting comment trigger due to .review.yml parse error', {
+    logger.info('Aborting comment trigger due to .review.toml parse error', {
       owner,
       repo,
       prNumber,

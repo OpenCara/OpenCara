@@ -44,50 +44,57 @@ OpenCara is a distributed AI code review service. Maintainers install a GitHub A
 
 ## Project Configuration
 
-### `.review.yml` Format
+### `.review.toml` Format
 
-Each repository configures review standards via `.review.yml` in the repo root:
+Each repository configures review standards via `.review.toml` in the repo root:
 
-```yaml
-version: 1
+```toml
+version = 1
 
 # Review prompt — what agents should focus on
-prompt: |
-  Focus on code quality, security, and test coverage.
-  This project uses TypeScript + React, following ESLint standards.
+prompt = """
+Focus on code quality, security, and test coverage.
+This project uses TypeScript + React, following ESLint standards.
+"""
 
 # Agent requirements
-agents:
-  review_count: 3 # Total agents (reviewers + synthesizer)
-  preferred_models: [] # Preferred AI models (informational)
-  preferred_tools: [] # Preferred AI tools (informational)
+[agents]
+review_count = 3 # Total agents (reviewers + synthesizer)
+preferred_models = [] # Preferred AI models (informational)
+preferred_tools = [] # Preferred AI tools (informational)
 
 # Timeout
-timeout: 10m # Range: 1m-30m
+timeout = "10m" # Range: 1m-30m
 
 # Trigger control
-trigger:
-  on: [opened, synchronize] # PR events that trigger review
-  comment: '/opencara review' # Manual trigger command
-  skip: [draft] # Skip conditions: "draft", label names, branch names
+[trigger]
+on = ["opened", "synchronize"] # PR events that trigger review
+comment = "/opencara review" # Manual trigger command
+skip = ["draft"] # Skip conditions: "draft", label names, branch names
 
 # Reviewer access control (enforced server-side)
-reviewer:
-  whitelist:
-    - agent: agent-abc123 # Only these agents can review
-  blacklist:
-    - agent: agent-spammy999 # Block specific agents
-  allow_anonymous: true # Allow agents without accounts
+[reviewer]
+allow_anonymous = true # Allow agents without accounts
+
+[[reviewer.whitelist]]
+agent = "agent-abc123" # Only these agents can review
+
+[[reviewer.blacklist]]
+agent = "agent-spammy999" # Block specific agents
 
 # Summarizer (synthesizer) access control
-summarizer:
-  whitelist:
-    - agent: agent-abc123 # Only these agents can synthesize
-  blacklist:
-    - agent: agent-spammy999 # Block specific agents
-  preferred: # Ordered preference for synthesis role
-    - agent: agent-abc123 # First choice synthesizer
-    - agent: agent-def456 # Fallback if first is unavailable
+[[summarizer.whitelist]]
+agent = "agent-abc123" # Only these agents can synthesize
+
+[[summarizer.blacklist]]
+agent = "agent-spammy999" # Block specific agents
+
+# Ordered preference for synthesis role
+[[summarizer.preferred]]
+agent = "agent-abc123" # First choice synthesizer
+
+[[summarizer.preferred]]
+agent = "agent-def456" # Fallback if first is unavailable
 ```
 
 ### Configuration Defaults
@@ -110,7 +117,7 @@ summarizer:
 ### Setup
 
 1. `npm i -g opencara` — install the CLI
-2. Edit `~/.opencara/config.yml` — configure agents (model, tool, command)
+2. Edit `~/.opencara/config.toml` — configure agents (model, tool, command)
 3. `opencara agent start` — start a single agent, or `--all` for all configured agents
 
 ### How It Works
@@ -134,27 +141,27 @@ Contributors control costs locally:
 
 - Max diff size to skip oversized PRs
 
-### Local Configuration (`~/.opencara/config.yml`)
+### Local Configuration (`~/.opencara/config.toml`)
 
-```yaml
-platform_url: https://api.opencara.com
+```toml
+platform_url = "https://api.opencara.com"
 
 # GitHub token for private repo access (optional)
-# github_token: ghp_your_token_here
+# github_token = "ghp_your_token_here"
 
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude-code
-    name: My Claude Agent # Display name in CLI logs
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-    review_only: false # true = skip synthesis role
-    # github_token: ghp_per_agent_token                       # Per-agent token (overrides global)
-    repos:
-      mode: all # all | own | whitelist | blacklist
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+name = "My Claude Agent" # Display name in CLI logs
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
+review_only = false # true = skip synthesis role
+# github_token = "ghp_per_agent_token"  # Per-agent token (overrides global)
+[agents.repos]
+mode = "all" # all | own | whitelist | blacklist
 
-max_diff_size_kb: 200
+max_diff_size_kb = 200
 
-# agent_command: claude --model ${MODEL} --allowedTools '*' --print  # Default command template
+# agent_command = "claude --model ${MODEL} --allowedTools '*' --print"  # Default command template
 ```
 
 ## Future Considerations

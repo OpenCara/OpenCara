@@ -24,7 +24,7 @@
 ```
 GitHub (PR Webhook)
     ↓
-Hono server validates signature, reads .review.yml
+Hono server validates signature, reads .review.toml
     ↓
 Creates task in D1 (DataStore)
     ↓
@@ -165,7 +165,7 @@ pending ──→ reviewing ──→ completed
 
 ### Multi-Agent Flow
 
-For `review_count > 1` in `.review.yml`:
+For `review_count > 1` in `.review.toml`:
 
 1. `review_count - 1` agents claim as `review` role
 2. After all reviews complete, one agent claims as `summary` role
@@ -182,7 +182,7 @@ For `review_count = 1` (single agent):
 2. Agent reviews and submits
 3. Server posts review to GitHub
 
-## `.review.yml` Configuration
+## `.review.toml` Configuration
 
 Read from the repository's head branch on each PR webhook.
 
@@ -195,63 +195,66 @@ Read from the repository's head branch on each PR webhook.
 
 ### Full Schema
 
-```yaml
-version: 1 # Required
-prompt: | # Required — review instructions for agents
-  Review this PR for bugs and security issues.
+```toml
+version = 1 # Required
+prompt = """
+Review this PR for bugs and security issues.
+""" # Required — review instructions for agents
 
-agents:
-  review_count: 3 # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
-  preferred_models: [] # Preferred AI models (informational, not enforced)
-  preferred_tools: [] # Preferred AI tools (informational, not enforced)
+[agents]
+review_count = 3 # Total agents: (N-1) reviewers + 1 synthesizer (1-10, default: 1)
+preferred_models = [] # Preferred AI models (informational, not enforced)
+preferred_tools = [] # Preferred AI tools (informational, not enforced)
 
-timeout: 10m # Task timeout (1m-30m, default: 10m)
+timeout = "10m" # Task timeout (1m-30m, default: 10m)
 
-trigger:
-  on: [opened] # PR events that trigger review (default: [opened])
-  comment: '/opencara review' # Manual trigger comment (default: /opencara review)
-  skip: [draft] # Skip conditions: "draft", label names, branch names
+[trigger]
+on = ["opened"] # PR events that trigger review (default: ["opened"])
+comment = "/opencara review" # Manual trigger comment (default: /opencara review)
+skip = ["draft"] # Skip conditions: "draft", label names, branch names
 
 # Reviewer access control
-reviewer:
-  whitelist: # Only these agents/users can review (empty = all allowed)
-    - agent: agent-abc123
-    - user: alice
-  blacklist: # Block specific agents/users from reviewing
-    - agent: agent-spammy999
-  allow_anonymous: true # Allow agents without accounts (default: true)
+[reviewer]
+allow_anonymous = true # Allow agents without accounts (default: true)
+
+[[reviewer.whitelist]]
+agent = "agent-abc123"
+[[reviewer.whitelist]]
+user = "alice"
+
+[[reviewer.blacklist]]
+agent = "agent-spammy999"
 
 # Summarizer (synthesizer) access control
-summarizer:
-  whitelist: # Only these agents/users can synthesize
-    - agent: agent-abc123
-  blacklist: # Block specific agents/users from synthesizing
-    - agent: agent-xyz789
-  preferred: # Ordered preference for synthesis role
-    - agent: agent-abc123 # Gets summary slot immediately
-    - agent: agent-def456 # Fallback if first is unavailable
+[[summarizer.whitelist]]
+agent = "agent-abc123"
+
+[[summarizer.blacklist]]
+agent = "agent-xyz789"
+
+[[summarizer.preferred]]
+agent = "agent-abc123" # Gets summary slot immediately
+[[summarizer.preferred]]
+agent = "agent-def456" # Fallback if first is unavailable
 ```
 
 ### Defaults
 
-```yaml
-version: 1
-prompt: 'Review this pull request for bugs, security issues, and code quality.'
-agents:
-  review_count: 1
-timeout: '10m'
-trigger:
-  on: ['opened']
-  comment: '/opencara review'
-  skip: ['draft']
-reviewer:
-  whitelist: []
-  blacklist: []
-  allow_anonymous: true
-summarizer:
-  whitelist: []
-  blacklist: []
-  preferred: []
+```toml
+version = 1
+prompt = "Review this pull request for bugs, security issues, and code quality."
+timeout = "10m"
+
+[agents]
+review_count = 1
+
+[trigger]
+on = ["opened"]
+comment = "/opencara review"
+skip = ["draft"]
+
+[reviewer]
+allow_anonymous = true
 ```
 
 ## Error Responses
