@@ -280,6 +280,13 @@ export function loadConfig(): CliConfig {
   };
 
   if (!fs.existsSync(CONFIG_FILE)) {
+    // Backward compatibility: warn if old config.yml exists
+    const legacyFile = path.join(CONFIG_DIR, 'config.yml');
+    if (fs.existsSync(legacyFile)) {
+      console.warn(
+        '\u26a0 Found config.yml but config.toml expected. Run `opencara config migrate` or manually rename.',
+      );
+    }
     return defaults;
   }
 
