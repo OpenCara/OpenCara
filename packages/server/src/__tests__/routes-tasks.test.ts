@@ -211,7 +211,9 @@ describe('Task Routes', () => {
     });
 
     it('returns both review and summary when review_only is not set', async () => {
-      await store.createTask(makeTask({ id: 'task-review', review_count: 3, queue: 'review', task_type: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'task-review', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       await store.createTask(makeTask({ id: 'task-summary', review_count: 1, queue: 'summary' }));
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
@@ -289,7 +291,9 @@ describe('Task Routes', () => {
 
     it('filters tasks by roles — review only', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         roles: ['review'],
@@ -302,7 +306,9 @@ describe('Task Routes', () => {
 
     it('filters tasks by roles — summary only', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         roles: ['summary'],
@@ -315,7 +321,9 @@ describe('Task Routes', () => {
 
     it('returns both roles when roles includes both', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         roles: ['review', 'summary'],
@@ -326,7 +334,9 @@ describe('Task Routes', () => {
 
     it('returns all tasks when roles is omitted (backward compatible)', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
       expect(body.tasks).toHaveLength(2);
@@ -334,7 +344,9 @@ describe('Task Routes', () => {
 
     it('roles takes precedence over review_only', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       // roles says summary, review_only says true — roles wins
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
@@ -369,7 +381,8 @@ describe('Task Routes', () => {
         makeTask({
           id: 'review-task',
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           task_type: 'review',
           owner: 'org',
           repo: 'repo-x',
@@ -406,7 +419,9 @@ describe('Task Routes', () => {
           whitelist: [{ agent: 'agent-allowed' }],
         },
       };
-      await store.createTask(makeTask({ config, queue: 'review', review_count: 2, task_type: 'review' }));
+      await store.createTask(
+        makeTask({ config, queue: 'review', review_count: 2, task_type: 'review' }),
+      );
       // Non-whitelisted agent — not eligible
       const res1 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body1 = await res1.json();
@@ -790,8 +805,24 @@ describe('Task Routes', () => {
 
     it('creates summary task when last worker result is submitted', async () => {
       // Two worker tasks in the same group
-      await store.createTask(makeTask({ id: 'w1', review_count: 2, queue: 'review', task_type: 'review', group_id: 'grp-1' }));
-      await store.createTask(makeTask({ id: 'w2', review_count: 2, queue: 'review', task_type: 'review', group_id: 'grp-1' }));
+      await store.createTask(
+        makeTask({
+          id: 'w1',
+          review_count: 2,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-1',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'w2',
+          review_count: 2,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-1',
+        }),
+      );
 
       // Claim and submit both workers
       await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
@@ -817,7 +848,9 @@ describe('Task Routes', () => {
 
       // After second worker, summary task should exist
       const allTasks2 = await store.listTasks({});
-      const summaries2 = allTasks2.filter((t) => t.task_type === 'summary' && t.group_id === 'grp-1');
+      const summaries2 = allTasks2.filter(
+        (t) => t.task_type === 'summary' && t.group_id === 'grp-1',
+      );
       expect(summaries2).toHaveLength(1);
       expect(summaries2[0].status).toBe('pending');
     });
@@ -830,7 +863,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -883,7 +917,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -916,7 +951,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           task_type: 'review',
           status: 'reviewing',
         }),
@@ -967,7 +1003,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 0, // already 0 (edge case)
           status: 'reviewing',
         }),
@@ -996,7 +1033,8 @@ describe('Task Routes', () => {
         makeTask({
           id: 'task-1',
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           task_type: 'review',
           status: 'reviewing',
           group_id: 'grp-1',
@@ -1006,7 +1044,8 @@ describe('Task Routes', () => {
         makeTask({
           id: 'task-2',
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           task_type: 'review',
           status: 'reviewing',
           group_id: 'grp-1',
@@ -1056,7 +1095,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1109,7 +1149,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1161,7 +1202,8 @@ describe('Task Routes', () => {
         makeTask({
           id: 'task-1',
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           task_type: 'review',
           status: 'reviewing',
           group_id: 'grp-1',
@@ -1171,7 +1213,8 @@ describe('Task Routes', () => {
         makeTask({
           id: 'task-2',
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           task_type: 'review',
           status: 'reviewing',
           group_id: 'grp-1',
@@ -1281,7 +1324,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1313,7 +1357,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1387,7 +1432,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1407,7 +1453,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1428,7 +1475,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1448,7 +1496,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1495,7 +1544,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1555,7 +1605,8 @@ describe('Task Routes', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1649,8 +1700,24 @@ describe('Task Routes', () => {
   describe('multi-agent review flow', () => {
     it('review_count=3: 2 workers → summary becomes available after both complete', async () => {
       // Separate task model: 2 worker tasks in a group
-      await store.createTask(makeTask({ id: 'w1', review_count: 3, queue: 'review', task_type: 'review', group_id: 'grp-multi' }));
-      await store.createTask(makeTask({ id: 'w2', review_count: 3, queue: 'review', task_type: 'review', group_id: 'grp-multi' }));
+      await store.createTask(
+        makeTask({
+          id: 'w1',
+          review_count: 3,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-multi',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'w2',
+          review_count: 3,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-multi',
+        }),
+      );
 
       // Agent A polls → sees both worker tasks
       let res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-a' });
@@ -1659,11 +1726,17 @@ describe('Task Routes', () => {
       expect(body.tasks[0].role).toBe('review');
 
       // Agent A claims first worker
-      const claimRes = await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
+      const claimRes = await request('POST', '/api/tasks/w1/claim', {
+        agent_id: 'agent-a',
+        role: 'review',
+      });
       expect(claimRes.status).toBe(200);
 
       // Agent B claims second worker
-      const claimRes2 = await request('POST', '/api/tasks/w2/claim', { agent_id: 'agent-b', role: 'review' });
+      const claimRes2 = await request('POST', '/api/tasks/w2/claim', {
+        agent_id: 'agent-b',
+        role: 'review',
+      });
       expect(claimRes2.status).toBe(200);
 
       // Agent C polls → no pending tasks (both claimed)
@@ -1832,7 +1905,15 @@ describe('Task Routes', () => {
     describe('summary task creation tracks worker completion', () => {
       it('creates summary task when sole worker completes', async () => {
         // Single worker task in a group
-        await store.createTask(makeTask({ id: 'w1', review_count: 2, queue: 'review', task_type: 'review', group_id: 'grp-pref' }));
+        await store.createTask(
+          makeTask({
+            id: 'w1',
+            review_count: 2,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref',
+          }),
+        );
 
         // Claim and submit
         await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
@@ -1849,14 +1930,32 @@ describe('Task Routes', () => {
 
         // Summary task should have been created
         const allTasks = await store.listTasks({});
-        const summaries = allTasks.filter((t) => t.task_type === 'summary' && t.group_id === 'grp-pref');
+        const summaries = allTasks.filter(
+          (t) => t.task_type === 'summary' && t.group_id === 'grp-pref',
+        );
         expect(summaries).toHaveLength(1);
       });
 
       it('does not create summary before all workers are done', async () => {
         // Two worker tasks in a group
-        await store.createTask(makeTask({ id: 'w1', review_count: 3, queue: 'review', task_type: 'review', group_id: 'grp-pref2' }));
-        await store.createTask(makeTask({ id: 'w2', review_count: 3, queue: 'review', task_type: 'review', group_id: 'grp-pref2' }));
+        await store.createTask(
+          makeTask({
+            id: 'w1',
+            review_count: 3,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref2',
+          }),
+        );
+        await store.createTask(
+          makeTask({
+            id: 'w2',
+            review_count: 3,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref2',
+          }),
+        );
 
         // Complete only first worker
         await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
@@ -1869,7 +1968,9 @@ describe('Task Routes', () => {
 
         // No summary task yet
         const allTasks = await store.listTasks({});
-        const summaries = allTasks.filter((t) => t.task_type === 'summary' && t.group_id === 'grp-pref2');
+        const summaries = allTasks.filter(
+          (t) => t.task_type === 'summary' && t.group_id === 'grp-pref2',
+        );
         expect(summaries).toHaveLength(0);
       });
     });
@@ -1916,7 +2017,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now(),
           }),
@@ -1935,7 +2037,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig([], ['claude']),
             created_at: Date.now(),
           }),
@@ -1954,7 +2057,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now(),
           }),
@@ -1972,7 +2076,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -1991,7 +2096,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now(),
           }),
@@ -2010,7 +2116,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig([], []),
             created_at: Date.now(),
           }),
@@ -2033,7 +2140,8 @@ describe('Task Routes', () => {
           makeTask({
             id: 'task-a',
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['gemini-2.5-pro'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2044,7 +2152,8 @@ describe('Task Routes', () => {
           makeTask({
             id: 'task-b',
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2067,7 +2176,8 @@ describe('Task Routes', () => {
           makeTask({
             id: 'task-a',
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig([], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2078,7 +2188,8 @@ describe('Task Routes', () => {
           makeTask({
             id: 'task-b',
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2102,7 +2213,8 @@ describe('Task Routes', () => {
         await store.createTask(
           makeTask({
             review_count: 3,
-            queue: 'review', task_type: 'review',
+            queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], ['gemini']),
             created_at: Date.now(),
           }),

@@ -77,7 +77,9 @@ describe('E2E Scenarios', () => {
   /** Get all pending worker task IDs in a group. */
   async function getWorkerTaskIds(groupId: string): Promise<string[]> {
     const tasks = await store.getTasksByGroup(groupId);
-    return tasks.filter((t) => t.task_type !== 'summary' && t.status === 'pending').map((t) => t.id);
+    return tasks
+      .filter((t) => t.task_type !== 'summary' && t.status === 'pending')
+      .map((t) => t.id);
   }
 
   /** Create a MockAgent bound to the test app. */

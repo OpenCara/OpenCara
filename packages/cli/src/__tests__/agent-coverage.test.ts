@@ -199,7 +199,10 @@ describe('Agent Coverage Tests', () => {
           agent_id: `reviewer-${i + 1}`,
           role: 'review',
           status: 'completed',
-          review_text: i === 0 ? '## Summary\nLGTM\n\n## Verdict\nAPPROVE' : '## Summary\nSome issues found\n\n## Verdict\nCOMMENT',
+          review_text:
+            i === 0
+              ? '## Summary\nLGTM\n\n## Verdict\nAPPROVE'
+              : '## Summary\nSome issues found\n\n## Verdict\nCOMMENT',
           verdict: i === 0 ? 'approve' : 'comment',
           model: `model-${i + 1}`,
           tool: `tool-${i + 1}`,
@@ -845,7 +848,10 @@ describe('Agent Coverage Tests', () => {
           agent_id: `reviewer-${i + 1}`,
           role: 'review',
           status: 'completed',
-          review_text: i === 0 ? '## Summary\nLGTM\n\n## Verdict\nAPPROVE' : '## Summary\nIssues found\n\n## Verdict\nCOMMENT',
+          review_text:
+            i === 0
+              ? '## Summary\nLGTM\n\n## Verdict\nAPPROVE'
+              : '## Summary\nIssues found\n\n## Verdict\nCOMMENT',
           verdict: i === 0 ? 'approve' : 'comment',
           model: `model-${i + 1}`,
           tool: `tool-${i + 1}`,

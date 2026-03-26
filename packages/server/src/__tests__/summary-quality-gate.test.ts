@@ -62,9 +62,13 @@ describe('Summary Quality Gate', () => {
    * Each worker task is a separate task in the group — claim each individually.
    * Returns the review texts submitted and the summary task ID (auto-created).
    */
-  async function completeReviewPhase(groupId: string): Promise<{ reviewTexts: string[]; summaryTaskId: string }> {
+  async function completeReviewPhase(
+    groupId: string,
+  ): Promise<{ reviewTexts: string[]; summaryTaskId: string }> {
     const groupTasks = await store.getTasksByGroup(groupId);
-    const workerTasks = groupTasks.filter((t) => t.task_type !== 'summary' && t.status === 'pending');
+    const workerTasks = groupTasks.filter(
+      (t) => t.task_type !== 'summary' && t.status === 'pending',
+    );
     const reviewTexts: string[] = [];
 
     for (let i = 0; i < workerTasks.length; i++) {
@@ -212,7 +216,12 @@ describe('Summary Quality Gate', () => {
       const claimResult = await synth.claim(summaryTaskId, 'summary');
       expect(claimResult.claimed).toBe(true);
 
-      const result = await synth.submitResult(summaryTaskId, 'summary', 'No issues found.', 'approve');
+      const result = await synth.submitResult(
+        summaryTaskId,
+        'summary',
+        'No issues found.',
+        'approve',
+      );
       // Last retry triggers fallback and returns 200; earlier retries return 400
       const expectedStatus = i === MAX_SUMMARY_RETRIES - 1 ? 200 : 400;
       expect(result.status).toBe(expectedStatus);
@@ -246,7 +255,12 @@ describe('Summary Quality Gate', () => {
       'Replacing it with a JOIN would significantly improve performance. ' +
       'Overall, the code needs security and performance improvements before merging.';
 
-    const result = await synth.submitResult(summaryTaskId, 'summary', goodSummary, 'request_changes');
+    const result = await synth.submitResult(
+      summaryTaskId,
+      'summary',
+      goodSummary,
+      'request_changes',
+    );
     expect(result.status).toBe(200);
 
     // All tasks should be deleted (posted and cleaned up)

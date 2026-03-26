@@ -106,10 +106,7 @@ export function isCompletedReview(claim: TaskClaim): boolean {
  * Check if all worker tasks in a group are completed, meaning a summary
  * task should be created for synthesis.
  */
-export function shouldCreateSummaryTask(
-  completedCount: number,
-  workerTaskCount: number,
-): boolean {
+export function shouldCreateSummaryTask(completedCount: number, workerTaskCount: number): boolean {
   return workerTaskCount > 0 && completedCount >= workerTaskCount;
 }
 

@@ -142,69 +142,61 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('A. CLI agent poll → claim → submit lifecycle', () => {
-    it(
-      'CLI agent claims review task and submits result via server API',
-      async () => {
-        // reviewCount=3 → 2 worker tasks; agent claims first one
-        const taskId = await server.injectTask({ reviewCount: 3 });
+    it('CLI agent claims review task and submits result via server API', async () => {
+      // reviewCount=3 → 2 worker tasks; agent claims first one
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
-        // Use reviewOnly to prevent agent from claiming summary tasks (which
-        // would trigger the quality gate and eventually delete the entire group)
-        const agentPromise = startTestAgent('cli-review-agent', { reviewOnly: true });
-        await advanceTime(2000);
+      // Use reviewOnly to prevent agent from claiming summary tasks (which
+      // would trigger the quality gate and eventually delete the entire group)
+      const agentPromise = startTestAgent('cli-review-agent', { reviewOnly: true });
+      await advanceTime(2000);
 
-        // Verify claim was created on the first worker task
-        const claims = await server.getClaims(taskId);
-        expect(claims).toHaveLength(1);
-        expect(claims[0].agent_id).toBe('cli-review-agent');
-        expect(claims[0].role).toBe('review');
-        expect(claims[0].status).toBe('completed');
-        expect(claims[0].model).toBe('test-model');
-        expect(claims[0].tool).toBe('test-tool');
-        expect(claims[0].review_text).toBeDefined();
-        expect(claims[0].tokens_used).toBe(500);
+      // Verify claim was created on the first worker task
+      const claims = await server.getClaims(taskId);
+      expect(claims).toHaveLength(1);
+      expect(claims[0].agent_id).toBe('cli-review-agent');
+      expect(claims[0].role).toBe('review');
+      expect(claims[0].status).toBe('completed');
+      expect(claims[0].model).toBe('test-model');
+      expect(claims[0].tool).toBe('test-tool');
+      expect(claims[0].review_text).toBeDefined();
+      expect(claims[0].tokens_used).toBe(500);
 
-        // Tool was called
-        expect(mockedExecuteTool).toHaveBeenCalled();
+      // Tool was called
+      expect(mockedExecuteTool).toHaveBeenCalled();
 
-        // First task completed
-        const task = await server.getTask(taskId);
-        expect(task?.status).toBe('completed');
+      // First task completed
+      const task = await server.getTask(taskId);
+      expect(task?.status).toBe('completed');
 
-        await stopAgent(agentPromise, server);
-      },
-      15000,
-    );
+      await stopAgent(agentPromise, server);
+    }, 15000);
 
-    it(
-      'two CLI agents complete review slots sequentially',
-      async () => {
-        // Both agents independently process review tasks.
-        // Agent 1 processes tasks from first injection, agent 2 from second.
-        await server.injectTask({ reviewCount: 3 });
+    it('two CLI agents complete review slots sequentially', async () => {
+      // Both agents independently process review tasks.
+      // Agent 1 processes tasks from first injection, agent 2 from second.
+      await server.injectTask({ reviewCount: 3 });
 
-        const agent1Promise = startTestAgent('cli-r1', { reviewOnly: true });
-        await advanceTime(2000);
+      const agent1Promise = startTestAgent('cli-r1', { reviewOnly: true });
+      await advanceTime(2000);
 
-        const agent1Calls = mockedExecuteTool.mock.calls.length;
-        expect(agent1Calls).toBeGreaterThanOrEqual(1);
+      const agent1Calls = mockedExecuteTool.mock.calls.length;
+      expect(agent1Calls).toBeGreaterThanOrEqual(1);
 
-        await stopAgent(agent1Promise, server);
-        server.install();
+      await stopAgent(agent1Promise, server);
+      server.install();
 
-        // Inject fresh tasks for agent 2
-        await server.injectTask({ reviewCount: 3, prNumber: 2 });
+      // Inject fresh tasks for agent 2
+      await server.injectTask({ reviewCount: 3, prNumber: 2 });
 
-        const agent2Promise = startTestAgent('cli-r2', { reviewOnly: true });
-        await advanceTime(2000);
+      const agent2Promise = startTestAgent('cli-r2', { reviewOnly: true });
+      await advanceTime(2000);
 
-        // Agent 2 also completed at least one review
-        expect(mockedExecuteTool.mock.calls.length).toBeGreaterThanOrEqual(agent1Calls + 1);
+      // Agent 2 also completed at least one review
+      expect(mockedExecuteTool.mock.calls.length).toBeGreaterThanOrEqual(agent1Calls + 1);
 
-        await stopAgent(agent2Promise, server);
-      },
-      15000,
-    );
+      await stopAgent(agent2Promise, server);
+    }, 15000);
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -244,23 +236,19 @@ describe('CLI ↔ Server Integration', () => {
       await stopAgent(agentPromise, server);
     });
 
-    it(
-      'CLI agent with reviewOnly claims review tasks',
-      async () => {
-        const taskId = await server.injectTask({ reviewCount: 3 });
+    it('CLI agent with reviewOnly claims review tasks', async () => {
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
-        const agentPromise = startTestAgent('review-only-cli', { reviewOnly: true });
-        await advanceTime(2000);
+      const agentPromise = startTestAgent('review-only-cli', { reviewOnly: true });
+      await advanceTime(2000);
 
-        const claims = await server.getClaims(taskId);
-        expect(claims).toHaveLength(1);
-        expect(claims[0].role).toBe('review');
-        expect(claims[0].status).toBe('completed');
+      const claims = await server.getClaims(taskId);
+      expect(claims).toHaveLength(1);
+      expect(claims[0].role).toBe('review');
+      expect(claims[0].status).toBe('completed');
 
-        await stopAgent(agentPromise, server);
-      },
-      15000,
-    );
+      await stopAgent(agentPromise, server);
+    }, 15000);
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -281,25 +269,21 @@ describe('CLI ↔ Server Integration', () => {
       await stopAgent(agentPromise, server);
     });
 
-    it(
-      'CLI agent with matching whitelist claims the task',
-      async () => {
-        // reviewCount=3 → 2 separate worker tasks; agent claims first one
-        await server.injectTask({ reviewCount: 3 });
+    it('CLI agent with matching whitelist claims the task', async () => {
+      // reviewCount=3 → 2 separate worker tasks; agent claims first one
+      await server.injectTask({ reviewCount: 3 });
 
-        const agentPromise = startTestAgent('filtered-cli', {
-          repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
-          reviewOnly: true,
-        });
-        await advanceTime(2000);
+      const agentPromise = startTestAgent('filtered-cli', {
+        repoConfig: { mode: 'whitelist', list: ['test-org/test-repo'] },
+        reviewOnly: true,
+      });
+      await advanceTime(2000);
 
-        // Tool was called — agent claimed and reviewed a task
-        expect(mockedExecuteTool).toHaveBeenCalled();
+      // Tool was called — agent claimed and reviewed a task
+      expect(mockedExecuteTool).toHaveBeenCalled();
 
-        await stopAgent(agentPromise, server);
-      },
-      15000,
-    );
+      await stopAgent(agentPromise, server);
+    }, 15000);
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -307,27 +291,23 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('E. Tool execution failure → error reported to server', () => {
-    it(
-      'tool crash reports error to server, slot is freed',
-      async () => {
-        const taskId = await server.injectTask({ reviewCount: 2 });
-        mockedExecuteTool.mockRejectedValue(new Error('Tool SIGSEGV'));
+    it('tool crash reports error to server, slot is freed', async () => {
+      const taskId = await server.injectTask({ reviewCount: 2 });
+      mockedExecuteTool.mockRejectedValue(new Error('Tool SIGSEGV'));
 
-        const agentPromise = startTestAgent('crash-cli');
-        await advanceTime(3000);
+      const agentPromise = startTestAgent('crash-cli');
+      await advanceTime(3000);
 
-        expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error on task'));
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error on task'));
 
-        // Task should be back to pending (freed for re-claim)
-        const task = await server.getTask(taskId);
-        expect(task?.status).toBe('pending');
+      // Task should be back to pending (freed for re-claim)
+      const task = await server.getTask(taskId);
+      expect(task?.status).toBe('pending');
 
-        // Mark completed to stop loop
-        await server.store.updateTask(taskId, { status: 'completed' });
-        await stopAgent(agentPromise, server);
-      },
-      15000,
-    );
+      // Mark completed to stop loop
+      await server.store.updateTask(taskId, { status: 'completed' });
+      await stopAgent(agentPromise, server);
+    }, 15000);
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -415,32 +395,28 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('G. Private repo tasks via CLI', () => {
-    it(
-      'CLI agent with repo whitelist can see and claim private tasks',
-      async () => {
-        // reviewCount=3 → 2 worker tasks; agent claims first one
-        const taskId = await server.injectTask({
-          owner: 'corp',
-          repo: 'secret',
-          reviewCount: 3,
-          private: true,
-        });
+    it('CLI agent with repo whitelist can see and claim private tasks', async () => {
+      // reviewCount=3 → 2 worker tasks; agent claims first one
+      const taskId = await server.injectTask({
+        owner: 'corp',
+        repo: 'secret',
+        reviewCount: 3,
+        private: true,
+      });
 
-        const agentPromise = startTestAgent('private-cli-agent', {
-          repoConfig: { mode: 'whitelist', list: ['corp/secret'] },
-          reviewOnly: true,
-        });
-        await advanceTime(2000);
+      const agentPromise = startTestAgent('private-cli-agent', {
+        repoConfig: { mode: 'whitelist', list: ['corp/secret'] },
+        reviewOnly: true,
+      });
+      await advanceTime(2000);
 
-        const claims = await server.getClaims(taskId);
-        expect(claims).toHaveLength(1);
-        expect(claims[0].status).toBe('completed');
-        expect(claims[0].agent_id).toBe('private-cli-agent');
+      const claims = await server.getClaims(taskId);
+      expect(claims).toHaveLength(1);
+      expect(claims[0].status).toBe('completed');
+      expect(claims[0].agent_id).toBe('private-cli-agent');
 
-        await stopAgent(agentPromise, server);
-      },
-      15000,
-    );
+      await stopAgent(agentPromise, server);
+    }, 15000);
 
     it('CLI agent without repo whitelist cannot see private tasks', async () => {
       await server.injectTask({

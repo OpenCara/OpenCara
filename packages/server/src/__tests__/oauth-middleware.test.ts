@@ -765,7 +765,8 @@ describe('OAuth middleware integration', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -790,7 +791,8 @@ describe('OAuth middleware integration', () => {
       await store.createTask(
         makeTask({
           review_count: 3,
-          queue: 'review', task_type: 'review',
+          queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {

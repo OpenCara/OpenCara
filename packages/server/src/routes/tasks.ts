@@ -8,9 +8,6 @@ import type {
   ReviewVerdict,
   ReviewTask,
   TaskRole,
-  Feature,
-  DedupReport,
-  TriageReport,
 } from '@opencara/shared';
 import { isRepoAllowed, isEntityMatch } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
@@ -37,7 +34,6 @@ import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
   isTaskActive,
-  isTaskTerminal,
   isWorkerTask,
   isSummaryTask,
   isClaimPending,
@@ -403,7 +399,10 @@ async function handleTriageSummaryResult(
 
   if (triageReport) {
     // Determine mode: rewrite or comment
-    const triageConfig = task.config as unknown as { defaultMode?: string; authorModes?: Record<string, string> };
+    const triageConfig = task.config as unknown as {
+      defaultMode?: string;
+      authorModes?: Record<string, string>;
+    };
     let mode: 'comment' | 'rewrite' = 'comment';
     if (triageConfig.defaultMode === 'rewrite') mode = 'rewrite';
     if (task.issue_author && triageConfig.authorModes?.[task.issue_author]) {
@@ -518,10 +517,7 @@ interface PollCandidate {
 /**
  * Get completed worker reviews for a group (used for summary poll/claim responses).
  */
-async function getWorkerReviews(
-  store: DataStore,
-  groupId: string,
-): Promise<ClaimReview[]> {
+async function getWorkerReviews(store: DataStore, groupId: string): Promise<ClaimReview[]> {
   const groupTasks = await store.getTasksByGroup(groupId);
   const reviews: ClaimReview[] = [];
   for (const gt of groupTasks) {

@@ -15,8 +15,6 @@ import {
   type ReviewTask,
   type TaskRole,
   type Feature,
-  type DedupReport,
-  type TriageReport,
 } from '@opencara/shared';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
@@ -170,8 +168,12 @@ describe('Unified Pipeline (Issue #506)', () => {
     });
 
     it('does not return reviewing or completed tasks', async () => {
-      await store.createTask(makeWorkerTask('w1', 'g1', 'review', 'review', { status: 'reviewing' }));
-      await store.createTask(makeWorkerTask('w2', 'g2', 'review', 'review', { status: 'completed' }));
+      await store.createTask(
+        makeWorkerTask('w1', 'g1', 'review', 'review', { status: 'reviewing' }),
+      );
+      await store.createTask(
+        makeWorkerTask('w2', 'g2', 'review', 'review', { status: 'completed' }),
+      );
       await store.createTask(makeWorkerTask('w3', 'g3', 'review', 'review', { status: 'pending' }));
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
@@ -424,7 +426,9 @@ describe('Unified Pipeline (Issue #506)', () => {
       const postSpy = vi.spyOn(github, 'postPrComment');
 
       // Create completed worker + summary task
-      await store.createTask(makeWorkerTask('w1', groupId, 'review', 'review', { status: 'completed' }));
+      await store.createTask(
+        makeWorkerTask('w1', groupId, 'review', 'review', { status: 'completed' }),
+      );
       await store.createTask(makeSummaryTask('s1', groupId, 'review'));
 
       // Add worker claim with review text
@@ -434,7 +438,8 @@ describe('Unified Pipeline (Issue #506)', () => {
         agent_id: 'r1',
         role: 'review',
         status: 'completed',
-        review_text: 'Worker approved the implementation following best practices with quality standards for production deployment',
+        review_text:
+          'Worker approved the implementation following best practices with quality standards for production deployment',
         verdict: 'approve',
         created_at: Date.now(),
       });
@@ -503,12 +508,7 @@ describe('Unified Pipeline (Issue #506)', () => {
       );
 
       // Fetched index issue body
-      expect(fetchBodySpy).toHaveBeenCalledWith(
-        'test-org',
-        'test-repo',
-        10,
-        expect.any(String),
-      );
+      expect(fetchBodySpy).toHaveBeenCalledWith('test-org', 'test-repo', 10, expect.any(String));
 
       // Updated index issue
       expect(updateSpy).toHaveBeenCalledWith(
@@ -726,7 +726,9 @@ describe('Unified Pipeline (Issue #506)', () => {
     });
 
     it('accepts dedup_report in result', async () => {
-      await store.createTask(makeSummaryTask('s1', 'g1', 'dedup_pr', { dedup_target: 'pr', pr_number: 5 }));
+      await store.createTask(
+        makeSummaryTask('s1', 'g1', 'dedup_pr', { dedup_target: 'pr', pr_number: 5 }),
+      );
       await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'summary' });
 
       const res = await request('POST', '/api/tasks/s1/result', {
@@ -751,8 +753,7 @@ describe('Unified Pipeline (Issue #506)', () => {
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'agent-1',
         type: 'summary',
-        review_text:
-          'Triage analysis complete. Categorized issue as a bug with high priority.',
+        review_text: 'Triage analysis complete. Categorized issue as a bug with high priority.',
         triage_report: {
           category: 'bug',
           priority: 'high',
