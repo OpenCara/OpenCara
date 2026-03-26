@@ -1350,9 +1350,7 @@ review_only = true
       const config = loadConfig();
       expect(config.agents![0].roles).toEqual(['review', 'dedup']);
       expect(config.agents![0].review_only).toBe(true);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("'roles' takes precedence"),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("'roles' takes precedence"));
       warnSpy.mockRestore();
     });
 
@@ -1368,9 +1366,7 @@ synthesizer_only = true
 `);
       const config = loadConfig();
       expect(config.agents![0].roles).toEqual(['summary']);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("'roles' takes precedence"),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("'roles' takes precedence"));
       warnSpy.mockRestore();
     });
 
