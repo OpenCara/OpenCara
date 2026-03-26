@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { fetchPRContext, formatPRContext, hasContent, type PRContext } from '../pr-context.js';
+import {
+  fetchPRContext,
+  formatPRContext,
+  hasContent,
+  UNTRUSTED_BOUNDARY_START,
+  UNTRUSTED_BOUNDARY_END,
+  type PRContext,
+} from '../pr-context.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -289,8 +296,14 @@ describe('formatPRContext', () => {
     ],
   };
 
-  it('formats all sections into structured text', () => {
+  it('formats all sections into structured text with anti-injection boundaries', () => {
     const text = formatPRContext(fullContext);
+
+    // Must be wrapped in untrusted content boundaries
+    expect(text).toContain(UNTRUSTED_BOUNDARY_START);
+    expect(text).toContain(UNTRUSTED_BOUNDARY_END);
+    expect(text.startsWith(UNTRUSTED_BOUNDARY_START)).toBe(true);
+    expect(text.trimEnd().endsWith(UNTRUSTED_BOUNDARY_END)).toBe(true);
 
     expect(text).toContain('## PR Context');
     expect(text).toContain('**Title**: Fix race condition in task claiming');
@@ -313,6 +326,8 @@ describe('formatPRContext', () => {
 
     expect(text).toContain('## Local Codebase');
     expect(text).toContain('/tmp/repos/owner/repo');
+    expect(text).toContain(UNTRUSTED_BOUNDARY_START);
+    expect(text).toContain(UNTRUSTED_BOUNDARY_END);
   });
 
   it('omits codebase section when not provided', () => {
@@ -334,7 +349,7 @@ describe('formatPRContext', () => {
     expect(text).toBe('');
   });
 
-  it('handles metadata-only context', () => {
+  it('handles metadata-only context with boundaries', () => {
     const metadataOnly: PRContext = {
       metadata: {
         title: 'Simple PR',
@@ -351,6 +366,8 @@ describe('formatPRContext', () => {
 
     const text = formatPRContext(metadataOnly);
 
+    expect(text).toContain(UNTRUSTED_BOUNDARY_START);
+    expect(text).toContain(UNTRUSTED_BOUNDARY_END);
     expect(text).toContain('## PR Context');
     expect(text).toContain('**Title**: Simple PR');
     expect(text).not.toContain('**Description**');

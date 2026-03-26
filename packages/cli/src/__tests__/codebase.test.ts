@@ -16,7 +16,13 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { cloneOrUpdate, cleanupTaskDir, buildCloneUrl, validatePathSegment } from '../codebase.js';
+import {
+  cloneOrUpdate,
+  cleanupTaskDir,
+  buildCloneUrl,
+  buildAuthArgs,
+  validatePathSegment,
+} from '../codebase.js';
 
 describe('codebase', () => {
   beforeEach(() => {
@@ -24,18 +30,31 @@ describe('codebase', () => {
   });
 
   describe('buildCloneUrl', () => {
-    it('builds public URL without token', () => {
+    it('builds public HTTPS URL without embedded credentials', () => {
       expect(buildCloneUrl('acme', 'widgets')).toBe('https://github.com/acme/widgets.git');
     });
+  });
 
-    it('builds public URL when token is null', () => {
-      expect(buildCloneUrl('acme', 'widgets', null)).toBe('https://github.com/acme/widgets.git');
+  describe('buildAuthArgs', () => {
+    it('returns empty array when no token is provided', () => {
+      expect(buildAuthArgs()).toEqual([]);
+      expect(buildAuthArgs(null)).toEqual([]);
+      expect(buildAuthArgs(undefined)).toEqual([]);
     });
 
-    it('builds authenticated URL with token', () => {
-      expect(buildCloneUrl('acme', 'widgets', 'ghp_abc123')).toBe(
-        'https://x-access-token:ghp_abc123@github.com/acme/widgets.git',
-      );
+    it('returns http.extraHeader config args with Bearer token', () => {
+      expect(buildAuthArgs('ghp_abc123')).toEqual([
+        '-c',
+        'http.extraHeader=Authorization: Bearer ghp_abc123',
+      ]);
+    });
+
+    it('does not embed token in a URL', () => {
+      const args = buildAuthArgs('ghp_secret');
+      const joined = args.join(' ');
+      expect(joined).not.toContain('github.com');
+      expect(joined).not.toContain('@');
+      expect(joined).toContain('Authorization: Bearer ghp_secret');
     });
   });
 
@@ -119,7 +138,7 @@ describe('codebase', () => {
       expect(calls[1][1]).toContain('checkout');
     });
 
-    it('uses authenticated URL when token is provided', () => {
+    it('uses http.extraHeader for auth when token is provided', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockReturnValue('');
 
@@ -127,10 +146,18 @@ describe('codebase', () => {
 
       const cloneCall = vi.mocked(execFileSync).mock.calls[0];
       const cloneArgs = cloneCall[1] as string[];
-      expect(cloneArgs.some((a) => a.includes('x-access-token:ghp_token@'))).toBe(true);
+      // Token must NOT be in the URL
+      expect(cloneArgs.some((a) => a.includes('x-access-token:ghp_token@'))).toBe(false);
+      // Token must be passed via http.extraHeader
+      expect(cloneArgs).toContain('-c');
+      expect(
+        cloneArgs.some((a) => a.includes('http.extraHeader=Authorization: Bearer ghp_token')),
+      ).toBe(true);
+      // Clone URL must be plain HTTPS
+      expect(cloneArgs.some((a) => a.includes('github.com/acme/private-repo.git'))).toBe(true);
     });
 
-    it('uses public URL when no token', () => {
+    it('uses plain URL without auth args when no token', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockReturnValue('');
 
@@ -139,6 +166,7 @@ describe('codebase', () => {
       const cloneCall = vi.mocked(execFileSync).mock.calls[0];
       const cloneArgs = cloneCall[1] as string[];
       expect(cloneArgs.some((a) => a.includes('x-access-token'))).toBe(false);
+      expect(cloneArgs).not.toContain('-c');
       expect(cloneArgs.some((a) => a.includes('github.com/acme/public-repo.git'))).toBe(true);
     });
 
@@ -146,18 +174,17 @@ describe('codebase', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockImplementation(() => {
         throw new Error(
-          'fatal: could not access https://x-access-token:ghp_secret123@github.com/acme/repo.git',
+          'fatal: could not access https://github.com/acme/repo.git with Authorization: Bearer ghp_secret123',
         );
       });
 
-      expect(() => cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123')).toThrow(
-        'x-access-token:***@',
-      );
+      expect(() => cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123')).toThrow();
       // Should NOT contain the actual token
       try {
         cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123');
       } catch (err) {
         expect((err as Error).message).not.toContain('ghp_secret123');
+        expect((err as Error).message).toContain('Authorization: ***');
       }
     });
 

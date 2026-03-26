@@ -20,7 +20,8 @@ export interface CloneOrUpdateResult {
  *   to prevent concurrent reviews of the same repo from interfering.
  * - Checkout: `git clone --depth 1` then `git fetch --force origin pull/<prNumber>/head`
  *
- * Uses `x-access-token` scheme when a GitHub token is provided (required for private repos).
+ * Authentication uses `http.extraHeader` config to inject the token via HTTP header,
+ * avoiding token exposure in process listings or crash dumps.
  * All git operations use `--depth 1` for minimal disk/time footprint.
  *
  * After review completes, callers should call `cleanupTaskDir()` to remove the
@@ -46,18 +47,22 @@ export function cloneOrUpdate(
   const repoDir = taskId
     ? path.join(baseDir, owner, repo, taskId)
     : path.join(baseDir, owner, repo);
-  const cloneUrl = buildCloneUrl(owner, repo, githubToken);
+  const cloneUrl = buildCloneUrl(owner, repo);
+  const authArgs = buildAuthArgs(githubToken);
   let cloned = false;
 
   if (!fs.existsSync(path.join(repoDir, '.git'))) {
     // First clone — shallow
     fs.mkdirSync(repoDir, { recursive: true });
-    git(['clone', '--depth', '1', cloneUrl, repoDir]);
+    git([...authArgs, 'clone', '--depth', '1', cloneUrl, repoDir]);
     cloned = true;
   }
 
   // Fetch the PR ref and checkout (--force handles force-pushed PRs)
-  git(['fetch', '--force', '--depth', '1', 'origin', `pull/${prNumber}/head`], repoDir);
+  git(
+    [...authArgs, 'fetch', '--force', '--depth', '1', 'origin', `pull/${prNumber}/head`],
+    repoDir,
+  );
   git(['checkout', 'FETCH_HEAD'], repoDir);
 
   return { localPath: repoDir, cloned };
@@ -93,13 +98,20 @@ export function validatePathSegment(segment: string, name: string): void {
 }
 
 /**
- * Build the clone URL, injecting a token for private repo access.
+ * Build the clone URL. Always returns a plain HTTPS URL without embedded credentials.
  */
-export function buildCloneUrl(owner: string, repo: string, githubToken?: string | null): string {
-  if (githubToken) {
-    return `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
-  }
+export function buildCloneUrl(owner: string, repo: string): string {
   return `https://github.com/${owner}/${repo}.git`;
+}
+
+/**
+ * Build git CLI args that inject authentication via http.extraHeader.
+ * This avoids embedding the token in the URL (visible via `ps`, crash dumps, logs).
+ * Returns an empty array when no token is provided.
+ */
+export function buildAuthArgs(githubToken?: string | null): string[] {
+  if (!githubToken) return [];
+  return ['-c', `http.extraHeader=Authorization: Bearer ${githubToken}`];
 }
 
 /**
