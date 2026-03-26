@@ -54,6 +54,7 @@ import { sanitizeTokens } from '../sanitize.js';
 import { detectSuspiciousPatterns } from '../prompt-guard.js';
 import { executeDedupTask } from '../dedup.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
+import { executeTriageTask, type TriageExecutorDeps } from '../triage.js';
 import {
   createLogger,
   createAgentSession,
@@ -617,9 +618,35 @@ async function handleTask(
     }
   }
 
-  // Execute review, summary, or dedup
+  // Execute review, summary, dedup, or triage
   try {
-    if (role === 'dedup') {
+    if (role === 'triage') {
+      const triageDeps: TriageExecutorDeps = {
+        commandTemplate: reviewDeps.commandTemplate,
+      };
+      const triageResult = await executeTriageTask(
+        client,
+        agentId,
+        task,
+        triageDeps,
+        timeout_seconds,
+        logger,
+        signal,
+      );
+      recordSessionUsage(consumptionDeps.session, {
+        inputTokens: triageResult.tokenDetail.input,
+        outputTokens: triageResult.tokenDetail.output,
+        totalTokens: triageResult.tokensUsed,
+        estimated: triageResult.tokensEstimated,
+      });
+      if (consumptionDeps.usageTracker) {
+        consumptionDeps.usageTracker.recordReview({
+          input: triageResult.tokenDetail.input,
+          output: triageResult.tokenDetail.output,
+          estimated: triageResult.tokensEstimated,
+        });
+      }
+    } else if (role === 'dedup') {
       await executeDedupTask(
         client,
         agentId,
