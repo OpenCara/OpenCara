@@ -22,6 +22,8 @@ export interface DataStore {
   // Claims — createClaim returns false if (task_id, agent_id) already exists
   createClaim(claim: TaskClaim): Promise<boolean>;
   getClaim(claimId: string): Promise<TaskClaim | null>;
+  /** Batch fetch multiple claims by ID. Returns a Map of claimId → TaskClaim for found claims. */
+  getClaimsBatch(claimIds: string[]): Promise<Map<string, TaskClaim>>;
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
 

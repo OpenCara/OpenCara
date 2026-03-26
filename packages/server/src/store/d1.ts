@@ -389,6 +389,29 @@ export class D1DataStore implements DataStore {
     return row ? rowToClaim(row) : null;
   }
 
+  async getClaimsBatch(claimIds: string[]): Promise<Map<string, TaskClaim>> {
+    const map = new Map<string, TaskClaim>();
+    if (claimIds.length === 0) return map;
+
+    // SQLite/D1 limits bound parameters to 999. In practice, poll returns
+    // at most a few hundred candidates (active tasks × 1 role per task),
+    // so this is unlikely to be hit. Guard with chunking just in case.
+    const CHUNK_SIZE = 900;
+    for (let i = 0; i < claimIds.length; i += CHUNK_SIZE) {
+      const chunk = claimIds.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      const result = await this.db
+        .prepare(`SELECT * FROM claims WHERE id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<ClaimRow>();
+
+      for (const row of result.results ?? []) {
+        map.set(row.id, rowToClaim(row));
+      }
+    }
+    return map;
+  }
+
   async getClaims(taskId: string): Promise<TaskClaim[]> {
     const result = await this.db
       .prepare('SELECT * FROM claims WHERE task_id = ?')
@@ -433,12 +456,10 @@ export class D1DataStore implements DataStore {
   async incrementCompletedReviews(
     taskId: string,
   ): Promise<{ newCount: number; queue: string } | null> {
-    await this.db
-      .prepare(`UPDATE tasks SET completed_reviews = completed_reviews + 1 WHERE id = ?`)
-      .bind(taskId)
-      .run();
     const row = await this.db
-      .prepare('SELECT completed_reviews, queue FROM tasks WHERE id = ?')
+      .prepare(
+        `UPDATE tasks SET completed_reviews = completed_reviews + 1 WHERE id = ? RETURNING completed_reviews, queue`,
+      )
       .bind(taskId)
       .first<{ completed_reviews: number; queue: string }>();
     if (!row) return null;
