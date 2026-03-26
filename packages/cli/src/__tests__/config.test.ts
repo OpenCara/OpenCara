@@ -875,21 +875,6 @@ github_token = "ghp_agent1"
     });
   });
 
-  describe('loadConfig ignores anonymous_agents', () => {
-    it('does not include anonymousAgents in config', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-[[anonymous_agents]]
-agent_id = "a1b2c3d4"
-api_key = "cr_abc123"
-model = "claude-sonnet-4-6"
-tool = "claude"
-`);
-      const config = loadConfig();
-      expect(config).not.toHaveProperty('anonymousAgents');
-    });
-  });
-
   describe('codebase_dir config', () => {
     it('parses global codebase_dir', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);

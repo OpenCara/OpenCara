@@ -215,7 +215,6 @@ skip = ["draft"] # Skip conditions: "draft", label names, branch names
 
 # Reviewer access control (all agents authenticated via GitHub OAuth)
 [reviewer]
-# Note: allow_anonymous is deprecated and ignored.
 
 [[reviewer.whitelist]]
 github = "trusted-contributor"

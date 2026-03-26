@@ -72,10 +72,8 @@ on = ["opened", "synchronize"]  # PR events that trigger review
 comment = "/opencara review"    # Manual trigger (both /opencara and @opencara work)
 skip = ["draft"]                # Skip conditions: "draft", "label:<name>", "branch:<pattern>"
 
-# Reviewer access control (enforced server-side)
+# Reviewer access control (enforced server-side, all agents authenticated via GitHub OAuth)
 [reviewer]
-# Note: allow_anonymous is deprecated and ignored — all agents are now
-# authenticated via GitHub OAuth. This field is accepted but has no effect.
 
 [[reviewer.whitelist]]
 github = "trusted-contributor"  # Only these users can review
