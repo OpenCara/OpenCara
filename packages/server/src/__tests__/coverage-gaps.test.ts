@@ -65,9 +65,19 @@ describe('review-formatter edge cases', () => {
   it('wrapReviewComment wraps text with header and footer', async () => {
     const { wrapReviewComment } = await import('../review-formatter.js');
     const result = wrapReviewComment('LGTM, no issues.');
-    expect(result).toBe(
-      '## OpenCara Review\n\nLGTM, no issues.\n\n---\n<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>',
-    );
+    expect(result).toContain('## OpenCara Review');
+    expect(result).toContain('LGTM, no issues.');
+    expect(result).toContain('<sub>Reviewed by');
+    expect(result).not.toContain('**Contributors**');
+  });
+
+  it('wrapReviewComment includes contributors in header when provided', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('LGTM', ['alice', 'bob']);
+    expect(result).toContain('## OpenCara Review');
+    expect(result).toContain('**Contributors**: @alice, @bob');
+    expect(result).toContain('LGTM');
+    expect(result).toContain('<sub>Reviewed by');
   });
 });
 
