@@ -6,8 +6,8 @@
  * skips (draft PRs, action not in trigger list, no installation) return 200 OK.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
-import type { ReviewConfig } from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
+import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
 import type { GitHubService, PrDetails } from '../github/service.js';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
@@ -48,6 +48,7 @@ class FailableGitHubService implements GitHubService {
   tokenError: Error | null = null;
   parseError = false;
   configOverride: ReviewConfig | null = null;
+  openCaraConfigOverride: OpenCaraConfig | null = null;
   fetchPrResult: PrDetails | null = {
     number: 1,
     html_url: 'https://github.com/acme/widget/pull/1',
@@ -89,6 +90,23 @@ class FailableGitHubService implements GitHubService {
     _token: string,
   ): Promise<{ config: ReviewConfig; parseError: boolean }> {
     return { config: this.configOverride ?? DEFAULT_REVIEW_CONFIG, parseError: this.parseError };
+  }
+
+  async loadOpenCaraConfig(
+    _owner: string,
+    _repo: string,
+    _ref: string,
+    _token: string,
+  ): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
+    if (this.openCaraConfigOverride) {
+      return { config: this.openCaraConfigOverride, parseError: this.parseError };
+    }
+    // Build from configOverride/default for backward compat
+    const review = this.configOverride ?? DEFAULT_REVIEW_CONFIG;
+    return {
+      config: { ...DEFAULT_OPENCARA_CONFIG, review },
+      parseError: this.parseError,
+    };
   }
 
   async updateIssue(): Promise<void> {}

@@ -7,10 +7,11 @@ import { postPrComment } from './reviews.js';
 import {
   fetchPrDetails,
   loadReviewConfig as loadReviewConfigImpl,
+  loadOpenCaraConfig as loadOpenCaraConfigImpl,
   type PrDetails,
 } from './config.js';
-import type { ReviewConfig } from '@opencara/shared';
-import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
 
 export type { PrDetails } from './config.js';
 
@@ -43,6 +44,12 @@ export interface GitHubService {
     prNumber: number,
     token: string,
   ): Promise<{ config: ReviewConfig; parseError: boolean }>;
+  loadOpenCaraConfig(
+    owner: string,
+    repo: string,
+    ref: string,
+    token: string,
+  ): Promise<{ config: OpenCaraConfig; parseError: boolean }>;
 
   // Issue management
   updateIssue(
@@ -115,6 +122,16 @@ export class RealGitHubService implements GitHubService {
     token: string,
   ): Promise<{ config: ReviewConfig; parseError: boolean }> {
     return loadReviewConfigImpl(owner, repo, baseRef, prNumber, token, this.logger);
+  }
+
+  async loadOpenCaraConfig(
+    owner: string,
+    repo: string,
+    ref: string,
+    token: string,
+  ): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
+    // Note: prNumber=0 is a dummy — loadOpenCaraConfig doesn't post PR comments for issue events
+    return loadOpenCaraConfigImpl(owner, repo, ref, 0, token, this.logger);
   }
 
   async updateIssue(
@@ -234,6 +251,11 @@ export class NoOpGitHubService implements GitHubService {
   async loadReviewConfig(): Promise<{ config: ReviewConfig; parseError: boolean }> {
     this.logger.info('Dev mode — using default review config');
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+  }
+
+  async loadOpenCaraConfig(): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
+    this.logger.info('Dev mode — using default opencara config');
+    return { config: DEFAULT_OPENCARA_CONFIG, parseError: false };
   }
 
   async updateIssue(

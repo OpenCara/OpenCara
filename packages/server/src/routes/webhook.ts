@@ -1,5 +1,13 @@
 import { Hono } from 'hono';
-import type { ReviewConfig } from '@opencara/shared';
+import type {
+  ReviewConfig,
+  OpenCaraConfig,
+  FeatureConfig,
+  Feature,
+  TaskRole,
+  ReviewTask,
+} from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
@@ -16,7 +24,12 @@ export const MAX_PROMPT_LENGTH = 10_000;
 interface PullRequestPayload {
   action: string;
   installation?: { id: number };
-  repository: { owner: { login: string }; name: string; private?: boolean };
+  repository: {
+    owner: { login: string };
+    name: string;
+    default_branch?: string;
+    private?: boolean;
+  };
   pull_request: {
     number: number;
     html_url: string;
@@ -31,7 +44,12 @@ interface PullRequestPayload {
 interface IssueCommentPayload {
   action: string;
   installation?: { id: number };
-  repository: { owner: { login: string }; name: string; private?: boolean };
+  repository: {
+    owner: { login: string };
+    name: string;
+    default_branch?: string;
+    private?: boolean;
+  };
   issue: {
     number: number;
     pull_request?: { url: string };
@@ -40,6 +58,25 @@ interface IssueCommentPayload {
     body: string;
     user: { login: string };
     author_association: string;
+  };
+}
+
+interface IssuePayload {
+  action: string;
+  installation?: { id: number };
+  repository: {
+    owner: { login: string };
+    name: string;
+    default_branch?: string;
+    private?: boolean;
+  };
+  issue: {
+    number: number;
+    html_url: string;
+    title: string;
+    body: string | null;
+    user: { login: string };
+    pull_request?: { url: string };
   };
 }
 
@@ -86,12 +123,147 @@ function hexToBytes(hex: string): Uint8Array | null {
   return bytes;
 }
 
+// ── Task Group Creation ──────────────────────────────────────────
+
 /**
- * Create a task in the store for a PR. No diff fetching, no agent selection —
- * agents will poll and fetch diffs themselves.
+ * Get per-agent prompt for a given slot index.
+ * Task i → agents[i].prompt ?? feature.prompt
+ */
+function getAgentPrompt(feature: FeatureConfig, index: number): string {
+  return feature.agents?.[index]?.prompt ?? feature.prompt;
+}
+
+/**
+ * Get per-agent task_type: if agentCount > 1, worker tasks are 'review';
+ * if agentCount == 1, the single task is 'summary'.
+ */
+function getTaskRole(agentCount: number): TaskRole {
+  return agentCount > 1 ? 'review' : 'summary';
+}
+
+/**
+ * Build a base ReviewTask template with common fields. Caller fills in
+ * task-specific fields (id, prompt, task_type, feature, group_id).
+ */
+function buildBaseTask(
+  installationId: number,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  prUrl: string,
+  diffUrl: string,
+  baseRef: string,
+  headRef: string,
+  config: ReviewConfig,
+  isPrivate: boolean,
+  timeoutMs: number,
+): Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> {
+  const agentCount = config.agentCount;
+  return {
+    owner,
+    repo,
+    pr_number: prNumber,
+    pr_url: prUrl,
+    diff_url: diffUrl,
+    base_ref: baseRef,
+    head_ref: headRef,
+    review_count: agentCount,
+    timeout_at: Date.now() + timeoutMs,
+    status: 'pending',
+    queue: agentCount > 1 ? 'review' : 'summary',
+    github_installation_id: installationId,
+    private: isPrivate,
+    config,
+    created_at: Date.now(),
+  };
+}
+
+/**
+ * Create a group of tasks for a feature pipeline.
  *
- * Returns null if an active (pending/reviewing) task already exists for this PR
- * (idempotency guard against webhook redeliveries and rapid PR events).
+ * Uses createTaskIfNotExists for the first task (idempotency guard), then
+ * createTask for remaining tasks. Returns the group_id if the group was
+ * created, or null if a duplicate exists.
+ *
+ * When `skipDedup` is true, all tasks are created with createTask (no dedup check).
+ * Use this for secondary groups in the same webhook event (e.g., dedup group alongside
+ * review group) where the primary group already guards against duplicate webhooks.
+ */
+export async function createTaskGroup(
+  store: DataStore,
+  feature: Feature,
+  featureConfig: FeatureConfig,
+  baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'>,
+  logger: Logger,
+  extraFields?: Partial<ReviewTask>,
+  skipDedup?: boolean,
+): Promise<string | null> {
+  const agentCount = featureConfig.agentCount;
+  const taskCount = agentCount > 1 ? agentCount - 1 : 1;
+  const role = getTaskRole(agentCount);
+  const groupId = crypto.randomUUID();
+  const timeoutMs = parseTimeoutMs(featureConfig.timeout);
+
+  for (let i = 0; i < taskCount; i++) {
+    const taskId = crypto.randomUUID();
+    const prompt = getAgentPrompt(featureConfig, i);
+
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      logger.warn('Prompt exceeds MAX_PROMPT_LENGTH — skipping task group creation', {
+        feature,
+        promptLength: prompt.length,
+        maxLength: MAX_PROMPT_LENGTH,
+        slotIndex: i,
+      });
+      return null;
+    }
+
+    const task: ReviewTask = {
+      ...baseTask,
+      id: taskId,
+      prompt,
+      task_type: role,
+      feature,
+      group_id: groupId,
+      timeout_at: Date.now() + timeoutMs,
+      ...extraFields,
+    };
+
+    if (i === 0 && !skipDedup) {
+      // First task: atomic create-if-not-exists for idempotency
+      const created = await store.createTaskIfNotExists(task);
+      if (!created) {
+        logger.info('Task group already exists — skipping', {
+          feature,
+          owner: baseTask.owner,
+          repo: baseTask.repo,
+          prNumber: baseTask.pr_number,
+        });
+        return null;
+      }
+    } else {
+      await store.createTask(task);
+    }
+  }
+
+  logger.info('Task group created', {
+    groupId,
+    feature,
+    taskCount,
+    role,
+    owner: baseTask.owner,
+    repo: baseTask.repo,
+    prNumber: baseTask.pr_number,
+  });
+  return groupId;
+}
+
+/**
+ * Create review task group for a PR.
+ * Returns the group_id if created, null if duplicate.
+ *
+ * @deprecated Use createTaskGroup directly — kept for backward compatibility
+ * with existing tests.
  */
 export async function createTaskForPR(
   store: DataStore,
@@ -107,55 +279,166 @@ export async function createTaskForPR(
   isPrivate: boolean,
   logger: Logger,
 ): Promise<string | null> {
-  if (config.prompt.length > MAX_PROMPT_LENGTH) {
-    logger.warn('Prompt exceeds MAX_PROMPT_LENGTH — skipping task creation', {
-      owner,
-      repo,
-      prNumber,
-      promptLength: config.prompt.length,
-      maxLength: MAX_PROMPT_LENGTH,
-    });
-    return null;
-  }
-
-  const taskId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(config.timeout);
-  const reviewCount = config.agentCount;
-
-  // Atomic create-if-not-exists: prevents duplicate tasks from concurrent webhook deliveries.
-  // The store checks for an existing active (pending/reviewing) task for this PR and inserts
-  // the new task in a single atomic operation — no read-then-write race window.
-  const created = await store.createTaskIfNotExists({
-    id: taskId,
+  const baseTask = buildBaseTask(
+    installationId,
     owner,
     repo,
-    pr_number: prNumber,
-    pr_url: prUrl,
-    diff_url: diffUrl,
-    base_ref: baseRef,
-    head_ref: headRef,
-    review_count: reviewCount,
-    prompt: config.prompt,
-    timeout_at: Date.now() + timeoutMs,
+    prNumber,
+    prUrl,
+    diffUrl,
+    baseRef,
+    headRef,
+    config,
+    isPrivate,
+    timeoutMs,
+  );
+  return createTaskGroup(store, 'review', config, baseTask, logger);
+}
+
+/**
+ * Create all task groups for a PR event: review + optional dedup.prs.
+ */
+async function createPrTaskGroups(
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  prUrl: string,
+  diffUrl: string,
+  baseRef: string,
+  headRef: string,
+  fullConfig: OpenCaraConfig,
+  isPrivate: boolean,
+  logger: Logger,
+): Promise<void> {
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+  const timeoutMs = parseTimeoutMs(reviewConfig.timeout);
+  const baseTask = buildBaseTask(
+    installationId,
+    owner,
+    repo,
+    prNumber,
+    prUrl,
+    diffUrl,
+    baseRef,
+    headRef,
+    reviewConfig,
+    isPrivate,
+    timeoutMs,
+  );
+
+  // Review task group (primary — uses createTaskIfNotExists for idempotency)
+  const reviewGroupId = await createTaskGroup(store, 'review', reviewConfig, baseTask, logger);
+
+  // Only create secondary groups if the primary group was created
+  // (if it returned null, a duplicate webhook already created the groups)
+  if (reviewGroupId === null) return;
+
+  // Dedup PR task group (secondary — skipDedup since review group already guards)
+  if (fullConfig.dedup?.prs?.enabled) {
+    const dedupConfig = fullConfig.dedup.prs;
+    await createTaskGroup(
+      store,
+      'dedup_pr',
+      dedupConfig,
+      baseTask,
+      logger,
+      {
+        dedup_target: 'pr',
+        ...(dedupConfig.indexIssue !== undefined
+          ? { index_issue_number: dedupConfig.indexIssue }
+          : {}),
+      },
+      true, // skipDedup — review group is the idempotency guard
+    );
+  }
+}
+
+/**
+ * Create task groups for an issue event: triage + dedup.issues.
+ */
+async function createIssueTaskGroups(
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  issue: IssuePayload['issue'],
+  fullConfig: OpenCaraConfig,
+  reviewConfig: ReviewConfig,
+  isPrivate: boolean,
+  action: string,
+  logger: Logger,
+): Promise<void> {
+  // Base task template for issue tasks (pr_number = 0, no diff)
+  const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+    owner,
+    repo,
+    pr_number: 0,
+    pr_url: '',
+    diff_url: '',
+    base_ref: '',
+    head_ref: '',
+    review_count: 1,
+    timeout_at: Date.now() + 10 * 60 * 1000,
     status: 'pending',
-    queue: reviewCount > 1 ? 'review' : 'summary',
-    task_type: 'review',
-    feature: 'review',
-    group_id: taskId,
+    queue: 'summary',
     github_installation_id: installationId,
     private: isPrivate,
-    config,
+    config: reviewConfig,
     created_at: Date.now(),
-  });
+  };
 
-  if (!created) {
-    logger.info('Task already exists for PR — skipping', { owner, repo, prNumber });
-    return null;
+  const issueFields: Partial<ReviewTask> = {
+    issue_number: issue.number,
+    issue_url: issue.html_url,
+    issue_title: issue.title,
+    issue_body: issue.body ?? undefined,
+    issue_author: issue.user.login,
+  };
+
+  // Create issue task groups. The first group uses createTaskIfNotExists
+  // for idempotency; subsequent groups skip dedup (the primary guards).
+  let primaryCreated = false;
+
+  // Triage task group
+  if (fullConfig.triage?.enabled && fullConfig.triage.triggers.includes(action)) {
+    const groupId = await createTaskGroup(
+      store,
+      'triage',
+      fullConfig.triage,
+      baseTask,
+      logger,
+      issueFields,
+      primaryCreated, // false on first call → uses createTaskIfNotExists
+    );
+    if (groupId !== null) primaryCreated = true;
+    else return; // Duplicate webhook — skip all remaining groups
   }
 
-  logger.info('Task created', { taskId, owner, repo, prNumber });
-  return taskId;
+  // Dedup issue task group
+  if (fullConfig.dedup?.issues?.enabled) {
+    const dedupIssueConfig = fullConfig.dedup.issues;
+    await createTaskGroup(
+      store,
+      'dedup_issue',
+      dedupIssueConfig,
+      baseTask,
+      logger,
+      {
+        ...issueFields,
+        dedup_target: 'issue',
+        ...(dedupIssueConfig.indexIssue !== undefined
+          ? { index_issue_number: dedupIssueConfig.indexIssue }
+          : {}),
+      },
+      primaryCreated, // true if triage group was created → skip dedup
+    );
+  }
 }
+
+// ── Webhook Routes ───────────────────────────────────────────────
 
 export function webhookRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
@@ -191,6 +474,8 @@ export function webhookRoutes() {
           action,
           logger,
         );
+      case 'issues':
+        return handleIssueEvent(github, store, payload as unknown as IssuePayload, action, logger);
       case 'issue_comment':
         if (action === 'created') {
           return handleIssueComment(
@@ -251,11 +536,10 @@ async function handlePullRequest(
   }
 
   const baseRef = pull_request.base.ref;
-  const { config, parseError } = await github.loadReviewConfig(
+  const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
     owner,
     repo,
     baseRef,
-    prNumber,
     token,
   );
 
@@ -264,16 +548,18 @@ async function handlePullRequest(
     return new Response('Service Unavailable', { status: 503 });
   }
 
-  if (!config.trigger.on.includes(action)) {
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+
+  if (!reviewConfig.trigger.on.includes(action)) {
     logger.info('Action not in trigger.on — skipping', {
       prNumber,
       action,
-      triggerOn: config.trigger.on,
+      triggerOn: reviewConfig.trigger.on,
     });
     return new Response('OK', { status: 200 });
   }
 
-  const skipReason = shouldSkipReview(config, {
+  const skipReason = shouldSkipReview(reviewConfig, {
     draft: pull_request.draft,
     labels: pull_request.labels,
     headRef,
@@ -284,7 +570,7 @@ async function handlePullRequest(
   }
 
   try {
-    await createTaskForPR(
+    await createPrTaskGroups(
       store,
       installation.id,
       owner,
@@ -294,16 +580,120 @@ async function handlePullRequest(
       pull_request.diff_url,
       pull_request.base.ref,
       headRef,
-      config,
+      fullConfig,
       repository.private ?? false,
       logger,
     );
   } catch (err) {
-    logger.error('Failed to create task for PR', {
+    logger.error('Failed to create task groups for PR', {
       error: err instanceof Error ? err.message : String(err),
       owner,
       repo,
       prNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+/**
+ * Handle GitHub `issues` webhook event.
+ * Creates triage and/or dedup task groups for new or edited issues.
+ */
+export async function handleIssueEvent(
+  github: GitHubService,
+  store: DataStore,
+  payload: IssuePayload,
+  action: string,
+  logger: Logger,
+): Promise<Response> {
+  const { installation, repository, issue } = payload;
+
+  if (!installation) {
+    logger.info('Issue event without installation — skipping');
+    return new Response('OK', { status: 200 });
+  }
+
+  // Skip issue events for pull requests (GitHub sends issues events for PRs too)
+  if (issue.pull_request) {
+    logger.info('Issue event is a PR — skipping', { issueNumber: issue.number });
+    return new Response('OK', { status: 200 });
+  }
+
+  if (action !== 'opened' && action !== 'edited') {
+    logger.info('Issue action not handled — skipping', { action, issueNumber: issue.number });
+    return new Response('OK', { status: 200 });
+  }
+
+  const owner = repository.owner.login;
+  const repo = repository.name;
+  const defaultBranch = repository.default_branch ?? 'main';
+
+  logger.info('Webhook received', {
+    event: 'issues',
+    owner,
+    repo,
+    issueNumber: issue.number,
+    action,
+  });
+
+  let token: string;
+  try {
+    token = await github.getInstallationToken(installation.id);
+  } catch (err) {
+    logger.error('Failed to get installation token', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+    owner,
+    repo,
+    defaultBranch,
+    token,
+  );
+
+  if (parseError) {
+    logger.info('Aborting due to .opencara.toml parse error', {
+      issueNumber: issue.number,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+
+  // Check if any feature is enabled for issues
+  const triageEnabled = fullConfig.triage?.enabled && fullConfig.triage.triggers.includes(action);
+  const dedupIssuesEnabled = fullConfig.dedup?.issues?.enabled;
+
+  if (!triageEnabled && !dedupIssuesEnabled) {
+    logger.info('No issue features enabled — skipping', {
+      issueNumber: issue.number,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  try {
+    await createIssueTaskGroups(
+      store,
+      installation.id,
+      owner,
+      repo,
+      issue,
+      fullConfig,
+      reviewConfig,
+      repository.private ?? false,
+      action,
+      logger,
+    );
+  } catch (err) {
+    logger.error('Failed to create task groups for issue', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber: issue.number,
     });
     return new Response('Service Unavailable', { status: 503 });
   }

@@ -47,7 +47,7 @@ export function testRoutes() {
       ? { ...DEFAULT_REVIEW_CONFIG, ...body.config }
       : DEFAULT_REVIEW_CONFIG;
 
-    const taskId = await createTaskForPR(
+    const groupId = await createTaskForPR(
       store,
       installationId,
       owner,
@@ -62,11 +62,15 @@ export function testRoutes() {
       logger,
     );
 
-    if (!taskId) {
+    if (!groupId) {
       return c.json({ created: false, reason: 'Active task already exists for this PR' }, 200);
     }
 
-    return c.json({ created: true, task_id: taskId }, 201);
+    // Look up tasks in the group and return the first task's ID for backward compat
+    const groupTasks = await store.getTasksByGroup(groupId);
+    const firstTaskId = groupTasks.length > 0 ? groupTasks[0].id : groupId;
+
+    return c.json({ created: true, task_id: firstTaskId, group_id: groupId }, 201);
   });
 
   /**

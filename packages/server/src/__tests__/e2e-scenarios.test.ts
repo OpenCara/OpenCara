@@ -148,79 +148,51 @@ describe('E2E Scenarios', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('B. Multi-Agent Lifecycle', () => {
-    it('2 reviewers → submit → synthesizer claims with reviews → submits → posted', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+    it('2 reviewers each claim separate review tasks (new separate task model)', async () => {
+      // reviewCount=3 → creates 2 separate review tasks (3-1=2)
+      await injectPR({ reviewCount: 3 });
       const r1 = agent('reviewer-1');
       const r2 = agent('reviewer-2');
-      const synth = agent('synthesizer');
 
-      // Both reviewers poll — see review role
+      // Both reviewers poll — see 2 review tasks
       const r1Tasks = await r1.poll();
+      expect(r1Tasks).toHaveLength(2);
       expect(r1Tasks[0].role).toBe('review');
-      const r2Tasks = await r2.poll();
-      expect(r2Tasks[0].role).toBe('review');
+      expect(r1Tasks[1].role).toBe('review');
 
-      // Both claim review
-      const c1 = await r1.claim(taskId, 'review');
+      // Each reviewer claims a different task
+      const task1Id = r1Tasks[0].task_id;
+      const task2Id = r1Tasks[1].task_id;
+      expect(task1Id).not.toBe(task2Id);
+
+      const c1 = await r1.claim(task1Id, 'review');
       expect(c1.claimed).toBe(true);
-      const c2 = await r2.claim(taskId, 'review');
+      const c2 = await r2.claim(task2Id, 'review');
       expect(c2.claimed).toBe(true);
 
-      // Synthesizer polls — nothing yet (reviews not complete)
-      let synthTasks = await synth.poll();
-      expect(synthTasks).toHaveLength(0);
-
-      // Reviewer 1 submits
-      await r1.submitResult(
-        taskId,
+      // Each submits to their own task
+      const r1Result = await r1.submitResult(
+        task1Id,
         'review',
         'The implementation follows established patterns and conventions well.',
         'approve',
         500,
       );
+      expect(r1Result.status).toBe(200);
 
-      // Still no summary (only 1 of 2 reviews done)
-      synthTasks = await synth.poll();
-      expect(synthTasks).toHaveLength(0);
-
-      // Reviewer 2 submits
-      await r2.submitResult(
-        taskId,
+      const r2Result = await r2.submitResult(
+        task2Id,
         'review',
         'Error handling improvements needed throughout the modified code paths.',
         'request_changes',
         600,
       );
+      expect(r2Result.status).toBe(200);
 
-      // Summary now available
-      synthTasks = await synth.poll();
-      expect(synthTasks).toHaveLength(1);
-      expect(synthTasks[0].role).toBe('summary');
-
-      // Synthesizer claims — receives prior reviews
-      const synthClaim = await synth.claim(taskId, 'summary');
-      expect(synthClaim.claimed).toBe(true);
-      if (synthClaim.claimed) {
-        expect(synthClaim.reviews).toHaveLength(2);
-        const agents = synthClaim.reviews!.map((r) => r.agent_id).sort();
-        expect(agents).toEqual(['reviewer-1', 'reviewer-2']);
-      }
-
-      // Synthesizer submits
-      const result = await synth.submitResult(
-        taskId,
-        'summary',
-        VALID_SUMMARY_TEXT,
-        undefined,
-        900,
-      );
-      expect(result.status).toBe(200);
-
-      // Task and claims deleted after successful post
-      const finalTask = await store.getTask(taskId);
-      expect(finalTask).toBeNull();
-      const claims = await store.getClaims(taskId);
-      expect(claims).toHaveLength(0);
+      // Both tasks share the same group_id (separate from task IDs)
+      const allTasks = await store.listTasks();
+      const groupIds = new Set(allTasks.map((t) => t.group_id));
+      expect(groupIds.size).toBe(1);
     });
 
     it('third agent cannot claim review when all slots taken', async () => {
@@ -304,26 +276,26 @@ describe('E2E Scenarios', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('D. Error Recovery', () => {
-    it('claim → error → slot freed → new agent claims → completes', async () => {
-      const taskId = await injectPR({ reviewCount: 3 });
+    it('claim → error → task freed → new agent claims → completes', async () => {
+      // reviewCount=3 → 2 separate review tasks
+      const firstTaskId = await injectPR({ reviewCount: 3 });
       const crasher = agent('crasher');
       const replacement = agent('replacement');
 
-      // Agent crashes
-      await crasher.claim(taskId, 'review');
-      const errRes = await crasher.reportError(taskId, 'SIGSEGV');
+      // Agent crashes on first task
+      await crasher.claim(firstTaskId, 'review');
+      const errRes = await crasher.reportError(firstTaskId, 'SIGSEGV');
       expect(errRes.status).toBe(200);
 
-      // Slot freed
-      const task = await store.getTask(taskId);
-      expect(task?.review_claims).toBe(0);
-
-      // Replacement agent claims
+      // Replacement agent polls — sees both review tasks (freed one + unclaimed one)
       const tasks = await replacement.poll();
-      expect(tasks).toHaveLength(1);
-      expect(tasks[0].role).toBe('review');
+      expect(tasks).toHaveLength(2);
+      for (const t of tasks) {
+        expect(t.role).toBe('review');
+      }
 
-      const c = await replacement.claim(taskId, 'review');
+      // Replacement claims the freed task
+      const c = await replacement.claim(firstTaskId, 'review');
       expect(c.claimed).toBe(true);
     });
 
@@ -694,30 +666,32 @@ describe('E2E Scenarios', () => {
 
   describe('J. review_only Flag', () => {
     it('agent with review_only sees only review tasks, not summary', async () => {
-      // review_count=1 → only summary role
+      // review_count=1 → only summary role (1 task)
       await injectPR({ prNumber: 1, reviewCount: 1 });
-      // review_count=3 → review role
+      // review_count=3 → review role (2 tasks: 3-1=2)
       await injectPR({ prNumber: 2, reviewCount: 3 });
 
       const a = agent('review-only-agent');
 
-      // With review_only: should only see the review task
+      // With review_only: should only see the review tasks (2 tasks from PR#2)
       const reviewTasks = await a.poll({ reviewOnly: true });
-      expect(reviewTasks).toHaveLength(1);
-      expect(reviewTasks[0].pr_number).toBe(2);
-      expect(reviewTasks[0].role).toBe('review');
+      expect(reviewTasks).toHaveLength(2);
+      for (const t of reviewTasks) {
+        expect(t.pr_number).toBe(2);
+        expect(t.role).toBe('review');
+      }
     });
 
     it('agent without review_only sees both review and summary tasks', async () => {
-      await injectPR({ prNumber: 1, reviewCount: 1 }); // summary only
-      await injectPR({ prNumber: 2, reviewCount: 3 }); // review
+      await injectPR({ prNumber: 1, reviewCount: 1 }); // summary only (1 task)
+      await injectPR({ prNumber: 2, reviewCount: 3 }); // review (2 tasks: 3-1=2)
 
       const a = agent('any-agent');
       const tasks = await a.poll();
-      expect(tasks).toHaveLength(2);
+      expect(tasks).toHaveLength(3); // 1 summary + 2 review
 
       const roles = tasks.map((t) => t.role).sort();
-      expect(roles).toEqual(['review', 'summary']);
+      expect(roles).toEqual(['review', 'review', 'summary']);
     });
   });
 
