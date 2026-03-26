@@ -344,6 +344,208 @@ describe('Agent Coverage Tests', () => {
   });
 
   // ═══════════════════════════════════════════════════════════
+  // Tier 1: Installation token diff fetch (3-tier strategy)
+  // ═══════════════════════════════════════════════════════════
+
+  describe('fetchDiff with installation token (tier 1)', () => {
+    it('uses installation token from claim response to fetch diff via GitHub API', async () => {
+      let diffFetchUrl: string | undefined;
+      let diffFetchHeaders: Record<string, string> | undefined;
+
+      const originalFetch = globalThis.fetch;
+      server.uninstallFetch();
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+        if (url.includes('/api/tasks/poll')) {
+          return new Response(
+            JSON.stringify({
+              tasks: [
+                {
+                  task_id: 'task-inst-token',
+                  owner: 'private-org',
+                  repo: 'private-repo',
+                  pr_number: 99,
+                  diff_url: 'https://github.com/private-org/private-repo/pull/99.diff',
+                  timeout_seconds: 300,
+                  prompt: 'Review',
+                  role: 'review',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('/claim')) {
+          // Server returns installation_token in claim response
+          return new Response(
+            JSON.stringify({ claimed: true, installation_token: 'ghs_inst_token_abc123' }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('api.github.com/repos') && url.includes('/pulls/')) {
+          const headers = init?.headers as Record<string, string> | undefined;
+          const accept = headers?.['Accept'] ?? '';
+          // PR context fetches use application/vnd.github+json — return JSON
+          if (accept.includes('+json')) {
+            return new Response(JSON.stringify([]), { status: 200 });
+          }
+          // Diff fetch uses application/vnd.github.v3.diff — capture for assertion
+          diffFetchUrl = url;
+          diffFetchHeaders = headers;
+          return new Response('diff --git a/f b/f\n-old\n+new', { status: 200 });
+        }
+
+        // PR context issue comments endpoint
+        if (url.includes('api.github.com/repos') && url.includes('/issues/')) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+
+        if (url.includes('/result') || url.includes('/reject') || url.includes('/error')) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('inst-token-agent');
+
+        const promise = startAgent(
+          'inst-token-agent',
+          'http://fake-server',
+          { model: 'test', tool: 'test' },
+          deps.reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(500);
+
+        // Tier 1 should have been used — installation token Bearer auth
+        expect(diffFetchUrl).toContain('api.github.com/repos/private-org/private-repo/pulls/99');
+        expect(diffFetchHeaders?.['Authorization']).toBe('Bearer ghs_inst_token_abc123');
+        expect(diffFetchHeaders?.['Accept']).toBe('application/vnd.github.v3.diff');
+
+        // Stop agent
+        globalThis.fetch = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
+        });
+        await advanceTime(3000);
+        await promise;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('falls through to tier 3 when installation token fetch fails', async () => {
+      let diffFetchUrl: string | undefined;
+      let installationTokenAttempted = false;
+
+      const originalFetch = globalThis.fetch;
+      server.uninstallFetch();
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+        if (url.includes('/api/tasks/poll')) {
+          return new Response(
+            JSON.stringify({
+              tasks: [
+                {
+                  task_id: 'task-inst-fallback',
+                  owner: 'org',
+                  repo: 'repo',
+                  pr_number: 7,
+                  diff_url: 'https://github.com/org/repo/pull/7.diff',
+                  timeout_seconds: 300,
+                  prompt: 'Review',
+                  role: 'review',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('/claim')) {
+          return new Response(
+            JSON.stringify({ claimed: true, installation_token: 'ghs_expired_token' }),
+            { status: 200 },
+          );
+        }
+
+        if (url.includes('api.github.com/repos') && url.includes('/pulls/')) {
+          const headers = init?.headers as Record<string, string> | undefined;
+          const accept = headers?.['Accept'] ?? '';
+          if (accept.includes('+json')) {
+            return new Response(JSON.stringify([]), { status: 200 });
+          }
+          // Installation token tier — fail with 401 (expired token)
+          if (headers?.['Authorization']?.includes('ghs_expired_token')) {
+            installationTokenAttempted = true;
+            return new Response('Bad credentials', { status: 401 });
+          }
+          // Tier 3 HTTP fallback (with platform OAuth token)
+          diffFetchUrl = url;
+          return new Response('diff --git a/f b/f', { status: 200 });
+        }
+
+        if (url.includes('api.github.com/repos') && url.includes('/issues/')) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+
+        // Tier 3 fallback: plain .diff URL
+        if (url.includes('.diff')) {
+          diffFetchUrl = url;
+          return new Response('diff --git a/f b/f', { status: 200 });
+        }
+
+        if (url.includes('/result') || url.includes('/reject') || url.includes('/error')) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('inst-fallback-agent');
+
+        const promise = startAgent(
+          'inst-fallback-agent',
+          'http://fake-server',
+          { model: 'test', tool: 'test' },
+          deps.reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(500);
+
+        // Installation token tier was attempted but failed
+        expect(installationTokenAttempted).toBe(true);
+        // Tier 3 HTTP fallback was used (gh CLI is mocked to fail)
+        expect(diffFetchUrl).toBeDefined();
+
+        globalThis.fetch = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: { code: 'UNAUTHORIZED', message: 'shutdown' } }),
+        });
+        await advanceTime(3000);
+        await promise;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
   // Diff fetch failure → safeReject reports to server
   // ═══════════════════════════════════════════════════════════
 

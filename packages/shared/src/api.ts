@@ -59,6 +59,10 @@ export interface ClaimReview {
 export interface ClaimResponse {
   claimed: true;
   reviews?: ClaimReview[];
+  /** Short-lived GitHub installation token for accessing private repo diffs.
+   *  Provided by the server when the GitHub App has repo access.
+   *  Agents should prefer this over gh CLI or unauthenticated HTTP. */
+  installation_token?: string;
 }
 
 // ── Result ─────────────────────────────────────────────────────

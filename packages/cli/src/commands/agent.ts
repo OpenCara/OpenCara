@@ -148,24 +148,114 @@ export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
   return ['review', 'summary'];
 }
 
+/** Diff fetch method identifier for logging. */
+type DiffMethod = 'installation-token' | 'gh' | 'http';
+
+/**
+ * Fetch diff via HTTP with streaming size guard.
+ * Shared by both the installation-token and public HTTP tiers.
+ */
+async function fetchDiffHttp(
+  url: string,
+  headers: Record<string, string>,
+  signal?: AbortSignal,
+  maxDiffSizeKb?: number,
+): Promise<string> {
+  const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
+
+  const response = await fetch(url, { headers, signal });
+  if (!response.ok) {
+    const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
+    if (NON_RETRYABLE_STATUSES.has(response.status)) {
+      throw new NonRetryableError(msg);
+    }
+    throw new Error(msg);
+  }
+
+  // Fast path: check Content-Length header before reading body
+  if (maxBytes < Infinity) {
+    const contentLength = parseInt(response.headers.get('content-length') ?? '', 10);
+    if (!isNaN(contentLength) && contentLength > maxBytes) {
+      if (response.body) {
+        void response.body.cancel();
+      }
+      throw new DiffTooLargeError(
+        `Diff too large (${Math.round(contentLength / 1024)}KB > ${maxDiffSizeKb}KB, from Content-Length)`,
+      );
+    }
+
+    // Stream with size limit — Content-Length may be absent or incorrect
+    if (response.body) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.length;
+        if (totalBytes > maxBytes) {
+          void reader.cancel();
+          throw new DiffTooLargeError(`Diff too large (>${maxDiffSizeKb}KB)`);
+        }
+        chunks.push(value);
+      }
+      return new TextDecoder().decode(concatUint8Arrays(chunks, totalBytes));
+    }
+  }
+
+  return response.text();
+}
+
 /**
  * Fetch the PR diff directly from GitHub.
  * Agent fetches diff itself — server never sends it.
  *
  * Strategy (in order):
- * 1. Try `gh api` — uses the user's own GitHub credentials, works for private repos
- * 2. Fall back to HTTP fetch with OAuth token (API URL for private, web URL for public)
+ * 1. Installation token from claim response — short-lived GitHub App token, works for private repos
+ * 2. `gh` CLI — uses the user's own GitHub credentials, works for private repos
+ * 3. Public HTTP fetch — unauthenticated or with platform OAuth token, works for public repos
  */
 async function fetchDiff(
   diffUrl: string,
   owner: string,
   repo: string,
   prNumber: number,
-  githubToken?: string | null,
-  signal?: AbortSignal,
-  maxDiffSizeKb?: number,
-): Promise<{ diff: string; method: 'gh' | 'http' }> {
-  // Try gh CLI first — works for private repos without a platform token
+  opts: {
+    installationToken?: string | null;
+    githubToken?: string | null;
+    signal?: AbortSignal;
+    maxDiffSizeKb?: number;
+  },
+): Promise<{ diff: string; method: DiffMethod }> {
+  const { installationToken, githubToken, signal, maxDiffSizeKb } = opts;
+
+  // Tier 1: Installation token from claim response (GitHub App, works for private repos)
+  if (installationToken) {
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+    try {
+      const diff = await withRetry(
+        () =>
+          fetchDiffHttp(
+            apiUrl,
+            {
+              Authorization: `Bearer ${installationToken}`,
+              Accept: 'application/vnd.github.v3.diff',
+            },
+            signal,
+            maxDiffSizeKb,
+          ),
+        { maxAttempts: 2 },
+        signal,
+      );
+      return { diff, method: 'installation-token' };
+    } catch (err) {
+      // DiffTooLargeError should propagate — it's not a fetch failure
+      if (err instanceof DiffTooLargeError) throw err;
+      // Otherwise fall through to next tier
+    }
+  }
+
+  // Tier 2: gh CLI — uses user's own GitHub credentials
   const ghDiff = await fetchDiffViaGh(owner, repo, prNumber, signal);
   if (ghDiff !== null) {
     if (maxDiffSizeKb) {
@@ -179,11 +269,9 @@ async function fetchDiff(
     return { diff: ghDiff, method: 'gh' };
   }
 
-  // Fall back to HTTP fetch
-  const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
-
+  // Tier 3: Public HTTP fetch (with platform OAuth token if available)
   const diff = await withRetry(
-    async () => {
+    () => {
       const headers: Record<string, string> = {};
       let url: string;
 
@@ -199,52 +287,7 @@ async function fetchDiff(
         }
       }
 
-      const response = await fetch(url, { headers, signal });
-      if (!response.ok) {
-        const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
-        if (NON_RETRYABLE_STATUSES.has(response.status)) {
-          const hint =
-            response.status === 404
-              ? '. If this is a private repo, ensure gh CLI is installed and authenticated: gh auth login'
-              : '';
-          throw new NonRetryableError(`${msg}${hint}`);
-        }
-        throw new Error(msg);
-      }
-
-      // Fast path: check Content-Length header before reading body
-      if (maxBytes < Infinity) {
-        const contentLength = parseInt(response.headers.get('content-length') ?? '', 10);
-        if (!isNaN(contentLength) && contentLength > maxBytes) {
-          // Cancel the body to avoid downloading
-          if (response.body) {
-            void response.body.cancel();
-          }
-          throw new DiffTooLargeError(
-            `Diff too large (${Math.round(contentLength / 1024)}KB > ${maxDiffSizeKb}KB, from Content-Length)`,
-          );
-        }
-
-        // Stream with size limit — Content-Length may be absent or incorrect
-        if (response.body) {
-          const reader = response.body.getReader();
-          const chunks: Uint8Array[] = [];
-          let totalBytes = 0;
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            totalBytes += value.length;
-            if (totalBytes > maxBytes) {
-              void reader.cancel();
-              throw new DiffTooLargeError(`Diff too large (>${maxDiffSizeKb}KB)`);
-            }
-            chunks.push(value);
-          }
-          return new TextDecoder().decode(concatUint8Arrays(chunks, totalBytes));
-        }
-      }
-
-      return response.text();
+      return fetchDiffHttp(url, headers, signal, maxDiffSizeKb);
     },
     { maxAttempts: 2 },
     signal,
@@ -482,18 +525,15 @@ async function handleTask(
     return {};
   }
 
-  // Fetch diff — try gh CLI first, fall back to HTTP
+  // Fetch diff — 3-tier: installation token → gh CLI → HTTP
   let diffContent: string;
   try {
-    const result = await fetchDiff(
-      diff_url,
-      owner,
-      repo,
-      pr_number,
-      client.currentToken,
+    const result = await fetchDiff(diff_url, owner, repo, pr_number, {
+      installationToken: claimResponse.installation_token,
+      githubToken: client.currentToken,
       signal,
-      reviewDeps.maxDiffSizeKb,
-    );
+      maxDiffSizeKb: reviewDeps.maxDiffSizeKb,
+    });
     diffContent = result.diff;
     log(`  Diff fetched via ${result.method} (${Math.round(diffContent.length / 1024)}KB)`);
   } catch (err) {
