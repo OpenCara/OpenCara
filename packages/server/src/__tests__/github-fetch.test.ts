@@ -241,10 +241,12 @@ describe('githubFetch', () => {
         const res = await githubFetch('https://api.github.com/test');
 
         expect(res.status).toBe(200);
-        expect(delays).toHaveLength(1);
+        // Filter out timeout timers (30000ms) — only check retry delay timers
+        const retryDelays = delays.filter((d) => d < 10_000);
+        expect(retryDelays).toHaveLength(1);
         // Base delay is 1000ms, with ±30% jitter → 700-1300
-        expect(delays[0]).toBeGreaterThanOrEqual(700);
-        expect(delays[0]).toBeLessThanOrEqual(1300);
+        expect(retryDelays[0]).toBeGreaterThanOrEqual(700);
+        expect(retryDelays[0]).toBeLessThanOrEqual(1300);
       } finally {
         vi.useFakeTimers();
       }
@@ -310,6 +312,51 @@ describe('githubFetch', () => {
 
       expect(res.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // ── Timeout behavior ─────────────────────────────────────
+
+  describe('timeout', () => {
+    it('passes AbortController signal to each fetch attempt', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+
+      await fetchWithTimers('https://api.github.com/test');
+
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('retries on timeout (abort error) like a network error', async () => {
+      fetchMock
+        .mockRejectedValueOnce(new DOMException('The operation was aborted.', 'AbortError'))
+        .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+
+      const res = await fetchWithTimers('https://api.github.com/test');
+
+      expect(res.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('uses custom timeoutMs when provided', async () => {
+      vi.useRealTimers();
+      try {
+        const delays: number[] = [];
+        const origSetTimeout = globalThis.setTimeout;
+        vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: TimerHandler, ms?: number) => {
+          delays.push(ms ?? 0);
+          return origSetTimeout(cb, 0);
+        });
+
+        fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+
+        await githubFetch('https://api.github.com/test', { timeoutMs: 5000 });
+
+        // The first setTimeout should be the timeout timer with our custom value
+        expect(delays).toContain(5000);
+      } finally {
+        vi.useFakeTimers();
+      }
     });
   });
 

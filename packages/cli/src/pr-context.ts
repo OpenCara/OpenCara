@@ -45,6 +45,9 @@ export interface PRContext {
 
 // ── Fetching ──────────────────────────────────────────────────
 
+/** Default timeout for GitHub API calls in PR context (30 seconds). */
+const GITHUB_API_TIMEOUT_MS = 30_000;
+
 interface FetchDeps {
   githubToken?: string | null;
   signal?: AbortSignal;
@@ -57,11 +60,27 @@ async function githubGet<T>(url: string, deps: FetchDeps): Promise<T> {
   if (deps.githubToken) {
     headers['Authorization'] = `Bearer ${deps.githubToken}`;
   }
-  const response = await fetch(url, { headers, signal: deps.signal });
-  if (!response.ok) {
-    throw new Error(`GitHub API ${response.status}: ${response.statusText}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GITHUB_API_TIMEOUT_MS);
+
+  // If the caller provides a signal (e.g., for graceful shutdown), abort on that too
+  const onParentAbort = () => controller.abort();
+  if (deps.signal?.aborted) {
+    controller.abort();
+  } else {
+    deps.signal?.addEventListener('abort', onParentAbort);
   }
-  return response.json() as Promise<T>;
+
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`GitHub API ${response.status}: ${response.statusText}`);
+    }
+    return response.json() as Promise<T>;
+  } finally {
+    clearTimeout(timer);
+    deps.signal?.removeEventListener('abort', onParentAbort);
+  }
 }
 
 interface GitHubPR {

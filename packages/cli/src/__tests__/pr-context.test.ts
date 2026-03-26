@@ -228,7 +228,7 @@ describe('fetchPRContext', () => {
     expect(ctx.comments[0].author).toBe('unknown');
   });
 
-  it('passes signal to fetch calls', async () => {
+  it('passes signal to fetch calls (internal controller forwards parent abort)', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       json: () =>
@@ -246,10 +246,42 @@ describe('fetchPRContext', () => {
     const controller = new AbortController();
     await fetchPRContext('owner', 'repo', 1, { signal: controller.signal });
 
+    // Each fetch call receives an AbortSignal (from the internal timeout controller)
     for (const call of fetchSpy.mock.calls) {
       const init = call[1] as RequestInit;
-      expect(init.signal).toBe(controller.signal);
+      expect(init.signal).toBeInstanceOf(AbortSignal);
     }
+  });
+
+  it('aborts fetch when parent signal is aborted', async () => {
+    const controller = new AbortController();
+    // Abort immediately — all fetches should fail
+    controller.abort();
+
+    const fetchSpy = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.signal?.aborted) {
+        return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            title: 'T',
+            body: null,
+            user: null,
+            labels: [],
+            base: { ref: 'main' },
+            head: { ref: 'test' },
+          }),
+      });
+    });
+    globalThis.fetch = fetchSpy;
+
+    const ctx = await fetchPRContext('owner', 'repo', 1, { signal: controller.signal });
+
+    // All sub-fetches degrade gracefully on abort
+    expect(ctx.metadata).toBeNull();
+    expect(ctx.comments).toEqual([]);
   });
 });
 

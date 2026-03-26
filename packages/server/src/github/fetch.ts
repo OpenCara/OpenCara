@@ -3,9 +3,14 @@ const GITHUB_API_VERSION = '2022-11-28';
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 
+/** Default timeout for GitHub API calls (30 seconds). */
+export const GITHUB_FETCH_TIMEOUT_MS = 30_000;
+
 export interface GitHubFetchOptions extends RequestInit {
   token?: string;
   accept?: string;
+  /** Per-attempt timeout in milliseconds. Defaults to GITHUB_FETCH_TIMEOUT_MS (30s). */
+  timeoutMs?: number;
 }
 
 /**
@@ -18,7 +23,7 @@ export async function githubFetch(
   url: string,
   options: GitHubFetchOptions = {},
 ): Promise<Response> {
-  const { token, accept, ...fetchOptions } = options;
+  const { token, accept, timeoutMs = GITHUB_FETCH_TIMEOUT_MS, ...fetchOptions } = options;
 
   const headers: Record<string, string> = {
     'User-Agent': GITHUB_USER_AGENT,
@@ -33,8 +38,15 @@ export async function githubFetch(
   };
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, { ...fetchOptions, headers });
+      const response = await fetch(url, {
+        ...fetchOptions,
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
 
       if (response.ok) return response;
 
@@ -53,7 +65,8 @@ export async function githubFetch(
       // Non-retryable error or retries exhausted
       return response;
     } catch (err) {
-      // Network errors are transient — retry
+      clearTimeout(timer);
+      // Network errors and timeouts are transient — retry
       if (attempt < MAX_RETRIES) {
         const baseDelay = BASE_DELAY_MS * Math.pow(2, attempt);
         const delay = Math.round(baseDelay * (0.7 + Math.random() * 0.6));

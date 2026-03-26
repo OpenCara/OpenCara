@@ -151,6 +151,9 @@ export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
 /** Diff fetch method identifier for logging. */
 type DiffMethod = 'gh' | 'http';
 
+/** Default timeout for diff fetch via HTTP (60 seconds — diffs can be large). */
+const DIFF_FETCH_TIMEOUT_MS = 60_000;
+
 /**
  * Fetch diff via HTTP with streaming size guard.
  */
@@ -162,7 +165,26 @@ async function fetchDiffHttp(
 ): Promise<string> {
   const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
 
-  const response = await fetch(url, { headers, signal });
+  // Per-call timeout, combined with optional caller signal (e.g., shutdown)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DIFF_FETCH_TIMEOUT_MS);
+  const onParentAbort = () => controller.abort();
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener('abort', onParentAbort);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, { headers, signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onParentAbort);
+    throw err;
+  }
+  clearTimeout(timer);
+  signal?.removeEventListener('abort', onParentAbort);
   if (!response.ok) {
     const hint =
       response.status === 404
