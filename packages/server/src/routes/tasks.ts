@@ -303,7 +303,6 @@ async function postFallbackConsolidatedReview(
   store: DataStore,
   github: GitHubService,
   taskId: string,
-  individualReviews: string[],
   claims: import('@opencara/shared').TaskClaim[],
   logger: Logger,
 ): Promise<void> {
@@ -780,14 +779,8 @@ export function taskRoutes() {
             taskId,
             retryCount,
           });
-          await postFallbackConsolidatedReview(
-            store,
-            github,
-            taskId,
-            individualReviews,
-            claims,
-            logger,
-          );
+          await postFallbackConsolidatedReview(store, github, taskId, claims, logger);
+          return c.json<ResultResponse>({ success: true });
         }
 
         return apiError(

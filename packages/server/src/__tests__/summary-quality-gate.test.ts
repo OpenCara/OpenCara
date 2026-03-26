@@ -204,7 +204,9 @@ describe('Summary Quality Gate', () => {
       expect(claimResult.claimed).toBe(true);
 
       const result = await synth.submitResult(taskId, 'summary', 'No issues found.', 'approve');
-      expect(result.status).toBe(400);
+      // Last retry triggers fallback and returns 200; earlier retries return 400
+      const expectedStatus = i === MAX_SUMMARY_RETRIES - 1 ? 200 : 400;
+      expect(result.status).toBe(expectedStatus);
     }
 
     // Task should be deleted (fallback posted and cleaned up)

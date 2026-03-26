@@ -109,9 +109,7 @@ export function rowToTask(row: TaskRow): ReviewTask {
   if (row.summary_agent_id !== null) {
     task.summary_agent_id = row.summary_agent_id;
   }
-  if (row.summary_retry_count > 0) {
-    task.summary_retry_count = row.summary_retry_count;
-  }
+  task.summary_retry_count = row.summary_retry_count;
 
   return task;
 }
@@ -446,12 +444,10 @@ export class D1DataStore implements DataStore {
   // ── Summary retry count (atomic increment) ─────────────────
 
   async incrementSummaryRetryCount(taskId: string): Promise<number | null> {
-    await this.db
-      .prepare(`UPDATE tasks SET summary_retry_count = summary_retry_count + 1 WHERE id = ?`)
-      .bind(taskId)
-      .run();
     const row = await this.db
-      .prepare('SELECT summary_retry_count FROM tasks WHERE id = ?')
+      .prepare(
+        `UPDATE tasks SET summary_retry_count = summary_retry_count + 1 WHERE id = ? RETURNING summary_retry_count`,
+      )
       .bind(taskId)
       .first<{ summary_retry_count: number }>();
     return row ? row.summary_retry_count : null;

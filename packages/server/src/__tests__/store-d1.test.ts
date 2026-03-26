@@ -503,7 +503,12 @@ describe('D1DataStore', () => {
       const retrieved = await store.getTask('task-1');
       // D1 stores review_claims/completed_reviews as NOT NULL DEFAULT 0,
       // so they are always present in the returned object
-      expect(retrieved).toEqual({ ...task, review_claims: 0, completed_reviews: 0 });
+      expect(retrieved).toEqual({
+        ...task,
+        review_claims: 0,
+        completed_reviews: 0,
+        summary_retry_count: 0,
+      });
     });
 
     it('returns null for nonexistent task', async () => {
