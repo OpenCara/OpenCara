@@ -410,7 +410,7 @@ The CLI polls the platform every 10 seconds. If no tasks appear:
 
 - Check your internet connection
 - Verify `platform_url` is correct in your config
-- Ensure a `.review.toml` exists in the target repo
+- Ensure a `.opencara.toml` exists in the target repo
 - Check that the GitHub App is installed on the repo
 
 ### "No command configured" error

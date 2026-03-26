@@ -1,20 +1,26 @@
-import { parseReviewConfig, DEFAULT_REVIEW_CONFIG, type ReviewConfig } from '@opencara/shared';
+import {
+  parseOpenCaraConfig,
+  DEFAULT_REVIEW_CONFIG,
+  DEFAULT_OPENCARA_CONFIG,
+  type ReviewConfig,
+  type OpenCaraConfig,
+} from '@opencara/shared';
 import { githubFetch } from './fetch.js';
 import { postPrComment } from './reviews.js';
 import { createLogger, type Logger } from '../logger.js';
 
 /**
- * Fetch the .review.toml file from a repository at a specific ref.
+ * Fetch the .opencara.toml file from a repository at a specific ref.
  * Returns null if the file doesn't exist.
  */
-export async function fetchReviewConfig(
+export async function fetchOpenCaraConfig(
   owner: string,
   repo: string,
   ref: string,
   token: string,
 ): Promise<string | null> {
   const response = await githubFetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/.review.toml?ref=${ref}`,
+    `https://api.github.com/repos/${owner}/${repo}/contents/.opencara.toml?ref=${ref}`,
     {
       token,
       accept: 'application/vnd.github.raw+json',
@@ -26,11 +32,14 @@ export async function fetchReviewConfig(
   }
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch .review.toml: ${response.status} ${response.statusText}`);
+    throw new Error(`Failed to fetch .opencara.toml: ${response.status} ${response.statusText}`);
   }
 
   return response.text();
 }
+
+/** @deprecated Use fetchOpenCaraConfig instead */
+export const fetchReviewConfig = fetchOpenCaraConfig;
 
 export interface PrDetails {
   number: number;
@@ -69,7 +78,7 @@ export async function fetchPrDetails(
 }
 
 /**
- * Fetch .review.toml and parse config. Returns DEFAULT_REVIEW_CONFIG on error/missing.
+ * Fetch .opencara.toml and parse config. Returns DEFAULT_REVIEW_CONFIG on error/missing.
  * Posts a PR comment if the TOML is malformed.
  */
 export async function loadReviewConfig(
@@ -82,9 +91,9 @@ export async function loadReviewConfig(
 ): Promise<{ config: ReviewConfig; parseError: boolean }> {
   let configToml: string | null;
   try {
-    configToml = await fetchReviewConfig(owner, repo, baseRef, token);
+    configToml = await fetchOpenCaraConfig(owner, repo, baseRef, token);
   } catch (err) {
-    logger.error('Failed to fetch .review.toml', {
+    logger.error('Failed to fetch .opencara.toml', {
       owner,
       repo,
       error: err instanceof Error ? err.message : String(err),
@@ -93,19 +102,19 @@ export async function loadReviewConfig(
   }
 
   if (configToml === null) {
-    logger.info('No .review.toml found — using default review config', { owner, repo });
+    logger.info('No .opencara.toml found — using default review config', { owner, repo });
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
   }
 
-  const parsed = parseReviewConfig(configToml);
+  const parsed = parseOpenCaraConfig(configToml);
   if ('error' in parsed) {
-    logger.info('.review.toml parse error', { error: parsed.error });
+    logger.info('.opencara.toml parse error', { error: parsed.error });
     try {
       await postPrComment(
         owner,
         repo,
         prNumber,
-        `**OpenCara**: Failed to parse \`.review.toml\`: ${parsed.error}`,
+        `**OpenCara**: Failed to parse \`.opencara.toml\`: ${parsed.error}`,
         token,
       );
     } catch (err) {
@@ -114,6 +123,58 @@ export async function loadReviewConfig(
       });
     }
     return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+  }
+
+  // Extract review section, falling back to defaults
+  return { config: parsed.review ?? DEFAULT_REVIEW_CONFIG, parseError: false };
+}
+
+/**
+ * Load the full OpenCaraConfig (all sections, not just review).
+ * Returns DEFAULT_OPENCARA_CONFIG on error/missing.
+ */
+export async function loadOpenCaraConfig(
+  owner: string,
+  repo: string,
+  baseRef: string,
+  prNumber: number,
+  token: string,
+  logger: Logger = createLogger(),
+): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
+  let configToml: string | null;
+  try {
+    configToml = await fetchOpenCaraConfig(owner, repo, baseRef, token);
+  } catch (err) {
+    logger.error('Failed to fetch .opencara.toml', {
+      owner,
+      repo,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { config: DEFAULT_OPENCARA_CONFIG, parseError: false };
+  }
+
+  if (configToml === null) {
+    logger.info('No .opencara.toml found — using default config', { owner, repo });
+    return { config: DEFAULT_OPENCARA_CONFIG, parseError: false };
+  }
+
+  const parsed = parseOpenCaraConfig(configToml);
+  if ('error' in parsed) {
+    logger.info('.opencara.toml parse error', { error: parsed.error });
+    try {
+      await postPrComment(
+        owner,
+        repo,
+        prNumber,
+        `**OpenCara**: Failed to parse \`.opencara.toml\`: ${parsed.error}`,
+        token,
+      );
+    } catch (err) {
+      logger.error('Failed to post error comment', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return { config: DEFAULT_OPENCARA_CONFIG, parseError: true };
   }
 
   return { config: parsed, parseError: false };

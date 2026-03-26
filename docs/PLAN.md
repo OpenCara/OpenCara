@@ -27,7 +27,7 @@ pnpm monorepo with 4 packages (shared, worker, cli, web). TypeScript strict mode
 
 ### M1: GitHub App + Webhook — #4 -> PR #7
 
-Platform receives PR events. HMAC-SHA256 validation, .review.toml parsing, GitHub API client with JWT auth.
+Platform receives PR events. HMAC-SHA256 validation, .opencara.toml parsing, GitHub API client with JWT auth.
 
 ### M2: Database + Auth — #5 -> PR #6
 
@@ -103,7 +103,7 @@ Complete rewrite to stateless REST polling. Dropped WebSocket, Durable Objects, 
 
 | Issue | Agent      | PR   | Description                                             |
 | ----- | ---------- | ---- | ------------------------------------------------------- |
-| #228  | server-dev | #243 | Security: .review.toml read from PR head branch         |
+| #228  | server-dev | #243 | Security: .opencara.toml read from PR head branch       |
 | #229  | server-dev | #247 | KV store race conditions: eliminate shared task index   |
 | #230  | server-dev | #244 | Reviewer/summarizer whitelist: user field not enforced  |
 | #231  | server-dev | #246 | Repo filtering parsed but not enforced in poll endpoint |
@@ -408,7 +408,7 @@ Parent issue: #445
 | #223 | #211   | cli-dev    | 03-21 | Dockerfile + docker-compose      |
 | #224 | #216   | server-dev | 03-21 | Preferred synthesizer config     |
 | #226 | #225   | cli-dev    | 03-21 | Fix Docker build: copy tsconfig  |
-| #243 | #228   | server-dev | 03-22 | .review.toml config security     |
+| #243 | #228   | server-dev | 03-22 | .opencara.toml config security   |
 | #244 | #230   | server-dev | 03-22 | Whitelist user enforcement       |
 | #246 | #231   | server-dev | 03-22 | Repo filter enforcement          |
 | #247 | #229   | server-dev | 03-22 | KV race conditions fix           |

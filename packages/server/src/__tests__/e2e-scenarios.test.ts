@@ -51,10 +51,7 @@ describe('E2E Scenarios', () => {
   }): Promise<string> {
     const config = {
       ...DEFAULT_REVIEW_CONFIG,
-      agents: {
-        ...DEFAULT_REVIEW_CONFIG.agents,
-        reviewCount: opts?.reviewCount ?? 1,
-      },
+      agentCount: opts?.reviewCount ?? 1,
       ...(opts?.timeout ? { timeout: opts.timeout } : {}),
     };
 
@@ -525,7 +522,7 @@ describe('E2E Scenarios', () => {
       // Create task that's already expired
       const config = {
         ...DEFAULT_REVIEW_CONFIG,
-        agents: { ...DEFAULT_REVIEW_CONFIG.agents, reviewCount: 3 },
+        agentCount: 3,
       };
 
       const res = await app.request(

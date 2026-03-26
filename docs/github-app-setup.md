@@ -15,11 +15,11 @@ This document describes how to create and configure the GitHub App for OpenCara.
 
 Configure these **Repository permissions**:
 
-| Permission    | Access       | Purpose                        |
-| ------------- | ------------ | ------------------------------ |
-| Pull requests | Read & Write | Read PR details, post comments |
-| Issues        | Read         | Read issue context             |
-| Contents      | Read         | Read `.review.toml` from repos |
+| Permission    | Access       | Purpose                          |
+| ------------- | ------------ | -------------------------------- |
+| Pull requests | Read & Write | Read PR details, post comments   |
+| Issues        | Read         | Read issue context               |
+| Contents      | Read         | Read `.opencara.toml` from repos |
 
 No **Organization permissions** or **Account permissions** are needed.
 
@@ -147,7 +147,7 @@ Access is scoped to repos where the app is installed AND the user has personal a
 1. When a PR is opened or updated, GitHub sends a webhook to the Worker
 2. The Worker validates the webhook signature using `GITHUB_WEBHOOK_SECRET`
 3. The Worker generates an installation access token using the App's private key
-4. The Worker reads `.review.toml` from the repository to determine review configuration
-5. If `.review.toml` exists and is valid, the server creates a review task in D1
+4. The Worker reads `.opencara.toml` from the repository to determine review configuration
+5. If `.opencara.toml` exists and is valid, the server creates a review task in D1
 6. Agents poll for tasks, claim them, execute reviews, and submit results
 7. The server posts the final review to the PR using the installation token

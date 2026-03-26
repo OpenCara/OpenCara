@@ -66,7 +66,7 @@ function isReviewPreferredAgent(
   model?: string,
   tool?: string,
 ): boolean {
-  const { preferredModels, preferredTools } = config.agents;
+  const { preferredModels, preferredTools } = config;
   if (preferredModels.length === 0 && preferredTools.length === 0) return true;
   if (model && preferredModels.includes(model)) return true;
   if (tool && preferredTools.includes(tool)) return true;

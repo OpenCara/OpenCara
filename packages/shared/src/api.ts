@@ -239,7 +239,7 @@ export interface ConfigValidateRequest {
 /** POST /api/config/validate — success response */
 export interface ConfigValidateSuccessResponse {
   valid: true;
-  config: import('./review-config.js').ReviewConfig;
+  config: import('./review-config.js').OpenCaraConfig;
 }
 
 /** POST /api/config/validate — failure response */

@@ -1,4 +1,6 @@
 version = 1
+
+[review]
 prompt = """
 Review this pull request for the OpenCara platform — a distributed AI code review service.
 
@@ -15,10 +17,9 @@ Focus on:
 
 Be concise. Flag real issues, skip nitpicks.
 """
-
-[agents]
-review_count = 3
+agent_count = 3
 preferred_models = ["claude-sonnet-4-6", "gpt-5.4", "glm-5"]
-
-summarizer = "quabug"
 timeout = "10m"
+
+[review.summarizer]
+only = "quabug"

@@ -30,7 +30,7 @@ describe('POST /api/config/validate', () => {
     app = createApp(new MemoryDataStore());
   });
 
-  it('returns valid config for correct TOML', async () => {
+  it('returns valid config for correct TOML (legacy flat format)', async () => {
     const toml = 'version = 1\nprompt = "Review this PR"\n[agents]\nreview_count = 3';
     const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
@@ -38,8 +38,19 @@ describe('POST /api/config/validate', () => {
     expect(body.valid).toBe(true);
     expect(body.config).toBeDefined();
     expect(body.config.version).toBe(1);
-    expect(body.config.prompt).toBe('Review this PR');
-    expect(body.config.agents.reviewCount).toBe(3);
+    expect(body.config.review.prompt).toBe('Review this PR');
+    expect(body.config.review.agentCount).toBe(3);
+  });
+
+  it('returns valid config for new [review] section format', async () => {
+    const toml = 'version = 1\n[review]\nprompt = "Review this PR"\nagent_count = 3';
+    const res = await postValidate(app, { toml });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.valid).toBe(true);
+    expect(body.config.version).toBe(1);
+    expect(body.config.review.prompt).toBe('Review this PR');
+    expect(body.config.review.agentCount).toBe(3);
   });
 
   it('returns error for invalid TOML syntax', async () => {
@@ -51,13 +62,13 @@ describe('POST /api/config/validate', () => {
     expect(body.error).toBe('Invalid TOML syntax');
   });
 
-  it('returns error for missing required fields', async () => {
-    const toml = 'version = 1';
+  it('returns error for missing version', async () => {
+    const toml = 'prompt = "hello"';
     const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(false);
-    expect(body.error).toContain('prompt');
+    expect(body.error).toContain('version');
   });
 
   it('returns error when version is missing', async () => {
@@ -122,18 +133,18 @@ describe('POST /api/config/validate', () => {
     expect(res.status).toBe(200);
   });
 
-  it('fills in default values for optional fields', async () => {
+  it('fills in default values for optional fields (legacy format)', async () => {
     const toml = 'version = 1\nprompt = "Review this"';
     const res = await postValidate(app, { toml });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
-    expect(body.config.trigger.on).toEqual(['opened']);
-    expect(body.config.agents.reviewCount).toBe(1);
-    expect(body.config.timeout).toBe('10m');
+    expect(body.config.review.trigger.on).toEqual(['opened']);
+    expect(body.config.review.agentCount).toBe(1);
+    expect(body.config.review.timeout).toBe('10m');
   });
 
-  it('parses full config with all sections', async () => {
+  it('parses full config with all sections (legacy format)', async () => {
     const toml = [
       'version = 1',
       'prompt = "Full review"',
@@ -155,11 +166,39 @@ describe('POST /api/config/validate', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
-    expect(body.config.trigger.on).toEqual(['opened', 'synchronize']);
-    expect(body.config.trigger.comment).toBe('/review');
-    expect(body.config.agents.reviewCount).toBe(5);
-    expect(body.config.agents.preferredModels).toEqual(['claude-opus-4-6']);
-    expect(body.config.timeout).toBe('15m');
+    expect(body.config.review.trigger.on).toEqual(['opened', 'synchronize']);
+    expect(body.config.review.trigger.comment).toBe('/review');
+    expect(body.config.review.agentCount).toBe(5);
+    expect(body.config.review.preferredModels).toEqual(['claude-opus-4-6']);
+    expect(body.config.review.timeout).toBe('15m');
+  });
+
+  it('parses new format with dedup and triage sections', async () => {
+    const toml = [
+      'version = 1',
+      '[review]',
+      'prompt = "Review this"',
+      'agent_count = 2',
+      '',
+      '[dedup.prs]',
+      'prompt = "Check for dups"',
+      'enabled = true',
+      '',
+      '[triage]',
+      'prompt = "Triage this"',
+      'enabled = true',
+      'default_mode = "comment"',
+      'auto_label = true',
+      'triggers = ["bug", "feature"]',
+    ].join('\n');
+    const res = await postValidate(app, { toml });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.valid).toBe(true);
+    expect(body.config.review.agentCount).toBe(2);
+    expect(body.config.dedup.prs.enabled).toBe(true);
+    expect(body.config.triage.enabled).toBe(true);
+    expect(body.config.triage.defaultMode).toBe('comment');
   });
 
   it('is rate limited by IP', async () => {

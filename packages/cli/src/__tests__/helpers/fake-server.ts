@@ -117,8 +117,8 @@ export class FakeServer {
           return new Response(JSON.stringify({ token: 'ghs_mock_token' }), { status: 200 });
         }
 
-        // Fetch .review.toml
-        if (url.includes('/contents/.review.toml')) {
+        // Fetch .opencara.toml
+        if (url.includes('/contents/.opencara.toml')) {
           return new Response('Not Found', { status: 404 });
         }
 
@@ -201,10 +201,7 @@ export class FakeServer {
   }): Promise<string> {
     const config: ReviewConfig = {
       ...DEFAULT_REVIEW_CONFIG,
-      agents: {
-        ...DEFAULT_REVIEW_CONFIG.agents,
-        reviewCount: opts?.reviewCount ?? 1,
-      },
+      agentCount: opts?.reviewCount ?? 1,
       ...(opts?.timeout ? { timeout: opts.timeout } : {}),
     };
 

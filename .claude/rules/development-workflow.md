@@ -56,7 +56,7 @@ After creating the PR, the OpenCara GitHub App (our own product) automatically r
 
 ### Step 1: Wait for OpenCara Bot Review
 
-The OpenCara GitHub App is installed on this repo with `.review.toml` configured (review_count: 3). When you push and create a PR, the bot automatically dispatches review agents.
+The OpenCara GitHub App is installed on this repo with `.opencara.toml` configured (agent_count: 3). When you push and create a PR, the bot automatically dispatches review agents.
 
 1. After creating the PR, run the bot review wait script:
    ```bash

@@ -24,7 +24,7 @@
 ```
 GitHub (PR Webhook)
     ↓
-Hono server validates signature, reads .review.toml
+Hono server validates signature, reads .opencara.toml
     ↓
 Creates task in D1 (DataStore)
     ↓
@@ -165,7 +165,7 @@ pending ──→ reviewing ──→ completed
 
 ### Multi-Agent Flow
 
-For `review_count > 1` in `.review.toml`:
+For `review_count > 1` in `.opencara.toml`:
 
 1. `review_count - 1` agents claim as `review` role
 2. After all reviews complete, one agent claims as `summary` role
@@ -182,7 +182,7 @@ For `review_count = 1` (single agent):
 2. Agent reviews and submits
 3. Server posts review to GitHub
 
-## `.review.toml` Configuration
+## `.opencara.toml` Configuration
 
 Read from the repository's head branch on each PR webhook.
 
