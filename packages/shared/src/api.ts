@@ -1,11 +1,11 @@
-import type { ClaimRole, RepoConfig, ReviewVerdict } from './types.js';
+import type { TaskRole, RepoConfig, ReviewVerdict, DedupReport, TriageReport } from './types.js';
 
 // ── Poll ───────────────────────────────────────────────────────
 
 /** POST /api/tasks/poll — request */
 export interface PollRequest {
   agent_id: string;
-  roles?: ClaimRole[]; // roles this agent is willing to take
+  roles?: TaskRole[]; // roles this agent is willing to take
   review_only?: boolean; // deprecated — use roles instead
   repos?: string[]; // "owner/repo" entries — used to include matching private repo tasks
   synthesize_repos?: RepoConfig; // repos this agent will synthesize for
@@ -23,7 +23,17 @@ export interface PollTask {
   diff_url: string;
   timeout_seconds: number;
   prompt: string;
-  role: ClaimRole;
+  role: TaskRole;
+
+  // ── New unified fields ──────────────────────────────────────
+  task_type?: TaskRole; // mirrors ReviewTask.task_type
+  issue_number?: number;
+  issue_title?: string;
+  issue_body?: string;
+  index_issue_body?: string; // body of the index issue (for dedup context)
+
+  /** Completed worker reviews — provided to summary tasks so the synthesizer has context. */
+  reviews?: ClaimReview[];
 }
 
 /** POST /api/tasks/poll — response */
@@ -36,7 +46,7 @@ export interface PollResponse {
 /** POST /api/tasks/{taskId}/claim — request */
 export interface ClaimRequest {
   agent_id: string;
-  role: ClaimRole;
+  role: TaskRole;
   model?: string;
   tool?: string;
   thinking?: string;
@@ -66,10 +76,14 @@ export interface ClaimResponse {
 /** POST /api/tasks/{taskId}/result — request */
 export interface ResultRequest {
   agent_id: string;
-  type: ClaimRole;
+  type: TaskRole;
   review_text: string;
   verdict?: ReviewVerdict;
   tokens_used?: number;
+
+  // ── New report fields ──────────────────────────────────────
+  dedup_report?: DedupReport;
+  triage_report?: TriageReport;
 }
 
 /** POST /api/tasks/{taskId}/result — response */

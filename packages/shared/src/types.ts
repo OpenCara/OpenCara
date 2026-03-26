@@ -1,7 +1,21 @@
 /** ReviewVerdict — the agent's conclusion on a PR */
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
-/** Task queue — determines what kind of claims the task accepts */
+/** Unified task role — determines what kind of work a task represents */
+export type TaskRole = 'review' | 'summary' | 'dedup' | 'triage';
+
+/** Feature pipeline — which feature spawned this task group */
+export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage';
+
+/**
+ * @deprecated Use TaskRole instead. Kept for backward compatibility during migration.
+ */
+export type ClaimRole = 'review' | 'summary';
+
+/**
+ * Task queue — determines what kind of claims the task accepts.
+ * @deprecated Use task_type (TaskRole) instead. Kept for backward compatibility during migration.
+ */
 export type TaskQueue = 'review' | 'summary' | 'finished' | 'completed';
 
 /** Task status lifecycle */
@@ -9,9 +23,6 @@ export type TaskStatus = 'pending' | 'reviewing' | 'completed' | 'timeout' | 'fa
 
 /** Claim status lifecycle */
 export type ClaimStatus = 'pending' | 'completed' | 'rejected' | 'error';
-
-/** Claim role — review or summary (synthesizer) */
-export type ClaimRole = 'review' | 'summary';
 
 /** Repo filter mode for agent preferences */
 export type RepoFilterMode = 'all' | 'own' | 'whitelist' | 'blacklist';
@@ -32,21 +43,45 @@ export interface ReviewTask {
   diff_url: string;
   base_ref: string;
   head_ref: string;
-  review_count: number; // total agents (reviewers + synthesizer)
   prompt: string;
   timeout_at: number; // unix ms
   status: TaskStatus;
-  queue: TaskQueue; // which queue this task is in
   github_installation_id: number;
   private: boolean; // true if the source repo is private
   config: import('./review-config.js').ReviewConfig; // parsed .opencara.toml review section
   created_at: number;
-  // Counters — updated atomically on task to avoid KV list() consistency issues
-  review_claims?: number; // number of review slot claims
-  completed_reviews?: number; // number of completed review submissions
-  reviews_completed_at?: number; // unix ms when all reviews completed (for grace period)
-  summary_agent_id?: string; // agent that claimed summary (queue=finished)
-  summary_retry_count?: number; // number of failed summary quality evaluations
+
+  // ── New unified fields ──────────────────────────────────────
+  task_type: TaskRole; // replaces queue — determines what kind of work this task is
+  feature: Feature; // which feature pipeline spawned this task
+  group_id: string; // links tasks in the same pipeline run
+
+  // ── Issue fields (for dedup/triage on issues) ──────────────
+  issue_number?: number;
+  issue_url?: string;
+  issue_title?: string;
+  issue_body?: string;
+  issue_author?: string;
+
+  // ── Dedup fields ───────────────────────────────────────────
+  dedup_target?: 'pr' | 'issue';
+  index_issue_number?: number;
+
+  // ── Deprecated fields (kept for migration) ─────────────────
+  /** @deprecated Use task_type instead */
+  queue: TaskQueue;
+  /** @deprecated Use group task count instead */
+  review_count: number;
+  /** @deprecated Tracked per-task now (1 task = 1 claim) */
+  review_claims?: number;
+  /** @deprecated Tracked per-task now (1 task = 1 claim) */
+  completed_reviews?: number;
+  /** @deprecated Tracked per-task now */
+  reviews_completed_at?: number;
+  /** @deprecated Tracked per-task now */
+  summary_agent_id?: string;
+  /** @deprecated Tracked per-task now */
+  summary_retry_count?: number;
 }
 
 /** A claim on a task (review_result equivalent) */
@@ -54,7 +89,7 @@ export interface TaskClaim {
   id: string;
   task_id: string;
   agent_id: string;
-  role: ClaimRole;
+  role: TaskRole;
   status: ClaimStatus;
   model?: string; // agent's model name (self-reported)
   tool?: string; // agent's tool name (self-reported)
@@ -65,6 +100,44 @@ export interface TaskClaim {
   github_user_id?: number; // verified GitHub user ID from OAuth (optional for backward compat)
   github_username?: string; // verified GitHub username from OAuth (optional for backward compat)
   created_at: number;
+}
+
+// ── Dedup Report Types ──────────────────────────────────────────
+
+/** A single duplicate match found by the dedup agent */
+export interface DedupMatch {
+  number: number;
+  similarity: 'exact' | 'high' | 'partial';
+  description: string;
+}
+
+/** Report produced by a dedup agent */
+export interface DedupReport {
+  duplicates: DedupMatch[];
+  index_entry: string;
+}
+
+// ── Triage Report Types ─────────────────────────────────────────
+
+/** Issue category determined by triage */
+export type TriageCategory = 'bug' | 'feature' | 'improvement' | 'question' | 'docs' | 'chore';
+
+/** Triage priority level */
+export type TriagePriority = 'critical' | 'high' | 'medium' | 'low';
+
+/** Triage size estimate */
+export type TriageSize = 'XS' | 'S' | 'M' | 'L' | 'XL';
+
+/** Report produced by a triage agent */
+export interface TriageReport {
+  category: TriageCategory;
+  module?: string;
+  priority: TriagePriority;
+  size: TriageSize;
+  labels: string[];
+  summary?: string;
+  body?: string;
+  comment: string;
 }
 
 /**

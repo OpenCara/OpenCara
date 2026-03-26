@@ -9,7 +9,7 @@ import type {
   PollResponse,
   PollTask,
   ClaimResponse,
-  ClaimRole,
+  TaskRole,
   ReviewVerdict,
   ErrorResponse,
 } from '@opencara/shared';
@@ -54,7 +54,7 @@ export class MockAgent {
   /** Claim a task with a specific role. Returns success or structured error. */
   async claim(
     taskId: string,
-    role: ClaimRole,
+    role: TaskRole,
     opts?: { model?: string; tool?: string },
   ): Promise<ClaimResult> {
     const res = await this.request('POST', `/api/tasks/${taskId}/claim`, {
@@ -74,7 +74,7 @@ export class MockAgent {
   /** Submit a review result. Returns status and parsed body. */
   async submitResult(
     taskId: string,
-    type: ClaimRole,
+    type: TaskRole,
     reviewText: string,
     verdict?: ReviewVerdict,
     tokensUsed?: number,
@@ -112,13 +112,13 @@ export class MockAgent {
    * Returns null if no tasks are available.
    */
   async pollAndClaim(
-    role?: ClaimRole,
+    role?: TaskRole,
   ): Promise<{ taskId: string; claimResponse: ClaimResult } | null> {
     const tasks = await this.poll(role === 'review' ? { reviewOnly: true } : undefined);
     if (tasks.length === 0) return null;
 
     const task = tasks[0];
-    const taskRole = role ?? (task.role as ClaimRole);
+    const taskRole = role ?? (task.role as TaskRole);
     const claimResponse = await this.claim(task.task_id, taskRole);
     return { taskId: task.task_id, claimResponse };
   }

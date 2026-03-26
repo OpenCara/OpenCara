@@ -61,6 +61,17 @@ interface TaskRow {
   reviews_completed_at: number | null;
   summary_agent_id: string | null;
   summary_retry_count: number;
+  // New unified fields
+  task_type: string;
+  feature: string;
+  group_id: string;
+  issue_number: number | null;
+  issue_url: string | null;
+  issue_title: string | null;
+  issue_body: string | null;
+  issue_author: string | null;
+  dedup_target: string | null;
+  index_issue_number: number | null;
 }
 
 interface ClaimRow {
@@ -96,6 +107,9 @@ export function rowToTask(row: TaskRow): ReviewTask {
     timeout_at: row.timeout_at,
     status: row.status as ReviewTask['status'],
     queue: (row.queue ?? 'review') as ReviewTask['queue'],
+    task_type: (row.task_type ?? 'review') as ReviewTask['task_type'],
+    feature: (row.feature ?? 'review') as ReviewTask['feature'],
+    group_id: row.group_id ?? row.id,
     github_installation_id: row.github_installation_id,
     private: Boolean(row.private),
     config: JSON.parse(row.config),
@@ -111,6 +125,17 @@ export function rowToTask(row: TaskRow): ReviewTask {
     task.summary_agent_id = row.summary_agent_id;
   }
   task.summary_retry_count = row.summary_retry_count;
+
+  // Optional issue fields
+  if (row.issue_number !== null) task.issue_number = row.issue_number;
+  if (row.issue_url !== null) task.issue_url = row.issue_url;
+  if (row.issue_title !== null) task.issue_title = row.issue_title;
+  if (row.issue_body !== null) task.issue_body = row.issue_body;
+  if (row.issue_author !== null) task.issue_author = row.issue_author;
+
+  // Optional dedup fields
+  if (row.dedup_target !== null) task.dedup_target = row.dedup_target as ReviewTask['dedup_target'];
+  if (row.index_issue_number !== null) task.index_issue_number = row.index_issue_number;
 
   return task;
 }
@@ -166,8 +191,10 @@ export class D1DataStore implements DataStore {
         `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
         review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
         created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
-        summary_retry_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        summary_retry_count, task_type, feature, group_id,
+        issue_number, issue_url, issue_title, issue_body, issue_author,
+        dedup_target, index_issue_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         task.id,
@@ -192,6 +219,16 @@ export class D1DataStore implements DataStore {
         task.reviews_completed_at ?? null,
         task.summary_agent_id ?? null,
         task.summary_retry_count ?? 0,
+        task.task_type,
+        task.feature,
+        task.group_id,
+        task.issue_number ?? null,
+        task.issue_url ?? null,
+        task.issue_title ?? null,
+        task.issue_body ?? null,
+        task.issue_author ?? null,
+        task.dedup_target ?? null,
+        task.index_issue_number ?? null,
       )
       .run();
   }
@@ -203,8 +240,10 @@ export class D1DataStore implements DataStore {
           `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
           review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
           created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
-          summary_retry_count)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          summary_retry_count, task_type, feature, group_id,
+          issue_number, issue_url, issue_title, issue_body, issue_author,
+          dedup_target, index_issue_number)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
           SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?)
         )`,
@@ -232,6 +271,16 @@ export class D1DataStore implements DataStore {
           task.reviews_completed_at ?? null,
           task.summary_agent_id ?? null,
           task.summary_retry_count ?? 0,
+          task.task_type,
+          task.feature,
+          task.group_id,
+          task.issue_number ?? null,
+          task.issue_url ?? null,
+          task.issue_title ?? null,
+          task.issue_body ?? null,
+          task.issue_author ?? null,
+          task.dedup_target ?? null,
+          task.index_issue_number ?? null,
           // WHERE NOT EXISTS params
           task.owner,
           task.repo,

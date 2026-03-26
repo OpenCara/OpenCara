@@ -1,6 +1,8 @@
 // Core types
 export type {
   ReviewVerdict,
+  TaskRole,
+  Feature,
   TaskQueue,
   TaskStatus,
   ClaimStatus,
@@ -9,6 +11,12 @@ export type {
   RepoConfig,
   ReviewTask,
   TaskClaim,
+  DedupMatch,
+  DedupReport,
+  TriageCategory,
+  TriagePriority,
+  TriageSize,
+  TriageReport,
 } from './types.js';
 
 // Utility functions

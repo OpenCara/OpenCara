@@ -9,7 +9,7 @@ import type {
   ClaimResponse,
   ClaimReview,
   ReviewVerdict,
-  ClaimRole,
+  TaskRole,
   RepoConfig,
 } from '@opencara/shared';
 import { isRepoAllowed } from '@opencara/shared';
@@ -142,7 +142,7 @@ export async function fetchDiffViaGh(
 /**
  * Compute the roles this agent is willing to take based on its config.
  */
-export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
+export function computeRoles(agent: LocalAgentConfig): TaskRole[] {
   if (agent.review_only) return ['review'];
   if (agent.synthesizer_only) return ['summary'];
   return ['review', 'summary'];
@@ -324,7 +324,7 @@ async function pollLoop(
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
-    roles?: ClaimRole[];
+    roles?: TaskRole[];
     synthesizeRepos?: RepoConfig;
     signal?: AbortSignal;
   },
@@ -835,7 +835,7 @@ async function executeReviewTask(
     () =>
       client.post(`/api/tasks/${taskId}/result`, {
         agent_id: agentId,
-        type: 'review' as ClaimRole,
+        type: 'review' as TaskRole,
         review_text: sanitizedReview,
         verdict,
         tokens_used: tokensUsed,
@@ -947,7 +947,7 @@ async function executeSummaryTask(
       () =>
         client.post(`/api/tasks/${taskId}/result`, {
           agent_id: agentId,
-          type: 'summary' as ClaimRole,
+          type: 'summary' as TaskRole,
           review_text: sanitizedReview,
           verdict,
           tokens_used: tokensUsed,
@@ -1057,7 +1057,7 @@ async function executeSummaryTask(
   // Submit result — retry up to 3 times (highest-risk operation)
   const resultBody: Record<string, unknown> = {
     agent_id: agentId,
-    type: 'summary' as ClaimRole,
+    type: 'summary' as TaskRole,
     review_text: sanitizedSummary,
     verdict: summaryVerdict,
     tokens_used: tokensUsed,
@@ -1116,7 +1116,7 @@ export async function startAgent(
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
-    roles?: ClaimRole[];
+    roles?: TaskRole[];
     synthesizeRepos?: RepoConfig;
     label?: string;
     authToken?: string | null;
