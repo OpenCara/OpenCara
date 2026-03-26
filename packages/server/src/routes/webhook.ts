@@ -363,7 +363,11 @@ async function handleIssueComment(
   }
 
   const triggerCommand = config.trigger.comment;
-  if (!comment.body.trim().toLowerCase().startsWith(triggerCommand.toLowerCase())) {
+  const body = comment.body.trim().toLowerCase();
+  const cmd = triggerCommand.toLowerCase();
+  const atVariant = cmd.startsWith('/') ? '@' + cmd.slice(1) : null;
+  const triggered = body.startsWith(cmd) || (atVariant !== null && body.startsWith(atVariant));
+  if (!triggered) {
     return new Response('OK', { status: 200 });
   }
 

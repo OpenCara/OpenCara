@@ -47,6 +47,7 @@ async function signPayload(body: string, secret: string): Promise<string> {
 class FailableGitHubService implements GitHubService {
   tokenError: Error | null = null;
   parseError = false;
+  configOverride: ReviewConfig | null = null;
   fetchPrResult: PrDetails | null = {
     number: 1,
     html_url: 'https://github.com/acme/widget/pull/1',
@@ -87,7 +88,7 @@ class FailableGitHubService implements GitHubService {
     _prNumber: number,
     _token: string,
   ): Promise<{ config: ReviewConfig; parseError: boolean }> {
-    return { config: DEFAULT_REVIEW_CONFIG, parseError: this.parseError };
+    return { config: this.configOverride ?? DEFAULT_REVIEW_CONFIG, parseError: this.parseError };
   }
 }
 
@@ -304,6 +305,54 @@ describe('Webhook 503 — transient failure responses', () => {
       expect(res.status).toBe(200);
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
+    });
+  });
+
+  // ── @mention trigger alias ──────────────────────────────────
+
+  describe('@mention trigger alias', () => {
+    it('triggers on @opencara review (same as /opencara review)', async () => {
+      const payload = makeCommentPayload('@opencara review');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('triggers on @OPENCARA REVIEW (case-insensitive)', async () => {
+      const payload = makeCommentPayload('@OPENCARA REVIEW');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('triggers on @opencara review with trailing text (prefix match)', async () => {
+      const payload = makeCommentPayload('@opencara review please check');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('accepts @review when custom trigger is /review', async () => {
+      github.configOverride = {
+        ...DEFAULT_REVIEW_CONFIG,
+        trigger: { ...DEFAULT_REVIEW_CONFIG.trigger, comment: '/review' },
+      };
+      const payload = makeCommentPayload('@review');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('does not trigger on non-matching @ comments', async () => {
+      const payload = makeCommentPayload('@someone please review');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
     });
   });
 });
