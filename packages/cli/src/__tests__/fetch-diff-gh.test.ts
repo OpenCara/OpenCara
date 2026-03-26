@@ -117,4 +117,35 @@ describe('fetchDiffViaGh', () => {
       expect.any(Function),
     );
   });
+
+  it('returns null and kills child process when signal is already aborted', async () => {
+    const killFn = vi.fn(() => true);
+    mockedExecFile.mockImplementation(((..._args: unknown[]) => {
+      // Don't call callback — the abort handler should handle it
+      return { pid: 123, kill: killFn };
+    }) as typeof execFile);
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await fetchDiffViaGh('owner', 'repo', 1, controller.signal);
+
+    expect(result).toBeNull();
+    expect(killFn).toHaveBeenCalled();
+  });
+
+  it('returns null and kills child process when signal fires during execution', async () => {
+    const killFn = vi.fn(() => true);
+    const controller = new AbortController();
+    mockedExecFile.mockImplementation(((..._args: unknown[]) => {
+      // Abort after the child is created but before it completes
+      process.nextTick(() => controller.abort());
+      return { pid: 123, kill: killFn };
+    }) as typeof execFile);
+
+    const result = await fetchDiffViaGh('owner', 'repo', 1, controller.signal);
+
+    expect(result).toBeNull();
+    expect(killFn).toHaveBeenCalled();
+  });
 });

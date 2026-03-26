@@ -103,10 +103,11 @@ export async function fetchDiffViaGh(
   owner: string,
   repo: string,
   prNumber: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const stdout = await new Promise<string>((resolve, reject) => {
-      execFile(
+      const child = execFile(
         'gh',
         [
           'api',
@@ -120,6 +121,17 @@ export async function fetchDiffViaGh(
           else resolve(stdout);
         },
       );
+      if (signal) {
+        const onAbort = () => {
+          child.kill();
+          reject(new Error('aborted'));
+        };
+        if (signal.aborted) {
+          onAbort();
+        } else {
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+      }
     });
     return stdout;
   } catch {
@@ -154,7 +166,7 @@ async function fetchDiff(
   maxDiffSizeKb?: number,
 ): Promise<{ diff: string; method: 'gh' | 'http' }> {
   // Try gh CLI first — works for private repos without a platform token
-  const ghDiff = await fetchDiffViaGh(owner, repo, prNumber);
+  const ghDiff = await fetchDiffViaGh(owner, repo, prNumber, signal);
   if (ghDiff !== null) {
     if (maxDiffSizeKb) {
       const maxBytes = maxDiffSizeKb * 1024;
