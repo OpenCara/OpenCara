@@ -164,7 +164,11 @@ async function fetchDiffHttp(
 
   const response = await fetch(url, { headers, signal });
   if (!response.ok) {
-    const msg = `Failed to fetch diff: ${response.status} ${response.statusText}`;
+    const hint =
+      response.status === 404
+        ? '. If this is a private repo, ensure gh CLI is installed and authenticated: gh auth login'
+        : '';
+    const msg = `Failed to fetch diff: ${response.status} ${response.statusText}${hint}`;
     if (NON_RETRYABLE_STATUSES.has(response.status)) {
       throw new NonRetryableError(msg);
     }
