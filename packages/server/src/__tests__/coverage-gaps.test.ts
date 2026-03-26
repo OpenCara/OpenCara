@@ -6,7 +6,7 @@
  * - index.ts: error handler and 404
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
 import type { GitHubService } from '../github/service.js';
 
 const originalFetch = globalThis.fetch;
@@ -480,7 +480,7 @@ describe('webhook.ts edge cases', () => {
   });
 
   it('PR event with .opencara.toml parse error returns 503', async () => {
-    // Inject a GitHubService that returns parseError: true from loadReviewConfig
+    // Inject a GitHubService that returns parseError: true from loadOpenCaraConfig
     const parseErrorGithub: GitHubService = {
       async getInstallationToken() {
         return 'ghs_test';
@@ -493,6 +493,9 @@ describe('webhook.ts edge cases', () => {
       },
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+      },
+      async loadOpenCaraConfig() {
+        return { config: DEFAULT_OPENCARA_CONFIG, parseError: true };
       },
       async updateIssue() {},
       async fetchIssueBody() {
@@ -541,6 +544,9 @@ describe('webhook.ts edge cases', () => {
       },
       async loadReviewConfig() {
         return { config: DEFAULT_REVIEW_CONFIG, parseError: true };
+      },
+      async loadOpenCaraConfig() {
+        return { config: DEFAULT_OPENCARA_CONFIG, parseError: true };
       },
       async updateIssue() {},
       async fetchIssueBody() {

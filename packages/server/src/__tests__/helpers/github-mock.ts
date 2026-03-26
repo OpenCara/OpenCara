@@ -5,8 +5,8 @@
  * - MockGitHubService: Implements GitHubService interface with call tracking
  */
 import { vi } from 'vitest';
-import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
-import type { ReviewConfig } from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
+import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
 import type { GitHubService, PrDetails } from '../../github/service.js';
 
 export interface GitHubCall {
@@ -164,6 +164,23 @@ export class MockGitHubService implements GitHubService {
       args: { owner, repo, baseRef, prNumber, token },
     });
     return { config: DEFAULT_REVIEW_CONFIG, parseError: false };
+  }
+
+  /** Override to return custom OpenCaraConfig in tests */
+  openCaraConfig: OpenCaraConfig = DEFAULT_OPENCARA_CONFIG;
+  openCaraConfigParseError = false;
+
+  async loadOpenCaraConfig(
+    owner: string,
+    repo: string,
+    ref: string,
+    token: string,
+  ): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
+    this.calls.push({
+      method: 'loadOpenCaraConfig',
+      args: { owner, repo, ref, token },
+    });
+    return { config: this.openCaraConfig, parseError: this.openCaraConfigParseError };
   }
 
   async updateIssue(

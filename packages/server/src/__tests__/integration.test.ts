@@ -880,10 +880,10 @@ describe('Integration: full E2E flows', () => {
         mockEnv,
       );
 
-      // The loadReviewConfig call should use base ref (main), not head ref (feat/malicious-config)
-      const configFetch = githubCalls.find((c) => c.method === 'loadReviewConfig');
+      // The loadOpenCaraConfig call should use base ref (main), not head ref (feat/malicious-config)
+      const configFetch = githubCalls.find((c) => c.method === 'loadOpenCaraConfig');
       expect(configFetch).toBeDefined();
-      expect(configFetch!.args.baseRef).toBe('main');
+      expect(configFetch!.args.ref).toBe('main');
     });
 
     it('invalid signature is rejected with 401', async () => {
