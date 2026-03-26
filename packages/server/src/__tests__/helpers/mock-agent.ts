@@ -130,7 +130,7 @@ export class MockAgent {
     prNumber?: number;
     reviewCount?: number;
     timeout?: string;
-  }): Promise<{ created: boolean; taskId?: string }> {
+  }): Promise<{ created: boolean; taskId?: string; groupId?: string }> {
     const config =
       opts?.reviewCount || opts?.timeout
         ? {
@@ -147,7 +147,7 @@ export class MockAgent {
       pr_number: opts?.prNumber ?? 1,
       config,
     });
-    const body = (await res.json()) as { created: boolean; task_id?: string };
-    return { created: body.created, taskId: body.task_id };
+    const body = (await res.json()) as { created: boolean; task_id?: string; group_id?: string };
+    return { created: body.created, taskId: body.task_id, groupId: body.group_id };
   }
 }

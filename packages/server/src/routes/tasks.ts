@@ -3,9 +3,11 @@ import type {
   PollResponse,
   PollTask,
   ClaimResponse,
+  ClaimReview,
   ResultResponse,
   ReviewVerdict,
   ReviewTask,
+  TaskRole,
 } from '@opencara/shared';
 import { isRepoAllowed, isEntityMatch } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
@@ -32,13 +34,12 @@ import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
   isTaskActive,
-  isTaskTerminal,
-  isInReviewQueue,
-  isInSummaryQueue,
+  isWorkerTask,
+  isSummaryTask,
   isClaimPending,
   isClaimFailed,
   isCompletedReview,
-  shouldTransitionToSummary,
+  shouldCreateSummaryTask,
 } from '../task-lifecycle.js';
 import {
   parseBody,
@@ -74,26 +75,17 @@ function isReviewPreferredAgent(
 }
 
 /**
- * Check if a review queue task is visible to the given agent, considering
+ * Check if a worker task is visible to the given agent, considering
  * the preferred model/tool grace period.
- *
- * - If no preferred list is configured, review is available immediately.
- * - If the agent matches a preferred model/tool, review is available immediately.
- * - If the agent does NOT match, review is only available after the grace period.
  */
-function isReviewVisibleToAgent(task: ReviewTask, model?: string, tool?: string): boolean {
+function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string): boolean {
   if (isReviewPreferredAgent(task.config, model, tool)) return true;
   return Date.now() - task.created_at >= PREFERRED_REVIEW_GRACE_PERIOD_MS;
 }
 
 /**
- * Check if a summary queue task is visible to the given agent, considering
+ * Check if a summary task is visible to the given agent, considering
  * the preferred synthesizer grace period.
- *
- * - If no preferred list is configured, summary is available immediately.
- * - If the agent is in the preferred list, summary is available immediately.
- * - If the agent is NOT preferred, summary is only available after the grace period
- *   has elapsed since the task entered the summary queue.
  */
 function isSummaryVisibleToAgent(task: ReviewTask, agentId: string): boolean {
   const preferred = task.config?.summarizer?.preferred ?? [];
@@ -102,11 +94,8 @@ function isSummaryVisibleToAgent(task: ReviewTask, agentId: string): boolean {
   const isPreferred = preferred.some((p) => isEntityMatch(p, agentId));
   if (isPreferred) return true;
 
-  // Non-preferred agent: check if grace period has elapsed
-  // For review_count=1 (no review phase), use task creation time as the baseline
-  const graceStart = task.reviews_completed_at ?? (task.review_count === 1 ? task.created_at : 0);
-  if (!graceStart) return false; // reviews not yet completed
-  return Date.now() - graceStart >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
+  // Non-preferred agent: check if grace period has elapsed since task creation
+  return Date.now() - task.created_at >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
 }
 
 /**
@@ -167,7 +156,15 @@ export async function checkTimeouts(
     timeout_before: now,
   });
 
+  // Track which groups we've already processed to avoid duplicate posts
+  const processedGroups = new Set<string>();
+
   for (const task of expired) {
+    // If this task is part of a group, handle the entire group at once
+    if (task.group_id && processedGroups.has(task.group_id)) {
+      continue;
+    }
+
     log.info('Task timed out', {
       taskId: task.id,
       owner: task.owner,
@@ -175,46 +172,90 @@ export async function checkTimeouts(
       prNumber: task.pr_number,
     });
 
-    // Post fallback: any completed reviews as individual comments
-    const claims = await store.getClaims(task.id);
+    if (task.group_id) {
+      processedGroups.add(task.group_id);
 
-    // Log structured errors for each pending claim that timed out
-    for (const claim of claims.filter(isClaimPending)) {
-      log.error('Agent claim timed out', {
-        agentId: claim.agent_id,
-        taskId: task.id,
-        action: 'timeout',
-        role: claim.role,
-      });
-    }
-    const completedReviews = claims.filter(isCompletedReview);
+      // Collect completed reviews from ALL worker tasks in the group
+      const groupTasks = await store.getTasksByGroup(task.group_id);
+      const allReviews: TimeoutReview[] = [];
 
-    try {
-      const token = await github.getInstallationToken(task.github_installation_id);
-      const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
+      for (const gt of groupTasks) {
+        const claims = await store.getClaims(gt.id);
 
-      const reviews: TimeoutReview[] = completedReviews.map((claim) => ({
-        model: claim.model ?? 'unknown',
-        tool: claim.tool ?? 'unknown',
-        thinking: claim.thinking,
-        verdict: (claim.verdict as ReviewVerdict) ?? 'comment',
-        review_text: claim.review_text!,
-      }));
+        // Log structured errors for pending claims that timed out
+        for (const claim of claims.filter(isClaimPending)) {
+          log.error('Agent claim timed out', {
+            agentId: claim.agent_id,
+            taskId: gt.id,
+            action: 'timeout',
+            role: claim.role,
+          });
+        }
 
-      const body = formatTimeoutComment(timeoutMinutes, reviews);
-      await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
+        // Collect completed reviews from this task
+        const completedReviews = claims.filter(isCompletedReview);
+        for (const claim of completedReviews) {
+          allReviews.push({
+            model: claim.model ?? 'unknown',
+            tool: claim.tool ?? 'unknown',
+            thinking: claim.thinking,
+            verdict: (claim.verdict as ReviewVerdict) ?? 'comment',
+            review_text: claim.review_text!,
+          });
+        }
+      }
 
-      // Only delete AFTER posting succeeds — if posting fails,
-      // leave task in current state so next checkTimeouts() retries.
-      // If deleteTask fails after post succeeds, cleanupTerminalTasks
-      // will eventually clean up the orphaned task.
-      await store.deleteTask(task.id);
-    } catch (err) {
-      log.error('Timeout post failed', {
-        taskId: task.id,
-        action: 'timeout_post_failed',
-        error: err instanceof Error ? err.message : String(err),
-      });
+      try {
+        const token = await github.getInstallationToken(task.github_installation_id);
+        const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
+        const body = formatTimeoutComment(timeoutMinutes, allReviews);
+        await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
+        await store.deleteTasksByGroup(task.group_id);
+      } catch (err) {
+        log.error('Timeout post failed', {
+          taskId: task.id,
+          groupId: task.group_id,
+          action: 'timeout_post_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } else {
+      // Non-group task: handle individually (legacy path)
+      const claims = await store.getClaims(task.id);
+
+      for (const claim of claims.filter(isClaimPending)) {
+        log.error('Agent claim timed out', {
+          agentId: claim.agent_id,
+          taskId: task.id,
+          action: 'timeout',
+          role: claim.role,
+        });
+      }
+      const completedReviews = claims.filter(isCompletedReview);
+
+      try {
+        const token = await github.getInstallationToken(task.github_installation_id);
+        const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
+
+        const reviews: TimeoutReview[] = completedReviews.map((claim) => ({
+          model: claim.model ?? 'unknown',
+          tool: claim.tool ?? 'unknown',
+          thinking: claim.thinking,
+          verdict: (claim.verdict as ReviewVerdict) ?? 'comment',
+          review_text: claim.review_text!,
+        }));
+
+        const body = formatTimeoutComment(timeoutMinutes, reviews);
+        await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
+
+        await store.deleteTask(task.id);
+      } catch (err) {
+        log.error('Timeout post failed', {
+          taskId: task.id,
+          action: 'timeout_post_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 }
@@ -224,83 +265,197 @@ export interface SummaryData {
   review_text: string;
 }
 
+// ── Summary Result Handlers (dispatch by feature) ──────────────
+
 /**
- * Post the final review to GitHub when a task is complete.
- * For summary role: post the synthesized/single review with inline comments.
- *
- * Summary data is passed directly from the result endpoint rather than
- * re-read from KV, because KV eventual consistency (30-60s) can cause
- * the re-read to return stale data without review_text, silently dropping
- * the review.
+ * Post the final review to GitHub when a review summary is complete.
  */
-async function postFinalReview(
+async function handleReviewSummaryResult(
   store: DataStore,
   github: GitHubService,
-  taskId: string,
-  summaryAgentId: string,
+  task: ReviewTask,
+  groupId: string,
   summaryData: SummaryData,
   logger: Logger,
 ): Promise<void> {
-  const task = await store.getTask(taskId);
-  if (!task) return;
-
-  // Defense-in-depth: if task is already completed, another agent already posted.
-  if (isTaskTerminal(task)) {
-    logger.info('Skipping duplicate post — task already completed', {
-      taskId,
-      agentId: summaryAgentId,
-    });
-    return;
-  }
-
-  // Final guard: validate review_text before posting to GitHub
   const trimmed = summaryData.review_text.trim();
   if (trimmed.length < REVIEW_TEXT_MIN_LENGTH) {
     logger.error('Final review guard — review_text too short, skipping GitHub post', {
-      taskId,
-      agentId: summaryAgentId,
+      taskId: task.id,
       length: trimmed.length,
     });
-    await store.releaseSummarySlot(taskId);
-    await store.updateTask(taskId, { status: 'reviewing' });
     return;
   }
 
-  // Collect unique contributors from all claims — non-fatal on failure
+  // Collect unique contributors from all claims in the group
   let contributors: string[] = [];
   try {
-    const claims = await store.getClaims(taskId);
-    contributors = [
-      ...new Set(claims.map((c) => c.github_username).filter((u): u is string => !!u)),
-    ];
+    const groupTasks = await store.getTasksByGroup(groupId);
+    for (const gt of groupTasks) {
+      const claims = await store.getClaims(gt.id);
+      for (const c of claims) {
+        if (c.github_username) contributors.push(c.github_username);
+      }
+    }
+    contributors = [...new Set(contributors)];
   } catch {
     // Non-fatal — post review without contributor attribution
   }
 
-  try {
-    const token = await github.getInstallationToken(task.github_installation_id);
+  const token = await github.getInstallationToken(task.github_installation_id);
+  const body = wrapReviewComment(trimmed, contributors.length > 0 ? contributors : undefined);
+  await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
-    // Wrap review_text with consistent branding header/footer
-    const body = wrapReviewComment(trimmed, contributors.length > 0 ? contributors : undefined);
-    await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
+  logger.info('Review posted to GitHub', {
+    taskId: task.id,
+    owner: task.owner,
+    repo: task.repo,
+    prNumber: task.pr_number,
+  });
+}
 
-    await store.deleteTask(taskId);
-    logger.info('Review posted to GitHub — task deleted', {
-      taskId,
-      owner: task.owner,
-      repo: task.repo,
+/**
+ * Handle dedup summary result — post comment on PR/issue + update index issue.
+ */
+async function handleDedupSummaryResult(
+  store: DataStore,
+  github: GitHubService,
+  task: ReviewTask,
+  groupId: string,
+  dedupReport: DedupReport | undefined,
+  reviewText: string,
+  logger: Logger,
+): Promise<void> {
+  const token = await github.getInstallationToken(task.github_installation_id);
+  const commentBody = wrapReviewComment(reviewText.trim());
+
+  if (task.dedup_target === 'pr' && task.pr_number > 0) {
+    // Post comment on the PR
+    await github.postPrComment(task.owner, task.repo, task.pr_number, commentBody, token);
+    logger.info('Dedup PR comment posted', {
+      taskId: task.id,
       prNumber: task.pr_number,
     });
-  } catch (err) {
-    logger.error('Failed to post review to GitHub', {
-      agentId: summaryAgentId,
-      taskId,
-      action: 'post_review_failed',
-      error: err instanceof Error ? err.message : String(err),
+  } else if (task.dedup_target === 'issue' && task.issue_number) {
+    // Post comment on the issue
+    await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
+    logger.info('Dedup issue comment posted', {
+      taskId: task.id,
+      issueNumber: task.issue_number,
     });
-    // On failure, move task back to summary queue so another agent can retry
-    await store.releaseSummarySlot(taskId);
-    await store.updateTask(taskId, { status: 'reviewing' });
+  }
+
+  // Update the index issue if configured and report includes an index entry
+  if (dedupReport?.index_entry && task.index_issue_number) {
+    try {
+      const currentBody = await github.fetchIssueBody(
+        task.owner,
+        task.repo,
+        task.index_issue_number,
+        token,
+      );
+      const updatedBody = currentBody
+        ? `${currentBody}\n${dedupReport.index_entry}`
+        : dedupReport.index_entry;
+      await github.updateIssue(
+        task.owner,
+        task.repo,
+        task.index_issue_number,
+        { body: updatedBody },
+        token,
+      );
+      logger.info('Index issue updated', {
+        taskId: task.id,
+        indexIssue: task.index_issue_number,
+      });
+    } catch (err) {
+      logger.error('Failed to update index issue', {
+        taskId: task.id,
+        indexIssue: task.index_issue_number,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+/**
+ * Handle triage summary result — comment or rewrite issue + apply labels.
+ */
+async function handleTriageSummaryResult(
+  _store: DataStore,
+  github: GitHubService,
+  task: ReviewTask,
+  _groupId: string,
+  triageReport: TriageReport | undefined,
+  reviewText: string,
+  logger: Logger,
+): Promise<void> {
+  if (!task.issue_number) {
+    logger.error('Triage result but no issue_number on task', { taskId: task.id });
+    return;
+  }
+
+  const token = await github.getInstallationToken(task.github_installation_id);
+
+  if (triageReport) {
+    // Determine mode: rewrite or comment
+    const triageConfig = task.config as unknown as {
+      defaultMode?: string;
+      authorModes?: Record<string, string>;
+    };
+    let mode: 'comment' | 'rewrite' = 'comment';
+    if (triageConfig.defaultMode === 'rewrite') mode = 'rewrite';
+    if (task.issue_author && triageConfig.authorModes?.[task.issue_author]) {
+      mode = triageConfig.authorModes[task.issue_author] as 'comment' | 'rewrite';
+    }
+
+    if (mode === 'rewrite' && triageReport.body) {
+      // Rewrite the issue body
+      const updates: { body?: string; title?: string; labels?: string[] } = {
+        body: triageReport.body,
+      };
+      if (triageReport.summary) {
+        updates.title = triageReport.summary;
+      }
+      if (triageReport.labels.length > 0) {
+        updates.labels = triageReport.labels;
+      }
+      await github.updateIssue(task.owner, task.repo, task.issue_number, updates, token);
+      logger.info('Triage issue rewritten', {
+        taskId: task.id,
+        issueNumber: task.issue_number,
+        mode: 'rewrite',
+      });
+    } else {
+      // Post comment on the issue
+      const commentBody = wrapReviewComment(triageReport.comment || reviewText.trim());
+      await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
+
+      // Apply labels if configured
+      if (triageReport.labels.length > 0) {
+        await github.updateIssue(
+          task.owner,
+          task.repo,
+          task.issue_number,
+          { labels: triageReport.labels },
+          token,
+        );
+      }
+      logger.info('Triage comment posted', {
+        taskId: task.id,
+        issueNumber: task.issue_number,
+        mode: 'comment',
+        labels: triageReport.labels,
+      });
+    }
+  } else {
+    // No structured report — just post review text as a comment
+    const commentBody = wrapReviewComment(reviewText.trim());
+    await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
+    logger.info('Triage fallback comment posted', {
+      taskId: task.id,
+      issueNumber: task.issue_number,
+    });
   }
 }
 
@@ -311,18 +466,15 @@ async function postFinalReview(
 async function postFallbackConsolidatedReview(
   store: DataStore,
   github: GitHubService,
-  taskId: string,
-  claims: import('@opencara/shared').TaskClaim[],
+  task: ReviewTask,
+  workerClaims: import('@opencara/shared').TaskClaim[],
   logger: Logger,
 ): Promise<void> {
-  const task = await store.getTask(taskId);
-  if (!task) return;
-
   try {
     const token = await github.getInstallationToken(task.github_installation_id);
     const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
 
-    const reviews: TimeoutReview[] = claims.filter(isCompletedReview).map((c) => ({
+    const reviews: TimeoutReview[] = workerClaims.filter(isCompletedReview).map((c) => ({
       model: c.model ?? 'unknown',
       tool: c.tool ?? 'unknown',
       verdict: (c.verdict as ReviewVerdict) ?? 'comment',
@@ -332,14 +484,13 @@ async function postFallbackConsolidatedReview(
     const body = formatTimeoutComment(timeoutMinutes, reviews);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
-    await store.deleteTask(taskId);
-    logger.info('Fallback consolidated review posted — task deleted', {
-      taskId,
+    logger.info('Fallback consolidated review posted', {
+      taskId: task.id,
       reviewCount: reviews.length,
     });
   } catch (err) {
     logger.error('Failed to post fallback consolidated review', {
-      taskId,
+      taskId: task.id,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -359,8 +510,33 @@ export const MUTATION_RATE_LIMIT = { maxRequests: 30, windowMs: 60_000 };
 /** A task that passed non-claim eligibility filters during poll, pending batch claim check. */
 interface PollCandidate {
   task: ReviewTask;
-  role: 'review' | 'summary';
+  role: TaskRole;
   claimId: string;
+}
+
+/**
+ * Get completed worker reviews for a group (used for summary poll/claim responses).
+ */
+async function getWorkerReviews(store: DataStore, groupId: string): Promise<ClaimReview[]> {
+  const groupTasks = await store.getTasksByGroup(groupId);
+  const reviews: ClaimReview[] = [];
+  for (const gt of groupTasks) {
+    if (!isWorkerTask(gt)) continue;
+    const claims = await store.getClaims(gt.id);
+    for (const cl of claims) {
+      if (cl.status === 'completed' && cl.review_text) {
+        reviews.push({
+          agent_id: cl.agent_id,
+          review_text: cl.review_text,
+          verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
+          model: cl.model,
+          tool: cl.tool,
+          thinking: cl.thinking,
+        });
+      }
+    }
+  }
+  return reviews;
 }
 
 export function taskRoutes() {
@@ -413,8 +589,8 @@ export function taskRoutes() {
     // Check timeouts lazily (throttled to every 30s per isolate)
     await maybeCheckTimeouts(store, github, logger);
 
-    // Find available tasks — only active tasks (pending/reviewing)
-    const tasks = await store.listTasks({ status: ['pending', 'reviewing'] });
+    // Find available tasks — only pending tasks (not yet claimed)
+    const tasks = await store.listTasks({ status: ['pending'] });
     const tasksById = new Map(tasks.map((t) => [t.id, t]));
 
     // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
@@ -429,52 +605,37 @@ export function taskRoutes() {
       const remainingMs = task.timeout_at - Date.now();
       if (remainingMs <= 0) continue;
 
-      // Queue-based role assignment
-      if (isInSummaryQueue(task)) {
-        // Summary queue — check role filter, eligibility, grace period, and repo preference
-        if (acceptedRoles && !acceptedRoles.has('summary')) continue;
-        const { eligible } = isAgentEligibleForRole(
-          task.config,
-          'summary',
-          agent_id,
-          verifiedIdentity?.github_username,
-        );
-        if (!eligible) continue;
-        if (!isSummaryVisibleToAgent(task, agent_id)) continue;
+      // Filter by task_type matching agent's declared roles
+      const taskRole = task.task_type;
+      if (acceptedRoles && !acceptedRoles.has(taskRole)) continue;
 
+      // Eligibility check based on role
+      const eligibilityRole = isSummaryTask(task) ? 'summary' : taskRole;
+      const { eligible } = isAgentEligibleForRole(
+        task.config,
+        eligibilityRole,
+        agent_id,
+        verifiedIdentity?.github_username,
+      );
+      if (!eligible) continue;
+
+      // Grace period visibility checks
+      if (isSummaryTask(task)) {
+        if (!isSummaryVisibleToAgent(task, agent_id)) continue;
+        // Repo filter for summary agents
         if (synthesize_repos) {
           if (!isRepoAllowed(synthesize_repos, task.owner, task.repo)) continue;
         }
-
-        candidates.push({
-          task,
-          role: 'summary',
-          claimId: `${task.id}:${agent_id}:summary`,
-        });
-      } else if (isInReviewQueue(task)) {
-        // Review queue — check role filter and review slots
-        if (acceptedRoles && !acceptedRoles.has('review')) continue;
-        const reviewSlots = task.review_count - 1;
-        const reviewClaims = task.review_claims ?? 0;
-        if (reviewClaims >= reviewSlots) continue;
-
-        const { eligible } = isAgentEligibleForRole(
-          task.config,
-          'review',
-          agent_id,
-          verifiedIdentity?.github_username,
-        );
-        if (!eligible) continue;
-
-        if (!isReviewVisibleToAgent(task, body.model, body.tool)) continue;
-
-        candidates.push({
-          task,
-          role: 'review',
-          claimId: `${task.id}:${agent_id}:review`,
-        });
+      } else {
+        // Worker task — check model/tool preference grace period
+        if (!isWorkerVisibleToAgent(task, body.model, body.tool)) continue;
       }
-      // Tasks in 'finished' or 'completed' queue are not pollable
+
+      candidates.push({
+        task,
+        role: taskRole,
+        claimId: `${task.id}:${agent_id}:${taskRole}`,
+      });
     }
 
     // Batch-fetch all candidate claims in a single query (eliminates N+1)
@@ -490,7 +651,7 @@ export function taskRoutes() {
       }
 
       const remainingMs = task.timeout_at - Date.now();
-      available.push({
+      const pollTask: PollTask = {
         task_id: task.id,
         owner: task.owner,
         repo: task.repo,
@@ -499,21 +660,30 @@ export function taskRoutes() {
         timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
         prompt: task.prompt,
         role,
-      });
+        task_type: task.task_type,
+        issue_number: task.issue_number,
+        issue_title: task.issue_title,
+        issue_body: task.issue_body,
+      };
+
+      // For summary tasks, include worker results from the group
+      if (isSummaryTask(task)) {
+        pollTask.reviews = await getWorkerReviews(store, task.group_id);
+      }
+
+      available.push(pollTask);
     }
 
-    // Sort preferred tasks first (only applies to review-role tasks)
+    // Sort preferred tasks first (only applies to worker tasks)
     available.sort((a, b) => {
-      if (a.role !== 'review' && b.role !== 'review') return 0;
-      if (a.role !== 'review') return 1;
-      if (b.role !== 'review') return -1;
-
-      const aTask = tasksById.get(a.task_id);
-      const bTask = tasksById.get(b.task_id);
-      const aPref = aTask ? isReviewPreferredAgent(aTask.config, body.model, body.tool) : false;
-      const bPref = bTask ? isReviewPreferredAgent(bTask.config, body.model, body.tool) : false;
-      if (aPref && !bPref) return -1;
-      if (!aPref && bPref) return 1;
+      if (isSortableWorkerRole(a.role) && isSortableWorkerRole(b.role)) {
+        const aTask = tasksById.get(a.task_id);
+        const bTask = tasksById.get(b.task_id);
+        const aPref = aTask ? isReviewPreferredAgent(aTask.config, body.model, body.tool) : false;
+        const bPref = bTask ? isReviewPreferredAgent(bTask.config, body.model, body.tool) : false;
+        if (aPref && !bPref) return -1;
+        if (!aPref && bPref) return 1;
+      }
       return 0;
     });
 
@@ -555,10 +725,21 @@ export function taskRoutes() {
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Task has timed out');
     }
 
-    // Check whitelist/blacklist eligibility before slot availability
+    // Validate role matches task_type
+    if (role !== task.task_type) {
+      return apiError(
+        c,
+        409,
+        'CLAIM_CONFLICT',
+        `Role '${role}' does not match task type '${task.task_type}'`,
+      );
+    }
+
+    // Check whitelist/blacklist eligibility
+    const eligibilityRole = isSummaryTask(task) ? 'summary' : role;
     const eligibility = isAgentEligibleForRole(
       task.config,
-      role,
+      eligibilityRole,
       agent_id,
       verifiedIdentity?.github_username,
     );
@@ -571,39 +752,18 @@ export function taskRoutes() {
       );
     }
 
-    // Queue-based claim validation
-    if (role === 'review') {
-      if (!isInReviewQueue(task)) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
-      }
-      // Atomic slot reservation — prevents concurrent oversubscription
-      const reviewSlots = task.review_count - 1;
-      const slotReserved = await store.claimReviewSlot(taskId, reviewSlots);
-      if (!slotReserved) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'No review slots available');
-      }
-    } else if (role === 'summary') {
-      if (!isInSummaryQueue(task)) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
-      }
-      // Check preferred synthesizer grace period
-      if (!isSummaryVisibleToAgent(task, agent_id)) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
-      }
+    // Grace period check for summary tasks
+    if (isSummaryTask(task) && !isSummaryVisibleToAgent(task, agent_id)) {
+      return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
     }
 
-    // For summary claims, use atomic CAS to prevent concurrent claims.
-    // claimSummarySlot atomically sets queue='finished' + summary_agent_id
-    // only if queue='summary', preventing the race where multiple agents
-    // pass the queue check above.
-    if (role === 'summary') {
-      const claimed = await store.claimSummarySlot(taskId, agent_id);
-      if (!claimed) {
-        return apiError(c, 409, 'CLAIM_CONFLICT', 'Unable to claim summary slot');
-      }
+    // Atomic CAS: pending → reviewing
+    const claimed = await store.claimTask(taskId);
+    if (!claimed) {
+      return apiError(c, 409, 'CLAIM_CONFLICT', 'Task already claimed');
     }
 
-    // Role-aware claim ID: allows reviewer to also claim summary later
+    // Role-aware claim ID
     const claimId = `${taskId}:${agent_id}:${role}`;
     const claimCreated = await store.createClaim({
       id: claimId,
@@ -619,34 +779,15 @@ export function taskRoutes() {
       created_at: Date.now(),
     });
     if (!claimCreated) {
-      if (role === 'review') {
-        // Atomically release the reserved slot
-        await store.releaseReviewSlot(taskId);
-      } else if (role === 'summary') {
-        await store.releaseSummarySlot(taskId);
-      }
+      // Release the task so another agent can claim it
+      await store.releaseTask(taskId);
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
     }
 
-    // Update task state based on role
-    // Note: review_claims increment is handled atomically by claimReviewSlot above
-    // Note: summary queue/agent updates are handled by claimSummarySlot above
-    if (task.status === 'pending') {
-      await store.updateTask(taskId, { status: 'reviewing' });
-    }
-
-    // If summary role, include completed review texts
-    if (role === 'summary') {
-      const claims = await store.getClaims(taskId);
-      const completedReviews = claims.filter(isCompletedReview).map((cl) => ({
-        agent_id: cl.agent_id,
-        review_text: cl.review_text!,
-        verdict: (cl.verdict ?? 'comment') as ReviewVerdict,
-        model: cl.model,
-        tool: cl.tool,
-        thinking: cl.thinking,
-      }));
-      return c.json<ClaimResponse>({ claimed: true, reviews: completedReviews });
+    // For summary claims, return completed worker results from the group
+    if (isSummaryTask(task)) {
+      const reviews = await getWorkerReviews(store, task.group_id);
+      return c.json<ClaimResponse>({ claimed: true, reviews });
     }
 
     return c.json<ClaimResponse>({ claimed: true });
@@ -677,7 +818,6 @@ export function taskRoutes() {
       });
 
       // Record rejection for abuse tracking if review_text was the invalid field.
-      // Only track when review_text is a string (non-string types are a different error).
       const agentId =
         typeof raw.agent_id === 'string' && raw.agent_id.length > 0 ? raw.agent_id : null;
       if (agentId && typeof raw.review_text === 'string') {
@@ -696,7 +836,8 @@ export function taskRoutes() {
       return apiError(c, 400, 'INVALID_REQUEST', messages.join('; '));
     }
 
-    const { agent_id, type, review_text, verdict, tokens_used } = result.data;
+    const { agent_id, type, review_text, verdict, tokens_used, dedup_report, triage_report } =
+      result.data;
 
     // Role-aware claim lookup
     const claimId = `${taskId}:${agent_id}:${type}`;
@@ -739,86 +880,156 @@ export function taskRoutes() {
       tokens_used,
     });
 
-    // Check if the task is now complete
+    // Check if the task exists
     const task = await store.getTask(taskId);
     if (!task) {
       return c.json<ResultResponse>({ success: true });
     }
 
-    if (type === 'summary') {
-      // Verify this agent is the summary holder (queue-based check)
-      if (task.summary_agent_id !== agent_id) {
-        logger.info('Accepting result but skipping GitHub post — agent is not summary holder', {
-          taskId,
-          agentId: agent_id,
-        });
-        return c.json<ResultResponse>({ success: true });
-      }
+    if (isSummaryTask(task)) {
+      // ── Summary result — dispatch by feature ──────────────
 
-      // Quality gate: evaluate summary before posting to GitHub
-      const claims = await store.getClaims(taskId);
-      const individualReviews = claims.filter(isCompletedReview).map((cl) => cl.review_text!);
+      // Quality gate for review summaries
+      if (task.feature === 'review') {
+        const workerReviews = await getWorkerReviews(store, task.group_id);
+        const individualTexts = workerReviews.map((r) => r.review_text);
 
-      const evaluation = evaluateSummaryQuality(review_text, individualReviews);
+        const evaluation = evaluateSummaryQuality(review_text, individualTexts);
 
-      if (!evaluation.pass) {
-        // Reject: revert claim, release slot, record rejection, increment retry count
-        await store.updateClaim(claimId, { status: 'rejected' });
-        await store.releaseSummarySlot(taskId);
-        await store.recordAgentRejection(
-          agent_id,
-          `summary_quality: ${evaluation.reason}`,
-          Date.now(),
-        );
+        if (!evaluation.pass) {
+          // Reject: revert claim, release task, record rejection
+          await store.updateClaim(claimId, { status: 'rejected' });
+          await store.releaseTask(taskId);
+          await store.recordAgentRejection(
+            agent_id,
+            `summary_quality: ${evaluation.reason}`,
+            Date.now(),
+          );
 
-        const retryCount = await store.incrementSummaryRetryCount(taskId);
+          const retryCount = await store.incrementSummaryRetryCount(taskId);
 
-        logger.warn('Summary quality rejected', {
-          taskId,
-          agentId: agent_id,
-          reason: evaluation.reason,
-          retryCount,
-        });
-
-        // If retries exhausted, fall back to timeout-style consolidated post
-        if (retryCount !== null && retryCount >= MAX_SUMMARY_RETRIES) {
-          logger.info('Summary retries exhausted — posting fallback consolidated reviews', {
+          logger.warn('Summary quality rejected', {
             taskId,
+            agentId: agent_id,
+            reason: evaluation.reason,
             retryCount,
           });
-          await postFallbackConsolidatedReview(store, github, taskId, claims, logger);
-          return c.json<ResultResponse>({ success: true });
-        }
 
-        return apiError(
-          c,
-          400,
-          'REVIEW_QUALITY_REJECTED',
-          `Summary rejected: ${evaluation.reason}`,
-        );
+          // If retries exhausted, fall back to consolidated post
+          if (retryCount !== null && retryCount >= MAX_SUMMARY_RETRIES) {
+            logger.info('Summary retries exhausted — posting fallback consolidated reviews', {
+              taskId,
+              retryCount,
+            });
+            const workerClaims: import('@opencara/shared').TaskClaim[] = [];
+            const groupTasks = await store.getTasksByGroup(task.group_id);
+            for (const gt of groupTasks) {
+              if (isWorkerTask(gt)) {
+                const gtClaims = await store.getClaims(gt.id);
+                workerClaims.push(...gtClaims);
+              }
+            }
+            await postFallbackConsolidatedReview(store, github, task, workerClaims, logger);
+            await store.deleteTasksByGroup(task.group_id);
+            return c.json<ResultResponse>({ success: true });
+          }
+
+          return apiError(
+            c,
+            400,
+            'REVIEW_QUALITY_REJECTED',
+            `Summary rejected: ${evaluation.reason}`,
+          );
+        }
       }
 
-      // Summary submitted — post the final review to GitHub
-      await postFinalReview(store, github, taskId, agent_id, { review_text }, logger);
-    } else {
-      // Review submitted — atomically increment completed_reviews counter
-      const result = await store.incrementCompletedReviews(taskId);
-      if (result) {
-        const { newCount, queue } = result;
-        const reviewSlots = task.review_count > 1 ? task.review_count - 1 : 0;
-        if (shouldTransitionToSummary(newCount, reviewSlots, queue)) {
-          // All reviews done — move task to summary queue
-          // Guard: shouldTransitionToSummary checks queue is still 'review' to prevent
-          // late review results from overwriting 'summary' or 'finished' state
-          await store.updateTask(taskId, {
-            queue: 'summary',
-            reviews_completed_at: Date.now(),
-          });
-          logger.info('All reviews complete, task moved to summary queue', {
-            taskId,
-            reviewSlots,
-          });
+      // Dispatch by feature
+      try {
+        switch (task.feature) {
+          case 'review':
+            await handleReviewSummaryResult(
+              store,
+              github,
+              task,
+              task.group_id,
+              { review_text },
+              logger,
+            );
+            break;
+          case 'dedup_pr':
+          case 'dedup_issue':
+            await handleDedupSummaryResult(
+              store,
+              github,
+              task,
+              task.group_id,
+              dedup_report as DedupReport | undefined,
+              review_text,
+              logger,
+            );
+            break;
+          case 'triage':
+            await handleTriageSummaryResult(
+              store,
+              github,
+              task,
+              task.group_id,
+              triage_report as TriageReport | undefined,
+              review_text,
+              logger,
+            );
+            break;
+          default:
+            logger.error('Unknown feature for summary result', {
+              taskId,
+              feature: task.feature,
+            });
         }
+
+        // Delete all tasks in the group after posting
+        await store.deleteTasksByGroup(task.group_id);
+      } catch (err) {
+        logger.error('Failed to post summary result to GitHub', {
+          taskId,
+          feature: task.feature,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // On failure, release the task so another agent can retry
+        await store.releaseTask(taskId);
+        await store.updateClaim(claimId, { status: 'error' });
+      }
+    } else {
+      // ── Worker result — check group completion ──────────────
+
+      // Mark the task as completed
+      await store.updateTask(taskId, { status: 'completed' });
+
+      // Check if all worker tasks in the group are completed
+      const groupTasks = await store.getTasksByGroup(task.group_id);
+      const workerTasks = groupTasks.filter(isWorkerTask);
+      const completedWorkers = workerTasks.filter((t) => t.status === 'completed').length;
+
+      if (shouldCreateSummaryTask(completedWorkers, workerTasks.length)) {
+        // All workers done — create a summary task for this group
+        const summaryTaskId = crypto.randomUUID();
+        const summaryTask: ReviewTask = {
+          ...task,
+          id: summaryTaskId,
+          task_type: 'summary',
+          status: 'pending',
+          queue: 'summary',
+          prompt: task.prompt,
+          created_at: Date.now(),
+          timeout_at: Date.now() + (task.timeout_at - task.created_at),
+        };
+        await store.createTask(summaryTask);
+
+        logger.info('All workers complete — summary task created', {
+          groupId: task.group_id,
+          feature: task.feature,
+          summaryTaskId,
+          workerCount: workerTasks.length,
+        });
       }
     }
 
@@ -835,7 +1046,7 @@ export function taskRoutes() {
     if (body instanceof Response) return body;
     const { agent_id, reason } = body;
 
-    // Try role-aware claim IDs (summary first, then review)
+    // Try role-aware claim IDs
     const claim = await findClaimForAgent(store, taskId, agent_id);
 
     if (!claim) {
@@ -852,12 +1063,8 @@ export function taskRoutes() {
 
     await store.updateClaim(claim.id, { status: 'rejected' });
 
-    // Free the slot so another agent can claim it (atomic to avoid races)
-    if (claim.role === 'review') {
-      await store.releaseReviewSlot(taskId);
-    } else if (claim.role === 'summary') {
-      await store.releaseSummarySlot(taskId);
-    }
+    // Release the task so another agent can claim it
+    await store.releaseTask(taskId);
 
     logger.error('Agent rejected task', {
       agentId: agent_id,
@@ -879,7 +1086,7 @@ export function taskRoutes() {
     if (body instanceof Response) return body;
     const { agent_id, error } = body;
 
-    // Try role-aware claim IDs (summary first, then review)
+    // Try role-aware claim IDs
     const claim = await findClaimForAgent(store, taskId, agent_id);
 
     if (!claim) {
@@ -896,12 +1103,8 @@ export function taskRoutes() {
 
     await store.updateClaim(claim.id, { status: 'error' });
 
-    // Free the slot so another agent can claim it (atomic to avoid races)
-    if (claim.role === 'review') {
-      await store.releaseReviewSlot(taskId);
-    } else if (claim.role === 'summary') {
-      await store.releaseSummarySlot(taskId);
-    }
+    // Release the task so another agent can claim it
+    await store.releaseTask(taskId);
 
     logger.error('Agent reported error', {
       agentId: agent_id,
@@ -916,26 +1119,32 @@ export function taskRoutes() {
   return app;
 }
 
+/** Check if a role is a sortable worker role for preferred agent ordering. */
+function isSortableWorkerRole(role: TaskRole): boolean {
+  return role !== 'summary';
+}
+
 /**
- * Find a pending claim for an agent on a task. Checks role-aware claim IDs
- * (summary first since that's the more impactful role to release).
+ * Find a pending claim for an agent on a task. Checks all possible role-aware
+ * claim IDs (summary first since that's the more impactful role to release).
  */
 async function findClaimForAgent(
   store: DataStore,
   taskId: string,
   agentId: string,
 ): Promise<import('@opencara/shared').TaskClaim | null> {
-  // Try summary claim first (higher priority to release)
-  const summaryClaim = await store.getClaim(`${taskId}:${agentId}:summary`);
-  if (summaryClaim && isClaimPending(summaryClaim)) return summaryClaim;
+  const roles: TaskRole[] = ['summary', 'review', 'dedup', 'triage'];
 
-  // Try review claim
-  const reviewClaim = await store.getClaim(`${taskId}:${agentId}:review`);
-  if (reviewClaim && isClaimPending(reviewClaim)) return reviewClaim;
+  for (const role of roles) {
+    const claim = await store.getClaim(`${taskId}:${agentId}:${role}`);
+    if (claim && isClaimPending(claim)) return claim;
+  }
 
   // Return any found claim for idempotency checks (rejected/error/completed)
-  if (summaryClaim) return summaryClaim;
-  if (reviewClaim) return reviewClaim;
+  for (const role of roles) {
+    const claim = await store.getClaim(`${taskId}:${agentId}:${role}`);
+    if (claim) return claim;
+  }
 
   return null;
 }

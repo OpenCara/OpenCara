@@ -30,7 +30,7 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
-    task_type: 'review',
+    task_type: 'summary',
     feature: 'review',
     group_id: 'group-1',
     ...overrides,
@@ -766,6 +766,7 @@ describe('OAuth middleware integration', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -791,6 +792,7 @@ describe('OAuth middleware integration', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {

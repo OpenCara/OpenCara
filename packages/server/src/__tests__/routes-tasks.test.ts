@@ -24,12 +24,13 @@ function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
     prompt: 'Review this PR',
     timeout_at: Date.now() + 600_000,
     status: 'pending',
-    queue: 'summary', // review_count=1 → summary queue
+    queue: 'summary', // deprecated — use task_type instead
     github_installation_id: 123,
     private: false,
     config: DEFAULT_REVIEW_CONFIG,
     created_at: Date.now(),
-    task_type: 'review',
+    // Default: summary task (review_count=1 → single agent = summary)
+    task_type: 'summary',
     feature: 'review',
     group_id: 'group-1',
     ...overrides,
@@ -175,7 +176,7 @@ describe('Task Routes', () => {
     });
 
     it('returns review role for multi-agent tasks', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', task_type: 'review' }));
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
       expect(body.tasks[0].role).toBe('review');
@@ -199,7 +200,7 @@ describe('Task Routes', () => {
 
     it('returns review tasks when review_only is true', async () => {
       // review_count=3 → review queue
-      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', task_type: 'review' }));
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         review_only: true,
@@ -210,7 +211,9 @@ describe('Task Routes', () => {
     });
 
     it('returns both review and summary when review_only is not set', async () => {
-      await store.createTask(makeTask({ id: 'task-review', review_count: 3, queue: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'task-review', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       await store.createTask(makeTask({ id: 'task-summary', review_count: 1, queue: 'summary' }));
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
@@ -288,7 +291,9 @@ describe('Task Routes', () => {
 
     it('filters tasks by roles — review only', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         roles: ['review'],
@@ -301,7 +306,9 @@ describe('Task Routes', () => {
 
     it('filters tasks by roles — summary only', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         roles: ['summary'],
@@ -314,7 +321,9 @@ describe('Task Routes', () => {
 
     it('returns both roles when roles includes both', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
         roles: ['review', 'summary'],
@@ -325,7 +334,9 @@ describe('Task Routes', () => {
 
     it('returns all tasks when roles is omitted (backward compatible)', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body = await res.json();
       expect(body.tasks).toHaveLength(2);
@@ -333,7 +344,9 @@ describe('Task Routes', () => {
 
     it('roles takes precedence over review_only', async () => {
       await store.createTask(makeTask({ id: 'summary-task', review_count: 1, queue: 'summary' }));
-      await store.createTask(makeTask({ id: 'review-task', review_count: 3, queue: 'review' }));
+      await store.createTask(
+        makeTask({ id: 'review-task', review_count: 3, queue: 'review', task_type: 'review' }),
+      );
       // roles says summary, review_only says true — roles wins
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
@@ -369,6 +382,8 @@ describe('Task Routes', () => {
           id: 'review-task',
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
+          task_type: 'review',
           owner: 'org',
           repo: 'repo-x',
         }),
@@ -404,7 +419,9 @@ describe('Task Routes', () => {
           whitelist: [{ agent: 'agent-allowed' }],
         },
       };
-      await store.createTask(makeTask({ config, queue: 'review', review_count: 2 }));
+      await store.createTask(
+        makeTask({ config, queue: 'review', review_count: 2, task_type: 'review' }),
+      );
       // Non-whitelisted agent — not eligible
       const res1 = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
       const body1 = await res1.json();
@@ -486,7 +503,7 @@ describe('Task Routes', () => {
     });
 
     it('rejects double claim from same agent', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', task_type: 'review' }));
       // First claim succeeds
       await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
@@ -503,18 +520,21 @@ describe('Task Routes', () => {
     });
 
     it('includes reviews when claiming summary role', async () => {
+      // Create a worker task with completed review in the same group
       await store.createTask(
         makeTask({
-          review_count: 2,
-          queue: 'summary',
-          review_claims: 1,
-          completed_reviews: 1,
+          id: 'worker-1',
+          task_type: 'review',
+          group_id: 'group-1',
+          status: 'completed',
         }),
       );
-      // Add a completed review with model/tool/thinking
+      // Summary task in same group
+      await store.createTask(makeTask({ id: 'task-1', task_type: 'summary', group_id: 'group-1' }));
+      // Add a completed review on the worker task
       await store.createClaim({
-        id: 'task-1:reviewer:review',
-        task_id: 'task-1',
+        id: 'worker-1:reviewer:review',
+        task_id: 'worker-1',
         agent_id: 'reviewer',
         role: 'review',
         status: 'completed',
@@ -549,38 +569,33 @@ describe('Task Routes', () => {
       expect(task?.status).toBe('reviewing');
     });
 
-    it('moves task to finished queue on summary claim', async () => {
+    it('moves task to reviewing on summary claim', async () => {
       await store.createTask(makeTask());
       await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
         role: 'summary',
       });
       const task = await store.getTask('task-1');
-      expect(task?.queue).toBe('finished');
-      expect(task?.summary_agent_id).toBe('agent-1');
+      expect(task?.status).toBe('reviewing');
     });
 
-    it('reviewer can claim summary after completing review (#330)', async () => {
-      // Start with review_count=2, review queue
-      await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
+    it('same agent can claim both worker and summary tasks in a group (#330)', async () => {
+      // Worker task
+      await store.createTask(makeTask({ id: 'w1', task_type: 'review', group_id: 'g1' }));
+      // Summary task
+      await store.createTask(makeTask({ id: 's1', task_type: 'summary', group_id: 'g1' }));
 
-      // Agent-a claims review
-      await request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-a', role: 'review' });
-
-      // Agent-a submits review — this should move task to summary queue
-      await request('POST', '/api/tasks/task-1/result', {
+      // Agent-a claims and completes worker
+      await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
+      await request('POST', '/api/tasks/w1/result', {
         agent_id: 'agent-a',
         type: 'review',
-        review_text: 'Review A: Detailed analysis',
+        review_text: 'Review A: Detailed analysis of the code changes',
         verdict: 'approve',
       });
 
-      // Task should now be in summary queue
-      const task = await store.getTask('task-1');
-      expect(task?.queue).toBe('summary');
-
-      // Agent-a should be able to claim summary (role-aware claim ID)
-      const res = await request('POST', '/api/tasks/task-1/claim', {
+      // Agent-a can also claim the summary task
+      const res = await request('POST', '/api/tasks/s1/claim', {
         agent_id: 'agent-a',
         role: 'summary',
       });
@@ -631,11 +646,11 @@ describe('Task Routes', () => {
       expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
 
-    it('prevents oversubscription with concurrent review claims', async () => {
-      // Task with review_count=3 → 2 review slots (review_count - 1)
-      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+    it('prevents concurrent claims to the same task', async () => {
+      // Each task in new model only accepts one claim (CAS: pending → reviewing)
+      await store.createTask(makeTask({ id: 'task-1', task_type: 'review' }));
 
-      // Three agents race for 2 review slots
+      // Three agents race for the same task
       const results = await Promise.all([
         request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-1', role: 'review' }),
         request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-2', role: 'review' }),
@@ -646,17 +661,13 @@ describe('Task Routes', () => {
       const successes = statuses.filter((s) => s === 200);
       const conflicts = statuses.filter((s) => s === 409);
 
-      // Exactly 2 should succeed, 1 should be rejected
-      expect(successes).toHaveLength(2);
-      expect(conflicts).toHaveLength(1);
-
-      // Task should have exactly 2 review_claims
-      const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(2);
+      // Exactly 1 should succeed, 2 should be rejected (CAS)
+      expect(successes).toHaveLength(1);
+      expect(conflicts).toHaveLength(2);
     });
 
-    it('review claim releases slot on duplicate agent claim', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+    it('duplicate claim from same agent is rejected', async () => {
+      await store.createTask(makeTask({ id: 'task-1', task_type: 'review' }));
 
       // First claim succeeds
       const res1 = await request('POST', '/api/tasks/task-1/claim', {
@@ -665,20 +676,16 @@ describe('Task Routes', () => {
       });
       expect(res1.status).toBe(200);
 
-      // Same agent tries again — should fail and release the reserved slot
+      // Same agent tries again — task already in reviewing state
       const res2 = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-1',
         role: 'review',
       });
       expect(res2.status).toBe(409);
-
-      // review_claims should still be 1 (slot was released after duplicate detection)
-      const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(1);
     });
 
-    it('handles concurrent duplicate claims without corrupting slot count', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review', review_claims: 0 }));
+    it('concurrent duplicate claims all rejected after first succeeds', async () => {
+      await store.createTask(makeTask({ id: 'task-1', task_type: 'review' }));
 
       // First claim succeeds
       await request('POST', '/api/tasks/task-1/claim', {
@@ -686,25 +693,14 @@ describe('Task Routes', () => {
         role: 'review',
       });
 
-      // Fire multiple duplicate claims concurrently
-      await Promise.all([
-        request('POST', '/api/tasks/task-1/claim', {
-          agent_id: 'agent-1',
-          role: 'review',
-        }),
-        request('POST', '/api/tasks/task-1/claim', {
-          agent_id: 'agent-1',
-          role: 'review',
-        }),
-        request('POST', '/api/tasks/task-1/claim', {
-          agent_id: 'agent-1',
-          role: 'review',
-        }),
+      // Fire multiple duplicate claims concurrently — all should fail (task already reviewing)
+      const results = await Promise.all([
+        request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-1', role: 'review' }),
+        request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-2', role: 'review' }),
+        request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-3', role: 'review' }),
       ]);
 
-      // Slot count should still be 1 (only the original claim)
-      const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(1);
+      expect(results.every((r) => r.status === 409)).toBe(true);
     });
   });
 
@@ -712,7 +708,7 @@ describe('Task Routes', () => {
 
   describe('POST /api/tasks/:taskId/result', () => {
     it('stores review result', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+      await store.createTask(makeTask({ task_type: 'review', status: 'reviewing' }));
       await store.createClaim({
         id: 'task-1:agent-1:review',
         task_id: 'task-1',
@@ -749,7 +745,7 @@ describe('Task Routes', () => {
     });
 
     it('rejects result when submission type does not match claim role (review claim, summary submission)', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+      await store.createTask(makeTask({ review_count: 3, queue: 'review', task_type: 'review' }));
       await store.createClaim({
         id: 'task-1:agent-1:review',
         task_id: 'task-1',
@@ -807,24 +803,56 @@ describe('Task Routes', () => {
       expect(res.status).toBe(409);
     });
 
-    it('moves task to summary queue when last review is submitted', async () => {
-      await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
-      // Agent claims review
-      await request('POST', '/api/tasks/task-1/claim', {
-        agent_id: 'agent-a',
-        role: 'review',
-      });
-      // Submit review
-      await request('POST', '/api/tasks/task-1/result', {
+    it('creates summary task when last worker result is submitted', async () => {
+      // Two worker tasks in the same group
+      await store.createTask(
+        makeTask({
+          id: 'w1',
+          review_count: 2,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-1',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'w2',
+          review_count: 2,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-1',
+        }),
+      );
+
+      // Claim and submit both workers
+      await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
+      await request('POST', '/api/tasks/w1/result', {
         agent_id: 'agent-a',
         type: 'review',
-        review_text: 'Looks good overall',
+        review_text: 'Review A: Detailed analysis',
         verdict: 'approve',
       });
 
-      const task = await store.getTask('task-1');
-      expect(task?.queue).toBe('summary');
-      expect(task?.completed_reviews).toBe(1);
+      // After first worker, no summary yet
+      const allTasks1 = await store.listTasks({});
+      const summaries1 = allTasks1.filter((t) => t.task_type === 'summary');
+      expect(summaries1).toHaveLength(0);
+
+      await request('POST', '/api/tasks/w2/claim', { agent_id: 'agent-b', role: 'review' });
+      await request('POST', '/api/tasks/w2/result', {
+        agent_id: 'agent-b',
+        type: 'review',
+        review_text: 'Review B: Detailed analysis',
+        verdict: 'comment',
+      });
+
+      // After second worker, summary task should exist
+      const allTasks2 = await store.listTasks({});
+      const summaries2 = allTasks2.filter(
+        (t) => t.task_type === 'summary' && t.group_id === 'grp-1',
+      );
+      expect(summaries2).toHaveLength(1);
+      expect(summaries2[0].status).toBe('pending');
     });
   });
 
@@ -836,6 +864,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -889,6 +918,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -917,12 +947,13 @@ describe('Task Routes', () => {
       expect(res2.status).toBe(200);
     });
 
-    it('frees review slot (review_claims decremented)', async () => {
+    it('releases task on reject (status back to pending)', async () => {
       await store.createTask(
         makeTask({
           review_count: 3,
           queue: 'review',
-          review_claims: 2,
+          task_type: 'review',
+          task_type: 'review',
           status: 'reviewing',
         }),
       );
@@ -941,14 +972,12 @@ describe('Task Routes', () => {
       });
 
       const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(1);
+      expect(task?.status).toBe('pending');
     });
 
-    it('moves task back to summary queue on summary reject', async () => {
+    it('releases summary task on reject (status back to pending)', async () => {
       await store.createTask(
         makeTask({
-          queue: 'finished',
-          summary_agent_id: 'agent-1',
           status: 'reviewing',
         }),
       );
@@ -967,8 +996,7 @@ describe('Task Routes', () => {
       });
 
       const task = await store.getTask('task-1');
-      expect(task?.queue).toBe('summary');
-      expect(task?.summary_agent_id).toBeUndefined();
+      expect(task?.status).toBe('pending');
     });
 
     it('counter underflow protection — reject when review_claims is already 0', async () => {
@@ -976,6 +1004,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 0, // already 0 (edge case)
           status: 'reviewing',
         }),
@@ -998,13 +1027,28 @@ describe('Task Routes', () => {
       expect(task?.review_claims).toBe(0); // underflow protected by releaseReviewSlot
     });
 
-    it('concurrent rejections decrement review_claims correctly', async () => {
+    it('concurrent rejections release separate tasks correctly', async () => {
+      // Two separate worker tasks (new model: one task per agent)
       await store.createTask(
         makeTask({
+          id: 'task-1',
           review_count: 3,
           queue: 'review',
-          review_claims: 2,
+          task_type: 'review',
+          task_type: 'review',
           status: 'reviewing',
+          group_id: 'grp-1',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          review_count: 3,
+          queue: 'review',
+          task_type: 'review',
+          task_type: 'review',
+          status: 'reviewing',
+          group_id: 'grp-1',
         }),
       );
       await store.createClaim({
@@ -1016,8 +1060,8 @@ describe('Task Routes', () => {
         created_at: Date.now(),
       });
       await store.createClaim({
-        id: 'task-1:agent-2:review',
-        task_id: 'task-1',
+        id: 'task-2:agent-2:review',
+        task_id: 'task-2',
         agent_id: 'agent-2',
         role: 'review',
         status: 'pending',
@@ -1030,7 +1074,7 @@ describe('Task Routes', () => {
           agent_id: 'agent-1',
           reason: 'test',
         }),
-        request('POST', '/api/tasks/task-1/reject', {
+        request('POST', '/api/tasks/task-2/reject', {
           agent_id: 'agent-2',
           reason: 'test',
         }),
@@ -1038,8 +1082,11 @@ describe('Task Routes', () => {
       expect(res1.status).toBe(200);
       expect(res2.status).toBe(200);
 
-      const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(0); // both decrements applied atomically
+      // Both tasks released back to pending
+      const t1 = await store.getTask('task-1');
+      const t2 = await store.getTask('task-2');
+      expect(t1?.status).toBe('pending');
+      expect(t2?.status).toBe('pending');
     });
   });
 
@@ -1049,6 +1096,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1102,6 +1150,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1123,11 +1172,9 @@ describe('Task Routes', () => {
       expect(res2.status).toBe(200);
     });
 
-    it('moves task back to summary queue on summary error', async () => {
+    it('releases summary task on error (status back to pending)', async () => {
       await store.createTask(
         makeTask({
-          queue: 'finished',
-          summary_agent_id: 'agent-1',
           status: 'reviewing',
         }),
       );
@@ -1146,17 +1193,31 @@ describe('Task Routes', () => {
       });
 
       const task = await store.getTask('task-1');
-      expect(task?.queue).toBe('summary');
-      expect(task?.summary_agent_id).toBeUndefined();
+      expect(task?.status).toBe('pending');
     });
 
-    it('concurrent errors decrement review_claims correctly', async () => {
+    it('concurrent errors release separate tasks correctly', async () => {
+      // Two separate worker tasks (new model: one task per agent)
       await store.createTask(
         makeTask({
+          id: 'task-1',
           review_count: 3,
           queue: 'review',
-          review_claims: 2,
+          task_type: 'review',
+          task_type: 'review',
           status: 'reviewing',
+          group_id: 'grp-1',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          review_count: 3,
+          queue: 'review',
+          task_type: 'review',
+          task_type: 'review',
+          status: 'reviewing',
+          group_id: 'grp-1',
         }),
       );
       await store.createClaim({
@@ -1168,8 +1229,8 @@ describe('Task Routes', () => {
         created_at: Date.now(),
       });
       await store.createClaim({
-        id: 'task-1:agent-2:review',
-        task_id: 'task-1',
+        id: 'task-2:agent-2:review',
+        task_id: 'task-2',
         agent_id: 'agent-2',
         role: 'review',
         status: 'pending',
@@ -1182,7 +1243,7 @@ describe('Task Routes', () => {
           agent_id: 'agent-1',
           error: 'crash',
         }),
-        request('POST', '/api/tasks/task-1/error', {
+        request('POST', '/api/tasks/task-2/error', {
           agent_id: 'agent-2',
           error: 'crash',
         }),
@@ -1190,8 +1251,11 @@ describe('Task Routes', () => {
       expect(res1.status).toBe(200);
       expect(res2.status).toBe(200);
 
-      const task = await store.getTask('task-1');
-      expect(task?.review_claims).toBe(0); // both decrements applied atomically
+      // Both tasks released back to pending
+      const t1 = await store.getTask('task-1');
+      const t2 = await store.getTask('task-2');
+      expect(t1?.status).toBe('pending');
+      expect(t2?.status).toBe('pending');
     });
   });
 
@@ -1261,6 +1325,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1293,6 +1358,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           review_claims: 1,
           status: 'reviewing',
         }),
@@ -1367,6 +1433,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1387,6 +1454,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1408,6 +1476,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1428,6 +1497,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1475,6 +1545,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1535,6 +1606,7 @@ describe('Task Routes', () => {
         makeTask({
           review_count: 3,
           queue: 'review',
+          task_type: 'review',
           config: {
             ...DEFAULT_REVIEW_CONFIG,
             reviewer: {
@@ -1626,52 +1698,74 @@ describe('Task Routes', () => {
   // ── Multi-agent flow ─────────────────────────────────────
 
   describe('multi-agent review flow', () => {
-    it('review_count=3: 2 reviews → summary becomes available', async () => {
-      await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+    it('review_count=3: 2 workers → summary becomes available after both complete', async () => {
+      // Separate task model: 2 worker tasks in a group
+      await store.createTask(
+        makeTask({
+          id: 'w1',
+          review_count: 3,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-multi',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'w2',
+          review_count: 3,
+          queue: 'review',
+          task_type: 'review',
+          group_id: 'grp-multi',
+        }),
+      );
 
-      // Agent A polls → gets review role
+      // Agent A polls → sees both worker tasks
       let res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-a' });
       let body = await res.json();
+      expect(body.tasks.length).toBeGreaterThanOrEqual(1);
       expect(body.tasks[0].role).toBe('review');
 
-      // Agent A claims review
-      await request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-a', role: 'review' });
+      // Agent A claims first worker
+      const claimRes = await request('POST', '/api/tasks/w1/claim', {
+        agent_id: 'agent-a',
+        role: 'review',
+      });
+      expect(claimRes.status).toBe(200);
 
-      // Agent B polls → gets review role
-      res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-b' });
-      body = await res.json();
-      expect(body.tasks[0].role).toBe('review');
+      // Agent B claims second worker
+      const claimRes2 = await request('POST', '/api/tasks/w2/claim', {
+        agent_id: 'agent-b',
+        role: 'review',
+      });
+      expect(claimRes2.status).toBe(200);
 
-      // Agent B claims review
-      await request('POST', '/api/tasks/task-1/claim', { agent_id: 'agent-b', role: 'review' });
-
-      // Agent C polls → no tasks (review slots filled, reviews not done)
+      // Agent C polls → no pending tasks (both claimed)
       res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-c' });
       body = await res.json();
       expect(body.tasks).toHaveLength(0);
 
       // Agent A submits review
-      await request('POST', '/api/tasks/task-1/result', {
+      await request('POST', '/api/tasks/w1/result', {
         agent_id: 'agent-a',
         type: 'review',
         review_text: 'Review A: Detailed analysis',
         verdict: 'approve',
       });
 
-      // Still no summary (only 1 of 2 reviews done)
+      // Still no summary (only 1 of 2 workers done)
       res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-c' });
       body = await res.json();
       expect(body.tasks).toHaveLength(0);
 
       // Agent B submits review
-      await request('POST', '/api/tasks/task-1/result', {
+      await request('POST', '/api/tasks/w2/result', {
         agent_id: 'agent-b',
         type: 'review',
         review_text: 'Review B: Detailed analysis',
         verdict: 'comment',
       });
 
-      // Now summary is available (task moved to summary queue)
+      // Now summary is available (created when all workers completed)
       res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-c' });
       body = await res.json();
       expect(body.tasks).toHaveLength(1);
@@ -1745,15 +1839,13 @@ describe('Task Routes', () => {
 
     describe('multi-agent tasks (review_count > 1)', () => {
       it('preferred agent gets summary immediately when reviews are complete', async () => {
+        // Summary task created after workers complete — just created (grace period active)
         await store.createTask(
           makeTask({
-            review_count: 3,
+            task_type: 'summary',
             queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            review_claims: 2,
-            completed_reviews: 2,
-            reviews_completed_at: Date.now(), // just completed
-            status: 'reviewing',
+            created_at: Date.now(), // just created
           }),
         );
 
@@ -1763,34 +1855,13 @@ describe('Task Routes', () => {
         expect(body.tasks[0].role).toBe('summary');
       });
 
-      it('non-preferred agent is held during grace period after reviews complete', async () => {
-        await store.createTask(
-          makeTask({
-            review_count: 3,
-            queue: 'summary',
-            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            review_claims: 2,
-            completed_reviews: 2,
-            reviews_completed_at: Date.now(), // just completed
-            status: 'reviewing',
-          }),
-        );
-
-        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
-        const body = await res.json();
-        expect(body.tasks).toHaveLength(0);
-      });
-
       it('non-preferred agent gets summary after grace period expires', async () => {
         await store.createTask(
           makeTask({
-            review_count: 3,
+            task_type: 'summary',
             queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            review_claims: 2,
-            completed_reviews: 2,
-            reviews_completed_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
-            status: 'reviewing',
+            created_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
           }),
         );
 
@@ -1800,38 +1871,13 @@ describe('Task Routes', () => {
         expect(body.tasks[0].role).toBe('summary');
       });
 
-      it('non-preferred agent cannot claim summary during grace period', async () => {
-        await store.createTask(
-          makeTask({
-            review_count: 3,
-            queue: 'summary',
-            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            review_claims: 2,
-            completed_reviews: 2,
-            reviews_completed_at: Date.now(), // just completed
-            status: 'reviewing',
-          }),
-        );
-
-        const res = await request('POST', '/api/tasks/task-1/claim', {
-          agent_id: 'agent-other',
-          role: 'summary',
-        });
-        expect(res.status).toBe(409);
-        const body = await res.json();
-        expect(body.error.code).toBe('CLAIM_CONFLICT');
-      });
-
       it('preferred agent can claim summary during grace period', async () => {
         await store.createTask(
           makeTask({
-            review_count: 3,
+            task_type: 'summary',
             queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            review_claims: 2,
-            completed_reviews: 2,
-            reviews_completed_at: Date.now(), // just completed
-            status: 'reviewing',
+            created_at: Date.now(), // just created
           }),
         );
 
@@ -1856,46 +1902,76 @@ describe('Task Routes', () => {
       });
     });
 
-    describe('reviews_completed_at is set when last review is submitted', () => {
-      it('sets reviews_completed_at on final review submission', async () => {
-        await store.createTask(makeTask({ review_count: 2, queue: 'review' }));
+    describe('summary task creation tracks worker completion', () => {
+      it('creates summary task when sole worker completes', async () => {
+        // Single worker task in a group
+        await store.createTask(
+          makeTask({
+            id: 'w1',
+            review_count: 2,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref',
+          }),
+        );
 
-        // Claim review
-        await request('POST', '/api/tasks/task-1/claim', {
-          agent_id: 'agent-a',
-          role: 'review',
-        });
-
-        // Submit review
-        await request('POST', '/api/tasks/task-1/result', {
+        // Claim and submit
+        await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
+        await request('POST', '/api/tasks/w1/result', {
           agent_id: 'agent-a',
           type: 'review',
           review_text: 'Looks good overall',
           verdict: 'approve',
         });
 
-        const task = await store.getTask('task-1');
-        expect(task?.reviews_completed_at).toBeDefined();
-        expect(task?.reviews_completed_at).toBeGreaterThan(0);
+        // Worker task should be completed
+        const task = await store.getTask('w1');
+        expect(task?.status).toBe('completed');
+
+        // Summary task should have been created
+        const allTasks = await store.listTasks({});
+        const summaries = allTasks.filter(
+          (t) => t.task_type === 'summary' && t.group_id === 'grp-pref',
+        );
+        expect(summaries).toHaveLength(1);
       });
 
-      it('does not set reviews_completed_at before all reviews are done', async () => {
-        await store.createTask(makeTask({ review_count: 3, queue: 'review' }));
+      it('does not create summary before all workers are done', async () => {
+        // Two worker tasks in a group
+        await store.createTask(
+          makeTask({
+            id: 'w1',
+            review_count: 3,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref2',
+          }),
+        );
+        await store.createTask(
+          makeTask({
+            id: 'w2',
+            review_count: 3,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref2',
+          }),
+        );
 
-        // Claim and submit first review
-        await request('POST', '/api/tasks/task-1/claim', {
-          agent_id: 'agent-a',
-          role: 'review',
-        });
-        await request('POST', '/api/tasks/task-1/result', {
+        // Complete only first worker
+        await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-a', role: 'review' });
+        await request('POST', '/api/tasks/w1/result', {
           agent_id: 'agent-a',
           type: 'review',
           review_text: 'Review A: Detailed analysis',
           verdict: 'approve',
         });
 
-        const task = await store.getTask('task-1');
-        expect(task?.reviews_completed_at).toBeUndefined();
+        // No summary task yet
+        const allTasks = await store.listTasks({});
+        const summaries = allTasks.filter(
+          (t) => t.task_type === 'summary' && t.group_id === 'grp-pref2',
+        );
+        expect(summaries).toHaveLength(0);
       });
     });
 
@@ -1942,6 +2018,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now(),
           }),
@@ -1961,6 +2038,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig([], ['claude']),
             created_at: Date.now(),
           }),
@@ -1980,6 +2058,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now(),
           }),
@@ -1998,6 +2077,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2017,6 +2097,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now(),
           }),
@@ -2036,6 +2117,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig([], []),
             created_at: Date.now(),
           }),
@@ -2059,6 +2141,7 @@ describe('Task Routes', () => {
             id: 'task-a',
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['gemini-2.5-pro'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2070,6 +2153,7 @@ describe('Task Routes', () => {
             id: 'task-b',
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2093,6 +2177,7 @@ describe('Task Routes', () => {
             id: 'task-a',
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig([], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2104,6 +2189,7 @@ describe('Task Routes', () => {
             id: 'task-b',
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], []),
             created_at: Date.now() - PREFERRED_REVIEW_GRACE_PERIOD_MS - 1000,
           }),
@@ -2128,6 +2214,7 @@ describe('Task Routes', () => {
           makeTask({
             review_count: 3,
             queue: 'review',
+            task_type: 'review',
             config: makePreferredReviewConfig(['claude-sonnet-4-6'], ['gemini']),
             created_at: Date.now(),
           }),
@@ -2147,9 +2234,9 @@ describe('Task Routes', () => {
   // ── Summary claim timeout recovery (#462) ──────────────────
 
   describe('summary claim timeout recovery (#462)', () => {
-    it('task returns to summary queue after summary claim is reclaimed', async () => {
+    it('task returns to pending after summary claim is reclaimed', async () => {
       const now = Date.now();
-      // Task in summary queue, agent-A claims it
+      // Summary task, agent-A claims it
       await store.createTask(makeTask({ queue: 'summary' }));
       const claimRes = await request('POST', '/api/tasks/task-1/claim', {
         agent_id: 'agent-A',
@@ -2157,22 +2244,20 @@ describe('Task Routes', () => {
       });
       expect(claimRes.status).toBe(200);
 
-      // Verify task moved to finished queue
+      // Verify task is now reviewing
       let task = await store.getTask('task-1');
-      expect(task?.queue).toBe('finished');
-      expect(task?.summary_agent_id).toBe('agent-A');
+      expect(task?.status).toBe('reviewing');
 
       // Simulate agent going stale (heartbeat expired)
       await store.setAgentLastSeen('agent-A', now - 300_000);
 
-      // Reclaim abandoned claims — should free the summary claim AND release the slot
+      // Reclaim abandoned claims — should free the claim AND release the task
       const freed = await store.reclaimAbandonedClaims(180_000);
       expect(freed).toBe(1);
 
-      // Task should be back in summary queue
+      // Task should be back to pending
       task = await store.getTask('task-1');
-      expect(task?.queue).toBe('summary');
-      expect(task?.summary_agent_id).toBeUndefined();
+      expect(task?.status).toBe('pending');
 
       // Another agent should see it in poll
       const pollRes = await request('POST', '/api/tasks/poll', { agent_id: 'agent-B' });
@@ -2204,10 +2289,9 @@ describe('Task Routes', () => {
       const body = await claimRes.json();
       expect(body.claimed).toBe(true);
 
-      // Task should be in finished queue with agent-B
+      // Task should be reviewing again
       const task = await store.getTask('task-1');
-      expect(task?.queue).toBe('finished');
-      expect(task?.summary_agent_id).toBe('agent-B');
+      expect(task?.status).toBe('reviewing');
     });
 
     it('original agent gets 409 when submitting result after claim was reclaimed', async () => {

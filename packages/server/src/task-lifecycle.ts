@@ -1,41 +1,42 @@
 /**
  * Task Lifecycle State Machine
  *
- * Encapsulates the implicit state machine that was previously spread across
- * route handlers as ad-hoc queue/status string comparisons.
+ * Separate task model: each task is one unit of work (worker or summary).
+ * Tasks are linked by group_id. Workers complete independently; when all
+ * workers in a group finish, a summary task is created.
  *
- * ## State Diagram
+ * ## State Diagram (per task)
  *
- *   TaskStatus: pending → reviewing → [deleted on completion or timeout]
- *   TaskQueue:  review  → summary   → finished → [deleted]
+ *   TaskStatus: pending → reviewing → completed → [deleted]
  *
- *   ┌─────────────────────────────────────────────────────────────┐
- *   │                     Task Created                           │
- *   │  status=pending, queue=review (or summary if count==1)     │
- *   └────────────────────────┬────────────────────────────────────┘
- *                            │ first claim
- *                            ▼
- *   ┌─────────────────────────────────────────────────────────────┐
- *   │  status=reviewing, queue=review                            │
- *   │  Agents claim review slots (atomic increment)              │
- *   └────────────────────────┬────────────────────────────────────┘
- *                            │ all review slots completed
- *                            ▼
- *   ┌─────────────────────────────────────────────────────────────┐
- *   │  status=reviewing, queue=summary                           │
- *   │  Summary agent claims (atomic CAS → queue=finished)        │
- *   └──────────┬────────────────────────────┬─────────────────────┘
- *              │ summary claimed             │ quality rejected
- *              ▼                             │ (→ queue=summary, retry)
- *   ┌──────────────────────┐                │
- *   │  queue=finished      │◄───────────────┘
- *   │  summary_agent_id set│
- *   └──────────┬───────────┘
- *              │ result submitted + posted to GitHub
- *              ▼
- *   ┌──────────────────────┐
- *   │  [task deleted]      │
- *   └──────────────────────┘
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  Worker Task Created (task_type = review/dedup/triage)    │
+ *   │  status = pending                                         │
+ *   └──────────────────────────┬─────────────────────────────────┘
+ *                              │ agent claims (CAS: pending → reviewing)
+ *                              ▼
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  status = reviewing                                       │
+ *   │  Agent works on the task                                  │
+ *   └──────────────────────────┬─────────────────────────────────┘
+ *                              │ result submitted → status = completed
+ *                              ▼
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  status = completed                                       │
+ *   │  Check: all workers in group completed?                   │
+ *   │  Yes → create summary task for the group                  │
+ *   └──────────────────────────┬─────────────────────────────────┘
+ *                              │
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  Summary Task Created (task_type = summary)               │
+ *   │  status = pending                                         │
+ *   └──────────────────────────┬─────────────────────────────────┘
+ *                              │ agent claims → reviews → submits result
+ *                              ▼
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  Summary result posted to GitHub                          │
+ *   │  All tasks in group deleted                               │
+ *   └────────────────────────────────────────────────────────────┘
  *
  * ## Claim Status Lifecycle
  *
@@ -62,19 +63,14 @@ export function isTaskTerminal(task: ReviewTask): boolean {
   return task.status === 'completed' || task.queue === 'completed';
 }
 
-/** True if the task is in the review phase (accepting review claims). */
-export function isInReviewQueue(task: ReviewTask): boolean {
-  return task.queue === 'review';
+/** True if the task is a worker task (review, dedup, or triage — not summary). */
+export function isWorkerTask(task: ReviewTask): boolean {
+  return task.task_type !== 'summary';
 }
 
-/** True if the task is in the summary phase (accepting summary claims). */
-export function isInSummaryQueue(task: ReviewTask): boolean {
-  return task.queue === 'summary';
-}
-
-/** True if the summary slot has been claimed (queue=finished). */
-export function isSummaryClaimed(task: ReviewTask): boolean {
-  return task.queue === 'finished';
+/** True if the task is a summary task. */
+export function isSummaryTask(task: ReviewTask): boolean {
+  return task.task_type === 'summary';
 }
 
 /** True if the task has timed out. Accepts optional `now` for testability. */
@@ -107,8 +103,42 @@ export function isCompletedReview(claim: TaskClaim): boolean {
 // ── Transition Predicates ───────────────────────────────────────
 
 /**
- * Check if all review slots are filled, meaning the task should transition
- * from review → summary queue.
+ * Check if all worker tasks in a group are completed, meaning a summary
+ * task should be created for synthesis.
+ */
+export function shouldCreateSummaryTask(completedCount: number, workerTaskCount: number): boolean {
+  return workerTaskCount > 0 && completedCount >= workerTaskCount;
+}
+
+// ── Deprecated predicates (kept for backward compat during migration) ──
+
+/**
+ * @deprecated Use isWorkerTask/isSummaryTask instead.
+ * True if the task is in the review phase (accepting review claims).
+ */
+export function isInReviewQueue(task: ReviewTask): boolean {
+  return task.queue === 'review';
+}
+
+/**
+ * @deprecated Use isSummaryTask instead.
+ * True if the task is in the summary phase (accepting summary claims).
+ */
+export function isInSummaryQueue(task: ReviewTask): boolean {
+  return task.queue === 'summary';
+}
+
+/**
+ * @deprecated No longer used in separate task model.
+ * True if the summary slot has been claimed (queue=finished).
+ */
+export function isSummaryClaimed(task: ReviewTask): boolean {
+  return task.queue === 'finished';
+}
+
+/**
+ * @deprecated Use shouldCreateSummaryTask instead.
+ * Check if all review slots are filled.
  */
 export function shouldTransitionToSummary(
   completedReviews: number,

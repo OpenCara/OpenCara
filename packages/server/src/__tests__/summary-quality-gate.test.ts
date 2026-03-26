@@ -49,23 +49,31 @@ describe('Summary Quality Gate', () => {
     return new MockAgent(id, app, env);
   }
 
-  /** Inject a PR and return the task ID. */
-  async function injectPR(reviewCount = 1): Promise<string> {
+  /** Inject a PR and return the first task ID and group ID. */
+  async function injectPR(reviewCount = 1): Promise<{ taskId: string; groupId: string }> {
     const a = mkAgent('setup-agent');
-    const { created, taskId } = await a.injectPR({ reviewCount });
+    const { created, taskId, groupId } = await a.injectPR({ reviewCount });
     expect(created).toBe(true);
-    return taskId!;
+    return { taskId: taskId!, groupId: groupId! };
   }
 
   /**
-   * Complete the review phase for a multi-reviewer task (reviewCount > 1).
-   * Returns the review texts submitted.
+   * Complete the review phase for a multi-reviewer task group (reviewCount > 1).
+   * Each worker task is a separate task in the group — claim each individually.
+   * Returns the review texts submitted and the summary task ID (auto-created).
    */
-  async function completeReviewPhase(taskId: string, reviewerCount: number): Promise<string[]> {
+  async function completeReviewPhase(
+    groupId: string,
+  ): Promise<{ reviewTexts: string[]; summaryTaskId: string }> {
+    const groupTasks = await store.getTasksByGroup(groupId);
+    const workerTasks = groupTasks.filter(
+      (t) => t.task_type !== 'summary' && t.status === 'pending',
+    );
     const reviewTexts: string[] = [];
-    for (let i = 0; i < reviewerCount; i++) {
+
+    for (let i = 0; i < workerTasks.length; i++) {
       const reviewer = mkAgent(`reviewer-${i}`);
-      const claimResult = await reviewer.claim(taskId, 'review');
+      const claimResult = await reviewer.claim(workerTasks[i].id, 'review');
       expect(claimResult.claimed).toBe(true);
 
       const text =
@@ -74,16 +82,21 @@ describe('Summary Quality Gate', () => {
         `exhibits an N+1 pattern that should be replaced with a JOIN for better performance.`;
       reviewTexts.push(text);
 
-      const result = await reviewer.submitResult(taskId, 'review', text, 'comment');
+      const result = await reviewer.submitResult(workerTasks[i].id, 'review', text, 'comment');
       expect(result.status).toBe(200);
     }
-    return reviewTexts;
+
+    // After all workers complete, a summary task is auto-created in the group
+    const updatedTasks = await store.getTasksByGroup(groupId);
+    const summaryTask = updatedTasks.find((t) => t.task_type === 'summary');
+    expect(summaryTask).toBeDefined();
+    return { reviewTexts, summaryTaskId: summaryTask!.id };
   }
 
   // ── Rejection tests ─────────────────────────────────────────
 
   it('rejects blocklist summary with REVIEW_QUALITY_REJECTED', async () => {
-    const taskId = await injectPR(1);
+    const { taskId } = await injectPR(1);
     const synth = mkAgent('synth-1');
 
     const claimResult = await synth.claim(taskId, 'summary');
@@ -99,7 +112,7 @@ describe('Summary Quality Gate', () => {
   });
 
   it('rejects too-short summary', async () => {
-    const taskId = await injectPR(1);
+    const { taskId } = await injectPR(1);
     const synth = mkAgent('synth-1');
 
     await synth.claim(taskId, 'summary');
@@ -116,12 +129,12 @@ describe('Summary Quality Gate', () => {
   });
 
   it('rejects summary that does not reference individual reviews', async () => {
-    // Use review_count=3 → 2 reviewers + 1 synthesizer
-    const taskId = await injectPR(3);
-    await completeReviewPhase(taskId, 2);
+    // Use review_count=3 → 2 worker tasks + 1 auto-created summary task
+    const { groupId } = await injectPR(3);
+    const { summaryTaskId } = await completeReviewPhase(groupId);
 
     const synth = mkAgent('synth-1');
-    const claimResult = await synth.claim(taskId, 'summary');
+    const claimResult = await synth.claim(summaryTaskId, 'summary');
     expect(claimResult.claimed).toBe(true);
 
     // Long enough but completely unrelated to the review content
@@ -131,7 +144,7 @@ describe('Summary Quality Gate', () => {
       'Nulla facilisi. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ' +
       'Curabitur pretium tincidunt lacus. Nullam euismod, nisl eget ultricies.';
 
-    const result = await synth.submitResult(taskId, 'summary', unrelatedText, 'comment');
+    const result = await synth.submitResult(summaryTaskId, 'summary', unrelatedText, 'comment');
     expect(result.status).toBe(400);
     const err = result.body.error as { code: string; message: string };
     expect(err.code).toBe('REVIEW_QUALITY_REJECTED');
@@ -141,7 +154,7 @@ describe('Summary Quality Gate', () => {
   // ── Slot release on rejection ──────────────────────────────
 
   it('releases summary slot on rejection — another agent can claim', async () => {
-    const taskId = await injectPR(1);
+    const { taskId } = await injectPR(1);
     const synth1 = mkAgent('synth-1');
     const synth2 = mkAgent('synth-2');
 
@@ -162,7 +175,7 @@ describe('Summary Quality Gate', () => {
   // ── Abuse tracking ─────────────────────────────────────────
 
   it('records rejection for abuse tracking', async () => {
-    const taskId = await injectPR(1);
+    const { taskId } = await injectPR(1);
     const synth = mkAgent('bad-synth');
 
     await synth.claim(taskId, 'summary');
@@ -176,7 +189,7 @@ describe('Summary Quality Gate', () => {
   // ── Retry count ────────────────────────────────────────────
 
   it('increments summary_retry_count on each rejection', async () => {
-    const taskId = await injectPR(1);
+    const { taskId } = await injectPR(1);
 
     for (let i = 0; i < 2; i++) {
       const synth = mkAgent(`synth-${i}`);
@@ -193,25 +206,30 @@ describe('Summary Quality Gate', () => {
   // ── Fallback posting ───────────────────────────────────────
 
   it('posts fallback consolidated reviews after MAX_SUMMARY_RETRIES', async () => {
-    // Use review_count=3 → 2 reviewers + 1 synthesizer
-    const taskId = await injectPR(3);
-    await completeReviewPhase(taskId, 2);
+    // Use review_count=3 → 2 worker tasks + 1 auto-created summary task
+    const { groupId } = await injectPR(3);
+    const { summaryTaskId } = await completeReviewPhase(groupId);
 
     // Exhaust all retries with low-quality summaries (Zod-valid but blocklisted)
     for (let i = 0; i < MAX_SUMMARY_RETRIES; i++) {
       const synth = mkAgent(`synth-${i}`);
-      const claimResult = await synth.claim(taskId, 'summary');
+      const claimResult = await synth.claim(summaryTaskId, 'summary');
       expect(claimResult.claimed).toBe(true);
 
-      const result = await synth.submitResult(taskId, 'summary', 'No issues found.', 'approve');
+      const result = await synth.submitResult(
+        summaryTaskId,
+        'summary',
+        'No issues found.',
+        'approve',
+      );
       // Last retry triggers fallback and returns 200; earlier retries return 400
       const expectedStatus = i === MAX_SUMMARY_RETRIES - 1 ? 200 : 400;
       expect(result.status).toBe(expectedStatus);
     }
 
-    // Task should be deleted (fallback posted and cleaned up)
-    const task = await store.getTask(taskId);
-    expect(task).toBeNull();
+    // All tasks should be deleted (fallback posted and cleaned up)
+    const remainingTasks = await store.getTasksByGroup(groupId);
+    expect(remainingTasks).toHaveLength(0);
 
     // GitHub service should have received a comment
     const comments = github.calls.filter((c) => c.method === 'postPrComment');
@@ -222,11 +240,11 @@ describe('Summary Quality Gate', () => {
   // ── Passing summary ────────────────────────────────────────
 
   it('posts to GitHub when summary passes quality gate', async () => {
-    const taskId = await injectPR(3);
-    await completeReviewPhase(taskId, 2);
+    const { groupId } = await injectPR(3);
+    const { summaryTaskId } = await completeReviewPhase(groupId);
 
     const synth = mkAgent('good-synth');
-    const claimResult = await synth.claim(taskId, 'summary');
+    const claimResult = await synth.claim(summaryTaskId, 'summary');
     expect(claimResult.claimed).toBe(true);
 
     // Build a good summary that references the reviews
@@ -237,12 +255,17 @@ describe('Summary Quality Gate', () => {
       'Replacing it with a JOIN would significantly improve performance. ' +
       'Overall, the code needs security and performance improvements before merging.';
 
-    const result = await synth.submitResult(taskId, 'summary', goodSummary, 'request_changes');
+    const result = await synth.submitResult(
+      summaryTaskId,
+      'summary',
+      goodSummary,
+      'request_changes',
+    );
     expect(result.status).toBe(200);
 
-    // Task should be deleted (posted and cleaned up)
-    const task = await store.getTask(taskId);
-    expect(task).toBeNull();
+    // All tasks should be deleted (posted and cleaned up)
+    const remainingTasks = await store.getTasksByGroup(groupId);
+    expect(remainingTasks).toHaveLength(0);
 
     // GitHub should have received the review
     const comments = github.calls.filter((c) => c.method === 'postPrComment');
@@ -253,7 +276,7 @@ describe('Summary Quality Gate', () => {
   // ── Single-reviewer task (review_count=1, skip overlap check) ──
 
   it('passes summary for single-reviewer task with sufficient length', async () => {
-    const taskId = await injectPR(1);
+    const { taskId } = await injectPR(1);
     const synth = mkAgent('synth-1');
 
     await synth.claim(taskId, 'summary');
