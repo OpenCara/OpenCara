@@ -651,6 +651,56 @@ describe('MemoryDataStore', () => {
       const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
       expect(freed).toBe(0);
     });
+
+    it('releases summary slot when summary claim is reclaimed (#462)', async () => {
+      const now = Date.now();
+      // Task in finished queue (summary was claimed)
+      await store.createTask(makeTask({ queue: 'finished', summary_agent_id: 'stale-synth' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:stale-synth:summary',
+          agent_id: 'stale-synth',
+          role: 'summary',
+        }),
+      );
+      // Agent last seen 5 minutes ago (stale)
+      await store.setAgentLastSeen('stale-synth', now - 300_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      // Claim should be errored
+      const claim = await store.getClaim('task-1:stale-synth:summary');
+      expect(claim?.status).toBe('error');
+
+      // Summary slot should be released — task back in summary queue
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+      expect(task?.summary_agent_id).toBeUndefined();
+    });
+
+    it('freed summary slot can be re-claimed by another agent (#462)', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ queue: 'finished', summary_agent_id: 'stale-synth' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:stale-synth:summary',
+          agent_id: 'stale-synth',
+          role: 'summary',
+        }),
+      );
+      await store.setAgentLastSeen('stale-synth', now - 300_000);
+
+      await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+
+      // Another agent should be able to claim the summary slot
+      const claimed = await store.claimSummarySlot('task-1', 'new-agent');
+      expect(claimed).toBe(true);
+
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+      expect(task?.summary_agent_id).toBe('new-agent');
+    });
   });
 
   // ── reclaimAbandonedSummarySlots ────────────────────────────

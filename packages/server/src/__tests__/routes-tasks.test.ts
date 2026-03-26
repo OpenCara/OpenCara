@@ -2141,4 +2141,97 @@ describe('Task Routes', () => {
       });
     });
   });
+
+  // ── Summary claim timeout recovery (#462) ──────────────────
+
+  describe('summary claim timeout recovery (#462)', () => {
+    it('task returns to summary queue after summary claim is reclaimed', async () => {
+      const now = Date.now();
+      // Task in summary queue, agent-A claims it
+      await store.createTask(makeTask({ queue: 'summary' }));
+      const claimRes = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-A',
+        role: 'summary',
+      });
+      expect(claimRes.status).toBe(200);
+
+      // Verify task moved to finished queue
+      let task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+      expect(task?.summary_agent_id).toBe('agent-A');
+
+      // Simulate agent going stale (heartbeat expired)
+      await store.setAgentLastSeen('agent-A', now - 300_000);
+
+      // Reclaim abandoned claims — should free the summary claim AND release the slot
+      const freed = await store.reclaimAbandonedClaims(180_000);
+      expect(freed).toBe(1);
+
+      // Task should be back in summary queue
+      task = await store.getTask('task-1');
+      expect(task?.queue).toBe('summary');
+      expect(task?.summary_agent_id).toBeUndefined();
+
+      // Another agent should see it in poll
+      const pollRes = await request('POST', '/api/tasks/poll', { agent_id: 'agent-B' });
+      const pollBody = await pollRes.json();
+      expect(pollBody.tasks).toHaveLength(1);
+      expect(pollBody.tasks[0].role).toBe('summary');
+    });
+
+    it('another agent can claim summary after previous claim was reclaimed', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ queue: 'summary' }));
+
+      // Agent-A claims summary
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-A',
+        role: 'summary',
+      });
+
+      // Agent-A goes stale, claim is reclaimed
+      await store.setAgentLastSeen('agent-A', now - 300_000);
+      await store.reclaimAbandonedClaims(180_000);
+
+      // Agent-B can now claim the summary
+      const claimRes = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-B',
+        role: 'summary',
+      });
+      expect(claimRes.status).toBe(200);
+      const body = await claimRes.json();
+      expect(body.claimed).toBe(true);
+
+      // Task should be in finished queue with agent-B
+      const task = await store.getTask('task-1');
+      expect(task?.queue).toBe('finished');
+      expect(task?.summary_agent_id).toBe('agent-B');
+    });
+
+    it('original agent gets 409 when submitting result after claim was reclaimed', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ queue: 'summary' }));
+
+      // Agent-A claims summary
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-A',
+        role: 'summary',
+      });
+
+      // Agent-A goes stale, claim is reclaimed
+      await store.setAgentLastSeen('agent-A', now - 300_000);
+      await store.reclaimAbandonedClaims(180_000);
+
+      // Agent-A tries to submit result — should fail
+      const resultRes = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-A',
+        type: 'summary',
+        review_text: 'This is a synthesized review of the changes. '.repeat(10),
+        verdict: 'approve',
+      });
+      expect(resultRes.status).toBe(409);
+      const body = await resultRes.json();
+      expect(body.error.message).toContain('Claim already error');
+    });
+  });
 });
