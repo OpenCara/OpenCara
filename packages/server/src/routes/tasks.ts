@@ -8,6 +8,8 @@ import type {
   ReviewVerdict,
   ReviewTask,
   TaskRole,
+  DedupReport,
+  TriageReport,
 } from '@opencara/shared';
 import { isRepoAllowed, isEntityMatch } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
