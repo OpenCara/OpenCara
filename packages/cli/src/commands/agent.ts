@@ -141,8 +141,10 @@ export async function fetchDiffViaGh(
 
 /**
  * Compute the roles this agent is willing to take based on its config.
+ * Priority: roles field > review_only/synthesizer_only > default.
  */
 export function computeRoles(agent: LocalAgentConfig): ClaimRole[] {
+  if (agent.roles && agent.roles.length > 0) return agent.roles as ClaimRole[];
   if (agent.review_only) return ['review'];
   if (agent.synthesizer_only) return ['summary'];
   return ['review', 'summary'];
