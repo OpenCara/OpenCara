@@ -6,6 +6,9 @@ import { sanitizeTokens } from './sanitize.js';
 /** Pattern for valid GitHub owner/repo names */
 const VALID_NAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
+/** Git credential helper arg that delegates to gh CLI */
+const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
+
 export interface CloneOrUpdateResult {
   /** Absolute path to the local checkout */
   localPath: string;
@@ -18,11 +21,9 @@ export interface CloneOrUpdateResult {
  *
  * - Each task gets its own isolated checkout at `<baseDir>/<owner>/<repo>/<taskId>/`
  *   to prevent concurrent reviews of the same repo from interfering.
- * - Checkout: `git clone --depth 1` then `git fetch --force origin pull/<prNumber>/head`
+ * - Clone: `gh repo clone` (handles auth internally) with fallback to unauthenticated `git clone`
+ * - Fetch: `git fetch` with `gh auth git-credential` helper, fallback to plain fetch
  *
- * Authentication uses `gh auth token` to obtain the user's GitHub credentials,
- * matching the pattern used by `fetchDiffViaGh` for diff fetching.
- * Falls back to unauthenticated HTTPS when `gh` is not available.
  * All git operations use `--depth 1` for minimal disk/time footprint.
  *
  * After review completes, callers should call `cleanupTaskDir()` to remove the
@@ -47,20 +48,28 @@ export function cloneOrUpdate(
   const repoDir = taskId
     ? path.join(baseDir, owner, repo, taskId)
     : path.join(baseDir, owner, repo);
-  const cloneUrl = buildCloneUrl(owner, repo);
-  const authArgs = getGhAuthArgs();
+  const ghAvailable = isGhAvailable();
   let cloned = false;
 
   if (!fs.existsSync(path.join(repoDir, '.git'))) {
     // First clone — shallow
-    fs.mkdirSync(repoDir, { recursive: true });
-    git([...authArgs, 'clone', '--depth', '1', cloneUrl, repoDir]);
+    if (ghAvailable) {
+      // gh repo clone handles auth internally (like gh api)
+      // Pass git args after -- for shallow clone
+      ghClone(owner, repo, repoDir);
+    } else {
+      // Fallback: unauthenticated HTTPS clone (works for public repos)
+      fs.mkdirSync(repoDir, { recursive: true });
+      const cloneUrl = buildCloneUrl(owner, repo);
+      git(['clone', '--depth', '1', cloneUrl, repoDir]);
+    }
     cloned = true;
   }
 
   // Fetch the PR ref and checkout (--force handles force-pushed PRs)
+  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
   git(
-    [...authArgs, 'fetch', '--force', '--depth', '1', 'origin', `pull/${prNumber}/head`],
+    [...credArgs, 'fetch', '--force', '--depth', '1', 'origin', `pull/${prNumber}/head`],
     repoDir,
   );
   git(['checkout', 'FETCH_HEAD'], repoDir);
@@ -105,21 +114,38 @@ export function buildCloneUrl(owner: string, repo: string): string {
 }
 
 /**
- * Obtain a GitHub token from the `gh` CLI and return git auth args.
- * Uses `gh auth token` which reads the user's authenticated session.
- * Returns an empty array if `gh` is not installed or not authenticated.
+ * Check whether the `gh` CLI is installed and authenticated.
+ * Returns true if `gh auth status` exits successfully.
  */
-export function getGhAuthArgs(): string[] {
+export function isGhAvailable(): boolean {
   try {
-    const token = execFileSync('gh', ['auth', 'token'], {
+    execFileSync('gh', ['auth', 'status'], {
       encoding: 'utf-8',
       timeout: 10_000,
       stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    if (!token) return [];
-    return ['-c', `http.extraHeader=Authorization: Bearer ${token}`];
+    });
+    return true;
   } catch {
-    return [];
+    return false;
+  }
+}
+
+/**
+ * Clone a repository using `gh repo clone`, which handles auth internally.
+ * Creates the target directory and performs a shallow clone.
+ */
+function ghClone(owner: string, repo: string, targetDir: string): void {
+  try {
+    // gh repo clone creates the target directory itself
+    // Args after -- are passed to underlying git clone
+    execFileSync('gh', ['repo', 'clone', `${owner}/${repo}`, targetDir, '--', '--depth', '1'], {
+      encoding: 'utf-8',
+      timeout: 120_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(sanitizeTokens(message));
   }
 }
 
