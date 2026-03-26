@@ -345,7 +345,7 @@ describe('githubFetch', () => {
       fetchMock.mockResolvedValueOnce(new Response('Not Found', { status: 404 }));
 
       const response = await fetchWithTimers(
-        'https://api.github.com/repos/test/test/contents/.review.yml?ref=main',
+        'https://api.github.com/repos/test/test/contents/.review.toml?ref=main',
         {
           token: 'ghs_test',
           accept: 'application/vnd.github.raw+json',

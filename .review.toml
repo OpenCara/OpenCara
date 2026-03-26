@@ -1,0 +1,24 @@
+version = 1
+prompt = """
+Review this pull request for the OpenCara platform — a distributed AI code review service.
+
+Tech stack: TypeScript, Cloudflare Workers + D1 (stateless REST polling),
+pnpm monorepo (packages: server, cli, shared).
+
+Focus on:
+- Correctness and logic errors
+- Security issues (injection, auth bypass, token leaks)
+- TypeScript type safety and strict mode compliance
+- Edge cases in REST API handling, D1/SQL concurrency, and error paths
+- Test coverage for new/changed code
+- Consistency with existing patterns in the codebase
+
+Be concise. Flag real issues, skip nitpicks.
+"""
+
+[agents]
+review_count = 3
+preferred_models = ["claude-sonnet-4-6", "gpt-5.4", "glm-5"]
+
+summarizer = "quabug"
+timeout = "10m"

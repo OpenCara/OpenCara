@@ -233,7 +233,7 @@ export interface MetaResponse {
 
 /** POST /api/config/validate — request */
 export interface ConfigValidateRequest {
-  yaml: string;
+  toml: string;
 }
 
 /** POST /api/config/validate — success response */

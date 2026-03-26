@@ -126,7 +126,7 @@ export function resolveCommandTemplate(agentCommand: string | null | undefined):
   }
   throw new Error(
     'No command configured for this agent. ' +
-      'Set command in ~/.opencara/config.yml agents section or run `opencara agent create`.',
+      'Set command in ~/.opencara/config.toml agents section or run `opencara agent create`.',
   );
 }
 

@@ -42,7 +42,7 @@ Enforce unified review standards across your org. Deploy centralized agents with
 ### For Maintainers
 
 1. Install the [OpenCara GitHub App](https://github.com/apps/opencara) on your repo
-2. Optionally add a `.review.yml` to customize review behavior (works without one)
+2. Optionally add a `.review.toml` to customize review behavior (works without one)
 3. AI agents automatically review incoming PRs
 
 ### For Contributors
@@ -63,12 +63,13 @@ npm i -g opencara
 
 # 2. Configure
 mkdir -p ~/.opencara
-cat > ~/.opencara/config.yml << 'EOF'
-platform_url: https://api.opencara.com
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
+cat > ~/.opencara/config.toml << 'EOF'
+platform_url = "https://api.opencara.com"
+
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 EOF
 
 # 3. Start
@@ -93,7 +94,7 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Distributed agents** — Contributors run review agents locally; platform only coordinates
 - **Multi-agent review** — Multiple agents review each PR in parallel; a synthesizer produces a consolidated review
 - **Preferred synthesizer** — Maintainers can specify preferred agents for synthesis with automatic grace period fallback
-- **Access control** — Whitelist/blacklist agents per role (reviewer, summarizer) in `.review.yml`
+- **Access control** — Whitelist/blacklist agents per role (reviewer, summarizer) in `.review.toml`
 - **Repo filtering** — Agents can choose which repos to review: all, own, whitelist, or blacklist
 - **Configurable triggers** — Control when reviews run: on PR open, on push, via `/opencara review` comment, skip drafts
 - **Codebase context** — Agents can shallow-clone repos locally for context-aware reviews (imports, callers, architecture)
@@ -112,45 +113,50 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 
 ## Configuration
 
-### `.review.yml` (repository, optional)
+### `.review.toml` (repository, optional)
 
-Place this file in your repository root to customize reviews. Only `version` and `prompt` are required — everything else has sensible defaults. Works without any `.review.yml` at all.
+Place this file in your repository root to customize reviews. Only `version` and `prompt` are required — everything else has sensible defaults. Works without any `.review.toml` at all.
 
-```yaml
-version: 1
-prompt: 'Review for bugs, security issues, and code quality.'
-trigger:
-  on: [opened, synchronize]
-  skip: [draft]
-agents:
-  review_count: 3
-  preferred_models: [claude-sonnet-4-6, qwen3.5-plus]
-timeout: 10m
-summarizer:
-  preferred:
-    - agent: agent-abc123 # First choice for synthesis
+```toml
+version = 1
+prompt = "Review for bugs, security issues, and code quality."
+timeout = "10m"
+
+[trigger]
+on = ["opened", "synchronize"]
+skip = ["draft"]
+
+[agents]
+review_count = 3
+preferred_models = ["claude-sonnet-4-6", "qwen3.5-plus"]
+
+[[summarizer.preferred]]
+agent = "agent-abc123" # First choice for synthesis
 ```
 
 See [`docs/product.md`](docs/product.md) for the full schema with all options documented.
 
-### `~/.opencara/config.yml` (contributor, local)
+### `~/.opencara/config.toml` (contributor, local)
 
 Create manually to configure your agents:
 
-```yaml
-platform_url: https://api.opencara.com
-agents:
-  - model: claude-sonnet-4-6
-    tool: claude
-    command: claude --model claude-sonnet-4-6 --allowedTools '*' --print
-  - model: qwen3.5-plus
-    tool: qwen
-    command: qwen --model qwen3.5-plus -y
+```toml
+platform_url = "https://api.opencara.com"
+
+[[agents]]
+model = "claude-sonnet-4-6"
+tool = "claude"
+command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
+
+[[agents]]
+model = "qwen3.5-plus"
+tool = "qwen"
+command = "qwen --model qwen3.5-plus -y"
 ```
 
 Review prompts are delivered via stdin to your commands. Do not use `${PROMPT}` in command templates.
 
-See [`config.template.yml`](config.template.yml) for the full reference with all options (limits, repo filtering, github_token, codebase_dir).
+See [`config.template.toml`](config.template.toml) for the full reference with all options (limits, repo filtering, github_token, codebase_dir).
 
 ## Tech Stack
 
@@ -165,7 +171,7 @@ See [`config.template.yml`](config.template.yml) for the full reference with all
 ## Documentation
 
 - [Agent Setup Guide](docs/agent-guide.md) — Install, configure, and run review agents (CLI, Docker, AI prompt)
-- [Product Design](docs/product.md) — Trust model, review flow, `.review.yml` schema, contributor experience
+- [Product Design](docs/product.md) — Trust model, review flow, `.review.toml` schema, contributor experience
 - [Architecture](docs/architecture.md) — Tech stack, REST API, DataStore, task lifecycle, security
 - [Deployment Guide](docs/deployment.md) — Cloudflare Workers + D1 setup, GitHub App configuration
 - [Self-Hosting Guide](docs/self-hosting.md) — Cloudflare Workers or VPS/Docker deployment

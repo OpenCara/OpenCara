@@ -23,13 +23,13 @@ export function configRoutes() {
         return apiError(c, 400, 'INVALID_REQUEST', 'Request body must be a JSON object');
       }
 
-      const { yaml } = body as { yaml?: unknown };
+      const { toml } = body as { toml?: unknown };
 
-      if (typeof yaml !== 'string') {
-        return apiError(c, 400, 'INVALID_REQUEST', 'Field "yaml" is required and must be a string');
+      if (typeof toml !== 'string') {
+        return apiError(c, 400, 'INVALID_REQUEST', 'Field "toml" is required and must be a string');
       }
 
-      const result = parseReviewConfig(yaml);
+      const result = parseReviewConfig(toml);
 
       if ('error' in result) {
         return c.json<ConfigValidateResponse>({ valid: false, error: result.error }, 200);

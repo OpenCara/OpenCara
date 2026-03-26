@@ -9,35 +9,37 @@ import {
 } from '../review-config.js';
 
 const VALID_FULL_CONFIG = `
-version: 1
-prompt: |
-  Focus on code quality, security, and test coverage.
-  This project uses TypeScript + React, following ESLint standards.
-agents:
-  review_count: 2
-  preferred_models:
-    - claude-opus-4-6
-    - glm-5
-  preferred_tools:
-    - claude-code
-    - codex
-reviewer:
-  whitelist:
-    - agent: abc-123
-  blacklist:
-    - agent: agent-bad
-  allow_anonymous: false
-summarizer:
-  whitelist:
-    - agent: agent-synth
-  blacklist:
-    - agent: agent-spam
-timeout: 15m
+version = 1
+prompt = """
+Focus on code quality, security, and test coverage.
+This project uses TypeScript + React, following ESLint standards.
+"""
+timeout = "15m"
+
+[agents]
+review_count = 2
+preferred_models = ["claude-opus-4-6", "glm-5"]
+preferred_tools = ["claude-code", "codex"]
+
+[reviewer]
+allow_anonymous = false
+
+[[reviewer.whitelist]]
+agent = "abc-123"
+
+[[reviewer.blacklist]]
+agent = "agent-bad"
+
+[[summarizer.whitelist]]
+agent = "agent-synth"
+
+[[summarizer.blacklist]]
+agent = "agent-spam"
 `;
 
 const MINIMAL_CONFIG = `
-version: 1
-prompt: Review this code.
+version = 1
+prompt = "Review this code."
 `;
 
 describe('parseReviewConfig', () => {
@@ -73,75 +75,79 @@ describe('parseReviewConfig', () => {
     expect(config.timeout).toBe('10m');
   });
 
-  it('returns error for invalid YAML syntax', () => {
-    const result = parseReviewConfig('{ invalid yaml: [');
+  it('returns error for invalid TOML syntax', () => {
+    const result = parseReviewConfig('{ invalid toml: [');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe('Invalid YAML syntax');
+    expect((result as { error: string }).error).toBe('Invalid TOML syntax');
   });
 
-  it('returns error for non-object YAML', () => {
+  it('returns error for bare string (invalid TOML)', () => {
     const result = parseReviewConfig('just a string');
     expect('error' in result).toBe(true);
-    expect((result as { error: string }).error).toBe('Configuration must be a YAML object');
+    expect((result as { error: string }).error).toBe('Invalid TOML syntax');
   });
 
   it('returns error when version is missing', () => {
-    const result = parseReviewConfig('prompt: hello');
+    const result = parseReviewConfig('prompt = "hello"');
     expect('error' in result).toBe(true);
     expect((result as { error: string }).error).toBe('Missing required field: version');
   });
 
   it('returns error when version is not a number', () => {
-    const result = parseReviewConfig('version: "one"\nprompt: hello');
+    const result = parseReviewConfig('version = "one"\nprompt = "hello"');
     expect('error' in result).toBe(true);
     expect((result as { error: string }).error).toBe('Field "version" must be a number');
   });
 
   it('returns error when prompt is missing', () => {
-    const result = parseReviewConfig('version: 1');
+    const result = parseReviewConfig('version = 1');
     expect('error' in result).toBe(true);
     expect((result as { error: string }).error).toBe('Missing required field: prompt');
   });
 
   it('returns error when prompt is not a string', () => {
-    const result = parseReviewConfig('version: 1\nprompt: 123');
+    const result = parseReviewConfig('version = 1\nprompt = 123');
     expect('error' in result).toBe(true);
     expect((result as { error: string }).error).toBe('Field "prompt" must be a string');
   });
 
   it('clamps review_count to range 1-10', () => {
     const low = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  review_count: 0',
+      'version = 1\nprompt = "test"\n[agents]\nreview_count = 0',
     ) as ReviewConfig;
     expect(low.agents.reviewCount).toBe(1);
 
     const high = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  review_count: 99',
+      'version = 1\nprompt = "test"\n[agents]\nreview_count = 99',
     ) as ReviewConfig;
     expect(high.agents.reviewCount).toBe(10);
   });
 
   it('uses default timeout for invalid format', () => {
-    const result = parseReviewConfig('version: 1\nprompt: test\ntimeout: 2h') as ReviewConfig;
+    const result = parseReviewConfig(
+      'version = 1\nprompt = "test"\ntimeout = "2h"',
+    ) as ReviewConfig;
     expect(result.timeout).toBe('10m');
   });
 
   it('uses default timeout for out-of-range minutes', () => {
-    const result = parseReviewConfig('version: 1\nprompt: test\ntimeout: 60m') as ReviewConfig;
+    const result = parseReviewConfig(
+      'version = 1\nprompt = "test"\ntimeout = "60m"',
+    ) as ReviewConfig;
     expect(result.timeout).toBe('10m');
   });
 
   it('accepts valid timeout values', () => {
-    const r1 = parseReviewConfig('version: 1\nprompt: test\ntimeout: 1m') as ReviewConfig;
+    const r1 = parseReviewConfig('version = 1\nprompt = "test"\ntimeout = "1m"') as ReviewConfig;
     expect(r1.timeout).toBe('1m');
 
-    const r30 = parseReviewConfig('version: 1\nprompt: test\ntimeout: 30m') as ReviewConfig;
+    const r30 = parseReviewConfig('version = 1\nprompt = "test"\ntimeout = "30m"') as ReviewConfig;
     expect(r30.timeout).toBe('30m');
   });
 
   it('filters non-string values from preferred_tools', () => {
     const result = parseReviewConfig(
-      'version: 1\nprompt: test\nagents:\n  preferred_tools:\n    - claude-code\n    - 123\n    - codex',
+      'version = 1\nprompt = "test"\n[agents]\npreferred_tools = ["claude-code", 123, "codex"]',
     ) as ReviewConfig;
     expect(result.agents.preferredTools).toEqual(['claude-code', 'codex']);
   });
@@ -149,7 +155,7 @@ describe('parseReviewConfig', () => {
   it('logs deprecation warning when allow_anonymous is present', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: false',
+      'version = 1\nprompt = "test"\n[reviewer]\nallow_anonymous = false',
     ) as ReviewConfig;
     expect('error' in result).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith(
@@ -167,7 +173,7 @@ describe('parseReviewConfig', () => {
 
   it('does not include allowAnonymous in parsed config', () => {
     const result = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  allow_anonymous: false',
+      'version = 1\nprompt = "test"\n[reviewer]\nallow_anonymous = false',
     ) as ReviewConfig;
     expect('allowAnonymous' in result.reviewer).toBe(false);
   });
@@ -192,7 +198,7 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
 describe('trigger config parsing', () => {
   it('parses custom trigger config', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\ntrigger:\n  on: [opened, synchronize]\n  comment: "/review"\n  skip: [draft, "label:wip"]',
+      'version = 1\nprompt = "test"\n[trigger]\non = ["opened", "synchronize"]\ncomment = "/review"\nskip = ["draft", "label:wip"]',
     );
     expect('error' in config).toBe(false);
     if (!('error' in config)) {
@@ -203,7 +209,7 @@ describe('trigger config parsing', () => {
   });
 
   it('uses defaults when trigger section is missing', () => {
-    const config = parseReviewConfig('version: 1\nprompt: test');
+    const config = parseReviewConfig('version = 1\nprompt = "test"');
     expect('error' in config).toBe(false);
     if (!('error' in config)) {
       expect(config.trigger.on).toEqual(['opened']);
@@ -214,7 +220,7 @@ describe('trigger config parsing', () => {
 
   it('uses defaults for individual missing trigger fields', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\ntrigger:\n  on: [ready_for_review]',
+      'version = 1\nprompt = "test"\n[trigger]\non = ["ready_for_review"]',
     );
     expect('error' in config).toBe(false);
     if (!('error' in config)) {
@@ -228,7 +234,7 @@ describe('trigger config parsing', () => {
 describe('summarizer.preferred parsing', () => {
   it('parses preferred agent list', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - agent: agent-def',
+      'version = 1\nprompt = "test"\n[[summarizer.preferred]]\nagent = "agent-abc"\n[[summarizer.preferred]]\nagent = "agent-def"',
     ) as ReviewConfig;
     expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }, { agent: 'agent-def' }]);
   });
@@ -240,28 +246,14 @@ describe('summarizer.preferred parsing', () => {
 
   it('filters out entries without agent or github field', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - notanagent: true',
+      'version = 1\nprompt = "test"\n[[summarizer.preferred]]\nagent = "agent-abc"\n[[summarizer.preferred]]\nnotanagent = true',
     ) as ReviewConfig;
     expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }]);
-  });
-
-  it('filters out non-object entries', () => {
-    const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-abc\n    - just-a-string\n    - 123',
-    ) as ReviewConfig;
-    expect(config.summarizer.preferred).toEqual([{ agent: 'agent-abc' }]);
-  });
-
-  it('returns empty array when preferred is not an array', () => {
-    const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred: not-an-array',
-    ) as ReviewConfig;
-    expect(config.summarizer.preferred).toEqual([]);
   });
 
   it('parses full config with preferred alongside whitelist/blacklist', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  whitelist:\n    - agent: agent-a\n  blacklist:\n    - agent: agent-b\n  preferred:\n    - agent: agent-a',
+      'version = 1\nprompt = "test"\n[[summarizer.whitelist]]\nagent = "agent-a"\n[[summarizer.blacklist]]\nagent = "agent-b"\n[[summarizer.preferred]]\nagent = "agent-a"',
     ) as ReviewConfig;
     expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-a' }]);
     expect(config.summarizer.blacklist).toEqual([{ agent: 'agent-b' }]);
@@ -273,7 +265,7 @@ describe('user entries in whitelist/blacklist', () => {
   it('ignores user-only entries and logs a warning', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - user: alice\n    - agent: agent-abc',
+      'version = 1\nprompt = "test"\n[[reviewer.whitelist]]\nuser = "alice"\n[[reviewer.whitelist]]\nagent = "agent-abc"',
     ) as ReviewConfig;
     expect(config.reviewer.whitelist).toEqual([{ agent: 'agent-abc' }]);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Ignoring "user" entry'));
@@ -282,7 +274,7 @@ describe('user entries in whitelist/blacklist', () => {
 
   it('keeps entries that have both user and agent fields (agent wins)', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - user: alice\n      agent: agent-abc',
+      'version = 1\nprompt = "test"\n[[reviewer.whitelist]]\nuser = "alice"\nagent = "agent-abc"',
     ) as ReviewConfig;
     expect(config.reviewer.whitelist).toEqual([{ agent: 'agent-abc' }]);
   });
@@ -290,7 +282,7 @@ describe('user entries in whitelist/blacklist', () => {
   it('produces empty list when all entries are user-only', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  blacklist:\n    - user: bob\n    - user: charlie',
+      'version = 1\nprompt = "test"\n[[reviewer.blacklist]]\nuser = "bob"\n[[reviewer.blacklist]]\nuser = "charlie"',
     ) as ReviewConfig;
     expect(config.reviewer.blacklist).toEqual([]);
     expect(warnSpy).toHaveBeenCalledTimes(2);
@@ -331,28 +323,28 @@ describe('validateReviewConfig', () => {
 describe('GitHub entity entries in entity lists', () => {
   it('parses github entries in whitelist', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nreviewer:\n  whitelist:\n    - github: alice\n    - agent: agent-abc',
+      'version = 1\nprompt = "test"\n[[reviewer.whitelist]]\ngithub = "alice"\n[[reviewer.whitelist]]\nagent = "agent-abc"',
     ) as ReviewConfig;
     expect(config.reviewer.whitelist).toEqual([{ github: 'alice' }, { agent: 'agent-abc' }]);
   });
 
   it('parses github entries in blacklist', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  blacklist:\n    - github: mallory',
+      'version = 1\nprompt = "test"\n[[summarizer.blacklist]]\ngithub = "mallory"',
     ) as ReviewConfig;
     expect(config.summarizer.blacklist).toEqual([{ github: 'mallory' }]);
   });
 
   it('parses entries with both agent and github', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - agent: agent-a\n      github: alice',
+      'version = 1\nprompt = "test"\n[[summarizer.preferred]]\nagent = "agent-a"\ngithub = "alice"',
     ) as ReviewConfig;
     expect(config.summarizer.preferred).toEqual([{ agent: 'agent-a', github: 'alice' }]);
   });
 
   it('parses github entries in summarizer preferred list', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  preferred:\n    - github: alice\n    - github: bob',
+      'version = 1\nprompt = "test"\n[[summarizer.preferred]]\ngithub = "alice"\n[[summarizer.preferred]]\ngithub = "bob"',
     ) as ReviewConfig;
     expect(config.summarizer.preferred).toEqual([{ github: 'alice' }, { github: 'bob' }]);
   });
@@ -405,7 +397,9 @@ describe('parseEntityList', () => {
 
 describe('summarizer shorthand parsing', () => {
   it('parses string shorthand as preferred github username', () => {
-    const config = parseReviewConfig('version: 1\nprompt: test\nsummarizer: alice') as ReviewConfig;
+    const config = parseReviewConfig(
+      'version = 1\nprompt = "test"\nsummarizer = "alice"',
+    ) as ReviewConfig;
     expect(config.summarizer.preferred).toEqual([{ github: 'alice' }]);
     expect(config.summarizer.whitelist).toEqual([]);
     expect(config.summarizer.blacklist).toEqual([]);
@@ -413,7 +407,7 @@ describe('summarizer shorthand parsing', () => {
 
   it('parses "only" string as whitelist with single github entry', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  only: alice',
+      'version = 1\nprompt = "test"\n[summarizer]\nonly = "alice"',
     ) as ReviewConfig;
     expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }]);
     expect(config.summarizer.preferred).toEqual([]);
@@ -422,16 +416,16 @@ describe('summarizer shorthand parsing', () => {
 
   it('parses "only" list as whitelist with multiple github entries', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  only: [alice, bob]',
+      'version = 1\nprompt = "test"\n[summarizer]\nonly = ["alice", "bob"]',
     ) as ReviewConfig;
     expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }, { github: 'bob' }]);
     expect(config.summarizer.preferred).toEqual([]);
     expect(config.summarizer.blacklist).toEqual([]);
   });
 
-  it('parses full object form (backward compatible)', () => {
+  it('parses full object form', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  whitelist:\n    - agent: agent-a\n  blacklist:\n    - github: mallory\n  preferred:\n    - github: alice',
+      'version = 1\nprompt = "test"\n[[summarizer.whitelist]]\nagent = "agent-a"\n[[summarizer.blacklist]]\ngithub = "mallory"\n[[summarizer.preferred]]\ngithub = "alice"',
     ) as ReviewConfig;
     expect(config.summarizer.whitelist).toEqual([{ agent: 'agent-a' }]);
     expect(config.summarizer.blacklist).toEqual([{ github: 'mallory' }]);
@@ -447,7 +441,7 @@ describe('summarizer shorthand parsing', () => {
 
   it('returns defaults when "only" has invalid value', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  only: 123',
+      'version = 1\nprompt = "test"\n[summarizer]\nonly = 123',
     ) as ReviewConfig;
     expect(config.summarizer.whitelist).toEqual([]);
     expect(config.summarizer.preferred).toEqual([]);
@@ -455,7 +449,7 @@ describe('summarizer shorthand parsing', () => {
 
   it('filters non-string entries in "only" list', () => {
     const config = parseReviewConfig(
-      'version: 1\nprompt: test\nsummarizer:\n  only:\n    - alice\n    - 123\n    - bob',
+      'version = 1\nprompt = "test"\n[summarizer]\nonly = ["alice", 123, "bob"]',
     ) as ReviewConfig;
     expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }, { github: 'bob' }]);
   });
