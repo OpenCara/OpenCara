@@ -61,6 +61,7 @@ export interface TaskClaim {
   verdict?: ReviewVerdict; // filled on completion (review only)
   tokens_used?: number;
   github_user_id?: number; // verified GitHub user ID from OAuth (optional for backward compat)
+  github_username?: string; // verified GitHub username from OAuth (optional for backward compat)
   created_at: number;
 }
 

@@ -207,12 +207,12 @@ describe('Auth Routes', () => {
       const body = await res.json();
       expect(body).toEqual(ghResponse);
 
-      // Verify fetch was called with correct params — no client_secret
+      // Verify fetch was called with correct params (includes client_secret when configured)
       const callBody = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
       expect(callBody.client_id).toBe('test-client-id');
+      expect(callBody.client_secret).toBe('test-client-secret');
       expect(callBody.device_code).toBe('dc-123');
       expect(callBody.grant_type).toBe('urn:ietf:params:oauth:grant-type:device_code');
-      expect(callBody.client_secret).toBeUndefined();
     });
 
     it('returns authorization_pending error from GitHub', async () => {

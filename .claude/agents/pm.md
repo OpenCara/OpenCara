@@ -65,9 +65,14 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
 
 ## Core Loop (runs via CronCreate every 5 minutes)
 
-1. **Poll** GitHub via `gh issue list` and `gh pr list`
-2. **Filter** — skip already-processed items (check pm-notebook.md for `#<number>`)
-3. **Handle** each new item:
+1. **Dispatch scan** — check for Ready issues that haven't been dispatched yet:
+   - Run `scripts/list-issues-by-status.sh ready` to get all Ready issues
+   - For each Ready issue: if it's not currently "In progress" (no active agent), dispatch it immediately
+   - This catches issues the team lead moved from Backlog → Ready between polls
+   - Respect dependency ordering — only dispatch issues whose blockers are all resolved
+2. **Poll** GitHub via `gh issue list` and `gh pr list`
+3. **Filter** — skip already-processed items (check pm-notebook.md for `#<number>`)
+4. **Handle** each new item:
 
    **New issue** (open, not in pm-notebook.md):
    - Read the issue content via `gh issue view <number>` and assess complexity

@@ -158,51 +158,64 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
       body: JSON.stringify({ device_code: initData.device_code }),
     });
 
-    if (tokenRes.ok) {
-      const tokenData = (await tokenRes.json()) as DeviceFlowTokenResponse;
-
-      // Step 4: Resolve GitHub user info
-      const user = await resolveUser(tokenData.access_token, fetchFn);
-
-      const auth: StoredAuth = {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token,
-        expires_at: Date.now() + tokenData.expires_in * 1000,
-        github_username: user.login,
-        github_user_id: user.id,
-      };
-
-      // Step 5: Save
-      saveAuth(auth);
-      log(`\nAuthenticated as ${user.login}`);
-      return auth;
-    }
-
-    // Handle polling error states
-    let errorBody: ErrorResponse | undefined;
-    try {
-      errorBody = (await tokenRes.json()) as ErrorResponse;
-    } catch {
-      // Unparseable response — continue polling (may be transient)
-    }
-
-    const errorCode = errorBody?.error?.code;
-
-    if (errorCode === 'AUTH_TOKEN_EXPIRED') {
-      throw new AuthError('Authorization timed out, please try again');
-    }
-
-    if (errorCode === 'AUTH_TOKEN_REVOKED') {
-      throw new AuthError('Authorization denied by user');
-    }
-
-    if (errorCode === 'RATE_LIMITED') {
-      // slow_down — increase interval by 5 seconds
-      interval += 5000;
+    if (!tokenRes.ok) {
+      // Non-200: transient error — continue polling
+      try {
+        await tokenRes.text(); // consume body
+      } catch {
+        // ignore
+      }
       continue;
     }
 
-    // authorization_pending or transient errors — continue polling until deadline
+    // Server returns 200 for both success and GitHub error states
+    // (authorization_pending, slow_down, expired_token, access_denied).
+    // Parse the response and check for the error field.
+    const body = (await tokenRes.json()) as Record<string, unknown>;
+
+    // Check if this is a GitHub error response (has "error" field, no "access_token")
+    if (body.error) {
+      const errorStr = body.error as string;
+
+      if (errorStr === 'expired_token') {
+        throw new AuthError('Authorization timed out, please try again');
+      }
+
+      if (errorStr === 'access_denied') {
+        throw new AuthError('Authorization denied by user');
+      }
+
+      if (errorStr === 'slow_down') {
+        // slow_down — increase interval by 5 seconds
+        interval += 5000;
+      }
+
+      // authorization_pending or other — continue polling
+      continue;
+    }
+
+    // Success — response has access_token
+    const tokenData = body as unknown as DeviceFlowTokenResponse;
+    if (!tokenData.access_token) {
+      // Unexpected response shape — continue polling
+      continue;
+    }
+
+    // Step 4: Resolve GitHub user info
+    const user = await resolveUser(tokenData.access_token, fetchFn);
+
+    const auth: StoredAuth = {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_at: Date.now() + tokenData.expires_in * 1000,
+      github_username: user.login,
+      github_user_id: user.id,
+    };
+
+    // Step 5: Save
+    saveAuth(auth);
+    log(`\nAuthenticated as ${user.login}`);
+    return auth;
   }
 
   throw new AuthError('Authorization timed out, please try again');

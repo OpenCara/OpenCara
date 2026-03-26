@@ -21,9 +21,14 @@ export interface TimeoutReview {
 /**
  * Wrap review text with the standard OpenCara header and footer.
  * Used for normal review comments posted to GitHub.
+ * If contributors are provided, adds "Contributors: @user1, @user2" to the header.
  */
-export function wrapReviewComment(reviewText: string): string {
-  return `${REVIEW_HEADER}\n\n${reviewText}\n\n---\n${REVIEW_FOOTER}`;
+export function wrapReviewComment(reviewText: string, contributors?: string[]): string {
+  const contributorLine =
+    contributors && contributors.length > 0
+      ? `\n**Contributors**: ${contributors.map((c) => `@${c}`).join(', ')}\n`
+      : '';
+  return `${REVIEW_HEADER}\n${contributorLine}\n${reviewText}\n\n---\n${REVIEW_FOOTER}`;
 }
 
 /**
