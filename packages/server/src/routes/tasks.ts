@@ -261,9 +261,7 @@ async function postFinalReview(
   try {
     const claims = await store.getClaims(taskId);
     contributors = [
-      ...new Set(
-        claims.map((c) => c.github_username).filter((u): u is string => !!u),
-      ),
+      ...new Set(claims.map((c) => c.github_username).filter((u): u is string => !!u)),
     ];
   } catch {
     // Non-fatal — post review without contributor attribution
