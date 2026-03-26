@@ -20,8 +20,9 @@ export interface CloneOrUpdateResult {
  *   to prevent concurrent reviews of the same repo from interfering.
  * - Checkout: `git clone --depth 1` then `git fetch --force origin pull/<prNumber>/head`
  *
- * Authentication uses `http.extraHeader` config to inject the token via HTTP header,
- * avoiding token exposure in process listings or crash dumps.
+ * Authentication uses `gh auth token` to obtain the user's GitHub credentials,
+ * matching the pattern used by `fetchDiffViaGh` for diff fetching.
+ * Falls back to unauthenticated HTTPS when `gh` is not available.
  * All git operations use `--depth 1` for minimal disk/time footprint.
  *
  * After review completes, callers should call `cleanupTaskDir()` to remove the
@@ -34,7 +35,6 @@ export function cloneOrUpdate(
   repo: string,
   prNumber: number,
   baseDir: string,
-  githubToken?: string | null,
   taskId?: string,
 ): CloneOrUpdateResult {
   validatePathSegment(owner, 'owner');
@@ -48,7 +48,7 @@ export function cloneOrUpdate(
     ? path.join(baseDir, owner, repo, taskId)
     : path.join(baseDir, owner, repo);
   const cloneUrl = buildCloneUrl(owner, repo);
-  const authArgs = buildAuthArgs(githubToken);
+  const authArgs = getGhAuthArgs();
   let cloned = false;
 
   if (!fs.existsSync(path.join(repoDir, '.git'))) {
@@ -105,13 +105,22 @@ export function buildCloneUrl(owner: string, repo: string): string {
 }
 
 /**
- * Build git CLI args that inject authentication via http.extraHeader.
- * This avoids embedding the token in the URL (visible via `ps`, crash dumps, logs).
- * Returns an empty array when no token is provided.
+ * Obtain a GitHub token from the `gh` CLI and return git auth args.
+ * Uses `gh auth token` which reads the user's authenticated session.
+ * Returns an empty array if `gh` is not installed or not authenticated.
  */
-export function buildAuthArgs(githubToken?: string | null): string[] {
-  if (!githubToken) return [];
-  return ['-c', `http.extraHeader=Authorization: Bearer ${githubToken}`];
+export function getGhAuthArgs(): string[] {
+  try {
+    const token = execFileSync('gh', ['auth', 'token'], {
+      encoding: 'utf-8',
+      timeout: 10_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (!token) return [];
+    return ['-c', `http.extraHeader=Authorization: Bearer ${token}`];
+  } catch {
+    return [];
+  }
 }
 
 /**

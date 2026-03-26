@@ -549,14 +549,7 @@ async function handleTask(
   let taskCheckoutPath: string | null = null;
   if (reviewDeps.codebaseDir) {
     try {
-      const result = cloneOrUpdate(
-        owner,
-        repo,
-        pr_number,
-        reviewDeps.codebaseDir,
-        client.currentToken,
-        task_id,
-      );
+      const result = cloneOrUpdate(owner, repo, pr_number, reviewDeps.codebaseDir, task_id);
       log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
       taskCheckoutPath = result.localPath;
       // Pass the resolved local path as codebaseDir for this task
