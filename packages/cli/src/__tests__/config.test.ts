@@ -1313,7 +1313,7 @@ tool = "claude"
       expect(config.agents![0].roles).toBeUndefined();
     });
 
-    it('filters non-string entries from roles array', () => {
+    it('parses roles with multiple valid entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 [[agents]]
