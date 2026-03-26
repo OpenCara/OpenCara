@@ -20,7 +20,7 @@ import {
   cloneOrUpdate,
   cleanupTaskDir,
   buildCloneUrl,
-  buildAuthArgs,
+  getGhAuthArgs,
   validatePathSegment,
 } from '../codebase.js';
 
@@ -35,26 +35,33 @@ describe('codebase', () => {
     });
   });
 
-  describe('buildAuthArgs', () => {
-    it('returns empty array when no token is provided', () => {
-      expect(buildAuthArgs()).toEqual([]);
-      expect(buildAuthArgs(null)).toEqual([]);
-      expect(buildAuthArgs(undefined)).toEqual([]);
+  describe('getGhAuthArgs', () => {
+    it('returns auth args when gh auth token succeeds', () => {
+      vi.mocked(execFileSync).mockReturnValueOnce('ghp_abc123\n');
+
+      expect(getGhAuthArgs()).toEqual(['-c', 'http.extraHeader=Authorization: Bearer ghp_abc123']);
     });
 
-    it('returns http.extraHeader config args with Bearer token', () => {
-      expect(buildAuthArgs('ghp_abc123')).toEqual([
-        '-c',
-        'http.extraHeader=Authorization: Bearer ghp_abc123',
-      ]);
+    it('returns empty array when gh is not installed', () => {
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error('gh: command not found');
+      });
+
+      expect(getGhAuthArgs()).toEqual([]);
     });
 
-    it('does not embed token in a URL', () => {
-      const args = buildAuthArgs('ghp_secret');
-      const joined = args.join(' ');
-      expect(joined).not.toContain('github.com');
-      expect(joined).not.toContain('@');
-      expect(joined).toContain('Authorization: Bearer ghp_secret');
+    it('returns empty array when gh auth token returns empty string', () => {
+      vi.mocked(execFileSync).mockReturnValueOnce('  \n');
+
+      expect(getGhAuthArgs()).toEqual([]);
+    });
+
+    it('returns empty array when gh is not authenticated', () => {
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error('not logged in');
+      });
+
+      expect(getGhAuthArgs()).toEqual([]);
     });
   });
 
@@ -84,7 +91,10 @@ describe('codebase', () => {
   describe('cloneOrUpdate', () => {
     it('clones repo on first review (no .git dir)', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      // First call: gh auth token, rest: git commands
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockReturnValue(''); // git commands
 
       const result = cloneOrUpdate('acme', 'widgets', 42, '/tmp/repos');
 
@@ -96,31 +106,38 @@ describe('codebase', () => {
         recursive: true,
       });
 
-      // Should run clone, then fetch, then checkout
+      // Should run: gh auth token, clone, fetch, checkout
       const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls.length).toBe(3);
+      expect(calls.length).toBe(4);
 
-      // Clone call
-      expect(calls[0][0]).toBe('git');
-      expect(calls[0][1]).toContain('clone');
-      expect(calls[0][1]).toContain('--depth');
-      expect(calls[0][1]).toContain('1');
+      // gh auth token
+      expect(calls[0][0]).toBe('gh');
+      expect(calls[0][1]).toEqual(['auth', 'token']);
+
+      // Clone call (with auth)
+      expect(calls[1][0]).toBe('git');
+      expect(calls[1][1]).toContain('clone');
+      expect(calls[1][1]).toContain('--depth');
+      expect(calls[1][1]).toContain('1');
+      expect(calls[1][1]).toContain('-c');
 
       // Fetch PR ref (with --force)
-      expect(calls[1][0]).toBe('git');
-      expect(calls[1][1]).toContain('fetch');
-      expect(calls[1][1]).toContain('--force');
-      expect(calls[1][1]).toContain('pull/42/head');
+      expect(calls[2][0]).toBe('git');
+      expect(calls[2][1]).toContain('fetch');
+      expect(calls[2][1]).toContain('--force');
+      expect(calls[2][1]).toContain('pull/42/head');
 
       // Checkout FETCH_HEAD
-      expect(calls[2][0]).toBe('git');
-      expect(calls[2][1]).toContain('checkout');
-      expect(calls[2][1]).toContain('FETCH_HEAD');
+      expect(calls[3][0]).toBe('git');
+      expect(calls[3][1]).toContain('checkout');
+      expect(calls[3][1]).toContain('FETCH_HEAD');
     });
 
     it('only fetches on subsequent reviews (.git dir exists)', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockReturnValue(''); // git commands
 
       const result = cloneOrUpdate('acme', 'widgets', 99, '/tmp/repos');
 
@@ -130,40 +147,47 @@ describe('codebase', () => {
       // Should NOT create dir or clone
       expect(fs.mkdirSync).not.toHaveBeenCalled();
 
-      // Only fetch + checkout
+      // gh auth token + fetch + checkout
       const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls.length).toBe(2);
-      expect(calls[0][1]).toContain('fetch');
-      expect(calls[0][1]).toContain('pull/99/head');
-      expect(calls[1][1]).toContain('checkout');
+      expect(calls.length).toBe(3);
+      expect(calls[0][0]).toBe('gh');
+      expect(calls[1][1]).toContain('fetch');
+      expect(calls[1][1]).toContain('pull/99/head');
+      expect(calls[2][1]).toContain('checkout');
     });
 
-    it('uses http.extraHeader for auth when token is provided', () => {
+    it('uses gh auth token for authentication', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_mytoken\n') // gh auth token
+        .mockReturnValue(''); // git commands
 
-      cloneOrUpdate('acme', 'private-repo', 1, '/tmp/repos', 'ghp_token');
+      cloneOrUpdate('acme', 'private-repo', 1, '/tmp/repos');
 
-      const cloneCall = vi.mocked(execFileSync).mock.calls[0];
+      const cloneCall = vi.mocked(execFileSync).mock.calls[1];
       const cloneArgs = cloneCall[1] as string[];
       // Token must NOT be in the URL
-      expect(cloneArgs.some((a) => a.includes('x-access-token:ghp_token@'))).toBe(false);
+      expect(cloneArgs.some((a) => a.includes('x-access-token:ghp_mytoken@'))).toBe(false);
       // Token must be passed via http.extraHeader
       expect(cloneArgs).toContain('-c');
       expect(
-        cloneArgs.some((a) => a.includes('http.extraHeader=Authorization: Bearer ghp_token')),
+        cloneArgs.some((a) => a.includes('http.extraHeader=Authorization: Bearer ghp_mytoken')),
       ).toBe(true);
       // Clone URL must be plain HTTPS
       expect(cloneArgs.some((a) => a.includes('github.com/acme/private-repo.git'))).toBe(true);
     });
 
-    it('uses plain URL without auth args when no token', () => {
+    it('falls back to unauthenticated clone when gh is not available', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('gh: command not found');
+        }) // gh auth token fails
+        .mockReturnValue(''); // git commands
 
       cloneOrUpdate('acme', 'public-repo', 1, '/tmp/repos');
 
-      const cloneCall = vi.mocked(execFileSync).mock.calls[0];
+      const cloneCall = vi.mocked(execFileSync).mock.calls[1];
       const cloneArgs = cloneCall[1] as string[];
       expect(cloneArgs.some((a) => a.includes('x-access-token'))).toBe(false);
       expect(cloneArgs).not.toContain('-c');
@@ -172,16 +196,27 @@ describe('codebase', () => {
 
     it('sanitizes tokens from git error messages', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockImplementation(() => {
-        throw new Error(
-          'fatal: could not access https://github.com/acme/repo.git with Authorization: Bearer ghp_secret123',
-        );
-      });
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_secret123\n') // gh auth token
+        .mockImplementation(() => {
+          throw new Error(
+            'fatal: could not access https://github.com/acme/repo.git with Authorization: Bearer ghp_secret123',
+          );
+        });
 
-      expect(() => cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123')).toThrow();
+      expect(() => cloneOrUpdate('acme', 'repo', 1, '/tmp/repos')).toThrow();
       // Should NOT contain the actual token
       try {
-        cloneOrUpdate('acme', 'repo', 1, '/tmp/repos', 'ghp_secret123');
+        // Reset mocks for the second call
+        vi.mocked(execFileSync)
+          .mockReset()
+          .mockReturnValueOnce('ghp_secret123\n') // gh auth token
+          .mockImplementation(() => {
+            throw new Error(
+              'fatal: could not access https://github.com/acme/repo.git with Authorization: Bearer ghp_secret123',
+            );
+          });
+        cloneOrUpdate('acme', 'repo', 1, '/tmp/repos');
       } catch (err) {
         expect((err as Error).message).not.toContain('ghp_secret123');
         expect((err as Error).message).toContain('Authorization: ***');
@@ -190,9 +225,11 @@ describe('codebase', () => {
 
     it('throws on git clone failure', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockImplementation(() => {
-        throw new Error('fatal: repository not found');
-      });
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockImplementation(() => {
+          throw new Error('fatal: repository not found');
+        });
 
       expect(() => cloneOrUpdate('bad', 'repo', 1, '/tmp/repos')).toThrow(
         'fatal: repository not found',
@@ -201,9 +238,11 @@ describe('codebase', () => {
 
     it('throws on git fetch failure', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(execFileSync).mockImplementation(() => {
-        throw new Error('fatal: could not read from remote');
-      });
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockImplementation(() => {
+          throw new Error('fatal: could not read from remote');
+        });
 
       expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos')).toThrow(
         'fatal: could not read from remote',
@@ -224,22 +263,27 @@ describe('codebase', () => {
 
     it('passes cwd to fetch and checkout commands', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockReturnValue('');
 
       cloneOrUpdate('acme', 'widgets', 5, '/tmp/repos');
 
-      const fetchCall = vi.mocked(execFileSync).mock.calls[0];
+      // calls[0] = gh auth token, calls[1] = fetch, calls[2] = checkout
+      const fetchCall = vi.mocked(execFileSync).mock.calls[1];
       expect(fetchCall[2]).toMatchObject({ cwd: expect.stringContaining('acme/widgets') });
 
-      const checkoutCall = vi.mocked(execFileSync).mock.calls[1];
+      const checkoutCall = vi.mocked(execFileSync).mock.calls[2];
       expect(checkoutCall[2]).toMatchObject({ cwd: expect.stringContaining('acme/widgets') });
     });
 
     it('uses task-specific subdirectory when taskId is provided', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockReturnValue('');
 
-      const result = cloneOrUpdate('acme', 'widgets', 42, '/tmp/repos', null, 'task-abc-123');
+      const result = cloneOrUpdate('acme', 'widgets', 42, '/tmp/repos', 'task-abc-123');
 
       expect(result.localPath).toBe('/tmp/repos/acme/widgets/task-abc-123');
       expect(result.cloned).toBe(true);
@@ -252,7 +296,9 @@ describe('codebase', () => {
 
     it('uses owner/repo path without taskId (backward compatible)', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockReturnValue('');
 
       const result = cloneOrUpdate('acme', 'widgets', 42, '/tmp/repos');
 
@@ -261,10 +307,20 @@ describe('codebase', () => {
 
     it('isolates concurrent tasks with different taskIds', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token (1st call)
+        .mockReturnValue('') // git commands (1st call)
+        .mockReturnValueOnce('ghp_test\n'); // gh auth token (2nd call) — already covered by mockReturnValue
 
-      const result1 = cloneOrUpdate('acme', 'widgets', 10, '/tmp/repos', null, 'task-1');
-      const result2 = cloneOrUpdate('acme', 'widgets', 20, '/tmp/repos', null, 'task-2');
+      const result1 = cloneOrUpdate('acme', 'widgets', 10, '/tmp/repos', 'task-1');
+
+      vi.mocked(execFileSync).mockReset();
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('ghp_test\n') // gh auth token
+        .mockReturnValue('');
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+
+      const result2 = cloneOrUpdate('acme', 'widgets', 20, '/tmp/repos', 'task-2');
 
       expect(result1.localPath).toBe('/tmp/repos/acme/widgets/task-1');
       expect(result2.localPath).toBe('/tmp/repos/acme/widgets/task-2');
@@ -272,13 +328,13 @@ describe('codebase', () => {
     });
 
     it('rejects taskId with path traversal', () => {
-      expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos', null, '../../etc')).toThrow(
+      expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos', '../../etc')).toThrow(
         'disallowed characters',
       );
     });
 
     it('rejects taskId with slashes', () => {
-      expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos', null, 'a/b')).toThrow(
+      expect(() => cloneOrUpdate('acme', 'widgets', 1, '/tmp/repos', 'a/b')).toThrow(
         'disallowed characters',
       );
     });
