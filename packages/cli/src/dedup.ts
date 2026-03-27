@@ -152,8 +152,15 @@ export function parseDedupReport(text: string): DedupReport {
       throw new Error('Invalid duplicate entry');
     }
     const entry = item as Record<string, unknown>;
-    if (typeof entry.number !== 'number') {
-      throw new Error('Duplicate entry missing "number"');
+    const rawNum = entry.number;
+    const num =
+      typeof rawNum === 'number'
+        ? rawNum
+        : typeof rawNum === 'string' && /^#?\d+$/.test(rawNum)
+          ? parseInt(rawNum.replace(/^#/, ''), 10)
+          : NaN;
+    if (isNaN(num)) {
+      throw new Error('Duplicate entry missing valid "number"');
     }
     if (typeof entry.similarity !== 'string' || !VALID_SIMILARITIES.has(entry.similarity)) {
       throw new Error(
@@ -164,7 +171,7 @@ export function parseDedupReport(text: string): DedupReport {
       throw new Error('Duplicate entry missing "description"');
     }
     duplicates.push({
-      number: entry.number,
+      number: num,
       similarity: entry.similarity as DedupMatch['similarity'],
       description: entry.description,
     });

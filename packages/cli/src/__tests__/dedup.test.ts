@@ -218,12 +218,46 @@ describe('parseDedupReport', () => {
     expect(() => parseDedupReport(text)).toThrow('Invalid similarity');
   });
 
-  it('throws on non-number duplicate number', () => {
+  it('coerces string number to numeric', () => {
+    const text = JSON.stringify({
+      duplicates: [{ number: '59', similarity: 'exact', description: 'Same' }],
+      index_entry: 'x',
+    });
+    const report = parseDedupReport(text);
+    expect(report.duplicates[0].number).toBe(59);
+  });
+
+  it('coerces string number with # prefix to numeric', () => {
+    const text = JSON.stringify({
+      duplicates: [{ number: '#59', similarity: 'high', description: 'Similar' }],
+      index_entry: 'x',
+    });
+    const report = parseDedupReport(text);
+    expect(report.duplicates[0].number).toBe(59);
+  });
+
+  it('throws on non-numeric string number', () => {
     const text = JSON.stringify({
       duplicates: [{ number: 'not-a-number', similarity: 'exact', description: 'x' }],
       index_entry: 'x',
     });
-    expect(() => parseDedupReport(text)).toThrow('missing "number"');
+    expect(() => parseDedupReport(text)).toThrow('missing valid "number"');
+  });
+
+  it('throws on partial-numeric string like "59abc"', () => {
+    const text = JSON.stringify({
+      duplicates: [{ number: '59abc', similarity: 'exact', description: 'x' }],
+      index_entry: 'x',
+    });
+    expect(() => parseDedupReport(text)).toThrow('missing valid "number"');
+  });
+
+  it('throws on missing number field', () => {
+    const text = JSON.stringify({
+      duplicates: [{ similarity: 'exact', description: 'x' }],
+      index_entry: 'x',
+    });
+    expect(() => parseDedupReport(text)).toThrow('missing valid "number"');
   });
 
   it('throws on missing duplicate description', () => {
