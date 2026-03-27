@@ -228,16 +228,15 @@ async function updateIssueComment(
 
 /**
  * Format a single item as an index entry line.
- * Full format: `- #<number> [label1] [label2] — <title>`
- * Compact format (archived): `- #<number> — <title>`
+ * Full format: `- <number>(<label1>, <label2>): <title>`
+ * Compact format (archived): `- <number>(): <title>`
  */
 export function formatEntry(item: GitHubItem, compact: boolean = false): string {
   if (compact) {
-    return `- #${item.number} — ${item.title}`;
+    return `- ${item.number}(): ${item.title}`;
   }
-  const labels = item.labels.map((l) => `[${l.name}]`).join(' ');
-  const labelPart = labels ? ` ${labels}` : '';
-  return `- #${item.number}${labelPart} — ${item.title}`;
+  const labels = item.labels.map((l) => l.name).join(', ');
+  return `- ${item.number}(${labels}): ${item.title}`;
 }
 
 // ── Categorization ───────────────────────────────────────────
@@ -271,10 +270,12 @@ export function categorizeItems(
 
 // ── Comment Body Building ────────────────────────────────────
 
-/** Parse existing entries from a comment body. Returns the set of #numbers already present. */
+/** Parse existing entries from a comment body. Returns the set of numbers already present.
+ *  Supports both old format (`- #42 ...`) and new format (`- 42(...): ...`).
+ */
 export function parseExistingNumbers(body: string): Set<number> {
   const numbers = new Set<number>();
-  const regex = /^- #(\d+)/gm;
+  const regex = /^- #?(\d+)/gm;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(body)) !== null) {
     numbers.add(parseInt(match[1], 10));

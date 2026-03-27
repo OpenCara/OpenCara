@@ -46,12 +46,12 @@ describe('formatEntry', () => {
       title: 'Fix login bug',
       labels: [{ name: 'bug' }, { name: 'critical' }],
     });
-    expect(formatEntry(item)).toBe('- #42 [bug] [critical] — Fix login bug');
+    expect(formatEntry(item)).toBe('- 42(bug, critical): Fix login bug');
   });
 
   it('formats item without labels', () => {
     const item = makeItem({ number: 10, title: 'Add feature' });
-    expect(formatEntry(item)).toBe('- #10 — Add feature');
+    expect(formatEntry(item)).toBe('- 10(): Add feature');
   });
 
   it('formats compact entry (archived)', () => {
@@ -60,7 +60,7 @@ describe('formatEntry', () => {
       title: 'Fix login bug',
       labels: [{ name: 'bug' }],
     });
-    expect(formatEntry(item, true)).toBe('- #42 — Fix login bug');
+    expect(formatEntry(item, true)).toBe('- 42(): Fix login bug');
   });
 });
 
@@ -150,6 +150,29 @@ Not a list item #99`;
     const numbers = parseExistingNumbers(body);
     expect(numbers).toEqual(new Set([5]));
   });
+
+  it('parses numbers from new format entries', () => {
+    const body = `<!-- opencara-dedup-index:open -->
+## Open Items
+
+- 1(bug): Fix
+- 42(): Add feature
+- 100(feat, ui): Dashboard`;
+
+    const numbers = parseExistingNumbers(body);
+    expect(numbers).toEqual(new Set([1, 42, 100]));
+  });
+
+  it('parses numbers from mixed old and new format entries', () => {
+    const body = `<!-- opencara-dedup-index:open -->
+## Open Items
+
+- #1 [bug] — Fix
+- 42(cli): Add feature`;
+
+    const numbers = parseExistingNumbers(body);
+    expect(numbers).toEqual(new Set([1, 42]));
+  });
 });
 
 // ── buildCommentBody ─────────────────────────────────────────
@@ -166,8 +189,8 @@ describe('buildCommentBody', () => {
     const body = buildCommentBody(marker, header, items, null);
     expect(body).toContain(marker);
     expect(body).toContain('## Open Items');
-    expect(body).toContain('- #1 — First');
-    expect(body).toContain('- #2 — Second');
+    expect(body).toContain('- 1(): First');
+    expect(body).toContain('- 2(): Second');
   });
 
   it('merges without duplicates', () => {
@@ -179,17 +202,17 @@ describe('buildCommentBody', () => {
     const body = buildCommentBody(marker, header, items, existingBody);
     // Should contain #1 from existing and add #3
     expect(body).toContain('- #1 — First');
-    expect(body).toContain('- #3 — Third');
+    expect(body).toContain('- 3(): Third');
     // Should NOT have duplicate #1
-    const count1 = (body.match(/- #1/g) || []).length;
+    const count1 = (body.match(/- #?1[\s(]/g) || []).length;
     expect(count1).toBe(1);
   });
 
   it('uses compact format for archived', () => {
     const items = [makeItem({ number: 1, title: 'Item', labels: [{ name: 'bug' }] })];
     const body = buildCommentBody(marker, header, items, null, true);
-    expect(body).toContain('- #1 — Item');
-    expect(body).not.toContain('[bug]');
+    expect(body).toContain('- 1(): Item');
+    expect(body).not.toContain('bug');
   });
 });
 
@@ -358,11 +381,11 @@ describe('initIndex', () => {
     expect(result.newEntries).toBe(3);
     expect(createdComments).toHaveLength(3);
     expect(createdComments[0]).toContain('Open Items');
-    expect(createdComments[0]).toContain('- #1 — Open PR');
+    expect(createdComments[0]).toContain('- 1(): Open PR');
     expect(createdComments[1]).toContain('Recently Closed');
-    expect(createdComments[1]).toContain('- #2 — Recent PR');
+    expect(createdComments[1]).toContain('- 2(): Recent PR');
     expect(createdComments[2]).toContain('Archived');
-    expect(createdComments[2]).toContain('- #3 — Old PR');
+    expect(createdComments[2]).toContain('- 3(): Old PR');
   });
 
   it('merges with existing entries', async () => {
@@ -411,8 +434,8 @@ describe('initIndex', () => {
     const openUpdate = updatedBodies.find((u) => u.id === 100);
     expect(openUpdate).toBeDefined();
     expect(openUpdate!.body).toContain('- #1 — Existing PR');
-    expect(openUpdate!.body).toContain('- #4 — New PR');
-    const count1 = (openUpdate!.body.match(/- #1/g) || []).length;
+    expect(openUpdate!.body).toContain('- 4(): New PR');
+    const count1 = (openUpdate!.body.match(/- #?1[\s(]/g) || []).length;
     expect(count1).toBe(1);
   });
 

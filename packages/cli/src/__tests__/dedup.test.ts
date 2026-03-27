@@ -107,7 +107,7 @@ describe('buildDedupPrompt', () => {
 
   it('specifies index_entry format', () => {
     const prompt = buildDedupPrompt(baseTask);
-    expect(prompt).toContain('- #<number> [label1] [label2]');
+    expect(prompt).toContain('- <number>(<label1>, <label2>, ...): <short description>');
   });
 
   it('injects custom prompt as Repo-Specific Instructions', () => {

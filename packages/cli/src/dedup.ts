@@ -57,7 +57,7 @@ You MUST output ONLY a valid JSON object matching this exact schema (no markdown
 
 - "duplicates": array of matches found (empty array if no duplicates)
 - "similarity": "exact" = identical intent/change, "high" = very similar with minor differences, "partial" = overlapping but distinct
-- "index_entry": a single line in the format: \`- #<number> [label1] [label2] — <short description>\``);
+- "index_entry": a single line in the format: \`- <number>(<label1>, <label2>, ...): <short description>\` where labels are inferred from GitHub labels, PR/issue title, body, and any available context`);
 
   if (task.customPrompt) {
     parts.push(`\n## Repo-Specific Instructions\n\n${task.customPrompt}`);
