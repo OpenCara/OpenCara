@@ -75,9 +75,7 @@ export function isWorkerTask(task: ReviewTask): boolean {
  */
 export function isSummaryTask(task: ReviewTask): boolean {
   return (
-    task.task_type === 'summary' ||
-    isDedupRole(task.task_type) ||
-    isTriageRole(task.task_type)
+    task.task_type === 'summary' || isDedupRole(task.task_type) || isTriageRole(task.task_type)
   );
 }
 

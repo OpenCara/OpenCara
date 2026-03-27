@@ -539,7 +539,10 @@ describe('Unified Pipeline (Issue #506)', () => {
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'dedup-agent', role: 'issue_dedup' });
+      await request('POST', '/api/tasks/s1/claim', {
+        agent_id: 'dedup-agent',
+        role: 'issue_dedup',
+      });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'dedup-agent',
         type: 'issue_dedup',
@@ -581,7 +584,10 @@ describe('Unified Pipeline (Issue #506)', () => {
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'triage-agent', role: 'issue_triage' });
+      await request('POST', '/api/tasks/s1/claim', {
+        agent_id: 'triage-agent',
+        role: 'issue_triage',
+      });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'triage-agent',
         type: 'issue_triage',
@@ -639,7 +645,10 @@ describe('Unified Pipeline (Issue #506)', () => {
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'triage-agent', role: 'issue_triage' });
+      await request('POST', '/api/tasks/s1/claim', {
+        agent_id: 'triage-agent',
+        role: 'issue_triage',
+      });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'triage-agent',
         type: 'issue_triage',
@@ -727,9 +736,7 @@ describe('Unified Pipeline (Issue #506)', () => {
     });
 
     it('accepts dedup_report in result', async () => {
-      await store.createTask(
-        makeWorkerTask('s1', 'g1', 'pr_dedup', 'dedup_pr', { pr_number: 5 }),
-      );
+      await store.createTask(makeWorkerTask('s1', 'g1', 'pr_dedup', 'dedup_pr', { pr_number: 5 }));
       await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'pr_dedup' });
 
       const res = await request('POST', '/api/tasks/s1/result', {
