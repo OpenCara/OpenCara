@@ -466,6 +466,163 @@ describe('Task Routes', () => {
     });
   });
 
+  // ── Dedup serialization ──────────────────────────────────
+
+  describe('dedup serialization', () => {
+    it('returns only the oldest pending dedup task per repo', async () => {
+      const now = Date.now();
+      await store.createTask(
+        makeTask({
+          id: 'dedup-old',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-old',
+          created_at: now - 10_000,
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'dedup-new',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-new',
+          created_at: now,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['pr_dedup'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('dedup-old');
+    });
+
+    it('returns no dedup task if one is already claimed for that repo', async () => {
+      // Create a claimed (reviewing) dedup task
+      await store.createTask(
+        makeTask({
+          id: 'dedup-claimed',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-claimed',
+        }),
+      );
+      await request('POST', '/api/tasks/dedup-claimed/claim', {
+        agent_id: 'agent-other',
+        role: 'pr_dedup',
+      });
+
+      // Create a pending dedup task for the same repo
+      await store.createTask(
+        makeTask({
+          id: 'dedup-pending',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-pending',
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['pr_dedup'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(0);
+    });
+
+    it('does not serialize review/summary/triage tasks per repo', async () => {
+      // Two review tasks for the same repo should both be returned
+      await store.createTask(
+        makeTask({
+          id: 'review-1',
+          task_type: 'review',
+          feature: 'review',
+          group_id: 'grp-r1',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'review-2',
+          task_type: 'review',
+          feature: 'review',
+          group_id: 'grp-r2',
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['review'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+    });
+
+    it('does not block dedup tasks across different repos', async () => {
+      const now = Date.now();
+      await store.createTask(
+        makeTask({
+          id: 'dedup-repo-a',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-a',
+          owner: 'org',
+          repo: 'repo-a',
+          created_at: now,
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'dedup-repo-b',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-b',
+          owner: 'org',
+          repo: 'repo-b',
+          created_at: now,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['pr_dedup'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+    });
+
+    it('serializes issue_dedup tasks per repo the same as pr_dedup', async () => {
+      const now = Date.now();
+      await store.createTask(
+        makeTask({
+          id: 'issue-dedup-old',
+          task_type: 'issue_dedup',
+          feature: 'dedup_issue',
+          group_id: 'grp-id-old',
+          created_at: now - 5_000,
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'issue-dedup-new',
+          task_type: 'issue_dedup',
+          feature: 'dedup_issue',
+          group_id: 'grp-id-new',
+          created_at: now,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['issue_dedup'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('issue-dedup-old');
+    });
+  });
+
   // ── Claim ────────────────────────────────────────────────
 
   describe('POST /api/tasks/:taskId/claim', () => {
