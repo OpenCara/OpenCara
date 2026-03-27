@@ -474,11 +474,12 @@ describe('Unified Pipeline (Issue #506)', () => {
   });
 
   describe('Summary result: dedup_pr feature', () => {
-    it('posts dedup comment on PR and updates index issue', async () => {
+    it('posts dedup comment on PR and updates index issue via structured comments', async () => {
       const groupId = 'dedup-pr-group';
       const postSpy = vi.spyOn(github, 'postPrComment');
-      const updateSpy = vi.spyOn(github, 'updateIssue');
-      const fetchBodySpy = vi.spyOn(github, 'fetchIssueBody');
+      const listCommentsSpy = vi.spyOn(github, 'listIssueComments');
+      const createCommentSpy = vi.spyOn(github, 'createIssueComment');
+      const updateCommentSpy = vi.spyOn(github, 'updateIssueComment');
 
       await store.createTask(
         makeWorkerTask('s1', groupId, 'pr_dedup', 'dedup_pr', {
@@ -509,15 +510,18 @@ describe('Unified Pipeline (Issue #506)', () => {
         expect.any(String),
       );
 
-      // Fetched index issue body
-      expect(fetchBodySpy).toHaveBeenCalledWith('test-org', 'test-repo', 10, expect.any(String));
+      // Listed comments to find/create structured comments
+      expect(listCommentsSpy).toHaveBeenCalledWith('test-org', 'test-repo', 10, expect.any(String));
 
-      // Updated index issue
-      expect(updateSpy).toHaveBeenCalledWith(
+      // Created the 3 structured comments (first time)
+      expect(createCommentSpy).toHaveBeenCalledTimes(3);
+
+      // Updated the open items comment with the index entry
+      expect(updateCommentSpy).toHaveBeenCalledWith(
         'test-org',
         'test-repo',
-        10,
-        expect.objectContaining({ body: expect.stringContaining('PR #5: duplicate of #3') }),
+        expect.any(Number),
+        expect.stringContaining('PR #5: duplicate of #3'),
         expect.any(String),
       );
 
