@@ -15,6 +15,7 @@ import type { Logger } from '../logger.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
+import { moveToRecentlyClosed, ageOutToArchived } from '../dedup-index.js';
 
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
@@ -561,6 +562,12 @@ async function handlePullRequest(
 
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
+  // Handle PR close/merge — move dedup index entries
+  if (action === 'closed') {
+    await handlePrClose(github, owner, repo, prNumber, fullConfig, token, logger);
+    return new Response('OK', { status: 200 });
+  }
+
   if (!reviewConfig.trigger.on.includes(action)) {
     logger.info('Action not in trigger.on — skipping', {
       prNumber,
@@ -632,11 +639,6 @@ export async function handleIssueEvent(
     return new Response('OK', { status: 200 });
   }
 
-  if (action !== 'opened' && action !== 'edited') {
-    logger.info('Issue action not handled — skipping', { action, issueNumber: issue.number });
-    return new Response('OK', { status: 200 });
-  }
-
   const owner = repository.owner.login;
   const repo = repository.name;
   const defaultBranch = repository.default_branch ?? 'main';
@@ -648,6 +650,36 @@ export async function handleIssueEvent(
     issueNumber: issue.number,
     action,
   });
+
+  // Handle issue close — move dedup index entries
+  if (action === 'closed') {
+    let token: string;
+    try {
+      token = await github.getInstallationToken(installation.id);
+    } catch (err) {
+      logger.error('Failed to get installation token', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+      owner,
+      repo,
+      defaultBranch,
+      token,
+    );
+
+    if (!parseError) {
+      await handleIssueClose(github, owner, repo, issue.number, fullConfig, token, logger);
+    }
+    return new Response('OK', { status: 200 });
+  }
+
+  if (action !== 'opened' && action !== 'edited') {
+    logger.info('Issue action not handled — skipping', { action, issueNumber: issue.number });
+    return new Response('OK', { status: 200 });
+  }
 
   let token: string;
   try {
@@ -710,6 +742,68 @@ export async function handleIssueEvent(
   }
 
   return new Response('OK', { status: 200 });
+}
+
+// ── Index Lifecycle on Close ─────────────────────────────────────
+
+/**
+ * Handle dedup index update when a PR is closed/merged.
+ * Moves the PR entry from Open → Recently Closed, then runs age-out.
+ */
+async function handlePrClose(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  config: OpenCaraConfig,
+  token: string,
+  logger: Logger,
+): Promise<void> {
+  const indexIssue = config.dedup?.prs?.indexIssue;
+  if (!indexIssue || !config.dedup?.prs?.enabled) return;
+
+  try {
+    await moveToRecentlyClosed(github, owner, repo, indexIssue, prNumber, token, logger);
+    await ageOutToArchived(github, owner, repo, indexIssue, token, logger);
+  } catch (err) {
+    logger.error('Failed to update dedup index on PR close', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      prNumber,
+      indexIssue,
+    });
+  }
+}
+
+/**
+ * Handle dedup index update when an issue is closed.
+ * Moves the issue entry from Open → Recently Closed, then runs age-out.
+ */
+async function handleIssueClose(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  config: OpenCaraConfig,
+  token: string,
+  logger: Logger,
+): Promise<void> {
+  const indexIssue = config.dedup?.issues?.indexIssue;
+  if (!indexIssue || !config.dedup?.issues?.enabled) return;
+
+  try {
+    await moveToRecentlyClosed(github, owner, repo, indexIssue, issueNumber, token, logger);
+    await ageOutToArchived(github, owner, repo, indexIssue, token, logger);
+  } catch (err) {
+    logger.error('Failed to update dedup index on issue close', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+      indexIssue,
+    });
+  }
 }
 
 async function handleIssueComment(
