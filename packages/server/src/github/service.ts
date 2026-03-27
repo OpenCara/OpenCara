@@ -71,6 +71,28 @@ export interface GitHubService {
     fields: { title: string; body: string; labels?: string[] },
     token: string,
   ): Promise<number>;
+
+  // Comment management
+  listIssueComments(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<Array<{ id: number; body: string }>>;
+  createIssueComment(
+    owner: string,
+    repo: string,
+    number: number,
+    body: string,
+    token: string,
+  ): Promise<number>;
+  updateIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string,
+    token: string,
+  ): Promise<void>;
 }
 
 /**
@@ -201,6 +223,76 @@ export class RealGitHubService implements GitHubService {
     const data = (await response.json()) as { number: number };
     return data.number;
   }
+
+  async listIssueComments(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<Array<{ id: number; body: string }>> {
+    const response = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
+      { token },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to list comments for issue #${number}: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const data = (await response.json()) as Array<{ id: number; body: string | null }>;
+    return data.map((c) => ({ id: c.id, body: c.body ?? '' }));
+  }
+
+  async createIssueComment(
+    owner: string,
+    repo: string,
+    number: number,
+    body: string,
+    token: string,
+  ): Promise<number> {
+    const response = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments`,
+      {
+        method: 'POST',
+        token,
+        body: JSON.stringify({ body }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to create comment on issue #${number}: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const data = (await response.json()) as { id: number };
+    return data.id;
+  }
+
+  async updateIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string,
+    token: string,
+  ): Promise<void> {
+    const response = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}`,
+      {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ body }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to update comment ${commentId}: ${response.status} ${response.statusText}`,
+      );
+    }
+  }
 }
 
 /**
@@ -288,5 +380,59 @@ export class NoOpGitHubService implements GitHubService {
       title: fields.title,
     });
     return 0;
+  }
+
+  private commentIdCounter = 1000;
+  private comments = new Map<string, Array<{ id: number; body: string }>>();
+
+  async listIssueComments(
+    owner: string,
+    repo: string,
+    number: number,
+  ): Promise<Array<{ id: number; body: string }>> {
+    this.logger.info('Dev mode — returning mock issue comments', { owner, repo, number });
+    const key = `${owner}/${repo}#${number}`;
+    return this.comments.get(key) ?? [];
+  }
+
+  async createIssueComment(
+    owner: string,
+    repo: string,
+    number: number,
+    body: string,
+  ): Promise<number> {
+    this.logger.info('Dev mode — creating mock issue comment', {
+      owner,
+      repo,
+      number,
+      bodyLength: body.length,
+    });
+    const key = `${owner}/${repo}#${number}`;
+    const id = this.commentIdCounter++;
+    const list = this.comments.get(key) ?? [];
+    list.push({ id, body });
+    this.comments.set(key, list);
+    return id;
+  }
+
+  async updateIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string,
+  ): Promise<void> {
+    this.logger.info('Dev mode — updating mock issue comment', {
+      owner,
+      repo,
+      commentId,
+      bodyLength: body.length,
+    });
+    for (const [, list] of this.comments) {
+      const comment = list.find((c) => c.id === commentId);
+      if (comment) {
+        comment.body = body;
+        return;
+      }
+    }
   }
 }

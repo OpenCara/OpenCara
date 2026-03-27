@@ -43,6 +43,7 @@ import {
   isCompletedReview,
   shouldCreateSummaryTask,
 } from '../task-lifecycle.js';
+import { appendOpenEntry, fetchIndexBody } from '../dedup-index.js';
 import {
   parseBody,
   PollRequestSchema,
@@ -350,23 +351,16 @@ async function handleDedupSummaryResult(
   // Update the index issue if configured and report includes an index entry
   if (dedupReport?.index_entry && task.index_issue_number) {
     try {
-      const currentBody = await github.fetchIssueBody(
+      await appendOpenEntry(
+        github,
         task.owner,
         task.repo,
         task.index_issue_number,
+        dedupReport.index_entry,
         token,
+        logger,
       );
-      const updatedBody = currentBody
-        ? `${currentBody}\n${dedupReport.index_entry}`
-        : dedupReport.index_entry;
-      await github.updateIssue(
-        task.owner,
-        task.repo,
-        task.index_issue_number,
-        { body: updatedBody },
-        token,
-      );
-      logger.info('Index issue updated', {
+      logger.info('Index issue updated (structured comments)', {
         taskId: task.id,
         indexIssue: task.index_issue_number,
       });
@@ -671,6 +665,27 @@ export function taskRoutes() {
       // For summary tasks, include worker results from the group
       if (isSummaryTask(task)) {
         pollTask.reviews = await getWorkerReviews(store, task.group_id);
+      }
+
+      // For dedup tasks with an index issue, fetch the structured index body
+      if (
+        (task.task_type === 'dedup' ||
+          task.feature === 'dedup_pr' ||
+          task.feature === 'dedup_issue') &&
+        task.index_issue_number
+      ) {
+        try {
+          const token = await github.getInstallationToken(task.github_installation_id);
+          pollTask.index_issue_body = await fetchIndexBody(
+            github,
+            task.owner,
+            task.repo,
+            task.index_issue_number,
+            token,
+          );
+        } catch {
+          // Non-fatal — agent will work without index context
+        }
       }
 
       available.push(pollTask);
