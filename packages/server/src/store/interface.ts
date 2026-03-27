@@ -10,8 +10,10 @@ export interface DataStore {
   createTask(task: ReviewTask): Promise<void>;
   /**
    * Atomically create a task only if no active (pending/reviewing) task exists
-   * for the same PR. Returns true if the task was created, false if a duplicate exists.
-   * This prevents race conditions from concurrent webhook deliveries.
+   * for the same PR and feature. Returns true if the task was created, false if
+   * a duplicate exists. This prevents race conditions from concurrent webhook
+   * deliveries while allowing multiple task groups for different features on
+   * the same PR.
    */
   createTaskIfNotExists(task: ReviewTask): Promise<boolean>;
   getTask(id: string): Promise<ReviewTask | null>;

@@ -33,6 +33,7 @@ export class MemoryDataStore implements DataStore {
         existing.owner === task.owner &&
         existing.repo === task.repo &&
         existing.pr_number === task.pr_number &&
+        existing.feature === task.feature &&
         (existing.status === 'pending' || existing.status === 'reviewing')
       ) {
         return false;

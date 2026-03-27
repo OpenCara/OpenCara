@@ -245,7 +245,7 @@ export class D1DataStore implements DataStore {
           dedup_target, index_issue_number)
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
-          SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND status IN (?, ?)
+          SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND feature = ? AND status IN (?, ?)
         )`,
         )
         .bind(
@@ -285,6 +285,7 @@ export class D1DataStore implements DataStore {
           task.owner,
           task.repo,
           task.pr_number,
+          task.feature,
           'pending',
           'reviewing',
         )
