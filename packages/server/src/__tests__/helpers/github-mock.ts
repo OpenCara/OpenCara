@@ -213,6 +213,58 @@ export class MockGitHubService implements GitHubService {
     return 42;
   }
 
+  // ── Comment management (for dedup index) ────────────────────
+
+  private commentIdCounter = 1000;
+  private issueComments = new Map<string, Array<{ id: number; body: string }>>();
+
+  async listIssueComments(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<Array<{ id: number; body: string }>> {
+    this.calls.push({ method: 'listIssueComments', args: { owner, repo, number, token } });
+    const key = `${owner}/${repo}#${number}`;
+    return this.issueComments.get(key) ?? [];
+  }
+
+  async createIssueComment(
+    owner: string,
+    repo: string,
+    number: number,
+    body: string,
+    token: string,
+  ): Promise<number> {
+    this.calls.push({ method: 'createIssueComment', args: { owner, repo, number, body, token } });
+    const key = `${owner}/${repo}#${number}`;
+    const id = this.commentIdCounter++;
+    const list = this.issueComments.get(key) ?? [];
+    list.push({ id, body });
+    this.issueComments.set(key, list);
+    return id;
+  }
+
+  async updateIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string,
+    token: string,
+  ): Promise<void> {
+    this.calls.push({
+      method: 'updateIssueComment',
+      args: { owner, repo, commentId, body, token },
+    });
+    for (const [, list] of this.issueComments) {
+      const comment = list.find((c) => c.id === commentId);
+      if (comment) {
+        comment.body = body;
+        return;
+      }
+    }
+  }
+
   /** Count postPrComment calls (convenience for assertions). */
   get commentCount(): number {
     return this.calls.filter((c) => c.method === 'postPrComment').length;
