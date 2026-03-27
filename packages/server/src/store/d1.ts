@@ -134,7 +134,6 @@ export function rowToTask(row: TaskRow): ReviewTask {
   if (row.issue_author !== null) task.issue_author = row.issue_author;
 
   // Optional dedup fields
-  if (row.dedup_target !== null) task.dedup_target = row.dedup_target as ReviewTask['dedup_target'];
   if (row.index_issue_number !== null) task.index_issue_number = row.index_issue_number;
 
   return task;
@@ -227,7 +226,7 @@ export class D1DataStore implements DataStore {
         task.issue_title ?? null,
         task.issue_body ?? null,
         task.issue_author ?? null,
-        task.dedup_target ?? null,
+        null, // dedup_target column (deprecated — role now encodes target)
         task.index_issue_number ?? null,
       )
       .run();
@@ -279,7 +278,7 @@ export class D1DataStore implements DataStore {
           task.issue_title ?? null,
           task.issue_body ?? null,
           task.issue_author ?? null,
-          task.dedup_target ?? null,
+          null, // dedup_target column (deprecated — role now encodes target)
           task.index_issue_number ?? null,
           // WHERE NOT EXISTS params
           task.owner,
@@ -368,7 +367,6 @@ export class D1DataStore implements DataStore {
       issue_title: (v) => v ?? null,
       issue_body: (v) => v ?? null,
       issue_author: (v) => v ?? null,
-      dedup_target: (v) => v ?? null,
       index_issue_number: (v) => v ?? null,
     };
 

@@ -364,7 +364,6 @@ describe('Webhook refactor — separate task creation', () => {
     it('creates dedup tasks with extra fields', async () => {
       const dedupConfig = makeReviewConfig({ agentCount: 2, prompt: 'Check for duplicates' });
       const groupId = await createTaskGroup(store, 'dedup_pr', dedupConfig, baseTask, logger, {
-        dedup_target: 'pr',
         index_issue_number: 99,
       });
 
@@ -372,7 +371,7 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1); // 2 - 1 = 1
       expect(tasks[0].feature).toBe('dedup_pr');
-      expect(tasks[0].dedup_target).toBe('pr');
+      expect(tasks[0].task_type).toBe('pr_dedup');
       expect(tasks[0].index_issue_number).toBe(99);
     });
   });
@@ -531,8 +530,7 @@ describe('Webhook refactor — separate task creation', () => {
       expect(reviewTasks[0].group_id).not.toBe(dedupTasks[0].group_id);
 
       // Dedup task properties
-      expect(dedupTasks[0].dedup_target).toBe('pr');
-      expect(dedupTasks[0].task_type).toBe('summary');
+      expect(dedupTasks[0].task_type).toBe('pr_dedup');
     });
 
     it('skips dedup tasks when dedup.prs.enabled is false', async () => {
@@ -663,7 +661,7 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].feature).toBe('triage');
-      expect(tasks[0].task_type).toBe('summary');
+      expect(tasks[0].task_type).toBe('issue_triage');
       expect(tasks[0].issue_number).toBe(10);
       expect(tasks[0].issue_title).toBe('Bug: something is broken');
       expect(tasks[0].issue_body).toBe('Steps to reproduce...');
@@ -693,7 +691,7 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].feature).toBe('dedup_issue');
-      expect(tasks[0].dedup_target).toBe('issue');
+      expect(tasks[0].task_type).toBe('issue_dedup');
       expect(tasks[0].index_issue_number).toBe(5);
       expect(tasks[0].issue_number).toBe(10);
     });
@@ -867,7 +865,7 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks).toHaveLength(2); // 3 - 1 = 2
       for (const task of tasks) {
         expect(task.feature).toBe('dedup_issue');
-        expect(task.task_type).toBe('review');
+        expect(task.task_type).toBe('issue_dedup');
       }
     });
   });

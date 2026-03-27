@@ -331,14 +331,14 @@ async function handleDedupSummaryResult(
   const token = await github.getInstallationToken(task.github_installation_id);
   const commentBody = wrapReviewComment(reviewText.trim());
 
-  if (task.dedup_target === 'pr' && task.pr_number > 0) {
+  if (task.task_type === 'pr_dedup' && task.pr_number > 0) {
     // Post comment on the PR
     await github.postPrComment(task.owner, task.repo, task.pr_number, commentBody, token);
     logger.info('Dedup PR comment posted', {
       taskId: task.id,
       prNumber: task.pr_number,
     });
-  } else if (task.dedup_target === 'issue' && task.issue_number) {
+  } else if (task.task_type === 'issue_dedup' && task.issue_number) {
     // Post comment on the issue
     await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
     logger.info('Dedup issue comment posted', {
@@ -1135,7 +1135,7 @@ async function findClaimForAgent(
   taskId: string,
   agentId: string,
 ): Promise<import('@opencara/shared').TaskClaim | null> {
-  const roles: TaskRole[] = ['summary', 'review', 'dedup', 'triage'];
+  const roles: TaskRole[] = ['summary', 'review', 'pr_dedup', 'issue_dedup', 'pr_triage', 'issue_triage'];
 
   for (const role of roles) {
     const claim = await store.getClaim(`${taskId}:${agentId}:${role}`);

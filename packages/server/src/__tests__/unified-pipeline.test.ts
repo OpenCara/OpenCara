@@ -123,7 +123,7 @@ describe('Unified Pipeline (Issue #506)', () => {
   describe('Poll: task_type filtering', () => {
     it('returns tasks filtered by task_type matching agent roles', async () => {
       await store.createTask(makeWorkerTask('worker-1', 'g1', 'review', 'review'));
-      await store.createTask(makeWorkerTask('dedup-1', 'g2', 'dedup', 'dedup_pr'));
+      await store.createTask(makeWorkerTask('dedup-1', 'g2', 'pr_dedup', 'dedup_pr'));
       await store.createTask(makeSummaryTask('summary-1', 'g3', 'review'));
 
       // Agent accepting only review
@@ -139,12 +139,12 @@ describe('Unified Pipeline (Issue #506)', () => {
       // Agent accepting dedup
       const res2 = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-2',
-        roles: ['dedup'],
+        roles: ['pr_dedup'],
       });
       const body2 = await res2.json();
       expect(body2.tasks).toHaveLength(1);
       expect(body2.tasks[0].task_id).toBe('dedup-1');
-      expect(body2.tasks[0].role).toBe('dedup');
+      expect(body2.tasks[0].role).toBe('pr_dedup');
 
       // Agent accepting summary
       const res3 = await request('POST', '/api/tasks/poll', {
@@ -159,7 +159,7 @@ describe('Unified Pipeline (Issue #506)', () => {
 
     it('returns all tasks when roles is omitted', async () => {
       await store.createTask(makeWorkerTask('w1', 'g1', 'review'));
-      await store.createTask(makeWorkerTask('w2', 'g2', 'dedup', 'dedup_pr'));
+      await store.createTask(makeWorkerTask('w2', 'g2', 'pr_dedup', 'dedup_pr'));
       await store.createTask(makeSummaryTask('s1', 'g3'));
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
@@ -184,7 +184,7 @@ describe('Unified Pipeline (Issue #506)', () => {
 
     it('includes issue fields in poll response for issue tasks', async () => {
       await store.createTask(
-        makeWorkerTask('triage-1', 'g1', 'triage', 'triage', {
+        makeWorkerTask('triage-1', 'g1', 'issue_triage', 'triage', {
           issue_number: 42,
           issue_title: 'Bug: something broke',
           issue_body: 'Detailed description',
@@ -194,7 +194,7 @@ describe('Unified Pipeline (Issue #506)', () => {
 
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-1',
-        roles: ['triage'],
+        roles: ['issue_triage'],
       });
       const body = await res.json();
       expect(body.tasks).toHaveLength(1);
@@ -261,12 +261,12 @@ describe('Unified Pipeline (Issue #506)', () => {
     });
 
     it('uses atomic claimTask CAS for all task types', async () => {
-      await store.createTask(makeWorkerTask('w1', 'g1', 'dedup', 'dedup_pr'));
+      await store.createTask(makeWorkerTask('w1', 'g1', 'pr_dedup', 'dedup_pr'));
 
       // First claim succeeds
       const res1 = await request('POST', '/api/tasks/w1/claim', {
         agent_id: 'agent-1',
-        role: 'dedup',
+        role: 'pr_dedup',
       });
       expect(res1.status).toBe(200);
 
@@ -277,7 +277,7 @@ describe('Unified Pipeline (Issue #506)', () => {
       // Second claim fails (task already claimed)
       const res2 = await request('POST', '/api/tasks/w1/claim', {
         agent_id: 'agent-2',
-        role: 'dedup',
+        role: 'pr_dedup',
       });
       expect(res2.status).toBe(409);
     });
@@ -310,18 +310,18 @@ describe('Unified Pipeline (Issue #506)', () => {
     });
 
     it('accepts dedup and triage roles', async () => {
-      await store.createTask(makeWorkerTask('d1', 'g1', 'dedup', 'dedup_pr'));
-      await store.createTask(makeWorkerTask('t1', 'g2', 'triage', 'triage'));
+      await store.createTask(makeWorkerTask('d1', 'g1', 'pr_dedup', 'dedup_pr'));
+      await store.createTask(makeWorkerTask('t1', 'g2', 'issue_triage', 'triage'));
 
       const res1 = await request('POST', '/api/tasks/d1/claim', {
         agent_id: 'agent-1',
-        role: 'dedup',
+        role: 'pr_dedup',
       });
       expect(res1.status).toBe(200);
 
       const res2 = await request('POST', '/api/tasks/t1/claim', {
         agent_id: 'agent-2',
-        role: 'triage',
+        role: 'issue_triage',
       });
       expect(res2.status).toBe(200);
     });
@@ -398,23 +398,26 @@ describe('Unified Pipeline (Issue #506)', () => {
       expect(summaries).toHaveLength(0);
     });
 
-    it('preserves feature/group_id on summary task', async () => {
+    it('dedup tasks dispatch directly as final tasks (no summary step)', async () => {
       const groupId = 'dedup-group';
-      await store.createTask(makeWorkerTask('w1', groupId, 'dedup', 'dedup_pr'));
+      const postSpy = vi.spyOn(github, 'postPrComment');
+      await store.createTask(
+        makeWorkerTask('w1', groupId, 'pr_dedup', 'dedup_pr', { pr_number: 5 }),
+      );
 
-      await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-1', role: 'dedup' });
+      await request('POST', '/api/tasks/w1/claim', { agent_id: 'agent-1', role: 'pr_dedup' });
       await request('POST', '/api/tasks/w1/result', {
         agent_id: 'agent-1',
-        type: 'dedup',
+        type: 'pr_dedup',
         review_text: 'Dedup analysis: No duplicates found in the codebase for this change.',
-        verdict: 'comment',
       });
 
+      // Dedup task dispatches directly — no summary task created
       const groupTasks = await store.getTasksByGroup(groupId);
-      const summary = groupTasks.find((t) => t.task_type === 'summary');
-      expect(summary).toBeDefined();
-      expect(summary?.feature).toBe('dedup_pr');
-      expect(summary?.group_id).toBe(groupId);
+      expect(groupTasks).toHaveLength(0); // group deleted after dispatch
+
+      // Posted comment on PR
+      expect(postSpy).toHaveBeenCalled();
     });
   });
 
@@ -478,17 +481,16 @@ describe('Unified Pipeline (Issue #506)', () => {
       const fetchBodySpy = vi.spyOn(github, 'fetchIssueBody');
 
       await store.createTask(
-        makeSummaryTask('s1', groupId, 'dedup_pr', {
-          dedup_target: 'pr',
+        makeWorkerTask('s1', groupId, 'pr_dedup', 'dedup_pr', {
           index_issue_number: 10,
           pr_number: 5,
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'dedup-agent', role: 'summary' });
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'dedup-agent', role: 'pr_dedup' });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'dedup-agent',
-        type: 'summary',
+        type: 'pr_dedup',
         review_text:
           'Dedup analysis complete: This PR duplicates functionality found in PR #3 and PR #7. See detailed analysis below.',
         dedup_report: {
@@ -531,17 +533,16 @@ describe('Unified Pipeline (Issue #506)', () => {
       const postSpy = vi.spyOn(github, 'postPrComment');
 
       await store.createTask(
-        makeSummaryTask('s1', groupId, 'dedup_issue', {
-          dedup_target: 'issue',
+        makeWorkerTask('s1', groupId, 'issue_dedup', 'dedup_issue', {
           issue_number: 42,
           index_issue_number: 10,
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'dedup-agent', role: 'summary' });
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'dedup-agent', role: 'issue_dedup' });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'dedup-agent',
-        type: 'summary',
+        type: 'issue_dedup',
         review_text:
           'Dedup analysis: Issue #42 appears to be a duplicate of issue #15 based on the description and context.',
         dedup_report: {
@@ -573,17 +574,17 @@ describe('Unified Pipeline (Issue #506)', () => {
       const updateSpy = vi.spyOn(github, 'updateIssue');
 
       await store.createTask(
-        makeSummaryTask('s1', groupId, 'triage', {
+        makeWorkerTask('s1', groupId, 'issue_triage', 'triage', {
           issue_number: 42,
           issue_author: 'user1',
           pr_number: 0,
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'triage-agent', role: 'summary' });
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'triage-agent', role: 'issue_triage' });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'triage-agent',
-        type: 'summary',
+        type: 'issue_triage',
         review_text:
           'Triage complete: This is a bug report related to authentication. Priority is high, size is medium.',
         triage_report: {
@@ -630,7 +631,7 @@ describe('Unified Pipeline (Issue #506)', () => {
       };
 
       await store.createTask(
-        makeSummaryTask('s1', groupId, 'triage', {
+        makeWorkerTask('s1', groupId, 'issue_triage', 'triage', {
           issue_number: 42,
           issue_author: 'user1',
           pr_number: 0,
@@ -638,10 +639,10 @@ describe('Unified Pipeline (Issue #506)', () => {
         }),
       );
 
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'triage-agent', role: 'summary' });
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'triage-agent', role: 'issue_triage' });
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'triage-agent',
-        type: 'summary',
+        type: 'issue_triage',
         review_text:
           'Triage complete with rewrite: Updated issue body and title for better clarity.',
         triage_report: {
@@ -716,24 +717,24 @@ describe('Unified Pipeline (Issue #506)', () => {
 
   describe('Schema validation', () => {
     it('accepts dedup and triage roles in claim', async () => {
-      await store.createTask(makeWorkerTask('d1', 'g1', 'dedup', 'dedup_pr'));
+      await store.createTask(makeWorkerTask('d1', 'g1', 'pr_dedup', 'dedup_pr'));
 
       const res = await request('POST', '/api/tasks/d1/claim', {
         agent_id: 'agent-1',
-        role: 'dedup',
+        role: 'pr_dedup',
       });
       expect(res.status).toBe(200);
     });
 
     it('accepts dedup_report in result', async () => {
       await store.createTask(
-        makeSummaryTask('s1', 'g1', 'dedup_pr', { dedup_target: 'pr', pr_number: 5 }),
+        makeWorkerTask('s1', 'g1', 'pr_dedup', 'dedup_pr', { pr_number: 5 }),
       );
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'summary' });
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'pr_dedup' });
 
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'agent-1',
-        type: 'summary',
+        type: 'pr_dedup',
         review_text:
           'Dedup analysis complete. Found potential duplicates in the repository codebase.',
         dedup_report: {
@@ -746,13 +747,13 @@ describe('Unified Pipeline (Issue #506)', () => {
 
     it('accepts triage_report in result', async () => {
       await store.createTask(
-        makeSummaryTask('s1', 'g1', 'triage', { issue_number: 42, pr_number: 0 }),
+        makeWorkerTask('s1', 'g1', 'issue_triage', 'triage', { issue_number: 42, pr_number: 0 }),
       );
-      await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'summary' });
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'issue_triage' });
 
       const res = await request('POST', '/api/tasks/s1/result', {
         agent_id: 'agent-1',
-        type: 'summary',
+        type: 'issue_triage',
         review_text: 'Triage analysis complete. Categorized issue as a bug with high priority.',
         triage_report: {
           category: 'bug',

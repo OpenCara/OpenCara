@@ -1296,10 +1296,10 @@ synthesizer_only = true
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
-roles = ["review", "summary", "dedup"]
+roles = ["review", "summary", "pr_dedup"]
 `);
       const config = loadConfig();
-      expect(config.agents![0].roles).toEqual(['review', 'summary', 'dedup']);
+      expect(config.agents![0].roles).toEqual(['review', 'summary', 'pr_dedup']);
     });
 
     it('defaults to undefined roles when omitted', () => {
@@ -1344,11 +1344,11 @@ roles = []
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
-roles = ["review", "dedup"]
+roles = ["review", "pr_dedup"]
 review_only = true
 `);
       const config = loadConfig();
-      expect(config.agents![0].roles).toEqual(['review', 'dedup']);
+      expect(config.agents![0].roles).toEqual(['review', 'pr_dedup']);
       expect(config.agents![0].review_only).toBe(true);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("'roles' takes precedence"));
       warnSpy.mockRestore();
@@ -1377,7 +1377,7 @@ synthesizer_only = true
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
-roles = ["review", "summary", "triage"]
+roles = ["review", "summary", "issue_triage"]
 `);
       loadConfig();
       const calls = warnSpy.mock.calls.map((c) => c[0] as string);
@@ -1393,14 +1393,14 @@ roles = ["review", "summary", "triage"]
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         codebaseDir: null,
         agentCommand: null,
-        agents: [{ model: 'claude-opus-4-6', tool: 'claude', roles: ['review', 'dedup'] }],
+        agents: [{ model: 'claude-opus-4-6', tool: 'claude', roles: ['review', 'pr_dedup'] }],
         usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(written).toContain('roles');
       expect(written).toContain('review');
-      expect(written).toContain('dedup');
+      expect(written).toContain('pr_dedup');
     });
   });
 

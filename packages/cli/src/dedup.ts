@@ -300,6 +300,7 @@ export async function executeDedupTask(
   consumptionDeps: ConsumptionDeps,
   logger: Logger,
   signal?: AbortSignal,
+  role: TaskRole = 'pr_dedup',
 ): Promise<void> {
   logger.log(`  ${icons.running} Executing dedup: ${reviewDeps.commandTemplate}`);
 
@@ -329,7 +330,7 @@ export async function executeDedupTask(
     () =>
       client.post(`/api/tasks/${taskId}/result`, {
         agent_id: agentId,
-        type: 'dedup' as TaskRole,
+        type: role,
         review_text: sanitizedSummary,
         dedup_report: report,
         tokens_used: result.tokensUsed,

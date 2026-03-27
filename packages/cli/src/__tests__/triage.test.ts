@@ -23,7 +23,7 @@ function makeTask(overrides: Partial<PollTask> = {}): PollTask {
     diff_url: 'https://github.com/acme/widgets/pull/42.diff',
     timeout_seconds: 300,
     prompt: 'review this',
-    role: 'triage',
+    role: 'issue_triage',
     issue_title: 'Bug: login fails on Safari',
     issue_body: 'When I click login on Safari 17, nothing happens. Console shows CORS error.',
     ...overrides,
@@ -372,7 +372,7 @@ describe('executeTriageTask', () => {
       '/api/tasks/task-1/result',
       expect.objectContaining({
         agent_id: 'agent-1',
-        type: 'triage',
+        type: 'issue_triage',
         triage_report: expect.objectContaining({
           category: 'bug',
           priority: 'high',

@@ -20,7 +20,7 @@ export type {
 } from './types.js';
 
 // Utility functions
-export { isRepoAllowed } from './types.js';
+export { isRepoAllowed, isDedupRole, isTriageRole } from './types.js';
 
 // API request/response types
 export type {
