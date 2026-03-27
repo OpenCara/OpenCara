@@ -30,6 +30,7 @@ export function buildDedupPrompt(task: {
   diff_url: string;
   index_issue_body?: string;
   diffContent?: string;
+  customPrompt?: string;
 }): string {
   const parts: string[] = [];
 
@@ -56,11 +57,13 @@ You MUST output ONLY a valid JSON object matching this exact schema (no markdown
 
 - "duplicates": array of matches found (empty array if no duplicates)
 - "similarity": "exact" = identical intent/change, "high" = very similar with minor differences, "partial" = overlapping but distinct
-- "index_entry": a single line in the format: \`- #<number> [label1] [label2] — <short description>\`
+- "index_entry": a single line in the format: \`- #<number> [label1] [label2] — <short description>\``);
 
-## Index of Existing Items
+  if (task.customPrompt) {
+    parts.push(`\n## Repo-Specific Instructions\n\n${task.customPrompt}`);
+  }
 
-<UNTRUSTED_CONTENT>`);
+  parts.push(`\n## Index of Existing Items\n\n<UNTRUSTED_CONTENT>`);
 
   if (task.index_issue_body) {
     parts.push(task.index_issue_body);
@@ -300,6 +303,7 @@ export async function executeDedupTask(
     issue_body?: string;
     diff_url: string;
     index_issue_body?: string;
+    prompt?: string;
   },
   diffContent: string,
   timeoutSeconds: number,
@@ -311,7 +315,7 @@ export async function executeDedupTask(
 ): Promise<void> {
   logger.log(`  ${icons.running} Executing dedup: ${reviewDeps.commandTemplate}`);
 
-  const prompt = buildDedupPrompt({ ...task, diffContent });
+  const prompt = buildDedupPrompt({ ...task, diffContent, customPrompt: task.prompt });
 
   const result = await executeDedup(
     prompt,

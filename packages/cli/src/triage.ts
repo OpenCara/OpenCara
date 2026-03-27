@@ -94,6 +94,10 @@ export function buildTriagePrompt(task: PollTask): string {
   const rawBody = task.issue_body ?? '';
   const safeBody = truncateToBytes(rawBody, MAX_ISSUE_BODY_BYTES);
 
+  const repoPromptSection = task.prompt
+    ? `\n\n## Repo-Specific Instructions\n\n${task.prompt}`
+    : '';
+
   const userMessage = [
     `## Issue Title`,
     title,
@@ -104,7 +108,7 @@ export function buildTriagePrompt(task: PollTask): string {
     '</UNTRUSTED_CONTENT>',
   ].join('\n');
 
-  return `${TRIAGE_SYSTEM_PROMPT}\n\n${userMessage}`;
+  return `${TRIAGE_SYSTEM_PROMPT}${repoPromptSection}\n\n${userMessage}`;
 }
 
 // ── Output Parsing ───────────────────────────────────────────────

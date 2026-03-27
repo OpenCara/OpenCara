@@ -109,6 +109,41 @@ describe('buildDedupPrompt', () => {
     const prompt = buildDedupPrompt(baseTask);
     expect(prompt).toContain('- #<number> [label1] [label2]');
   });
+
+  it('injects custom prompt as Repo-Specific Instructions', () => {
+    const prompt = buildDedupPrompt({
+      ...baseTask,
+      customPrompt: 'This is a monorepo — PRs touching different packages are NOT duplicates',
+    });
+    expect(prompt).toContain('## Repo-Specific Instructions');
+    expect(prompt).toContain(
+      'This is a monorepo — PRs touching different packages are NOT duplicates',
+    );
+  });
+
+  it('places custom prompt before index UNTRUSTED_CONTENT (in trusted section)', () => {
+    const prompt = buildDedupPrompt({
+      ...baseTask,
+      customPrompt: 'Custom dedup instructions here',
+      index_issue_body: '- #100 [cli] — Some feature',
+    });
+    const customIndex = prompt.indexOf('Custom dedup instructions here');
+    // Find the UNTRUSTED_CONTENT tag that wraps the index (after "## Index of Existing Items")
+    const indexHeader = prompt.indexOf('## Index of Existing Items');
+    const indexUntrusted = prompt.indexOf('<UNTRUSTED_CONTENT>', indexHeader);
+    expect(customIndex).toBeGreaterThan(-1);
+    expect(indexUntrusted).toBeGreaterThan(customIndex);
+  });
+
+  it('omits Repo-Specific Instructions when customPrompt is not provided', () => {
+    const prompt = buildDedupPrompt(baseTask);
+    expect(prompt).not.toContain('## Repo-Specific Instructions');
+  });
+
+  it('omits Repo-Specific Instructions when customPrompt is empty string', () => {
+    const prompt = buildDedupPrompt({ ...baseTask, customPrompt: '' });
+    expect(prompt).not.toContain('## Repo-Specific Instructions');
+  });
 });
 
 // ── extractJson ───────────────────────────────────────────────

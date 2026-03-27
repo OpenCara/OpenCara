@@ -673,6 +673,7 @@ async function handleTask(
           issue_body: task.issue_body,
           diff_url,
           index_issue_body: task.index_issue_body,
+          prompt,
         },
         diffContent,
         timeout_seconds,

@@ -131,6 +131,29 @@ describe('buildTriagePrompt', () => {
     expect(prompt).toContain('cli');
     expect(prompt).toContain('shared');
   });
+
+  it('injects custom prompt as Repo-Specific Instructions', () => {
+    const prompt = buildTriagePrompt(
+      makeTask({ prompt: 'Use our team priority labels: P0-critical, P1-high, P2-medium, P3-low' }),
+    );
+    expect(prompt).toContain('## Repo-Specific Instructions');
+    expect(prompt).toContain(
+      'Use our team priority labels: P0-critical, P1-high, P2-medium, P3-low',
+    );
+  });
+
+  it('places custom prompt before UNTRUSTED_CONTENT (in trusted section)', () => {
+    const prompt = buildTriagePrompt(makeTask({ prompt: 'Custom triage instructions' }));
+    const customIndex = prompt.indexOf('Custom triage instructions');
+    const firstUntrusted = prompt.indexOf('<UNTRUSTED_CONTENT>');
+    expect(customIndex).toBeGreaterThan(-1);
+    expect(firstUntrusted).toBeGreaterThan(customIndex);
+  });
+
+  it('omits Repo-Specific Instructions when prompt is empty', () => {
+    const prompt = buildTriagePrompt(makeTask({ prompt: '' }));
+    expect(prompt).not.toContain('## Repo-Specific Instructions');
+  });
 });
 
 // ── extractJsonFromOutput ───────────────────────────────────────
