@@ -21,6 +21,9 @@ const OPEN_HEADER = `${OPEN_MARKER}\n## Open Items\n`;
 const RECENT_HEADER = `${RECENT_MARKER}\n## Recently Closed Items\n`;
 const ARCHIVED_HEADER = `${ARCHIVED_MARKER}\n## Archived Items\n`;
 
+/** Default age-out window: 30 days in milliseconds. */
+export const DEFAULT_AGE_OUT_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** Parsed structured comments from the index issue. */
 export interface IndexComments {
   open: { id: number; body: string } | null;
@@ -46,9 +49,19 @@ export function findIndexComments(comments: Array<{ id: number; body: string }>)
   return { open, recent, archived };
 }
 
+/** Result of ensureIndexComments — IDs and bodies for all 3 comments. */
+export interface EnsuredIndex {
+  openId: number;
+  openBody: string;
+  recentId: number;
+  recentBody: string;
+  archivedId: number;
+  archivedBody: string;
+}
+
 /**
  * Ensure the 3 structured comments exist on the index issue.
- * Creates any missing ones and returns the comment IDs and current open body.
+ * Creates any missing ones and returns the comment IDs and current bodies.
  */
 export async function ensureIndexComments(
   github: GitHubService,
@@ -57,7 +70,7 @@ export async function ensureIndexComments(
   issueNumber: number,
   token: string,
   logger: Logger,
-): Promise<{ openId: number; openBody: string; recentId: number; archivedId: number }> {
+): Promise<EnsuredIndex> {
   const comments = await github.listIssueComments(owner, repo, issueNumber, token);
   const found = findIndexComments(comments);
 
@@ -68,9 +81,11 @@ export async function ensureIndexComments(
   const recentId =
     found.recent?.id ??
     (await github.createIssueComment(owner, repo, issueNumber, RECENT_HEADER, token));
+  const recentBody = found.recent?.body ?? RECENT_HEADER;
   const archivedId =
     found.archived?.id ??
     (await github.createIssueComment(owner, repo, issueNumber, ARCHIVED_HEADER, token));
+  const archivedBody = found.archived?.body ?? ARCHIVED_HEADER;
 
   if (!found.open || !found.recent || !found.archived) {
     logger.info('Created missing index comments', {
@@ -81,7 +96,7 @@ export async function ensureIndexComments(
     });
   }
 
-  return { openId, openBody, recentId, archivedId };
+  return { openId, openBody, recentId, recentBody, archivedId, archivedBody };
 }
 
 /**
@@ -107,6 +122,179 @@ export async function appendOpenEntry(
 
   const updatedBody = `${openBody}\n${entry}`;
   await github.updateIssueComment(owner, repo, openId, updatedBody, token);
+}
+
+// ── Entry parsing helpers ───────────────────────────────────────
+
+/**
+ * Extract the item number from an index entry line.
+ * Matches patterns like `- #42 ...` or `- #42: ...`.
+ * Returns null if the line doesn't match.
+ */
+export function parseEntryNumber(line: string): number | null {
+  const match = line.match(/^-\s+#(\d+)\b/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+/**
+ * Extract entries (non-header lines starting with `- #`) from a comment body.
+ */
+export function extractEntries(body: string): string[] {
+  return body.split('\n').filter((line) => /^-\s+#\d+/.test(line.trim()));
+}
+
+/**
+ * Remove a specific entry (by item number) from a comment body.
+ * Returns the updated body and the removed entry line (or null if not found).
+ */
+export function removeEntry(
+  body: string,
+  itemNumber: number,
+): { body: string; entry: string | null } {
+  const lines = body.split('\n');
+  let entry: string | null = null;
+  const remaining = lines.filter((line) => {
+    if (entry) return true; // already found — keep remaining
+    const num = parseEntryNumber(line.trim());
+    if (num === itemNumber) {
+      entry = line.trim();
+      return false;
+    }
+    return true;
+  });
+  return { body: remaining.join('\n'), entry };
+}
+
+// ── Close date annotation ───────────────────────────────────────
+
+/**
+ * Format a close-date suffix to append to entries in Recently Closed.
+ * Uses ISO date (YYYY-MM-DD) for consistent parsing.
+ */
+export function formatCloseDate(timestamp: number): string {
+  const d = new Date(timestamp);
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+/**
+ * Parse the close date from a Recently Closed entry line.
+ * Expects the date in `(closed YYYY-MM-DD)` suffix.
+ * Returns the timestamp (start of day UTC) or null if not found.
+ */
+export function parseCloseDate(line: string): number | null {
+  const match = line.match(/\(closed (\d{4}-\d{2}-\d{2})\)/);
+  return match ? new Date(match[1]).getTime() : null;
+}
+
+/**
+ * Convert an entry to its compact archived format: `- #<number> — <title>`.
+ * Strips labels, close-date annotations, and other metadata.
+ */
+export function toArchivedEntry(entry: string): string {
+  // Extract number and description after labels/markers
+  const match = entry.match(/^-\s+#(\d+)\b.*?—\s*(.+?)(?:\s*\(closed \d{4}-\d{2}-\d{2}\))?$/);
+  if (match) {
+    return `- #${match[1]} — ${match[2].trim()}`;
+  }
+  // Fallback: strip close-date annotation only
+  return entry.replace(/\s*\(closed \d{4}-\d{2}-\d{2}\)/, '').trim();
+}
+
+// ── Lifecycle operations ────────────────────────────────────────
+
+/**
+ * Move an entry from Open Items → Recently Closed.
+ * Appends a `(closed YYYY-MM-DD)` suffix to the entry.
+ *
+ * If the entry is not found in Open Items, this is a no-op (no error).
+ */
+export async function moveToRecentlyClosed(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  indexIssueNumber: number,
+  itemNumber: number,
+  token: string,
+  logger: Logger,
+  now: number = Date.now(),
+): Promise<void> {
+  const ensured = await ensureIndexComments(github, owner, repo, indexIssueNumber, token, logger);
+
+  // Remove from Open
+  const { body: newOpenBody, entry } = removeEntry(ensured.openBody, itemNumber);
+  if (!entry) {
+    logger.info('Entry not found in Open Items — skipping move', {
+      indexIssueNumber,
+      itemNumber,
+    });
+    return;
+  }
+
+  // Append to Recently Closed with close date
+  const closedEntry = `${entry} (closed ${formatCloseDate(now)})`;
+  const newRecentBody = `${ensured.recentBody}\n${closedEntry}`;
+
+  // Update both comments
+  await github.updateIssueComment(owner, repo, ensured.openId, newOpenBody, token);
+  await github.updateIssueComment(owner, repo, ensured.recentId, newRecentBody, token);
+
+  logger.info('Entry moved to Recently Closed', {
+    indexIssueNumber,
+    itemNumber,
+    closeDate: formatCloseDate(now),
+  });
+}
+
+/**
+ * Age out entries from Recently Closed → Archived.
+ * Entries older than `ageOutMs` (default 30 days) are moved.
+ * Archived entries use compact format (number + title only).
+ *
+ * This can be called lazily during any index update.
+ */
+export async function ageOutToArchived(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  indexIssueNumber: number,
+  token: string,
+  logger: Logger,
+  now: number = Date.now(),
+  ageOutMs: number = DEFAULT_AGE_OUT_MS,
+): Promise<void> {
+  const ensured = await ensureIndexComments(github, owner, repo, indexIssueNumber, token, logger);
+
+  const recentEntries = extractEntries(ensured.recentBody);
+  const toArchive: string[] = [];
+  const toKeep: string[] = [];
+
+  for (const entry of recentEntries) {
+    const closeDate = parseCloseDate(entry);
+    if (closeDate !== null && now - closeDate >= ageOutMs) {
+      toArchive.push(entry);
+    } else {
+      toKeep.push(entry);
+    }
+  }
+
+  if (toArchive.length === 0) return;
+
+  // Rebuild Recently Closed without aged-out entries
+  const newRecentBody =
+    toKeep.length > 0 ? `${RECENT_HEADER}\n${toKeep.join('\n')}` : RECENT_HEADER;
+
+  // Append compact entries to Archived
+  const archivedEntries = toArchive.map(toArchivedEntry);
+  const newArchivedBody = `${ensured.archivedBody}\n${archivedEntries.join('\n')}`;
+
+  await github.updateIssueComment(owner, repo, ensured.recentId, newRecentBody, token);
+  await github.updateIssueComment(owner, repo, ensured.archivedId, newArchivedBody, token);
+
+  logger.info('Entries aged out to Archived', {
+    indexIssueNumber,
+    count: toArchive.length,
+    archivedNumbers: toArchive.map((e) => parseEntryNumber(e)),
+  });
 }
 
 /**
