@@ -1,8 +1,11 @@
 import { Command } from 'commander';
 import pc from 'picocolors';
-import { parseOpenCaraConfig } from '@opencara/shared';
+import { parseOpenCaraConfig, DEFAULT_REGISTRY } from '@opencara/shared';
 import type { OpenCaraConfig } from '@opencara/shared';
 import { loadAuth } from '../auth.js';
+import { loadConfig } from '../config.js';
+import { executeTool, type ToolExecutorResult } from '../tool-executor.js';
+import { extractJson } from '../dedup.js';
 import { icons } from '../logger.js';
 
 // ── Constants ────────────────────────────────────────────────
@@ -51,6 +54,12 @@ export interface DedupInitDeps {
   log?: (msg: string) => void;
   logError?: (msg: string) => void;
   loadAuthFn?: typeof loadAuth;
+  resolveAgentCommandFn?: (toolName: string) => string | null;
+  runTool?: (
+    commandTemplate: string,
+    prompt: string,
+    timeoutMs: number,
+  ) => Promise<ToolExecutorResult>;
 }
 
 // ── GitHub API Helpers ───────────────────────────────────────
@@ -239,6 +248,125 @@ export function formatEntry(item: GitHubItem, compact: boolean = false): string 
   return `- ${item.number}(${labels}): ${item.title}`;
 }
 
+// ── Agent-based Entry Generation ─────────────────────────────
+
+/** Timeout per AI call for index entry generation (60s). */
+const AI_ENTRY_TIMEOUT_MS = 60_000;
+
+/**
+ * Build a prompt asking the AI to produce a one-line index entry for a PR/issue.
+ */
+export function buildIndexEntryPrompt(item: GitHubItem, kind: 'prs' | 'issues'): string {
+  const typeLabel = kind === 'prs' ? 'PR' : 'Issue';
+  const labels = item.labels.map((l) => l.name).join(', ');
+  return `You are a dedup index entry generator. Given a GitHub ${typeLabel}, produce a concise one-line description suitable for duplicate detection.
+
+## Input
+
+${typeLabel} #${item.number}: ${item.title}
+Labels: ${labels || '(none)'}
+State: ${item.state}
+
+## Output Format
+
+Respond with ONLY a JSON object (no markdown fences, no preamble):
+
+{
+  "description": "<concise one-line description for duplicate detection>"
+}
+
+The description should capture the core intent/change of the ${typeLabel.toLowerCase()} in a way that helps identify duplicates. Keep it under 120 characters.`;
+}
+
+/**
+ * Parse the AI response for an index entry description.
+ * Returns the description string, or null if parsing fails.
+ */
+export function parseIndexEntryResponse(stdout: string): string | null {
+  const jsonStr = extractJson(stdout);
+  if (!jsonStr) return null;
+
+  try {
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    if (typeof parsed.description === 'string' && parsed.description.length > 0) {
+      return parsed.description;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/**
+ * Resolve a command template for a tool name.
+ *
+ * Priority:
+ * 1. Matching agent in user's config (by tool name) — uses agent.command or global agentCommand
+ * 2. DEFAULT_REGISTRY command template (with MODEL placeholder left as-is or using first matching model)
+ *
+ * Returns null if the tool is not found anywhere.
+ */
+export function resolveAgentCommand(toolName: string): string | null {
+  // 1. Check user config for a matching agent
+  const config = loadConfig();
+  if (config.agents) {
+    const agent = config.agents.find((a) => a.tool === toolName);
+    if (agent) {
+      const cmd = agent.command ?? config.agentCommand;
+      if (cmd) return cmd;
+    }
+  }
+
+  // 2. Fall back to DEFAULT_REGISTRY
+  const registryTool = DEFAULT_REGISTRY.tools.find((t) => t.name === toolName);
+  if (registryTool) {
+    // Find a default model for this tool
+    const defaultModel = DEFAULT_REGISTRY.models.find((m) => m.tools.includes(toolName));
+    const modelName = defaultModel?.name ?? '';
+    return registryTool.commandTemplate.replaceAll('${MODEL}', modelName);
+  }
+
+  return null;
+}
+
+/**
+ * Generate an AI-enriched index entry for a single item.
+ * Returns the enriched description on success, or null on failure.
+ */
+export async function generateAIEntry(
+  item: GitHubItem,
+  kind: 'prs' | 'issues',
+  commandTemplate: string,
+  runTool: (
+    commandTemplate: string,
+    prompt: string,
+    timeoutMs: number,
+  ) => Promise<ToolExecutorResult> = executeTool,
+): Promise<string | null> {
+  const prompt = buildIndexEntryPrompt(item, kind);
+  try {
+    const result = await runTool(commandTemplate, prompt, AI_ENTRY_TIMEOUT_MS);
+    return parseIndexEntryResponse(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Format a single item as an index entry line, using an AI-generated description if available.
+ */
+export function formatEntryWithDescription(
+  item: GitHubItem,
+  description: string,
+  compact: boolean = false,
+): string {
+  if (compact) {
+    return `- ${item.number}(): ${description}`;
+  }
+  const labels = item.labels.map((l) => l.name).join(', ');
+  return `- ${item.number}(${labels}): ${description}`;
+}
+
 // ── Categorization ───────────────────────────────────────────
 
 /**
@@ -283,13 +411,16 @@ export function parseExistingNumbers(body: string): Set<number> {
   return numbers;
 }
 
-/** Build comment body for a section, merging with existing entries. */
+/** Build comment body for a section, merging with existing entries.
+ *  When `descriptions` is provided, uses AI-generated descriptions instead of raw titles.
+ */
 export function buildCommentBody(
   marker: string,
   header: string,
   items: GitHubItem[],
   existingBody: string | null,
   compact: boolean = false,
+  descriptions?: Map<number, string>,
 ): string {
   const existingNumbers = existingBody ? parseExistingNumbers(existingBody) : new Set<number>();
   const newItems = items.filter((item) => !existingNumbers.has(item.number));
@@ -297,7 +428,12 @@ export function buildCommentBody(
   // Preserve existing entries and append new ones
   let body = existingBody ?? `${marker}\n## ${header}\n`;
   for (const item of newItems) {
-    body += `\n${formatEntry(item, compact)}`;
+    const aiDesc = descriptions?.get(item.number);
+    if (aiDesc) {
+      body += `\n${formatEntryWithDescription(item, aiDesc, compact)}`;
+    } else {
+      body += `\n${formatEntry(item, compact)}`;
+    }
   }
 
   return body;
@@ -329,8 +465,16 @@ export interface InitIndexOptions {
   recentDays: number;
   dryRun: boolean;
   token: string;
+  /** When set, uses the AI tool to generate enriched entry descriptions. */
+  agentCommandTemplate?: string;
   fetchFn?: typeof fetch;
   log?: (msg: string) => void;
+  /** Injected tool executor for testing. */
+  runTool?: (
+    commandTemplate: string,
+    prompt: string,
+    timeoutMs: number,
+  ) => Promise<ToolExecutorResult>;
 }
 
 /**
@@ -346,6 +490,7 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
   const { owner, repo, indexIssue, kind, recentDays, dryRun, token } = opts;
   const fetchFn = opts.fetchFn ?? fetch;
   const log = opts.log ?? (() => {});
+  const runTool = opts.runTool ?? executeTool;
 
   // 1. Fetch all items
   log(`Scanning ${kind}...`);
@@ -367,13 +512,55 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
   const comments = await fetchIssueComments(owner, repo, indexIssue, token, fetchFn);
   const found = findIndexComments(comments);
 
+  // Count new entries (needed before AI enrichment to know which items to process)
+  const existingOpen = found.open ? parseExistingNumbers(found.open.body) : new Set<number>();
+  const existingRecent = found.recent ? parseExistingNumbers(found.recent.body) : new Set<number>();
+  const existingArchived = found.archived
+    ? parseExistingNumbers(found.archived.body)
+    : new Set<number>();
+
+  const newOpenItems = open.filter((i) => !existingOpen.has(i.number));
+  const newRecentItems = recentlyClosed.filter((i) => !existingRecent.has(i.number));
+  const newArchivedItems = archived.filter((i) => !existingArchived.has(i.number));
+  const newEntries = newOpenItems.length + newRecentItems.length + newArchivedItems.length;
+
+  // 3b. Generate AI-enriched descriptions if agent is configured
+  const descriptions = new Map<number, string>();
+  if (opts.agentCommandTemplate && newEntries > 0) {
+    const allNewItems = [...newOpenItems, ...newRecentItems, ...newArchivedItems];
+    log(`\nGenerating AI-enriched descriptions for ${allNewItems.length} items...`);
+    for (let i = 0; i < allNewItems.length; i++) {
+      const item = allNewItems[i];
+      log(`  Processing item ${i + 1}/${allNewItems.length} (#${item.number})...`);
+      const desc = await generateAIEntry(item, kind, opts.agentCommandTemplate, runTool);
+      if (desc) {
+        descriptions.set(item.number, desc);
+      } else {
+        log(`  ${icons.warn} AI failed for #${item.number}, using raw title`);
+      }
+    }
+    const enriched = descriptions.size;
+    log(
+      `${icons.info} AI enrichment: ${enriched}/${allNewItems.length} items enriched successfully`,
+    );
+  }
+
   // 4. Build updated comment bodies (merging without duplicates)
-  const openBody = buildCommentBody(OPEN_MARKER, 'Open Items', open, found.open?.body ?? null);
+  const openBody = buildCommentBody(
+    OPEN_MARKER,
+    'Open Items',
+    open,
+    found.open?.body ?? null,
+    false,
+    descriptions,
+  );
   const recentBody = buildCommentBody(
     RECENT_MARKER,
     'Recently Closed Items',
     recentlyClosed,
     found.recent?.body ?? null,
+    false,
+    descriptions,
   );
   const archivedBody = buildCommentBody(
     ARCHIVED_MARKER,
@@ -381,25 +568,14 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
     archived,
     found.archived?.body ?? null,
     true, // compact format
+    descriptions,
   );
-
-  // Count new entries
-  const existingOpen = found.open ? parseExistingNumbers(found.open.body) : new Set<number>();
-  const existingRecent = found.recent ? parseExistingNumbers(found.recent.body) : new Set<number>();
-  const existingArchived = found.archived
-    ? parseExistingNumbers(found.archived.body)
-    : new Set<number>();
-
-  const newOpen = open.filter((i) => !existingOpen.has(i.number)).length;
-  const newRecent = recentlyClosed.filter((i) => !existingRecent.has(i.number)).length;
-  const newArchived = archived.filter((i) => !existingArchived.has(i.number)).length;
-  const newEntries = newOpen + newRecent + newArchived;
 
   if (dryRun) {
     log(`\n${icons.info} Dry run — would update index issue #${indexIssue}:`);
-    log(`  Open Items: ${open.length} entries (${newOpen} new)`);
-    log(`  Recently Closed: ${recentlyClosed.length} entries (${newRecent} new)`);
-    log(`  Archived: ${archived.length} entries (${newArchived} new)`);
+    log(`  Open Items: ${open.length} entries (${newOpenItems.length} new)`);
+    log(`  Recently Closed: ${recentlyClosed.length} entries (${newRecentItems.length} new)`);
+    log(`  Archived: ${archived.length} entries (${newArchivedItems.length} new)`);
     return {
       openCount: open.length,
       recentCount: recentlyClosed.length,
@@ -445,13 +621,14 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
 
 /** Run `opencara dedup init` with injectable dependencies. */
 export async function runDedupInit(
-  options: { repo?: string; all?: boolean; dryRun?: boolean; days?: string },
+  options: { repo?: string; all?: boolean; dryRun?: boolean; days?: string; agent?: string },
   deps: DedupInitDeps = {},
 ): Promise<void> {
   const fetchFn = deps.fetchFn ?? fetch;
   const log = deps.log ?? console.log;
   const logError = deps.logError ?? console.error;
   const loadAuthFn = deps.loadAuthFn ?? loadAuth;
+  const resolveCmd = deps.resolveAgentCommandFn ?? resolveAgentCommand;
 
   // 1. Require authentication
   const auth = loadAuthFn();
@@ -535,7 +712,22 @@ export async function runDedupInit(
     return;
   }
 
-  // 5. Initialize each target
+  // 5. Resolve agent command template if --agent is specified
+  let agentCommandTemplate: string | undefined;
+  if (options.agent) {
+    const cmd = resolveCmd(options.agent);
+    if (!cmd) {
+      logError(
+        `${icons.error} Unknown agent tool "${options.agent}". Available: ${DEFAULT_REGISTRY.tools.map((t) => t.name).join(', ')}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    agentCommandTemplate = cmd;
+    log(`Using AI agent "${options.agent}" for enriched descriptions`);
+  }
+
+  // 6. Initialize each target
   for (const target of filteredTargets) {
     log(`\n${pc.bold(`Initializing ${target.kind} dedup index (issue #${target.indexIssue})...`)}`);
     await initIndex({
@@ -546,8 +738,10 @@ export async function runDedupInit(
       recentDays,
       dryRun: options.dryRun ?? false,
       token,
+      agentCommandTemplate,
       fetchFn,
       log,
+      runTool: deps.runTool,
     });
   }
 }
@@ -563,9 +757,21 @@ export function dedupCommand(): Command {
     .option('--all', 'Initialize both PR and issue dedup indexes')
     .option('--dry-run', 'Show what would be done without making changes')
     .option('--days <number>', 'Recently closed window in days (default: 30)', '30')
-    .action(async (options: { repo: string; all?: boolean; dryRun?: boolean; days?: string }) => {
-      await runDedupInit(options);
-    });
+    .option(
+      '--agent <tool-name>',
+      'Use AI agent to generate enriched descriptions (e.g., claude, codex, gemini, qwen)',
+    )
+    .action(
+      async (options: {
+        repo: string;
+        all?: boolean;
+        dryRun?: boolean;
+        days?: string;
+        agent?: string;
+      }) => {
+        await runDedupInit(options);
+      },
+    );
 
   return dedup;
 }
