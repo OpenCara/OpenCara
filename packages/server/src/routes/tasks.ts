@@ -669,7 +669,8 @@ export function taskRoutes() {
 
       // For dedup tasks with an index issue, fetch the structured index body
       if (
-        (task.task_type === 'dedup' ||
+        (task.task_type === 'pr_dedup' ||
+          task.task_type === 'issue_dedup' ||
           task.feature === 'dedup_pr' ||
           task.feature === 'dedup_issue') &&
         task.index_issue_number
