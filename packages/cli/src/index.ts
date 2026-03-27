@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import { agentCommand, startAgentRouter } from './commands/agent.js';
 import { authCommand } from './commands/auth.js';
+import { dedupCommand } from './commands/dedup.js';
 import { statusCommand } from './commands/status.js';
 
 declare const __CLI_VERSION__: string;
@@ -14,6 +15,7 @@ const program = new Command()
 
 program.addCommand(agentCommand);
 program.addCommand(authCommand());
+program.addCommand(dedupCommand());
 program.addCommand(statusCommand);
 
 // Default: run agent start in router mode when no subcommand is given
