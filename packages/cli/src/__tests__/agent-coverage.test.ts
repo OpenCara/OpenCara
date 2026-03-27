@@ -1571,7 +1571,7 @@ describe('Agent Coverage Tests', () => {
       mockedExecuteTool.mockResolvedValueOnce({
         stdout: JSON.stringify({
           duplicates: [],
-          index_entry: '- #42 [bug] — Test issue',
+          index_entry: '- 42(bug): Test issue',
         }),
         stderr: '',
         exitCode: 0,
