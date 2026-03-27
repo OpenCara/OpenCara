@@ -683,8 +683,12 @@ export function taskRoutes() {
             task.index_issue_number,
             token,
           );
-        } catch {
-          // Non-fatal — agent will work without index context
+        } catch (err) {
+          logger.warn('Failed to fetch dedup index body', {
+            taskId: task.id,
+            indexIssue: task.index_issue_number,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 
