@@ -1135,14 +1135,7 @@ async function findClaimForAgent(
   taskId: string,
   agentId: string,
 ): Promise<import('@opencara/shared').TaskClaim | null> {
-  const roles: TaskRole[] = [
-    'summary',
-    'review',
-    'pr_dedup',
-    'issue_dedup',
-    'pr_triage',
-    'issue_triage',
-  ];
+  const roles: TaskRole[] = ['summary', 'review', 'pr_dedup', 'issue_dedup', 'issue_triage'];
 
   for (const role of roles) {
     const claim = await store.getClaim(`${taskId}:${agentId}:${role}`);

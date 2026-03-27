@@ -64,7 +64,12 @@ export function isTaskTerminal(task: ReviewTask): boolean {
   return task.status === 'completed' || task.queue === 'completed';
 }
 
-/** True if the task is a worker task (review only — needs summary after all workers complete). */
+/**
+ * True if the task is a worker task (review only — needs summary after all workers complete).
+ *
+ * NOTE: isWorkerTask and isSummaryTask form a binary partition of all TaskRole values.
+ * When adding a new TaskRole, update one of these functions to include it.
+ */
 export function isWorkerTask(task: ReviewTask): boolean {
   return task.task_type === 'review';
 }
@@ -72,6 +77,9 @@ export function isWorkerTask(task: ReviewTask): boolean {
 /**
  * True if the task is a "final" task that dispatches results directly.
  * This includes summary tasks and all dedup/triage variants.
+ *
+ * NOTE: isWorkerTask and isSummaryTask form a binary partition of all TaskRole values.
+ * When adding a new TaskRole, update one of these functions to include it.
  */
 export function isSummaryTask(task: ReviewTask): boolean {
   return (
