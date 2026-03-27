@@ -230,6 +230,32 @@ describe('MemoryDataStore', () => {
       expect(created).toBe(false);
       expect(await store.getTask('review-dup')).toBeNull();
     });
+
+    // ── createTaskBatch ──────────────────────────────────────
+
+    it('createTaskBatch creates multiple tasks', async () => {
+      const tasks = [
+        makeTask({ id: 'batch-1', group_id: 'g1' }),
+        makeTask({ id: 'batch-2', group_id: 'g1' }),
+        makeTask({ id: 'batch-3', group_id: 'g1' }),
+      ];
+      await store.createTaskBatch(tasks);
+
+      const all = await store.listTasks();
+      expect(all).toHaveLength(3);
+      const ids = new Set(all.map((t) => t.id));
+      expect(ids).toEqual(new Set(['batch-1', 'batch-2', 'batch-3']));
+    });
+
+    it('createTaskBatch with empty array is a no-op', async () => {
+      await store.createTaskBatch([]);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('createTaskBatch with single task works', async () => {
+      await store.createTaskBatch([makeTask({ id: 'solo' })]);
+      expect(await store.getTask('solo')).not.toBeNull();
+    });
   });
 
   // ── Claims ─────────────────────────────────────────────────

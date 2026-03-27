@@ -184,115 +184,87 @@ export class D1DataStore implements DataStore {
 
   // ── Tasks ──────────────────────────────────────────────────────
 
-  async createTask(task: ReviewTask): Promise<void> {
-    await this.db
-      .prepare(
-        `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
+  private static readonly INSERT_TASK_SQL = `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
         review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
         created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
         summary_retry_count, task_type, feature, group_id,
         issue_number, issue_url, issue_title, issue_body, issue_author,
         dedup_target, index_issue_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        task.id,
-        task.owner,
-        task.repo,
-        task.pr_number,
-        task.pr_url,
-        task.diff_url,
-        task.base_ref,
-        task.head_ref,
-        task.review_count,
-        task.prompt,
-        task.timeout_at,
-        task.status,
-        task.queue,
-        task.github_installation_id,
-        task.private ? 1 : 0,
-        JSON.stringify(task.config),
-        task.created_at,
-        task.review_claims ?? 0,
-        task.completed_reviews ?? 0,
-        task.reviews_completed_at ?? null,
-        task.summary_agent_id ?? null,
-        task.summary_retry_count ?? 0,
-        task.task_type,
-        task.feature,
-        task.group_id,
-        task.issue_number ?? null,
-        task.issue_url ?? null,
-        task.issue_title ?? null,
-        task.issue_body ?? null,
-        task.issue_author ?? null,
-        null, // dedup_target column (deprecated — role now encodes target)
-        task.index_issue_number ?? null,
-      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+  private bindTaskParams(task: ReviewTask): unknown[] {
+    return [
+      task.id,
+      task.owner,
+      task.repo,
+      task.pr_number,
+      task.pr_url,
+      task.diff_url,
+      task.base_ref,
+      task.head_ref,
+      task.review_count,
+      task.prompt,
+      task.timeout_at,
+      task.status,
+      task.queue,
+      task.github_installation_id,
+      task.private ? 1 : 0,
+      JSON.stringify(task.config),
+      task.created_at,
+      task.review_claims ?? 0,
+      task.completed_reviews ?? 0,
+      task.reviews_completed_at ?? null,
+      task.summary_agent_id ?? null,
+      task.summary_retry_count ?? 0,
+      task.task_type,
+      task.feature,
+      task.group_id,
+      task.issue_number ?? null,
+      task.issue_url ?? null,
+      task.issue_title ?? null,
+      task.issue_body ?? null,
+      task.issue_author ?? null,
+      null, // dedup_target column (deprecated — role now encodes target)
+      task.index_issue_number ?? null,
+    ];
+  }
+
+  async createTask(task: ReviewTask): Promise<void> {
+    await this.db
+      .prepare(D1DataStore.INSERT_TASK_SQL)
+      .bind(...this.bindTaskParams(task))
       .run();
   }
 
+  async createTaskBatch(tasks: ReviewTask[]): Promise<void> {
+    if (tasks.length === 0) return;
+    if (tasks.length === 1) {
+      await this.createTask(tasks[0]);
+      return;
+    }
+    const statements = tasks.map((task) =>
+      this.db.prepare(D1DataStore.INSERT_TASK_SQL).bind(...this.bindTaskParams(task)),
+    );
+    await this.db.batch(statements);
+  }
+
   async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
+    // Use separate SELECT + INSERT instead of INSERT...SELECT...WHERE NOT EXISTS.
+    // D1's meta.changes can return 0 for INSERT...SELECT even when a row is
+    // inserted, causing the caller to incorrectly think a duplicate exists.
+    const existing = await this.db
+      .prepare(
+        `SELECT 1 AS found FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND feature = ? AND status IN (?, ?)`,
+      )
+      .bind(task.owner, task.repo, task.pr_number, task.feature, 'pending', 'reviewing')
+      .first();
+    if (existing) return false;
+
     try {
-      const result = await this.db
-        .prepare(
-          `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
-          review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
-          created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
-          summary_retry_count, task_type, feature, group_id,
-          issue_number, issue_url, issue_title, issue_body, issue_author,
-          dedup_target, index_issue_number)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE NOT EXISTS (
-          SELECT 1 FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND feature = ? AND status IN (?, ?)
-        )`,
-        )
-        .bind(
-          task.id,
-          task.owner,
-          task.repo,
-          task.pr_number,
-          task.pr_url,
-          task.diff_url,
-          task.base_ref,
-          task.head_ref,
-          task.review_count,
-          task.prompt,
-          task.timeout_at,
-          task.status,
-          task.queue,
-          task.github_installation_id,
-          task.private ? 1 : 0,
-          JSON.stringify(task.config),
-          task.created_at,
-          task.review_claims ?? 0,
-          task.completed_reviews ?? 0,
-          task.reviews_completed_at ?? null,
-          task.summary_agent_id ?? null,
-          task.summary_retry_count ?? 0,
-          task.task_type,
-          task.feature,
-          task.group_id,
-          task.issue_number ?? null,
-          task.issue_url ?? null,
-          task.issue_title ?? null,
-          task.issue_body ?? null,
-          task.issue_author ?? null,
-          null, // dedup_target column (deprecated — role now encodes target)
-          task.index_issue_number ?? null,
-          // WHERE NOT EXISTS params
-          task.owner,
-          task.repo,
-          task.pr_number,
-          task.feature,
-          'pending',
-          'reviewing',
-        )
-        .run();
-      return (result.meta?.changes ?? 0) > 0;
+      await this.createTask(task);
+      return true;
     } catch (err) {
-      // The partial unique index is a safety net — if it fires (extremely rare race),
-      // treat it as a duplicate rather than propagating a 500 error.
+      // Safety net for rare race: concurrent webhook inserts between SELECT and INSERT.
       if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
         return false;
       }

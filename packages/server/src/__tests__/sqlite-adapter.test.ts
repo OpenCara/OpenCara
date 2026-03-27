@@ -485,6 +485,35 @@ describe('SqliteD1Adapter', () => {
       expect(await store.getTask('first')).not.toBeNull();
       expect(await store.getTask('second')).not.toBeNull();
     });
+
+    // ── createTaskBatch (D1) ─────────────────────────────────
+
+    it('createTaskBatch inserts multiple tasks in a single batch', async () => {
+      const tasks = [
+        makeTask({ id: 'b1', group_id: 'g1', owner: 'org', repo: 'repo', pr_number: 10 }),
+        makeTask({ id: 'b2', group_id: 'g1', owner: 'org', repo: 'repo', pr_number: 10 }),
+        makeTask({ id: 'b3', group_id: 'g1', owner: 'org', repo: 'repo', pr_number: 10 }),
+      ];
+      await store.createTaskBatch(tasks);
+
+      expect(await store.getTask('b1')).not.toBeNull();
+      expect(await store.getTask('b2')).not.toBeNull();
+      expect(await store.getTask('b3')).not.toBeNull();
+
+      const groupTasks = await store.getTasksByGroup('g1');
+      expect(groupTasks).toHaveLength(3);
+    });
+
+    it('createTaskBatch with empty array is a no-op', async () => {
+      await store.createTaskBatch([]);
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('createTaskBatch with single task works', async () => {
+      await store.createTaskBatch([makeTask({ id: 'solo' })]);
+      expect(await store.getTask('solo')).not.toBeNull();
+    });
   });
 
   describe('agent rejections (D1)', () => {
