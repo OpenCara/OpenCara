@@ -1,6 +1,6 @@
 {
   "name": "opencara",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Distributed AI code review agent — poll, review, and submit PR reviews using your own AI tools",
   "type": "module",
   "license": "MIT",
