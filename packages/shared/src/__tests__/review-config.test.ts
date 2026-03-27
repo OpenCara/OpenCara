@@ -359,7 +359,7 @@ prompt = "Triage"
     expect(result.triage!.enabled).toBe(true);
     expect(result.triage!.defaultMode).toBe('comment');
     expect(result.triage!.autoLabel).toBe(false);
-    expect(result.triage!.triggers).toEqual([]);
+    expect(result.triage!.triggers).toEqual(['opened']);
     expect(result.triage!.authorModes).toBeUndefined();
   });
 
@@ -375,6 +375,28 @@ bob = "invalid"
     const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
     // Invalid values are silently skipped
     expect(result.triage!.authorModes).toEqual({ alice: 'rewrite' });
+  });
+
+  it('uses explicit triggers when provided', () => {
+    const toml = `
+version = 1
+[triage]
+prompt = "Triage"
+triggers = ["opened", "edited"]
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.triage!.triggers).toEqual(['opened', 'edited']);
+  });
+
+  it('uses explicit empty triggers when provided', () => {
+    const toml = `
+version = 1
+[triage]
+prompt = "Triage"
+triggers = []
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.triage!.triggers).toEqual([]);
   });
 
   it('defaults default_mode to comment for invalid value', () => {

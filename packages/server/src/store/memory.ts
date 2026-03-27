@@ -33,16 +33,25 @@ export class MemoryDataStore implements DataStore {
   }
 
   async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
-    // Check-and-insert in a single synchronous block (atomic in single-threaded JS)
+    // Check-and-insert in a single synchronous block (atomic in single-threaded JS).
+    // For issue tasks (pr_number=0 + issue_number set), dedup by issue_number
+    // instead of pr_number so different issues don't collide.
+    const isIssueTask = task.pr_number === 0 && task.issue_number !== undefined;
+
     for (const existing of this.tasks.values()) {
       if (
-        existing.owner === task.owner &&
-        existing.repo === task.repo &&
-        existing.pr_number === task.pr_number &&
-        existing.feature === task.feature &&
-        (existing.status === 'pending' || existing.status === 'reviewing')
+        existing.owner !== task.owner ||
+        existing.repo !== task.repo ||
+        existing.feature !== task.feature ||
+        (existing.status !== 'pending' && existing.status !== 'reviewing')
       ) {
-        return false;
+        continue;
+      }
+
+      if (isIssueTask) {
+        if (existing.issue_number === task.issue_number) return false;
+      } else {
+        if (existing.pr_number === task.pr_number) return false;
       }
     }
     this.tasks.set(task.id, { ...task });
