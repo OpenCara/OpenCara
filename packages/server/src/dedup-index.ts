@@ -48,7 +48,7 @@ export function findIndexComments(comments: Array<{ id: number; body: string }>)
 
 /**
  * Ensure the 3 structured comments exist on the index issue.
- * Creates any missing ones and returns the comment IDs.
+ * Creates any missing ones and returns the comment IDs and current open body.
  */
 export async function ensureIndexComments(
   github: GitHubService,
@@ -57,13 +57,14 @@ export async function ensureIndexComments(
   issueNumber: number,
   token: string,
   logger: Logger,
-): Promise<{ openId: number; recentId: number; archivedId: number }> {
+): Promise<{ openId: number; openBody: string; recentId: number; archivedId: number }> {
   const comments = await github.listIssueComments(owner, repo, issueNumber, token);
   const found = findIndexComments(comments);
 
   const openId =
     found.open?.id ??
     (await github.createIssueComment(owner, repo, issueNumber, OPEN_HEADER, token));
+  const openBody = found.open?.body ?? OPEN_HEADER;
   const recentId =
     found.recent?.id ??
     (await github.createIssueComment(owner, repo, issueNumber, RECENT_HEADER, token));
@@ -80,7 +81,7 @@ export async function ensureIndexComments(
     });
   }
 
-  return { openId, recentId, archivedId };
+  return { openId, openBody, recentId, archivedId };
 }
 
 /**
@@ -95,13 +96,16 @@ export async function appendOpenEntry(
   token: string,
   logger: Logger,
 ): Promise<void> {
-  const { openId } = await ensureIndexComments(github, owner, repo, issueNumber, token, logger);
+  const { openId, openBody } = await ensureIndexComments(
+    github,
+    owner,
+    repo,
+    issueNumber,
+    token,
+    logger,
+  );
 
-  const comments = await github.listIssueComments(owner, repo, issueNumber, token);
-  const openComment = comments.find((c) => c.id === openId);
-  const currentBody = openComment?.body ?? OPEN_HEADER;
-
-  const updatedBody = `${currentBody}\n${entry}`;
+  const updatedBody = `${openBody}\n${entry}`;
   await github.updateIssueComment(owner, repo, openId, updatedBody, token);
 }
 
