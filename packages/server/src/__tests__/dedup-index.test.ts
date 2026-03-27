@@ -375,15 +375,12 @@ describe('Dedup Index (Issue #525)', () => {
         logger,
       );
 
+      // Spy AFTER setup so it only tracks calls from moveToRecentlyClosed
       const updateSpy = vi.spyOn(github, 'updateIssueComment');
       await moveToRecentlyClosed(github, owner, repo, issueNumber, 99, token, logger, now);
 
-      // Only 1 update from appendOpenEntry; moveToRecentlyClosed should not update
-      // (it calls ensureIndexComments which doesn't update, then returns early)
-      // The spy tracks all calls, including those from appendOpenEntry
-      const callsBeforeMove = updateSpy.mock.calls.length;
-      await moveToRecentlyClosed(github, owner, repo, issueNumber, 99, token, logger, now);
-      expect(updateSpy.mock.calls.length).toBe(callsBeforeMove); // no new updates
+      // Entry #99 doesn't exist — no comment updates should happen
+      expect(updateSpy).not.toHaveBeenCalled();
     });
 
     it('preserves other entries in Open when moving one', async () => {
