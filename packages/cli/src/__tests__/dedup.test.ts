@@ -244,6 +244,14 @@ describe('parseDedupReport', () => {
     expect(() => parseDedupReport(text)).toThrow('missing valid "number"');
   });
 
+  it('throws on partial-numeric string like "59abc"', () => {
+    const text = JSON.stringify({
+      duplicates: [{ number: '59abc', similarity: 'exact', description: 'x' }],
+      index_entry: 'x',
+    });
+    expect(() => parseDedupReport(text)).toThrow('missing valid "number"');
+  });
+
   it('throws on missing number field', () => {
     const text = JSON.stringify({
       duplicates: [{ similarity: 'exact', description: 'x' }],

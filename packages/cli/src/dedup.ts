@@ -156,10 +156,10 @@ export function parseDedupReport(text: string): DedupReport {
     const num =
       typeof rawNum === 'number'
         ? rawNum
-        : typeof rawNum === 'string'
+        : typeof rawNum === 'string' && /^#?\d+$/.test(rawNum)
           ? parseInt(rawNum.replace(/^#/, ''), 10)
           : NaN;
-    if (typeof num !== 'number' || isNaN(num)) {
+    if (isNaN(num)) {
       throw new Error('Duplicate entry missing valid "number"');
     }
     if (typeof entry.similarity !== 'string' || !VALID_SIMILARITIES.has(entry.similarity)) {
