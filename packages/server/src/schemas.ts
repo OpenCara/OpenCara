@@ -6,7 +6,14 @@ import { apiError } from './errors.js';
 
 const agentIdSchema = z.string().min(1, 'agent_id must be a non-empty string');
 
-const taskRoleSchema = z.enum(['review', 'summary', 'dedup', 'triage']);
+const taskRoleSchema = z.enum([
+  'review',
+  'summary',
+  'pr_dedup',
+  'issue_dedup',
+  'pr_triage',
+  'issue_triage',
+]);
 
 /** @deprecated Use taskRoleSchema for new code. Kept for backward compat. */
 const claimRoleSchema = taskRoleSchema;

@@ -2,7 +2,23 @@
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
 /** Unified task role — determines what kind of work a task represents */
-export type TaskRole = 'review' | 'summary' | 'dedup' | 'triage';
+export type TaskRole =
+  | 'review'
+  | 'summary'
+  | 'pr_dedup'
+  | 'issue_dedup'
+  | 'pr_triage'
+  | 'issue_triage';
+
+/** Check if a role is a dedup variant */
+export function isDedupRole(role: TaskRole): boolean {
+  return role === 'pr_dedup' || role === 'issue_dedup';
+}
+
+/** Check if a role is a triage variant */
+export function isTriageRole(role: TaskRole): boolean {
+  return role === 'pr_triage' || role === 'issue_triage';
+}
 
 /** Feature pipeline — which feature spawned this task group */
 export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage';
@@ -64,7 +80,6 @@ export interface ReviewTask {
   issue_author?: string;
 
   // ── Dedup fields ───────────────────────────────────────────
-  dedup_target?: 'pr' | 'issue';
   index_issue_number?: number;
 
   // ── Deprecated fields (kept for migration) ─────────────────

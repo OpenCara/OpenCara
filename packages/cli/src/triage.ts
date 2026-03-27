@@ -4,6 +4,7 @@ import type {
   TriagePriority,
   TriageSize,
   PollTask,
+  TaskRole,
 } from '@opencara/shared';
 import {
   executeTool,
@@ -293,6 +294,7 @@ export async function executeTriageTask(
     timeoutMs: number,
     signal?: AbortSignal,
   ) => Promise<ToolExecutorResult>,
+  role: TaskRole = 'issue_triage',
 ): Promise<{ tokensUsed: number; tokensEstimated: boolean; tokenDetail: TokenUsageDetail }> {
   logger.log(`  Executing triage for issue: ${task.issue_title ?? `#${task.pr_number}`}`);
 
@@ -301,7 +303,7 @@ export async function executeTriageTask(
   // Submit result to server
   await client.post(`/api/tasks/${task.task_id}/result`, {
     agent_id: agentId,
-    type: 'triage' as const,
+    type: role,
     review_text: sanitizeTokens(result.report.comment),
     tokens_used: result.tokensUsed,
     triage_report: result.report,

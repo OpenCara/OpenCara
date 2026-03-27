@@ -46,6 +46,7 @@
  */
 
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
+import { isDedupRole, isTriageRole } from '@opencara/shared';
 
 // ── Task State Queries ──────────────────────────────────────────
 
@@ -63,14 +64,27 @@ export function isTaskTerminal(task: ReviewTask): boolean {
   return task.status === 'completed' || task.queue === 'completed';
 }
 
-/** True if the task is a worker task (review, dedup, or triage — not summary). */
+/**
+ * True if the task is a worker task (review only — needs summary after all workers complete).
+ *
+ * NOTE: isWorkerTask and isSummaryTask form a binary partition of all TaskRole values.
+ * When adding a new TaskRole, update one of these functions to include it.
+ */
 export function isWorkerTask(task: ReviewTask): boolean {
-  return task.task_type !== 'summary';
+  return task.task_type === 'review';
 }
 
-/** True if the task is a summary task. */
+/**
+ * True if the task is a "final" task that dispatches results directly.
+ * This includes summary tasks and all dedup/triage variants.
+ *
+ * NOTE: isWorkerTask and isSummaryTask form a binary partition of all TaskRole values.
+ * When adding a new TaskRole, update one of these functions to include it.
+ */
 export function isSummaryTask(task: ReviewTask): boolean {
-  return task.task_type === 'summary';
+  return (
+    task.task_type === 'summary' || isDedupRole(task.task_type) || isTriageRole(task.task_type)
+  );
 }
 
 /** True if the task has timed out. Accepts optional `now` for testability. */

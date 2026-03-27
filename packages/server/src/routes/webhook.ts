@@ -142,6 +142,16 @@ function getTaskRole(agentCount: number): TaskRole {
 }
 
 /**
+ * Maps feature types to their specific TaskRole values.
+ * Features not in this map use getTaskRole(agentCount) for review/summary.
+ */
+const FEATURE_ROLE_MAP: Partial<Record<Feature, TaskRole>> = {
+  dedup_pr: 'pr_dedup',
+  dedup_issue: 'issue_dedup',
+  triage: 'issue_triage',
+};
+
+/**
  * Build a base ReviewTask template with common fields. Caller fills in
  * task-specific fields (id, prompt, task_type, feature, group_id).
  */
@@ -200,7 +210,7 @@ export async function createTaskGroup(
 ): Promise<string | null> {
   const agentCount = featureConfig.agentCount;
   const taskCount = agentCount > 1 ? agentCount - 1 : 1;
-  const role = getTaskRole(agentCount);
+  const role = FEATURE_ROLE_MAP[feature] ?? getTaskRole(agentCount);
   const groupId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(featureConfig.timeout);
 
@@ -345,12 +355,9 @@ async function createPrTaskGroups(
       dedupConfig,
       baseTask,
       logger,
-      {
-        dedup_target: 'pr',
-        ...(dedupConfig.indexIssue !== undefined
-          ? { index_issue_number: dedupConfig.indexIssue }
-          : {}),
-      },
+      dedupConfig.indexIssue !== undefined
+        ? { index_issue_number: dedupConfig.indexIssue }
+        : undefined,
       true, // skipDedup — review group is the idempotency guard
     );
   }
@@ -428,7 +435,6 @@ async function createIssueTaskGroups(
       logger,
       {
         ...issueFields,
-        dedup_target: 'issue',
         ...(dedupIssueConfig.indexIssue !== undefined
           ? { index_issue_number: dedupIssueConfig.indexIssue }
           : {}),

@@ -1014,29 +1014,29 @@ describe('computeRoles', () => {
     const agent: LocalAgentConfig = {
       model: 'claude-opus-4-6',
       tool: 'claude',
-      roles: ['review', 'dedup', 'triage'],
+      roles: ['review', 'pr_dedup', 'issue_triage'],
     };
-    expect(computeRoles(agent)).toEqual(['review', 'dedup', 'triage']);
+    expect(computeRoles(agent)).toEqual(['review', 'pr_dedup', 'issue_triage']);
   });
 
   it('roles field takes precedence over review_only', () => {
     const agent: LocalAgentConfig = {
       model: 'claude-opus-4-6',
       tool: 'claude',
-      roles: ['review', 'summary', 'dedup'],
+      roles: ['review', 'summary', 'pr_dedup'],
       review_only: true,
     };
-    expect(computeRoles(agent)).toEqual(['review', 'summary', 'dedup']);
+    expect(computeRoles(agent)).toEqual(['review', 'summary', 'pr_dedup']);
   });
 
   it('roles field takes precedence over synthesizer_only', () => {
     const agent: LocalAgentConfig = {
       model: 'claude-opus-4-6',
       tool: 'claude',
-      roles: ['triage'],
+      roles: ['issue_triage'],
       synthesizer_only: true,
     };
-    expect(computeRoles(agent)).toEqual(['triage']);
+    expect(computeRoles(agent)).toEqual(['issue_triage']);
   });
 
   it('falls back to review_only when roles is empty', () => {

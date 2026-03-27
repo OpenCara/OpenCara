@@ -12,7 +12,7 @@ import type {
   TaskRole,
   RepoConfig,
 } from '@opencara/shared';
-import { isRepoAllowed } from '@opencara/shared';
+import { isRepoAllowed, isDedupRole, isTriageRole } from '@opencara/shared';
 import {
   loadConfig,
   resolveCodebaseDir,
@@ -620,7 +620,7 @@ async function handleTask(
 
   // Execute review, summary, dedup, or triage
   try {
-    if (role === 'triage') {
+    if (isTriageRole(role)) {
       const triageDeps: TriageExecutorDeps = {
         commandTemplate: reviewDeps.commandTemplate,
       };
@@ -632,6 +632,8 @@ async function handleTask(
         timeout_seconds,
         logger,
         signal,
+        undefined,
+        role,
       );
       recordSessionUsage(consumptionDeps.session, {
         inputTokens: triageResult.tokenDetail.input,
@@ -646,7 +648,7 @@ async function handleTask(
           estimated: triageResult.tokensEstimated,
         });
       }
-    } else if (role === 'dedup') {
+    } else if (isDedupRole(role)) {
       await executeDedupTask(
         client,
         agentId,
@@ -666,6 +668,7 @@ async function handleTask(
         consumptionDeps,
         logger,
         signal,
+        role,
       );
     } else if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
       await executeSummaryTask(
