@@ -270,6 +270,76 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks).toHaveLength(1);
     });
 
+    it('creates multiple review tasks that all appear in poll', async () => {
+      const config = makeReviewConfig({ agentCount: 3 });
+      const groupId = await createTaskGroup(store, 'review', config, baseTask, logger);
+      expect(groupId).not.toBeNull();
+
+      // Both tasks should be pending and listable
+      const pending = await store.listTasks({ status: ['pending'] });
+      expect(pending).toHaveLength(2);
+      for (const task of pending) {
+        expect(task.group_id).toBe(groupId);
+        expect(task.status).toBe('pending');
+        expect(task.feature).toBe('review');
+      }
+    });
+
+    it('different agents can claim different tasks without conflict', async () => {
+      const config = makeReviewConfig({ agentCount: 3 });
+      const groupId = await createTaskGroup(store, 'review', config, baseTask, logger);
+      expect(groupId).not.toBeNull();
+
+      const tasks = await store.listTasks({ status: ['pending'] });
+      expect(tasks).toHaveLength(2);
+
+      // Agent 1 claims first task
+      const claimed1 = await store.claimTask(tasks[0].id);
+      expect(claimed1).toBe(true);
+
+      // Agent 2 claims second task — no conflict
+      const claimed2 = await store.claimTask(tasks[1].id);
+      expect(claimed2).toBe(true);
+
+      // Both tasks are now reviewing
+      const reviewing = await store.listTasks({ status: ['reviewing'] });
+      expect(reviewing).toHaveLength(2);
+    });
+
+    it('allows different feature groups for the same PR', async () => {
+      const reviewConfig = makeReviewConfig({ agentCount: 2 });
+      const dedupConfig = makeReviewConfig({ agentCount: 2, prompt: 'Check for duplicates' });
+
+      // Review group for the PR
+      const reviewGroupId = await createTaskGroup(store, 'review', reviewConfig, baseTask, logger);
+      expect(reviewGroupId).not.toBeNull();
+
+      // Dedup group for the same PR — different feature, should succeed
+      const dedupGroupId = await createTaskGroup(store, 'dedup_pr', dedupConfig, baseTask, logger);
+      expect(dedupGroupId).not.toBeNull();
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2); // 1 review + 1 dedup
+      const features = new Set(tasks.map((t) => t.feature));
+      expect(features).toEqual(new Set(['review', 'dedup_pr']));
+    });
+
+    it('duplicate review group for same PR is rejected', async () => {
+      const config = makeReviewConfig({ agentCount: 3 });
+
+      // First group succeeds
+      const first = await createTaskGroup(store, 'review', config, baseTask, logger);
+      expect(first).not.toBeNull();
+
+      // Second review group for same PR is rejected (idempotency)
+      const second = await createTaskGroup(store, 'review', config, baseTask, logger);
+      expect(second).toBeNull();
+
+      // Still only 2 tasks (from the first group)
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+    });
+
     it('all tasks in group share the same group_id', async () => {
       const config = makeReviewConfig({ agentCount: 5 });
       const groupId = await createTaskGroup(store, 'review', config, baseTask, logger);

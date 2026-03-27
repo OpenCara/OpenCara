@@ -408,34 +408,82 @@ describe('SqliteD1Adapter', () => {
       expect(created).toBe(true);
     });
 
-    it('partial unique index prevents duplicate active tasks at DB level', async () => {
+    it('createTaskIfNotExists returns false for same PR and feature', async () => {
       await store.createTask(
-        makeTask({ id: 'first', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
+        makeTask({
+          id: 'first',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'pending',
+          feature: 'review',
+        }),
       );
 
-      await expect(
-        store.createTask(
-          makeTask({
-            id: 'second',
-            owner: 'org',
-            repo: 'repo',
-            pr_number: 10,
-            status: 'pending',
-          }),
-        ),
-      ).rejects.toThrow(/UNIQUE constraint failed/);
-    });
-
-    it('createTaskIfNotExists returns false on constraint violation', async () => {
-      // Directly insert a pending task
-      await store.createTask(
-        makeTask({ id: 'first', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
-      );
-
-      // createTaskIfNotExists should return false (caught by WHERE NOT EXISTS)
-      const task = makeTask({ id: 'dup', owner: 'org', repo: 'repo', pr_number: 10 });
+      const task = makeTask({
+        id: 'dup',
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 10,
+        feature: 'review',
+      });
       const created = await store.createTaskIfNotExists(task);
       expect(created).toBe(false);
+    });
+
+    it('createTaskIfNotExists succeeds for same PR but different feature', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'review-1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'pending',
+          feature: 'review',
+        }),
+      );
+
+      const task = makeTask({
+        id: 'dedup-1',
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 10,
+        feature: 'dedup_pr',
+      });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+      expect(await store.getTask('dedup-1')).not.toBeNull();
+    });
+
+    it('allows multiple active tasks for same PR after index removal', async () => {
+      // With idx_tasks_active_pr dropped, multiple active tasks per PR are allowed
+      // (needed for multi-task groups)
+      await store.createTask(
+        makeTask({
+          id: 'first',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'pending',
+          feature: 'review',
+        }),
+      );
+
+      // Second task for same PR should succeed (no unique index blocking it)
+      await store.createTask(
+        makeTask({
+          id: 'second',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          status: 'pending',
+          feature: 'review',
+          group_id: 'same-group',
+        }),
+      );
+
+      expect(await store.getTask('first')).not.toBeNull();
+      expect(await store.getTask('second')).not.toBeNull();
     });
   });
 

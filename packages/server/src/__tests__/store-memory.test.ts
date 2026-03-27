@@ -198,6 +198,38 @@ describe('MemoryDataStore', () => {
       const created = await store.createTaskIfNotExists(task);
       expect(created).toBe(true);
     });
+
+    it('createTaskIfNotExists succeeds for same PR but different feature', async () => {
+      await store.createTask(
+        makeTask({ id: 'review-1', owner: 'org', repo: 'repo', pr_number: 10, feature: 'review' }),
+      );
+      const task = makeTask({
+        id: 'dedup-1',
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 10,
+        feature: 'dedup_pr',
+      });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(true);
+      expect(await store.getTask('dedup-1')).not.toBeNull();
+    });
+
+    it('createTaskIfNotExists returns false for same PR and same feature', async () => {
+      await store.createTask(
+        makeTask({ id: 'review-1', owner: 'org', repo: 'repo', pr_number: 10, feature: 'review' }),
+      );
+      const task = makeTask({
+        id: 'review-dup',
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 10,
+        feature: 'review',
+      });
+      const created = await store.createTaskIfNotExists(task);
+      expect(created).toBe(false);
+      expect(await store.getTask('review-dup')).toBeNull();
+    });
   });
 
   // ── Claims ─────────────────────────────────────────────────
