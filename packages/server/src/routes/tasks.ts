@@ -11,7 +11,7 @@ import type {
   DedupReport,
   TriageReport,
 } from '@opencara/shared';
-import { isRepoAllowed, isEntityMatch } from '@opencara/shared';
+import { isRepoAllowed, isEntityMatch, isDedupRole } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
@@ -589,6 +589,26 @@ export function taskRoutes() {
     const tasks = await store.listTasks({ status: ['pending'] });
     const tasksById = new Map(tasks.map((t) => [t.id, t]));
 
+    // ── Dedup serialization: build blocked-repo set and oldest-per-repo map ──
+    // Query reviewing (claimed) tasks to find repos with in-progress dedup work
+    const reviewingTasks = await store.listTasks({ status: ['reviewing'] });
+    const dedupBlockedRepos = new Set<string>();
+    for (const t of reviewingTasks) {
+      if (isDedupRole(t.task_type)) {
+        dedupBlockedRepos.add(`${t.owner}/${t.repo}`);
+      }
+    }
+    // Track the oldest pending dedup task per repo (only return one per repo)
+    const oldestDedupPerRepo = new Map<string, ReviewTask>();
+    for (const t of tasks) {
+      if (!isDedupRole(t.task_type)) continue;
+      const repoKey = `${t.owner}/${t.repo}`;
+      const existing = oldestDedupPerRepo.get(repoKey);
+      if (!existing || t.created_at < existing.created_at) {
+        oldestDedupPerRepo.set(repoKey, t);
+      }
+    }
+
     // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
     const candidates: PollCandidate[] = [];
 
@@ -644,6 +664,14 @@ export function taskRoutes() {
       const existing = existingClaims.get(claimId);
       if (existing && !isClaimFailed(existing)) {
         continue;
+      }
+
+      // Dedup serialization: skip if repo has a claimed dedup task or this isn't the oldest
+      if (isDedupRole(task.task_type)) {
+        const repoKey = `${task.owner}/${task.repo}`;
+        if (dedupBlockedRepos.has(repoKey)) continue;
+        const oldest = oldestDedupPerRepo.get(repoKey);
+        if (oldest && oldest.id !== task.id) continue;
       }
 
       const remainingMs = task.timeout_at - Date.now();
