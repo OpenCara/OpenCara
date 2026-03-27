@@ -495,8 +495,14 @@ async function handleTask(
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
 
-  log(`${icons.success} Claimed task ${task_id} (${role}) — ${owner}/${repo}#${pr_number}`);
-  log(`  https://github.com/${owner}/${repo}/pull/${pr_number}`);
+  const isIssueTask = pr_number === 0;
+  if (isIssueTask) {
+    const issueRef = task.issue_number ? `issue #${task.issue_number}` : 'issue';
+    log(`${icons.success} Claimed task ${task_id} (${role}) — ${owner}/${repo} ${issueRef}`);
+  } else {
+    log(`${icons.success} Claimed task ${task_id} (${role}) — ${owner}/${repo}#${pr_number}`);
+    log(`  https://github.com/${owner}/${repo}/pull/${pr_number}`);
+  }
 
   // Claim the task (retry once — slot may be taken)
   // On failure, server returns structured error (e.g. CLAIM_CONFLICT, TASK_NOT_FOUND)
@@ -526,77 +532,83 @@ async function handleTask(
     return {};
   }
 
-  // Fetch diff — gh CLI first, fall back to HTTP
-  let diffContent: string;
-  try {
-    const result = await fetchDiff(diff_url, owner, repo, pr_number, {
-      githubToken: client.currentToken,
-      signal,
-      maxDiffSizeKb: reviewDeps.maxDiffSizeKb,
-    });
-    diffContent = result.diff;
-    log(`  Diff fetched via ${result.method} (${Math.round(diffContent.length / 1024)}KB)`);
-  } catch (err) {
-    logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
-    await safeReject(
-      client,
-      task_id,
-      agentId,
-      `Cannot access diff: ${(err as Error).message}`,
-      logger,
-    );
-    return { diffFetchFailed: true };
-  }
-
-  // Clone/update codebase if configured, otherwise create a repo-scoped working directory
+  // Issue-based tasks (issue_triage, issue_dedup) have no diff, codebase, or PR context
+  let diffContent = '';
   let taskReviewDeps = reviewDeps;
   let taskCheckoutPath: string | null = null;
-  if (reviewDeps.codebaseDir) {
-    try {
-      const result = cloneOrUpdate(owner, repo, pr_number, reviewDeps.codebaseDir, task_id);
-      log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
-      taskCheckoutPath = result.localPath;
-      // Pass the resolved local path as codebaseDir for this task
-      taskReviewDeps = { ...reviewDeps, codebaseDir: result.localPath };
-    } catch (err) {
-      logWarn(
-        `  Warning: codebase clone failed: ${(err as Error).message}. Continuing with diff-only review.`,
-      );
-      taskReviewDeps = { ...reviewDeps, codebaseDir: null };
-    }
-  } else {
-    // No codebase_dir configured — create a repo-scoped working directory
-    try {
-      validatePathSegment(owner, 'owner');
-      validatePathSegment(repo, 'repo');
-      validatePathSegment(task_id, 'task_id');
-      const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
-      fs.mkdirSync(repoScopedDir, { recursive: true });
-      taskCheckoutPath = repoScopedDir;
-      taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
-      log(`  Working directory: ${repoScopedDir}`);
-    } catch (err) {
-      logWarn(
-        `  Warning: failed to create working directory: ${(err as Error).message}. Continuing without scoped cwd.`,
-      );
-    }
-  }
-
-  // Fetch PR context (metadata, comments, reviews) — non-blocking on failure
   let contextBlock: string | undefined;
-  try {
-    const prContext = await fetchPRContext(owner, repo, pr_number, {
-      githubToken: client.currentToken,
-      signal,
-    });
-    if (hasContent(prContext)) {
-      contextBlock = formatPRContext(prContext, taskReviewDeps.codebaseDir);
-      log('  PR context fetched');
+
+  if (isIssueTask) {
+    log('  Issue-based task — skipping diff fetch');
+  } else {
+    // Fetch diff — gh CLI first, fall back to HTTP
+    try {
+      const result = await fetchDiff(diff_url, owner, repo, pr_number, {
+        githubToken: client.currentToken,
+        signal,
+        maxDiffSizeKb: reviewDeps.maxDiffSizeKb,
+      });
+      diffContent = result.diff;
+      log(`  Diff fetched via ${result.method} (${Math.round(diffContent.length / 1024)}KB)`);
+    } catch (err) {
+      logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
+      await safeReject(
+        client,
+        task_id,
+        agentId,
+        `Cannot access diff: ${(err as Error).message}`,
+        logger,
+      );
+      return { diffFetchFailed: true };
     }
-  } catch (err) {
-    logWarn(
-      `  Warning: failed to fetch PR context: ${(err as Error).message}. Continuing without.`,
-    );
+
+    // Clone/update codebase if configured, otherwise create a repo-scoped working directory
+    if (reviewDeps.codebaseDir) {
+      try {
+        const result = cloneOrUpdate(owner, repo, pr_number, reviewDeps.codebaseDir, task_id);
+        log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
+        taskCheckoutPath = result.localPath;
+        // Pass the resolved local path as codebaseDir for this task
+        taskReviewDeps = { ...reviewDeps, codebaseDir: result.localPath };
+      } catch (err) {
+        logWarn(
+          `  Warning: codebase clone failed: ${(err as Error).message}. Continuing with diff-only review.`,
+        );
+        taskReviewDeps = { ...reviewDeps, codebaseDir: null };
+      }
+    } else {
+      // No codebase_dir configured — create a repo-scoped working directory
+      try {
+        validatePathSegment(owner, 'owner');
+        validatePathSegment(repo, 'repo');
+        validatePathSegment(task_id, 'task_id');
+        const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
+        fs.mkdirSync(repoScopedDir, { recursive: true });
+        taskCheckoutPath = repoScopedDir;
+        taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
+        log(`  Working directory: ${repoScopedDir}`);
+      } catch (err) {
+        logWarn(
+          `  Warning: failed to create working directory: ${(err as Error).message}. Continuing without scoped cwd.`,
+        );
+      }
+    }
+
+    // Fetch PR context (metadata, comments, reviews) — non-blocking on failure
+    try {
+      const prContext = await fetchPRContext(owner, repo, pr_number, {
+        githubToken: client.currentToken,
+        signal,
+      });
+      if (hasContent(prContext)) {
+        contextBlock = formatPRContext(prContext, taskReviewDeps.codebaseDir);
+        log('  PR context fetched');
+      }
+    } catch (err) {
+      logWarn(
+        `  Warning: failed to fetch PR context: ${(err as Error).message}. Continuing without.`,
+      );
+    }
   }
 
   // Check repo prompt for suspicious patterns (prompt injection attempts)

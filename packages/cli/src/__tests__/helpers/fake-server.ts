@@ -228,6 +228,54 @@ export class FakeServer {
     return body.task_id;
   }
 
+  /** Inject an issue-based task directly into the store (no test route for issue events). */
+  async injectIssueTask(opts?: {
+    owner?: string;
+    repo?: string;
+    issueNumber?: number;
+    issueTitle?: string;
+    issueBody?: string;
+    taskType?: 'issue_triage' | 'issue_dedup';
+    indexIssueNumber?: number;
+  }): Promise<string> {
+    const taskId = `issue-task-${Date.now()}`;
+    const groupId = `group-${Date.now()}`;
+    const taskType = opts?.taskType ?? 'issue_triage';
+    const feature = taskType === 'issue_dedup' ? 'dedup_issue' : 'triage';
+
+    const task: ReviewTask = {
+      id: taskId,
+      owner: opts?.owner ?? 'test-org',
+      repo: opts?.repo ?? 'test-repo',
+      pr_number: 0,
+      pr_url: '',
+      diff_url: '',
+      base_ref: '',
+      head_ref: '',
+      prompt: '',
+      timeout_at: Date.now() + 600_000,
+      status: 'pending',
+      github_installation_id: 1,
+      private: false,
+      config: DEFAULT_REVIEW_CONFIG,
+      created_at: Date.now(),
+      task_type: taskType,
+      feature,
+      group_id: groupId,
+      queue: 'review',
+      review_count: 1,
+      issue_number: opts?.issueNumber ?? 42,
+      issue_url: `https://github.com/${opts?.owner ?? 'test-org'}/${opts?.repo ?? 'test-repo'}/issues/${opts?.issueNumber ?? 42}`,
+      issue_title: opts?.issueTitle ?? 'Test issue title',
+      issue_body: opts?.issueBody ?? 'Test issue body content',
+      issue_author: 'test-user',
+      ...(opts?.indexIssueNumber != null ? { index_issue_number: opts.indexIssueNumber } : {}),
+    };
+
+    await this.store.createTask(task);
+    return taskId;
+  }
+
   /** Get a task from the store. */
   async getTask(id: string): Promise<ReviewTask | null> {
     return this.store.getTask(id);

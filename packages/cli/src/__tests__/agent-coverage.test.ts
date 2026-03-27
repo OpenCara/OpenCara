@@ -1506,4 +1506,162 @@ describe('Agent Coverage Tests', () => {
       }
     });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Issue-based tasks (pr_number=0) — skip diff fetch
+  // ═══════════════════════════════════════════════════════════
+
+  describe('Issue-based tasks (pr_number=0)', () => {
+    it('issue_triage task succeeds without diff fetch', async () => {
+      // Return triage JSON from the tool executor
+      mockedExecuteTool.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          category: 'bug',
+          module: 'cli',
+          priority: 'high',
+          size: 'S',
+          labels: ['bug', 'cli'],
+          summary: 'Test issue summary',
+          body: 'Test issue body',
+          comment: 'This is a bug in the CLI module.',
+        }),
+        stderr: '',
+        exitCode: 0,
+        tokensUsed: 200,
+        tokensParsed: true,
+        tokenDetail: { input: 0, output: 200, total: 200, parsed: true },
+      });
+
+      const taskId = await server.injectIssueTask({ taskType: 'issue_triage' });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('triage-agent');
+        await advanceTime(2000);
+
+        // Should have logged "Issue-based task" and NOT tried to fetch a diff
+        expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Issue-based task'));
+
+        // Result should have been submitted
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.type).toBe('issue_triage');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
+      }
+    });
+
+    it('issue_dedup task succeeds without diff fetch', async () => {
+      // Return dedup JSON from the tool executor
+      mockedExecuteTool.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          duplicates: [],
+          index_entry: '- #42 [bug] — Test issue',
+        }),
+        stderr: '',
+        exitCode: 0,
+        tokensUsed: 150,
+        tokensParsed: true,
+        tokenDetail: { input: 0, output: 150, total: 150, parsed: true },
+      });
+
+      const taskId = await server.injectIssueTask({ taskType: 'issue_dedup' });
+
+      let resultBody: Record<string, unknown> | null = null;
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          if (typeof init?.body === 'string') {
+            resultBody = JSON.parse(init.body);
+          }
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('dedup-agent');
+        await advanceTime(2000);
+
+        // Should have logged "Issue-based task" and NOT tried to fetch a diff
+        expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Issue-based task'));
+
+        // Result should have been submitted
+        expect(resultBody).not.toBeNull();
+        expect(resultBody!.type).toBe('issue_dedup');
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
+      }
+    });
+
+    it('issue task does not attempt diff fetch (no diff URL failure)', async () => {
+      mockedExecuteTool.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          category: 'feature',
+          module: 'server',
+          priority: 'medium',
+          size: 'M',
+          labels: ['enhancement'],
+          summary: 'New feature',
+          body: 'Feature description',
+          comment: 'Feature request for server.',
+        }),
+        stderr: '',
+        exitCode: 0,
+        tokensUsed: 180,
+        tokensParsed: true,
+        tokenDetail: { input: 0, output: 180, total: 180, parsed: true },
+      });
+
+      const taskId = await server.injectIssueTask({ taskType: 'issue_triage' });
+
+      const savedFetch = globalThis.fetch;
+      const fetchCalls: string[] = [];
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        fetchCalls.push(url);
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return savedFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const agentPromise = startTestAgent('no-diff-agent');
+        await advanceTime(2000);
+
+        // No diff-related fetch calls should have been made
+        const diffCalls = fetchCalls.filter(
+          (u) => u.includes('.diff') || u.includes('application/vnd.github.v3.diff'),
+        );
+        expect(diffCalls).toHaveLength(0);
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(agentPromise, server);
+      } finally {
+        globalThis.fetch = savedFetch;
+      }
+    });
+  });
 });
