@@ -252,12 +252,25 @@ export class D1DataStore implements DataStore {
     // Use separate SELECT + INSERT instead of INSERT...SELECT...WHERE NOT EXISTS.
     // D1's meta.changes can return 0 for INSERT...SELECT even when a row is
     // inserted, causing the caller to incorrectly think a duplicate exists.
-    const existing = await this.db
-      .prepare(
-        `SELECT 1 AS found FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND feature = ? AND status IN (?, ?)`,
-      )
-      .bind(task.owner, task.repo, task.pr_number, task.feature, 'pending', 'reviewing')
-      .first();
+    //
+    // For issue tasks (pr_number=0 + issue_number set), scope dedup by
+    // issue_number so different issues don't collide.
+    let existing: Record<string, unknown> | null;
+    if (task.pr_number === 0 && task.issue_number !== undefined) {
+      existing = await this.db
+        .prepare(
+          `SELECT 1 AS found FROM tasks WHERE owner = ? AND repo = ? AND issue_number = ? AND feature = ? AND status IN (?, ?)`,
+        )
+        .bind(task.owner, task.repo, task.issue_number, task.feature, 'pending', 'reviewing')
+        .first();
+    } else {
+      existing = await this.db
+        .prepare(
+          `SELECT 1 AS found FROM tasks WHERE owner = ? AND repo = ? AND pr_number = ? AND feature = ? AND status IN (?, ?)`,
+        )
+        .bind(task.owner, task.repo, task.pr_number, task.feature, 'pending', 'reviewing')
+        .first();
+    }
     if (existing) return false;
 
     try {

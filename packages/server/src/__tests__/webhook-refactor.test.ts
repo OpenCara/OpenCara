@@ -870,6 +870,109 @@ describe('Webhook refactor — separate task creation', () => {
     });
   });
 
+  // ── Issue dedup scoping by issue_number ─────────────────────
+
+  describe('Issue webhook — dedup scoping by issue_number', () => {
+    it('creates separate dedup tasks for different issues', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        dedup: {
+          issues: {
+            enabled: true,
+            prompt: 'Check for duplicates',
+            agentCount: 1,
+            timeout: '10m',
+            preferredModels: [],
+            preferredTools: [],
+            indexIssue: 5,
+          },
+        },
+      };
+
+      // Issue #10
+      const res1 = await sendWebhook(app, 'issues', makeIssuePayload(), env);
+      expect(res1.status).toBe(200);
+
+      // Issue #20 (different issue number)
+      const payload2 = makeIssuePayload({
+        issue: {
+          number: 20,
+          html_url: 'https://github.com/acme/widget/issues/20',
+          title: 'Another bug',
+          body: 'Different issue',
+          user: { login: 'bob' },
+        },
+      });
+      const res2 = await sendWebhook(app, 'issues', payload2, env);
+      expect(res2.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0].issue_number).toBe(10);
+      expect(tasks[1].issue_number).toBe(20);
+    });
+
+    it('deduplicates same issue on repeat webhook', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        dedup: {
+          issues: {
+            enabled: true,
+            prompt: 'Check for duplicates',
+            agentCount: 1,
+            timeout: '10m',
+            preferredModels: [],
+            preferredTools: [],
+          },
+        },
+      };
+
+      // Same issue twice
+      await sendWebhook(app, 'issues', makeIssuePayload(), env);
+      await sendWebhook(app, 'issues', makeIssuePayload(), env);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('creates separate triage tasks for different issues', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        triage: {
+          enabled: true,
+          prompt: 'Triage this issue',
+          agentCount: 1,
+          timeout: '10m',
+          preferredModels: [],
+          preferredTools: [],
+          defaultMode: 'comment',
+          autoLabel: false,
+          triggers: ['opened'],
+        },
+      };
+
+      // Issue #10
+      await sendWebhook(app, 'issues', makeIssuePayload(), env);
+
+      // Issue #20
+      const payload2 = makeIssuePayload({
+        issue: {
+          number: 20,
+          html_url: 'https://github.com/acme/widget/issues/20',
+          title: 'Another bug',
+          body: 'Different issue',
+          user: { login: 'bob' },
+        },
+      });
+      await sendWebhook(app, 'issues', payload2, env);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0].issue_number).toBe(10);
+      expect(tasks[1].issue_number).toBe(20);
+    });
+  });
+
   // ── Group queries ───────────────────────────────────────────
 
   describe('Group ID queries', () => {

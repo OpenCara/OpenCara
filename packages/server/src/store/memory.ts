@@ -42,6 +42,11 @@ export class MemoryDataStore implements DataStore {
         existing.feature === task.feature &&
         (existing.status === 'pending' || existing.status === 'reviewing')
       ) {
+        // For issue tasks (pr_number=0), also match on issue_number
+        // so different issues don't collide in the dedup check.
+        if (task.pr_number === 0 && task.issue_number !== undefined) {
+          if (existing.issue_number !== task.issue_number) continue;
+        }
         return false;
       }
     }

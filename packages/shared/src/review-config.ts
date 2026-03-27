@@ -364,7 +364,7 @@ function parseTriageSection(raw: Record<string, unknown>): TriageConfig {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
     defaultMode: defaultMode,
     autoLabel: typeof raw.auto_label === 'boolean' ? raw.auto_label : false,
-    triggers: parseStringArray(raw.triggers),
+    triggers: Array.isArray(raw.triggers) ? parseStringArray(raw.triggers) : ['opened'],
     ...(authorModes ? { authorModes } : {}),
   };
 }
