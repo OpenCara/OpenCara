@@ -8,6 +8,8 @@ import type { TaskFilter } from '../types.js';
 export interface DataStore {
   // Tasks
   createTask(task: ReviewTask): Promise<void>;
+  /** Create multiple tasks in a single batch. Uses D1 batch on production. */
+  createTaskBatch(tasks: ReviewTask[]): Promise<void>;
   /**
    * Atomically create a task only if no active (pending/reviewing) task exists
    * for the same PR and feature. Returns true if the task was created, false if

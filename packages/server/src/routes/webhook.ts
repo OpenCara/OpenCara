@@ -214,8 +214,9 @@ export async function createTaskGroup(
   const groupId = crypto.randomUUID();
   const timeoutMs = parseTimeoutMs(featureConfig.timeout);
 
+  // Phase 1: Build all tasks up front (validate prompts before any DB writes)
+  const tasks: ReviewTask[] = [];
   for (let i = 0; i < taskCount; i++) {
-    const taskId = crypto.randomUUID();
     const prompt = getAgentPrompt(featureConfig, i);
 
     if (prompt.length > MAX_PROMPT_LENGTH) {
@@ -228,32 +229,36 @@ export async function createTaskGroup(
       return null;
     }
 
-    const task: ReviewTask = {
+    tasks.push({
       ...baseTask,
-      id: taskId,
+      id: crypto.randomUUID(),
       prompt,
       task_type: role,
       feature,
       group_id: groupId,
       timeout_at: Date.now() + timeoutMs,
       ...extraFields,
-    };
+    });
+  }
 
-    if (i === 0 && !skipDedup) {
-      // First task: atomic create-if-not-exists for idempotency
-      const created = await store.createTaskIfNotExists(task);
-      if (!created) {
-        logger.info('Task group already exists — skipping', {
-          feature,
-          owner: baseTask.owner,
-          repo: baseTask.repo,
-          prNumber: baseTask.pr_number,
-        });
-        return null;
-      }
-    } else {
-      await store.createTask(task);
+  // Phase 2: Dedup check, then batch-insert all tasks
+  if (!skipDedup) {
+    const created = await store.createTaskIfNotExists(tasks[0]);
+    if (!created) {
+      logger.info('Task group already exists — skipping', {
+        feature,
+        owner: baseTask.owner,
+        repo: baseTask.repo,
+        prNumber: baseTask.pr_number,
+      });
+      return null;
     }
+    // First task already inserted by createTaskIfNotExists; batch the rest
+    if (tasks.length > 1) {
+      await store.createTaskBatch(tasks.slice(1));
+    }
+  } else {
+    await store.createTaskBatch(tasks);
   }
 
   logger.info('Task group created', {
