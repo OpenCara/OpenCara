@@ -40,7 +40,7 @@ describe('config', () => {
   });
 
   it('DEFAULT_PLATFORM_URL is correct', () => {
-    expect(DEFAULT_PLATFORM_URL).toBe('https://api.opencara.dev');
+    expect(DEFAULT_PLATFORM_URL).toBe('https://api.opencara.com');
   });
 
   describe('ensureConfigDir', () => {

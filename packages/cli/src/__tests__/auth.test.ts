@@ -274,7 +274,7 @@ describe('auth', () => {
   });
 
   describe('login', () => {
-    const PLATFORM_URL = 'https://api.opencara.dev';
+    const PLATFORM_URL = 'https://api.opencara.com';
     const DEVICE_RESPONSE: DeviceFlowInitResponse = {
       device_code: 'dc_test',
       user_code: 'ABCD-1234',
@@ -510,7 +510,7 @@ describe('auth', () => {
   });
 
   describe('getValidToken', () => {
-    const PLATFORM_URL = 'https://api.opencara.dev';
+    const PLATFORM_URL = 'https://api.opencara.com';
 
     it('returns token when not expired', async () => {
       const now = Date.now();
