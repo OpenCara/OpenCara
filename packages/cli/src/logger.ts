@@ -41,6 +41,53 @@ export function createLogger(label?: string): Logger {
   };
 }
 
+/** Default truncation limit for verbose tool output (characters). */
+export const VERBOSE_TRUNCATE_LIMIT = 2000;
+
+/** Estimated characters per token (~4 chars/token). */
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+/**
+ * Log raw tool stdout/stderr output for debugging.
+ * Truncates to the given limit to avoid flooding the terminal.
+ */
+export function logVerboseToolOutput(
+  logger: Logger,
+  label: string,
+  stdout: string,
+  stderr: string,
+  promptLength: number,
+  limit: number = VERBOSE_TRUNCATE_LIMIT,
+): void {
+  const estimatedTokens = Math.ceil(promptLength / CHARS_PER_TOKEN_ESTIMATE);
+  logger.log(
+    `${icons.info} [verbose] ${label} — prompt: ${promptLength} chars (~${estimatedTokens} tokens)`,
+  );
+
+  if (stdout) {
+    const truncated =
+      stdout.length > limit
+        ? stdout.slice(0, limit) + `\n... (truncated at ${limit} chars)`
+        : stdout;
+    logger.log(
+      `${icons.info} [verbose] ${label} stdout (${stdout.length} chars):\n---\n${truncated}\n---`,
+    );
+  } else {
+    logger.log(`${icons.info} [verbose] ${label} stdout: (empty)`);
+  }
+
+  // Stderr is omitted when empty to reduce noise; stdout shows (empty) to confirm execution completed.
+  if (stderr) {
+    const truncated =
+      stderr.length > limit
+        ? stderr.slice(0, limit) + `\n... (truncated at ${limit} chars)`
+        : stderr;
+    logger.log(
+      `${icons.info} [verbose] ${label} stderr (${stderr.length} chars):\n---\n${truncated}\n---`,
+    );
+  }
+}
+
 /** Session statistics for exit summary. */
 export interface AgentSessionStats {
   startTime: number;

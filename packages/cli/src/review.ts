@@ -26,6 +26,12 @@ export interface ReviewResponse {
   tokensUsed: number;
   tokensEstimated: boolean;
   tokenDetail: TokenUsageDetail;
+  /** Raw stdout from the tool execution (available for verbose logging). */
+  toolStdout: string;
+  /** Raw stderr from the tool execution (available for verbose logging). */
+  toolStderr: string;
+  /** Length of the prompt sent to the tool in characters. */
+  promptLength: number;
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
@@ -220,6 +226,9 @@ export async function executeReview(
       tokensUsed: result.tokensUsed + inputTokens,
       tokensEstimated: !result.tokensParsed,
       tokenDetail,
+      toolStdout: result.stdout,
+      toolStderr: result.stderr,
+      promptLength: fullPrompt.length,
     };
   } finally {
     clearTimeout(abortTimer);
