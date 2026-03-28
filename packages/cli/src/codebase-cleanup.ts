@@ -26,6 +26,8 @@ export function parseTtl(value: string): number {
         return num * 60 * 60 * 1000;
       case 'd':
         return num * 24 * 60 * 60 * 1000;
+      default:
+        throw new Error(`Unreachable: unhandled unit "${match[2]}"`);
     }
   }
 
@@ -101,7 +103,8 @@ export class CodebaseCleanupTracker {
         await removeFn(entry.bareRepoPath, entry.worktreePath);
         cleaned++;
       } catch {
-        // Best-effort — already logged by removeFn
+        // Re-queue for next sweep — removeFn already logs the error
+        this.pending.push(entry);
       }
     }
 
@@ -191,6 +194,18 @@ export function scanAndCleanStaleWorktrees(baseDir: string, ttlMs: number): numb
         if (age >= ttlMs) {
           try {
             fs.rmSync(taskPath, { recursive: true, force: true });
+
+            // Also clean git worktree metadata in the bare repo to prevent ghost entries.
+            // Worktree dir: <owner>/<repo>-worktrees/<taskId>
+            // Bare repo:    <owner>/<repo>.git/worktrees/<taskId>
+            const repoName = entry.replace(/-worktrees$/, '');
+            const metadataPath = path.join(ownerPath, `${repoName}.git`, 'worktrees', taskId);
+            try {
+              fs.rmSync(metadataPath, { recursive: true, force: true });
+            } catch {
+              // Best-effort — metadata may not exist
+            }
+
             cleaned++;
           } catch {
             // Best-effort cleanup

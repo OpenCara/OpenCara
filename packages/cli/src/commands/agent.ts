@@ -744,7 +744,6 @@ async function handleTask(
       if (cleanupTracker) {
         // Deferred cleanup: track for removal after TTL expires
         cleanupTracker.track(taskBareRepoPath, taskCheckoutPath);
-        log(`  Codebase retained for inspection (TTL-based cleanup)`);
       } else {
         // Immediate cleanup (no tracker = ttl is 0 or not configured)
         await cleanupWorktree(taskBareRepoPath, taskCheckoutPath);

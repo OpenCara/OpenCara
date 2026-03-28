@@ -115,7 +115,7 @@ describe('codebase-cleanup', () => {
       expect(tracker.size).toBe(1);
     });
 
-    it('handles remove function errors gracefully', async () => {
+    it('re-queues failed entries for next sweep', async () => {
       const tracker = new CodebaseCleanupTracker(0);
       tracker.track('/bare/repo.git', '/worktree/task-1');
       tracker.track('/bare/repo.git', '/worktree/task-2');
@@ -130,27 +130,42 @@ describe('codebase-cleanup', () => {
       // Only the second one succeeded
       expect(cleaned).toBe(1);
       expect(removeFn).toHaveBeenCalledTimes(2);
-      expect(tracker.size).toBe(0); // Both removed from pending
+      // Failed entry re-queued for next sweep
+      expect(tracker.size).toBe(1);
+
+      // Second sweep should retry the failed entry
+      removeFn.mockResolvedValueOnce(undefined);
+      const cleaned2 = await tracker.sweep(removeFn);
+      expect(cleaned2).toBe(1);
+      expect(tracker.size).toBe(0);
     });
 
-    it('sweeps only expired entries, keeps fresh ones', async () => {
-      const tracker = new CodebaseCleanupTracker(100); // 100ms TTL
+    it('sweeps only expired entries, keeps fresh ones', () => {
+      vi.useFakeTimers();
+      try {
+        const tracker = new CodebaseCleanupTracker(1000); // 1s TTL
 
-      // Track an entry, then wait for it to expire
-      tracker.track('/bare/repo.git', '/worktree/old-task');
+        // Track an entry
+        tracker.track('/bare/repo.git', '/worktree/old-task');
 
-      // Wait for the entry to expire
-      await new Promise((r) => setTimeout(r, 150));
+        // Advance past TTL
+        vi.advanceTimersByTime(1500);
 
-      // Track a fresh entry
-      tracker.track('/bare/repo.git', '/worktree/new-task');
+        // Track a fresh entry (after time advance)
+        tracker.track('/bare/repo.git', '/worktree/new-task');
 
-      const removeFn = vi.fn().mockResolvedValue(undefined);
-      const cleaned = await tracker.sweep(removeFn);
+        const removeFn = vi.fn().mockResolvedValue(undefined);
+        // sweep is async but with fake timers we can just await it
+        const sweepPromise = tracker.sweep(removeFn);
 
-      expect(cleaned).toBe(1);
-      expect(removeFn).toHaveBeenCalledWith('/bare/repo.git', '/worktree/old-task');
-      expect(tracker.size).toBe(1); // new-task still pending
+        return sweepPromise.then((cleaned) => {
+          expect(cleaned).toBe(1);
+          expect(removeFn).toHaveBeenCalledWith('/bare/repo.git', '/worktree/old-task');
+          expect(tracker.size).toBe(1); // new-task still pending
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -184,7 +199,13 @@ describe('codebase-cleanup', () => {
       const cleaned = scanAndCleanStaleWorktrees('/tmp/repos', 60_000); // 1 min TTL
 
       expect(cleaned).toBe(1);
+      // Removes the worktree directory
       expect(fs.rmSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets-worktrees/task-old', {
+        recursive: true,
+        force: true,
+      });
+      // Also removes git worktree metadata in bare repo
+      expect(fs.rmSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets.git/worktrees/task-old', {
         recursive: true,
         force: true,
       });
@@ -252,13 +273,14 @@ describe('codebase-cleanup', () => {
 
       vi.mocked(fs.rmSync)
         .mockImplementationOnce(() => {
-          throw new Error('EBUSY');
+          throw new Error('EBUSY'); // task-1 worktree removal fails
         })
-        .mockImplementationOnce(() => {}); // second succeeds
+        .mockImplementation(() => {}); // task-2 worktree + metadata succeed
 
       const cleaned = scanAndCleanStaleWorktrees('/tmp/repos', 60_000);
-      expect(cleaned).toBe(1); // only the second one counted
-      expect(fs.rmSync).toHaveBeenCalledTimes(2);
+      expect(cleaned).toBe(1); // only task-2 counted
+      // 1 failed (task-1 worktree) + 1 success (task-2 worktree) + 1 metadata (task-2)
+      expect(fs.rmSync).toHaveBeenCalledTimes(3);
     });
 
     it('skips non-directory entries in worktree base', () => {
