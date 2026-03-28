@@ -1548,7 +1548,7 @@ agentCommand
     '--version-override <value>',
     'Cloudflare Workers version override (e.g. opencara-server=abc123)',
   )
-  .option('-v, --verbose', 'Log tool stdout/stderr after each review for debugging')
+  .option('-v, --verbose', 'Log tool stdout/stderr after each review/summary for debugging')
   .action(
     async (opts: {
       pollInterval: string;

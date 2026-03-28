@@ -76,6 +76,7 @@ export function logVerboseToolOutput(
     logger.log(`${icons.info} [verbose] ${label} stdout: (empty)`);
   }
 
+  // Stderr is omitted when empty to reduce noise; stdout shows (empty) to confirm execution completed.
   if (stderr) {
     const truncated =
       stderr.length > limit
