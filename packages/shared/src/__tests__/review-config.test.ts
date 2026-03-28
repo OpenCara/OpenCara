@@ -937,4 +937,213 @@ model_diversity_grace = "20s"
     const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
     expect(result.triage!.modelDiversityGraceMs).toBe(20_000);
   });
+
+  it('applies to implement section', () => {
+    const toml = `
+version = 1
+[implement]
+prompt = "implement"
+model_diversity_grace = "15s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.implement!.modelDiversityGraceMs).toBe(15_000);
+  });
+
+  it('applies to fix section', () => {
+    const toml = `
+version = 1
+[fix]
+prompt = "fix"
+model_diversity_grace = "10s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.fix!.modelDiversityGraceMs).toBe(10_000);
+  });
+});
+
+// ── Implement section ──
+
+describe('parseOpenCaraConfig — implement section', () => {
+  it('parses implement section with all fields', () => {
+    const toml = `
+version = 1
+[implement]
+prompt = "Implement the requested feature"
+enabled = true
+agent_count = 2
+timeout = "15m"
+preferred_models = ["claude-opus-4-6"]
+preferred_tools = ["claude"]
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.implement).toBeDefined();
+    expect(result.implement!.prompt).toBe('Implement the requested feature');
+    expect(result.implement!.enabled).toBe(true);
+    expect(result.implement!.agentCount).toBe(2);
+    expect(result.implement!.timeout).toBe('15m');
+    expect(result.implement!.preferredModels).toEqual(['claude-opus-4-6']);
+    expect(result.implement!.preferredTools).toEqual(['claude']);
+  });
+
+  it('defaults implement fields', () => {
+    const toml = `
+version = 1
+[implement]
+prompt = "Implement changes"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.implement!.enabled).toBe(true);
+    expect(result.implement!.agentCount).toBe(1);
+    expect(result.implement!.timeout).toBe('10m');
+    expect(result.implement!.preferredModels).toEqual([]);
+    expect(result.implement!.preferredTools).toEqual([]);
+    expect(result.implement!.modelDiversityGraceMs).toBe(DEFAULT_MODEL_DIVERSITY_GRACE_MS);
+  });
+
+  it('parses implement with enabled = false', () => {
+    const toml = `
+version = 1
+[implement]
+prompt = "Implement"
+enabled = false
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.implement!.enabled).toBe(false);
+  });
+
+  it('uses default prompt when prompt is absent', () => {
+    const toml = `
+version = 1
+[implement]
+agent_count = 1
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.implement!.prompt).toBe('Implement the requested changes.');
+  });
+
+  it('implement section absent when not in config', () => {
+    const result = parseOpenCaraConfig('version = 1\n[review]\nprompt = "test"') as OpenCaraConfig;
+    expect(result.implement).toBeUndefined();
+  });
+
+  it('clamps implement agent_count to range 1-10', () => {
+    const low = parseOpenCaraConfig(
+      'version = 1\n[implement]\nprompt = "test"\nagent_count = 0',
+    ) as OpenCaraConfig;
+    expect(low.implement!.agentCount).toBe(1);
+
+    const high = parseOpenCaraConfig(
+      'version = 1\n[implement]\nprompt = "test"\nagent_count = 99',
+    ) as OpenCaraConfig;
+    expect(high.implement!.agentCount).toBe(10);
+  });
+});
+
+// ── Fix section ──
+
+describe('parseOpenCaraConfig — fix section', () => {
+  it('parses fix section with all fields', () => {
+    const toml = `
+version = 1
+[fix]
+prompt = "Fix the review comments"
+enabled = true
+agent_count = 1
+timeout = "5m"
+preferred_models = ["claude-sonnet-4-6"]
+preferred_tools = ["claude"]
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.fix).toBeDefined();
+    expect(result.fix!.prompt).toBe('Fix the review comments');
+    expect(result.fix!.enabled).toBe(true);
+    expect(result.fix!.agentCount).toBe(1);
+    expect(result.fix!.timeout).toBe('5m');
+    expect(result.fix!.preferredModels).toEqual(['claude-sonnet-4-6']);
+    expect(result.fix!.preferredTools).toEqual(['claude']);
+  });
+
+  it('defaults fix fields', () => {
+    const toml = `
+version = 1
+[fix]
+prompt = "Fix comments"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.fix!.enabled).toBe(true);
+    expect(result.fix!.agentCount).toBe(1);
+    expect(result.fix!.timeout).toBe('10m');
+    expect(result.fix!.preferredModels).toEqual([]);
+    expect(result.fix!.preferredTools).toEqual([]);
+    expect(result.fix!.modelDiversityGraceMs).toBe(DEFAULT_MODEL_DIVERSITY_GRACE_MS);
+  });
+
+  it('parses fix with enabled = false', () => {
+    const toml = `
+version = 1
+[fix]
+prompt = "Fix"
+enabled = false
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.fix!.enabled).toBe(false);
+  });
+
+  it('uses default prompt when prompt is absent', () => {
+    const toml = `
+version = 1
+[fix]
+agent_count = 1
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.fix!.prompt).toBe('Fix the review comments.');
+  });
+
+  it('fix section absent when not in config', () => {
+    const result = parseOpenCaraConfig('version = 1\n[review]\nprompt = "test"') as OpenCaraConfig;
+    expect(result.fix).toBeUndefined();
+  });
+
+  it('clamps fix agent_count to range 1-10', () => {
+    const low = parseOpenCaraConfig(
+      'version = 1\n[fix]\nprompt = "test"\nagent_count = 0',
+    ) as OpenCaraConfig;
+    expect(low.fix!.agentCount).toBe(1);
+
+    const high = parseOpenCaraConfig(
+      'version = 1\n[fix]\nprompt = "test"\nagent_count = 99',
+    ) as OpenCaraConfig;
+    expect(high.fix!.agentCount).toBe(10);
+  });
+});
+
+// ── Combined config ──
+
+describe('parseOpenCaraConfig — combined implement/fix with other sections', () => {
+  it('parses config with all sections', () => {
+    const toml = `
+version = 1
+
+[review]
+prompt = "Review this PR"
+
+[dedup.prs]
+prompt = "Check dupes"
+
+[triage]
+prompt = "Triage issue"
+
+[implement]
+prompt = "Implement feature"
+
+[fix]
+prompt = "Fix comments"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review).toBeDefined();
+    expect(result.dedup).toBeDefined();
+    expect(result.triage).toBeDefined();
+    expect(result.implement).toBeDefined();
+    expect(result.fix).toBeDefined();
+  });
 });

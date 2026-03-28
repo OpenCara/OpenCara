@@ -8,7 +8,9 @@ export type TaskRole =
   | 'pr_dedup'
   | 'issue_dedup'
   | 'pr_triage'
-  | 'issue_triage';
+  | 'issue_triage'
+  | 'implement'
+  | 'fix';
 
 /** Check if a role is a dedup variant */
 export function isDedupRole(role: TaskRole): boolean {
@@ -20,8 +22,23 @@ export function isTriageRole(role: TaskRole): boolean {
   return role === 'pr_triage' || role === 'issue_triage';
 }
 
+/** Check if a role is the implement role */
+export function isImplementRole(role: TaskRole): boolean {
+  return role === 'implement';
+}
+
+/** Check if a role is the fix role */
+export function isFixRole(role: TaskRole): boolean {
+  return role === 'fix';
+}
+
+/** Check if a role is a codegen variant (implement or fix) */
+export function isCodegenRole(role: TaskRole): boolean {
+  return role === 'implement' || role === 'fix';
+}
+
 /** Feature pipeline — which feature spawned this task group */
-export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage';
+export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage' | 'implement' | 'fix';
 
 /**
  * @deprecated Use TaskRole instead. Kept for backward compatibility during migration.
@@ -130,6 +147,25 @@ export interface DedupMatch {
 export interface DedupReport {
   duplicates: DedupMatch[];
   index_entry: string;
+}
+
+// ── Implement/Fix Report Types ──────────────────────────────────
+
+/** Report produced by an implement agent */
+export interface ImplementReport {
+  branch: string;
+  pr_number?: number;
+  pr_url?: string;
+  files_changed: number;
+  summary: string;
+}
+
+/** Report produced by a fix agent */
+export interface FixReport {
+  commit_sha?: string;
+  files_changed: number;
+  comments_addressed: number;
+  summary: string;
 }
 
 // ── Triage Report Types ─────────────────────────────────────────

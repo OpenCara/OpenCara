@@ -66,12 +66,24 @@ export interface TriageConfig extends FeatureConfig {
   authorModes?: Record<string, 'comment' | 'rewrite'>;
 }
 
+/** Implement section config */
+export interface ImplementConfig extends FeatureConfig {
+  enabled: boolean;
+}
+
+/** Fix section config */
+export interface FixConfig extends FeatureConfig {
+  enabled: boolean;
+}
+
 /** Top-level .opencara.toml config */
 export interface OpenCaraConfig {
   version: number;
   review?: ReviewSectionConfig;
   dedup?: DedupConfig;
   triage?: TriageConfig;
+  implement?: ImplementConfig;
+  fix?: FixConfig;
 }
 
 /**
@@ -406,6 +418,42 @@ function parseTriageSection(raw: Record<string, unknown>): TriageConfig {
   };
 }
 
+const DEFAULT_IMPLEMENT_FEATURE: FeatureConfig = {
+  prompt: 'Implement the requested changes.',
+  agentCount: 1,
+  timeout: '10m',
+  preferredModels: [],
+  preferredTools: [],
+  modelDiversityGraceMs: DEFAULT_MODEL_DIVERSITY_GRACE_MS,
+};
+
+/** Parse the [implement] section */
+function parseImplementSection(raw: Record<string, unknown>): ImplementConfig {
+  const base = parseFeatureFields(raw, DEFAULT_IMPLEMENT_FEATURE);
+  return {
+    ...base,
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+  };
+}
+
+const DEFAULT_FIX_FEATURE: FeatureConfig = {
+  prompt: 'Fix the review comments.',
+  agentCount: 1,
+  timeout: '10m',
+  preferredModels: [],
+  preferredTools: [],
+  modelDiversityGraceMs: DEFAULT_MODEL_DIVERSITY_GRACE_MS,
+};
+
+/** Parse the [fix] section */
+function parseFixSection(raw: Record<string, unknown>): FixConfig {
+  const base = parseFeatureFields(raw, DEFAULT_FIX_FEATURE);
+  return {
+    ...base,
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+  };
+}
+
 /**
  * Parse a .opencara.toml config string into OpenCaraConfig.
  *
@@ -466,6 +514,16 @@ export function parseOpenCaraConfig(toml: string): ParseResult {
   // Parse optional triage section
   if (isObject(raw.triage)) {
     config.triage = parseTriageSection(raw.triage);
+  }
+
+  // Parse optional implement section
+  if (isObject(raw.implement)) {
+    config.implement = parseImplementSection(raw.implement);
+  }
+
+  // Parse optional fix section
+  if (isObject(raw.fix)) {
+    config.fix = parseFixSection(raw.fix);
   }
 
   return config;

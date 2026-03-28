@@ -17,10 +17,19 @@ export type {
   TriagePriority,
   TriageSize,
   TriageReport,
+  ImplementReport,
+  FixReport,
 } from './types.js';
 
 // Utility functions
-export { isRepoAllowed, isDedupRole, isTriageRole } from './types.js';
+export {
+  isRepoAllowed,
+  isDedupRole,
+  isTriageRole,
+  isImplementRole,
+  isFixRole,
+  isCodegenRole,
+} from './types.js';
 
 // API request/response types
 export type {
@@ -81,4 +90,6 @@ export {
   type DedupIssueTargetConfig,
   type DedupConfig,
   type TriageConfig,
+  type ImplementConfig,
+  type FixConfig,
 } from './review-config.js';
