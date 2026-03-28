@@ -1,7 +1,6 @@
 import { Command } from 'commander';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
   PollResponse,
@@ -21,7 +20,7 @@ import {
   type LocalAgentConfig,
   type UsageLimits,
 } from '../config.js';
-import { cloneOrUpdate, cleanupTaskDir, validatePathSegment } from '../codebase.js';
+import { checkoutWorktree, cleanupWorktree } from '../repo-cache.js';
 import { getValidToken, loadAuth, AuthError } from '../auth.js';
 import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
@@ -536,6 +535,7 @@ async function handleTask(
   let diffContent = '';
   let taskReviewDeps = reviewDeps;
   let taskCheckoutPath: string | null = null;
+  let taskBareRepoPath: string | null = null;
   let contextBlock: string | undefined;
 
   if (isIssueTask) {
@@ -562,35 +562,20 @@ async function handleTask(
       return { diffFetchFailed: true };
     }
 
-    // Clone/update codebase if configured, otherwise create a repo-scoped working directory
-    if (reviewDeps.codebaseDir) {
+    // Checkout codebase using persistent bare clone + git worktree
+    {
+      const codebaseDir = reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos');
       try {
-        const result = cloneOrUpdate(owner, repo, pr_number, reviewDeps.codebaseDir, task_id);
-        log(`  Codebase ${result.cloned ? 'cloned' : 'updated'}: ${result.localPath}`);
-        taskCheckoutPath = result.localPath;
-        // Pass the resolved local path as codebaseDir for this task
-        taskReviewDeps = { ...reviewDeps, codebaseDir: result.localPath };
+        const result = await checkoutWorktree(owner, repo, pr_number, codebaseDir, task_id);
+        log(`  Codebase ${result.cloned ? 'cloned' : 'cached'} → worktree: ${result.worktreePath}`);
+        taskCheckoutPath = result.worktreePath;
+        taskBareRepoPath = result.bareRepoPath;
+        taskReviewDeps = { ...reviewDeps, codebaseDir: result.worktreePath };
       } catch (err) {
         logWarn(
-          `  Warning: codebase clone failed: ${(err as Error).message}. Continuing with diff-only review.`,
+          `  Warning: worktree checkout failed: ${(err as Error).message}. Continuing with diff-only review.`,
         );
         taskReviewDeps = { ...reviewDeps, codebaseDir: null };
-      }
-    } else {
-      // No codebase_dir configured — create a repo-scoped working directory
-      try {
-        validatePathSegment(owner, 'owner');
-        validatePathSegment(repo, 'repo');
-        validatePathSegment(task_id, 'task_id');
-        const repoScopedDir = path.join(CONFIG_DIR, 'repos', owner, repo, task_id);
-        fs.mkdirSync(repoScopedDir, { recursive: true });
-        taskCheckoutPath = repoScopedDir;
-        taskReviewDeps = { ...reviewDeps, codebaseDir: repoScopedDir };
-        log(`  Working directory: ${repoScopedDir}`);
-      } catch (err) {
-        logWarn(
-          `  Warning: failed to create working directory: ${(err as Error).message}. Continuing without scoped cwd.`,
-        );
       }
     }
 
@@ -734,9 +719,9 @@ async function handleTask(
       await safeError(client, task_id, agentId, (err as Error).message, logger);
     }
   } finally {
-    // Clean up task-specific checkout to avoid disk bloat
-    if (taskCheckoutPath) {
-      cleanupTaskDir(taskCheckoutPath);
+    // Clean up task worktree (bare repo stays for reuse)
+    if (taskCheckoutPath && taskBareRepoPath) {
+      await cleanupWorktree(taskBareRepoPath, taskCheckoutPath);
     }
   }
   return {};

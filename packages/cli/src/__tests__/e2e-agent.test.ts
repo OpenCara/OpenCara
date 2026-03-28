@@ -58,6 +58,29 @@ vi.mock('../tool-executor.js', () => ({
 
 const mockedExecuteTool = vi.mocked(executeTool);
 
+// ── Mock repo-cache so git worktree operations don't need real git ──
+vi.mock('../repo-cache.js', async () => {
+  const _fs = await import('node:fs');
+  const _path = await import('node:path');
+  return {
+    checkoutWorktree: vi.fn(
+      async (owner: string, repo: string, _prNumber: number, baseDir: string, taskId: string) => {
+        const worktreePath = _path.join(baseDir, owner, `${repo}-worktrees`, taskId);
+        const bareRepoPath = _path.join(baseDir, owner, `${repo}.git`);
+        _fs.mkdirSync(worktreePath, { recursive: true });
+        return { worktreePath, bareRepoPath, cloned: true };
+      },
+    ),
+    cleanupWorktree: vi.fn(async (_bareRepoPath: string, worktreePath: string) => {
+      try {
+        _fs.rmSync(worktreePath, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }),
+  };
+});
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function makeDeps(agentId = 'test-agent'): {
@@ -487,11 +510,11 @@ describe('E2E Agent Scenarios', () => {
   });
 
   // ═══════════════════════════════════════════════════════════
-  // K. Repo-scoped working directory (no codebase_dir)
+  // K. Worktree-based checkout
   // ═══════════════════════════════════════════════════════════
 
-  describe('K. Repo-scoped working directory when codebase_dir is not configured', () => {
-    it('creates repo-scoped dir and passes it as cwd to review tool', async () => {
+  describe('K. Worktree-based checkout for review tasks', () => {
+    it('creates worktree and passes it as cwd to review tool', async () => {
       // reviewCount=3 → 2 worker tasks; agent claims first one
       const taskId = await server.injectTask({ reviewCount: 3 });
 
@@ -503,11 +526,11 @@ describe('E2E Agent Scenarios', () => {
         '.opencara',
         'repos',
         'test-org',
-        'test-repo',
+        'test-repo-worktrees',
         taskId,
       );
 
-      // Verify executeTool was called with the repo-scoped dir as cwd
+      // Verify executeTool was called with the worktree dir as cwd
       expect(mockedExecuteTool).toHaveBeenCalled();
       const toolCall = mockedExecuteTool.mock.calls[0];
       // executeTool args: (commandTemplate, prompt, timeoutMs, signal, vars, cwd)
@@ -515,14 +538,12 @@ describe('E2E Agent Scenarios', () => {
       expect(cwdArg).toBe(expectedDir);
 
       // Verify log message
-      expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining(`Working directory: ${expectedDir}`),
-      );
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('worktree:'));
 
       await stopAgent(agentPromise, server);
     }, 15000);
 
-    it('cleans up repo-scoped dir after task completion', async () => {
+    it('cleans up worktree after task completion', async () => {
       // reviewCount=3 → 2 worker tasks; agent claims first one
       const taskId = await server.injectTask({ reviewCount: 3 });
 
@@ -534,25 +555,24 @@ describe('E2E Agent Scenarios', () => {
         '.opencara',
         'repos',
         'test-org',
-        'test-repo',
+        'test-repo-worktrees',
         taskId,
       );
 
-      // Verify the tool was called with the repo-scoped dir
+      // Verify the tool was called with the worktree dir
       expect(mockedExecuteTool).toHaveBeenCalled();
       const cwdArg = mockedExecuteTool.mock.calls[0][5];
       expect(cwdArg).toBe(expectedDir);
 
-      // After task completion, cleanupTaskDir removes the directory
-      // Since mkdirSync actually runs, verify directory no longer exists
+      // After task completion, cleanupWorktree removes the directory
       expect(fs.existsSync(expectedDir)).toBe(false);
 
       await stopAgent(agentPromise, server);
     }, 15000);
 
-    it('does not use repo-scoped dir when codebase_dir is configured', async () => {
+    it('uses codebase_dir as base when configured', async () => {
       // reviewCount=3 → 2 worker tasks; agent claims first one
-      await server.injectTask({ reviewCount: 3 });
+      const taskId = await server.injectTask({ reviewCount: 3 });
 
       const deps = makeDeps('codebase-agent');
       const reviewDeps: ReviewExecutorDeps = {
@@ -570,12 +590,12 @@ describe('E2E Agent Scenarios', () => {
       );
       await advanceTime(2000);
 
-      // The "Working directory:" log should NOT appear (codebase_dir takes the clone path)
-      const logCalls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
-      const repoScopedLogs = logCalls.filter(
-        (c: string[]) => typeof c[0] === 'string' && c[0].includes('Working directory:'),
+      // When codebase_dir is set, it's used as the baseDir for worktree checkout
+      expect(mockedExecuteTool).toHaveBeenCalled();
+      const cwdArg = mockedExecuteTool.mock.calls[0][5];
+      expect(cwdArg).toBe(
+        path.join('/tmp/test-codebase', 'test-org', 'test-repo-worktrees', taskId),
       );
-      expect(repoScopedLogs).toHaveLength(0);
 
       await stopAgent(agentPromise, server);
     }, 15000);
