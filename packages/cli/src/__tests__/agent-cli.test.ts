@@ -241,7 +241,9 @@ describe('Agent CLI tests', () => {
       // Advance timers to let agents start polling and fail with auth errors
       await advanceTime(5000);
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('2 agent(s)'));
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('2 agent instance(s) running'),
+      );
     });
 
     it('--all with no agents configured exits', async () => {
@@ -454,6 +456,120 @@ describe('Agent CLI tests', () => {
 
       expect(console.error).toHaveBeenCalledWith('No agents configured in ~/.opencara/config.toml');
       exitSpy.mockRestore();
+    });
+
+    it('spawns multiple instances when instances config is set', async () => {
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude', tool: 'cli', command: 'echo test', instances: 3 }],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+
+      void startCmd!.parseAsync(['--all'], { from: 'user' });
+      await advanceTime(5000);
+
+      // Should spawn 3 instances (visible in the "N agent instance(s) running" log)
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('3 agent instance(s) running'),
+      );
+    });
+
+    it('--instances flag overrides config instances', async () => {
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude', tool: 'cli', command: 'echo test', instances: 1 }],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+
+      void startCmd!.parseAsync(['--all', '--instances', '2'], { from: 'user' });
+      await advanceTime(5000);
+
+      // CLI flag should override config: 2 instances instead of 1
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('2 agent instance(s) running'),
+      );
+    });
+
+    it('--instances with invalid value exits', async () => {
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+
+      await startCmd!.parseAsync(['--agent', '0', '--instances', '0'], { from: 'user' });
+
+      expect(console.error).toHaveBeenCalledWith('--instances must be a positive integer');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      exitSpy.mockRestore();
+    });
+
+    it('instance labels include instance number when > 1', async () => {
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [
+          { model: 'claude', tool: 'cli', command: 'echo test', name: 'MyAgent', instances: 2 },
+        ],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+
+      void startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
+      await advanceTime(5000);
+
+      // Each instance should have a numbered label
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('[MyAgent#1]'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('[MyAgent#2]'));
+    });
+
+    it('single instance does not add instance number to label', async () => {
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude', tool: 'cli', command: 'echo test', name: 'MyAgent' }],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+
+      void startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
+      await advanceTime(5000);
+
+      // Should use plain label without # suffix
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('[MyAgent]'));
+      // Should NOT have numbered labels
+      const logCalls = vi.mocked(console.log).mock.calls.map((c) => c[0]);
+      const hasNumberedLabel = logCalls.some(
+        (msg) => typeof msg === 'string' && msg.includes('[MyAgent#'),
+      );
+      expect(hasNumberedLabel).toBe(false);
     });
   });
 });

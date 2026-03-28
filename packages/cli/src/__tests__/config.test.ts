@@ -492,6 +492,66 @@ describe('config', () => {
     });
   });
 
+  describe('agent instances config', () => {
+    it('parses instances field from agent entries', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '[[agents]]\nmodel = "gpt-5.4"\ntool = "codex"\ninstances = 3\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents).toEqual([{ model: 'gpt-5.4', tool: 'codex', instances: 3 }]);
+    });
+
+    it('omits instances when not set (defaults to undefined)', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('[[agents]]\nmodel = "gpt-5.4"\ntool = "codex"\n');
+
+      const config = loadConfig();
+      expect(config.agents![0].instances).toBeUndefined();
+    });
+
+    it('warns and ignores instances < 1', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '[[agents]]\nmodel = "gpt-5.4"\ntool = "codex"\ninstances = 0\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents![0].instances).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('instances must be a positive integer'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('warns and ignores non-integer instances', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '[[agents]]\nmodel = "gpt-5.4"\ntool = "codex"\ninstances = 2.5\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents![0].instances).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('instances must be a positive integer'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('accepts instances = 1 (no-op, same as default)', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '[[agents]]\nmodel = "gpt-5.4"\ntool = "codex"\ninstances = 1\n',
+      );
+
+      const config = loadConfig();
+      expect(config.agents![0].instances).toBe(1);
+    });
+  });
+
   describe('agent name parsing', () => {
     it('parses name from agent entries', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
