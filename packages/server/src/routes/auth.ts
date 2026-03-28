@@ -32,13 +32,13 @@ async function safeFetch(url: string, init: RequestInit): Promise<Response | nul
 function isValidTokenResponse(data: Record<string, unknown>): data is {
   access_token: string;
   refresh_token?: string;
-  expires_in: number;
+  expires_in?: number;
   token_type: string;
 } {
   return (
     typeof data.access_token === 'string' &&
-    typeof data.token_type === 'string' &&
-    typeof data.expires_in === 'number'
+    typeof data.token_type === 'string'
+    // expires_in is optional — present for GitHub Apps but absent for OAuth Apps
     // refresh_token is optional — GitHub Apps include it, but we don't require it
   );
 }
@@ -195,14 +195,29 @@ export function authRoutes() {
 
     if (!isValidTokenResponse(data)) {
       const logger = c.get('logger');
-      logger.error('GitHub returned invalid token response', { action: 'auth_device_token' });
-      return apiError(c, 500, 'INTERNAL_ERROR', 'Invalid token response from GitHub');
+      // Log response shape for debugging (keys + types only, no values for security)
+      const shape = Object.fromEntries(
+        Object.entries(data).map(([k, v]) => [k, typeof v]),
+      );
+      logger.error('GitHub returned invalid token response', {
+        action: 'auth_device_token',
+        responseShape: shape,
+      });
+      return apiError(
+        c,
+        500,
+        'INTERNAL_ERROR',
+        `Invalid token response from GitHub (keys: ${Object.keys(data).join(', ')})`,
+      );
     }
+
+    // Default expires_in to 8 hours if not provided (OAuth Apps don't include it)
+    const DEFAULT_EXPIRES_IN = 8 * 60 * 60;
 
     return c.json<DeviceFlowTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in: data.expires_in,
+      expires_in: typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_EXPIRES_IN,
       token_type: data.token_type,
     });
   });
@@ -273,10 +288,12 @@ export function authRoutes() {
       return apiError(c, 500, 'INTERNAL_ERROR', 'Invalid token response from GitHub');
     }
 
+    const DEFAULT_EXPIRES_IN_REFRESH = 8 * 60 * 60;
+
     return c.json<RefreshTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in: data.expires_in,
+      expires_in: typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_EXPIRES_IN_REFRESH,
       token_type: data.token_type,
     });
   });

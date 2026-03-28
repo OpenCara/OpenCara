@@ -161,18 +161,22 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_code: initData.device_code }),
       });
-    } catch {
+    } catch (err) {
       // Network error (timeout, DNS, etc.) — treat as transient, retry
+      const code = (err as { cause?: { code?: string } })?.cause?.code ?? 'UNKNOWN';
+      log(`  [poll] network error: ${code}`);
       continue;
     }
 
     if (!tokenRes.ok) {
       // Non-200: transient error — continue polling
+      let errText = '';
       try {
-        await tokenRes.text(); // consume body
+        errText = await tokenRes.text();
       } catch {
         // ignore
       }
+      log(`  [poll] server returned ${tokenRes.status}: ${errText.slice(0, 120)}`);
       continue;
     }
 
@@ -184,6 +188,7 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
       body = (await tokenRes.json()) as Record<string, unknown>;
     } catch {
       // Malformed 200 body — treat as transient, continue polling
+      log('  [poll] malformed JSON response');
       continue;
     }
 
@@ -202,9 +207,13 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
       if (errorStr === 'slow_down') {
         // slow_down — increase interval by 5 seconds
         interval += 5000;
+        log('  [poll] slow_down — increasing interval');
       }
 
       // authorization_pending or other — continue polling
+      if (errorStr !== 'authorization_pending') {
+        log(`  [poll] GitHub error: ${errorStr}`);
+      }
       continue;
     }
 

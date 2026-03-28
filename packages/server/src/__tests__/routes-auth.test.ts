@@ -387,7 +387,7 @@ describe('Auth Routes', () => {
       expect(res.status).toBe(500);
       const body = await res.json();
       expect(body.error.code).toBe('INTERNAL_ERROR');
-      expect(body.error.message).toBe('Invalid token response from GitHub');
+      expect(body.error.message).toContain('Invalid token response from GitHub');
     });
 
     it('rate limits after 10 requests per IP per minute', async () => {
@@ -570,7 +570,7 @@ describe('Auth Routes', () => {
       expect(res.status).toBe(500);
       const body = await res.json();
       expect(body.error.code).toBe('INTERNAL_ERROR');
-      expect(body.error.message).toBe('Invalid token response from GitHub');
+      expect(body.error.message).toContain('Invalid token response from GitHub');
     });
 
     it('rate limits after 10 requests per IP per minute', async () => {
