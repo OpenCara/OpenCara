@@ -12,20 +12,50 @@ Central coordinator, planner, and product owner. Reads GitHub events, triages is
 
 ## Event Sources
 
-PM responds to two types of events:
+PM responds to three types of events (in priority order):
 
-1. **GitHub polling** — poll issues and PRs via `gh` CLI (CronCreate, every 5 minutes)
+1. **Webhook events** (primary) — real-time GitHub events via local webhook receiver
 2. **Agent completion messages** — received directly via SendMessage from dev agents after they merge a PR
+3. **GitHub polling** (fallback) — periodic full reconciliation via `scripts/poll-github.sh`
 
-Agent completion messages are the **faster path** — PM should act on them immediately to dispatch newly unblocked issues. When a dev agent sends "Completed issue #N. PR #M merged.", PM should:
+### Webhook Events (Primary)
+
+A local webhook receiver (`scripts/github-webhook.py`) runs on port 8765 and writes GitHub events to `.claude/github-events.jsonl`. The PM processes these using:
+
+```bash
+# Process and consume webhook events — outputs PM-actionable notifications, then truncates the file
+# Notification types: TRIAGE, DISPATCH, HUMAN_COMMENT, HUMAN_REVIEW, CI_FAILED
+scripts/process-webhook-events.sh
+```
+
+Each notification type maps to a PM action:
+
+- **TRIAGE** — New issue opened → triage, label, add to board as Backlog
+- **DISPATCH** — Issue moved to Ready on board → check dependencies, dispatch agent
+- **HUMAN_COMMENT** — Human commented on issue/PR → may need PM response
+- **HUMAN_REVIEW** — Human submitted PR review → may need attention
+- **CI_FAILED** — CI workflow failed on main → investigate immediately
+
+To read raw events without consuming them:
+
+```bash
+scripts/read-webhook-events.sh              # Show unread events (cursor-tracked)
+scripts/read-webhook-events.sh --all        # Show all events
+scripts/read-webhook-events.sh --tail       # Continuously watch for new events
+scripts/read-webhook-events.sh --clear      # Mark all as read
+```
+
+### Agent Completion Messages
+
+The **faster path** for task lifecycle — PM should act on them immediately. When a dev agent sends "Completed issue #N. PR #M merged.", PM should:
 
 - Check the dependency DAG for issues unblocked by #N
 - Dispatch all newly unblocked agents in parallel
 - Update docs/PLAN.md and pm-notebook.md
 
-## GitHub Polling
+### GitHub Polling (Fallback / Reconciliation)
 
-Use `scripts/poll-github.sh` to check for new or changed issues and PRs:
+Use `scripts/poll-github.sh` for periodic full state reconciliation (every 30 minutes, or on demand). This catches anything the webhook might have missed:
 
 ```bash
 # Returns JSON with: open_issues, closed_issues, open_prs, merged_prs, board
@@ -41,6 +71,8 @@ scripts/list-issues-by-status.sh <STATUS>
 ```
 
 Compare results against `.claude/pm-notebook.md` to identify unprocessed items.
+
+**Note on API costs**: `poll-github.sh` uses REST API for issues/PRs (0 GraphQL points) and paginated GraphQL for board status (~2 points per 100 items). `set-issue-status.sh` uses a targeted GraphQL query (~1 point per call). The webhook-first approach eliminates most API usage.
 
 ## State Tracking
 

@@ -294,12 +294,12 @@ Parent issue: #445
 
 ## Post-M17 Fixes (2026-03-28)
 
-| Issue | Agent      | PR   | Description                                                    |
-| ----- | ---------- | ---- | -------------------------------------------------------------- |
-| #551  | server-dev | #552 | Fix race condition in summary task creation [DONE]             |
-| #555  | server-dev | #558 | Add preferred_models support for summarizer config [DONE]      |
+| Issue | Agent      | PR   | Description                                                      |
+| ----- | ---------- | ---- | ---------------------------------------------------------------- |
+| #551  | server-dev | #552 | Fix race condition in summary task creation [DONE]               |
+| #555  | server-dev | #558 | Add preferred_models support for summarizer config [DONE]        |
 | #557  | cli-dev    | #559 | Backward-compatible aliases for renamed repo filter modes [DONE] |
-| #560  | cli-dev    | --   | Keep heartbeat alive during review execution [IN PROGRESS]     |
+| #560  | cli-dev    | --   | Keep heartbeat alive during review execution [IN PROGRESS]       |
 
 ## Open Issues
 

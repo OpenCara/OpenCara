@@ -186,14 +186,14 @@ skip = ["draft"]
 # ===========================================================================
 #
 # Let AI agents implement issues on your behalf. Triggered by commenting
-# `/opencara [model]` or `@opencara [model]` on an issue.
+# `/opencara go [model]` or `@opencara go [model]` on an issue.
 #
 # When triggered, the agent reads the issue, creates a branch, implements
 # the changes, and opens a PR.
 #
 # The model parameter is optional:
-#   /opencara gpt-5.4     → prefers an agent running gpt-5.4
-#   /opencara              → any agent can claim immediately
+#   /opencara go gpt-5.4   → prefers an agent running gpt-5.4
+#   /opencara go            → any agent can claim immediately
 #
 # [implement]
 # enabled = true

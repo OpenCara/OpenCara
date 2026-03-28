@@ -302,7 +302,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 
 - #423 [server-dev, P2, M] Add model/tool constraint for synthesizer in .opencara.toml — **BACKLOG**
 - #424 [architect, P1, L] Reorganize .opencara.toml into modular feature sections (v2 config) — **BACKLOG**
-- #427 [cli-dev, P2, S] Add --verbose mode to log tool stdout/stderr — **BACKLOG**
+- #427 [cli-dev, P2, S] Add --verbose mode to log tool stdout/stderr — **IN REVIEW** (PR #573 merged 2026-03-28, QA pending)
 - #428 [architect, P2, S] Add amp to tool registry and update contributor docs — **BACKLOG** (deferred — amp -x requires paid credits, 402 error, closed)
 - #430 [pm, P3, XS] Update docs to use canonical tool names from registry — **DONE** (agent-guide.md claude-code→claude)
 - #431 [pm, P2, M] Improve local-agent.md as comprehensive contributor guide — **DONE** (commit 5042484, closed)
@@ -463,13 +463,13 @@ Parent: #480
 
 Parent: #564 — CLI Agent Implementation/Fix Mode
 
-| # | Title | Agent | Status | Depends On |
-|---|-------|-------|--------|------------|
-| #566 | Add implement/fix types to shared package | architect | Backlog | — |
-| #568 | Handle issue labeled event for implement tasks | server-dev | Backlog | #566 |
-| #567 | Handle PR comment /opencara fix for fix tasks | server-dev | Backlog | #566 |
-| #569 | Implement task executor — issue to branch to AI to PR | cli-dev | Backlog | #566, #568 |
-| #570 | Fix task executor — PR comments to AI to push | cli-dev | Backlog | #566, #567 |
+| #    | Title                                                     | Agent      | Status  | Depends On |
+| ---- | --------------------------------------------------------- | ---------- | ------- | ---------- |
+| #566 | Add implement/fix types to shared package                 | architect  | Backlog | —          |
+| #568 | Handle `/opencara go` comment trigger for implement tasks | server-dev | Backlog | #566       |
+| #567 | Handle PR comment /opencara fix for fix tasks             | server-dev | Backlog | #566       |
+| #569 | Implement task executor — issue to branch to AI to PR     | cli-dev    | Backlog | #566, #568 |
+| #570 | Fix task executor — PR comments to AI to push             | cli-dev    | Backlog | #566, #567 |
 
 Execution: Phase 1 (#566 shared) → Phase 2 (#568+#567 server, parallel) → Phase 3 (#569+#570 cli, parallel)
 
@@ -480,13 +480,16 @@ Execution: Phase 1 (#566 shared) → Phase 2 (#568+#567 server, parallel) → Ph
 ### Dispatch queue (Ready)
 
 **cli-dev** (sequential):
-- #427 [cli-dev, P2, S] Add --verbose mode for debugging — **IN PROGRESS** (cli-dev-427 dispatched, board→in-progress)
-- #565 [cli-dev, P2, M] Multi-instance agent — **READY** (after #427)
+
+- #427 — **IN REVIEW** (PR #573 merged 2026-03-28, QA pending)
+- #565 [cli-dev, P2, M] Multi-instance agent — **READY** (next to dispatch after #427 QA)
 
 **server-dev**:
+
 - (none ready)
 
 **Pending team-lead review:**
+
 - Epic #564 sub-issues (#566-#570) — all Backlog, team-lead will prioritize later
 
 ### Closed (2026-03-28)
@@ -515,6 +518,7 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Recently processed
 
+- PR #573 [cli-dev] merged 2026-03-28 — Add --verbose mode for debugging (#427)
 - PR #572 [cli-dev] merged 2026-03-28 — Auto-cleanup cloned codebase repos (#553)
 - PR #571 [server-dev] merged 2026-03-28 — Prefer model diversity across all tasks in a group (#554)
 - PR #563 [cli-dev] merged 2026-03-28 — Persistent repo cache with git worktrees (#473)
