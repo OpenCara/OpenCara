@@ -1651,7 +1651,9 @@ agentCommand
           userOrgs = fallbackOrgs;
           console.log(`Org memberships (from config): ${[...userOrgs].join(', ')}`);
         } else {
-          console.warn('⚠ Failed to fetch org memberships — private mode agents may not see org repos');
+          console.warn(
+            '⚠ Failed to fetch org memberships — private mode agents may not see org repos',
+          );
         }
       } else if (needsOrgs && userOrgs.size > 0) {
         console.log(`Org memberships: ${[...userOrgs].join(', ')}`);
