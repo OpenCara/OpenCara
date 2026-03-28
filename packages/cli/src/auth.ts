@@ -355,7 +355,7 @@ export async function resolveUser(
 
 /**
  * Fetch the authenticated user's org memberships from GitHub.
- * Returns a Set of org login names (lowercased for case-insensitive matching).
+ * Returns a Set of org login names.
  * Returns an empty set on failure (non-critical — agent can still work without orgs).
  */
 export async function fetchUserOrgs(
