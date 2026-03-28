@@ -431,7 +431,7 @@ describe('webhook.ts edge cases', () => {
         html_url: 'https://github.com/o/r/pull/1',
         diff_url: 'https://github.com/o/r/pull/1.diff',
         base: { ref: 'main' },
-        head: { ref: 'feat' },
+        head: { ref: 'feat', sha: 'abc123' },
       },
     });
     expect(res.status).toBe(200);
@@ -473,7 +473,7 @@ describe('webhook.ts edge cases', () => {
         html_url: 'https://github.com/o/r/pull/1',
         diff_url: 'https://github.com/o/r/pull/1.diff',
         base: { ref: 'main' },
-        head: { ref: 'feat' },
+        head: { ref: 'feat', sha: 'abc123' },
       },
     });
     expect(res.status).toBe(503);
@@ -515,7 +515,7 @@ describe('webhook.ts edge cases', () => {
         html_url: 'https://github.com/o/r/pull/1',
         diff_url: 'https://github.com/o/r/pull/1.diff',
         base: { ref: 'main' },
-        head: { ref: 'feat' },
+        head: { ref: 'feat', sha: 'abc123' },
       },
     });
     expect(res.status).toBe(503);
@@ -537,7 +537,7 @@ describe('webhook.ts edge cases', () => {
           html_url: 'https://github.com/o/r/pull/1',
           diff_url: 'https://github.com/o/r/pull/1.diff',
           base: { ref: 'main' },
-          head: { ref: 'feat' },
+          head: { ref: 'feat', sha: 'abc123' },
           draft: false,
           labels: [],
         };

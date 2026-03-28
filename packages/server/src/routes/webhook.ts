@@ -150,6 +150,7 @@ const FEATURE_ROLE_MAP: Partial<Record<Feature, TaskRole>> = {
   dedup_pr: 'pr_dedup',
   dedup_issue: 'issue_dedup',
   triage: 'issue_triage',
+  fix: 'fix',
 };
 
 /**
@@ -806,6 +807,19 @@ async function handleIssueClose(
   }
 }
 
+/**
+ * Parse a fix command from a comment body.
+ * Matches `/opencara fix [model]` or `@opencara fix [model]`.
+ * Returns the optional target model, or null if not a fix command.
+ */
+export function parseFixCommand(body: string): { targetModel?: string } | null {
+  const trimmed = body.trim();
+  // Match /opencara fix or @opencara fix (case-insensitive), optional model after
+  const match = trimmed.match(/^[/@]opencara\s+fix(?:\s+(\S+))?/i);
+  if (!match) return null;
+  return { targetModel: match[1] || undefined };
+}
+
 async function handleIssueComment(
   github: GitHubService,
   store: DataStore,
@@ -843,15 +857,14 @@ async function handleIssueComment(
     return new Response('Service Unavailable', { status: 503 });
   }
 
-  const { config, parseError } = await github.loadReviewConfig(
+  const { config: fullConfig, parseError: fullParseError } = await github.loadOpenCaraConfig(
     owner,
     repo,
     pr.base.ref,
-    prNumber,
     token,
   );
 
-  if (parseError) {
+  if (fullParseError) {
     logger.info('Aborting comment trigger due to .opencara.toml parse error', {
       owner,
       repo,
@@ -860,7 +873,31 @@ async function handleIssueComment(
     return new Response('Service Unavailable', { status: 503 });
   }
 
-  const triggerCommand = config.trigger.comment;
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+
+  // Check for fix command first
+  const fixCmd = parseFixCommand(comment.body);
+  if (fixCmd) {
+    return handleFixCommand(
+      github,
+      store,
+      installation.id,
+      owner,
+      repo,
+      prNumber,
+      pr,
+      fullConfig,
+      reviewConfig,
+      comment,
+      fixCmd,
+      repository.private ?? false,
+      token,
+      logger,
+    );
+  }
+
+  // Check for review trigger command
+  const triggerCommand = reviewConfig.trigger.comment;
   const body = comment.body.trim().toLowerCase();
   const cmd = triggerCommand.toLowerCase();
   // Only slash-commands get an @-alias (e.g. /opencara review → @opencara review).
@@ -899,12 +936,105 @@ async function handleIssueComment(
       pr.diff_url,
       pr.base.ref,
       pr.head.ref,
-      config,
+      reviewConfig,
       repository.private ?? false,
       logger,
     );
   } catch (err) {
     logger.error('Failed to create task for PR', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      prNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+/**
+ * Handle `/opencara fix [model]` command on a PR comment.
+ * Creates a fix task group with PR review comments.
+ */
+async function handleFixCommand(
+  github: GitHubService,
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  pr: NonNullable<Awaited<ReturnType<GitHubService['fetchPrDetails']>>>,
+  fullConfig: OpenCaraConfig,
+  reviewConfig: ReviewConfig,
+  comment: IssueCommentPayload['comment'],
+  fixCmd: { targetModel?: string },
+  isPrivate: boolean,
+  token: string,
+  logger: Logger,
+): Promise<Response> {
+  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
+    logger.info('Fix command ignored — not a trusted contributor', {
+      user: comment.user.login,
+      association: comment.author_association,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  if (!fullConfig.fix?.enabled) {
+    logger.info('Fix command ignored — [fix].enabled is not true', {
+      owner,
+      repo,
+      prNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  logger.info('Fix command received', {
+    user: comment.user.login,
+    owner,
+    repo,
+    prNumber,
+    targetModel: fixCmd.targetModel,
+  });
+
+  // Fetch PR review comments
+  let prReviewComments = '';
+  try {
+    prReviewComments = await github.fetchPrReviewComments(owner, repo, prNumber, token);
+  } catch (err) {
+    logger.warn('Failed to fetch PR review comments', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      prNumber,
+    });
+  }
+
+  const fixConfig = fullConfig.fix;
+  const timeoutMs = parseTimeoutMs(fixConfig.timeout);
+  const baseTask = buildBaseTask(
+    installationId,
+    owner,
+    repo,
+    prNumber,
+    pr.html_url,
+    pr.diff_url,
+    pr.base.ref,
+    pr.head.ref,
+    reviewConfig,
+    isPrivate,
+    timeoutMs,
+  );
+
+  try {
+    await createTaskGroup(store, 'fix', fixConfig, baseTask, logger, {
+      pr_review_comments: prReviewComments,
+      head_sha: pr.head.sha,
+      ...(fixCmd.targetModel ? { target_model: fixCmd.targetModel } : {}),
+    });
+  } catch (err) {
+    logger.error('Failed to create fix task group', {
       error: err instanceof Error ? err.message : String(err),
       owner,
       repo,

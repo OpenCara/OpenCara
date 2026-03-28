@@ -51,6 +51,14 @@ export interface GitHubService {
     token: string,
   ): Promise<{ config: OpenCaraConfig; parseError: boolean }>;
 
+  // PR review comments (for fix tasks)
+  fetchPrReviewComments(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    token: string,
+  ): Promise<string>;
+
   // Issue management
   updateIssue(
     owner: string,
@@ -154,6 +162,55 @@ export class RealGitHubService implements GitHubService {
   ): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
     // Note: prNumber=0 is a dummy — loadOpenCaraConfig doesn't post PR comments for issue events
     return loadOpenCaraConfigImpl(owner, repo, ref, 0, token, this.logger);
+  }
+
+  async fetchPrReviewComments(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    token: string,
+  ): Promise<string> {
+    const lines: string[] = [];
+
+    // Fetch inline review comments (line-level)
+    const commentsRes = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100`,
+      { token },
+    );
+    if (commentsRes.ok) {
+      const comments = (await commentsRes.json()) as Array<{
+        user: { login: string };
+        path: string;
+        line?: number | null;
+        original_line?: number | null;
+        body: string;
+      }>;
+      for (const c of comments) {
+        const line = c.line ?? c.original_line ?? null;
+        const loc = line ? `${c.path}:${line}` : c.path;
+        lines.push(`[${c.user.login}] ${loc}\n${c.body}`);
+      }
+    }
+
+    // Fetch general review bodies
+    const reviewsRes = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+      { token },
+    );
+    if (reviewsRes.ok) {
+      const reviews = (await reviewsRes.json()) as Array<{
+        user: { login: string };
+        state: string;
+        body: string | null;
+      }>;
+      for (const r of reviews) {
+        if (r.body && r.body.trim().length > 0) {
+          lines.push(`[${r.user.login}] (${r.state})\n${r.body}`);
+        }
+      }
+    }
+
+    return lines.join('\n\n---\n\n');
   }
 
   async updateIssue(
@@ -334,7 +391,7 @@ export class NoOpGitHubService implements GitHubService {
       html_url: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
       diff_url: `https://github.com/${owner}/${repo}/pull/${prNumber}.diff`,
       base: { ref: 'main' },
-      head: { ref: 'dev' },
+      head: { ref: 'dev', sha: 'abc123' },
       draft: false,
       labels: [],
     };
@@ -348,6 +405,11 @@ export class NoOpGitHubService implements GitHubService {
   async loadOpenCaraConfig(): Promise<{ config: OpenCaraConfig; parseError: boolean }> {
     this.logger.info('Dev mode — using default opencara config');
     return { config: DEFAULT_OPENCARA_CONFIG, parseError: false };
+  }
+
+  async fetchPrReviewComments(owner: string, repo: string, prNumber: number): Promise<string> {
+    this.logger.info('Dev mode — returning mock PR review comments', { owner, repo, prNumber });
+    return `[mock-reviewer] src/index.ts:10\nPlease fix this bug`;
   }
 
   async updateIssue(

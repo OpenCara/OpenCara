@@ -23,7 +23,12 @@ import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
-import { createTaskGroup, createTaskForPR, MAX_PROMPT_LENGTH } from '../routes/webhook.js';
+import {
+  createTaskGroup,
+  createTaskForPR,
+  MAX_PROMPT_LENGTH,
+  parseFixCommand,
+} from '../routes/webhook.js';
 import { Logger } from '../logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -66,7 +71,7 @@ class TestGitHubService implements GitHubService {
     html_url: 'https://github.com/acme/widget/pull/1',
     diff_url: 'https://github.com/acme/widget/pull/1.diff',
     base: { ref: 'main' },
-    head: { ref: 'feat/test' },
+    head: { ref: 'feat/test', sha: 'abc123' },
     draft: false,
     labels: [],
   };
@@ -91,6 +96,9 @@ class TestGitHubService implements GitHubService {
     return { config: this.openCaraConfig, parseError: this.openCaraConfigParseError };
   }
 
+  async fetchPrReviewComments(): Promise<string> {
+    return '[mock-reviewer] src/index.ts:10\nPlease fix this bug';
+  }
   async updateIssue(): Promise<void> {}
   async fetchIssueBody(): Promise<string | null> {
     return null;
@@ -98,6 +106,13 @@ class TestGitHubService implements GitHubService {
   async createIssue(): Promise<number> {
     return 0;
   }
+  async listIssueComments(): Promise<Array<{ id: number; body: string }>> {
+    return [];
+  }
+  async createIssueComment(): Promise<number> {
+    return 0;
+  }
+  async updateIssueComment(): Promise<void> {}
 }
 
 function makePRPayload(overrides: Record<string, unknown> = {}) {
@@ -110,7 +125,7 @@ function makePRPayload(overrides: Record<string, unknown> = {}) {
       html_url: 'https://github.com/acme/widget/pull/42',
       diff_url: 'https://github.com/acme/widget/pull/42.diff',
       base: { ref: 'main' },
-      head: { ref: 'feat/test' },
+      head: { ref: 'feat/test', sha: 'abc123' },
       draft: false,
       labels: [],
     },
@@ -129,6 +144,29 @@ function makeIssuePayload(overrides: Record<string, unknown> = {}) {
       title: 'Bug: something is broken',
       body: 'Steps to reproduce...',
       user: { login: 'alice' },
+    },
+    ...overrides,
+  };
+}
+
+function makeCommentPayload(commentBody: string, overrides: Record<string, unknown> = {}) {
+  return {
+    action: 'created',
+    installation: { id: 999 },
+    repository: {
+      owner: { login: 'acme' },
+      name: 'widget',
+      default_branch: 'main',
+      private: false,
+    },
+    issue: {
+      number: 42,
+      pull_request: { url: 'https://api.github.com/repos/acme/widget/pulls/42' },
+    },
+    comment: {
+      body: commentBody,
+      user: { login: 'alice' },
+      author_association: 'OWNER',
     },
     ...overrides,
   };
@@ -990,6 +1028,255 @@ describe('Webhook refactor — separate task creation', () => {
       const groupId = tasks[0].group_id;
       const groupTasks = await store.getTasksByGroup(groupId);
       expect(groupTasks).toHaveLength(3);
+    });
+  });
+
+  // ── parseFixCommand unit tests ────────────────────────────────
+
+  describe('parseFixCommand', () => {
+    it('parses /opencara fix without model', () => {
+      const result = parseFixCommand('/opencara fix');
+      expect(result).toEqual({ targetModel: undefined });
+    });
+
+    it('parses /opencara fix with model', () => {
+      const result = parseFixCommand('/opencara fix gpt-5.4');
+      expect(result).toEqual({ targetModel: 'gpt-5.4' });
+    });
+
+    it('parses @opencara fix without model', () => {
+      const result = parseFixCommand('@opencara fix');
+      expect(result).toEqual({ targetModel: undefined });
+    });
+
+    it('parses @opencara fix with model', () => {
+      const result = parseFixCommand('@opencara fix claude-opus');
+      expect(result).toEqual({ targetModel: 'claude-opus' });
+    });
+
+    it('is case-insensitive', () => {
+      expect(parseFixCommand('/OpenCara Fix')).toEqual({ targetModel: undefined });
+      expect(parseFixCommand('/OPENCARA FIX gpt-5')).toEqual({ targetModel: 'gpt-5' });
+    });
+
+    it('handles leading/trailing whitespace', () => {
+      expect(parseFixCommand('  /opencara fix  ')).toEqual({ targetModel: undefined });
+      expect(parseFixCommand('  @opencara fix  gpt-5  ')).toEqual({ targetModel: 'gpt-5' });
+    });
+
+    it('returns null for non-fix commands', () => {
+      expect(parseFixCommand('/opencara review')).toBeNull();
+      expect(parseFixCommand('@opencara review')).toBeNull();
+      expect(parseFixCommand('hello world')).toBeNull();
+      expect(parseFixCommand('')).toBeNull();
+    });
+
+    it('returns null for partial matches', () => {
+      expect(parseFixCommand('opencara fix')).toBeNull(); // missing / or @
+      expect(parseFixCommand('/opencarafix')).toBeNull(); // no space
+    });
+  });
+
+  // ── Fix command webhook tests ─────────────────────────────────
+
+  describe('Issue comment — fix command', () => {
+    const DEFAULT_FIX_CONFIG = {
+      enabled: true,
+      prompt: 'Fix the review comments.',
+      agentCount: 1,
+      timeout: '10m',
+      preferredModels: [] as string[],
+      preferredTools: [] as string[],
+      modelDiversityGraceMs: 30_000,
+    };
+
+    it('/opencara fix creates a fix task when fix.enabled=true', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const res = await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('fix');
+      expect(tasks[0].task_type).toBe('fix');
+      expect(tasks[0].pr_number).toBe(42);
+      expect(tasks[0].pr_review_comments).toBeDefined();
+      expect(tasks[0].head_sha).toBe('abc123');
+    });
+
+    it('@opencara fix also triggers fix task creation', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const res = await sendWebhook(app, 'issue_comment', makeCommentPayload('@opencara fix'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('fix');
+    });
+
+    it('/opencara fix with model sets target_model', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeCommentPayload('/opencara fix gpt-5.4'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].target_model).toBe('gpt-5.4');
+    });
+
+    it('fix command without model does not set target_model', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const res = await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].target_model).toBeUndefined();
+    });
+
+    it('fix command is ignored when fix.enabled=false', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: { ...DEFAULT_FIX_CONFIG, enabled: false },
+      };
+
+      const res = await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('fix command is ignored when no [fix] section in config', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        // no fix section
+      };
+
+      const res = await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('fix command from untrusted contributor is ignored', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const payload = makeCommentPayload('/opencara fix', {
+        comment: {
+          body: '/opencara fix',
+          user: { login: 'random' },
+          author_association: 'NONE',
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('duplicate fix commands are deduplicated', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+      await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('/opencara review still works alongside fix command support', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      // Send review command
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeCommentPayload('/opencara review'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('review');
+    });
+
+    it('fix task includes PR diff URL and branch info', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara fix'), env);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].diff_url).toBe('https://github.com/acme/widget/pull/1.diff');
+      expect(tasks[0].base_ref).toBe('main');
+      expect(tasks[0].head_ref).toBe('feat/test');
+    });
+
+    it('fix command on non-PR issue is ignored', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const payload = makeCommentPayload('/opencara fix', {
+        issue: {
+          number: 42,
+          // no pull_request field → not a PR
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
     });
   });
 });

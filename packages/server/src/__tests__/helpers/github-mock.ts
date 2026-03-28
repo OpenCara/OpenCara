@@ -86,7 +86,7 @@ export function createGitHubMock(): GitHubMock {
             html_url: `https://github.com/test/repo/pull/${prNumber}`,
             diff_url: `https://github.com/test/repo/pull/${prNumber}.diff`,
             base: { ref: 'main' },
-            head: { ref: 'feat/test' },
+            head: { ref: 'feat/test', sha: 'abc123' },
             draft: false,
             labels: [],
           }),
@@ -146,7 +146,7 @@ export class MockGitHubService implements GitHubService {
       html_url: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
       diff_url: `https://github.com/${owner}/${repo}/pull/${prNumber}.diff`,
       base: { ref: 'main' },
-      head: { ref: 'feat/test' },
+      head: { ref: 'feat/test', sha: 'abc123' },
       draft: false,
       labels: [],
     };
@@ -181,6 +181,16 @@ export class MockGitHubService implements GitHubService {
       args: { owner, repo, ref, token },
     });
     return { config: this.openCaraConfig, parseError: this.openCaraConfigParseError };
+  }
+
+  async fetchPrReviewComments(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    token: string,
+  ): Promise<string> {
+    this.calls.push({ method: 'fetchPrReviewComments', args: { owner, repo, prNumber, token } });
+    return '[mock-reviewer] src/index.ts:10\nPlease fix this bug';
   }
 
   async updateIssue(

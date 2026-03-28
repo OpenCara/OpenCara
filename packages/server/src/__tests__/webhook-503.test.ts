@@ -54,7 +54,7 @@ class FailableGitHubService implements GitHubService {
     html_url: 'https://github.com/acme/widget/pull/1',
     diff_url: 'https://github.com/acme/widget/pull/1.diff',
     base: { ref: 'main' },
-    head: { ref: 'feat/test' },
+    head: { ref: 'feat/test', sha: 'abc123' },
     draft: false,
     labels: [],
   };
@@ -109,6 +109,9 @@ class FailableGitHubService implements GitHubService {
     };
   }
 
+  async fetchPrReviewComments(): Promise<string> {
+    return '';
+  }
   async updateIssue(): Promise<void> {}
   async fetchIssueBody(): Promise<string | null> {
     return null;
@@ -116,6 +119,13 @@ class FailableGitHubService implements GitHubService {
   async createIssue(): Promise<number> {
     return 0;
   }
+  async listIssueComments(): Promise<Array<{ id: number; body: string }>> {
+    return [];
+  }
+  async createIssueComment(): Promise<number> {
+    return 0;
+  }
+  async updateIssueComment(): Promise<void> {}
 }
 
 function makePRPayload(overrides: Record<string, unknown> = {}) {
@@ -128,7 +138,7 @@ function makePRPayload(overrides: Record<string, unknown> = {}) {
       html_url: 'https://github.com/acme/widget/pull/42',
       diff_url: 'https://github.com/acme/widget/pull/42.diff',
       base: { ref: 'main' },
-      head: { ref: 'feat/test' },
+      head: { ref: 'feat/test', sha: 'abc123' },
       draft: false,
       labels: [],
     },
@@ -241,7 +251,7 @@ describe('Webhook 503 — transient failure responses', () => {
           html_url: 'https://github.com/acme/widget/pull/42',
           diff_url: 'https://github.com/acme/widget/pull/42.diff',
           base: { ref: 'main' },
-          head: { ref: 'feat/test' },
+          head: { ref: 'feat/test', sha: 'abc123' },
           draft: true,
           labels: [],
         },
