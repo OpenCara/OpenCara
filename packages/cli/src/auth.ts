@@ -352,3 +352,37 @@ export async function resolveUser(
 
   return { login: data.login, id: data.id };
 }
+
+/**
+ * Fetch the authenticated user's org memberships from GitHub.
+ * Returns a Set of org login names (lowercased for case-insensitive matching).
+ * Returns an empty set on failure (non-critical — agent can still work without orgs).
+ */
+export async function fetchUserOrgs(
+  token: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<Set<string>> {
+  try {
+    const res = await fetchFn('https://api.github.com/user/orgs?per_page=100', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+
+    if (!res.ok) {
+      return new Set();
+    }
+
+    const data = (await res.json()) as Array<{ login?: string }>;
+    const orgs = new Set<string>();
+    for (const org of data) {
+      if (typeof org.login === 'string') {
+        orgs.add(org.login);
+      }
+    }
+    return orgs;
+  } catch {
+    return new Set();
+  }
+}

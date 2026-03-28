@@ -163,14 +163,23 @@ export function isRepoAllowed(
   targetOwner: string,
   targetRepo: string,
   agentOwner?: string,
+  userOrgs?: ReadonlySet<string>,
 ): boolean {
   if (!repoConfig) return true; // null = accept all
   const fullRepo = `${targetOwner}/${targetRepo}`;
   switch (repoConfig.mode) {
     case 'public':
       return true;
-    case 'private':
-      return agentOwner === targetOwner;
+    case 'private': {
+      const hasAccess =
+        agentOwner === targetOwner || (userOrgs != null && userOrgs.has(targetOwner));
+      if (!hasAccess) return false;
+      // If list is specified, further restrict to listed repos
+      if (repoConfig.list && repoConfig.list.length > 0) {
+        return repoConfig.list.includes(fullRepo);
+      }
+      return true;
+    }
     case 'whitelist':
       return (repoConfig.list ?? []).includes(fullRepo);
     case 'blacklist':

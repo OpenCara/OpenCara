@@ -18,10 +18,51 @@ describe('isRepoAllowed edge cases', () => {
     expect(isRepoAllowed({ mode: 'public' }, 'any', 'repo')).toBe(true);
   });
 
-  it('mode=private checks agentOwner against targetOwner', () => {
+  it('mode=private allows own repos', () => {
     expect(isRepoAllowed({ mode: 'private' }, 'owner', 'repo', 'owner')).toBe(true);
     expect(isRepoAllowed({ mode: 'private' }, 'owner', 'repo', 'other')).toBe(false);
     expect(isRepoAllowed({ mode: 'private' }, 'owner', 'repo')).toBe(false);
+  });
+
+  it('mode=private allows org repos via userOrgs', () => {
+    const orgs = new Set(['my-org', 'other-org']);
+    expect(isRepoAllowed({ mode: 'private' }, 'my-org', 'repo', 'alice', orgs)).toBe(true);
+    expect(isRepoAllowed({ mode: 'private' }, 'other-org', 'repo', 'alice', orgs)).toBe(true);
+    expect(isRepoAllowed({ mode: 'private' }, 'unknown-org', 'repo', 'alice', orgs)).toBe(false);
+  });
+
+  it('mode=private with list narrows within accessible repos', () => {
+    const orgs = new Set(['my-org']);
+    const config = { mode: 'private' as const, list: ['my-org/allowed-repo'] };
+    expect(isRepoAllowed(config, 'my-org', 'allowed-repo', 'alice', orgs)).toBe(true);
+    expect(isRepoAllowed(config, 'my-org', 'other-repo', 'alice', orgs)).toBe(false);
+    // Not accessible org — rejected even if in list
+    expect(
+      isRepoAllowed(
+        { mode: 'private', list: ['unknown-org/repo'] },
+        'unknown-org',
+        'repo',
+        'alice',
+        orgs,
+      ),
+    ).toBe(false);
+  });
+
+  it('mode=private with list and own repos', () => {
+    const config = { mode: 'private' as const, list: ['alice/my-repo'] };
+    expect(isRepoAllowed(config, 'alice', 'my-repo', 'alice')).toBe(true);
+    expect(isRepoAllowed(config, 'alice', 'other-repo', 'alice')).toBe(false);
+  });
+
+  it('mode=private without list allows all own repos', () => {
+    expect(isRepoAllowed({ mode: 'private' }, 'alice', 'any-repo', 'alice')).toBe(true);
+  });
+
+  it('mode=private with empty list allows all accessible repos', () => {
+    const orgs = new Set(['my-org']);
+    expect(isRepoAllowed({ mode: 'private', list: [] }, 'my-org', 'repo', 'alice', orgs)).toBe(
+      true,
+    );
   });
 
   it('mode=whitelist checks list', () => {

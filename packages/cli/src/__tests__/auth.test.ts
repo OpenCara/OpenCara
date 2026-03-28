@@ -18,6 +18,7 @@ import {
   login,
   getValidToken,
   resolveUser,
+  fetchUserOrgs,
   getAuthFilePath,
   AuthError,
   type StoredAuth,
@@ -835,6 +836,74 @@ describe('auth', () => {
       await expect(resolveUser('ghu_token', fetchFn)).rejects.toThrow(
         'Invalid GitHub user response',
       );
+    });
+  });
+
+  describe('fetchUserOrgs', () => {
+    it('returns set of org logins on success', async () => {
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(
+          mockResponse([{ login: 'org-a' }, { login: 'org-b' }, { login: 'org-c' }]),
+        );
+
+      const result = await fetchUserOrgs('ghu_token', fetchFn);
+      expect(result).toEqual(new Set(['org-a', 'org-b', 'org-c']));
+    });
+
+    it('sends Bearer token in Authorization header', async () => {
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse([{ login: 'my-org' }]));
+
+      await fetchUserOrgs('ghu_my_token', fetchFn);
+
+      expect(fetchFn).toHaveBeenCalledWith(
+        'https://api.github.com/user/orgs?per_page=100',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer ghu_my_token',
+          }),
+        }),
+      );
+    });
+
+    it('returns empty set on HTTP error', async () => {
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse({}, 403));
+
+      const result = await fetchUserOrgs('bad_token', fetchFn);
+      expect(result).toEqual(new Set());
+    });
+
+    it('returns empty set on network error', async () => {
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockRejectedValueOnce(new Error('network error'));
+
+      const result = await fetchUserOrgs('ghu_token', fetchFn);
+      expect(result).toEqual(new Set());
+    });
+
+    it('skips entries without string login', async () => {
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(
+          mockResponse([{ login: 'valid-org' }, { login: 123 }, { name: 'no-login' }]),
+        );
+
+      const result = await fetchUserOrgs('ghu_token', fetchFn);
+      expect(result).toEqual(new Set(['valid-org']));
+    });
+
+    it('returns empty set for empty org list', async () => {
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse([]));
+
+      const result = await fetchUserOrgs('ghu_token', fetchFn);
+      expect(result).toEqual(new Set());
     });
   });
 

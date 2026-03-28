@@ -27,7 +27,7 @@ import {
   scanAndCleanStaleWorktrees,
   DEFAULT_CODEBASE_TTL_MS,
 } from '../codebase-cleanup.js';
-import { getValidToken, loadAuth, AuthError } from '../auth.js';
+import { getValidToken, loadAuth, fetchUserOrgs, AuthError } from '../auth.js';
 import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
 import {
@@ -339,6 +339,8 @@ async function pollLoop(
     signal?: AbortSignal;
     cleanupTracker?: CodebaseCleanupTracker;
     verbose?: boolean;
+    agentOwner?: string;
+    userOrgs?: ReadonlySet<string>;
   },
 ): Promise<void> {
   const {
@@ -352,6 +354,8 @@ async function pollLoop(
     signal,
     cleanupTracker,
     verbose,
+    agentOwner,
+    userOrgs,
   } = options;
   const { log, logError, logWarn } = logger;
 
@@ -396,7 +400,9 @@ async function pollLoop(
 
       // Filter tasks by repo config, then find first not exhausted by diff fetch failures
       const eligibleTasks = repoConfig
-        ? pollResponse.tasks.filter((t) => isRepoAllowed(repoConfig, t.owner, t.repo))
+        ? pollResponse.tasks.filter((t) =>
+            isRepoAllowed(repoConfig, t.owner, t.repo, agentOwner, userOrgs),
+          )
         : pollResponse.tasks;
       const task = eligibleTasks.find(
         (t) => (diffFailCounts.get(t.task_id) ?? 0) < MAX_DIFF_FETCH_ATTEMPTS,
@@ -1239,6 +1245,8 @@ export async function startAgent(
     versionOverride?: string | null;
     codebaseTtl?: string | null;
     verbose?: boolean;
+    agentOwner?: string;
+    userOrgs?: ReadonlySet<string>;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, {
@@ -1334,6 +1342,8 @@ export async function startAgent(
     signal: abortController.signal,
     cleanupTracker,
     verbose: options?.verbose,
+    agentOwner: options?.agentOwner,
+    userOrgs: options?.userOrgs,
   });
 
   // Final sweep: clean up any remaining tracked worktrees on shutdown
@@ -1392,8 +1402,15 @@ export async function startAgentRouter(): Promise<void> {
   }
 
   const storedAuth = loadAuth();
+  const agentOwner = storedAuth?.github_username;
   if (storedAuth) {
     logger.log(`Authenticated as ${storedAuth.github_username}`);
+  }
+
+  // Fetch org memberships for private repo filtering
+  const userOrgs = await fetchUserOrgs(oauthToken);
+  if (userOrgs.size > 0) {
+    logger.log(`Org memberships: ${[...userOrgs].join(', ')}`);
   }
 
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
@@ -1435,6 +1452,8 @@ export async function startAgentRouter(): Promise<void> {
       label,
       authToken: oauthToken,
       onTokenRefresh: () => getValidToken(config.platformUrl),
+      agentOwner,
+      userOrgs,
       usageLimits: config.usageLimits,
       versionOverride,
       codebaseTtl: config.codebaseTtl,
@@ -1461,6 +1480,8 @@ function startAgentByIndex(
   versionOverride?: string | null,
   verbose?: boolean,
   instancesOverride?: number,
+  agentOwner?: string,
+  userOrgs?: ReadonlySet<string>,
 ): Promise<void>[] | null {
   let commandTemplate: string | undefined;
   let agentConfig: LocalAgentConfig | undefined;
@@ -1538,6 +1559,8 @@ function startAgentByIndex(
         versionOverride,
         codebaseTtl: config.codebaseTtl,
         verbose,
+        agentOwner,
+        userOrgs,
       },
     ).finally(() => {
       routerRelay?.stop();
@@ -1599,8 +1622,15 @@ agentCommand
       }
 
       const storedAuth = loadAuth();
+      const agentOwner = storedAuth?.github_username;
       if (storedAuth) {
         console.log(`Authenticated as ${storedAuth.github_username}`);
+      }
+
+      // Fetch org memberships for private repo filtering
+      const userOrgs = await fetchUserOrgs(oauthToken);
+      if (userOrgs.size > 0) {
+        console.log(`Org memberships: ${[...userOrgs].join(', ')}`);
       }
 
       if (opts.all) {
@@ -1624,6 +1654,8 @@ agentCommand
             versionOverride,
             opts.verbose,
             instancesOverride,
+            agentOwner,
+            userOrgs,
           );
           if (agentPromises) {
             promises.push(...agentPromises);
@@ -1676,6 +1708,8 @@ agentCommand
           versionOverride,
           opts.verbose,
           instancesOverride,
+          agentOwner,
+          userOrgs,
         );
         if (!agentPromises) {
           // startAgentByIndex already logged the specific reason
