@@ -192,6 +192,36 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
+  async completeWorkerAndMaybeCreateSummary(
+    workerTaskId: string,
+    summaryTask: ReviewTask,
+  ): Promise<boolean> {
+    // In single-threaded JS, this is inherently atomic.
+    // Step 1: Mark worker as completed
+    const worker = this.tasks.get(workerTaskId);
+    if (worker) {
+      worker.status = 'completed';
+    }
+
+    // Step 2: Check if all review tasks in the group are completed
+    const groupId = summaryTask.group_id;
+    const groupTasks = [...this.tasks.values()].filter((t) => t.group_id === groupId);
+    const reviewTasks = groupTasks.filter((t) => t.task_type === 'review');
+    const completedReviews = reviewTasks.filter((t) => t.status === 'completed');
+
+    if (completedReviews.length < reviewTasks.length) return false;
+
+    // Step 3: Check no active summary task already exists
+    const activeSummary = groupTasks.find(
+      (t) => t.task_type === 'summary' && (t.status === 'pending' || t.status === 'reviewing'),
+    );
+    if (activeSummary) return false;
+
+    // Step 4: Create the summary task
+    this.tasks.set(summaryTask.id, { ...summaryTask });
+    return true;
+  }
+
   // ── Deprecated: Completed reviews — atomic increment ───────
 
   /** @deprecated Use claimTask instead. */

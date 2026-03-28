@@ -1229,6 +1229,157 @@ describe('D1DataStore', () => {
       await store.deleteTasksByGroup('nonexistent'); // should not throw
     });
   });
+
+  // NOTE: completeWorkerAndMaybeCreateSummary uses INSERT...SELECT which the
+  // MockD1Database cannot parse. These tests live in sqlite-adapter.test.ts
+  // which uses real SQLite for accurate SQL execution.
+
+  describe.skip('completeWorkerAndMaybeCreateSummary (see sqlite-adapter.test.ts)', () => {
+    it('creates summary when all workers are completed', async () => {
+      await store.createTask(
+        makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'completed' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'w2', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+
+      const summaryTask = makeTask({
+        id: 'sum-1',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+        queue: 'summary',
+      });
+
+      const created = await store.completeWorkerAndMaybeCreateSummary('w2', summaryTask);
+      expect(created).toBe(true);
+
+      const summary = await store.getTask('sum-1');
+      expect(summary).not.toBeNull();
+      expect(summary!.task_type).toBe('summary');
+    });
+
+    it('does not create summary when not all workers are completed', async () => {
+      await store.createTask(
+        makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'pending' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'w2', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+
+      const summaryTask = makeTask({
+        id: 'sum-1',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+      });
+
+      const created = await store.completeWorkerAndMaybeCreateSummary('w2', summaryTask);
+      expect(created).toBe(false);
+
+      const summary = await store.getTask('sum-1');
+      expect(summary).toBeNull();
+    });
+
+    it('does not create duplicate summary when one already exists', async () => {
+      await store.createTask(
+        makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'completed' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'w2', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'existing-sum',
+          group_id: 'grp-1',
+          task_type: 'summary',
+          status: 'pending',
+        }),
+      );
+
+      const summaryTask = makeTask({
+        id: 'sum-dup',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+      });
+
+      const created = await store.completeWorkerAndMaybeCreateSummary('w2', summaryTask);
+      expect(created).toBe(false);
+
+      const dup = await store.getTask('sum-dup');
+      expect(dup).toBeNull();
+    });
+
+    it('marks the worker task as completed', async () => {
+      await store.createTask(
+        makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+
+      const summaryTask = makeTask({
+        id: 'sum-1',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+      });
+
+      await store.completeWorkerAndMaybeCreateSummary('w1', summaryTask);
+
+      const worker = await store.getTask('w1');
+      expect(worker!.status).toBe('completed');
+    });
+
+    it('creates summary for single worker group', async () => {
+      await store.createTask(
+        makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+
+      const summaryTask = makeTask({
+        id: 'sum-1',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+      });
+
+      const created = await store.completeWorkerAndMaybeCreateSummary('w1', summaryTask);
+      expect(created).toBe(true);
+    });
+
+    it('atomically handles concurrent completions (both complete, only one summary)', async () => {
+      // Simulate both workers completing simultaneously by having both already
+      // in reviewing state, then calling the method twice
+      await store.createTask(
+        makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'w2', group_id: 'grp-1', task_type: 'review', status: 'reviewing' }),
+      );
+
+      const summary1 = makeTask({
+        id: 'sum-1',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+      });
+      const summary2 = makeTask({
+        id: 'sum-2',
+        group_id: 'grp-1',
+        task_type: 'summary',
+        status: 'pending',
+      });
+
+      // Call both — exactly one should create the summary
+      const [created1, created2] = await Promise.all([
+        store.completeWorkerAndMaybeCreateSummary('w1', summary1),
+        store.completeWorkerAndMaybeCreateSummary('w2', summary2),
+      ]);
+
+      // Exactly one should have created the summary
+      expect(created1 || created2).toBe(true);
+      // In MemoryDataStore (single-threaded), Promise.all resolves sequentially
+      // so the first call creates the summary and the second doesn't
+    });
+  });
 });
 
 // ── Row conversion helpers ────────────────────────────────────

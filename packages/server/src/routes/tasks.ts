@@ -41,7 +41,6 @@ import {
   isClaimPending,
   isClaimFailed,
   isCompletedReview,
-  shouldCreateSummaryTask,
 } from '../task-lifecycle.js';
 import { appendOpenEntry, fetchIndexBody } from '../dedup-index.js';
 import {
@@ -1049,36 +1048,30 @@ export function taskRoutes() {
         await store.updateClaim(claimId, { status: 'error' });
       }
     } else {
-      // ── Worker result — check group completion ──────────────
+      // ── Worker result — atomically complete and maybe create summary ──
 
-      // Mark the task as completed
-      await store.updateTask(taskId, { status: 'completed' });
+      const summaryTaskId = crypto.randomUUID();
+      const summaryTask: ReviewTask = {
+        ...task,
+        id: summaryTaskId,
+        task_type: 'summary',
+        status: 'pending',
+        queue: 'summary',
+        prompt: task.prompt,
+        created_at: Date.now(),
+        timeout_at: Date.now() + (task.timeout_at - task.created_at),
+      };
 
-      // Check if all worker tasks in the group are completed
-      const groupTasks = await store.getTasksByGroup(task.group_id);
-      const workerTasks = groupTasks.filter(isWorkerTask);
-      const completedWorkers = workerTasks.filter((t) => t.status === 'completed').length;
+      // Atomically: mark worker completed + create summary if all workers done.
+      // Uses a single D1 batch transaction to prevent the race condition where
+      // concurrent result submissions could both miss or both create the summary.
+      const summaryCreated = await store.completeWorkerAndMaybeCreateSummary(taskId, summaryTask);
 
-      if (shouldCreateSummaryTask(completedWorkers, workerTasks.length)) {
-        // All workers done — create a summary task for this group
-        const summaryTaskId = crypto.randomUUID();
-        const summaryTask: ReviewTask = {
-          ...task,
-          id: summaryTaskId,
-          task_type: 'summary',
-          status: 'pending',
-          queue: 'summary',
-          prompt: task.prompt,
-          created_at: Date.now(),
-          timeout_at: Date.now() + (task.timeout_at - task.created_at),
-        };
-        await store.createTask(summaryTask);
-
+      if (summaryCreated) {
         logger.info('All workers complete — summary task created', {
           groupId: task.group_id,
           feature: task.feature,
           summaryTaskId,
-          workerCount: workerTasks.length,
         });
       }
     }
