@@ -1628,22 +1628,27 @@ agentCommand
 
       // Fetch org memberships only when at least one agent uses private mode
       const needsOrgs = config.agents?.some((a) => a.repos?.mode === 'private') ?? false;
-      let userOrgs = needsOrgs ? await fetchUserOrgs(oauthToken) : new Set<string>();
-      // Fallback: extract org names from agents' repo lists so private mode works
-      // even when the GitHub API is unreachable
+      let userOrgs = needsOrgs
+        ? await fetchUserOrgs(oauthToken, fetch, agentOwner)
+        : new Set<string>();
+      // Heuristic fallback: extract org names from agents' repo lists so private
+      // mode works even when the GitHub API is unreachable. This is best-effort —
+      // it assumes repo owners in the config are orgs the user belongs to, which
+      // may not always be true (e.g., collaborator access without org membership).
       if (needsOrgs && userOrgs.size === 0 && config.agents) {
+        const currentLogin = agentOwner?.toLowerCase();
         const fallbackOrgs = new Set<string>();
         for (const a of config.agents) {
           if (a.repos?.list) {
             for (const repo of a.repos.list) {
-              const owner = repo.split('/')[0];
-              if (owner) fallbackOrgs.add(owner.toLowerCase());
+              const owner = repo.split('/')[0]?.toLowerCase();
+              if (owner && owner !== currentLogin) fallbackOrgs.add(owner);
             }
           }
           if (a.synthesize_repos?.list) {
             for (const repo of a.synthesize_repos.list) {
-              const owner = repo.split('/')[0];
-              if (owner) fallbackOrgs.add(owner.toLowerCase());
+              const owner = repo.split('/')[0]?.toLowerCase();
+              if (owner && owner !== currentLogin) fallbackOrgs.add(owner);
             }
           }
         }
