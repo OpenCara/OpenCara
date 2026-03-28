@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #428, #430, #431
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #428, #430, #431, #544, #545, #546, #551
 
 ## Merged PRs (processed)
 
@@ -132,7 +132,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552
 
 ### Milestone QA (2026-03-22)
 
@@ -409,9 +409,45 @@ Parent: #480
 
 - #500 [architect, P2, M] Remove anonymous agent mode from codebase — **READY** (M17 cleanup)
 
+### Dedup/Triage improvements (2026-03-27)
+
+- #525 [server-dev, P2, M] Dedup index issue: structured 3-comment layout with lifecycle categories — **DONE** (PR #528 merged, QA PASS 2026-03-27)
+- #526 [architect, P2, M] Split dedup/triage TaskRole into pr/issue variants — **DONE** (PR #529 merged, QA PASS 2026-03-27)
+- ~~#527~~ — **CLOSED** (duplicate of #526, getTaskRole bug subsumed by TaskRole split)
+
+### New features (2026-03-27)
+
+- #530 [cli-dev, P2, M] CLI command to initialize dedup index by scanning existing PRs/issues — **DONE** (PR #532 merged, QA PASS 2026-03-27)
+- #531 [server-dev, P1, S] Serialize dedup tasks per repo — only one claimable at a time — **DONE** (PR #533 merged, QA PASS 2026-03-27)
+- #534 [server-dev, P2, M] Maintain dedup index lifecycle — move entries on PR close and age-out — **DONE** (PR #543 merged, QA PASS 2026-03-27)
+
+### Bug fixes (live QA, 2026-03-27)
+
+- #535 [cli-dev, P1, S] Dedup report parser too strict — rejects string numbers from LLM output — **DONE** (PR #538 merged, QA PASS 2026-03-27)
+- #536 [server-dev, P1, S] Multi-agent review only creates 1 task instead of agent_count-1 — **DONE** (PR #539 merged, QA PASS 2026-03-27)
+- #537 [server-dev, P1, M] Issue webhook not creating dedup/triage tasks — **DONE** (PR #540 merged, QA PASS 2026-03-27)
+- #541 [cli-dev, P1, S] CLI crashes on issue tasks — diff fetch fails for triage/dedup with pr_number=0 — **DONE** (PR #542 merged, QA PASS 2026-03-27)
+
+### User-requested (2026-03-27)
+
+- #544 [cli-dev, P2, S] Change dedup index entry format to NUMBER(LABELS): DESCRIPTION — **DONE** (PR #548 merged 2026-03-27)
+- #545 [cli-dev, P2, M] dedup init: allow choosing AI agent/tool for index entry generation — **DONE** (PR #549 merged 2026-03-27)
+
+### Bug: dedup/triage custom prompt gap (2026-03-27)
+
+- #546 [cli-dev, P1, S] Wire repo custom prompt into dedup and triage prompt builders — **DONE** (PR #547 merged 2026-03-27)
+
+### Cleanup (2026-03-28)
+
+- PR #550 [external/quabug] merged 2026-03-28 — Remove unused api_key auth from CLI config (no issue)
+
+### Bug fix (user-reported, 2026-03-28)
+
+- #551 [server-dev, P1, S] Summary task not claimed after all reviews complete — D1 race in result handler — **DONE** (PR #552 merged 2026-03-28, 1941 tests passing)
+
 ### QA pending (In review)
 
-- #497 — Codebase clone auth fix v2 (PR #499 merged)
+- #551 — Fix race condition in summary task creation (PR #552 merged)
 
 ## Open PRs
 
@@ -422,6 +458,21 @@ Parent: #480
 (none)
 
 ## Recently processed
+
+- PR #552 [server-dev-551] merged 2026-03-28 — Fix race condition in summary task creation (#551)
+- PR #550 [external/quabug] merged 2026-03-28 — Remove unused api_key auth from CLI config
+- PR #549 [cli-dev] merged 2026-03-27 — dedup init agent/tool selection (#545)
+- PR #548 [cli-dev] merged 2026-03-27 — Change dedup index entry format (#544)
+- PR #547 [cli-dev] merged 2026-03-27 — Wire repo custom prompt into dedup/triage (#546)
+- PR #543 [server-dev] merged 2026-03-27 — Dedup index lifecycle (#534)
+- PR #542 [cli-dev] merged 2026-03-27 — Fix CLI crash on issue tasks (#541)
+- PR #540 [server-dev] merged 2026-03-27 — Fix issue webhook not creating dedup/triage tasks (#537)
+- PR #539 [server-dev] merged 2026-03-27 — Fix D1 createTaskIfNotExists blocking multi-task groups (#536)
+- PR #538 [cli-dev] merged 2026-03-27 — Fix dedup report parser string number coercion (#535)
+- PR #533 [server-dev] merged 2026-03-27 — Serialize dedup tasks per repo (#531)
+- PR #532 [cli-dev] merged 2026-03-27 — CLI command to initialize dedup index (#530)
+- PR #529 [architect] merged 2026-03-27 — Split dedup/triage TaskRole into pr/issue variants (#526)
+- PR #528 [server-dev] merged 2026-03-27 — Structured 3-comment dedup index layout (#525)
 
 - PR #499 [cli-dev-497-fix] merged 2026-03-26 — codebase clone uses gh repo clone (v2 fix)
 - PR #498 [cli-dev-497] merged 2026-03-26 — codebase clone uses gh auth token (QA FAIL)

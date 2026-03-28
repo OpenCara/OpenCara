@@ -12,7 +12,7 @@ OPEN_ISSUES=$(gh issue list --state open --json number,title,labels,createdAt --
 CLOSED_ISSUES=$(gh issue list --state closed --json number,title,closedAt --limit 20)
 OPEN_PRS=$(gh pr list --state open --json number,title,labels,createdAt --limit 20)
 MERGED_PRS=$(gh pr list --state merged --json number,title,labels,mergedAt --limit 20)
-BOARD=$(gh project item-list 1 --owner OpenCara --format json \
+BOARD=$(gh project item-list 1 --owner OpenCara --limit 500 --format json \
   | jq '[.items[] | {number: .content.number, title: .content.title, status: .status}]')
 
 jq -n \

@@ -669,7 +669,7 @@ tool = "claude"
 mode = "invalid"
 `);
       expect(() => loadConfig()).toThrow(RepoConfigError);
-      expect(() => loadConfig()).toThrow('must be one of: all, own, whitelist, blacklist');
+      expect(() => loadConfig()).toThrow('must be one of: public, private, whitelist, blacklist');
     });
 
     it('throws RepoConfigError when mode is missing', () => {
