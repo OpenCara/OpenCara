@@ -21,6 +21,12 @@ import {
   type UsageLimits,
 } from '../config.js';
 import { checkoutWorktree, cleanupWorktree } from '../repo-cache.js';
+import {
+  parseTtl,
+  CodebaseCleanupTracker,
+  scanAndCleanStaleWorktrees,
+  DEFAULT_CODEBASE_TTL_MS,
+} from '../codebase-cleanup.js';
 import { getValidToken, loadAuth, AuthError } from '../auth.js';
 import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
@@ -330,6 +336,7 @@ async function pollLoop(
     roles?: TaskRole[];
     synthesizeRepos?: RepoConfig;
     signal?: AbortSignal;
+    cleanupTracker?: CodebaseCleanupTracker;
   },
 ): Promise<void> {
   const {
@@ -341,6 +348,7 @@ async function pollLoop(
     roles,
     synthesizeRepos,
     signal,
+    cleanupTracker,
   } = options;
   const { log, logError, logWarn } = logger;
 
@@ -391,6 +399,16 @@ async function pollLoop(
         (t) => (diffFailCounts.get(t.task_id) ?? 0) < MAX_DIFF_FETCH_ATTEMPTS,
       );
 
+      // Sweep deferred codebase cleanups
+      if (cleanupTracker) {
+        const swept = await cleanupTracker.sweep(cleanupWorktree);
+        if (swept > 0) {
+          log(
+            `${icons.info} Cleaned up ${swept} stale codebase director${swept === 1 ? 'y' : 'ies'}`,
+          );
+        }
+      }
+
       if (task) {
         const result = await handleTask(
           client,
@@ -403,6 +421,7 @@ async function pollLoop(
           agentSession,
           routerRelay,
           signal,
+          cleanupTracker,
         );
         if (result.diffFetchFailed) {
           agentSession.errorsEncountered++;
@@ -490,6 +509,7 @@ async function handleTask(
   agentSession: AgentSessionStats,
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
+  cleanupTracker?: CodebaseCleanupTracker,
 ): Promise<HandleTaskResult> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
@@ -721,7 +741,14 @@ async function handleTask(
   } finally {
     // Clean up task worktree (bare repo stays for reuse)
     if (taskCheckoutPath && taskBareRepoPath) {
-      await cleanupWorktree(taskBareRepoPath, taskCheckoutPath);
+      if (cleanupTracker) {
+        // Deferred cleanup: track for removal after TTL expires
+        cleanupTracker.track(taskBareRepoPath, taskCheckoutPath);
+        log(`  Codebase retained for inspection (TTL-based cleanup)`);
+      } else {
+        // Immediate cleanup (no tracker = ttl is 0 or not configured)
+        await cleanupWorktree(taskBareRepoPath, taskCheckoutPath);
+      }
     }
   }
   return {};
@@ -1175,6 +1202,7 @@ export async function startAgent(
     onTokenRefresh?: () => Promise<string>;
     usageLimits?: UsageLimits;
     versionOverride?: string | null;
+    codebaseTtl?: string | null;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, {
@@ -1226,6 +1254,26 @@ export async function startAgent(
     }
   }
 
+  // Resolve codebase TTL for cleanup.
+  // When not configured (null), default to 0 (immediate cleanup) to preserve existing behavior.
+  // Users opt into deferred cleanup by setting codebase_ttl in config.toml.
+  const ttlMs = options?.codebaseTtl != null ? parseTtl(options.codebaseTtl) : 0;
+  const codebaseDir = reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos');
+
+  // Startup scan: remove stale worktree directories from previous runs.
+  // Use DEFAULT_CODEBASE_TTL_MS as the minimum scan threshold to avoid removing
+  // worktrees that are still in use by a recently-crashed agent.
+  const scanTtl = Math.max(ttlMs, DEFAULT_CODEBASE_TTL_MS);
+  const staleCount = scanAndCleanStaleWorktrees(codebaseDir, scanTtl);
+  if (staleCount > 0) {
+    log(
+      `${icons.info} Cleaned up ${staleCount} stale codebase director${staleCount === 1 ? 'y' : 'ies'} on startup`,
+    );
+  }
+
+  // Create cleanup tracker for deferred worktree removal (TTL > 0)
+  const cleanupTracker = ttlMs > 0 ? new CodebaseCleanupTracker(ttlMs) : undefined;
+
   const abortController = new AbortController();
 
   // Handle graceful shutdown
@@ -1245,7 +1293,18 @@ export async function startAgent(
     roles: options?.roles,
     synthesizeRepos: options?.synthesizeRepos,
     signal: abortController.signal,
+    cleanupTracker,
   });
+
+  // Final sweep: clean up any remaining tracked worktrees on shutdown
+  if (cleanupTracker && cleanupTracker.size > 0) {
+    const finalSwept = await cleanupTracker.sweep(cleanupWorktree);
+    if (finalSwept > 0) {
+      log(
+        `${icons.info} Cleaned up ${finalSwept} codebase director${finalSwept === 1 ? 'y' : 'ies'} on shutdown`,
+      );
+    }
+  }
 
   // Print usage summary on shutdown
   if (deps.usageTracker) {
@@ -1338,6 +1397,7 @@ export async function startAgentRouter(): Promise<void> {
       onTokenRefresh: () => getValidToken(config.platformUrl),
       usageLimits: config.usageLimits,
       versionOverride,
+      codebaseTtl: config.codebaseTtl,
     },
   );
 
@@ -1425,6 +1485,7 @@ function startAgentByIndex(
       onTokenRefresh: () => getValidToken(config.platformUrl),
       usageLimits: config.usageLimits,
       versionOverride,
+      codebaseTtl: config.codebaseTtl,
     },
   ).finally(() => {
     routerRelay?.stop();
