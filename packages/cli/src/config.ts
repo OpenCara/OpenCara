@@ -18,6 +18,7 @@ export interface LocalAgentConfig {
   synthesize_repos?: RepoConfig;
   codebase_dir?: string;
   repos?: RepoConfig;
+  instances?: number;
 }
 
 export interface UsageLimits {
@@ -204,6 +205,15 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
       );
     }
     if (typeof obj.codebase_dir === 'string') agent.codebase_dir = obj.codebase_dir;
+    if (typeof obj.instances === 'number') {
+      if (!Number.isInteger(obj.instances) || obj.instances < 1) {
+        console.warn(
+          `\u26a0 Config warning: agents[${i}].instances must be a positive integer, got ${obj.instances}. Value ignored.`,
+        );
+      } else {
+        agent.instances = obj.instances;
+      }
+    }
     const repoConfig = parseRepoConfig(obj, i);
     if (repoConfig) agent.repos = repoConfig;
     const synthesizeRepoConfig = parseRepoConfig(obj, i, 'synthesize_repos');

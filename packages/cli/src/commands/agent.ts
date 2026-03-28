@@ -1460,8 +1460,8 @@ function startAgentByIndex(
   oauthToken: string,
   versionOverride?: string | null,
   verbose?: boolean,
-): Promise<void> | null {
-  const agentId = crypto.randomUUID();
+  instancesOverride?: number,
+): Promise<void>[] | null {
   let commandTemplate: string | undefined;
   let agentConfig: LocalAgentConfig | undefined;
 
@@ -1486,6 +1486,8 @@ function startAgentByIndex(
     return null;
   }
 
+  const instanceCount = instancesOverride ?? agentConfig?.instances ?? 1;
+
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
@@ -1493,47 +1495,58 @@ function startAgentByIndex(
     codebaseDir,
   };
 
-  const isRouter = agentConfig?.router === true;
-  let routerRelay: RouterRelay | undefined;
-  if (isRouter) {
-    routerRelay = new RouterRelay();
-    routerRelay.start();
-  }
-
-  const session = createSessionTracker();
-  const usageTracker = new UsageTracker();
   const model = agentConfig?.model ?? 'unknown';
   const tool = agentConfig?.tool ?? 'unknown';
   const thinking = agentConfig?.thinking;
   const roles = agentConfig ? computeRoles(agentConfig) : undefined;
 
-  const agentPromise = startAgent(
-    agentId,
-    config.platformUrl,
-    { model, tool, thinking },
-    reviewDeps,
-    { agentId, session, usageTracker, usageLimits: config.usageLimits },
-    {
-      pollIntervalMs,
-      maxConsecutiveErrors: config.maxConsecutiveErrors,
-      routerRelay,
-      reviewOnly: agentConfig?.review_only,
-      repoConfig: agentConfig?.repos,
-      roles,
-      synthesizeRepos: agentConfig?.synthesize_repos,
-      label,
-      authToken: oauthToken,
-      onTokenRefresh: () => getValidToken(config.platformUrl),
-      usageLimits: config.usageLimits,
-      versionOverride,
-      codebaseTtl: config.codebaseTtl,
-      verbose,
-    },
-  ).finally(() => {
-    routerRelay?.stop();
-  });
+  // Share session stats and usage tracker across all instances so limits are
+  // enforced on the aggregate, not per-instance.
+  const session = createSessionTracker();
+  const usageTracker = new UsageTracker();
 
-  return agentPromise;
+  const promises: Promise<void>[] = [];
+  for (let inst = 0; inst < instanceCount; inst++) {
+    const agentId = crypto.randomUUID();
+    const instanceLabel = instanceCount > 1 ? `${label}#${inst + 1}` : label;
+
+    const isRouter = agentConfig?.router === true;
+    let routerRelay: RouterRelay | undefined;
+    if (isRouter) {
+      routerRelay = new RouterRelay();
+      routerRelay.start();
+    }
+
+    const agentPromise = startAgent(
+      agentId,
+      config.platformUrl,
+      { model, tool, thinking },
+      reviewDeps,
+      { agentId, session, usageTracker, usageLimits: config.usageLimits },
+      {
+        pollIntervalMs,
+        maxConsecutiveErrors: config.maxConsecutiveErrors,
+        routerRelay,
+        reviewOnly: agentConfig?.review_only,
+        repoConfig: agentConfig?.repos,
+        roles,
+        synthesizeRepos: agentConfig?.synthesize_repos,
+        label: instanceLabel,
+        authToken: oauthToken,
+        onTokenRefresh: () => getValidToken(config.platformUrl),
+        usageLimits: config.usageLimits,
+        versionOverride,
+        codebaseTtl: config.codebaseTtl,
+        verbose,
+      },
+    ).finally(() => {
+      routerRelay?.stop();
+    });
+
+    promises.push(agentPromise);
+  }
+
+  return promises;
 }
 
 export const agentCommand = new Command('agent').description('Manage review agents');
@@ -1549,6 +1562,7 @@ agentCommand
     'Cloudflare Workers version override (e.g. opencara-server=abc123)',
   )
   .option('-v, --verbose', 'Log tool stdout/stderr after each review/summary for debugging')
+  .option('--instances <count>', 'Number of concurrent instances per agent (overrides config)')
   .action(
     async (opts: {
       pollInterval: string;
@@ -1556,10 +1570,20 @@ agentCommand
       all?: boolean;
       versionOverride?: string;
       verbose?: boolean;
+      instances?: string;
     }) => {
       const config = loadConfig();
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
       const versionOverride = opts.versionOverride || process.env.OPENCARA_VERSION_OVERRIDE || null;
+      let instancesOverride: number | undefined;
+      if (opts.instances !== undefined) {
+        if (!/^[1-9]\d*$/.test(opts.instances)) {
+          console.error('--instances must be a positive integer');
+          process.exit(1);
+          return;
+        }
+        instancesOverride = parseInt(opts.instances, 10);
+      }
 
       // Authenticate via OAuth
       let oauthToken: string;
@@ -1587,21 +1611,22 @@ agentCommand
           return;
         }
 
-        console.log(`Starting ${config.agents.length} agent(s)...`);
+        console.log(`Starting ${config.agents.length} agent config(s)...`);
 
         const promises: Promise<void>[] = [];
         let startFailed = false;
         for (let i = 0; i < config.agents.length; i++) {
-          const p = startAgentByIndex(
+          const agentPromises = startAgentByIndex(
             config,
             i,
             pollIntervalMs,
             oauthToken,
             versionOverride,
             opts.verbose,
+            instancesOverride,
           );
-          if (p) {
-            promises.push(p);
+          if (agentPromises) {
+            promises.push(...agentPromises);
           } else {
             startFailed = true;
           }
@@ -1619,7 +1644,7 @@ agentCommand
           );
         }
 
-        console.log(`${promises.length} agent(s) running. Press Ctrl+C to stop all.\n`);
+        console.log(`${promises.length} agent instance(s) running. Press Ctrl+C to stop all.\n`);
 
         // Use allSettled so one agent crashing doesn't orphan the others
         const results = await Promise.allSettled(promises);
@@ -1643,20 +1668,28 @@ agentCommand
           process.exit(1);
           return;
         }
-        const p = startAgentByIndex(
+        const agentPromises = startAgentByIndex(
           config,
           agentIndex,
           pollIntervalMs,
           oauthToken,
           versionOverride,
           opts.verbose,
+          instancesOverride,
         );
-        if (!p) {
+        if (!agentPromises) {
           // startAgentByIndex already logged the specific reason
           process.exit(1);
           return;
         }
-        await p;
+        const results = await Promise.allSettled(agentPromises);
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        if (failures.length > 0) {
+          for (const f of failures) {
+            console.error(`Agent instance failed: ${f.reason}`);
+          }
+          process.exit(1);
+        }
       }
     },
   );
