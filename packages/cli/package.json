@@ -30,13 +30,10 @@
     "node": ">=20"
   },
   "bin": {
-    "opencara": "dist/index.js",
-    "opencara-codex-agent": "bin/opencara-codex-agent",
-    "opencara-gemini-agent": "bin/opencara-gemini-agent"
+    "opencara": "dist/index.js"
   },
   "files": [
     "dist",
-    "bin",
     "README.md"
   ],
   "scripts": {

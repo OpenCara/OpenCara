@@ -20,8 +20,6 @@ export interface Env {
   GITHUB_CLIENT_ID?: string;
   /** GitHub App client secret — used for OAuth token verification and Device Flow proxy (never exposed to clients). */
   GITHUB_CLIENT_SECRET?: string;
-  /** When 'true', enforce OAuth on all task endpoints (default: false, falls back to API key auth) */
-  OAUTH_REQUIRED?: string;
 }
 
 /** Hono context variables (set per-request via middleware) */

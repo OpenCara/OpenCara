@@ -537,12 +537,13 @@ async function getWorkerReviews(store: DataStore, groupId: string): Promise<Clai
 export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-  // Auth: OAuth when OAUTH_REQUIRED=true, otherwise fall back to API key auth.
+  // Auth: OAuth by default, fall back to API key only when OAuth credentials are not configured.
   // Pre-instantiate middleware to avoid allocating closures per request.
   const oauthMiddleware = requireOAuth();
   const apiKeyMiddleware = requireApiKey();
   app.use('/api/tasks/*', async (c, next) => {
-    return c.env.OAUTH_REQUIRED === 'true' ? oauthMiddleware(c, next) : apiKeyMiddleware(c, next);
+    const hasOAuthCredentials = c.env.GITHUB_CLIENT_ID && c.env.GITHUB_CLIENT_SECRET;
+    return hasOAuthCredentials ? oauthMiddleware(c, next) : apiKeyMiddleware(c, next);
   });
 
   // ── Poll ─────────────────────────────────────────────────────

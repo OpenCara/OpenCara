@@ -263,10 +263,9 @@ describe('OAuth middleware integration', () => {
     );
   }
 
-  describe('when OAUTH_REQUIRED=true', () => {
+  describe('when OAuth credentials are configured', () => {
     it('returns AUTH_REQUIRED when no Authorization header', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -280,7 +279,6 @@ describe('OAuth middleware integration', () => {
 
     it('returns AUTH_REQUIRED for non-Bearer header', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -295,7 +293,6 @@ describe('OAuth middleware integration', () => {
 
     it('returns AUTH_TOKEN_REVOKED for invalid token', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -311,7 +308,6 @@ describe('OAuth middleware integration', () => {
 
     it('returns AUTH_TOKEN_EXPIRED for expired token', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -327,7 +323,6 @@ describe('OAuth middleware integration', () => {
 
     it('allows valid OAuth token and passes request through', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -350,7 +345,6 @@ describe('OAuth middleware integration', () => {
 
     it('uses cache on second request (does not call GitHub API again)', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -377,7 +371,6 @@ describe('OAuth middleware integration', () => {
 
     it('returns 500 when GitHub API returns unexpected error', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -397,23 +390,20 @@ describe('OAuth middleware integration', () => {
       expect(body.error.code).toBe('INTERNAL_ERROR');
     });
 
-    it('returns 500 when GITHUB_CLIENT_ID is not configured', async () => {
+    it('falls back to API key auth when GITHUB_CLIENT_ID is not configured', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
-        // No GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET
+        // No GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET — falls back to API key
       });
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
         Authorization: 'Bearer ghu_token',
       });
-      expect(res.status).toBe(500);
-      const body = await res.json();
-      expect(body.error.code).toBe('INTERNAL_ERROR');
+      // Open mode (no API_KEYS set) — should allow through
+      expect(res.status).toBe(200);
     });
 
     it('returns 500 on network error during verification', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -429,7 +419,6 @@ describe('OAuth middleware integration', () => {
 
     it('returns structured INTERNAL_ERROR when cache read fails', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -448,7 +437,6 @@ describe('OAuth middleware integration', () => {
 
     it('succeeds even when cache write fails (best-effort caching)', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -475,8 +463,8 @@ describe('OAuth middleware integration', () => {
     });
   });
 
-  describe('backward compatibility (OAUTH_REQUIRED not set)', () => {
-    it('uses API key auth when OAUTH_REQUIRED is not set', async () => {
+  describe('fallback to API key auth (no OAuth credentials)', () => {
+    it('uses API key auth when OAuth credentials are not configured', async () => {
       const env = createOAuthApp({ API_KEYS: 'valid-key' });
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
@@ -485,7 +473,7 @@ describe('OAuth middleware integration', () => {
       expect(res.status).toBe(200);
     });
 
-    it('rejects invalid API key when OAUTH_REQUIRED is not set', async () => {
+    it('rejects invalid API key when OAuth credentials are not configured', async () => {
       const env = createOAuthApp({ API_KEYS: 'valid-key' });
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
@@ -496,19 +484,10 @@ describe('OAuth middleware integration', () => {
       expect(body.error.code).toBe('UNAUTHORIZED');
     });
 
-    it('allows open mode when no API_KEYS and no OAUTH_REQUIRED', async () => {
+    it('allows open mode when no API_KEYS and no OAuth credentials', async () => {
       const env = createOAuthApp();
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
-      expect(res.status).toBe(200);
-    });
-
-    it('uses API key auth when OAUTH_REQUIRED=false', async () => {
-      const env = createOAuthApp({ OAUTH_REQUIRED: 'false', API_KEYS: 'my-key' });
-
-      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
-        Authorization: 'Bearer my-key',
-      });
       expect(res.status).toBe(200);
     });
   });
@@ -516,7 +495,6 @@ describe('OAuth middleware integration', () => {
   describe('OAuth on mutation endpoints', () => {
     it('enforces OAuth on claim endpoint', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -534,7 +512,6 @@ describe('OAuth middleware integration', () => {
 
     it('enforces OAuth on result endpoint', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -552,7 +529,6 @@ describe('OAuth middleware integration', () => {
 
     it('enforces OAuth on reject endpoint', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -570,7 +546,6 @@ describe('OAuth middleware integration', () => {
 
     it('enforces OAuth on error endpoint', async () => {
       const env = createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -590,7 +565,6 @@ describe('OAuth middleware integration', () => {
   describe('verified identity in task routes', () => {
     function setupOAuthEnv() {
       return createOAuthApp({
-        OAUTH_REQUIRED: 'true',
         GITHUB_CLIENT_ID: 'cid',
         GITHUB_CLIENT_SECRET: 'csecret',
       });
@@ -831,7 +805,7 @@ describe('OAuth middleware integration', () => {
     });
 
     it('claim stores no github_user_id when OAuth is not enforced', async () => {
-      // No OAUTH_REQUIRED — uses API key auth, verifiedIdentity is undefined
+      // No OAuth credentials — uses API key auth, verifiedIdentity is undefined
       const env = createOAuthApp();
       await store.createTask(makeTask());
 
