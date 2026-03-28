@@ -292,8 +292,25 @@ Parent issue: #445
 | ----- | ----- | ------ | ------------------------------------------------ |
 | #453  | pm    | direct | GitHub App OAuth configuration and documentation |
 
+## Post-M17 Fixes (2026-03-28)
+
+| Issue | Agent      | PR   | Description                                                    |
+| ----- | ---------- | ---- | -------------------------------------------------------------- |
+| #551  | server-dev | #552 | Fix race condition in summary task creation [DONE]             |
+| #555  | server-dev | #558 | Add preferred_models support for summarizer config [DONE]      |
+| #557  | cli-dev    | #559 | Backward-compatible aliases for renamed repo filter modes [DONE] |
+| #560  | cli-dev    | --   | Keep heartbeat alive during review execution [IN PROGRESS]     |
+
 ## Open Issues
 
+- #560 [cli-dev, high] Keep heartbeat alive during review execution — IN PROGRESS
+- #554 [server-dev, medium, Backlog] Prefer model diversity across all tasks in a group
+- #553 [cli-dev, medium, Backlog] Auto-cleanup cloned codebase repos after task completion
+- #473 [cli-dev, medium, Ready] Persistent repo cache with git worktrees
+- #427 [cli-dev, medium, Ready] Add --verbose mode for debugging
+- #409 [server-dev, low, Backlog] Add prompt_hash to task creation and claim response
+- #410 [cli-dev, low, Backlog] Include prompt_hash in result submission
+- #404 [architect, medium, Backlog] Design security sandbox container
 - #348 [server-dev, medium, Backlog] Webhook event log for delivery visibility
 - #302 [cli-dev, medium, Backlog] Save agent logs to file for debugging
 
@@ -480,3 +497,7 @@ Parent issue: #445
 | #458 | #451   | cli-dev    | 03-25 | Auth login/status/logout cmds    |
 | #459 | #448   | server-dev | 03-25 | Verified identity in routes      |
 | #460 | #452   | cli-dev    | 03-25 | Replace github-auth with OAuth   |
+| #550 | --     | external   | 03-28 | Remove unused api_key from CLI   |
+| #552 | #551   | server-dev | 03-28 | Fix summary task race condition  |
+| #558 | #555   | server-dev | 03-28 | Summarizer preferred_models      |
+| #559 | #557   | cli-dev    | 03-28 | Repo filter mode compat aliases  |

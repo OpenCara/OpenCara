@@ -112,6 +112,11 @@ skip = ["draft"]
 # [[review.summarizer.preferred]]
 # github = "best-summarizer"
 
+# Prefer these AI models for the synthesizer agent.
+# When set, agents running a matching model get priority for the summary slot.
+# Default: []
+# preferred_models = ["claude-sonnet-4-6"]
+
 # ---------------------------------------------------------------------------
 # [[review.agents]] — Per-agent slot overrides (optional)
 # ---------------------------------------------------------------------------
@@ -122,6 +127,7 @@ skip = ["draft"]
 # [[review.agents]]
 # prompt = "Focus specifically on security vulnerabilities."
 # preferred_models = ["claude-opus-4-6"]
+# preferred_tools = ["claude"]
 #
 # [[review.agents]]
 # prompt = "Focus on performance and optimization."
@@ -131,17 +137,25 @@ skip = ["draft"]
 # ===========================================================================
 #
 # Detect duplicate PRs and issues before they accumulate.
+# Each sub-section inherits base feature fields:
+#   prompt, agent_count, timeout, preferred_models, preferred_tools
 #
 # [dedup.prs]
 # prompt = "Check if this PR duplicates an existing one."
 # enabled = true
 # agent_count = 1
+# timeout = "10m"
+# preferred_models = []
+# preferred_tools = []
 # index_issue = 42   # Issue number tracking known PRs
 #
 # [dedup.issues]
 # prompt = "Check if this issue is a duplicate."
 # enabled = true
 # agent_count = 1
+# timeout = "10m"
+# preferred_models = []
+# preferred_tools = []
 # include_closed = true   # Also check closed issues
 
 # ===========================================================================
@@ -149,6 +163,8 @@ skip = ["draft"]
 # ===========================================================================
 #
 # Automatically triage new issues — add labels, suggest priority, etc.
+# Inherits base feature fields: prompt, agent_count, timeout,
+# preferred_models, preferred_tools
 #
 # [triage]
 # prompt = "Triage this issue: categorize, assign priority, suggest labels."
@@ -156,11 +172,54 @@ skip = ["draft"]
 # default_mode = "comment"    # "comment" or "rewrite"
 # auto_label = true
 # agent_count = 1
-# triggers = ["bug", "feature", "question"]
+# timeout = "10m"
+# preferred_models = []
+# preferred_tools = []
+# triggers = ["opened"]       # Issue actions that trigger triage: "opened", "edited"
 #
 # [triage.author_modes]
 # alice = "rewrite"    # Per-author mode overrides
 # bob = "comment"
+
+# ===========================================================================
+# [implement] — AI Implementation (optional, disabled by default)
+# ===========================================================================
+#
+# Let AI agents implement issues on your behalf. Triggered by commenting
+# `/opencara [model]` or `@opencara [model]` on an issue.
+#
+# When triggered, the agent reads the issue, creates a branch, implements
+# the changes, and opens a PR.
+#
+# The model parameter is optional:
+#   /opencara gpt-5.4     → prefers an agent running gpt-5.4
+#   /opencara              → any agent can claim immediately
+#
+# [implement]
+# enabled = true
+# prompt = "Implement the changes described in this issue."
+# timeout = "15m"
+# agent_count = 1
+
+# ===========================================================================
+# [fix] — AI Fix from Review Comments (optional, disabled by default)
+# ===========================================================================
+#
+# Let AI agents fix PRs based on review comments. Triggered by commenting
+# `/opencara fix [model]` or `@opencara fix [model]` on a PR.
+#
+# When triggered, the agent reads the review comments, applies fixes,
+# commits, and pushes to the PR branch.
+#
+# The model parameter is optional:
+#   /opencara fix gpt-5.4  → prefers an agent running gpt-5.4
+#   /opencara fix           → any agent can claim immediately
+#
+# [fix]
+# enabled = true
+# prompt = "Fix the issues found in the review comments."
+# timeout = "10m"
+# agent_count = 1
 
 # ===========================================================================
 # CONFIGURATION EXAMPLES
@@ -200,6 +259,7 @@ skip = ["draft"]
 #   github = "security-team-member-2"
 #   [review.summarizer]
 #   only = "security-team-lead"
+#   preferred_models = ["claude-sonnet-4-6"]
 #
 # --- Example 4: Per-agent prompt overrides ---
 #
@@ -212,3 +272,27 @@ skip = ["draft"]
 #   preferred_models = ["claude-opus-4-6"]
 #   [[review.agents]]
 #   prompt = "Focus on performance and efficiency."
+#
+# --- Example 5: Full pipeline — review + dedup + triage + implement + fix ---
+#
+#   version = 1
+#   [review]
+#   prompt = "Review for correctness and style."
+#   agent_count = 2
+#   [dedup.prs]
+#   prompt = "Check for duplicate PRs."
+#   enabled = true
+#   index_issue = 10
+#   [dedup.issues]
+#   prompt = "Check for duplicate issues."
+#   enabled = true
+#   [triage]
+#   prompt = "Categorize and label this issue."
+#   enabled = true
+#   auto_label = true
+#   [implement]
+#   enabled = true
+#   prompt = "Implement the changes described in this issue."
+#   [fix]
+#   enabled = true
+#   prompt = "Fix the issues found in the review comments."

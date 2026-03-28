@@ -11,7 +11,7 @@
 # Override the platform URL with:         OPENCARA_PLATFORM_URL=https://...
 #
 # Minimal config (just 1 agent):
-#   platform_url = "https://opencara-server.opencara.workers.dev"
+#   platform_url = "https://api.opencara.com"
 #   [[agents]]
 #   model = "claude-sonnet-4-6"
 #   tool = "claude"
@@ -24,7 +24,7 @@
 # Platform URL — the OpenCara server endpoint your agents poll for tasks.
 # Set automatically by `opencara login`.
 # Can be overridden with OPENCARA_PLATFORM_URL environment variable.
-platform_url = "https://opencara-server.opencara.workers.dev"
+platform_url = "https://api.opencara.com"
 
 # ===========================================================================
 # AGENTS
@@ -48,10 +48,13 @@ platform_url = "https://opencara-server.opencara.workers.dev"
 #   thinking         — Thinking/reasoning level hint (e.g., "high", "medium", "1024")
 #                      Passed to the platform as metadata, not used by the CLI directly.
 #   roles            — Array of task roles this agent supports.
-#                      Available roles: "review", "summary", "dedup", "triage"
+#                      Available roles: "review", "summary", "pr_dedup",
+#                        "issue_dedup", "pr_triage", "issue_triage",
+#                        "implement", "fix"
 #                      Default: ["review", "summary"] (backward compat)
-#                      Agents must opt-in to "dedup" and "triage" — not in defaults.
-#                      Example: roles = ["review", "summary", "dedup"]
+#                      Agents must opt-in to dedup, triage, implement, and fix
+#                      roles — not in defaults.
+#                      Example: roles = ["review", "summary", "pr_dedup", "issue_dedup"]
 #   review_only      — (Deprecated, use `roles` instead) If true, equivalent to
 #                      roles = ["review"]. Default: false
 #   synthesizer_only — (Deprecated, use `roles` instead) If true, equivalent to
@@ -127,12 +130,12 @@ command = "qwen --model qwen3.5-plus -y"
 # [agents.synthesize_repos]
 # mode = "public"
 #
-# --- Example: agent that handles all roles including dedup and triage ---
+# --- Example: agent that handles all roles including dedup, triage, implement, fix ---
 # [[agents]]
 # model = "claude-opus-4-6"
 # tool = "claude"
 # name = "Full Pipeline Agent"
-# roles = ["review", "summary", "dedup", "triage"]
+# roles = ["review", "summary", "pr_dedup", "issue_dedup", "pr_triage", "issue_triage", "implement", "fix"]
 
 # ===========================================================================
 # REPO FILTERING
@@ -196,9 +199,10 @@ command = "qwen --model qwen3.5-plus -y"
 # Default: 10
 # max_consecutive_errors = 10
 
-# Codebase context: clone repos locally for context-aware reviews.
-# When set, the CLI shallow-clones repos using `gh repo clone` and runs
-# tool commands from within the local checkout (cwd set automatically).
+# Codebase context: persistent repo cache for context-aware reviews.
+# When set, the CLI maintains bare clones of repos and creates isolated git
+# worktrees per task. Repos are cached across tasks for fast subsequent checkouts.
+# Tool commands run from within the worktree (cwd set automatically).
 # This gives the AI tool access to the full codebase, not just the diff.
 # Supports ~ for home directory.
 # Requires `gh` CLI authenticated (`gh auth login`).
