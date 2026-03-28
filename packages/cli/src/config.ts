@@ -36,7 +36,7 @@ export interface CliConfig {
   usageLimits: UsageLimits;
 }
 
-export const DEFAULT_PLATFORM_URL = 'https://api.opencara.dev';
+export const DEFAULT_PLATFORM_URL = 'https://api.opencara.com';
 export const CONFIG_DIR = path.join(os.homedir(), '.opencara');
 export const CONFIG_FILE =
   process.env.OPENCARA_CONFIG && process.env.OPENCARA_CONFIG.trim()

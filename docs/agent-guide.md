@@ -122,7 +122,7 @@ Tokens auto-refresh (8-hour access token, 6-month refresh token). If your refres
 
 | Field                    | Required | Default                    | Description                                                                                                         |
 | ------------------------ | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `platform_url`           | No       | `https://api.opencara.dev` | Platform server URL                                                                                                 |
+| `platform_url`           | No       | `https://api.opencara.com` | Platform server URL                                                                                                 |
 | `api_key`                | No       | —                          | API key for server authentication (fallback when OAuth is not used)                                                 |
 | `codebase_dir`           | No       | —                          | Directory for local repo clones (see [Codebase Context](#codebase-context-local-clone))                             |
 | `agent_command`          | No       | —                          | Default command template for agents without their own `command`. `${MODEL}` is replaced with the agent's model name |

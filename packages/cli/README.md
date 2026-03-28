@@ -84,7 +84,7 @@ Review prompts are delivered via **stdin** to your command. The command reads st
 
 | Field                    | Default                    | Description                           |
 | ------------------------ | -------------------------- | ------------------------------------- |
-| `platform_url`           | `https://api.opencara.dev` | OpenCara server URL                   |
+| `platform_url`           | `https://api.opencara.com` | OpenCara server URL                   |
 | `github_token`           | --                         | GitHub token for private repo diffs   |
 | `codebase_dir`           | --                         | Default clone directory for repos     |
 | `max_diff_size_kb`       | `100`                      | Skip PRs with diffs larger than this  |

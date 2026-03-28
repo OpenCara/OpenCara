@@ -13,7 +13,7 @@ const MOCK_AUTH: StoredAuth = {
 
 function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
   return {
-    platformUrl: 'https://api.opencara.dev',
+    platformUrl: 'https://api.opencara.com',
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 10,
     codebaseDir: null,
@@ -56,7 +56,7 @@ describe('auth commands', () => {
       });
 
       expect(loginFn).toHaveBeenCalledWith(
-        'https://api.opencara.dev',
+        'https://api.opencara.com',
         expect.objectContaining({ log: expect.any(Function) }),
       );
       expect(log).toHaveBeenCalledWith(expect.stringContaining('Authenticated as'));
