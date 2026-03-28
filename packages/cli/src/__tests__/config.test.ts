@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as path from 'node:path';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -1171,10 +1172,27 @@ tool = "qwen"
       expect(result).toBe('/tmp/auth.json');
     });
 
-    it('resolves relative path', () => {
+    it('resolves relative path against CWD', () => {
       const result = resolveFilePath('auth.json');
-      expect(result).toContain('auth.json');
-      expect(result).toMatch(/^\//); // absolute path
+      expect(result).toBe(path.resolve('auth.json'));
+    });
+  });
+
+  describe('auth_file empty string guard', () => {
+    it('returns null for empty auth_file string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = ""\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBeNull();
+    });
+
+    it('returns null for whitespace-only auth_file string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = "  "\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBeNull();
     });
   });
 

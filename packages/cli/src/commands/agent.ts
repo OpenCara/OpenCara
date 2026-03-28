@@ -1390,7 +1390,7 @@ export async function startAgentRouter(): Promise<void> {
   // Authenticate via OAuth
   let oauthToken: string;
   try {
-    oauthToken = await getValidToken(config.platformUrl, {}, config.authFile);
+    oauthToken = await getValidToken(config.platformUrl, { configPath: config.authFile });
   } catch (err) {
     if (err instanceof AuthError) {
       logger.logError(`${icons.error} ${err.message}`);
@@ -1450,7 +1450,7 @@ export async function startAgentRouter(): Promise<void> {
       synthesizeRepos: agentConfig?.synthesize_repos,
       label,
       authToken: oauthToken,
-      onTokenRefresh: () => getValidToken(config.platformUrl, {}, config.authFile),
+      onTokenRefresh: () => getValidToken(config.platformUrl, { configPath: config.authFile }),
       agentOwner,
       userOrgs,
       usageLimits: config.usageLimits,
@@ -1553,7 +1553,7 @@ function startAgentByIndex(
         synthesizeRepos: agentConfig?.synthesize_repos,
         label: instanceLabel,
         authToken: oauthToken,
-        onTokenRefresh: () => getValidToken(config.platformUrl, {}, config.authFile),
+        onTokenRefresh: () => getValidToken(config.platformUrl, { configPath: config.authFile }),
         usageLimits: config.usageLimits,
         versionOverride,
         codebaseTtl: config.codebaseTtl,
@@ -1610,7 +1610,7 @@ agentCommand
       // Authenticate via OAuth
       let oauthToken: string;
       try {
-        oauthToken = await getValidToken(config.platformUrl, {}, config.authFile);
+        oauthToken = await getValidToken(config.platformUrl, { configPath: config.authFile });
       } catch (err) {
         if (err instanceof AuthError) {
           console.error(err.message);

@@ -258,6 +258,8 @@ export interface GetTokenDeps {
   loadAuthFn?: () => StoredAuth | null;
   saveAuthFn?: (auth: StoredAuth) => void;
   nowFn?: () => number;
+  /** Auth file path from config (overrides default, but env var still wins). */
+  configPath?: string | null;
 }
 
 /**
@@ -267,11 +269,8 @@ export interface GetTokenDeps {
  * 3. If expired: POST /api/auth/refresh -> save new tokens -> return
  * 4. If refresh fails: throw (user needs to re-login)
  */
-export async function getValidToken(
-  platformUrl: string,
-  deps: GetTokenDeps = {},
-  configPath?: string | null,
-): Promise<string> {
+export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}): Promise<string> {
+  const { configPath } = deps;
   const fetchFn = deps.fetchFn ?? fetch;
   const loadAuthFn = deps.loadAuthFn ?? (() => loadAuth(configPath));
   const saveAuthFn = deps.saveAuthFn ?? ((auth: StoredAuth) => saveAuth(auth, configPath));

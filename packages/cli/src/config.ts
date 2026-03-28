@@ -355,7 +355,10 @@ export function loadConfig(): CliConfig {
     platformUrl:
       envPlatformUrl ||
       (typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL),
-    authFile: typeof data.auth_file === 'string' ? resolveFilePath(data.auth_file) : null,
+    authFile:
+      typeof data.auth_file === 'string' && data.auth_file.trim()
+        ? resolveFilePath(data.auth_file)
+        : null,
     maxDiffSizeKb:
       overrides.maxDiffSizeKb ??
       (typeof data.max_diff_size_kb === 'number'
