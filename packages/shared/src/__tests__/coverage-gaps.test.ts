@@ -3,7 +3,14 @@
  * - types.ts: isRepoAllowed default case (line 83)
  */
 import { describe, it, expect } from 'vitest';
-import { isRepoAllowed } from '../types.js';
+import {
+  isRepoAllowed,
+  isDedupRole,
+  isTriageRole,
+  isImplementRole,
+  isFixRole,
+  isCodegenRole,
+} from '../types.js';
 
 describe('isRepoAllowed edge cases', () => {
   it('returns true for null repoConfig', () => {
@@ -88,5 +95,76 @@ describe('isRepoAllowed edge cases', () => {
 
   it('unknown mode defaults to true', () => {
     expect(isRepoAllowed({ mode: 'unknown' as 'public' }, 'owner', 'repo')).toBe(true);
+  });
+});
+
+describe('role helper functions', () => {
+  describe('isImplementRole', () => {
+    it('returns true for implement', () => {
+      expect(isImplementRole('implement')).toBe(true);
+    });
+
+    it('returns false for other roles', () => {
+      expect(isImplementRole('review')).toBe(false);
+      expect(isImplementRole('fix')).toBe(false);
+      expect(isImplementRole('summary')).toBe(false);
+    });
+  });
+
+  describe('isFixRole', () => {
+    it('returns true for fix', () => {
+      expect(isFixRole('fix')).toBe(true);
+    });
+
+    it('returns false for other roles', () => {
+      expect(isFixRole('review')).toBe(false);
+      expect(isFixRole('implement')).toBe(false);
+      expect(isFixRole('summary')).toBe(false);
+    });
+  });
+
+  describe('isCodegenRole', () => {
+    it('returns true for implement', () => {
+      expect(isCodegenRole('implement')).toBe(true);
+    });
+
+    it('returns true for fix', () => {
+      expect(isCodegenRole('fix')).toBe(true);
+    });
+
+    it('returns false for non-codegen roles', () => {
+      expect(isCodegenRole('review')).toBe(false);
+      expect(isCodegenRole('summary')).toBe(false);
+      expect(isCodegenRole('pr_dedup')).toBe(false);
+      expect(isCodegenRole('issue_dedup')).toBe(false);
+      expect(isCodegenRole('pr_triage')).toBe(false);
+      expect(isCodegenRole('issue_triage')).toBe(false);
+    });
+  });
+
+  describe('isDedupRole', () => {
+    it('returns true for dedup roles', () => {
+      expect(isDedupRole('pr_dedup')).toBe(true);
+      expect(isDedupRole('issue_dedup')).toBe(true);
+    });
+
+    it('returns false for non-dedup roles', () => {
+      expect(isDedupRole('review')).toBe(false);
+      expect(isDedupRole('implement')).toBe(false);
+      expect(isDedupRole('fix')).toBe(false);
+    });
+  });
+
+  describe('isTriageRole', () => {
+    it('returns true for triage roles', () => {
+      expect(isTriageRole('pr_triage')).toBe(true);
+      expect(isTriageRole('issue_triage')).toBe(true);
+    });
+
+    it('returns false for non-triage roles', () => {
+      expect(isTriageRole('review')).toBe(false);
+      expect(isTriageRole('implement')).toBe(false);
+      expect(isTriageRole('fix')).toBe(false);
+    });
   });
 });

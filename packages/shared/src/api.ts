@@ -1,4 +1,12 @@
-import type { TaskRole, RepoConfig, ReviewVerdict, DedupReport, TriageReport } from './types.js';
+import type {
+  TaskRole,
+  RepoConfig,
+  ReviewVerdict,
+  DedupReport,
+  TriageReport,
+  ImplementReport,
+  FixReport,
+} from './types.js';
 
 // ── Poll ───────────────────────────────────────────────────────
 
@@ -31,6 +39,13 @@ export interface PollTask {
   issue_title?: string;
   issue_body?: string;
   index_issue_body?: string; // body of the index issue (for dedup context)
+
+  /** Preferred model for this task (from model:xxx label or fix command) */
+  target_model?: string;
+  /** Review comments text (for fix tasks) */
+  pr_review_comments?: string;
+  /** HEAD SHA of PR branch (for fix tasks to checkout) */
+  head_sha?: string;
 
   /** Completed worker reviews — provided to summary tasks so the synthesizer has context. */
   reviews?: ClaimReview[];
@@ -84,6 +99,8 @@ export interface ResultRequest {
   // ── New report fields ──────────────────────────────────────
   dedup_report?: DedupReport;
   triage_report?: TriageReport;
+  implement_report?: ImplementReport;
+  fix_report?: FixReport;
 }
 
 /** POST /api/tasks/{taskId}/result — response */
