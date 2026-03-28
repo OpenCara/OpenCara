@@ -759,9 +759,6 @@ export function taskRoutes() {
     if (body instanceof Response) return body;
     const { agent_id, role, model, tool, thinking } = body;
 
-    // Update heartbeat — keep agent alive during claim
-    await store.setAgentLastSeen(agent_id, Date.now());
-
     // Block check — reject agents exceeding the rejection threshold
     if (await isAgentBlocked(store, agent_id)) {
       logger.warn('Blocked agent attempted claim', { agentId: agent_id, taskId });
@@ -845,6 +842,9 @@ export function taskRoutes() {
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
     }
 
+    // Update heartbeat — keep agent alive after successful claim
+    await store.setAgentLastSeen(agent_id, Date.now());
+
     // For summary claims, return completed worker results from the group
     if (isSummaryTask(task)) {
       const reviews = await getWorkerReviews(store, task.group_id);
@@ -900,9 +900,6 @@ export function taskRoutes() {
     const { agent_id, type, review_text, verdict, tokens_used, dedup_report, triage_report } =
       result.data;
 
-    // Update heartbeat — keep agent alive during result submission
-    await store.setAgentLastSeen(agent_id, Date.now());
-
     // Role-aware claim lookup
     const claimId = `${taskId}:${agent_id}:${type}`;
     const claim = await store.getClaim(claimId);
@@ -935,6 +932,9 @@ export function taskRoutes() {
         `Claim role '${claim.role}' does not match submission type '${type}'`,
       );
     }
+
+    // Update heartbeat — keep agent alive after successful result submission
+    await store.setAgentLastSeen(agent_id, Date.now());
 
     // Update the claim with result
     await store.updateClaim(claimId, {

@@ -859,7 +859,7 @@ describe('Task Routes', () => {
       expect(results.every((r) => r.status === 409)).toBe(true);
     });
 
-    it('updates agent heartbeat on claim', async () => {
+    it('updates agent heartbeat on successful claim', async () => {
       await store.createTask(makeTask());
       // Agent has no heartbeat yet
       const before = await store.getAgentLastSeen('agent-1');
@@ -874,6 +874,18 @@ describe('Task Routes', () => {
       expect(after).not.toBeNull();
       // Heartbeat should be recent (within last second)
       expect(Date.now() - after!).toBeLessThan(1000);
+    });
+
+    it('does not update heartbeat when claim fails validation', async () => {
+      // Claim a nonexistent task — should not update heartbeat
+      const res = await request('POST', '/api/tasks/nope/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+      });
+      expect(res.status).toBe(404);
+
+      const lastSeen = await store.getAgentLastSeen('agent-1');
+      expect(lastSeen).toBeNull();
     });
   });
 
@@ -1028,7 +1040,7 @@ describe('Task Routes', () => {
       expect(summaries2[0].status).toBe('pending');
     });
 
-    it('updates agent heartbeat on result submission', async () => {
+    it('updates agent heartbeat on successful result submission', async () => {
       await store.createTask(makeTask({ task_type: 'review', status: 'reviewing' }));
       await store.createClaim({
         id: 'task-1:agent-1:review',
@@ -1055,6 +1067,20 @@ describe('Task Routes', () => {
       expect(after).not.toBeNull();
       // Heartbeat should be recent (within last second)
       expect(Date.now() - after!).toBeLessThan(1000);
+    });
+
+    it('does not update heartbeat when result has no matching claim', async () => {
+      await store.createTask(makeTask());
+      // Submit result without a claim — should not update heartbeat
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-unknown',
+        type: 'review',
+        review_text: 'test review content',
+      });
+      expect(res.status).toBe(404);
+
+      const lastSeen = await store.getAgentLastSeen('agent-unknown');
+      expect(lastSeen).toBeNull();
     });
   });
 
@@ -2773,6 +2799,27 @@ describe('Task Routes', () => {
       const lastSeen = await store.getAgentLastSeen('agent-A');
       expect(lastSeen).not.toBeNull();
       expect(Date.now() - lastSeen!).toBeLessThan(1000);
+    });
+
+    it('truly abandoned agent is reclaimed after 10-minute threshold', async () => {
+      await store.createTask(makeTask());
+
+      // Agent claims the task
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-A',
+        role: 'summary',
+      });
+
+      // Simulate agent going stale: heartbeat 11 minutes ago
+      await store.setAgentLastSeen('agent-A', Date.now() - 11 * 60 * 1000);
+
+      // Reclaim with the actual 10-minute threshold — should free the claim
+      const freed = await store.reclaimAbandonedClaims(10 * 60 * 1000);
+      expect(freed).toBe(1);
+
+      // Task should be back to pending
+      const task = await store.getTask('task-1');
+      expect(task?.status).toBe('pending');
     });
   });
 });
