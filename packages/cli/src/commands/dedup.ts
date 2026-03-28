@@ -769,7 +769,8 @@ export function dedupCommand(): Command {
         days?: string;
         agent?: string;
       }) => {
-        await runDedupInit(options);
+        const config = loadConfig();
+        await runDedupInit(options, { loadAuthFn: () => loadAuth(config.authFile) });
       },
     );
 

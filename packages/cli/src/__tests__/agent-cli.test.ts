@@ -314,7 +314,7 @@ describe('Agent CLI tests', () => {
       await advanceTime(3000);
 
       // The OAuth token should be used (verified by getValidToken being called)
-      expect(getValidToken).toHaveBeenCalledWith('http://test-server');
+      expect(getValidToken).toHaveBeenCalledWith('http://test-server', { configPath: undefined });
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Agent'));
     });
 

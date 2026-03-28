@@ -23,15 +23,17 @@ export interface StoredAuth {
 /** Default auth directory — same as config */
 const AUTH_DIR = path.join(os.homedir(), '.opencara');
 
-/** Resolve the auth file path (supports OPENCARA_AUTH_FILE env override). */
-export function getAuthFilePath(): string {
+/** Resolve the auth file path. Priority: env var > config auth_file > default. */
+export function getAuthFilePath(configPath?: string | null): string {
   const envPath = process.env.OPENCARA_AUTH_FILE?.trim();
-  return envPath || path.join(AUTH_DIR, 'auth.json');
+  if (envPath) return envPath;
+  if (configPath) return configPath;
+  return path.join(AUTH_DIR, 'auth.json');
 }
 
-/** Load stored auth from ~/.opencara/auth.json. Returns null if not found or invalid. */
-export function loadAuth(): StoredAuth | null {
-  const filePath = getAuthFilePath();
+/** Load stored auth from the auth file. Returns null if not found or invalid. */
+export function loadAuth(configPath?: string | null): StoredAuth | null {
+  const filePath = getAuthFilePath(configPath);
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const data = JSON.parse(raw) as Record<string, unknown>;
@@ -51,9 +53,9 @@ export function loadAuth(): StoredAuth | null {
   }
 }
 
-/** Save auth to ~/.opencara/auth.json atomically (creates dir if needed). */
-export function saveAuth(auth: StoredAuth): void {
-  const filePath = getAuthFilePath();
+/** Save auth to the auth file atomically (creates dir if needed). */
+export function saveAuth(auth: StoredAuth, configPath?: string | null): void {
+  const filePath = getAuthFilePath(configPath);
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
 
@@ -73,9 +75,9 @@ export function saveAuth(auth: StoredAuth): void {
   }
 }
 
-/** Delete ~/.opencara/auth.json (logout). */
-export function deleteAuth(): void {
-  const filePath = getAuthFilePath();
+/** Delete the auth file (logout). */
+export function deleteAuth(configPath?: string | null): void {
+  const filePath = getAuthFilePath(configPath);
   try {
     fs.unlinkSync(filePath);
   } catch (err) {
@@ -86,8 +88,8 @@ export function deleteAuth(): void {
 }
 
 /** Check if auth exists and token is not expired. */
-export function isAuthenticated(): boolean {
-  const auth = loadAuth();
+export function isAuthenticated(configPath?: string | null): boolean {
+  const auth = loadAuth(configPath);
   if (!auth) return false;
   return auth.expires_at > Date.now();
 }
@@ -109,6 +111,7 @@ function delay(ms: number): Promise<void> {
 export interface LoginDeps {
   fetchFn?: typeof fetch;
   delayFn?: (ms: number) => Promise<void>;
+  saveAuthFn?: (auth: StoredAuth) => void;
   log?: (msg: string) => void;
 }
 
@@ -123,6 +126,7 @@ export interface LoginDeps {
 export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<StoredAuth> {
   const fetchFn = deps.fetchFn ?? fetch;
   const delayFn = deps.delayFn ?? delay;
+  const saveAuthFn = deps.saveAuthFn ?? saveAuth;
   const log = deps.log ?? console.log;
 
   // Step 1: Initiate device flow
@@ -237,7 +241,7 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
     };
 
     // Step 5: Save
-    saveAuth(auth);
+    saveAuthFn(auth);
     log(`\nAuthenticated as ${user.login}`);
     return auth;
   }
@@ -254,6 +258,8 @@ export interface GetTokenDeps {
   loadAuthFn?: () => StoredAuth | null;
   saveAuthFn?: (auth: StoredAuth) => void;
   nowFn?: () => number;
+  /** Auth file path from config (overrides default, but env var still wins). */
+  configPath?: string | null;
 }
 
 /**
@@ -264,9 +270,10 @@ export interface GetTokenDeps {
  * 4. If refresh fails: throw (user needs to re-login)
  */
 export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}): Promise<string> {
+  const { configPath } = deps;
   const fetchFn = deps.fetchFn ?? fetch;
-  const loadAuthFn = deps.loadAuthFn ?? loadAuth;
-  const saveAuthFn = deps.saveAuthFn ?? saveAuth;
+  const loadAuthFn = deps.loadAuthFn ?? (() => loadAuth(configPath));
+  const saveAuthFn = deps.saveAuthFn ?? ((auth: StoredAuth) => saveAuth(auth, configPath));
   const nowFn = deps.nowFn ?? Date.now;
 
   const auth = loadAuthFn();

@@ -121,7 +121,7 @@ export async function runStatus(deps: {
   // Config section
   log(`Config:     ${pc.cyan(CONFIG_FILE)}`);
   log(`Platform:   ${pc.cyan(config.platformUrl)}`);
-  const auth = loadAuth();
+  const auth = loadAuth(config.authFile);
   if (auth && auth.expires_at > Date.now()) {
     log(`Auth:       ${icons.success} ${auth.github_username}`);
   } else if (auth) {

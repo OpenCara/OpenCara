@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as path from 'node:path';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -17,6 +18,7 @@ import {
   saveConfig,
   ensureConfigDir,
   resolveCodebaseDir,
+  resolveFilePath,
   RepoConfigError,
   ConfigValidationError,
   CONFIG_DIR,
@@ -1082,6 +1084,115 @@ tool = "qwen"
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('codebase_ttl');
+    });
+  });
+
+  describe('auth_file config', () => {
+    it('parses auth_file with tilde expansion', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = "~/.opencara/auth.dev.json"\n');
+
+      const config = loadConfig();
+      expect(config.authFile).not.toBeNull();
+      expect(config.authFile).not.toContain('~');
+      expect(config.authFile).toContain('auth.dev.json');
+    });
+
+    it('parses auth_file with absolute path', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = "/tmp/auth.json"\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBe('/tmp/auth.json');
+    });
+
+    it('returns null when auth_file is absent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBeNull();
+    });
+
+    it('returns null for non-string auth_file', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = 123\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBeNull();
+    });
+
+    it('saveConfig writes auth_file when present', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        authFile: '/tmp/auth.dev.json',
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('auth_file = "/tmp/auth.dev.json"');
+    });
+
+    it('saveConfig omits auth_file when null', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        authFile: null,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('auth_file');
+    });
+  });
+
+  describe('resolveFilePath', () => {
+    it('expands ~ to home directory', () => {
+      const result = resolveFilePath('~/auth.json');
+      expect(result).not.toContain('~');
+      expect(result).toContain('auth.json');
+    });
+
+    it('expands ~ alone to home directory', () => {
+      const result = resolveFilePath('~');
+      expect(result).not.toContain('~');
+    });
+
+    it('returns absolute path unchanged', () => {
+      const result = resolveFilePath('/tmp/auth.json');
+      expect(result).toBe('/tmp/auth.json');
+    });
+
+    it('resolves relative path against CWD', () => {
+      const result = resolveFilePath('auth.json');
+      expect(result).toBe(path.resolve('auth.json'));
+    });
+  });
+
+  describe('auth_file empty string guard', () => {
+    it('returns null for empty auth_file string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = ""\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBeNull();
+    });
+
+    it('returns null for whitespace-only auth_file string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('auth_file = "  "\n');
+
+      const config = loadConfig();
+      expect(config.authFile).toBeNull();
     });
   });
 

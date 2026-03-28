@@ -29,6 +29,7 @@ export interface UsageLimits {
 
 export interface CliConfig {
   platformUrl: string;
+  authFile: string | null;
   maxDiffSizeKb: number;
   maxConsecutiveErrors: number;
   codebaseDir: string | null;
@@ -299,6 +300,7 @@ export function loadConfig(): CliConfig {
 
   const defaults: CliConfig = {
     platformUrl: envPlatformUrl || DEFAULT_PLATFORM_URL,
+    authFile: null,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     codebaseDir: null,
@@ -353,6 +355,10 @@ export function loadConfig(): CliConfig {
     platformUrl:
       envPlatformUrl ||
       (typeof data.platform_url === 'string' ? data.platform_url : DEFAULT_PLATFORM_URL),
+    authFile:
+      typeof data.auth_file === 'string' && data.auth_file.trim()
+        ? resolveFilePath(data.auth_file)
+        : null,
     maxDiffSizeKb:
       overrides.maxDiffSizeKb ??
       (typeof data.max_diff_size_kb === 'number'
@@ -380,6 +386,9 @@ export function saveConfig(config: CliConfig): void {
   const data: Record<string, unknown> = {
     platform_url: config.platformUrl,
   };
+  if (config.authFile) {
+    data.auth_file = config.authFile;
+  }
   if (config.codebaseDir) {
     data.codebase_dir = config.codebaseDir;
   }
@@ -408,6 +417,16 @@ export function saveConfig(config: CliConfig): void {
     data.max_tokens_per_review = config.usageLimits.maxTokensPerReview;
   }
   fs.writeFileSync(CONFIG_FILE, stringifyToml(data), { encoding: 'utf-8', mode: 0o600 });
+}
+
+/**
+ * Resolve a file path: expands ~ to home directory and resolves relative paths.
+ */
+export function resolveFilePath(raw: string): string {
+  if (raw.startsWith('~/') || raw === '~') {
+    return path.join(os.homedir(), raw.slice(1));
+  }
+  return path.resolve(raw);
 }
 
 /**
