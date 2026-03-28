@@ -599,30 +599,30 @@ tool = "claude"
       expect(config.agents![0].repos).toBeUndefined();
     });
 
-    it('parses repos with mode: all', () => {
+    it('parses repos with mode: public', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
 [agents.repos]
-mode = "all"
+mode = "public"
 `);
       const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'all' });
+      expect(config.agents![0].repos).toEqual({ mode: 'public' });
     });
 
-    it('parses repos with mode: own', () => {
+    it('parses repos with mode: private', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
 [agents.repos]
-mode = "own"
+mode = "private"
 `);
       const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'own' });
+      expect(config.agents![0].repos).toEqual({ mode: 'private' });
     });
 
     it('parses repos with mode: whitelist and list', () => {
@@ -752,31 +752,31 @@ list = ["a/b/c"]
       expect(() => loadConfig()).toThrow("must match 'owner/repo' format");
     });
 
-    it('does not require list for mode: all', () => {
+    it('does not require list for mode: public', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
 [agents.repos]
-mode = "all"
+mode = "public"
 `);
       const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'all' });
+      expect(config.agents![0].repos).toEqual({ mode: 'public' });
       expect(config.agents![0].repos!.list).toBeUndefined();
     });
 
-    it('does not require list for mode: own', () => {
+    it('does not require list for mode: private', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`
 [[agents]]
 model = "claude-opus-4-6"
 tool = "claude"
 [agents.repos]
-mode = "own"
+mode = "private"
 `);
       const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'own' });
+      expect(config.agents![0].repos).toEqual({ mode: 'private' });
       expect(config.agents![0].repos!.list).toBeUndefined();
     });
 
@@ -1440,13 +1440,13 @@ mode = "invalid"
 model = "claude-opus-4-6"
 tool = "claude"
 [agents.repos]
-mode = "all"
+mode = "public"
 [agents.synthesize_repos]
 mode = "whitelist"
 list = ["org/repo"]
 `);
       const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'all' });
+      expect(config.agents![0].repos).toEqual({ mode: 'public' });
       expect(config.agents![0].synthesize_repos).toEqual({
         mode: 'whitelist',
         list: ['org/repo'],

@@ -380,7 +380,7 @@ describe('agent poll loop', () => {
     expect(pollBody!.review_only).toBeUndefined();
   });
 
-  it('sends repos list in poll request for mode:all with private repos', async () => {
+  it('sends repos list in poll request for mode:public with private repos', async () => {
     let pollBody: Record<string, unknown> | null = null;
 
     globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
@@ -411,7 +411,7 @@ describe('agent poll loop', () => {
       consumptionDeps,
       {
         pollIntervalMs: 100,
-        repoConfig: { mode: 'all', list: ['org/private-repo'] },
+        repoConfig: { mode: 'public', list: ['org/private-repo'] },
       },
     );
 

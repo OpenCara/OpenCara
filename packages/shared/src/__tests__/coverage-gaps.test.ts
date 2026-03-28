@@ -14,14 +14,14 @@ describe('isRepoAllowed edge cases', () => {
     expect(isRepoAllowed(undefined, 'owner', 'repo')).toBe(true);
   });
 
-  it('returns true for mode=all', () => {
-    expect(isRepoAllowed({ mode: 'all' }, 'any', 'repo')).toBe(true);
+  it('returns true for mode=public', () => {
+    expect(isRepoAllowed({ mode: 'public' }, 'any', 'repo')).toBe(true);
   });
 
-  it('mode=own checks agentOwner against targetOwner', () => {
-    expect(isRepoAllowed({ mode: 'own' }, 'owner', 'repo', 'owner')).toBe(true);
-    expect(isRepoAllowed({ mode: 'own' }, 'owner', 'repo', 'other')).toBe(false);
-    expect(isRepoAllowed({ mode: 'own' }, 'owner', 'repo')).toBe(false);
+  it('mode=private checks agentOwner against targetOwner', () => {
+    expect(isRepoAllowed({ mode: 'private' }, 'owner', 'repo', 'owner')).toBe(true);
+    expect(isRepoAllowed({ mode: 'private' }, 'owner', 'repo', 'other')).toBe(false);
+    expect(isRepoAllowed({ mode: 'private' }, 'owner', 'repo')).toBe(false);
   });
 
   it('mode=whitelist checks list', () => {
@@ -37,6 +37,6 @@ describe('isRepoAllowed edge cases', () => {
   });
 
   it('unknown mode defaults to true', () => {
-    expect(isRepoAllowed({ mode: 'unknown' as 'all' }, 'owner', 'repo')).toBe(true);
+    expect(isRepoAllowed({ mode: 'unknown' as 'public' }, 'owner', 'repo')).toBe(true);
   });
 });

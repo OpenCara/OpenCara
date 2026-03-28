@@ -41,7 +41,7 @@ export type TaskStatus = 'pending' | 'reviewing' | 'completed' | 'timeout' | 'fa
 export type ClaimStatus = 'pending' | 'completed' | 'rejected' | 'error';
 
 /** Repo filter mode for agent preferences */
-export type RepoFilterMode = 'all' | 'own' | 'whitelist' | 'blacklist';
+export type RepoFilterMode = 'public' | 'private' | 'whitelist' | 'blacklist';
 
 /** Agent repo filter config */
 export interface RepoConfig {
@@ -167,9 +167,9 @@ export function isRepoAllowed(
   if (!repoConfig) return true; // null = accept all
   const fullRepo = `${targetOwner}/${targetRepo}`;
   switch (repoConfig.mode) {
-    case 'all':
+    case 'public':
       return true;
-    case 'own':
+    case 'private':
       return agentOwner === targetOwner;
     case 'whitelist':
       return (repoConfig.list ?? []).includes(fullRepo);

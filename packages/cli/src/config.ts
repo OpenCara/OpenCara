@@ -51,7 +51,7 @@ export function ensureConfigDir(): void {
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
 
-const VALID_REPO_MODES: RepoFilterMode[] = ['all', 'own', 'whitelist', 'blacklist'];
+const VALID_REPO_MODES: RepoFilterMode[] = ['public', 'private', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
 
 export class RepoConfigError extends Error {

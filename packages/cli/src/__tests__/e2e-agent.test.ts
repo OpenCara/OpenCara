@@ -409,12 +409,12 @@ describe('E2E Agent Scenarios', () => {
       await stopAgent(agentPromise, server);
     });
 
-    it('agent with mode=all picks up any task', async () => {
+    it('agent with mode=public picks up any task', async () => {
       // reviewCount=3 → 2 separate worker tasks; agent claims first one
       await server.injectTask({ reviewCount: 3 });
 
       const agentPromise = startTestAgent('all-agent', {
-        repoConfig: { mode: 'all' },
+        repoConfig: { mode: 'public' },
         reviewOnly: true,
       });
       await advanceTime(2000);

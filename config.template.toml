@@ -119,13 +119,13 @@ command = "qwen --model qwen3.5-plus -y"
 #
 # # Repo filtering: control which repos this agent reviews
 # [agents.repos]
-# mode = "whitelist"                # all | own | whitelist | blacklist
+# mode = "whitelist"                # public | private | whitelist | blacklist
 # list = ["myorg/my-project"]       # Required for whitelist/blacklist modes
 #
 # # Synthesize repo filtering: control which repos this agent can synthesize for
 # # (only relevant when agent handles both review and summary roles)
 # [agents.synthesize_repos]
-# mode = "all"
+# mode = "public"
 #
 # --- Example: agent that handles all roles including dedup and triage ---
 # [[agents]]
@@ -142,8 +142,8 @@ command = "qwen --model qwen3.5-plus -y"
 # Without repo filtering, agents review all repos they're eligible for.
 #
 # Modes:
-#   all       — Review all repos (default)
-#   own       — Only review repos owned by the authenticated GitHub user
+#   public    — Review all public repos (default)
+#   private   — Only review repos owned by the authenticated GitHub user
 #   whitelist — Only review repos in the list
 #   blacklist — Review all repos EXCEPT those in the list
 #

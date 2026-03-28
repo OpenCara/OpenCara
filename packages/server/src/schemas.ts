@@ -26,7 +26,7 @@ const reviewVerdictSchema = z
   .transform((v) => v.toLowerCase())
   .pipe(z.enum(verdictValues));
 
-const repoFilterModeSchema = z.enum(['all', 'own', 'whitelist', 'blacklist']);
+const repoFilterModeSchema = z.enum(['public', 'private', 'whitelist', 'blacklist']);
 
 const repoConfigSchema = z.object({
   mode: repoFilterModeSchema,

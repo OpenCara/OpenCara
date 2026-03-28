@@ -96,12 +96,12 @@ describe('isRepoAllowed', () => {
   });
 
   it('allows all when mode is all', () => {
-    expect(isRepoAllowed({ mode: 'all' }, 'org', 'repo')).toBe(true);
+    expect(isRepoAllowed({ mode: 'public' }, 'org', 'repo')).toBe(true);
   });
 
   it('allows own repos only', () => {
-    expect(isRepoAllowed({ mode: 'own' }, 'alice', 'repo', 'alice')).toBe(true);
-    expect(isRepoAllowed({ mode: 'own' }, 'bob', 'repo', 'alice')).toBe(false);
+    expect(isRepoAllowed({ mode: 'private' }, 'alice', 'repo', 'alice')).toBe(true);
+    expect(isRepoAllowed({ mode: 'private' }, 'bob', 'repo', 'alice')).toBe(false);
   });
 
   it('whitelist mode', () => {
