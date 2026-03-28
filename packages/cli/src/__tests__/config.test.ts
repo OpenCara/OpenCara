@@ -394,9 +394,7 @@ describe('config', () => {
 
     it('parses agents without command field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        '\n[[agents]]\nmodel = "glm-5"\ntool = "qwen"\n',
-      );
+      vi.mocked(fs.readFileSync).mockReturnValue('\n[[agents]]\nmodel = "glm-5"\ntool = "qwen"\n');
 
       const config = loadConfig();
       expect(config.agents).toEqual([{ model: 'glm-5', tool: 'qwen' }]);
@@ -851,7 +849,7 @@ github_token = "ghp_agent1"
     it('saveConfig does not write github_token or github_username', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
-          maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         codebaseDir: null,
         agentCommand: null,
@@ -1378,7 +1376,7 @@ roles = ["review", "summary", "issue_triage"]
     it('saveConfig round-trips roles field', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
-          maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         codebaseDir: null,
         agentCommand: null,
