@@ -355,8 +355,11 @@ export async function resolveUser(
 
 /**
  * Fetch the authenticated user's org memberships from GitHub.
- * Returns a Set of org login names.
+ * Returns a Set of org login names (lowercased for case-insensitive matching).
  * Returns an empty set on failure (non-critical — agent can still work without orgs).
+ *
+ * NOTE: Fetches only the first page (max 100 orgs). Pagination not implemented —
+ * users with >100 org memberships may miss some repos in private mode filtering.
  */
 export async function fetchUserOrgs(
   token: string,
@@ -367,6 +370,7 @@ export async function fetchUserOrgs(
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
       },
     });
 
@@ -378,7 +382,7 @@ export async function fetchUserOrgs(
     const orgs = new Set<string>();
     for (const org of data) {
       if (typeof org.login === 'string') {
-        orgs.add(org.login);
+        orgs.add(org.login.toLowerCase());
       }
     }
     return orgs;

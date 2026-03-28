@@ -840,18 +840,18 @@ describe('auth', () => {
   });
 
   describe('fetchUserOrgs', () => {
-    it('returns set of org logins on success', async () => {
+    it('returns set of org logins on success (lowercased)', async () => {
       const fetchFn = vi
         .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
         .mockResolvedValueOnce(
-          mockResponse([{ login: 'org-a' }, { login: 'org-b' }, { login: 'org-c' }]),
+          mockResponse([{ login: 'Org-A' }, { login: 'org-b' }, { login: 'ORG-C' }]),
         );
 
       const result = await fetchUserOrgs('ghu_token', fetchFn);
       expect(result).toEqual(new Set(['org-a', 'org-b', 'org-c']));
     });
 
-    it('sends Bearer token in Authorization header', async () => {
+    it('sends correct headers including API version', async () => {
       const fetchFn = vi
         .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
         .mockResolvedValueOnce(mockResponse([{ login: 'my-org' }]));
@@ -863,6 +863,7 @@ describe('auth', () => {
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: 'Bearer ghu_my_token',
+            'X-GitHub-Api-Version': '2022-11-28',
           }),
         }),
       );
@@ -890,7 +891,7 @@ describe('auth', () => {
       const fetchFn = vi
         .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
         .mockResolvedValueOnce(
-          mockResponse([{ login: 'valid-org' }, { login: 123 }, { name: 'no-login' }]),
+          mockResponse([{ login: 'Valid-Org' }, { login: 123 }, { name: 'no-login' }]),
         );
 
       const result = await fetchUserOrgs('ghu_token', fetchFn);

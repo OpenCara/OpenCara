@@ -171,10 +171,14 @@ export function isRepoAllowed(
     case 'public':
       return true;
     case 'private': {
+      // GitHub owner names are case-insensitive — normalize for comparison
+      const normalizedTarget = targetOwner.toLowerCase();
+      const normalizedOwner = agentOwner?.toLowerCase();
       const hasAccess =
-        agentOwner === targetOwner || (userOrgs != null && userOrgs.has(targetOwner));
+        normalizedOwner === normalizedTarget ||
+        (userOrgs != null && userOrgs.has(normalizedTarget));
       if (!hasAccess) return false;
-      // If list is specified, further restrict to listed repos
+      // list absent or empty — no further restriction; allow all accessible repos
       if (repoConfig.list && repoConfig.list.length > 0) {
         return repoConfig.list.includes(fullRepo);
       }

@@ -1407,11 +1407,10 @@ export async function startAgentRouter(): Promise<void> {
     logger.log(`Authenticated as ${storedAuth.github_username}`);
   }
 
-  // Fetch org memberships for private repo filtering
-  const userOrgs = await fetchUserOrgs(oauthToken);
-  if (userOrgs.size > 0) {
-    logger.log(`Org memberships: ${[...userOrgs].join(', ')}`);
-  }
+  // Fetch org memberships only when private mode needs them
+  const repoConfig = agentConfig?.repos;
+  const userOrgs =
+    repoConfig?.mode === 'private' ? await fetchUserOrgs(oauthToken) : new Set<string>();
 
   const codebaseDir = resolveCodebaseDir(agentConfig?.codebase_dir, config.codebaseDir);
   const reviewDeps: ReviewExecutorDeps = {
@@ -1446,7 +1445,7 @@ export async function startAgentRouter(): Promise<void> {
       maxConsecutiveErrors: config.maxConsecutiveErrors,
       routerRelay: router,
       reviewOnly: agentConfig?.review_only,
-      repoConfig: agentConfig?.repos,
+      repoConfig,
       roles,
       synthesizeRepos: agentConfig?.synthesize_repos,
       label,
@@ -1627,11 +1626,9 @@ agentCommand
         console.log(`Authenticated as ${storedAuth.github_username}`);
       }
 
-      // Fetch org memberships for private repo filtering
-      const userOrgs = await fetchUserOrgs(oauthToken);
-      if (userOrgs.size > 0) {
-        console.log(`Org memberships: ${[...userOrgs].join(', ')}`);
-      }
+      // Fetch org memberships only when at least one agent uses private mode
+      const needsOrgs = config.agents?.some((a) => a.repos?.mode === 'private') ?? false;
+      const userOrgs = needsOrgs ? await fetchUserOrgs(oauthToken) : new Set<string>();
 
       if (opts.all) {
         // Start all agents concurrently

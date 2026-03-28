@@ -31,6 +31,15 @@ describe('isRepoAllowed edge cases', () => {
     expect(isRepoAllowed({ mode: 'private' }, 'unknown-org', 'repo', 'alice', orgs)).toBe(false);
   });
 
+  it('mode=private is case-insensitive for owner matching', () => {
+    const orgs = new Set(['myorg']); // lowercased (as fetchUserOrgs returns)
+    expect(isRepoAllowed({ mode: 'private' }, 'MyOrg', 'repo', 'alice', orgs)).toBe(true);
+    expect(isRepoAllowed({ mode: 'private' }, 'MYORG', 'repo', 'alice', orgs)).toBe(true);
+    // agentOwner case-insensitive
+    expect(isRepoAllowed({ mode: 'private' }, 'Alice', 'repo', 'alice')).toBe(true);
+    expect(isRepoAllowed({ mode: 'private' }, 'ALICE', 'repo', 'alice')).toBe(true);
+  });
+
   it('mode=private with list narrows within accessible repos', () => {
     const orgs = new Set(['my-org']);
     const config = { mode: 'private' as const, list: ['my-org/allowed-repo'] };
