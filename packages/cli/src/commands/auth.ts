@@ -27,7 +27,7 @@ export async function defaultConfirm(prompt: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     let answered = false;
-    rl.on('close', () => {
+    rl.once('close', () => {
       if (!answered) resolve(false);
     });
     rl.question(`${prompt} (y/N) `, (answer) => {
