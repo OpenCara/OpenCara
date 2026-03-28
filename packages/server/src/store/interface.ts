@@ -37,7 +37,7 @@ export interface DataStore {
   /** Release a claimed task: reviewing → pending. */
   releaseTask(taskId: string): Promise<void>;
 
-  // ── Group queries (tasks linked by group_id) ─────────────���
+  // ── Group queries (tasks linked by group_id) ──────────────
   /** Get all tasks belonging to a group. */
   getTasksByGroup(groupId: string): Promise<ReviewTask[]>;
   /** Count completed tasks in a group. */
