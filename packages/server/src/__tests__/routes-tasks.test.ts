@@ -858,6 +858,23 @@ describe('Task Routes', () => {
 
       expect(results.every((r) => r.status === 409)).toBe(true);
     });
+
+    it('updates agent heartbeat on claim', async () => {
+      await store.createTask(makeTask());
+      // Agent has no heartbeat yet
+      const before = await store.getAgentLastSeen('agent-1');
+      expect(before).toBeNull();
+
+      await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-1',
+        role: 'summary',
+      });
+
+      const after = await store.getAgentLastSeen('agent-1');
+      expect(after).not.toBeNull();
+      // Heartbeat should be recent (within last second)
+      expect(Date.now() - after!).toBeLessThan(1000);
+    });
   });
 
   // ── Result ───────────────────────────────────────────────
@@ -1009,6 +1026,35 @@ describe('Task Routes', () => {
       );
       expect(summaries2).toHaveLength(1);
       expect(summaries2[0].status).toBe('pending');
+    });
+
+    it('updates agent heartbeat on result submission', async () => {
+      await store.createTask(makeTask({ task_type: 'review', status: 'reviewing' }));
+      await store.createClaim({
+        id: 'task-1:agent-1:review',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Agent has no heartbeat yet
+      const before = await store.getAgentLastSeen('agent-1');
+      expect(before).toBeNull();
+
+      await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-1',
+        type: 'review',
+        review_text: 'Looks good!',
+        verdict: 'approve',
+        tokens_used: 500,
+      });
+
+      const after = await store.getAgentLastSeen('agent-1');
+      expect(after).not.toBeNull();
+      // Heartbeat should be recent (within last second)
+      expect(Date.now() - after!).toBeLessThan(1000);
     });
   });
 
@@ -2671,6 +2717,62 @@ describe('Task Routes', () => {
       expect(resultRes.status).toBe(409);
       const body = await resultRes.json();
       expect(body.error.message).toContain('Claim already error');
+    });
+  });
+
+  // ── Heartbeat kept alive via claim/result (#560) ─────────
+
+  describe('heartbeat kept alive via claim/result (#560)', () => {
+    it('claim refreshes heartbeat so reclaim does not trigger within threshold', async () => {
+      await store.createTask(makeTask());
+
+      // Agent polls (sets heartbeat)
+      await request('POST', '/api/tasks/poll', { agent_id: 'agent-A' });
+
+      // Agent claims the task (refreshes heartbeat)
+      const claimRes = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-A',
+        role: 'summary',
+      });
+      expect(claimRes.status).toBe(200);
+
+      // Heartbeat was just refreshed by claim — should NOT be reclaimed
+      // even with a short threshold of 5 minutes
+      const freed = await store.reclaimAbandonedClaims(300_000);
+      expect(freed).toBe(0);
+
+      // Task should still be reviewing
+      const task = await store.getTask('task-1');
+      expect(task?.status).toBe('reviewing');
+    });
+
+    it('result refreshes heartbeat so agent stays active after submission', async () => {
+      await store.createTask(makeTask({ task_type: 'review', status: 'reviewing' }));
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      // Set agent heartbeat to 5 minutes ago (would be stale with old 3-min threshold)
+      await store.setAgentLastSeen('agent-A', Date.now() - 300_000);
+
+      // Agent submits result — this refreshes heartbeat
+      const res = await request('POST', '/api/tasks/task-1/result', {
+        agent_id: 'agent-A',
+        type: 'review',
+        review_text: 'Looks good!',
+        verdict: 'approve',
+      });
+      expect(res.status).toBe(200);
+
+      // Heartbeat should now be fresh
+      const lastSeen = await store.getAgentLastSeen('agent-A');
+      expect(lastSeen).not.toBeNull();
+      expect(Date.now() - lastSeen!).toBeLessThan(1000);
     });
   });
 });

@@ -759,6 +759,9 @@ export function taskRoutes() {
     if (body instanceof Response) return body;
     const { agent_id, role, model, tool, thinking } = body;
 
+    // Update heartbeat — keep agent alive during claim
+    await store.setAgentLastSeen(agent_id, Date.now());
+
     // Block check — reject agents exceeding the rejection threshold
     if (await isAgentBlocked(store, agent_id)) {
       logger.warn('Blocked agent attempted claim', { agentId: agent_id, taskId });
@@ -896,6 +899,9 @@ export function taskRoutes() {
 
     const { agent_id, type, review_text, verdict, tokens_used, dedup_report, triage_report } =
       result.data;
+
+    // Update heartbeat — keep agent alive during result submission
+    await store.setAgentLastSeen(agent_id, Date.now());
 
     // Role-aware claim lookup
     const claimId = `${taskId}:${agent_id}:${type}`;
