@@ -88,13 +88,21 @@ function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string)
 /**
  * Check if a summary task is visible to the given agent, considering
  * the preferred synthesizer grace period.
+ * Checks both entity-based preferences and model-based preferences.
  */
-function isSummaryVisibleToAgent(task: ReviewTask, agentId: string): boolean {
-  const preferred = task.config?.summarizer?.preferred ?? [];
-  if (preferred.length === 0) return true;
+function isSummaryVisibleToAgent(task: ReviewTask, agentId: string, model?: string): boolean {
+  const summarizer = task.config?.summarizer;
+  const preferred = summarizer?.preferred ?? [];
+  const preferredModels = summarizer?.preferredModels ?? [];
 
-  const isPreferred = preferred.some((p) => isEntityMatch(p, agentId));
-  if (isPreferred) return true;
+  // No preferences at all — visible to everyone
+  if (preferred.length === 0 && preferredModels.length === 0) return true;
+
+  // Check entity-based preference
+  if (preferred.length > 0 && preferred.some((p) => isEntityMatch(p, agentId))) return true;
+
+  // Check model-based preference
+  if (preferredModels.length > 0 && model && preferredModels.includes(model)) return true;
 
   // Non-preferred agent: check if grace period has elapsed since task creation
   return Date.now() - task.created_at >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
@@ -637,7 +645,7 @@ export function taskRoutes() {
 
       // Grace period visibility checks
       if (isSummaryTask(task)) {
-        if (!isSummaryVisibleToAgent(task, agent_id)) continue;
+        if (!isSummaryVisibleToAgent(task, agent_id, body.model)) continue;
         // Repo filter for summary agents
         if (synthesize_repos) {
           if (!isRepoAllowed(synthesize_repos, task.owner, task.repo)) continue;
@@ -803,7 +811,7 @@ export function taskRoutes() {
     }
 
     // Grace period check for summary tasks
-    if (isSummaryTask(task) && !isSummaryVisibleToAgent(task, agent_id)) {
+    if (isSummaryTask(task) && !isSummaryVisibleToAgent(task, agent_id, model)) {
       return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
     }
 

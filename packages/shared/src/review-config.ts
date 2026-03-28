@@ -30,7 +30,12 @@ export interface FeatureConfig {
 export interface ReviewSectionConfig extends FeatureConfig {
   trigger: TriggerConfig;
   reviewer: { whitelist: EntityEntry[]; blacklist: EntityEntry[] };
-  summarizer: { whitelist: EntityEntry[]; blacklist: EntityEntry[]; preferred: EntityEntry[] };
+  summarizer: {
+    whitelist: EntityEntry[];
+    blacklist: EntityEntry[];
+    preferred: EntityEntry[];
+    preferredModels: string[];
+  };
 }
 
 /** Dedup target config for PRs */
@@ -175,7 +180,7 @@ export const DEFAULT_REVIEW_SECTION: ReviewSectionConfig = {
   ...DEFAULT_FEATURE_CONFIG,
   trigger: DEFAULT_TRIGGER,
   reviewer: { whitelist: [], blacklist: [] },
-  summarizer: { whitelist: [], blacklist: [], preferred: [] },
+  summarizer: { whitelist: [], blacklist: [], preferred: [], preferredModels: [] },
 };
 
 /** @deprecated Use DEFAULT_REVIEW_SECTION instead */
@@ -207,6 +212,7 @@ function parseSummarizerSection(raw: unknown): ReviewSectionConfig['summarizer']
     whitelist: [],
     blacklist: [],
     preferred: [],
+    preferredModels: [],
   };
 
   // String shorthand: "alice" → preferred with github username
@@ -216,18 +222,21 @@ function parseSummarizerSection(raw: unknown): ReviewSectionConfig['summarizer']
 
   if (!isObject(raw)) return defaults;
 
+  // Parse preferred_models from any object form
+  const preferredModels = parseStringArray(raw.preferred_models);
+
   // Object with "only" key — whitelist-only mode
   if (raw.only !== undefined) {
     if (typeof raw.only === 'string') {
-      return { ...defaults, whitelist: [toGithubEntity(raw.only)] };
+      return { ...defaults, whitelist: [toGithubEntity(raw.only)], preferredModels };
     }
     if (Array.isArray(raw.only)) {
       const entries = raw.only
         .filter((v: unknown) => typeof v === 'string')
         .map((v: unknown) => toGithubEntity(v as string));
-      return { ...defaults, whitelist: entries };
+      return { ...defaults, whitelist: entries, preferredModels };
     }
-    return defaults;
+    return { ...defaults, preferredModels };
   }
 
   // Full object (existing behavior)
@@ -235,6 +244,7 @@ function parseSummarizerSection(raw: unknown): ReviewSectionConfig['summarizer']
     whitelist: parseEntityList(raw.whitelist),
     blacklist: parseEntityList(raw.blacklist),
     preferred: parseEntityList(raw.preferred),
+    preferredModels,
   };
 }
 
