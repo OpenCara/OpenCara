@@ -208,7 +208,7 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
     if (typeof obj.instances === 'number') {
       if (!Number.isInteger(obj.instances) || obj.instances < 1) {
         console.warn(
-          `\u26a0 Config warning: agents[${i}].instances must be a positive integer, got ${obj.instances}, using default (1)`,
+          `\u26a0 Config warning: agents[${i}].instances must be a positive integer, got ${obj.instances}. Value ignored.`,
         );
       } else {
         agent.instances = obj.instances;

@@ -502,7 +502,7 @@ describe('Agent CLI tests', () => {
       );
     });
 
-    it('--instances with invalid value exits', async () => {
+    it('--instances with zero exits', async () => {
       vi.mocked(loadConfig).mockReturnValue({
         platformUrl: 'http://test-server',
         maxDiffSizeKb: 100,
@@ -517,6 +517,27 @@ describe('Agent CLI tests', () => {
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
       await startCmd!.parseAsync(['--agent', '0', '--instances', '0'], { from: 'user' });
+
+      expect(console.error).toHaveBeenCalledWith('--instances must be a positive integer');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      exitSpy.mockRestore();
+    });
+
+    it('--instances with fractional value exits', async () => {
+      vi.mocked(loadConfig).mockReturnValue({
+        platformUrl: 'http://test-server',
+        maxDiffSizeKb: 100,
+        maxConsecutiveErrors: 3,
+        codebaseDir: null,
+        agentCommand: null,
+        agents: [{ model: 'claude', tool: 'cli', command: 'echo test' }],
+      });
+
+      const { agentCommand } = await import('../commands/agent.js');
+      const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+
+      await startCmd!.parseAsync(['--agent', '0', '--instances', '2.5'], { from: 'user' });
 
       expect(console.error).toHaveBeenCalledWith('--instances must be a positive integer');
       expect(exitSpy).toHaveBeenCalledWith(1);

@@ -1575,14 +1575,14 @@ agentCommand
       const config = loadConfig();
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
       const versionOverride = opts.versionOverride || process.env.OPENCARA_VERSION_OVERRIDE || null;
-      const instancesOverride = opts.instances ? parseInt(opts.instances, 10) : undefined;
-      if (
-        instancesOverride !== undefined &&
-        (!Number.isInteger(instancesOverride) || instancesOverride < 1)
-      ) {
-        console.error('--instances must be a positive integer');
-        process.exit(1);
-        return;
+      let instancesOverride: number | undefined;
+      if (opts.instances !== undefined) {
+        if (!/^[1-9]\d*$/.test(opts.instances)) {
+          console.error('--instances must be a positive integer');
+          process.exit(1);
+          return;
+        }
+        instancesOverride = parseInt(opts.instances, 10);
       }
 
       // Authenticate via OAuth
@@ -1682,7 +1682,14 @@ agentCommand
           process.exit(1);
           return;
         }
-        await Promise.allSettled(agentPromises);
+        const results = await Promise.allSettled(agentPromises);
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        if (failures.length > 0) {
+          for (const f of failures) {
+            console.error(`Agent instance failed: ${f.reason}`);
+          }
+          process.exit(1);
+        }
       }
     },
   );
