@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import type {
   DeviceFlowInitResponse,
   DeviceFlowTokenResponse,
@@ -402,7 +403,6 @@ export async function fetchUserOrgs(
  */
 function fetchUserOrgsViaGh(): Set<string> {
   try {
-    const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
     const output = execFileSync('gh', ['api', '/user/orgs', '--jq', '.[].login'], {
       encoding: 'utf-8',
       timeout: 10_000,
