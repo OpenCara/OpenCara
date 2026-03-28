@@ -721,7 +721,7 @@ async function handleTask(
   } finally {
     // Clean up task worktree (bare repo stays for reuse)
     if (taskCheckoutPath && taskBareRepoPath) {
-      cleanupWorktree(taskBareRepoPath, taskCheckoutPath);
+      await cleanupWorktree(taskBareRepoPath, taskCheckoutPath);
     }
   }
   return {};

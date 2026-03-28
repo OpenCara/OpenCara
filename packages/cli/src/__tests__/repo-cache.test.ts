@@ -32,26 +32,21 @@ describe('repo-cache', () => {
   });
 
   describe('ensureBareClone', () => {
-    it('creates bare clone via gh when repo does not exist', () => {
+    it('creates bare clone via gh when repo does not exist and gh is available', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      // Call 1: gh auth status, Call 2: gh repo clone
       vi.mocked(execFileSync).mockReturnValue('');
 
-      const result = ensureBareClone('acme', 'widgets', '/tmp/repos');
+      const result = ensureBareClone('acme', 'widgets', '/tmp/repos', true);
 
       expect(result.bareRepoPath).toBe('/tmp/repos/acme/widgets.git');
       expect(result.cloned).toBe(true);
 
       const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls.length).toBe(2);
-
-      // gh auth status
-      expect(calls[0][0]).toBe('gh');
-      expect(calls[0][1]).toEqual(['auth', 'status']);
+      expect(calls.length).toBe(1);
 
       // gh repo clone --bare
-      expect(calls[1][0]).toBe('gh');
-      expect(calls[1][1]).toEqual([
+      expect(calls[0][0]).toBe('gh');
+      expect(calls[0][1]).toEqual([
         'repo',
         'clone',
         'acme/widgets',
@@ -65,7 +60,7 @@ describe('repo-cache', () => {
     it('skips clone when bare repo already exists (HEAD file present)', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
 
-      const result = ensureBareClone('acme', 'widgets', '/tmp/repos');
+      const result = ensureBareClone('acme', 'widgets', '/tmp/repos', true);
 
       expect(result.bareRepoPath).toBe('/tmp/repos/acme/widgets.git');
       expect(result.cloned).toBe(false);
@@ -74,20 +69,15 @@ describe('repo-cache', () => {
 
     it('falls back to git clone when gh is not available', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync)
-        .mockImplementationOnce(() => {
-          throw new Error('gh: command not found');
-        })
-        .mockReturnValue('');
+      vi.mocked(execFileSync).mockReturnValue('');
 
-      const result = ensureBareClone('acme', 'widgets', '/tmp/repos');
+      const result = ensureBareClone('acme', 'widgets', '/tmp/repos', false);
 
       expect(result.cloned).toBe(true);
 
       const calls = vi.mocked(execFileSync).mock.calls;
-      // Call 1: gh auth status (fails), Call 2: git clone --bare
-      expect(calls[1][0]).toBe('git');
-      expect(calls[1][1]).toEqual([
+      expect(calls[0][0]).toBe('git');
+      expect(calls[0][1]).toEqual([
         'clone',
         '--bare',
         '--filter=blob:none',
@@ -100,19 +90,19 @@ describe('repo-cache', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockReturnValue('');
 
-      ensureBareClone('acme', 'widgets', '/tmp/repos');
+      ensureBareClone('acme', 'widgets', '/tmp/repos', true);
 
       expect(fs.mkdirSync).toHaveBeenCalledWith('/tmp/repos/acme', { recursive: true });
     });
 
     it('rejects invalid owner name', () => {
-      expect(() => ensureBareClone('../etc', 'repo', '/tmp/repos')).toThrow(
+      expect(() => ensureBareClone('../etc', 'repo', '/tmp/repos', true)).toThrow(
         'disallowed characters',
       );
     });
 
     it('rejects invalid repo name', () => {
-      expect(() => ensureBareClone('acme', '../../passwd', '/tmp/repos')).toThrow(
+      expect(() => ensureBareClone('acme', '../../passwd', '/tmp/repos', true)).toThrow(
         'disallowed characters',
       );
     });
@@ -122,30 +112,25 @@ describe('repo-cache', () => {
     it('fetches PR ref with credential helper when gh is available', () => {
       vi.mocked(execFileSync).mockReturnValue('');
 
-      fetchPRRef('/tmp/repos/acme/widgets.git', 42);
+      fetchPRRef('/tmp/repos/acme/widgets.git', 42, true);
 
-      const calls = vi.mocked(execFileSync).mock.calls;
-      // Call 1: gh auth status, Call 2: git fetch
-      expect(calls[1][0]).toBe('git');
-      expect(calls[1][1]).toContain('fetch');
-      expect(calls[1][1]).toContain('--force');
-      expect(calls[1][1]).toContain('pull/42/head');
-      expect(calls[1][1]).toContain('-c');
-      expect(calls[1][1]).toContain('credential.helper=!gh auth git-credential');
+      const call = vi.mocked(execFileSync).mock.calls[0];
+      expect(call[0]).toBe('git');
+      expect(call[1]).toContain('fetch');
+      expect(call[1]).toContain('--force');
+      expect(call[1]).toContain('pull/42/head');
+      expect(call[1]).toContain('-c');
+      expect(call[1]).toContain('credential.helper=!gh auth git-credential');
     });
 
     it('fetches without credential helper when gh is not available', () => {
-      vi.mocked(execFileSync)
-        .mockImplementationOnce(() => {
-          throw new Error('gh: command not found');
-        })
-        .mockReturnValue('');
+      vi.mocked(execFileSync).mockReturnValue('');
 
-      fetchPRRef('/tmp/repos/acme/widgets.git', 42);
+      fetchPRRef('/tmp/repos/acme/widgets.git', 42, false);
 
-      const fetchCall = vi.mocked(execFileSync).mock.calls[1];
-      expect(fetchCall[0]).toBe('git');
-      const args = fetchCall[1] as string[];
+      const call = vi.mocked(execFileSync).mock.calls[0];
+      expect(call[0]).toBe('git');
+      const args = call[1] as string[];
       expect(args).toContain('fetch');
       expect(args).not.toContain('-c');
     });
@@ -244,10 +229,13 @@ describe('repo-cache', () => {
   });
 
   describe('cleanupWorktree', () => {
-    it('delegates to removeWorktree', () => {
+    it('delegates to removeWorktree under lock', async () => {
       vi.mocked(execFileSync).mockReturnValue('');
 
-      cleanupWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/task-123');
+      await cleanupWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/task-123',
+      );
 
       const call = vi.mocked(execFileSync).mock.calls[0];
       expect(call[0]).toBe('git');
@@ -311,6 +299,26 @@ describe('repo-cache', () => {
       const result = await withRepoLock('acme/widgets', () => 42);
       expect(result).toBe(42);
     });
+
+    it('cleans up map entry after last concurrent operation', async () => {
+      // Run three concurrent operations on the same key
+      const op1 = withRepoLock('acme/widgets', async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      const op2 = withRepoLock('acme/widgets', async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      const op3 = withRepoLock('acme/widgets', async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      await Promise.all([op1, op2, op3]);
+
+      // After all complete, lock should be cleaned up
+      // (We can't directly check the internal map, but verify lock is acquirable)
+      const result = await withRepoLock('acme/widgets', () => 'ok');
+      expect(result).toBe('ok');
+    });
   });
 
   describe('checkoutWorktree', () => {
@@ -325,22 +333,21 @@ describe('repo-cache', () => {
       expect(result.cloned).toBe(true);
 
       const calls = vi.mocked(execFileSync).mock.calls;
-      // 1: gh auth status (ensureBareClone)
+      // 1: gh auth status (isGhAvailable — hoisted)
       // 2: gh repo clone --bare (ensureBareClone)
-      // 3: gh auth status (fetchPRRef)
-      // 4: git fetch (fetchPRRef)
-      // 5: git worktree add (addWorktree)
-      expect(calls.length).toBe(5);
+      // 3: git fetch (fetchPRRef)
+      // 4: git worktree add (addWorktree)
+      expect(calls.length).toBe(4);
 
       // Verify bare clone
       expect(calls[1][1]).toContain('--bare');
 
       // Verify fetch
-      expect(calls[3][1]).toContain('pull/42/head');
+      expect(calls[2][1]).toContain('pull/42/head');
 
       // Verify worktree add
-      expect(calls[4][1]).toContain('worktree');
-      expect(calls[4][1]).toContain('FETCH_HEAD');
+      expect(calls[3][1]).toContain('worktree');
+      expect(calls[3][1]).toContain('FETCH_HEAD');
     });
 
     it('reuses existing bare clone', async () => {
@@ -352,7 +359,7 @@ describe('repo-cache', () => {
 
       expect(result.cloned).toBe(false);
 
-      // Should not have a clone call — only gh auth status (for fetch) + fetch + worktree add
+      // Should not have a clone call
       const calls = vi.mocked(execFileSync).mock.calls;
       const cloneCalls = calls.filter(
         (c) => Array.isArray(c[1]) && (c[1] as string[]).includes('clone'),

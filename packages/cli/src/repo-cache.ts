@@ -11,8 +11,8 @@ const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
 const GIT_TIMEOUT_MS = 120_000;
 
 /**
- * Per-repo mutex to serialize git fetch operations.
- * Multiple concurrent tasks on the same repo must not fetch simultaneously
+ * Per-repo mutex to serialize git operations (fetch, worktree add/remove).
+ * Multiple concurrent tasks on the same repo must not run git commands simultaneously
  * (git lock file conflicts).
  */
 const repoLocks = new Map<string, Promise<void>>();
@@ -31,20 +31,19 @@ export interface WorktreeCheckoutResult {
  * Concurrent callers on the same repoKey queue behind the current holder.
  */
 export async function withRepoLock<T>(repoKey: string, fn: () => T | Promise<T>): Promise<T> {
-  // Wait for any in-flight operation on this repo
   const existing = repoLocks.get(repoKey);
   let release: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  repoLocks.set(repoKey, existing ? existing.then(() => gate) : gate);
+  // Always store gate directly — await existing for ordering
+  repoLocks.set(repoKey, gate);
 
   try {
     if (existing) await existing;
     return await fn();
   } finally {
     release!();
-    // Clean up if we're still the latest holder
     if (repoLocks.get(repoKey) === gate) {
       repoLocks.delete(repoKey);
     }
@@ -62,6 +61,7 @@ export function ensureBareClone(
   owner: string,
   repo: string,
   baseDir: string,
+  ghAvailable: boolean,
 ): { bareRepoPath: string; cloned: boolean } {
   validatePathSegment(owner, 'owner');
   validatePathSegment(repo, 'repo');
@@ -74,8 +74,6 @@ export function ensureBareClone(
 
   // Create parent dir
   fs.mkdirSync(path.join(baseDir, owner), { recursive: true });
-
-  const ghAvailable = isGhAvailable();
 
   if (ghAvailable) {
     // gh repo clone with --bare
@@ -101,8 +99,7 @@ export function ensureBareClone(
  * Fetch a PR ref into the bare repo.
  * Uses credential helper when gh is available.
  */
-export function fetchPRRef(bareRepoPath: string, prNumber: number): void {
-  const ghAvailable = isGhAvailable();
+export function fetchPRRef(bareRepoPath: string, prNumber: number, ghAvailable: boolean): void {
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
   gitExec(
     'git',
@@ -155,6 +152,16 @@ export function removeWorktree(bareRepoPath: string, worktreePath: string): void
 }
 
 /**
+ * Derive the repo key (owner/repo) from a bare repo path.
+ * Bare repos are at `<baseDir>/<owner>/<repo>.git`.
+ */
+function repoKeyFromBarePath(bareRepoPath: string): string {
+  const repoName = path.basename(bareRepoPath, '.git');
+  const owner = path.basename(path.dirname(bareRepoPath));
+  return `${owner}/${repoName}`;
+}
+
+/**
  * High-level: checkout a PR into an isolated worktree.
  *
  * 1. Ensure bare clone exists (or reuse cached)
@@ -175,11 +182,12 @@ export async function checkoutWorktree(
   validatePathSegment(taskId, 'taskId');
 
   const repoKey = `${owner}/${repo}`;
+  const ghAvailable = isGhAvailable();
 
-  // Serialize fetch operations per repo to avoid git lock conflicts
+  // Serialize all git operations per repo to avoid lock file conflicts
   return withRepoLock(repoKey, () => {
-    const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir);
-    fetchPRRef(bareRepoPath, prNumber);
+    const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
+    fetchPRRef(bareRepoPath, prNumber, ghAvailable);
     const worktreePath = addWorktree(bareRepoPath, taskId);
     return { worktreePath, bareRepoPath, cloned };
   });
@@ -187,9 +195,13 @@ export async function checkoutWorktree(
 
 /**
  * High-level: clean up a worktree after task completion.
+ * Acquires the per-repo lock to avoid racing with concurrent fetch/add operations.
  */
-export function cleanupWorktree(bareRepoPath: string, worktreePath: string): void {
-  removeWorktree(bareRepoPath, worktreePath);
+export async function cleanupWorktree(bareRepoPath: string, worktreePath: string): Promise<void> {
+  const repoKey = repoKeyFromBarePath(bareRepoPath);
+  await withRepoLock(repoKey, () => {
+    removeWorktree(bareRepoPath, worktreePath);
+  });
 }
 
 /**

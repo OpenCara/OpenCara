@@ -7,8 +7,6 @@
  *
  * Mocks: tool-executor (no real AI calls), globalThis.fetch (routes to Hono app).
  */
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
@@ -35,24 +33,27 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 // ── Mock repo-cache so git worktree operations don't need real git ──
-
-vi.mock('../repo-cache.js', () => ({
-  checkoutWorktree: vi.fn(
-    async (owner: string, repo: string, _prNumber: number, baseDir: string, taskId: string) => {
-      const worktreePath = path.join(baseDir, owner, `${repo}-worktrees`, taskId);
-      const bareRepoPath = path.join(baseDir, owner, `${repo}.git`);
-      fs.mkdirSync(worktreePath, { recursive: true });
-      return { worktreePath, bareRepoPath, cloned: true };
-    },
-  ),
-  cleanupWorktree: vi.fn((_bareRepoPath: string, worktreePath: string) => {
-    try {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
-  }),
-}));
+vi.mock('../repo-cache.js', async () => {
+  const _fs = await import('node:fs');
+  const _path = await import('node:path');
+  return {
+    checkoutWorktree: vi.fn(
+      async (owner: string, repo: string, _prNumber: number, baseDir: string, taskId: string) => {
+        const worktreePath = _path.join(baseDir, owner, `${repo}-worktrees`, taskId);
+        const bareRepoPath = _path.join(baseDir, owner, `${repo}.git`);
+        _fs.mkdirSync(worktreePath, { recursive: true });
+        return { worktreePath, bareRepoPath, cloned: true };
+      },
+    ),
+    cleanupWorktree: vi.fn(async (_bareRepoPath: string, worktreePath: string) => {
+      try {
+        _fs.rmSync(worktreePath, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }),
+  };
+});
 
 // ── Mock tool executor ───────────────────────────────────────
 
