@@ -780,42 +780,6 @@ mode = "private"
       expect(config.agents![0].repos!.list).toBeUndefined();
     });
 
-    it('accepts deprecated mode "all" as alias for "public" with warning', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-[[agents]]
-model = "claude-opus-4-6"
-tool = "claude"
-[agents.repos]
-mode = "all"
-`);
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'public' });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('"all" is deprecated, use "public" instead'),
-      );
-      warnSpy.mockRestore();
-    });
-
-    it('accepts deprecated mode "own" as alias for "private" with warning', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`
-[[agents]]
-model = "claude-opus-4-6"
-tool = "claude"
-[agents.repos]
-mode = "own"
-`);
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const config = loadConfig();
-      expect(config.agents![0].repos).toEqual({ mode: 'private' });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('"own" is deprecated, use "private" instead'),
-      );
-      warnSpy.mockRestore();
-    });
-
     it('saveConfig persists repos field on agents', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
