@@ -36,8 +36,7 @@ function isValidTokenResponse(data: Record<string, unknown>): data is {
   token_type: string;
 } {
   return (
-    typeof data.access_token === 'string' &&
-    typeof data.token_type === 'string'
+    typeof data.access_token === 'string' && typeof data.token_type === 'string'
     // expires_in is optional — present for GitHub Apps but absent for OAuth Apps
     // refresh_token is optional — GitHub Apps include it, but we don't require it
   );
@@ -196,9 +195,7 @@ export function authRoutes() {
     if (!isValidTokenResponse(data)) {
       const logger = c.get('logger');
       // Log response shape for debugging (keys + types only, no values for security)
-      const shape = Object.fromEntries(
-        Object.entries(data).map(([k, v]) => [k, typeof v]),
-      );
+      const shape = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, typeof v]));
       logger.error('GitHub returned invalid token response', {
         action: 'auth_device_token',
         responseShape: shape,
@@ -293,7 +290,8 @@ export function authRoutes() {
     return c.json<RefreshTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in: typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_EXPIRES_IN_REFRESH,
+      expires_in:
+        typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_EXPIRES_IN_REFRESH,
       token_type: data.token_type,
     });
   });
