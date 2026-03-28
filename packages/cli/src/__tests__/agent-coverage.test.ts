@@ -11,12 +11,15 @@
  * - handleTask codebase clone paths
  * - DiffTooLargeError / InputTooLargeError rejection paths
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import { createSessionTracker } from '../consumption.js';
 import { FakeServer, FAKE_SERVER_URL } from './helpers/fake-server.js';
 import { executeTool } from '../tool-executor.js';
+import { checkoutWorktree } from '../repo-cache.js';
 
 // ── Mock child_process so fetchDiffViaGh falls back to HTTP ──
 
@@ -35,6 +38,26 @@ vi.mock('node:child_process', async (importOriginal) => {
     }),
   };
 });
+
+// ── Mock repo-cache so git worktree operations don't need real git ──
+
+vi.mock('../repo-cache.js', () => ({
+  checkoutWorktree: vi.fn(
+    async (owner: string, repo: string, _prNumber: number, baseDir: string, taskId: string) => {
+      const worktreePath = path.join(baseDir, owner, `${repo}-worktrees`, taskId);
+      const bareRepoPath = path.join(baseDir, owner, `${repo}.git`);
+      fs.mkdirSync(worktreePath, { recursive: true });
+      return { worktreePath, bareRepoPath, cloned: true };
+    },
+  ),
+  cleanupWorktree: vi.fn((_bareRepoPath: string, worktreePath: string) => {
+    try {
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }),
+}));
 
 // ── Mock tool executor ───────────────────────────────────────
 
@@ -588,13 +611,10 @@ describe('Agent Coverage Tests', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('Codebase clone paths', () => {
-    it('continues with diff-only when codebase clone fails', async () => {
-      // Mock cloneOrUpdate to throw
-      vi.doMock('../codebase.js', () => ({
-        cloneOrUpdate: vi.fn(() => {
-          throw new Error('git clone failed');
-        }),
-      }));
+    it('continues with diff-only when worktree checkout fails', async () => {
+      // Override checkoutWorktree to throw for this test
+      const mockedCheckout = vi.mocked(checkoutWorktree);
+      mockedCheckout.mockRejectedValueOnce(new Error('git clone failed'));
 
       const taskId = await server.injectTask({ reviewCount: 2 });
 
@@ -627,14 +647,15 @@ describe('Agent Coverage Tests', () => {
 
         await advanceTime(2000);
 
-        // Should have warned about clone failure but still submitted a review
-        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('codebase clone failed'));
+        // Should have warned about checkout failure but still submitted a review
+        expect(console.warn).toHaveBeenCalledWith(
+          expect.stringContaining('worktree checkout failed'),
+        );
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(promise, server);
       } finally {
         globalThis.fetch = originalFetch;
-        vi.doUnmock('../codebase.js');
       }
     });
   });
