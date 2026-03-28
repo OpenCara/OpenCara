@@ -444,4 +444,36 @@ describe('executeReview', () => {
     const cwd = mockRunTool.mock.calls[0][5];
     expect(cwd).toBeUndefined();
   });
+
+  it('returns raw toolStdout and toolStderr for verbose logging', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: APPROVE\nGreat code!',
+      stderr: 'warning: something happened',
+      tokensUsed: 0,
+      tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
+    });
+
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
+
+    expect(result.toolStdout).toBe('VERDICT: APPROVE\nGreat code!');
+    expect(result.toolStderr).toBe('warning: something happened');
+  });
+
+  it('returns promptLength for verbose logging', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: 'VERDICT: APPROVE\nOK',
+      stderr: '',
+      tokensUsed: 0,
+      tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
+    });
+
+    const result = await executeReview(defaultRequest, defaultDeps, mockRunTool);
+
+    // promptLength should be the length of the full prompt (system + user)
+    expect(result.promptLength).toBeGreaterThan(0);
+    // The prompt contains system prompt + user message, so it must be longer than just the diff
+    expect(result.promptLength).toBeGreaterThan(defaultRequest.diffContent.length);
+  });
 });

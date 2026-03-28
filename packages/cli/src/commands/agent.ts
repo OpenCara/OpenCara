@@ -64,6 +64,7 @@ import {
   createLogger,
   createAgentSession,
   formatExitSummary,
+  logVerboseToolOutput,
   icons,
   type Logger,
   type AgentSessionStats,
@@ -337,6 +338,7 @@ async function pollLoop(
     synthesizeRepos?: RepoConfig;
     signal?: AbortSignal;
     cleanupTracker?: CodebaseCleanupTracker;
+    verbose?: boolean;
   },
 ): Promise<void> {
   const {
@@ -349,6 +351,7 @@ async function pollLoop(
     synthesizeRepos,
     signal,
     cleanupTracker,
+    verbose,
   } = options;
   const { log, logError, logWarn } = logger;
 
@@ -422,6 +425,7 @@ async function pollLoop(
           routerRelay,
           signal,
           cleanupTracker,
+          verbose,
         );
         if (result.diffFetchFailed) {
           agentSession.errorsEncountered++;
@@ -510,6 +514,7 @@ async function handleTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   cleanupTracker?: CodebaseCleanupTracker,
+  verbose?: boolean,
 ): Promise<HandleTaskResult> {
   const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
   const { log, logError, logWarn } = logger;
@@ -707,6 +712,7 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
+        verbose,
       );
     } else {
       await executeReviewTask(
@@ -726,6 +732,7 @@ async function handleTask(
         routerRelay,
         signal,
         contextBlock,
+        verbose,
       );
     }
     agentSession.tasksCompleted++;
@@ -822,6 +829,7 @@ async function executeReviewTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
+  verbose?: boolean,
 ): Promise<void> {
   // Check per-review token limit before executing.
   // Uses estimated *input* tokens only — output tokens are unpredictable and
@@ -896,6 +904,15 @@ async function executeReviewTask(
       totalTokens: result.tokensUsed,
       estimated: result.tokensEstimated,
     };
+    if (verbose) {
+      logVerboseToolOutput(
+        logger,
+        'Review',
+        result.toolStdout,
+        result.toolStderr,
+        result.promptLength,
+      );
+    }
   }
 
   // Prepend metadata header (covers both router and direct paths)
@@ -953,6 +970,7 @@ async function executeSummaryTask(
   routerRelay?: RouterRelay,
   signal?: AbortSignal,
   contextBlock?: string,
+  verbose?: boolean,
 ): Promise<void> {
   const meta: ReviewMetadata = { model: agentInfo.model, tool: agentInfo.tool };
 
@@ -1015,6 +1033,15 @@ async function executeSummaryTask(
         totalTokens: result.tokensUsed,
         estimated: result.tokensEstimated,
       };
+      if (verbose) {
+        logVerboseToolOutput(
+          logger,
+          'Summary (single-agent)',
+          result.toolStdout,
+          result.toolStderr,
+          result.promptLength,
+        );
+      }
     }
 
     // Prepend metadata header (covers both router and direct paths)
@@ -1116,6 +1143,15 @@ async function executeSummaryTask(
       totalTokens: result.tokensUsed,
       estimated: result.tokensEstimated,
     };
+    if (verbose) {
+      logVerboseToolOutput(
+        logger,
+        'Summary',
+        result.toolStdout,
+        result.toolStderr,
+        result.promptLength,
+      );
+    }
   }
 
   if (flaggedReviews.length > 0) {
@@ -1202,6 +1238,7 @@ export async function startAgent(
     usageLimits?: UsageLimits;
     versionOverride?: string | null;
     codebaseTtl?: string | null;
+    verbose?: boolean;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, {
@@ -1234,6 +1271,9 @@ export async function startAgent(
   log(`Model: ${agentInfo.model} | Tool: ${agentInfo.tool}${thinkingInfo}`);
   if (options?.versionOverride) {
     log(`${icons.info} Version override active: ${options.versionOverride}`);
+  }
+  if (options?.verbose) {
+    log(`${icons.info} Verbose mode enabled — tool stdout/stderr will be logged`);
   }
 
   if (!reviewDeps) {
@@ -1293,6 +1333,7 @@ export async function startAgent(
     synthesizeRepos: options?.synthesizeRepos,
     signal: abortController.signal,
     cleanupTracker,
+    verbose: options?.verbose,
   });
 
   // Final sweep: clean up any remaining tracked worktrees on shutdown
@@ -1418,6 +1459,7 @@ function startAgentByIndex(
   pollIntervalMs: number,
   oauthToken: string,
   versionOverride?: string | null,
+  verbose?: boolean,
 ): Promise<void> | null {
   const agentId = crypto.randomUUID();
   let commandTemplate: string | undefined;
@@ -1485,6 +1527,7 @@ function startAgentByIndex(
       usageLimits: config.usageLimits,
       versionOverride,
       codebaseTtl: config.codebaseTtl,
+      verbose,
     },
   ).finally(() => {
     routerRelay?.stop();
@@ -1505,12 +1548,14 @@ agentCommand
     '--version-override <value>',
     'Cloudflare Workers version override (e.g. opencara-server=abc123)',
   )
+  .option('-v, --verbose', 'Log tool stdout/stderr after each review for debugging')
   .action(
     async (opts: {
       pollInterval: string;
       agent: string;
       all?: boolean;
       versionOverride?: string;
+      verbose?: boolean;
     }) => {
       const config = loadConfig();
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
@@ -1547,7 +1592,14 @@ agentCommand
         const promises: Promise<void>[] = [];
         let startFailed = false;
         for (let i = 0; i < config.agents.length; i++) {
-          const p = startAgentByIndex(config, i, pollIntervalMs, oauthToken, versionOverride);
+          const p = startAgentByIndex(
+            config,
+            i,
+            pollIntervalMs,
+            oauthToken,
+            versionOverride,
+            opts.verbose,
+          );
           if (p) {
             promises.push(p);
           } else {
@@ -1597,6 +1649,7 @@ agentCommand
           pollIntervalMs,
           oauthToken,
           versionOverride,
+          opts.verbose,
         );
         if (!p) {
           // startAgentByIndex already logged the specific reason

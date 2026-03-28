@@ -475,4 +475,28 @@ describe('executeSummary', () => {
     expect(result.flaggedReviews[0].agentId).toBe('agent-1');
     expect(result.flaggedReviews[0].reason).toContain('generic');
   });
+
+  it('returns raw toolStdout and toolStderr for verbose logging', async () => {
+    const mockRunTool = vi.fn().mockResolvedValue({
+      stdout: '## Summary\nAll good.\n\n## Verdict\nAPPROVE',
+      stderr: 'debug: processing request',
+      tokensUsed: 0,
+      tokensParsed: false,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
+    });
+
+    const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
+
+    expect(result.toolStdout).toBe('## Summary\nAll good.\n\n## Verdict\nAPPROVE');
+    expect(result.toolStderr).toBe('debug: processing request');
+  });
+
+  it('returns promptLength for verbose logging', async () => {
+    const mockRunTool = createMockRunTool('## Summary\nOK.\n\n## Verdict\nAPPROVE');
+
+    const result = await executeSummary(defaultRequest, defaultDeps, mockRunTool);
+
+    expect(result.promptLength).toBeGreaterThan(0);
+    expect(result.promptLength).toBeGreaterThan(defaultRequest.diffContent.length);
+  });
 });

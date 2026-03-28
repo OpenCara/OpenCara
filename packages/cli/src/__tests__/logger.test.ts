@@ -4,6 +4,8 @@ import {
   createAgentSession,
   formatUptime,
   formatExitSummary,
+  logVerboseToolOutput,
+  VERBOSE_TRUNCATE_LIMIT,
   timestamp,
   icons,
 } from '../logger.js';
@@ -161,6 +163,92 @@ describe('logger', () => {
       session.startTime = Date.now() - 90_000;
       const summary = formatExitSummary(session);
       expect(summary).toContain('1m30s');
+    });
+  });
+
+  describe('logVerboseToolOutput', () => {
+    it('logs prompt length with estimated tokens', () => {
+      const logger = createLogger();
+      logVerboseToolOutput(logger, 'Review', 'some output', '', 400);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const promptLine = calls.find((c) => c.includes('[verbose]') && c.includes('prompt:'));
+      expect(promptLine).toBeDefined();
+      expect(promptLine).toContain('400 chars');
+      expect(promptLine).toContain('~100 tokens');
+    });
+
+    it('logs stdout content with char count', () => {
+      const logger = createLogger();
+      logVerboseToolOutput(logger, 'Review', 'tool output here', '', 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const stdoutLine = calls.find((c) => c.includes('stdout') && c.includes('16 chars'));
+      expect(stdoutLine).toBeDefined();
+      expect(stdoutLine).toContain('tool output here');
+    });
+
+    it('logs empty stdout marker when stdout is empty', () => {
+      const logger = createLogger();
+      logVerboseToolOutput(logger, 'Review', '', '', 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      expect(calls.some((c) => c.includes('stdout: (empty)'))).toBe(true);
+    });
+
+    it('logs stderr when present', () => {
+      const logger = createLogger();
+      logVerboseToolOutput(logger, 'Review', 'out', 'error output', 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const stderrLine = calls.find((c) => c.includes('stderr'));
+      expect(stderrLine).toBeDefined();
+      expect(stderrLine).toContain('error output');
+    });
+
+    it('does not log stderr when empty', () => {
+      const logger = createLogger();
+      logVerboseToolOutput(logger, 'Review', 'out', '', 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      expect(calls.some((c) => c.includes('stderr'))).toBe(false);
+    });
+
+    it('truncates stdout exceeding the limit', () => {
+      const logger = createLogger();
+      const longOutput = 'x'.repeat(VERBOSE_TRUNCATE_LIMIT + 500);
+      logVerboseToolOutput(logger, 'Review', longOutput, '', 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const stdoutLine = calls.find((c) => c.includes('stdout'));
+      expect(stdoutLine).toBeDefined();
+      expect(stdoutLine).toContain('truncated');
+      // The logged content should not contain the full string
+      expect(stdoutLine!.length).toBeLessThan(longOutput.length);
+    });
+
+    it('truncates stderr exceeding the limit', () => {
+      const logger = createLogger();
+      const longErr = 'e'.repeat(VERBOSE_TRUNCATE_LIMIT + 200);
+      logVerboseToolOutput(logger, 'Review', 'out', longErr, 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const stderrLine = calls.find((c) => c.includes('stderr'));
+      expect(stderrLine).toBeDefined();
+      expect(stderrLine).toContain('truncated');
+    });
+
+    it('uses custom truncation limit', () => {
+      const logger = createLogger();
+      const output = 'a'.repeat(150);
+      logVerboseToolOutput(logger, 'Review', output, '', 100, 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const stdoutLine = calls.find((c) => c.includes('stdout'));
+      expect(stdoutLine).toContain('truncated');
+    });
+
+    it('includes label in all log lines', () => {
+      const logger = createLogger();
+      logVerboseToolOutput(logger, 'Summary', 'out', 'err', 100);
+      const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const verboseCalls = calls.filter((c) => c.includes('[verbose]'));
+      expect(verboseCalls.length).toBeGreaterThanOrEqual(2);
+      for (const call of verboseCalls) {
+        expect(call).toContain('Summary');
+      }
     });
   });
 });
