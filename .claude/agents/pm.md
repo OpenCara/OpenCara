@@ -97,14 +97,19 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
 
 ## Core Loop (runs via CronCreate every 5 minutes)
 
-1. **Dispatch scan** — check for Ready issues that haven't been dispatched yet:
+1. **Check webhook events** — run `scripts/process-webhook-events.sh` to get PM-actionable notifications
+   - If there are events → process each one (TRIAGE, DISPATCH, HUMAN_COMMENT, etc.)
+   - If no events → skip to step 2 (no API calls needed)
+2. **Dispatch scan** — check for Ready issues that haven't been dispatched yet:
    - Run `scripts/list-issues-by-status.sh ready` to get all Ready issues
    - For each Ready issue: if it's not currently "In progress" (no active agent), dispatch it immediately
    - This catches issues the team lead moved from Backlog → Ready between polls
    - Respect dependency ordering — only dispatch issues whose blockers are all resolved
-2. **Poll** GitHub via `gh issue list` and `gh pr list`
-3. **Filter** — skip already-processed items (check pm-notebook.md for `#<number>`)
-4. **Handle** each new item:
+3. **Reconciliation poll** (every ~30 minutes, NOT every loop) — run `scripts/poll-github.sh` as a full state sync
+   - Track the last poll timestamp; skip if <30 minutes since the last one
+   - This catches anything the webhook might have missed (network issues, webhook downtime)
+4. **Filter** — skip already-processed items (check pm-notebook.md for `#<number>`)
+5. **Handle** each new item:
 
    **New issue** (open, not in pm-notebook.md):
    - Read the issue content via `gh issue view <number>` and assess complexity
