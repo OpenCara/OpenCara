@@ -69,6 +69,7 @@ export {
   DEFAULT_REVIEW_CONFIG,
   DEFAULT_REVIEW_SECTION,
   DEFAULT_OPENCARA_CONFIG,
+  DEFAULT_MODEL_DIVERSITY_GRACE_MS,
   type OpenCaraConfig,
   type ReviewSectionConfig,
   type ReviewConfig,

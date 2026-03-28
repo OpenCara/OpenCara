@@ -24,6 +24,8 @@ export interface FeatureConfig {
   preferredModels: string[];
   preferredTools: string[];
   agents?: AgentSlotConfig[];
+  /** Grace period (ms) for model diversity preference. 0 = disabled. Default: 30000 (30s). */
+  modelDiversityGraceMs: number;
 }
 
 /** Review section — extends FeatureConfig with trigger and access control */
@@ -146,6 +148,23 @@ function parseStringArray(value: unknown): string[] {
   return value.filter((v: unknown) => typeof v === 'string');
 }
 
+/** Default model diversity grace period: 30 seconds */
+export const DEFAULT_MODEL_DIVERSITY_GRACE_MS = 30_000;
+
+/**
+ * Parse a duration string like "30s" or "60s" into milliseconds.
+ * Supports seconds ("Ns") only. Returns default if invalid. 0 disables.
+ */
+function parseDurationSeconds(value: unknown, defaultMs: number): number {
+  if (typeof value === 'number') return value === 0 ? 0 : clamp(value, 0, 300) * 1000;
+  if (typeof value !== 'string') return defaultMs;
+  if (value === '0' || value === '0s') return 0;
+  const match = value.match(/^(\d+)s$/);
+  if (!match) return defaultMs;
+  const seconds = parseInt(match[1], 10);
+  return clamp(seconds, 0, 300) * 1000; // max 5 minutes
+}
+
 export function validateReviewConfig(config: unknown): config is ReviewConfig {
   if (!isObject(config)) return false;
   if (typeof config.prompt !== 'string') return false;
@@ -174,6 +193,7 @@ const DEFAULT_FEATURE_CONFIG: FeatureConfig = {
   timeout: '10m',
   preferredModels: [],
   preferredTools: [],
+  modelDiversityGraceMs: DEFAULT_MODEL_DIVERSITY_GRACE_MS,
 };
 
 export const DEFAULT_REVIEW_SECTION: ReviewSectionConfig = {
@@ -280,6 +300,10 @@ function parseFeatureFields(raw: Record<string, unknown>, defaults: FeatureConfi
     timeout: parseTimeout(raw.timeout ?? defaults.timeout),
     preferredModels: parseStringArray(raw.preferred_models ?? defaults.preferredModels),
     preferredTools: parseStringArray(raw.preferred_tools ?? defaults.preferredTools),
+    modelDiversityGraceMs: parseDurationSeconds(
+      raw.model_diversity_grace,
+      defaults.modelDiversityGraceMs,
+    ),
     ...(agentSlots ? { agents: agentSlots } : {}),
   };
 }
@@ -317,6 +341,7 @@ const DEFAULT_DEDUP_FEATURE: FeatureConfig = {
   timeout: '10m',
   preferredModels: [],
   preferredTools: [],
+  modelDiversityGraceMs: DEFAULT_MODEL_DIVERSITY_GRACE_MS,
 };
 
 /** Parse a dedup target section ([dedup.prs] or [dedup.issues]) */
@@ -351,6 +376,7 @@ const DEFAULT_TRIAGE_FEATURE: FeatureConfig = {
   timeout: '10m',
   preferredModels: [],
   preferredTools: [],
+  modelDiversityGraceMs: DEFAULT_MODEL_DIVERSITY_GRACE_MS,
 };
 
 /** Parse the [triage] section */
@@ -463,6 +489,10 @@ function parseLegacyReviewConfig(raw: Record<string, unknown>): ReviewSectionCon
     timeout: parseTimeout(raw.timeout),
     preferredModels: parseStringArray(agentsRaw.preferred_models),
     preferredTools: parseStringArray(agentsRaw.preferred_tools),
+    modelDiversityGraceMs: parseDurationSeconds(
+      raw.model_diversity_grace ?? agentsRaw.model_diversity_grace,
+      DEFAULT_MODEL_DIVERSITY_GRACE_MS,
+    ),
     trigger: {
       on: Array.isArray(triggerRaw.on)
         ? triggerRaw.on.filter((v: unknown) => typeof v === 'string')

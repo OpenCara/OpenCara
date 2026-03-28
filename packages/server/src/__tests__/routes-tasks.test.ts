@@ -2656,6 +2656,375 @@ describe('Task Routes', () => {
     });
   });
 
+  // ── Model diversity grace period (#554) ─────────────────────
+
+  describe('model diversity grace period (#554)', () => {
+    function makeDiversityConfig(graceMs: number = 30_000) {
+      return {
+        ...DEFAULT_REVIEW_CONFIG,
+        modelDiversityGraceMs: graceMs,
+      };
+    }
+
+    it('hides task from agent whose model is already claimed in group during grace window', async () => {
+      const config = makeDiversityConfig();
+      // Task 1: already claimed by agent with gpt-5.4
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'reviewing',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'gpt-5.4',
+        created_at: Date.now(),
+      });
+
+      // Task 2: pending, same group
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+
+      // Agent with gpt-5.4 should NOT see task-2 during grace window
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-B',
+        model: 'gpt-5.4',
+      });
+      const body = await res.json();
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(0);
+    });
+
+    it('shows task to agent with a different model during grace window', async () => {
+      const config = makeDiversityConfig();
+      // Task 1: claimed with gpt-5.4
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'reviewing',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'gpt-5.4',
+        created_at: Date.now(),
+      });
+
+      // Task 2: pending, same group
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+
+      // Agent with gemini — different model — should see task-2
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-B',
+        model: 'gemini-2.5-pro',
+      });
+      const body = await res.json();
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
+    });
+
+    it('shows task after grace period expires even if same model', async () => {
+      const config = makeDiversityConfig(30_000);
+      // Task 1: claimed with gpt-5.4
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'reviewing',
+          config,
+          created_at: Date.now() - 60_000,
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'gpt-5.4',
+        created_at: Date.now() - 60_000,
+      });
+
+      // Task 2: pending, same group, created 60s ago (> 30s grace)
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now() - 60_000,
+        }),
+      );
+
+      // Agent with gpt-5.4 should see task-2 after grace period
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-B',
+        model: 'gpt-5.4',
+      });
+      const body = await res.json();
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
+    });
+
+    it('diversity grace disabled (0) allows same model immediately', async () => {
+      const config = makeDiversityConfig(0);
+      // Task 1: claimed with gpt-5.4
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'reviewing',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'gpt-5.4',
+        created_at: Date.now(),
+      });
+
+      // Task 2: pending, same group
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+
+      // Same model but diversity disabled — should see task
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-B',
+        model: 'gpt-5.4',
+      });
+      const body = await res.json();
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
+    });
+
+    it('agent without model is visible even if models are claimed in group', async () => {
+      const config = makeDiversityConfig();
+      // Task 1: claimed with gpt-5.4
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'reviewing',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'gpt-5.4',
+        created_at: Date.now(),
+      });
+
+      // Task 2: pending
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+
+      // Agent with no model — should still see the task
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-B',
+      });
+      const body = await res.json();
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
+    });
+
+    it('applies diversity check to summary tasks too', async () => {
+      const config = makeDiversityConfig();
+      // Review tasks: completed with various models
+      await store.createTask(
+        makeTask({
+          id: 'task-w1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'completed',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-w1:agent-A:review',
+        task_id: 'task-w1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'completed',
+        model: 'gpt-5.4',
+        review_text: 'LGTM',
+        created_at: Date.now(),
+      });
+      await store.createTask(
+        makeTask({
+          id: 'task-w2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'completed',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-w2:agent-B:review',
+        task_id: 'task-w2',
+        agent_id: 'agent-B',
+        role: 'review',
+        status: 'completed',
+        model: 'gemini-2.5-pro',
+        review_text: 'Looks good',
+        created_at: Date.now(),
+      });
+
+      // Summary task: pending
+      await store.createTask(
+        makeTask({
+          id: 'task-summary',
+          task_type: 'summary',
+          queue: 'summary',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+
+      // Agent with gpt-5.4 — model already used in group — should be hidden during grace
+      const res1 = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-C',
+        model: 'gpt-5.4',
+      });
+      const body1 = await res1.json();
+      const summaryTasks1 = body1.tasks.filter(
+        (t: { task_id: string }) => t.task_id === 'task-summary',
+      );
+      expect(summaryTasks1).toHaveLength(0);
+
+      // Agent with claude-sonnet-4-6 — different model — should see it
+      const res2 = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-D',
+        model: 'claude-sonnet-4-6',
+      });
+      const body2 = await res2.json();
+      const summaryTasks2 = body2.tasks.filter(
+        (t: { task_id: string }) => t.task_id === 'task-summary',
+      );
+      expect(summaryTasks2).toHaveLength(1);
+    });
+
+    it('considers completed tasks in group for model diversity check', async () => {
+      const config = makeDiversityConfig();
+      // Task 1: completed with gpt-5.4
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'completed',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'completed',
+        model: 'gpt-5.4',
+        review_text: 'Good code',
+        created_at: Date.now(),
+      });
+
+      // Task 2: still pending
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-div',
+          status: 'pending',
+          config,
+          created_at: Date.now(),
+        }),
+      );
+
+      // Agent with gpt-5.4 — model already used (from completed task) — hidden during grace
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-B',
+        model: 'gpt-5.4',
+      });
+      const body = await res.json();
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(0);
+    });
+  });
+
   // ── Summary claim timeout recovery (#462) ──────────────────
 
   describe('summary claim timeout recovery (#462)', () => {

@@ -86,6 +86,28 @@ function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string)
 }
 
 /**
+ * Check if a task is visible to the given agent considering model diversity.
+ * During the grace window, hides tasks from agents whose model is already
+ * used by another claim in the same group. After the grace window, visible to all.
+ */
+function isModelDiversityVisible(
+  task: ReviewTask,
+  model: string | undefined,
+  groupClaimedModels: Map<string, Set<string>>,
+): boolean {
+  const graceMs = task.config.modelDiversityGraceMs;
+  if (graceMs <= 0) return true; // diversity disabled
+  if (!model) return true; // agent didn't declare a model, can't check
+  if (!task.group_id) return true; // no group, no diversity to enforce
+
+  const claimedModels = groupClaimedModels.get(task.group_id);
+  if (!claimedModels || !claimedModels.has(model)) return true; // model not yet used
+
+  // Model already used — check if grace period has elapsed
+  return Date.now() - task.created_at >= graceMs;
+}
+
+/**
  * Check if a summary task is visible to the given agent, considering
  * the preferred synthesizer grace period.
  * Checks both entity-based preferences and model-based preferences.
@@ -617,6 +639,41 @@ export function taskRoutes() {
       }
     }
 
+    // ── Model diversity: build claimed-models-per-group map ──
+    // Collect group IDs from pending tasks that have diversity grace enabled
+    const pendingGroupIds = new Set<string>();
+    for (const t of tasks) {
+      if (t.group_id && t.config.modelDiversityGraceMs > 0) {
+        pendingGroupIds.add(t.group_id);
+      }
+    }
+    // For reviewing tasks in those groups, fetch claims to learn which models are already used
+    const groupClaimedModels = new Map<string, Set<string>>();
+    if (pendingGroupIds.size > 0) {
+      const relevantReviewing = reviewingTasks.filter(
+        (t) => t.group_id && pendingGroupIds.has(t.group_id),
+      );
+      // Also include completed tasks from the store for groups with pending tasks
+      const completedTasks = await store.listTasks({ status: ['completed'] });
+      const relevantCompleted = completedTasks.filter(
+        (t) => t.group_id && pendingGroupIds.has(t.group_id),
+      );
+      const allClaimedTasks = [...relevantReviewing, ...relevantCompleted];
+      for (const t of allClaimedTasks) {
+        const claims = await store.getClaims(t.id);
+        for (const claim of claims) {
+          if (claim.model) {
+            let models = groupClaimedModels.get(t.group_id);
+            if (!models) {
+              models = new Set();
+              groupClaimedModels.set(t.group_id, models);
+            }
+            models.add(claim.model);
+          }
+        }
+      }
+    }
+
     // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
     const candidates: PollCandidate[] = [];
 
@@ -654,6 +711,9 @@ export function taskRoutes() {
         // Worker task — check model/tool preference grace period
         if (!isWorkerVisibleToAgent(task, body.model, body.tool)) continue;
       }
+
+      // Model diversity: prefer agents with different models across the group
+      if (!isModelDiversityVisible(task, body.model, groupClaimedModels)) continue;
 
       candidates.push({
         task,

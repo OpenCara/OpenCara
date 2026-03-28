@@ -8,6 +8,7 @@ import {
   validateOpenCaraConfig,
   DEFAULT_REVIEW_CONFIG,
   DEFAULT_OPENCARA_CONFIG,
+  DEFAULT_MODEL_DIVERSITY_GRACE_MS,
   type ReviewConfig,
   type OpenCaraConfig,
 } from '../review-config.js';
@@ -839,5 +840,101 @@ describe('isEntityMatch', () => {
 
   it('handles entry with no fields', () => {
     expect(isEntityMatch({}, 'a1', 'alice')).toBe(false);
+  });
+});
+
+// ── model_diversity_grace parsing ──
+
+describe('model_diversity_grace parsing', () => {
+  it('defaults to 30s when not set (new format)', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "test"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.modelDiversityGraceMs).toBe(DEFAULT_MODEL_DIVERSITY_GRACE_MS);
+  });
+
+  it('defaults to 30s when not set (legacy format)', () => {
+    const config = parseReviewConfig('version = 1\nprompt = "test"') as ReviewConfig;
+    expect(config.modelDiversityGraceMs).toBe(DEFAULT_MODEL_DIVERSITY_GRACE_MS);
+  });
+
+  it('parses "60s" as 60000ms', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "test"
+model_diversity_grace = "60s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.modelDiversityGraceMs).toBe(60_000);
+  });
+
+  it('parses "0s" to disable', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "test"
+model_diversity_grace = "0s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.modelDiversityGraceMs).toBe(0);
+  });
+
+  it('parses "0" to disable', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "test"
+model_diversity_grace = "0"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.modelDiversityGraceMs).toBe(0);
+  });
+
+  it('clamps to max 300s (5 minutes)', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "test"
+model_diversity_grace = "600s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.modelDiversityGraceMs).toBe(300_000);
+  });
+
+  it('uses default for invalid string format', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "test"
+model_diversity_grace = "30m"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.modelDiversityGraceMs).toBe(DEFAULT_MODEL_DIVERSITY_GRACE_MS);
+  });
+
+  it('applies to dedup sections', () => {
+    const toml = `
+version = 1
+[dedup.prs]
+prompt = "check dupes"
+model_diversity_grace = "45s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.dedup!.prs!.modelDiversityGraceMs).toBe(45_000);
+  });
+
+  it('applies to triage section', () => {
+    const toml = `
+version = 1
+[triage]
+prompt = "triage"
+model_diversity_grace = "20s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.triage!.modelDiversityGraceMs).toBe(20_000);
   });
 });
