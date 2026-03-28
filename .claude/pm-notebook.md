@@ -480,7 +480,7 @@ Execution: Phase 1 (#566 shared) → Phase 2 (#568+#567 server, parallel) → Ph
 ### Dispatch queue (Ready)
 
 **cli-dev** (sequential):
-- #427 [cli-dev, P2, S] Add --verbose mode for debugging — **READY** (next to dispatch)
+- #427 [cli-dev, P2, S] Add --verbose mode for debugging — **IN PROGRESS** (cli-dev-427 dispatched, board→in-progress)
 - #565 [cli-dev, P2, M] Multi-instance agent — **READY** (after #427)
 
 **server-dev**:
