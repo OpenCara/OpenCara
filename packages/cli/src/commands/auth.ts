@@ -1,15 +1,16 @@
 import { Command } from 'commander';
 import pc from 'picocolors';
 import { icons } from '../logger.js';
-import { loadAuth, deleteAuth, login, getAuthFilePath, AuthError } from '../auth.js';
-import type { StoredAuth } from '../auth.js';
+import { loadAuth, saveAuth, deleteAuth, login, getAuthFilePath, AuthError } from '../auth.js';
+import type { StoredAuth, LoginDeps } from '../auth.js';
 import { loadConfig } from '../config.js';
 
 /** Dependencies for auth commands — allows injection for testing. */
 export interface AuthCommandDeps {
   loadAuthFn?: () => StoredAuth | null;
   deleteAuthFn?: () => void;
-  loginFn?: (platformUrl: string, deps: { log?: (msg: string) => void }) => Promise<StoredAuth>;
+  loginFn?: (platformUrl: string, deps: LoginDeps) => Promise<StoredAuth>;
+  saveAuthFn?: (auth: StoredAuth) => void;
   loadConfigFn?: typeof loadConfig;
   getAuthFilePathFn?: () => string;
   log?: (msg: string) => void;
@@ -85,7 +86,10 @@ export async function runLogin(deps: AuthCommandDeps = {}): Promise<void> {
     const loginLog = (msg: string) => {
       if (!msg.includes('Authenticated as')) log(msg);
     };
-    const auth = await loginFn(config.platformUrl, { log: loginLog });
+    const auth = await loginFn(config.platformUrl, {
+      log: loginLog,
+      saveAuthFn: deps.saveAuthFn,
+    });
     log(
       `${icons.success} Authenticated as ${pc.bold(`@${auth.github_username}`)} (ID: ${auth.github_user_id})`,
     );
@@ -155,6 +159,18 @@ export function runLogout(deps: AuthCommandDeps = {}): void {
   log(`Logged out. Token removed from ${pc.dim(getAuthFilePathFn())}`);
 }
 
+/** Build config-aware deps that thread auth_file from config.toml. */
+function configAwareDeps(): AuthCommandDeps {
+  const config = loadConfig();
+  return {
+    loadAuthFn: () => loadAuth(config.authFile),
+    deleteAuthFn: () => deleteAuth(config.authFile),
+    saveAuthFn: (auth: StoredAuth) => saveAuth(auth, config.authFile),
+    loadConfigFn: () => config,
+    getAuthFilePathFn: () => getAuthFilePath(config.authFile),
+  };
+}
+
 /** Create the `auth` command group with login/status/logout subcommands. */
 export function authCommand(): Command {
   const auth = new Command('auth').description('Manage authentication');
@@ -163,21 +179,21 @@ export function authCommand(): Command {
     .command('login')
     .description('Authenticate via GitHub Device Flow')
     .action(async () => {
-      await runLogin();
+      await runLogin(configAwareDeps());
     });
 
   auth
     .command('status')
     .description('Show current authentication status')
     .action(() => {
-      runStatus();
+      runStatus(configAwareDeps());
     });
 
   auth
     .command('logout')
     .description('Remove stored authentication token')
     .action(() => {
-      runLogout();
+      runLogout(configAwareDeps());
     });
 
   return auth;

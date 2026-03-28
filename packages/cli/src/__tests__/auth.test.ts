@@ -77,6 +77,30 @@ describe('auth', () => {
       const result = getAuthFilePath();
       expect(result).toBe(path.join(os.homedir(), '.opencara', 'auth.json'));
     });
+
+    it('returns configPath when env is not set', () => {
+      delete process.env.OPENCARA_AUTH_FILE;
+      const result = getAuthFilePath('/custom/auth.json');
+      expect(result).toBe('/custom/auth.json');
+    });
+
+    it('env var takes priority over configPath', () => {
+      process.env.OPENCARA_AUTH_FILE = '/env/auth.json';
+      const result = getAuthFilePath('/config/auth.json');
+      expect(result).toBe('/env/auth.json');
+    });
+
+    it('falls back to default when configPath is null', () => {
+      delete process.env.OPENCARA_AUTH_FILE;
+      const result = getAuthFilePath(null);
+      expect(result).toBe(path.join(os.homedir(), '.opencara', 'auth.json'));
+    });
+
+    it('falls back to default when configPath is undefined', () => {
+      delete process.env.OPENCARA_AUTH_FILE;
+      const result = getAuthFilePath(undefined);
+      expect(result).toBe(path.join(os.homedir(), '.opencara', 'auth.json'));
+    });
   });
 
   describe('loadAuth', () => {
