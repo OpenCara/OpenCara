@@ -647,28 +647,25 @@ export function taskRoutes() {
         pendingGroupIds.add(t.group_id);
       }
     }
-    // For reviewing tasks in those groups, fetch claims to learn which models are already used
+    // For each relevant group, fetch all tasks (bounded by agentCount, max ~10)
+    // and their claims to learn which models are already used. Uses getTasksByGroup
+    // instead of scanning the full completed-tasks table.
     const groupClaimedModels = new Map<string, Set<string>>();
     if (pendingGroupIds.size > 0) {
-      const relevantReviewing = reviewingTasks.filter(
-        (t) => t.group_id && pendingGroupIds.has(t.group_id),
-      );
-      // Also include completed tasks from the store for groups with pending tasks
-      const completedTasks = await store.listTasks({ status: ['completed'] });
-      const relevantCompleted = completedTasks.filter(
-        (t) => t.group_id && pendingGroupIds.has(t.group_id),
-      );
-      const allClaimedTasks = [...relevantReviewing, ...relevantCompleted];
-      for (const t of allClaimedTasks) {
-        const claims = await store.getClaims(t.id);
-        for (const claim of claims) {
-          if (claim.model) {
-            let models = groupClaimedModels.get(t.group_id);
-            if (!models) {
-              models = new Set();
-              groupClaimedModels.set(t.group_id, models);
+      for (const groupId of pendingGroupIds) {
+        const groupTasks = await store.getTasksByGroup(groupId);
+        for (const gt of groupTasks) {
+          if (gt.status !== 'reviewing' && gt.status !== 'completed') continue;
+          const claims = await store.getClaims(gt.id);
+          for (const claim of claims) {
+            if (claim.model) {
+              let models = groupClaimedModels.get(groupId);
+              if (!models) {
+                models = new Set();
+                groupClaimedModels.set(groupId, models);
+              }
+              models.add(claim.model);
             }
-            models.add(claim.model);
           }
         }
       }

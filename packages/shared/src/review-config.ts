@@ -154,6 +154,7 @@ export const DEFAULT_MODEL_DIVERSITY_GRACE_MS = 30_000;
 /**
  * Parse a duration string like "30s" or "60s" into milliseconds.
  * Supports seconds ("Ns") only. Returns default if invalid. 0 disables.
+ * Numeric input is interpreted as seconds (e.g., 30 → 30000ms).
  */
 function parseDurationSeconds(value: unknown, defaultMs: number): number {
   if (typeof value === 'number') return value === 0 ? 0 : clamp(value, 0, 300) * 1000;
