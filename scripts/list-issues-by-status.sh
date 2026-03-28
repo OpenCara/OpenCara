@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # List GitHub Project board issues filtered by status.
+# Uses paginated GraphQL (~2 points per 100 items vs ~203 for gh project item-list).
 # Usage: scripts/list-issues-by-status.sh <STATUS>
 # STATUS: backlog | ready | in-progress | in-review | done
 # Output: JSON array of {number, title} objects
@@ -25,6 +26,8 @@ case "$STATUS" in
     ;;
 esac
 
-gh project item-list 1 --owner OpenCara --format json --limit 500 \
-  | jq --arg status "$DISPLAY_STATUS" \
-    '[.items[] | select(.status == $status) | {number: .content.number, title: .content.title}]'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/project-board.sh"
+
+fetch_board_items | jq --arg status "$DISPLAY_STATUS" \
+  '[.[] | select(.status == $status) | {number, title}]'

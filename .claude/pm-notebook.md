@@ -366,7 +366,7 @@ Parent: #424
 - #468 [server-dev, P1, M] Validate summary report quality before posting — reject empty/too-short and re-queue — **DONE** (PR #472 merged, QA PASS 2026-03-26)
 - #469 [architect, P2, M] Add thinking level field alongside model and tool — **DONE** (PR #470 merged, QA PASS 2026-03-26)
 - ~~#471~~ [cli-dev] CLI: per-tool directory isolation — **CLOSED** (superseded by #473)
-- #473 [cli-dev, P2, M] CLI: persistent repo cache with git worktrees for review checkouts — **DONE** (PR #563 merged 2026-03-28, In Review for QA)
+- #473 [cli-dev, P2, M] CLI: persistent repo cache with git worktrees for review checkouts — **DONE** (PR #563 merged 2026-03-28, QA PASS, board→Done, closed)
 - #474 [cli-dev, P1, M] CLI: 2-tier diff fetch (gh CLI → HTTP fallback) — **DONE** (PR #476 merged, QA PASS 2026-03-26)
 - ~~#475~~ [server-dev] Installation token in claim response — **CLOSED** (dropped, security concern)
 
@@ -447,8 +447,8 @@ Parent: #480
 
 ### New features (2026-03-28)
 
-- #553 [cli-dev, P2, M] Auto-cleanup cloned codebase repos after task completion or timeout — **READY** (promoted from Backlog)
-- #554 [server-dev, P2, M] Prefer model diversity across all tasks in a group — **READY** (promoted from Backlog)
+- #553 [cli-dev, P2, M] Auto-cleanup cloned codebase repos after task completion or timeout — **DONE** (PR #572 merged 2026-03-28, QA PASS, board→Done, closed)
+- #554 [server-dev, P2, M] Prefer model diversity across all tasks in a group — **DONE** (PR #571 merged 2026-03-28, QA PASS, board→Done, closed)
 - #555 [server-dev, P2, S] Add preferred_models support for summarizer config — **DONE** (PR #558 merged 2026-03-28, In Review for QA)
 
 ### Bug (QA-discovered, 2026-03-28)
@@ -475,20 +475,19 @@ Execution: Phase 1 (#566 shared) → Phase 2 (#568+#567 server, parallel) → Ph
 
 ### Multi-instance agent (2026-03-28)
 
-- #565 [cli-dev, P2, M] Add multi-instance option for running multiple agent instances per config — **BACKLOG**
+- #565 [cli-dev, P2, M] Add multi-instance option for running multiple agent instances per config — **READY** (promoted from Backlog by team-lead)
 
 ### Dispatch queue (Ready)
 
 **cli-dev** (sequential):
-- #553 [cli-dev, P2, M] Auto-cleanup cloned codebase repos — **IN PROGRESS** (cli-dev-553 dispatched)
-- #427 [cli-dev, P2, S] Add --verbose mode for debugging — **READY** (after #553)
+- #427 [cli-dev, P2, S] Add --verbose mode for debugging — **READY** (next to dispatch)
+- #565 [cli-dev, P2, M] Multi-instance agent — **READY** (after #427)
 
 **server-dev**:
-- #554 [server-dev, P2, M] Prefer model diversity across all tasks in a group — **IN PROGRESS** (server-dev-554 dispatched)
+- (none ready)
 
 **Pending team-lead review:**
 - Epic #564 sub-issues (#566-#570) — all Backlog, team-lead will prioritize later
-- #565 [cli-dev, P2, M] Multi-instance agent — Backlog, team-lead will prioritize later
 
 ### Closed (2026-03-28)
 
@@ -501,13 +500,14 @@ Execution: Phase 1 (#566 shared) → Phase 2 (#568+#567 server, parallel) → Ph
 - #557 — QA PASS (PR #559, alias mapping + deprecation warning, 2 new tests)
 - #560 — QA PASS (PR #562, threshold 3→10min, heartbeat on claim/result, 6+ new tests)
 - #473 — QA PASS (PR #563, 1989 tests, repo-cache.ts 100% coverage, all 8 acceptance criteria verified, issue closed)
+- #553 — QA PASS (PR #572, board→Done, closed)
+- #554 — QA PASS (PR #571, board→Done, closed)
 
 Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test#68, confirming full pipeline. Previous AUTH_TOKEN_REVOKED issue resolved.
 
 ## Open PRs
 
-- PR #571 [server-dev] Prefer model diversity across all tasks in a group (#554) — opened 2026-03-28, self-review phase
-- PR #572 [cli-dev] Auto-cleanup cloned codebase repos after task completion (#553) — opened 2026-03-28, self-review phase
+(none)
 
 ## Merged PRs (pending processing)
 
@@ -515,6 +515,8 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Recently processed
 
+- PR #572 [cli-dev] merged 2026-03-28 — Auto-cleanup cloned codebase repos (#553)
+- PR #571 [server-dev] merged 2026-03-28 — Prefer model diversity across all tasks in a group (#554)
 - PR #563 [cli-dev] merged 2026-03-28 — Persistent repo cache with git worktrees (#473)
 - PR #562 [cli-dev] merged 2026-03-28 — Keep heartbeat alive on claim/result (#560)
 - PR #558 [server-dev] merged 2026-03-28 — Add preferred_models support for summarizer config (#555)

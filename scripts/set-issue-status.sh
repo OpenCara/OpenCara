@@ -28,15 +28,37 @@ case "$STATUS" in
     ;;
 esac
 
-# Find the item ID for this issue in the project
-ITEM_ID=$(gh project item-list 1 --owner OpenCara --limit 500 --format json \
-  | jq -r ".items[] | select(.content.number == $ISSUE_NUMBER) | .id")
+# Find the item ID using a targeted GraphQL query (~1 point instead of ~203)
+ITEM_ID=$(gh api graphql \
+  -F owner=OpenCara -F repo=OpenCara -F issueNumber="$ISSUE_NUMBER" \
+  -f query='
+    query($owner: String!, $repo: String!, $issueNumber: Int!) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $issueNumber) {
+          projectItems(first: 10) {
+            nodes { id project { id } }
+          }
+        }
+      }
+    }' \
+  --jq ".data.repository.issue.projectItems.nodes[] | select(.project.id == \"$PROJECT_ID\") | .id")
 
 if [ -z "$ITEM_ID" ]; then
   echo "Issue #$ISSUE_NUMBER not found in project. Adding it first..."
   gh project item-add 1 --owner OpenCara --url "https://github.com/OpenCara/OpenCara/issues/$ISSUE_NUMBER"
-  ITEM_ID=$(gh project item-list 1 --owner OpenCara --limit 500 --format json \
-    | jq -r ".items[] | select(.content.number == $ISSUE_NUMBER) | .id")
+  ITEM_ID=$(gh api graphql \
+    -F owner=OpenCara -F repo=OpenCara -F issueNumber="$ISSUE_NUMBER" \
+    -f query='
+      query($owner: String!, $repo: String!, $issueNumber: Int!) {
+        repository(owner: $owner, name: $repo) {
+          issue(number: $issueNumber) {
+            projectItems(first: 10) {
+              nodes { id project { id } }
+            }
+          }
+        }
+      }' \
+    --jq ".data.repository.issue.projectItems.nodes[] | select(.project.id == \"$PROJECT_ID\") | .id")
   if [ -z "$ITEM_ID" ]; then
     echo "Failed to add issue #$ISSUE_NUMBER to project."
     exit 1
