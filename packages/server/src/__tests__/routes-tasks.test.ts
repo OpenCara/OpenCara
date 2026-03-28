@@ -2148,6 +2148,208 @@ describe('Task Routes', () => {
     });
   });
 
+  // ── Preferred summarizer models (#555) ──────────────────
+
+  describe('preferred summarizer models (#555)', () => {
+    function makeModelPreferredConfig(preferredModels: string[]) {
+      return {
+        ...DEFAULT_REVIEW_CONFIG,
+        summarizer: {
+          ...DEFAULT_REVIEW_CONFIG.summarizer,
+          preferredModels,
+        },
+      };
+    }
+
+    describe('poll — model preference during grace period', () => {
+      it('agent with matching model gets summary immediately', async () => {
+        await store.createTask(
+          makeTask({
+            config: makeModelPreferredConfig(['claude-opus-4-6', 'gpt-5.4']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-a',
+          model: 'claude-opus-4-6',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('agent without matching model is held during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-a',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+
+      it('agent without model is held during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-a',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+
+      it('non-matching agent gets summary after grace period expires', async () => {
+        await store.createTask(
+          makeTask({
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-a',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+    });
+
+    describe('combined entity and model preferences', () => {
+      it('entity-preferred agent gets summary even without matching model', async () => {
+        await store.createTask(
+          makeTask({
+            config: {
+              ...DEFAULT_REVIEW_CONFIG,
+              summarizer: {
+                ...DEFAULT_REVIEW_CONFIG.summarizer,
+                preferred: [{ agent: 'agent-preferred' }],
+                preferredModels: ['claude-opus-4-6'],
+              },
+            },
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-preferred',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+      });
+
+      it('model-preferred agent gets summary even without entity match', async () => {
+        await store.createTask(
+          makeTask({
+            config: {
+              ...DEFAULT_REVIEW_CONFIG,
+              summarizer: {
+                ...DEFAULT_REVIEW_CONFIG.summarizer,
+                preferred: [{ agent: 'agent-preferred' }],
+                preferredModels: ['claude-opus-4-6'],
+              },
+            },
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-other',
+          model: 'claude-opus-4-6',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+      });
+
+      it('agent matching neither entity nor model is held during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            config: {
+              ...DEFAULT_REVIEW_CONFIG,
+              summarizer: {
+                ...DEFAULT_REVIEW_CONFIG.summarizer,
+                preferred: [{ agent: 'agent-preferred' }],
+                preferredModels: ['claude-opus-4-6'],
+              },
+            },
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-other',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+    });
+
+    describe('claim — model preference during grace period', () => {
+      it('model-preferred agent can claim summary during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            task_type: 'summary',
+            queue: 'summary',
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-a',
+          role: 'summary',
+          model: 'claude-opus-4-6',
+        });
+        const body = await res.json();
+        expect(body.claimed).toBe(true);
+      });
+
+      it('non-matching model agent cannot claim during grace period', async () => {
+        await store.createTask(
+          makeTask({
+            task_type: 'summary',
+            queue: 'summary',
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now(),
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/task-1/claim', {
+          agent_id: 'agent-a',
+          role: 'summary',
+          model: 'gpt-4o',
+        });
+        expect(res.status).toBe(409);
+      });
+    });
+
+    describe('backward compatibility', () => {
+      it('summary is available immediately when no preferredModels set', async () => {
+        await store.createTask(makeTask());
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'any-agent' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+    });
+  });
+
   // ── Preferred review models/tools (#355) ───────────────
 
   describe('preferred review models/tools (#355)', () => {

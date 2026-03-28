@@ -724,6 +724,83 @@ describe('summarizer shorthand parsing', () => {
   });
 });
 
+// ── Summarizer preferred_models parsing ──
+
+describe('summarizer.preferred_models parsing', () => {
+  it('parses preferred_models in full object form (legacy)', () => {
+    const config = parseReviewConfig(
+      'version = 1\nprompt = "test"\n[summarizer]\npreferred_models = ["claude-opus-4-6", "gpt-5.4"]',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferredModels).toEqual(['claude-opus-4-6', 'gpt-5.4']);
+  });
+
+  it('parses preferred_models alongside "only" string', () => {
+    const config = parseReviewConfig(
+      'version = 1\nprompt = "test"\n[summarizer]\nonly = "alice"\npreferred_models = ["claude-opus-4-6"]',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }]);
+    expect(config.summarizer.preferredModels).toEqual(['claude-opus-4-6']);
+  });
+
+  it('parses preferred_models alongside "only" list', () => {
+    const config = parseReviewConfig(
+      'version = 1\nprompt = "test"\n[summarizer]\nonly = ["alice", "bob"]\npreferred_models = ["gpt-5.4"]',
+    ) as ReviewConfig;
+    expect(config.summarizer.whitelist).toEqual([{ github: 'alice' }, { github: 'bob' }]);
+    expect(config.summarizer.preferredModels).toEqual(['gpt-5.4']);
+  });
+
+  it('defaults to empty array when preferred_models is not set', () => {
+    const config = parseReviewConfig(MINIMAL_LEGACY_CONFIG) as ReviewConfig;
+    expect(config.summarizer.preferredModels).toEqual([]);
+  });
+
+  it('defaults to empty array for string shorthand (no object)', () => {
+    const config = parseReviewConfig(
+      'version = 1\nprompt = "test"\nsummarizer = "alice"',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferredModels).toEqual([]);
+  });
+
+  it('filters non-string entries from preferred_models', () => {
+    const config = parseReviewConfig(
+      'version = 1\nprompt = "test"\n[summarizer]\npreferred_models = ["claude-opus-4-6", 123, "gpt-5.4"]',
+    ) as ReviewConfig;
+    expect(config.summarizer.preferredModels).toEqual(['claude-opus-4-6', 'gpt-5.4']);
+  });
+
+  it('parses preferred_models in new format [review.summarizer]', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "Review this"
+[review.summarizer]
+only = "quabug"
+preferred_models = ["claude-opus-4-6", "gpt-5.4"]
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.summarizer.whitelist).toEqual([{ github: 'quabug' }]);
+    expect(result.review!.summarizer.preferredModels).toEqual(['claude-opus-4-6', 'gpt-5.4']);
+  });
+
+  it('parses preferred_models alongside entity preferences in new format', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "Review this"
+preferred_models = ["claude-opus-4-6"]
+[review.summarizer]
+preferred_models = ["gpt-5.4"]
+[[review.summarizer.preferred]]
+github = "alice"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review!.preferredModels).toEqual(['claude-opus-4-6']);
+    expect(result.review!.summarizer.preferred).toEqual([{ github: 'alice' }]);
+    expect(result.review!.summarizer.preferredModels).toEqual(['gpt-5.4']);
+  });
+});
+
 describe('isEntityMatch', () => {
   it('matches by agent ID', () => {
     expect(isEntityMatch({ agent: 'agent-abc' }, 'agent-abc')).toBe(true);
