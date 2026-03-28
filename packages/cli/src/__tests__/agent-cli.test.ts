@@ -57,6 +57,7 @@ vi.mock('../auth.js', () => ({
     github_username: 'testuser',
     github_user_id: 12345,
   })),
+  fetchUserOrgs: vi.fn(async () => new Set<string>()),
   AuthError: class AuthError extends Error {
     constructor(message: string) {
       super(message);
