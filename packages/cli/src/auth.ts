@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import type {
   DeviceFlowInitResponse,
   DeviceFlowTokenResponse,
@@ -358,13 +359,24 @@ export async function resolveUser(
  * Returns a Set of org login names (lowercased for case-insensitive matching).
  * Returns an empty set on failure (non-critical — agent can still work without orgs).
  *
- * NOTE: Fetches only the first page (max 100 orgs). Pagination not implemented —
- * users with >100 org memberships may miss some repos in private mode filtering.
+ * Strategy: try `gh` CLI first (uses the user's own GitHub auth which has org
+ * read permissions), fall back to the OAuth token (which may lack `read:org` scope).
+ *
+ * NOTE: gh CLI path uses --paginate to fetch all orgs. OAuth fallback fetches
+ * only the first page (max 100 orgs) — users with >100 orgs may miss some.
+ *
+ * @param expectedLogin - If provided, verifies gh CLI is authenticated as this user
  */
 export async function fetchUserOrgs(
   token: string,
   fetchFn: typeof fetch = fetch,
+  expectedLogin?: string,
 ): Promise<Set<string>> {
+  // Try gh CLI first — it has the user's full GitHub permissions
+  const ghOrgs = fetchUserOrgsViaGh(expectedLogin);
+  if (ghOrgs.size > 0) return ghOrgs;
+
+  // Fallback: use the OAuth token (may lack read:org scope)
   try {
     const res = await fetchFn('https://api.github.com/user/orgs?per_page=100', {
       headers: {
@@ -384,6 +396,42 @@ export async function fetchUserOrgs(
       if (typeof org.login === 'string') {
         orgs.add(org.login.toLowerCase());
       }
+    }
+    return orgs;
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Fetch org memberships via the `gh` CLI.
+ * Uses --paginate to fetch all orgs (no page limit).
+ * If expectedLogin is provided, verifies gh is authenticated as the same user.
+ * Returns a Set of lowercased org login names, or empty set if gh is unavailable.
+ */
+export function fetchUserOrgsViaGh(expectedLogin?: string): Set<string> {
+  try {
+    // Verify gh is authenticated as the expected user to avoid identity mismatch
+    if (expectedLogin) {
+      const ghUser = execFileSync('gh', ['api', '/user', '--jq', '.login'], {
+        encoding: 'utf-8',
+        timeout: 10_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      if (ghUser.toLowerCase() !== expectedLogin.toLowerCase()) {
+        return new Set();
+      }
+    }
+
+    const output = execFileSync('gh', ['api', '/user/orgs', '--paginate', '--jq', '.[].login'], {
+      encoding: 'utf-8',
+      timeout: 15_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const orgs = new Set<string>();
+    for (const line of output.trim().split('\n')) {
+      const name = line.trim();
+      if (name) orgs.add(name.toLowerCase());
     }
     return orgs;
   } catch {
