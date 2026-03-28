@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { runLogin, runStatus, runLogout, authCommand } from '../commands/auth.js';
+import { PassThrough } from 'node:stream';
+import { runLogin, runStatus, runLogout, authCommand, defaultConfirm } from '../commands/auth.js';
 import type { StoredAuth } from '../auth.js';
 import type { CliConfig } from '../config.js';
 
@@ -323,6 +324,87 @@ describe('auth commands', () => {
 
       const logout = cmd.commands.find((c) => c.name() === 'logout');
       expect(logout?.description()).toContain('Remove');
+    });
+  });
+
+  describe('defaultConfirm', () => {
+    let originalStdin: typeof process.stdin;
+
+    beforeEach(() => {
+      originalStdin = process.stdin;
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, 'stdin', { value: originalStdin, writable: true });
+    });
+
+    it('returns false when stdin is not a TTY', async () => {
+      const mockStdin = new PassThrough();
+      Object.defineProperty(mockStdin, 'isTTY', { value: false });
+      Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
+
+      const result = await defaultConfirm('Continue?');
+      expect(result).toBe(false);
+    });
+
+    it('returns true when user answers "y"', async () => {
+      const mockStdin = new PassThrough();
+      Object.defineProperty(mockStdin, 'isTTY', { value: true });
+      Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
+
+      const p = defaultConfirm('Continue?');
+      // Simulate user typing "y" and pressing enter
+      mockStdin.push('y\n');
+      const result = await p;
+      expect(result).toBe(true);
+    });
+
+    it('returns false when user answers "n"', async () => {
+      const mockStdin = new PassThrough();
+      Object.defineProperty(mockStdin, 'isTTY', { value: true });
+      Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
+
+      const p = defaultConfirm('Continue?');
+      mockStdin.push('n\n');
+      const result = await p;
+      expect(result).toBe(false);
+    });
+
+    it('returns false when user presses enter without input', async () => {
+      const mockStdin = new PassThrough();
+      Object.defineProperty(mockStdin, 'isTTY', { value: true });
+      Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
+
+      const p = defaultConfirm('Continue?');
+      mockStdin.push('\n');
+      const result = await p;
+      expect(result).toBe(false);
+    });
+
+    it('does not resolve to false from close event when question already answered', async () => {
+      const mockStdin = new PassThrough();
+      Object.defineProperty(mockStdin, 'isTTY', { value: true });
+      Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
+
+      const p = defaultConfirm('Continue?');
+      // User answers "y" — question callback fires first, then close event fires
+      mockStdin.push('y\n');
+      const result = await p;
+      // The answered guard ensures the close handler doesn't override the "y" answer
+      expect(result).toBe(true);
+    });
+
+    it('returns false when stdin closes before user answers (race condition guard)', async () => {
+      const mockStdin = new PassThrough();
+      Object.defineProperty(mockStdin, 'isTTY', { value: true });
+      Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
+
+      const p = defaultConfirm('Continue?');
+      // Simulate stdin closing without any input (the npx race condition)
+      // end() signals EOF which triggers readline 'close' event
+      mockStdin.end();
+      const result = await p;
+      expect(result).toBe(false);
     });
   });
 });
