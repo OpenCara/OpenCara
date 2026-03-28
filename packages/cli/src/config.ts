@@ -54,6 +54,12 @@ export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
 const VALID_REPO_MODES: RepoFilterMode[] = ['public', 'private', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
 
+/** Backward-compatible aliases for renamed repo filter modes. */
+const REPO_MODE_ALIASES: Record<string, RepoFilterMode> = {
+  all: 'public',
+  own: 'private',
+};
+
 export class RepoConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -87,10 +93,17 @@ function parseRepoConfig(
   }
 
   const reposObj = raw as Record<string, unknown>;
-  const mode = reposObj.mode;
+  let mode = reposObj.mode;
 
   if (mode === undefined) {
     throw new RepoConfigError(`agents[${index}].${field}.mode is required`);
+  }
+  if (typeof mode === 'string' && mode in REPO_MODE_ALIASES) {
+    const resolved = REPO_MODE_ALIASES[mode];
+    console.warn(
+      `⚠ Config warning: agents[${index}].${field}.mode "${mode}" is deprecated, use "${resolved}" instead`,
+    );
+    mode = resolved;
   }
   if (typeof mode !== 'string' || !VALID_REPO_MODES.includes(mode as RepoFilterMode)) {
     throw new RepoConfigError(
