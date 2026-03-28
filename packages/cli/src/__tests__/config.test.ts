@@ -789,12 +789,13 @@ tool = "claude"
 [agents.repos]
 mode = "all"
 `);
-      const warnSpy = vi.spyOn(console, 'warn');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'public' });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('"all" is deprecated, use "public" instead'),
       );
+      warnSpy.mockRestore();
     });
 
     it('accepts deprecated mode "own" as alias for "private" with warning', () => {
@@ -806,12 +807,13 @@ tool = "claude"
 [agents.repos]
 mode = "own"
 `);
-      const warnSpy = vi.spyOn(console, 'warn');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const config = loadConfig();
       expect(config.agents![0].repos).toEqual({ mode: 'private' });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('"own" is deprecated, use "private" instead'),
       );
+      warnSpy.mockRestore();
     });
 
     it('saveConfig persists repos field on agents', () => {

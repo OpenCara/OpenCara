@@ -98,7 +98,7 @@ function parseRepoConfig(
   if (mode === undefined) {
     throw new RepoConfigError(`agents[${index}].${field}.mode is required`);
   }
-  if (typeof mode === 'string' && mode in REPO_MODE_ALIASES) {
+  if (typeof mode === 'string' && Object.hasOwn(REPO_MODE_ALIASES, mode)) {
     const resolved = REPO_MODE_ALIASES[mode];
     console.warn(
       `⚠ Config warning: agents[${index}].${field}.mode "${mode}" is deprecated, use "${resolved}" instead`,
