@@ -147,10 +147,10 @@ describe('config', () => {
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
     });
 
-    it('silently ignores old anthropic_api_key and review_model fields, but parses api_key', () => {
+    it('silently ignores old anthropic_api_key, review_model, and api_key fields', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'anthropic_api_key = "sk-ant-test"\nreview_model = "claude-opus-4-6"\napi_key = "cr_test"\n',
+        'anthropic_api_key = "sk-ant-test"\nreview_model = "claude-opus-4-6"\n\n',
       );
 
       const config = loadConfig();
@@ -158,8 +158,7 @@ describe('config', () => {
       // Old fields are ignored, no errors thrown
       expect(config).not.toHaveProperty('anthropicApiKey');
       expect(config).not.toHaveProperty('reviewModel');
-      // api_key is now a valid config field
-      expect(config.apiKey).toBe('cr_test');
+      expect(config).not.toHaveProperty('apiKey');
     });
 
     it('returns defaults for empty config file', () => {
@@ -218,7 +217,7 @@ describe('config', () => {
 
     it('returns null agentCommand when not present', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('\n');
 
       const config = loadConfig();
 
@@ -293,7 +292,6 @@ describe('config', () => {
   describe('saveConfig', () => {
     const baseConfig = {
       platformUrl: 'https://api.dev',
-      apiKey: null as string | null,
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       codebaseDir: null as string | null,
@@ -313,20 +311,13 @@ describe('config', () => {
       );
     });
 
-    it('does not save api_key when null, and never saves anthropic_api_key or review_model', () => {
+    it('never saves anthropic_api_key, api_key, or review_model', () => {
       saveConfig(baseConfig);
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('api_key');
       expect(content).not.toContain('anthropic_api_key');
       expect(content).not.toContain('review_model');
-    });
-
-    it('saves api_key when set', () => {
-      saveConfig({ ...baseConfig, apiKey: 'cr_my_key' });
-
-      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(content).toContain('api_key = "cr_my_key"');
     });
 
     it('saves max_diff_size_kb when non-default', () => {
@@ -375,7 +366,7 @@ describe('config', () => {
   describe('agents parsing', () => {
     it('returns null when agents key is absent', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('\n');
 
       const config = loadConfig();
       expect(config.agents).toBeNull();
@@ -383,7 +374,7 @@ describe('config', () => {
 
     it('returns empty array when agents key is present but empty', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\nagents = []\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('\nagents = []\n');
 
       const config = loadConfig();
       expect(config.agents).toEqual([]);
@@ -392,7 +383,7 @@ describe('config', () => {
     it('parses agents with model, tool, and command', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key = "cr_test"\n[[agents]]\nmodel = "claude-opus-4-6"\ntool = "claude"\ncommand = "claude -p"\n',
+        '\n[[agents]]\nmodel = "claude-opus-4-6"\ntool = "claude"\ncommand = "claude -p"\n',
       );
 
       const config = loadConfig();
@@ -403,9 +394,7 @@ describe('config', () => {
 
     it('parses agents without command field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'api_key = "cr_test"\n[[agents]]\nmodel = "glm-5"\ntool = "qwen"\n',
-      );
+      vi.mocked(fs.readFileSync).mockReturnValue('\n[[agents]]\nmodel = "glm-5"\ntool = "qwen"\n');
 
       const config = loadConfig();
       expect(config.agents).toEqual([{ model: 'glm-5', tool: 'qwen' }]);
@@ -860,7 +849,6 @@ github_token = "ghp_agent1"
     it('saveConfig does not write github_token or github_username', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
-        apiKey: null,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         codebaseDir: null,
@@ -894,7 +882,7 @@ github_token = "ghp_agent1"
 
     it('returns null when codebase_dir is absent', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('api_key = "cr_test"\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('\n');
 
       const config = loadConfig();
       expect(config.codebaseDir).toBeNull();
@@ -1388,7 +1376,6 @@ roles = ["review", "summary", "issue_triage"]
     it('saveConfig round-trips roles field', () => {
       saveConfig({
         platformUrl: DEFAULT_PLATFORM_URL,
-        apiKey: null,
         maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
         maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
         codebaseDir: null,

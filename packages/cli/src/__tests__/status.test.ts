@@ -18,7 +18,6 @@ import { loadAuth } from '../auth.js';
 function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
   return {
     platformUrl: DEFAULT_PLATFORM_URL,
-    apiKey: null,
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 10,
     codebaseDir: null,

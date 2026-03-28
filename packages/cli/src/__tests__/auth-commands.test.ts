@@ -14,7 +14,6 @@ const MOCK_AUTH: StoredAuth = {
 function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
   return {
     platformUrl: 'https://api.opencara.dev',
-    apiKey: null,
     maxDiffSizeKb: 100,
     maxConsecutiveErrors: 10,
     codebaseDir: null,
