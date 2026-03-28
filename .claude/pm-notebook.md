@@ -463,15 +463,16 @@ Parent: #480
 
 Parent: #564 — CLI Agent Implementation/Fix Mode
 
-| #    | Title                                                     | Agent      | Status  | Depends On |
-| ---- | --------------------------------------------------------- | ---------- | ------- | ---------- |
-| #566 | Add implement/fix types to shared package                 | architect  | Backlog | —          |
-| #568 | Handle `/opencara go` comment trigger for implement tasks | server-dev | Backlog | #566       |
-| #567 | Handle PR comment /opencara fix for fix tasks             | server-dev | Backlog | #566       |
-| #569 | Implement task executor — issue to branch to AI to PR     | cli-dev    | Backlog | #566, #568 |
-| #570 | Fix task executor — PR comments to AI to push             | cli-dev    | Backlog | #566, #567 |
+| #    | Title                                                       | Agent      | Status  | Depends On       |
+| ---- | ----------------------------------------------------------- | ---------- | ------- | ---------------- |
+| #566 | Add implement/fix types to shared package                   | architect  | Backlog | —                |
+| #574 | Add allowed_by permission config for implement/fix triggers | architect  | Backlog | — (incl in #566) |
+| #568 | Handle `/opencara go` comment trigger for implement tasks   | server-dev | Backlog | #566             |
+| #567 | Handle PR comment /opencara fix for fix tasks               | server-dev | Backlog | #566             |
+| #569 | Implement task executor — issue to branch to AI to PR       | cli-dev    | Backlog | #566, #568       |
+| #570 | Fix task executor — PR comments to AI to push               | cli-dev    | Backlog | #566, #567       |
 
-Execution: Phase 1 (#566 shared) → Phase 2 (#568+#567 server, parallel) → Phase 3 (#569+#570 cli, parallel)
+Execution: Phase 1 (#566+#574 shared) → Phase 2 (#568+#567 server, parallel) → Phase 3 (#569+#570 cli, parallel)
 
 ### Multi-instance agent (2026-03-28)
 
