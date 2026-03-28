@@ -1,6 +1,6 @@
 {
   "name": "opencara",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "Distributed AI code review agent — poll, review, and submit PR reviews using your own AI tools",
   "type": "module",
   "license": "MIT",
@@ -30,10 +30,13 @@
     "node": ">=20"
   },
   "bin": {
-    "opencara": "dist/index.js"
+    "opencara": "dist/index.js",
+    "opencara-codex-agent": "bin/opencara-codex-agent",
+    "opencara-gemini-agent": "bin/opencara-gemini-agent"
   },
   "files": [
     "dist",
+    "bin",
     "README.md"
   ],
   "scripts": {

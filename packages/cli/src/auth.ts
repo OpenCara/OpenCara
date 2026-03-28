@@ -154,11 +154,17 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
       break;
     }
 
-    const tokenRes = await fetchFn(`${platformUrl}/api/auth/device/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_code: initData.device_code }),
-    });
+    let tokenRes: Response;
+    try {
+      tokenRes = await fetchFn(`${platformUrl}/api/auth/device/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_code: initData.device_code }),
+      });
+    } catch {
+      // Network error (timeout, DNS, etc.) — treat as transient, retry
+      continue;
+    }
 
     if (!tokenRes.ok) {
       // Non-200: transient error — continue polling
