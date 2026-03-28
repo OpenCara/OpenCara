@@ -295,7 +295,7 @@ describe('config', () => {
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       codebaseDir: null as string | null,
-
+      codebaseTtl: null as string | null,
       agentCommand: null as string | null,
       agents: null as import('../config.js').LocalAgentConfig[] | null,
     };
@@ -966,6 +966,62 @@ tool = "qwen"
       const config = loadConfig();
       expect(config.agents![0].codebase_dir).toBe('~/repos');
       expect(config.agents![1].codebase_dir).toBeUndefined();
+    });
+  });
+
+  describe('codebase_ttl config', () => {
+    it('parses codebase_ttl string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('codebase_ttl = "30m"\n');
+
+      const config = loadConfig();
+      expect(config.codebaseTtl).toBe('30m');
+    });
+
+    it('returns null for non-string codebase_ttl', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('codebase_ttl = 123\n');
+
+      const config = loadConfig();
+      expect(config.codebaseTtl).toBeNull();
+    });
+
+    it('returns null when codebase_ttl is absent', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('\n');
+
+      const config = loadConfig();
+      expect(config.codebaseTtl).toBeNull();
+    });
+
+    it('saveConfig writes codebase_ttl when present', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: '2h',
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('codebase_ttl = "2h"');
+    });
+
+    it('saveConfig omits codebase_ttl when null', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('codebase_ttl');
     });
   });
 

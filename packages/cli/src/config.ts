@@ -31,6 +31,7 @@ export interface CliConfig {
   maxDiffSizeKb: number;
   maxConsecutiveErrors: number;
   codebaseDir: string | null;
+  codebaseTtl: string | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
   usageLimits: UsageLimits;
@@ -291,6 +292,7 @@ export function loadConfig(): CliConfig {
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     codebaseDir: null,
+    codebaseTtl: null,
     agentCommand: null,
     agents: null,
     usageLimits: {
@@ -352,6 +354,7 @@ export function loadConfig(): CliConfig {
         ? data.max_consecutive_errors
         : DEFAULT_MAX_CONSECUTIVE_ERRORS),
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
+    codebaseTtl: typeof data.codebase_ttl === 'string' ? data.codebase_ttl : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
     usageLimits: {
@@ -369,6 +372,9 @@ export function saveConfig(config: CliConfig): void {
   };
   if (config.codebaseDir) {
     data.codebase_dir = config.codebaseDir;
+  }
+  if (config.codebaseTtl) {
+    data.codebase_ttl = config.codebaseTtl;
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
