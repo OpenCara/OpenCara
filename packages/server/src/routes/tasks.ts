@@ -842,6 +842,9 @@ export function taskRoutes() {
       return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
     }
 
+    // Update heartbeat — keep agent alive after successful claim
+    await store.setAgentLastSeen(agent_id, Date.now());
+
     // For summary claims, return completed worker results from the group
     if (isSummaryTask(task)) {
       const reviews = await getWorkerReviews(store, task.group_id);
@@ -929,6 +932,9 @@ export function taskRoutes() {
         `Claim role '${claim.role}' does not match submission type '${type}'`,
       );
     }
+
+    // Update heartbeat — keep agent alive after successful result submission
+    await store.setAgentLastSeen(agent_id, Date.now());
 
     // Update the claim with result
     await store.updateClaim(claimId, {
