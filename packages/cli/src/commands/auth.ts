@@ -19,12 +19,19 @@ export interface AuthCommandDeps {
 }
 
 /** Default interactive confirm — reads from stdin. */
-async function defaultConfirm(prompt: string): Promise<boolean> {
+export async function defaultConfirm(prompt: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    return false;
+  }
   const { createInterface } = await import('node:readline');
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    rl.on('close', () => resolve(false));
+    let answered = false;
+    rl.once('close', () => {
+      if (!answered) resolve(false);
+    });
     rl.question(`${prompt} (y/N) `, (answer) => {
+      answered = true;
       rl.close();
       resolve(answer.trim().toLowerCase() === 'y');
     });
