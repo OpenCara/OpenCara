@@ -1011,6 +1011,16 @@ enabled = false
     expect(result.implement!.enabled).toBe(false);
   });
 
+  it('uses default prompt when prompt is absent', () => {
+    const toml = `
+version = 1
+[implement]
+agent_count = 1
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.implement!.prompt).toBe('Implement the requested changes.');
+  });
+
   it('implement section absent when not in config', () => {
     const result = parseOpenCaraConfig('version = 1\n[review]\nprompt = "test"') as OpenCaraConfig;
     expect(result.implement).toBeUndefined();
@@ -1077,6 +1087,16 @@ enabled = false
 `;
     const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
     expect(result.fix!.enabled).toBe(false);
+  });
+
+  it('uses default prompt when prompt is absent', () => {
+    const toml = `
+version = 1
+[fix]
+agent_count = 1
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.fix!.prompt).toBe('Fix the review comments.');
   });
 
   it('fix section absent when not in config', () => {
