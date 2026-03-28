@@ -46,6 +46,18 @@ export interface DataStore {
   countWorkerTasksInGroup(groupId: string): Promise<number>;
   /** Delete all tasks in a group (cascade deletes claims). */
   deleteTasksByGroup(groupId: string): Promise<void>;
+  /**
+   * Atomically complete a worker task and create a summary task if all workers
+   * in the group are done. Uses a single D1 batch transaction to prevent race
+   * conditions where concurrent result submissions could both miss or both
+   * create the summary task.
+   *
+   * Returns true if the summary task was created, false otherwise.
+   */
+  completeWorkerAndMaybeCreateSummary(
+    workerTaskId: string,
+    summaryTask: ReviewTask,
+  ): Promise<boolean>;
 
   // ── Deprecated slot-counting methods (will be removed) ────
   /** @deprecated Use claimTask instead. Atomically increment completed_reviews. */

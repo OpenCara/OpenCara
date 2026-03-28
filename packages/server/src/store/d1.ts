@@ -542,6 +542,52 @@ export class D1DataStore implements DataStore {
     await this.db.prepare('DELETE FROM tasks WHERE group_id = ?').bind(groupId).run();
   }
 
+  async completeWorkerAndMaybeCreateSummary(
+    workerTaskId: string,
+    summaryTask: ReviewTask,
+  ): Promise<boolean> {
+    // Use D1 batch to run both statements in a single transaction.
+    // The INSERT...SELECT atomically checks that all review-type tasks in the
+    // group are completed AND no active summary task already exists before
+    // inserting. This prevents the race where concurrent result submissions
+    // could both miss or both create the summary task.
+    const updateStmt = this.db
+      .prepare(`UPDATE tasks SET status = 'completed' WHERE id = ?`)
+      .bind(workerTaskId);
+
+    const insertStmt = this.db
+      .prepare(
+        `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
+          review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
+          created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
+          summary_retry_count, task_type, feature, group_id,
+          issue_number, issue_url, issue_title, issue_body, issue_author,
+          dedup_target, index_issue_number)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE (
+          SELECT COUNT(*) FROM tasks
+          WHERE group_id = ? AND task_type = 'review' AND status = 'completed'
+        ) >= (
+          SELECT COUNT(*) FROM tasks
+          WHERE group_id = ? AND task_type = 'review'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM tasks
+          WHERE group_id = ? AND task_type = 'summary' AND status IN ('pending', 'reviewing')
+        )`,
+      )
+      .bind(
+        ...this.bindTaskParams(summaryTask),
+        summaryTask.group_id,
+        summaryTask.group_id,
+        summaryTask.group_id,
+      );
+
+    const results = await this.db.batch([updateStmt, insertStmt]);
+    // The second result (INSERT...SELECT) tells us if the summary was created
+    return (results[1]?.meta?.changes ?? 0) > 0;
+  }
+
   // ── Deprecated: Completed reviews (atomic increment) ───────
 
   /** @deprecated Use claimTask instead. */

@@ -1067,5 +1067,48 @@ describe('E2E Scenarios', () => {
       groupTasks = await store.getTasksByGroup(groupId);
       expect(groupTasks.filter((t) => t.task_type === 'summary')).toHaveLength(1);
     });
+
+    it('concurrent review submissions create exactly one summary task (#551)', async () => {
+      // Regression test for #551: summary task not created after all reviews complete.
+      // When both results are submitted simultaneously, the atomic
+      // completeWorkerAndMaybeCreateSummary ensures exactly one summary is created.
+      const { groupId } = await injectPR({ reviewCount: 3 });
+      const workerIds = await getWorkerTaskIds(groupId);
+      expect(workerIds).toHaveLength(2);
+
+      const r1 = agent('reviewer-1');
+      const r2 = agent('reviewer-2');
+
+      // Both agents claim their tasks
+      await r1.claim(workerIds[0], 'review');
+      await r2.claim(workerIds[1], 'review');
+
+      // Both submit results concurrently (simulates the race condition)
+      const [result1, result2] = await Promise.all([
+        r1.submitResult(
+          workerIds[0],
+          'review',
+          'Review 1: Thorough analysis complete',
+          'approve',
+          500,
+        ),
+        r2.submitResult(
+          workerIds[1],
+          'review',
+          'Review 2: Code quality assessment done',
+          'approve',
+          600,
+        ),
+      ]);
+
+      expect(result1.status).toBe(200);
+      expect(result2.status).toBe(200);
+
+      // Exactly one summary task should exist
+      const groupTasks = await store.getTasksByGroup(groupId);
+      const summaryTasks = groupTasks.filter((t) => t.task_type === 'summary');
+      expect(summaryTasks).toHaveLength(1);
+      expect(summaryTasks[0].status).toBe('pending');
+    });
   });
 });
