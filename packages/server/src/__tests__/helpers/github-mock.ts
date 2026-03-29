@@ -7,7 +7,7 @@
 import { vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
 import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
-import type { GitHubService, PrDetails } from '../../github/service.js';
+import type { GitHubService, PrDetails, IssueDetails } from '../../github/service.js';
 
 export interface GitHubCall {
   url: string;
@@ -211,6 +211,22 @@ export class MockGitHubService implements GitHubService {
   ): Promise<string | null> {
     this.calls.push({ method: 'fetchIssueBody', args: { owner, repo, number, token } });
     return `Mock issue body for #${number}`;
+  }
+
+  async fetchIssueDetails(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<IssueDetails | null> {
+    this.calls.push({ method: 'fetchIssueDetails', args: { owner, repo, number, token } });
+    return {
+      number,
+      html_url: `https://github.com/${owner}/${repo}/issues/${number}`,
+      title: `Mock issue #${number}`,
+      body: `Mock issue body for #${number}`,
+      user: { login: 'mock-user' },
+    };
   }
 
   async createIssue(

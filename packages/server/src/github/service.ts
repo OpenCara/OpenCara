@@ -15,6 +15,15 @@ import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared
 
 export type { PrDetails } from './config.js';
 
+/** Minimal issue details fetched from GitHub API */
+export interface IssueDetails {
+  number: number;
+  html_url: string;
+  title: string;
+  body: string | null;
+  user: { login: string };
+}
+
 /**
  * GitHubService — abstraction over all GitHub API interactions.
  *
@@ -73,6 +82,12 @@ export interface GitHubService {
     number: number,
     token: string,
   ): Promise<string | null>;
+  fetchIssueDetails(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<IssueDetails | null>;
   createIssue(
     owner: string,
     repo: string,
@@ -275,6 +290,31 @@ export class RealGitHubService implements GitHubService {
     return data.body ?? null;
   }
 
+  async fetchIssueDetails(
+    owner: string,
+    repo: string,
+    number: number,
+    token: string,
+  ): Promise<IssueDetails | null> {
+    const response = await githubFetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+      { token },
+    );
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch issue #${number}: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const data = (await response.json()) as IssueDetails;
+    return data;
+  }
+
   async createIssue(
     owner: string,
     repo: string,
@@ -443,6 +483,21 @@ export class NoOpGitHubService implements GitHubService {
   async fetchIssueBody(owner: string, repo: string, number: number): Promise<string | null> {
     this.logger.info('Dev mode — returning mock issue body', { owner, repo, number });
     return `Mock issue body for #${number}`;
+  }
+
+  async fetchIssueDetails(
+    owner: string,
+    repo: string,
+    number: number,
+  ): Promise<IssueDetails | null> {
+    this.logger.info('Dev mode — returning mock issue details', { owner, repo, number });
+    return {
+      number,
+      html_url: `https://github.com/${owner}/${repo}/issues/${number}`,
+      title: `Mock issue #${number}`,
+      body: `Mock issue body for #${number}`,
+      user: { login: 'mock-user' },
+    };
   }
 
   async createIssue(
