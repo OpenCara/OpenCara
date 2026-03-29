@@ -810,7 +810,7 @@ describe('Integration: full E2E flows', () => {
           html_url: 'https://github.com/acme/widget/pull/77',
           diff_url: 'https://github.com/acme/widget/pull/77.diff',
           base: { ref: 'main' },
-          head: { ref: 'feat/new-thing' },
+          head: { ref: 'feat/new-thing', sha: 'abc123' },
           draft: false,
           labels: [],
         },
@@ -859,7 +859,7 @@ describe('Integration: full E2E flows', () => {
           html_url: 'https://github.com/acme/widget/pull/78',
           diff_url: 'https://github.com/acme/widget/pull/78.diff',
           base: { ref: 'main' },
-          head: { ref: 'feat/malicious-config' },
+          head: { ref: 'feat/malicious-config', sha: 'abc123' },
           draft: false,
           labels: [],
         },
@@ -934,7 +934,7 @@ describe('Integration: full E2E flows', () => {
           html_url: 'https://github.com/acme/widget/pull/88',
           diff_url: 'https://github.com/acme/widget/pull/88.diff',
           base: { ref: 'main' },
-          head: { ref: 'draft-branch' },
+          head: { ref: 'draft-branch', sha: 'abc123' },
           draft: true,
           labels: [],
         },
@@ -971,7 +971,7 @@ describe('Integration: full E2E flows', () => {
           html_url: 'https://github.com/acme/widget/pull/99',
           diff_url: 'https://github.com/acme/widget/pull/99.diff',
           base: { ref: 'main' },
-          head: { ref: 'feat' },
+          head: { ref: 'feat', sha: 'abc123' },
         },
       };
 
@@ -1013,7 +1013,7 @@ describe('Integration: full E2E flows', () => {
           html_url: `https://github.com/acme/widget/pull/${prNumber}`,
           diff_url: `https://github.com/acme/widget/pull/${prNumber}.diff`,
           base: { ref: 'main' },
-          head: { ref: 'feat/branch' },
+          head: { ref: 'feat/branch', sha: 'abc123' },
           draft: false,
           labels: [],
         },
@@ -1158,11 +1158,11 @@ describe('Integration: full E2E flows', () => {
       githubCalls.length = 0;
       await sendCommentWebhook(83, '/opencara review');
 
-      // The mock returns PR details with base: { ref: 'main' } and head: { ref: 'feat/test' }
-      // loadReviewConfig should be called with base ref (main), not head ref
-      const configFetch = githubCalls.find((c) => c.method === 'loadReviewConfig');
+      // The mock returns PR details with base: { ref: 'main' } and head: { ref: 'feat/test', sha: 'abc123' }
+      // loadOpenCaraConfig should be called with base ref (main), not head ref
+      const configFetch = githubCalls.find((c) => c.method === 'loadOpenCaraConfig');
       expect(configFetch).toBeDefined();
-      expect(configFetch!.args.baseRef).toBe('main');
+      expect(configFetch!.args.ref).toBe('main');
     });
 
     it('/opencara review comment creates task after previous task deleted', async () => {
@@ -1208,7 +1208,7 @@ describe('Integration: full E2E flows', () => {
           html_url: 'https://github.com/org/app/pull/5',
           diff_url: 'https://github.com/org/app/pull/5.diff',
           base: { ref: 'main' },
-          head: { ref: 'fix/bug' },
+          head: { ref: 'fix/bug', sha: 'abc123' },
         },
       };
       const body = JSON.stringify(payload);

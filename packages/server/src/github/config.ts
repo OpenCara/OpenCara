@@ -46,7 +46,7 @@ export interface PrDetails {
   html_url: string;
   diff_url: string;
   base: { ref: string };
-  head: { ref: string };
+  head: { ref: string; sha: string };
   draft: boolean;
   labels: Array<{ name: string }>;
 }

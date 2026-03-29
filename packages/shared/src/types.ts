@@ -96,6 +96,14 @@ export interface ReviewTask {
   issue_body?: string;
   issue_author?: string;
 
+  // ── Fix/implement fields ─────────────────────────────────
+  /** Preferred model for this task (e.g. from `/opencara fix gpt-5.4`) */
+  target_model?: string;
+  /** Collected PR review comments for fix tasks */
+  pr_review_comments?: string;
+  /** HEAD SHA of PR branch (for fix tasks to checkout) */
+  head_sha?: string;
+
   // ── Dedup fields ───────────────────────────────────────────
   index_issue_number?: number;
 
