@@ -1132,6 +1132,14 @@ async function handleGoCommand(
     return new Response('OK', { status: 200 });
   }
 
+  logger.info('Go command received', {
+    user: comment.user.login,
+    owner,
+    repo,
+    issueNumber,
+    targetModel: goCmd.targetModel,
+  });
+
   let token: string;
   try {
     token = await github.getInstallationToken(installationId);
@@ -1168,19 +1176,22 @@ async function handleGoCommand(
   }
 
   // Fetch issue details from GitHub API
-  const issue = await github.fetchIssueDetails(owner, repo, issueNumber, token);
-  if (!issue) {
-    logger.error('Failed to fetch issue details', { owner, repo, issueNumber });
+  let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
+  try {
+    issue = await github.fetchIssueDetails(owner, repo, issueNumber, token);
+  } catch (err) {
+    logger.error('Failed to fetch issue details', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+    });
     return new Response('Service Unavailable', { status: 503 });
   }
-
-  logger.info('Go command received', {
-    user: comment.user.login,
-    owner,
-    repo,
-    issueNumber,
-    targetModel: goCmd.targetModel,
-  });
+  if (!issue) {
+    logger.error('Issue not found', { owner, repo, issueNumber });
+    return new Response('Service Unavailable', { status: 503 });
+  }
 
   const implementConfig = fullConfig.implement;
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;

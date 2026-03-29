@@ -95,7 +95,7 @@ function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string)
  */
 function isTargetModelVisible(task: ReviewTask, model?: string): boolean {
   if (!task.target_model) return true; // no preference — visible to all
-  if (model && model === task.target_model) return true; // model matches
+  if (model && model.toLowerCase() === task.target_model.toLowerCase()) return true; // model matches
   return Date.now() - task.created_at >= TARGET_MODEL_GRACE_PERIOD_MS;
 }
 
