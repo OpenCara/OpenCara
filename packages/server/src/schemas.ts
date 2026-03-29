@@ -13,6 +13,8 @@ const taskRoleSchema = z.enum([
   'issue_dedup',
   'pr_triage',
   'issue_triage',
+  'implement',
+  'fix',
 ]);
 
 /** @deprecated Use taskRoleSchema for new code. Kept for backward compat. */
