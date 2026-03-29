@@ -49,6 +49,8 @@ export interface PrDetails {
   head: { ref: string; sha: string };
   draft: boolean;
   labels: Array<{ name: string }>;
+  additions?: number;
+  deletions?: number;
 }
 
 /**

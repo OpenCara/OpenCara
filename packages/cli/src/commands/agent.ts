@@ -411,12 +411,23 @@ async function pollLoop(
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
 
-      // Filter tasks by repo config, then find first not exhausted by diff fetch failures
-      const eligibleTasks = repoConfig
-        ? pollResponse.tasks.filter((t) =>
-            isRepoAllowed(repoConfig, t.owner, t.repo, agentOwner, userOrgs),
-          )
-        : pollResponse.tasks;
+      // Filter tasks by repo config, diff size estimate, and diff fetch failure count
+      const maxDiffSizeKb = reviewDeps.maxDiffSizeKb;
+      const eligibleTasks = pollResponse.tasks.filter((t) => {
+        if (repoConfig && !isRepoAllowed(repoConfig, t.owner, t.repo, agentOwner, userOrgs)) {
+          return false;
+        }
+        // Skip tasks whose diff_size (lines) clearly exceeds maxDiffSizeKb.
+        // Use ~120 bytes/line as a conservative upper estimate for unified diff format.
+        if (
+          maxDiffSizeKb &&
+          t.diff_size != null &&
+          (t.diff_size * 120) / 1024 > maxDiffSizeKb
+        ) {
+          return false;
+        }
+        return true;
+      });
       const task = eligibleTasks.find(
         (t) => (diffFailCounts.get(t.task_id) ?? 0) < MAX_DIFF_FETCH_ATTEMPTS,
       );

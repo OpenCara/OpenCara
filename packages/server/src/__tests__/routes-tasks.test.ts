@@ -86,6 +86,22 @@ describe('Task Routes', () => {
       expect(body.tasks[0].role).toBe('summary'); // review_count=1 → summary only
     });
 
+    it('includes diff_size in poll response when set on task', async () => {
+      await store.createTask(makeTask({ diff_size: 250 }));
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].diff_size).toBe(250);
+    });
+
+    it('omits diff_size in poll response when not set on task', async () => {
+      await store.createTask(makeTask());
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].diff_size).toBeUndefined();
+    });
+
     it('does not return tasks already claimed by agent', async () => {
       // Create task and claim it
       await store.createTask(makeTask());

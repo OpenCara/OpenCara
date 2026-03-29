@@ -33,6 +33,9 @@ export interface PollTask {
   prompt: string;
   role: TaskRole;
 
+  /** Total diff size in lines (additions + deletions). Absent for old tasks or issue-only tasks. */
+  diff_size?: number;
+
   // ── New unified fields ──────────────────────────────────────
   task_type?: TaskRole; // mirrors ReviewTask.task_type
   issue_number?: number;

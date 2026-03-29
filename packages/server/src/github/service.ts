@@ -448,6 +448,8 @@ export class NoOpGitHubService implements GitHubService {
       head: { ref: 'dev', sha: 'abc123' },
       draft: false,
       labels: [],
+      additions: 10,
+      deletions: 5,
     };
   }
 

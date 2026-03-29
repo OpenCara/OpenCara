@@ -33,6 +33,7 @@ export function testRoutes() {
       labels?: string[];
       private?: boolean;
       config?: Partial<ReviewConfig>;
+      diff_size?: number;
     }>();
 
     const owner = body.owner ?? 'test-org';
@@ -60,6 +61,7 @@ export function testRoutes() {
       config,
       body.private ?? false,
       logger,
+      body.diff_size,
     );
 
     if (!groupId) {

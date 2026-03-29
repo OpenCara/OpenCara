@@ -42,6 +42,8 @@ interface PullRequestPayload {
     head: { ref: string };
     draft?: boolean;
     labels?: Array<{ name: string }>;
+    additions?: number;
+    deletions?: number;
   };
 }
 
@@ -173,6 +175,7 @@ function buildBaseTask(
   config: ReviewConfig,
   isPrivate: boolean,
   timeoutMs: number,
+  diffSize?: number,
 ): Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> {
   const agentCount = config.agentCount;
   return {
@@ -191,6 +194,7 @@ function buildBaseTask(
     private: isPrivate,
     config,
     created_at: Date.now(),
+    ...(diffSize !== undefined ? { diff_size: diffSize } : {}),
   };
 }
 
@@ -299,6 +303,7 @@ export async function createTaskForPR(
   config: ReviewConfig,
   isPrivate: boolean,
   logger: Logger,
+  diffSize?: number,
 ): Promise<string | null> {
   const timeoutMs = parseTimeoutMs(config.timeout);
   const baseTask = buildBaseTask(
@@ -313,6 +318,7 @@ export async function createTaskForPR(
     config,
     isPrivate,
     timeoutMs,
+    diffSize,
   );
   return createTaskGroup(store, 'review', config, baseTask, logger);
 }
@@ -333,6 +339,7 @@ async function createPrTaskGroups(
   fullConfig: OpenCaraConfig,
   isPrivate: boolean,
   logger: Logger,
+  diffSize?: number,
 ): Promise<void> {
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
   const timeoutMs = parseTimeoutMs(reviewConfig.timeout);
@@ -348,6 +355,7 @@ async function createPrTaskGroups(
     reviewConfig,
     isPrivate,
     timeoutMs,
+    diffSize,
   );
 
   // Review task group (primary — uses createTaskIfNotExists for idempotency)
@@ -592,6 +600,12 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
+  // Compute diff size from webhook payload (additions + deletions)
+  const diffSize =
+    typeof pull_request.additions === 'number' && typeof pull_request.deletions === 'number'
+      ? pull_request.additions + pull_request.deletions
+      : undefined;
+
   try {
     await createPrTaskGroups(
       store,
@@ -606,6 +620,7 @@ async function handlePullRequest(
       fullConfig,
       repository.private ?? false,
       logger,
+      diffSize,
     );
   } catch (err) {
     logger.error('Failed to create task groups for PR', {
@@ -965,6 +980,12 @@ async function handleIssueComment(
     prNumber,
   });
 
+  // Compute diff size from PR details (additions + deletions)
+  const commentDiffSize =
+    typeof pr.additions === 'number' && typeof pr.deletions === 'number'
+      ? pr.additions + pr.deletions
+      : undefined;
+
   try {
     await createTaskForPR(
       store,
@@ -979,6 +1000,7 @@ async function handleIssueComment(
       reviewConfig,
       repository.private ?? false,
       logger,
+      commentDiffSize,
     );
   } catch (err) {
     logger.error('Failed to create task for PR', {
@@ -1074,6 +1096,11 @@ async function handleFixCommand(
     prompt: fixConfig.prompt,
     modelDiversityGraceMs: fixConfig.modelDiversityGraceMs,
   };
+  // Compute diff size from PR details (additions + deletions)
+  const fixDiffSize =
+    typeof pr.additions === 'number' && typeof pr.deletions === 'number'
+      ? pr.additions + pr.deletions
+      : undefined;
   const baseTask = buildBaseTask(
     installationId,
     owner,
@@ -1086,6 +1113,7 @@ async function handleFixCommand(
     fixTaskConfig,
     isPrivate,
     timeoutMs,
+    fixDiffSize,
   );
 
   try {

@@ -763,6 +763,7 @@ export function taskRoutes() {
         repo: task.repo,
         pr_number: task.pr_number,
         diff_url: task.diff_url,
+        diff_size: task.diff_size,
         timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
         prompt: task.prompt,
         role,
