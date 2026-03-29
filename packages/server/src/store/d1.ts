@@ -72,6 +72,7 @@ interface TaskRow {
   issue_author: string | null;
   dedup_target: string | null;
   index_issue_number: number | null;
+  diff_size: number | null;
 }
 
 interface ClaimRow {
@@ -136,6 +137,9 @@ export function rowToTask(row: TaskRow): ReviewTask {
   // Optional dedup fields
   if (row.index_issue_number !== null) task.index_issue_number = row.index_issue_number;
 
+  // Optional diff size
+  if (row.diff_size !== null) task.diff_size = row.diff_size;
+
   return task;
 }
 
@@ -189,8 +193,8 @@ export class D1DataStore implements DataStore {
         created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
         summary_retry_count, task_type, feature, group_id,
         issue_number, issue_url, issue_title, issue_body, issue_author,
-        dedup_target, index_issue_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        dedup_target, index_issue_number, diff_size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   private bindTaskParams(task: ReviewTask): unknown[] {
     return [
@@ -226,6 +230,7 @@ export class D1DataStore implements DataStore {
       task.issue_author ?? null,
       null, // dedup_target column (deprecated — role now encodes target)
       task.index_issue_number ?? null,
+      task.diff_size ?? null,
     ];
   }
 
@@ -353,6 +358,7 @@ export class D1DataStore implements DataStore {
       issue_body: (v) => v ?? null,
       issue_author: (v) => v ?? null,
       index_issue_number: (v) => v ?? null,
+      diff_size: (v) => v ?? null,
     };
 
     for (const [field, transform] of Object.entries(columnMap)) {
@@ -562,8 +568,8 @@ export class D1DataStore implements DataStore {
           created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
           summary_retry_count, task_type, feature, group_id,
           issue_number, issue_url, issue_title, issue_body, issue_author,
-          dedup_target, index_issue_number)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          dedup_target, index_issue_number, diff_size)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE (
           SELECT COUNT(*) FROM tasks
           WHERE group_id = ? AND task_type = 'review' AND status = 'completed'

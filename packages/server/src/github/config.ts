@@ -50,6 +50,8 @@ export interface PrDetails {
   user: { login: string };
   draft: boolean;
   labels: Array<{ name: string }>;
+  additions?: number;
+  deletions?: number;
 }
 
 /**

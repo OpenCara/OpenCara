@@ -1664,4 +1664,59 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks[0].head_ref).toBe('');
     });
   });
+
+  // ── diff_size extraction tests ──────────────────────────────
+
+  describe('diff_size on PR tasks', () => {
+    it('stores additions + deletions from PR webhook payload as diff_size', async () => {
+      const payload = makePRPayload({
+        pull_request: {
+          number: 42,
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          draft: false,
+          labels: [],
+          additions: 150,
+          deletions: 50,
+        },
+      });
+      await sendWebhook(app, 'pull_request', payload, env);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks[0].diff_size).toBe(200);
+    });
+
+    it('leaves diff_size undefined when additions/deletions missing from payload', async () => {
+      const payload = makePRPayload();
+      await sendWebhook(app, 'pull_request', payload, env);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks[0].diff_size).toBeUndefined();
+    });
+
+    it('stores diff_size on comment-triggered review via fetchPrDetails', async () => {
+      // Set additions/deletions on the mock PR details
+      github.fetchPrResult = {
+        number: 42,
+        html_url: 'https://github.com/acme/widget/pull/42',
+        diff_url: 'https://github.com/acme/widget/pull/42.diff',
+        base: { ref: 'main' },
+        head: { ref: 'feat/test', sha: 'abc123' },
+        draft: false,
+        labels: [],
+        additions: 80,
+        deletions: 20,
+      };
+
+      await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara review'), env);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks[0].diff_size).toBe(100);
+    });
+  });
 });

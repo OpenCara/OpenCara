@@ -449,6 +449,8 @@ export class NoOpGitHubService implements GitHubService {
       user: { login: 'dev-user' },
       draft: false,
       labels: [],
+      additions: 10,
+      deletions: 5,
     };
   }
 

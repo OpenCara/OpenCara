@@ -89,6 +89,10 @@ export interface ReviewTask {
   feature: Feature; // which feature pipeline spawned this task
   group_id: string; // links tasks in the same pipeline run
 
+  // ── PR diff size (additions + deletions from webhook payload) ──
+  /** Total diff size in lines (additions + deletions) from the GitHub webhook payload. */
+  diff_size?: number;
+
   // ── Issue fields (for dedup/triage on issues) ──────────────
   issue_number?: number;
   issue_url?: string;
