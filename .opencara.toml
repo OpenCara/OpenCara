@@ -17,7 +17,7 @@ Focus on:
 
 Be concise. Flag real issues, skip nitpicks.
 """
-agent_count = 3
+agent_count = 5
 preferred_models = ["claude-sonnet-4-6", "gpt-5.4", "glm-5"]
 timeout = "10m"
 
