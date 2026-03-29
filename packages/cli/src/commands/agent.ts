@@ -11,7 +11,13 @@ import type {
   TaskRole,
   RepoConfig,
 } from '@opencara/shared';
-import { isRepoAllowed, isDedupRole, isTriageRole, isFixRole } from '@opencara/shared';
+import {
+  isRepoAllowed,
+  isDedupRole,
+  isTriageRole,
+  isFixRole,
+  isImplementRole,
+} from '@opencara/shared';
 import {
   loadConfig,
   resolveCodebaseDir,
@@ -60,6 +66,7 @@ import { detectSuspiciousPatterns } from '../prompt-guard.js';
 import { executeDedupTask } from '../dedup.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import { executeTriageTask, type TriageExecutorDeps } from '../triage.js';
+import { executeImplementTask, type ImplementExecutorDeps } from '../implement.js';
 import {
   executeFixTask,
   BranchNotFoundError,
@@ -652,9 +659,39 @@ async function handleTask(
     }
   }
 
-  // Execute review, summary, dedup, triage, or fix
+  // Execute review, summary, dedup, triage, fix, or implement
   try {
-    if (isFixRole(role)) {
+    if (isImplementRole(role)) {
+      const codebaseDir = reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos');
+      const implementDeps: ImplementExecutorDeps = {
+        commandTemplate: reviewDeps.commandTemplate,
+        codebaseDir,
+      };
+      const implementResult = await executeImplementTask(
+        client,
+        agentId,
+        task,
+        implementDeps,
+        timeout_seconds,
+        logger,
+        signal,
+        undefined,
+        role,
+      );
+      recordSessionUsage(consumptionDeps.session, {
+        inputTokens: implementResult.tokenDetail.input,
+        outputTokens: implementResult.tokenDetail.output,
+        totalTokens: implementResult.tokensUsed,
+        estimated: implementResult.tokensEstimated,
+      });
+      if (consumptionDeps.usageTracker) {
+        consumptionDeps.usageTracker.recordReview({
+          input: implementResult.tokenDetail.input,
+          output: implementResult.tokenDetail.output,
+          estimated: implementResult.tokensEstimated,
+        });
+      }
+    } else if (isFixRole(role)) {
       if (!taskCheckoutPath) {
         throw new Error('Fix task requires a codebase worktree but checkout failed');
       }
