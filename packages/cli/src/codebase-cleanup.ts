@@ -122,7 +122,7 @@ export class CodebaseCleanupTracker {
  * and remove any older than the given TTL.
  *
  * Directory structure expected:
- *   <baseDir>/<owner>/<repo>-worktrees/<taskId>/
+ *   <baseDir>/<owner>/<repo>-worktrees/<pr-N>/
  *   <baseDir>/<owner>/<repo>.git/  (bare repos — never removed)
  *
  * Returns the number of stale directories removed.
