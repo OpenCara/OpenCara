@@ -17,6 +17,7 @@ import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
 import { moveToRecentlyClosed, ageOutToArchived } from '../dedup-index.js';
 
+/** Trusted for review triggers — includes CONTRIBUTOR. */
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
 /** Maintainers only — no CONTRIBUTOR. Used for implement/fix permission checks. */
@@ -1017,7 +1018,7 @@ async function handleFixCommand(
   logger: Logger,
 ): Promise<Response> {
   const isMaintainer = MAINTAINER_ASSOCIATIONS.has(comment.author_association);
-  const isPrAuthor = comment.user.login === pr.user.login;
+  const isPrAuthor = comment.user.login.toLowerCase() === pr.user.login.toLowerCase();
   if (!isMaintainer && !isPrAuthor) {
     logger.info('Fix command ignored — not a maintainer or PR author', {
       user: comment.user.login,
