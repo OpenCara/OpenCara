@@ -22,6 +22,9 @@ const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRI
 /** Maximum allowed length for config.prompt (10,000 characters). */
 export const MAX_PROMPT_LENGTH = 10_000;
 
+/** Maximum allowed length for pr_review_comments (64 KB). */
+export const MAX_REVIEW_COMMENTS_LENGTH = 65_536;
+
 interface PullRequestPayload {
   action: string;
   installation?: { id: number };
@@ -815,7 +818,7 @@ async function handleIssueClose(
 export function parseFixCommand(body: string): { targetModel?: string } | null {
   const trimmed = body.trim();
   // Match /opencara fix or @opencara fix (case-insensitive), optional model after
-  const match = trimmed.match(/^[/@]opencara\s+fix(?:\s+(\S+))?/i);
+  const match = trimmed.match(/^[/@]opencara\s+fix(?:\s+(\S+))?\s*$/i);
   if (!match) return null;
   return { targetModel: match[1] || undefined };
 }
@@ -998,10 +1001,20 @@ async function handleFixCommand(
     targetModel: fixCmd.targetModel,
   });
 
-  // Fetch PR review comments
+  // Fetch PR review comments (truncate to 64KB to bound task size)
   let prReviewComments = '';
   try {
     prReviewComments = await github.fetchPrReviewComments(owner, repo, prNumber, token);
+    if (prReviewComments.length > MAX_REVIEW_COMMENTS_LENGTH) {
+      logger.warn('PR review comments truncated', {
+        originalLength: prReviewComments.length,
+        maxLength: MAX_REVIEW_COMMENTS_LENGTH,
+        owner,
+        repo,
+        prNumber,
+      });
+      prReviewComments = prReviewComments.slice(0, MAX_REVIEW_COMMENTS_LENGTH);
+    }
   } catch (err) {
     logger.warn('Failed to fetch PR review comments', {
       error: err instanceof Error ? err.message : String(err),
@@ -1013,6 +1026,17 @@ async function handleFixCommand(
 
   const fixConfig = fullConfig.fix;
   const timeoutMs = parseTimeoutMs(fixConfig.timeout);
+  // Merge fix feature preferences into a ReviewConfig so the stored task.config
+  // reflects the fix section's preferred models/tools (used for poll matching).
+  const fixTaskConfig: ReviewConfig = {
+    ...reviewConfig,
+    agentCount: fixConfig.agentCount,
+    timeout: fixConfig.timeout,
+    preferredModels: fixConfig.preferredModels,
+    preferredTools: fixConfig.preferredTools,
+    prompt: fixConfig.prompt,
+    modelDiversityGraceMs: fixConfig.modelDiversityGraceMs,
+  };
   const baseTask = buildBaseTask(
     installationId,
     owner,
@@ -1022,7 +1046,7 @@ async function handleFixCommand(
     pr.diff_url,
     pr.base.ref,
     pr.head.ref,
-    reviewConfig,
+    fixTaskConfig,
     isPrivate,
     timeoutMs,
   );

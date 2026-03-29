@@ -190,6 +190,13 @@ export class RealGitHubService implements GitHubService {
         const loc = line ? `${c.path}:${line}` : c.path;
         lines.push(`[${c.user.login}] ${loc}\n${c.body}`);
       }
+    } else {
+      this.logger.warn('Failed to fetch PR inline comments', {
+        status: commentsRes.status,
+        owner,
+        repo,
+        prNumber,
+      });
     }
 
     // Fetch general review bodies
@@ -208,6 +215,13 @@ export class RealGitHubService implements GitHubService {
           lines.push(`[${r.user.login}] (${r.state})\n${r.body}`);
         }
       }
+    } else {
+      this.logger.warn('Failed to fetch PR reviews', {
+        status: reviewsRes.status,
+        owner,
+        repo,
+        prNumber,
+      });
     }
 
     return lines.join('\n\n---\n\n');

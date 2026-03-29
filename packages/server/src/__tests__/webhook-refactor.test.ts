@@ -1075,6 +1075,11 @@ describe('Webhook refactor — separate task creation', () => {
       expect(parseFixCommand('opencara fix')).toBeNull(); // missing / or @
       expect(parseFixCommand('/opencarafix')).toBeNull(); // no space
     });
+
+    it('returns null for conversational comments starting with trigger', () => {
+      expect(parseFixCommand('/opencara fix this bug please')).toBeNull();
+      expect(parseFixCommand('@opencara fix the linting errors too')).toBeNull();
+    });
   });
 
   // ── Fix command webhook tests ─────────────────────────────────
