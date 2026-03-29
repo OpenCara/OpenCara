@@ -11,7 +11,7 @@ import type {
   TaskRole,
   RepoConfig,
 } from '@opencara/shared';
-import { isRepoAllowed, isDedupRole, isTriageRole } from '@opencara/shared';
+import { isRepoAllowed, isDedupRole, isTriageRole, isFixRole } from '@opencara/shared';
 import {
   loadConfig,
   resolveCodebaseDir,
@@ -60,6 +60,12 @@ import { detectSuspiciousPatterns } from '../prompt-guard.js';
 import { executeDedupTask } from '../dedup.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import { executeTriageTask, type TriageExecutorDeps } from '../triage.js';
+import {
+  executeFixTask,
+  BranchNotFoundError,
+  PushFailedError,
+  type FixExecutorDeps,
+} from '../fix.js';
 import {
   createLogger,
   createAgentSession,
@@ -646,9 +652,40 @@ async function handleTask(
     }
   }
 
-  // Execute review, summary, dedup, or triage
+  // Execute review, summary, dedup, triage, or fix
   try {
-    if (isTriageRole(role)) {
+    if (isFixRole(role)) {
+      if (!taskCheckoutPath) {
+        throw new Error('Fix task requires a codebase worktree but checkout failed');
+      }
+      const fixDeps: FixExecutorDeps = {
+        commandTemplate: reviewDeps.commandTemplate,
+      };
+      const fixResult = await executeFixTask(
+        client,
+        agentId,
+        task,
+        diffContent,
+        fixDeps,
+        timeout_seconds,
+        taskCheckoutPath,
+        logger,
+        signal,
+      );
+      recordSessionUsage(consumptionDeps.session, {
+        inputTokens: fixResult.tokenDetail.input,
+        outputTokens: fixResult.tokenDetail.output,
+        totalTokens: fixResult.tokensUsed,
+        estimated: fixResult.tokensEstimated,
+      });
+      if (consumptionDeps.usageTracker) {
+        consumptionDeps.usageTracker.recordReview({
+          input: fixResult.tokenDetail.input,
+          output: fixResult.tokenDetail.output,
+          estimated: fixResult.tokensEstimated,
+        });
+      }
+    } else if (isTriageRole(role)) {
       const triageDeps: TriageExecutorDeps = {
         commandTemplate: reviewDeps.commandTemplate,
       };
@@ -747,6 +784,12 @@ async function handleTask(
     if (err instanceof DiffTooLargeError || err instanceof InputTooLargeError) {
       logError(`  ${icons.error} ${err.message}`);
       await safeReject(client, task_id, agentId, err.message, logger);
+    } else if (err instanceof BranchNotFoundError) {
+      logError(`  ${icons.error} ${err.message}`);
+      await safeReject(client, task_id, agentId, err.message, logger);
+    } else if (err instanceof PushFailedError) {
+      logError(`  ${icons.error} ${err.message}`);
+      await safeError(client, task_id, agentId, err.message, logger);
     } else {
       logError(`  ${icons.error} Error on task ${task_id}: ${(err as Error).message}`);
       await safeError(client, task_id, agentId, (err as Error).message, logger);
