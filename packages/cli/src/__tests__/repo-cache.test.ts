@@ -24,11 +24,23 @@ import {
   cleanupWorktree,
   checkoutWorktree,
   withRepoLock,
+  prWorktreeKey,
+  getWorktreeRefCount,
+  resetWorktreeRefCounts,
 } from '../repo-cache.js';
 
 describe('repo-cache', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetWorktreeRefCounts();
+  });
+
+  describe('prWorktreeKey', () => {
+    it('generates pr-<number> key', () => {
+      expect(prWorktreeKey(42)).toBe('pr-42');
+      expect(prWorktreeKey(1)).toBe('pr-1');
+      expect(prWorktreeKey(9999)).toBe('pr-9999');
+    });
   });
 
   describe('ensureBareClone', () => {
@@ -138,11 +150,12 @@ describe('repo-cache', () => {
 
   describe('addWorktree', () => {
     it('creates worktree at correct path', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockReturnValue('');
 
-      const result = addWorktree('/tmp/repos/acme/widgets.git', 'task-123');
+      const result = addWorktree('/tmp/repos/acme/widgets.git', 'pr-42');
 
-      expect(result).toBe('/tmp/repos/acme/widgets-worktrees/task-123');
+      expect(result).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
       expect(fs.mkdirSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets-worktrees', {
         recursive: true,
       });
@@ -153,19 +166,32 @@ describe('repo-cache', () => {
         'worktree',
         'add',
         '--detach',
-        '/tmp/repos/acme/widgets-worktrees/task-123',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
         'FETCH_HEAD',
       ]);
       expect(call[2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets.git' });
     });
 
-    it('rejects invalid taskId', () => {
+    it('reuses existing worktree directory without creating a new one', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = addWorktree('/tmp/repos/acme/widgets.git', 'pr-42');
+
+      expect(result).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
+      // Should NOT call git worktree add
+      expect(vi.mocked(execFileSync)).not.toHaveBeenCalled();
+      // Should NOT call mkdirSync
+      expect(vi.mocked(fs.mkdirSync)).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid worktreeKey', () => {
       expect(() => addWorktree('/tmp/repos/acme/widgets.git', '../../etc')).toThrow(
         'disallowed characters',
       );
     });
 
-    it('rejects taskId with slashes', () => {
+    it('rejects worktreeKey with slashes', () => {
       expect(() => addWorktree('/tmp/repos/acme/widgets.git', 'a/b')).toThrow(
         'disallowed characters',
       );
@@ -176,7 +202,7 @@ describe('repo-cache', () => {
     it('removes worktree via git worktree remove', () => {
       vi.mocked(execFileSync).mockReturnValue('');
 
-      removeWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/task-123');
+      removeWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/pr-42');
 
       const call = vi.mocked(execFileSync).mock.calls[0];
       expect(call[0]).toBe('git');
@@ -184,7 +210,7 @@ describe('repo-cache', () => {
         'worktree',
         'remove',
         '--force',
-        '/tmp/repos/acme/widgets-worktrees/task-123',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
       ]);
       expect(call[2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets.git' });
     });
@@ -196,9 +222,9 @@ describe('repo-cache', () => {
         })
         .mockReturnValue(''); // prune succeeds
 
-      removeWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/task-123');
+      removeWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/pr-42');
 
-      expect(fs.rmSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets-worktrees/task-123', {
+      expect(fs.rmSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets-worktrees/pr-42', {
         recursive: true,
         force: true,
       });
@@ -220,7 +246,7 @@ describe('repo-cache', () => {
       });
 
       expect(() =>
-        removeWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/task-123'),
+        removeWorktree('/tmp/repos/acme/widgets.git', '/tmp/repos/acme/widgets-worktrees/pr-42'),
       ).not.toThrow();
 
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to clean up worktree'));
@@ -229,18 +255,73 @@ describe('repo-cache', () => {
   });
 
   describe('cleanupWorktree', () => {
-    it('delegates to removeWorktree under lock', async () => {
+    it('removes worktree when ref count is 0 (no prior checkout)', async () => {
       vi.mocked(execFileSync).mockReturnValue('');
 
       await cleanupWorktree(
         '/tmp/repos/acme/widgets.git',
-        '/tmp/repos/acme/widgets-worktrees/task-123',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
       );
 
       const call = vi.mocked(execFileSync).mock.calls[0];
       expect(call[0]).toBe('git');
       expect(call[1]).toContain('worktree');
       expect(call[1]).toContain('remove');
+    });
+
+    it('removes worktree when ref count drops to 0', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      // Checkout once (ref count = 1)
+      const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
+      expect(getWorktreeRefCount(result.worktreePath)).toBe(1);
+
+      vi.clearAllMocks();
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      // Cleanup (ref count 1 → 0) — should remove
+      await cleanupWorktree(result.bareRepoPath, result.worktreePath);
+
+      expect(getWorktreeRefCount(result.worktreePath)).toBe(0);
+      const removeCalls = vi
+        .mocked(execFileSync)
+        .mock.calls.filter((c) => Array.isArray(c[1]) && (c[1] as string[]).includes('remove'));
+      expect(removeCalls).toHaveLength(1);
+    });
+
+    it('skips removal when ref count is still > 0', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      // Checkout twice (ref count = 2)
+      const result1 = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
+
+      // Second checkout — existsSync now returns true for the worktree dir
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      const result2 = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
+
+      expect(result1.worktreePath).toBe(result2.worktreePath);
+      expect(getWorktreeRefCount(result1.worktreePath)).toBe(2);
+
+      vi.clearAllMocks();
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      // First cleanup (ref count 2 → 1) — should NOT remove
+      await cleanupWorktree(result1.bareRepoPath, result1.worktreePath);
+
+      expect(getWorktreeRefCount(result1.worktreePath)).toBe(1);
+      // No git worktree remove calls
+      expect(vi.mocked(execFileSync)).not.toHaveBeenCalled();
+
+      // Second cleanup (ref count 1 → 0) — should remove
+      await cleanupWorktree(result1.bareRepoPath, result1.worktreePath);
+
+      expect(getWorktreeRefCount(result1.worktreePath)).toBe(0);
+      const removeCalls = vi
+        .mocked(execFileSync)
+        .mock.calls.filter((c) => Array.isArray(c[1]) && (c[1] as string[]).includes('remove'));
+      expect(removeCalls).toHaveLength(1);
     });
   });
 
@@ -322,13 +403,14 @@ describe('repo-cache', () => {
   });
 
   describe('checkoutWorktree', () => {
-    it('performs full checkout flow: bare clone + fetch + worktree add', async () => {
+    it('uses pr-keyed worktree path instead of taskId', async () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockReturnValue('');
 
       const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos', 'task-abc');
 
-      expect(result.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/task-abc');
+      // Worktree is keyed by PR number, not taskId
+      expect(result.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
       expect(result.bareRepoPath).toBe('/tmp/repos/acme/widgets.git');
       expect(result.cloned).toBe(true);
 
@@ -345,9 +427,50 @@ describe('repo-cache', () => {
       // Verify fetch
       expect(calls[2][1]).toContain('pull/42/head');
 
-      // Verify worktree add
+      // Verify worktree add uses pr-42
       expect(calls[3][1]).toContain('worktree');
       expect(calls[3][1]).toContain('FETCH_HEAD');
+      expect(calls[3][1]).toContain('/tmp/repos/acme/widgets-worktrees/pr-42');
+    });
+
+    it('increments ref count on checkout', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
+      expect(getWorktreeRefCount(result.worktreePath)).toBe(1);
+    });
+
+    it('reuses worktree and increments ref count for same PR', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result1 = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos', 'task-1');
+
+      // Now the worktree dir exists
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+
+      const result2 = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos', 'task-2');
+
+      // Same worktree path
+      expect(result1.worktreePath).toBe(result2.worktreePath);
+      expect(result1.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
+
+      // Ref count is 2
+      expect(getWorktreeRefCount(result1.worktreePath)).toBe(2);
+    });
+
+    it('creates separate worktrees for different PRs', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result1 = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
+      const result2 = await checkoutWorktree('acme', 'widgets', 99, '/tmp/repos');
+
+      expect(result1.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
+      expect(result2.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-99');
+      expect(getWorktreeRefCount(result1.worktreePath)).toBe(1);
+      expect(getWorktreeRefCount(result2.worktreePath)).toBe(1);
     });
 
     it('reuses existing bare clone', async () => {
@@ -375,10 +498,16 @@ describe('repo-cache', () => {
       await expect(
         checkoutWorktree('acme', '../../passwd', 1, '/tmp/repos', 'task-1'),
       ).rejects.toThrow('disallowed characters');
+    });
 
-      await expect(checkoutWorktree('acme', 'repo', 1, '/tmp/repos', '../../etc')).rejects.toThrow(
-        'disallowed characters',
-      );
+    it('works without taskId parameter', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
+
+      expect(result.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
+      expect(getWorktreeRefCount(result.worktreePath)).toBe(1);
     });
   });
 });

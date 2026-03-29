@@ -17,6 +17,13 @@ const GIT_TIMEOUT_MS = 120_000;
  */
 const repoLocks = new Map<string, Promise<void>>();
 
+/**
+ * Ref-count tracker for shared worktrees.
+ * Key: worktree absolute path → number of active tasks using it.
+ * When count drops to 0, the worktree is eligible for removal.
+ */
+const worktreeRefCounts = new Map<string, number>();
+
 export interface WorktreeCheckoutResult {
   /** Absolute path to the worktree directory */
   worktreePath: string;
@@ -24,6 +31,14 @@ export interface WorktreeCheckoutResult {
   bareRepoPath: string;
   /** Whether the bare repo was freshly cloned */
   cloned: boolean;
+}
+
+/**
+ * Build the worktree directory name for a PR.
+ * Uses `pr-<number>` instead of taskId so multiple tasks on the same PR share one worktree.
+ */
+export function prWorktreeKey(prNumber: number): string {
+  return `pr-${prNumber}`;
 }
 
 /**
@@ -109,19 +124,27 @@ export function fetchPRRef(bareRepoPath: string, prNumber: number, ghAvailable: 
 }
 
 /**
- * Create a git worktree for a specific task from the bare repo.
+ * Create a git worktree from the bare repo.
  * The worktree is checked out at FETCH_HEAD (the PR ref just fetched).
  *
- * Path: `<bareRepoPath>/../<repo>-worktrees/<taskId>/`
+ * Path: `<bareRepoPath>/../<repo>-worktrees/<worktreeKey>/`
+ *
+ * If the worktree already exists (shared PR worktree), returns the existing path
+ * without creating a new one.
  */
-export function addWorktree(bareRepoPath: string, taskId: string): string {
-  validatePathSegment(taskId, 'taskId');
+export function addWorktree(bareRepoPath: string, worktreeKey: string): string {
+  validatePathSegment(worktreeKey, 'worktreeKey');
 
   // Place worktrees alongside the bare repo for clean organization
-  // e.g., <baseDir>/<owner>/<repo>-worktrees/<taskId>/
+  // e.g., <baseDir>/<owner>/<repo>-worktrees/<worktreeKey>/
   const repoName = path.basename(bareRepoPath, '.git');
   const worktreeBase = path.join(path.dirname(bareRepoPath), `${repoName}-worktrees`);
-  const worktreePath = path.join(worktreeBase, taskId);
+  const worktreePath = path.join(worktreeBase, worktreeKey);
+
+  // If the worktree directory already exists, reuse it
+  if (fs.existsSync(worktreePath)) {
+    return worktreePath;
+  }
 
   fs.mkdirSync(worktreeBase, { recursive: true });
 
@@ -164,9 +187,14 @@ function repoKeyFromBarePath(bareRepoPath: string): string {
 /**
  * High-level: checkout a PR into an isolated worktree.
  *
+ * Worktrees are keyed by PR number, not task ID. Multiple tasks for the same PR
+ * share a single worktree, tracked via ref counting. The worktree is only removed
+ * when the last task releases it via `cleanupWorktree`.
+ *
  * 1. Ensure bare clone exists (or reuse cached)
  * 2. Fetch PR ref (with per-repo lock)
- * 3. Create worktree for the task
+ * 3. Create or reuse worktree for this PR
+ * 4. Increment ref count
  *
  * Returns the worktree path for use as cwd during review.
  */
@@ -175,33 +203,66 @@ export async function checkoutWorktree(
   repo: string,
   prNumber: number,
   baseDir: string,
-  taskId: string,
+  _taskId?: string,
 ): Promise<WorktreeCheckoutResult> {
   validatePathSegment(owner, 'owner');
   validatePathSegment(repo, 'repo');
-  validatePathSegment(taskId, 'taskId');
 
   const repoKey = `${owner}/${repo}`;
   const ghAvailable = isGhAvailable();
+  const wtKey = prWorktreeKey(prNumber);
 
   // Serialize all git operations per repo to avoid lock file conflicts
   return withRepoLock(repoKey, () => {
     const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
-    const worktreePath = addWorktree(bareRepoPath, taskId);
+    const worktreePath = addWorktree(bareRepoPath, wtKey);
+
+    // Increment ref count
+    const current = worktreeRefCounts.get(worktreePath) ?? 0;
+    worktreeRefCounts.set(worktreePath, current + 1);
+
     return { worktreePath, bareRepoPath, cloned };
   });
 }
 
 /**
  * High-level: clean up a worktree after task completion.
+ *
+ * Decrements the ref count for the worktree. Only actually removes it when
+ * the ref count drops to 0 (no more tasks using it).
  * Acquires the per-repo lock to avoid racing with concurrent fetch/add operations.
  */
 export async function cleanupWorktree(bareRepoPath: string, worktreePath: string): Promise<void> {
   const repoKey = repoKeyFromBarePath(bareRepoPath);
   await withRepoLock(repoKey, () => {
+    const current = worktreeRefCounts.get(worktreePath) ?? 0;
+    if (current > 1) {
+      // Other tasks still using this worktree — just decrement
+      worktreeRefCounts.set(worktreePath, current - 1);
+      return;
+    }
+
+    // Last reference — remove the worktree
+    worktreeRefCounts.delete(worktreePath);
     removeWorktree(bareRepoPath, worktreePath);
   });
+}
+
+/**
+ * Get the current ref count for a worktree path.
+ * Exported for testing only.
+ */
+export function getWorktreeRefCount(worktreePath: string): number {
+  return worktreeRefCounts.get(worktreePath) ?? 0;
+}
+
+/**
+ * Reset all worktree ref counts.
+ * Exported for testing only.
+ */
+export function resetWorktreeRefCounts(): void {
+  worktreeRefCounts.clear();
 }
 
 /**
