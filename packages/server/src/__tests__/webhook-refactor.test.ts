@@ -1647,12 +1647,7 @@ describe('Webhook refactor — separate task creation', () => {
         deletions: 20,
       };
 
-      await sendWebhook(
-        app,
-        'issue_comment',
-        makeCommentPayload('/opencara review'),
-        env,
-      );
+      await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara review'), env);
 
       const tasks = await store.listTasks();
       expect(tasks.length).toBeGreaterThan(0);

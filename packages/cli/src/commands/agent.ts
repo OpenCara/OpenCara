@@ -419,11 +419,7 @@ async function pollLoop(
         }
         // Skip tasks whose diff_size (lines) clearly exceeds maxDiffSizeKb.
         // Use ~120 bytes/line as a conservative upper estimate for unified diff format.
-        if (
-          maxDiffSizeKb &&
-          t.diff_size != null &&
-          (t.diff_size * 120) / 1024 > maxDiffSizeKb
-        ) {
+        if (maxDiffSizeKb && t.diff_size != null && (t.diff_size * 120) / 1024 > maxDiffSizeKb) {
           return false;
         }
         return true;
