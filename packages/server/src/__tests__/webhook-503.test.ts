@@ -55,6 +55,7 @@ class FailableGitHubService implements GitHubService {
     diff_url: 'https://github.com/acme/widget/pull/1.diff',
     base: { ref: 'main' },
     head: { ref: 'feat/test', sha: 'abc123' },
+    user: { login: 'pr-author' },
     draft: false,
     labels: [],
   };

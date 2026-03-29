@@ -147,6 +147,7 @@ export class MockGitHubService implements GitHubService {
       diff_url: `https://github.com/${owner}/${repo}/pull/${prNumber}.diff`,
       base: { ref: 'main' },
       head: { ref: 'feat/test', sha: 'abc123' },
+      user: { login: 'pr-author' },
       draft: false,
       labels: [],
     };

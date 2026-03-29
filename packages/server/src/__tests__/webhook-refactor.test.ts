@@ -73,6 +73,7 @@ class TestGitHubService implements GitHubService {
     diff_url: 'https://github.com/acme/widget/pull/1.diff',
     base: { ref: 'main' },
     head: { ref: 'feat/test', sha: 'abc123' },
+    user: { login: 'pr-author' },
     draft: false,
     labels: [],
   };
@@ -1229,7 +1230,7 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks).toHaveLength(0);
     });
 
-    it('fix command from untrusted contributor is ignored', async () => {
+    it('fix command from non-maintainer non-author is ignored', async () => {
       github.openCaraConfig = {
         version: 1,
         review: makeReviewConfig(),
@@ -1248,6 +1249,49 @@ describe('Webhook refactor — separate task creation', () => {
 
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(0);
+    });
+
+    it('fix command from CONTRIBUTOR who is not PR author is ignored', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const payload = makeCommentPayload('/opencara fix', {
+        comment: {
+          body: '/opencara fix',
+          user: { login: 'some-contributor' },
+          author_association: 'CONTRIBUTOR',
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('fix command from PR author with NONE association creates task', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+      // fetchPrResult.user.login is 'pr-author'
+      const payload = makeCommentPayload('/opencara fix', {
+        comment: {
+          body: '/opencara fix',
+          user: { login: 'pr-author' },
+          author_association: 'NONE',
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('fix');
     });
 
     it('duplicate fix commands are deduplicated', async () => {
@@ -1510,7 +1554,7 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks).toHaveLength(0);
     });
 
-    it('go command from untrusted contributor is ignored', async () => {
+    it('go command from non-maintainer is ignored', async () => {
       github.openCaraConfig = {
         version: 1,
         review: makeReviewConfig(),
@@ -1522,6 +1566,27 @@ describe('Webhook refactor — separate task creation', () => {
           body: '/opencara go',
           user: { login: 'random' },
           author_association: 'NONE',
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('go command from CONTRIBUTOR is ignored (maintainers only)', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const payload = makeIssueCommentPayload('/opencara go', {
+        comment: {
+          body: '/opencara go',
+          user: { login: 'contributor-user' },
+          author_association: 'CONTRIBUTOR',
         },
       });
       const res = await sendWebhook(app, 'issue_comment', payload, env);

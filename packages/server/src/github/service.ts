@@ -446,6 +446,7 @@ export class NoOpGitHubService implements GitHubService {
       diff_url: `https://github.com/${owner}/${repo}/pull/${prNumber}.diff`,
       base: { ref: 'main' },
       head: { ref: 'dev', sha: 'abc123' },
+      user: { login: 'dev-user' },
       draft: false,
       labels: [],
     };
