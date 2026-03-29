@@ -773,6 +773,7 @@ export function taskRoutes() {
         target_model: task.target_model,
         pr_review_comments: task.pr_review_comments,
         head_sha: task.head_sha,
+        head_ref: task.head_ref || undefined,
       };
 
       // For summary tasks, include worker results from the group

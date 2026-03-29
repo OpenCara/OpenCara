@@ -46,6 +46,8 @@ export interface PollTask {
   pr_review_comments?: string;
   /** HEAD SHA of PR branch (for fix tasks to checkout) */
   head_sha?: string;
+  /** PR branch name (for fix tasks to checkout and push) */
+  head_ref?: string;
 
   /** Completed worker reviews — provided to summary tasks so the synthesizer has context. */
   reviews?: ClaimReview[];
