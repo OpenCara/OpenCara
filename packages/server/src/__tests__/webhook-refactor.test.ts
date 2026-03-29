@@ -18,7 +18,7 @@ import {
   type ReviewConfig,
   type ReviewSectionConfig,
 } from '@opencara/shared';
-import type { GitHubService, PrDetails } from '../github/service.js';
+import type { GitHubService, PrDetails, IssueDetails } from '../github/service.js';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
@@ -28,6 +28,7 @@ import {
   createTaskForPR,
   MAX_PROMPT_LENGTH,
   parseFixCommand,
+  parseGoCommand,
 } from '../routes/webhook.js';
 import { Logger } from '../logger.js';
 
@@ -103,6 +104,19 @@ class TestGitHubService implements GitHubService {
   async fetchIssueBody(): Promise<string | null> {
     return null;
   }
+  async fetchIssueDetails(
+    _owner: string,
+    _repo: string,
+    number: number,
+  ): Promise<IssueDetails | null> {
+    return {
+      number,
+      html_url: `https://github.com/acme/widget/issues/${number}`,
+      title: `Test issue #${number}`,
+      body: 'Test issue body content',
+      user: { login: 'alice' },
+    };
+  }
   async createIssue(): Promise<number> {
     return 0;
   }
@@ -162,6 +176,29 @@ function makeCommentPayload(commentBody: string, overrides: Record<string, unkno
     issue: {
       number: 42,
       pull_request: { url: 'https://api.github.com/repos/acme/widget/pulls/42' },
+    },
+    comment: {
+      body: commentBody,
+      user: { login: 'alice' },
+      author_association: 'OWNER',
+    },
+    ...overrides,
+  };
+}
+
+function makeIssueCommentPayload(commentBody: string, overrides: Record<string, unknown> = {}) {
+  return {
+    action: 'created',
+    installation: { id: 999 },
+    repository: {
+      owner: { login: 'acme' },
+      name: 'widget',
+      default_branch: 'main',
+      private: false,
+    },
+    issue: {
+      number: 10,
+      // no pull_request field — this is a plain issue, not a PR
     },
     comment: {
       body: commentBody,
@@ -1282,6 +1319,284 @@ describe('Webhook refactor — separate task creation', () => {
 
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(0);
+    });
+  });
+
+  // ── parseGoCommand unit tests ──────────────────────────────────
+
+  describe('parseGoCommand', () => {
+    it('parses /opencara go without model', () => {
+      const result = parseGoCommand('/opencara go');
+      expect(result).toEqual({ targetModel: undefined });
+    });
+
+    it('parses /opencara go with model', () => {
+      const result = parseGoCommand('/opencara go gpt-5.4');
+      expect(result).toEqual({ targetModel: 'gpt-5.4' });
+    });
+
+    it('parses @opencara go without model', () => {
+      const result = parseGoCommand('@opencara go');
+      expect(result).toEqual({ targetModel: undefined });
+    });
+
+    it('parses @opencara go with model', () => {
+      const result = parseGoCommand('@opencara go claude-opus');
+      expect(result).toEqual({ targetModel: 'claude-opus' });
+    });
+
+    it('is case-insensitive', () => {
+      expect(parseGoCommand('/OpenCara Go')).toEqual({ targetModel: undefined });
+      expect(parseGoCommand('/OPENCARA GO gpt-5')).toEqual({ targetModel: 'gpt-5' });
+    });
+
+    it('handles leading/trailing whitespace', () => {
+      expect(parseGoCommand('  /opencara go  ')).toEqual({ targetModel: undefined });
+      expect(parseGoCommand('  @opencara go  gpt-5  ')).toEqual({ targetModel: 'gpt-5' });
+    });
+
+    it('returns null for non-go commands', () => {
+      expect(parseGoCommand('/opencara review')).toBeNull();
+      expect(parseGoCommand('@opencara fix')).toBeNull();
+      expect(parseGoCommand('hello world')).toBeNull();
+      expect(parseGoCommand('')).toBeNull();
+    });
+
+    it('returns null for partial matches', () => {
+      expect(parseGoCommand('opencara go')).toBeNull(); // missing / or @
+      expect(parseGoCommand('/opencarago')).toBeNull(); // no space
+    });
+
+    it('returns null for conversational comments starting with trigger', () => {
+      expect(parseGoCommand('/opencara go implement this feature please')).toBeNull();
+      expect(parseGoCommand('@opencara go ahead and fix the bug')).toBeNull();
+    });
+  });
+
+  // ── Go command webhook tests ───────────────────────────────────
+
+  describe('Issue comment — go command', () => {
+    const DEFAULT_IMPLEMENT_CONFIG = {
+      enabled: true,
+      prompt: 'Implement the requested changes.',
+      agentCount: 1,
+      timeout: '10m',
+      preferredModels: [] as string[],
+      preferredTools: [] as string[],
+      modelDiversityGraceMs: 30_000,
+    };
+
+    it('/opencara go creates an implement task when implement.enabled=true', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+      expect(tasks[0].task_type).toBe('implement');
+      expect(tasks[0].pr_number).toBe(0);
+      expect(tasks[0].issue_number).toBe(10);
+      expect(tasks[0].issue_title).toBe('Test issue #10');
+      expect(tasks[0].issue_body).toBe('Test issue body content');
+      expect(tasks[0].issue_author).toBe('alice');
+    });
+
+    it('@opencara go also triggers implement task creation', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('@opencara go'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+    });
+
+    it('/opencara go with model sets target_model', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go gpt-5.4'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].target_model).toBe('gpt-5.4');
+    });
+
+    it('go command without model does not set target_model', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].target_model).toBeUndefined();
+    });
+
+    it('go command is ignored when implement.enabled=false', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: { ...DEFAULT_IMPLEMENT_CONFIG, enabled: false },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('go command is ignored when no [implement] section in config', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        // no implement section
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('go command from untrusted contributor is ignored', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const payload = makeIssueCommentPayload('/opencara go', {
+        comment: {
+          body: '/opencara go',
+          user: { login: 'random' },
+          author_association: 'NONE',
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('duplicate go commands are deduplicated', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      await sendWebhook(app, 'issue_comment', makeIssueCommentPayload('/opencara go'), env);
+      await sendWebhook(app, 'issue_comment', makeIssueCommentPayload('/opencara go'), env);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('go command on a PR is ignored', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      // Use PR comment payload (has pull_request field)
+      const res = await sendWebhook(app, 'issue_comment', makeCommentPayload('/opencara go'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('/opencara review still works alongside go command support', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      // Send review command on a PR
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeCommentPayload('/opencara review'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('review');
+    });
+
+    it('implement task has no diff or PR info', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      await sendWebhook(app, 'issue_comment', makeIssueCommentPayload('/opencara go'), env);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].pr_number).toBe(0);
+      expect(tasks[0].pr_url).toBe('');
+      expect(tasks[0].diff_url).toBe('');
+      expect(tasks[0].base_ref).toBe('');
+      expect(tasks[0].head_ref).toBe('');
     });
   });
 });

@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
 import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
-import type { GitHubService, PrDetails } from '../github/service.js';
+import type { GitHubService, PrDetails, IssueDetails } from '../github/service.js';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
@@ -115,6 +115,19 @@ class FailableGitHubService implements GitHubService {
   async updateIssue(): Promise<void> {}
   async fetchIssueBody(): Promise<string | null> {
     return null;
+  }
+  async fetchIssueDetails(
+    _owner: string,
+    _repo: string,
+    number: number,
+  ): Promise<IssueDetails | null> {
+    return {
+      number,
+      html_url: `https://github.com/acme/widget/issues/${number}`,
+      title: `Test issue #${number}`,
+      body: 'Test body',
+      user: { login: 'alice' },
+    };
   }
   async createIssue(): Promise<number> {
     return 0;

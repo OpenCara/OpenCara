@@ -60,6 +60,9 @@ export const PREFERRED_SYNTH_GRACE_PERIOD_MS = 60_000;
 /** Grace period (ms) for preferred review agents (model/tool matching). */
 export const PREFERRED_REVIEW_GRACE_PERIOD_MS = 30_000;
 
+/** Grace period (ms) for target_model preference (implement/fix tasks). */
+export const TARGET_MODEL_GRACE_PERIOD_MS = 120_000;
+
 /**
  * Check if an agent's model/tool matches the review preferences in the config.
  * Returns true if no preferences are set (backward compatible) or if the agent matches.
@@ -83,6 +86,17 @@ function isReviewPreferredAgent(
 function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string): boolean {
   if (isReviewPreferredAgent(task.config, model, tool)) return true;
   return Date.now() - task.created_at >= PREFERRED_REVIEW_GRACE_PERIOD_MS;
+}
+
+/**
+ * Check if a task with target_model is visible to the given agent.
+ * During the grace period, only agents matching the target model can see the task.
+ * After the grace period, any agent can claim it.
+ */
+function isTargetModelVisible(task: ReviewTask, model?: string): boolean {
+  if (!task.target_model) return true; // no preference — visible to all
+  if (model && model === task.target_model) return true; // model matches
+  return Date.now() - task.created_at >= TARGET_MODEL_GRACE_PERIOD_MS;
 }
 
 /**
@@ -708,6 +722,9 @@ export function taskRoutes() {
         // Worker task — check model/tool preference grace period
         if (!isWorkerVisibleToAgent(task, body.model, body.tool)) continue;
       }
+
+      // Target model preference: during grace period, only matching agents see the task
+      if (!isTargetModelVisible(task, body.model)) continue;
 
       // Model diversity: prefer agents with different models across the group
       if (!isModelDiversityVisible(task, body.model, groupClaimedModels)) continue;

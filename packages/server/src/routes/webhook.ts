@@ -153,6 +153,7 @@ const FEATURE_ROLE_MAP: Partial<Record<Feature, TaskRole>> = {
   dedup_pr: 'pr_dedup',
   dedup_issue: 'issue_dedup',
   triage: 'issue_triage',
+  implement: 'implement',
   fix: 'fix',
 };
 
@@ -823,6 +824,19 @@ export function parseFixCommand(body: string): { targetModel?: string } | null {
   return { targetModel: match[1] || undefined };
 }
 
+/**
+ * Parse a go command from a comment body.
+ * Matches `/opencara go [model]` or `@opencara go [model]`.
+ * Returns the optional target model, or null if not a go command.
+ */
+export function parseGoCommand(body: string): { targetModel?: string } | null {
+  const trimmed = body.trim();
+  // Match /opencara go or @opencara go (case-insensitive), optional model after
+  const match = trimmed.match(/^[/@]opencara\s+go(?:\s+(\S+))?\s*$/i);
+  if (!match) return null;
+  return { targetModel: match[1] || undefined };
+}
+
 async function handleIssueComment(
   github: GitHubService,
   store: DataStore,
@@ -831,12 +845,35 @@ async function handleIssueComment(
 ): Promise<Response> {
   const { installation, repository, issue, comment } = payload;
 
-  if (!issue.pull_request) {
+  if (!installation) {
+    logger.info('Comment event without installation — skipping');
     return new Response('OK', { status: 200 });
   }
 
-  if (!installation) {
-    logger.info('Comment event without installation — skipping');
+  // Check for go command on issues (not PRs)
+  const goCmd = parseGoCommand(comment.body);
+  if (goCmd) {
+    if (issue.pull_request) {
+      // go command is only valid on issues, not PRs
+      return new Response('OK', { status: 200 });
+    }
+    return handleGoCommand(
+      github,
+      store,
+      installation.id,
+      repository.owner.login,
+      repository.name,
+      issue.number,
+      repository.default_branch ?? 'main',
+      comment,
+      goCmd,
+      repository.private ?? false,
+      logger,
+    );
+  }
+
+  // All remaining commands (fix, review) require a PR context
+  if (!issue.pull_request) {
     return new Response('OK', { status: 200 });
   }
 
@@ -1063,6 +1100,137 @@ async function handleFixCommand(
       owner,
       repo,
       prNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+/**
+ * Handle `/opencara go [model]` command on an issue comment.
+ * Creates an implement task group with issue context.
+ */
+async function handleGoCommand(
+  github: GitHubService,
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  defaultBranch: string,
+  comment: IssueCommentPayload['comment'],
+  goCmd: { targetModel?: string },
+  isPrivate: boolean,
+  logger: Logger,
+): Promise<Response> {
+  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
+    logger.info('Go command ignored — not a trusted contributor', {
+      user: comment.user.login,
+      association: comment.author_association,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  let token: string;
+  try {
+    token = await github.getInstallationToken(installationId);
+  } catch (err) {
+    logger.error('Failed to get installation token', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+    owner,
+    repo,
+    defaultBranch,
+    token,
+  );
+
+  if (parseError) {
+    logger.info('Aborting go command due to .opencara.toml parse error', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  if (!fullConfig.implement?.enabled) {
+    logger.info('Go command ignored — [implement].enabled is not true', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  // Fetch issue details from GitHub API
+  const issue = await github.fetchIssueDetails(owner, repo, issueNumber, token);
+  if (!issue) {
+    logger.error('Failed to fetch issue details', { owner, repo, issueNumber });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  logger.info('Go command received', {
+    user: comment.user.login,
+    owner,
+    repo,
+    issueNumber,
+    targetModel: goCmd.targetModel,
+  });
+
+  const implementConfig = fullConfig.implement;
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+  const timeoutMs = parseTimeoutMs(implementConfig.timeout);
+
+  // Merge implement feature preferences into a ReviewConfig so the stored task.config
+  // reflects the implement section's preferred models/tools (used for poll matching).
+  const implementTaskConfig: ReviewConfig = {
+    ...reviewConfig,
+    agentCount: implementConfig.agentCount,
+    timeout: implementConfig.timeout,
+    preferredModels: implementConfig.preferredModels,
+    preferredTools: implementConfig.preferredTools,
+    prompt: implementConfig.prompt,
+    modelDiversityGraceMs: implementConfig.modelDiversityGraceMs,
+  };
+
+  const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+    owner,
+    repo,
+    pr_number: 0,
+    pr_url: '',
+    diff_url: '',
+    base_ref: '',
+    head_ref: '',
+    review_count: implementConfig.agentCount,
+    timeout_at: Date.now() + timeoutMs,
+    status: 'pending',
+    queue: 'summary',
+    github_installation_id: installationId,
+    private: isPrivate,
+    config: implementTaskConfig,
+    created_at: Date.now(),
+  };
+
+  try {
+    await createTaskGroup(store, 'implement', implementConfig, baseTask, logger, {
+      issue_number: issue.number,
+      issue_url: issue.html_url,
+      issue_title: issue.title,
+      issue_body: issue.body ?? undefined,
+      issue_author: issue.user.login,
+      ...(goCmd.targetModel ? { target_model: goCmd.targetModel } : {}),
+    });
+  } catch (err) {
+    logger.error('Failed to create implement task group', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
     });
     return new Response('Service Unavailable', { status: 503 });
   }
