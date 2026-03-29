@@ -538,6 +538,7 @@ describe('webhook.ts edge cases', () => {
           diff_url: 'https://github.com/o/r/pull/1.diff',
           base: { ref: 'main' },
           head: { ref: 'feat', sha: 'abc123' },
+          user: { login: 'pr-author' },
           draft: false,
           labels: [],
         };

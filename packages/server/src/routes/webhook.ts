@@ -17,7 +17,11 @@ import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
 import { moveToRecentlyClosed, ageOutToArchived } from '../dedup-index.js';
 
+/** Trusted for review triggers — includes CONTRIBUTOR. */
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
+
+/** Maintainers only — no CONTRIBUTOR. Used for implement/fix permission checks. */
+const MAINTAINER_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
 /** Maximum allowed length for config.prompt (10,000 characters). */
 export const MAX_PROMPT_LENGTH = 10_000;
@@ -1013,10 +1017,13 @@ async function handleFixCommand(
   token: string,
   logger: Logger,
 ): Promise<Response> {
-  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
-    logger.info('Fix command ignored — not a trusted contributor', {
+  const isMaintainer = MAINTAINER_ASSOCIATIONS.has(comment.author_association);
+  const isPrAuthor = comment.user.login.toLowerCase() === pr.user.login.toLowerCase();
+  if (!isMaintainer && !isPrAuthor) {
+    logger.info('Fix command ignored — not a maintainer or PR author', {
       user: comment.user.login,
       association: comment.author_association,
+      prAuthor: pr.user.login,
     });
     return new Response('OK', { status: 200 });
   }
@@ -1124,8 +1131,8 @@ async function handleGoCommand(
   isPrivate: boolean,
   logger: Logger,
 ): Promise<Response> {
-  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
-    logger.info('Go command ignored — not a trusted contributor', {
+  if (!MAINTAINER_ASSOCIATIONS.has(comment.author_association)) {
+    logger.info('Go command ignored — not a maintainer', {
       user: comment.user.login,
       association: comment.author_association,
     });
