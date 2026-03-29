@@ -12,7 +12,7 @@ const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
 /** Default timeout for git operations (2 minutes). */
 const GIT_TIMEOUT_MS = 120_000;
 
-// ── Git Helpers ───────��──────────────────────────────────────────
+// ── Git Helpers ──────────────────────────────────────────────
 
 /**
  * Run a git command synchronously in the given directory.
@@ -77,7 +77,7 @@ export function commitAndPush(
   return { commitSha, filesChanged };
 }
 
-// ── Prompt Builder ────────���──────────────────────────────────────
+// ── Prompt Builder ──────────────────────────────────────────
 
 /**
  * Build the fix prompt that instructs the AI to apply fixes based on review comments.
@@ -115,7 +115,7 @@ IMPORTANT: Make only the changes needed to address the review comments. Do not r
   return parts.join('\n');
 }
 
-// ── Error Types ────���─────────────────────────────────────────────
+// ── Error Types ────────────────────────────────────────────────────
 
 export class BranchNotFoundError extends Error {
   constructor(headRef: string) {
@@ -131,7 +131,7 @@ export class PushFailedError extends Error {
   }
 }
 
-// ── Executor ────────────────────────────���────────────────────────
+// ── Executor ────────────────────────────────────────────────
 
 export interface FixResponse {
   report: FixReport;
