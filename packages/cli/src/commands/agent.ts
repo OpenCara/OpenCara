@@ -329,6 +329,8 @@ function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Arra
 
 /** Max times an agent will attempt a task that fails diff fetch before skipping it. */
 const MAX_DIFF_FETCH_ATTEMPTS = 3;
+/** Conservative upper estimate of bytes per changed line in unified diff format. */
+const ESTIMATED_BYTES_PER_DIFF_LINE = 120;
 
 /**
  * Poll → Claim → Review → Submit loop for a single agent.
@@ -417,9 +419,15 @@ async function pollLoop(
         if (repoConfig && !isRepoAllowed(repoConfig, t.owner, t.repo, agentOwner, userOrgs)) {
           return false;
         }
-        // Skip tasks whose diff_size (lines) clearly exceeds maxDiffSizeKb.
-        // Use ~120 bytes/line as a conservative upper estimate for unified diff format.
-        if (maxDiffSizeKb && t.diff_size != null && (t.diff_size * 120) / 1024 > maxDiffSizeKb) {
+        // Skip review tasks whose diff_size (lines) clearly exceeds maxDiffSizeKb.
+        // Only filter roles that actually fetch the full diff (review); summary/fix/dedup
+        // tasks don't require processing the raw diff and should not be blocked.
+        if (
+          maxDiffSizeKb > 0 &&
+          t.diff_size != null &&
+          t.role === 'review' &&
+          (t.diff_size * ESTIMATED_BYTES_PER_DIFF_LINE) / 1024 >= maxDiffSizeKb
+        ) {
           return false;
         }
         return true;

@@ -160,6 +160,16 @@ const FEATURE_ROLE_MAP: Partial<Record<Feature, TaskRole>> = {
 };
 
 /**
+ * Compute diff size (additions + deletions) from a PR-like object.
+ * Returns undefined if the fields are missing (e.g. old webhook payloads).
+ */
+function computeDiffSize(pr: { additions?: number; deletions?: number }): number | undefined {
+  return typeof pr.additions === 'number' && typeof pr.deletions === 'number'
+    ? pr.additions + pr.deletions
+    : undefined;
+}
+
+/**
  * Build a base ReviewTask template with common fields. Caller fills in
  * task-specific fields (id, prompt, task_type, feature, group_id).
  */
@@ -600,11 +610,7 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  // Compute diff size from webhook payload (additions + deletions)
-  const diffSize =
-    typeof pull_request.additions === 'number' && typeof pull_request.deletions === 'number'
-      ? pull_request.additions + pull_request.deletions
-      : undefined;
+  const diffSize = computeDiffSize(pull_request);
 
   try {
     await createPrTaskGroups(
@@ -980,11 +986,7 @@ async function handleIssueComment(
     prNumber,
   });
 
-  // Compute diff size from PR details (additions + deletions)
-  const commentDiffSize =
-    typeof pr.additions === 'number' && typeof pr.deletions === 'number'
-      ? pr.additions + pr.deletions
-      : undefined;
+  const commentDiffSize = computeDiffSize(pr);
 
   try {
     await createTaskForPR(
@@ -1096,11 +1098,7 @@ async function handleFixCommand(
     prompt: fixConfig.prompt,
     modelDiversityGraceMs: fixConfig.modelDiversityGraceMs,
   };
-  // Compute diff size from PR details (additions + deletions)
-  const fixDiffSize =
-    typeof pr.additions === 'number' && typeof pr.deletions === 'number'
-      ? pr.additions + pr.deletions
-      : undefined;
+  const fixDiffSize = computeDiffSize(pr);
   const baseTask = buildBaseTask(
     installationId,
     owner,
