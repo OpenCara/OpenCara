@@ -115,10 +115,12 @@ describe('truncateToBytes', () => {
     expect(result).toContain('[... truncated ...]');
   });
 
-  it('handles multi-byte characters safely', () => {
+  it('handles multi-byte characters safely without replacement chars', () => {
     const emoji = '\u{1F600}'.repeat(100);
     const result = truncateToBytes(emoji, 100);
     expect(() => Buffer.from(result, 'utf-8').toString('utf-8')).not.toThrow();
+    // Should not contain replacement characters (U+FFFD)
+    expect(result).not.toContain('\uFFFD');
   });
 });
 

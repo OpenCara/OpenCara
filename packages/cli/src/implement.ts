@@ -255,8 +255,20 @@ export function checkoutForImplement(
     // Strip "origin/" prefix if present
     defaultBranch = defaultBranch.replace(/^origin\//, '');
   } catch {
-    // Fallback: try common branch names
-    defaultBranch = 'main';
+    // Fallback: try main, then master
+    try {
+      gitExec(['rev-parse', '--verify', 'origin/main'], bareRepoPath);
+      defaultBranch = 'main';
+    } catch {
+      try {
+        gitExec(['rev-parse', '--verify', 'origin/master'], bareRepoPath);
+        defaultBranch = 'master';
+      } catch {
+        throw new Error(
+          'Cannot determine default branch — neither origin/main nor origin/master exists',
+        );
+      }
+    }
   }
 
   // Create worktree with new branch from default branch
@@ -307,7 +319,7 @@ export function cleanupImplementWorktree(bareRepoPath: string, worktreePath: str
 }
 
 /**
- * Count the number of changed files in the worktree (staged + unstaged).
+ * Count the number of changed files in the worktree (staged, unstaged, and untracked).
  */
 export function countChangedFiles(worktreePath: string): number {
   const status = gitExec(['status', '--porcelain'], worktreePath);
@@ -331,9 +343,9 @@ export function commitAndPush(
   // Stage all changes
   gitExec(['add', '-A'], worktreePath);
 
-  // Commit
-  const slug = slugify(issueTitle, 60);
-  const commitMsg = `Implement #${issueNumber}: ${slug}`;
+  // Commit with human-readable title (truncated, not slugified)
+  const truncatedTitle = issueTitle.length > 60 ? issueTitle.slice(0, 57) + '...' : issueTitle;
+  const commitMsg = `Implement #${issueNumber}: ${truncatedTitle}`;
   gitExec(['commit', '-m', commitMsg], worktreePath);
 
   // Push with credential helper
@@ -365,15 +377,17 @@ export function createPR(
     '*Automated by OpenCara implement agent*',
   ].join('\n');
 
-  const output = ghExec(
-    ['pr', 'create', '--title', title, '--body', body, '--label', 'opencara-bot'],
-    worktreePath,
-  );
+  // Note: no --label flag — label may not exist on arbitrary repos.
+  // Server/webhook handles labeling after PR creation.
+  const output = ghExec(['pr', 'create', '--title', title, '--body', body], worktreePath);
 
   // Parse PR URL from gh output (last line is the URL)
   const prUrl = output.trim().split('\n').pop()?.trim() ?? '';
   const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
-  const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : 0;
+  if (!prNumberMatch) {
+    throw new Error(`Failed to parse PR URL from gh output: ${output.trim().slice(0, 200)}`);
+  }
+  const prNumber = parseInt(prNumberMatch[1], 10);
 
   return { prNumber, prUrl };
 }
@@ -558,8 +572,10 @@ export async function executeImplementTask(
         agent_id: agentId,
         error: sanitizeTokens(errorMsg),
       });
-    } catch {
-      // Best-effort error reporting
+    } catch (reportErr) {
+      logger.log(
+        `  Warning: failed to report error to server: ${reportErr instanceof Error ? reportErr.message : String(reportErr)}`,
+      );
     }
     throw err;
   } finally {
