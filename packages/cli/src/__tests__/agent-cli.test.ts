@@ -364,9 +364,12 @@ describe('Agent CLI tests', () => {
       void startCmd!.parseAsync(['--all'], { from: 'user' });
       await advanceTime(5000);
 
+      // startBatchAgents logs skipped agents via logError (console.error) and
+      // the skip warning via logWarn (console.warn)
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('One or more agents could not start'),
+        expect.stringContaining('No command configured. Skipping'),
       );
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('agent config(s) skipped'));
     });
 
     it('agent with router=true creates RouterRelay', async () => {
@@ -410,13 +413,14 @@ describe('Agent CLI tests', () => {
 
       const { agentCommand } = await import('../commands/agent.js');
       const startCmd = agentCommand.commands.find((c) => c.name() === 'start');
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
       await startCmd!.parseAsync(['--all'], { from: 'user' });
 
-      expect(console.error).toHaveBeenCalledWith('No agents could be started. Check your config.');
-      expect(exitSpy).toHaveBeenCalledWith(1);
-      exitSpy.mockRestore();
+      // startBatchAgents sets process.exitCode = 1 when no agents can be started
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('No agents could be started'),
+      );
+      expect(process.exitCode).toBe(1);
     });
 
     it('negative agent index is rejected', async () => {

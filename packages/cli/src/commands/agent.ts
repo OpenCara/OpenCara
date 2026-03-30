@@ -10,6 +10,7 @@ import type {
   ReviewVerdict,
   TaskRole,
   RepoConfig,
+  BatchPollResponse,
 } from '@opencara/shared';
 import {
   isRepoAllowed,
@@ -82,6 +83,15 @@ import {
   type Logger,
   type AgentSessionStats,
 } from '../logger.js';
+import {
+  type AgentDescriptor,
+  buildBatchPollRequest,
+  filterTasksForAgent,
+  agentConfigToDescriptor,
+  verifyRepoAccess,
+  extractRepoUrls,
+  DEFAULT_RECHECK_INTERVAL,
+} from '../batch-poll.js';
 
 declare const __CLI_VERSION__: string;
 
@@ -1450,6 +1460,453 @@ export async function startAgent(
   log(formatExitSummary(agentSession));
 }
 
+// ── Batch Poll Coordinator ────────────────────────────────────
+
+/** Per-agent state tracked by the batch poll coordinator. */
+interface BatchAgentState {
+  descriptor: AgentDescriptor;
+  reviewDeps: ReviewExecutorDeps;
+  consumptionDeps: ConsumptionDeps;
+  logger: Logger;
+  agentSession: AgentSessionStats;
+  routerRelay?: RouterRelay;
+  cleanupTracker?: CodebaseCleanupTracker;
+  verbose?: boolean;
+  /** Tasks that repeatedly failed diff fetch — skip on future polls. */
+  diffFailCounts: Map<string, number>;
+}
+
+/**
+ * Single batch poll loop that replaces N independent per-agent poll loops.
+ * Polls once via the batch endpoint, then dispatches tasks to per-agent workers.
+ */
+export async function batchPollLoop(
+  client: ApiClient,
+  agentStates: BatchAgentState[],
+  options: {
+    pollIntervalMs: number;
+    maxConsecutiveErrors: number;
+    signal?: AbortSignal;
+    recheckInterval?: number;
+    accessibleRepos?: Set<string>;
+    githubToken?: string;
+  },
+): Promise<void> {
+  const {
+    pollIntervalMs,
+    maxConsecutiveErrors,
+    signal,
+    recheckInterval = DEFAULT_RECHECK_INTERVAL,
+    accessibleRepos,
+    githubToken,
+  } = options;
+
+  // Use the first agent's logger for coordinator-level messages
+  const coordLogger = agentStates[0]?.logger ?? createLogger('batch');
+  const { log, logError, logWarn } = coordLogger;
+
+  log(
+    `${icons.polling} Batch polling every ${pollIntervalMs / 1000}s for ${agentStates.length} agent(s)...`,
+  );
+
+  let consecutiveAuthErrors = 0;
+  let consecutiveErrors = 0;
+  let pollCycleCount = 0;
+
+  while (!signal?.aborted) {
+    // Periodic repo access re-check
+    if (
+      accessibleRepos &&
+      githubToken &&
+      recheckInterval > 0 &&
+      pollCycleCount > 0 &&
+      pollCycleCount % recheckInterval === 0
+    ) {
+      const allRepos = extractRepoUrls(
+        agentStates.map((s) => ({
+          model: s.descriptor.model,
+          tool: s.descriptor.tool,
+          repos: s.descriptor.repoConfig,
+          synthesize_repos: s.descriptor.synthesizeRepos,
+        })),
+      );
+      if (allRepos.length > 0) {
+        log(`${icons.info} Re-checking repo access (cycle ${pollCycleCount})...`);
+        const result = await verifyRepoAccess(allRepos, githubToken);
+        const newAccessible = new Set(result.accessible);
+        // Report changes
+        for (const repo of result.inaccessible) {
+          if (accessibleRepos.has(repo)) {
+            logWarn(`${icons.warn} Lost access to ${repo}`);
+          }
+        }
+        for (const repo of result.accessible) {
+          if (!accessibleRepos.has(repo)) {
+            log(`${icons.success} Gained access to ${repo}`);
+          }
+        }
+        accessibleRepos.clear();
+        for (const repo of newAccessible) accessibleRepos.add(repo);
+        if (accessibleRepos.size === 0) {
+          logError(`${icons.error} No accessible repos remaining. Shutting down.`);
+          process.exitCode = 1;
+          break;
+        }
+      }
+    }
+    pollCycleCount++;
+
+    // Check usage limits for all agents
+    let allLimited = true;
+    for (const state of agentStates) {
+      const { consumptionDeps } = state;
+      if (consumptionDeps.usageTracker && consumptionDeps.usageLimits) {
+        const limitStatus = consumptionDeps.usageTracker.checkLimits(consumptionDeps.usageLimits);
+        if (limitStatus.allowed) {
+          allLimited = false;
+          if (limitStatus.warning) {
+            state.logger.logWarn(`${icons.warn} Approaching limits: ${limitStatus.warning}`);
+          }
+        }
+      } else {
+        allLimited = false;
+      }
+    }
+    if (allLimited) {
+      log(`${icons.stop} All agents have reached usage limits. Stopping.`);
+      break;
+    }
+
+    try {
+      // Build and send batch poll request
+      const descriptors = agentStates.map((s) => s.descriptor);
+      const request = buildBatchPollRequest(descriptors);
+      const response = await client.post<BatchPollResponse>('/api/tasks/poll/batch', request);
+
+      consecutiveAuthErrors = 0;
+      consecutiveErrors = 0;
+
+      // Dispatch tasks to per-agent workers
+      const handlePromises: Promise<void>[] = [];
+      for (const state of agentStates) {
+        const agentName = state.descriptor.name;
+        const pollResponse = response.assignments[agentName];
+        if (!pollResponse || pollResponse.tasks.length === 0) continue;
+
+        // Filter tasks for this agent
+        const eligible = filterTasksForAgent(
+          pollResponse.tasks,
+          state.descriptor,
+          state.reviewDeps.maxDiffSizeKb,
+          state.diffFailCounts,
+        );
+
+        const task = eligible[0];
+        if (!task) continue;
+
+        // Dispatch task to the agent worker
+        handlePromises.push(
+          (async () => {
+            const result = await handleTask(
+              client,
+              state.descriptor.agentId,
+              task,
+              state.reviewDeps,
+              state.consumptionDeps,
+              {
+                model: state.descriptor.model,
+                tool: state.descriptor.tool,
+                thinking: state.descriptor.thinking,
+              },
+              state.logger,
+              state.agentSession,
+              state.routerRelay,
+              signal,
+              state.cleanupTracker,
+              state.verbose,
+            );
+            if (result.diffFetchFailed) {
+              state.agentSession.errorsEncountered++;
+              const count = (state.diffFailCounts.get(task.task_id) ?? 0) + 1;
+              state.diffFailCounts.set(task.task_id, count);
+              if (count >= MAX_DIFF_FETCH_ATTEMPTS) {
+                state.logger.logWarn(
+                  `  Skipping task ${task.task_id} after ${count} diff fetch failures`,
+                );
+              }
+            }
+          })(),
+        );
+      }
+
+      // Wait for all task handlers to complete before next poll
+      if (handlePromises.length > 0) {
+        await Promise.allSettled(handlePromises);
+      }
+
+      // Sweep deferred codebase cleanups for all agents
+      for (const state of agentStates) {
+        if (state.cleanupTracker) {
+          const swept = await state.cleanupTracker.sweep(cleanupWorktree);
+          if (swept > 0) {
+            state.logger.log(
+              `${icons.info} Cleaned up ${swept} stale codebase director${swept === 1 ? 'y' : 'ies'}`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      if (signal?.aborted) break;
+
+      if (err instanceof UpgradeRequiredError) {
+        logWarn(`${icons.warn} ${err.message}`);
+        process.exitCode = 1;
+        break;
+      }
+
+      if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
+        consecutiveAuthErrors++;
+        consecutiveErrors++;
+        logError(
+          `${icons.error} Auth error (${err.status}): ${err.message} [${consecutiveAuthErrors}/${MAX_CONSECUTIVE_AUTH_ERRORS}]`,
+        );
+        if (consecutiveAuthErrors >= MAX_CONSECUTIVE_AUTH_ERRORS) {
+          logError(`${icons.error} Authentication failed repeatedly. Exiting.`);
+          break;
+        }
+      } else {
+        consecutiveAuthErrors = 0;
+        consecutiveErrors++;
+        logError(`${icons.error} Batch poll error: ${(err as Error).message}`);
+      }
+
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        logError(
+          `Too many consecutive errors (${consecutiveErrors}/${maxConsecutiveErrors}). Shutting down.`,
+        );
+        process.exitCode = 1;
+        break;
+      }
+
+      if (consecutiveErrors > 0) {
+        const backoff = Math.min(
+          pollIntervalMs * Math.pow(2, consecutiveErrors - 1),
+          MAX_POLL_BACKOFF_MS,
+        );
+        const extraDelay = backoff - pollIntervalMs;
+        if (extraDelay > 0) {
+          logWarn(
+            `Batch poll failed (${consecutiveErrors} consecutive). Next poll in ${Math.round(backoff / 1000)}s`,
+          );
+          await sleep(extraDelay, signal);
+        }
+      }
+    }
+
+    await sleep(pollIntervalMs, signal);
+  }
+}
+
+/**
+ * Start all configured agents using a single batch poll loop.
+ * Replaces the N independent poll loops from `--all` mode.
+ */
+export async function startBatchAgents(
+  config: ReturnType<typeof loadConfig>,
+  agents: LocalAgentConfig[],
+  pollIntervalMs: number,
+  oauthToken: string,
+  options: {
+    versionOverride?: string | null;
+    verbose?: boolean;
+    instancesOverride?: number;
+    agentOwner?: string;
+    userOrgs?: ReadonlySet<string>;
+  },
+): Promise<void> {
+  const { versionOverride, verbose, instancesOverride, agentOwner, userOrgs } = options;
+
+  const client = new ApiClient(config.platformUrl, {
+    authToken: oauthToken,
+    cliVersion: __CLI_VERSION__,
+    versionOverride,
+    onTokenRefresh: () => getValidToken(config.platformUrl, { configPath: config.authFile }),
+  });
+
+  const coordLogger = createLogger('batch');
+  const { log, logError, logWarn } = coordLogger;
+
+  // Pre-flight: verify repo access
+  const allRepos = extractRepoUrls(agents);
+  let accessibleRepos: Set<string> | undefined;
+
+  if (allRepos.length > 0) {
+    log(`${icons.info} Verifying access to ${allRepos.length} repo(s)...`);
+    const result = await verifyRepoAccess(allRepos, oauthToken);
+    for (const repo of result.accessible) {
+      log(`  ${icons.success} ${repo}`);
+    }
+    for (const repo of result.inaccessible) {
+      logWarn(`  ${icons.warn} ${repo} — no access, excluded from polling`);
+    }
+    if (result.accessible.length === 0) {
+      logError(`${icons.error} No accessible repos. Cannot start agents.`);
+      process.exitCode = 1;
+      return;
+    }
+    accessibleRepos = new Set(result.accessible);
+  }
+
+  // Build per-agent state
+  const agentStates: BatchAgentState[] = [];
+  let skipped = 0;
+
+  for (let i = 0; i < agents.length; i++) {
+    const agentConfig = agents[i];
+    const commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
+    const label = agentConfig.name ?? `agent[${i}]`;
+
+    if (!commandTemplate) {
+      logError(`[${label}] No command configured. Skipping.`);
+      skipped++;
+      continue;
+    }
+
+    if (!validateCommandBinary(commandTemplate)) {
+      logError(`[${label}] Command binary not found: ${commandTemplate.split(' ')[0]}. Skipping.`);
+      skipped++;
+      continue;
+    }
+
+    const instanceCount = instancesOverride ?? agentConfig.instances ?? 1;
+    const codebaseDir = resolveCodebaseDir(agentConfig.codebase_dir, config.codebaseDir);
+    const reviewDeps: ReviewExecutorDeps = {
+      commandTemplate,
+      maxDiffSizeKb: config.maxDiffSizeKb,
+      codebaseDir,
+    };
+
+    // Share session stats and usage tracker across instances of the same agent config
+    const session = createSessionTracker();
+    const usageTracker = new UsageTracker();
+
+    const ttlMs = config.codebaseTtl != null ? parseTtl(config.codebaseTtl) : 0;
+    const cleanupTracker = ttlMs > 0 ? new CodebaseCleanupTracker(ttlMs) : undefined;
+
+    for (let inst = 0; inst < instanceCount; inst++) {
+      const agentId = crypto.randomUUID();
+      const instanceLabel = instanceCount > 1 ? `${label}#${inst + 1}` : label;
+      const descriptor = agentConfigToDescriptor(agentConfig, agentId, i, agentOwner, userOrgs);
+      // Override name with instance-specific label
+      descriptor.name = instanceLabel;
+
+      const isRouter = agentConfig.router === true;
+      let routerRelay: RouterRelay | undefined;
+      if (isRouter) {
+        routerRelay = new RouterRelay();
+        routerRelay.start();
+      }
+
+      agentStates.push({
+        descriptor,
+        reviewDeps,
+        consumptionDeps: {
+          agentId,
+          session,
+          usageTracker,
+          usageLimits: config.usageLimits,
+        },
+        logger: createLogger(instanceLabel),
+        agentSession: createAgentSession(),
+        routerRelay,
+        cleanupTracker,
+        verbose,
+        diffFailCounts: new Map(),
+      });
+    }
+  }
+
+  if (agentStates.length === 0) {
+    logError('No agents could be started. Check your config.');
+    process.exitCode = 1;
+    return;
+  }
+
+  if (skipped > 0) {
+    logWarn(
+      `${skipped} agent config(s) skipped (see warnings above). Continuing with ${agentStates.length} instance(s).`,
+    );
+  }
+
+  // Dry-run test commands for non-router agents
+  for (const state of agentStates) {
+    if (state.reviewDeps.commandTemplate && !state.routerRelay) {
+      state.logger.log('Testing command...');
+      const result = await testCommand(state.reviewDeps.commandTemplate);
+      if (result.ok) {
+        state.logger.log(
+          `${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`,
+        );
+      } else {
+        state.logger.logWarn(
+          `${icons.warn} Command test failed (${result.error}). Reviews may fail.`,
+        );
+      }
+    }
+  }
+
+  // Startup scan: remove stale worktree directories
+  const codebaseDirs = new Set(
+    agentStates.map((s) => s.reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos')),
+  );
+  for (const dir of codebaseDirs) {
+    const ttlMs = config.codebaseTtl != null ? parseTtl(config.codebaseTtl) : 0;
+    const scanTtl = Math.max(ttlMs, DEFAULT_CODEBASE_TTL_MS);
+    const staleCount = scanAndCleanStaleWorktrees(dir, scanTtl);
+    if (staleCount > 0) {
+      log(
+        `${icons.info} Cleaned up ${staleCount} stale codebase director${staleCount === 1 ? 'y' : 'ies'} on startup`,
+      );
+    }
+  }
+
+  const abortController = new AbortController();
+  process.on('SIGINT', () => abortController.abort());
+  process.on('SIGTERM', () => abortController.abort());
+
+  log(`${agentStates.length} agent instance(s) running in batch mode. Press Ctrl+C to stop.\n`);
+
+  await batchPollLoop(client, agentStates, {
+    pollIntervalMs,
+    maxConsecutiveErrors: config.maxConsecutiveErrors,
+    signal: abortController.signal,
+    accessibleRepos,
+    githubToken: oauthToken,
+  });
+
+  // Cleanup on shutdown
+  for (const state of agentStates) {
+    state.routerRelay?.stop();
+    if (state.cleanupTracker && state.cleanupTracker.size > 0) {
+      const swept = await state.cleanupTracker.sweep(cleanupWorktree);
+      if (swept > 0) {
+        state.logger.log(
+          `${icons.info} Cleaned up ${swept} codebase director${swept === 1 ? 'y' : 'ies'} on shutdown`,
+        );
+      }
+    }
+    if (state.consumptionDeps.usageTracker) {
+      const limits = state.consumptionDeps.usageLimits ?? {
+        maxReviewsPerDay: null,
+        maxTokensPerDay: null,
+        maxTokensPerReview: null,
+      };
+      state.logger.log(state.consumptionDeps.usageTracker.formatSummary(limits));
+    }
+    state.logger.log(formatExitSummary(state.agentSession));
+  }
+}
+
 /**
  * Start agent in router mode (stdin/stdout relay).
  * Default action when running `opencara` with no subcommand.
@@ -1752,59 +2209,22 @@ agentCommand
       }
 
       if (opts.all) {
-        // Start all agents concurrently
+        // Start all agents using single batch poll coordinator
         if (!config.agents || config.agents.length === 0) {
           console.error('No agents configured in ~/.opencara/config.toml');
           process.exit(1);
           return;
         }
 
-        console.log(`Starting ${config.agents.length} agent config(s)...`);
+        console.log(`Starting ${config.agents.length} agent config(s) in batch mode...`);
 
-        const promises: Promise<void>[] = [];
-        let startFailed = false;
-        for (let i = 0; i < config.agents.length; i++) {
-          const agentPromises = startAgentByIndex(
-            config,
-            i,
-            pollIntervalMs,
-            oauthToken,
-            versionOverride,
-            opts.verbose,
-            instancesOverride,
-            agentOwner,
-            userOrgs,
-          );
-          if (agentPromises) {
-            promises.push(...agentPromises);
-          } else {
-            startFailed = true;
-          }
-        }
-
-        if (promises.length === 0) {
-          console.error('No agents could be started. Check your config.');
-          process.exit(1);
-          return;
-        }
-
-        if (startFailed) {
-          console.error(
-            'One or more agents could not start (see warnings above). Continuing with the rest.',
-          );
-        }
-
-        console.log(`${promises.length} agent instance(s) running. Press Ctrl+C to stop all.\n`);
-
-        // Use allSettled so one agent crashing doesn't orphan the others
-        const results = await Promise.allSettled(promises);
-        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-        if (failures.length > 0) {
-          for (const f of failures) {
-            console.error(`Agent exited with error: ${f.reason}`);
-          }
-          process.exit(1);
-        }
+        await startBatchAgents(config, config.agents, pollIntervalMs, oauthToken, {
+          versionOverride,
+          verbose: opts.verbose,
+          instancesOverride,
+          agentOwner,
+          userOrgs,
+        });
       } else {
         // Start a single agent by index
         const maxIndex = (config.agents?.length ?? 0) - 1;
