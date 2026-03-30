@@ -1028,9 +1028,9 @@ describe('computeRoles', () => {
     expect(computeRoles(agent)).toEqual(['summary']);
   });
 
-  it('returns ["review", "summary"] for agent with neither flag', () => {
+  it('returns default roles for agent with neither flag', () => {
     const agent: LocalAgentConfig = { model: 'claude-opus-4-6', tool: 'claude' };
-    expect(computeRoles(agent)).toEqual(['review', 'summary']);
+    expect(computeRoles(agent)).toEqual(['review', 'summary', 'implement', 'fix']);
   });
 
   it('returns explicit roles when roles field is set', () => {
@@ -1078,6 +1078,6 @@ describe('computeRoles', () => {
       tool: 'claude',
       roles: undefined,
     };
-    expect(computeRoles(agent)).toEqual(['review', 'summary']);
+    expect(computeRoles(agent)).toEqual(['review', 'summary', 'implement', 'fix']);
   });
 });
