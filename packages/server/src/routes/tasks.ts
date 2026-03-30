@@ -513,8 +513,7 @@ async function handleImplementSummaryResult(
   logger: Logger,
 ): Promise<void> {
   if (!task.issue_number) {
-    logger.error('Implement result but no issue_number on task', { taskId: task.id });
-    return;
+    throw new Error(`Implement result but no issue_number on task ${task.id}`);
   }
 
   const token = await github.getInstallationToken(task.github_installation_id);
@@ -543,22 +542,22 @@ async function handleFixSummaryResult(
   reviewText: string,
   logger: Logger,
 ): Promise<void> {
+  if (task.pr_number <= 0) {
+    throw new Error(`Fix result but no pr_number on task ${task.id}`);
+  }
+
   const token = await github.getInstallationToken(task.github_installation_id);
   const commentBody = wrapReviewComment(reviewText.trim());
+  await github.postPrComment(task.owner, task.repo, task.pr_number, commentBody, token);
 
-  if (task.pr_number > 0) {
-    await github.postPrComment(task.owner, task.repo, task.pr_number, commentBody, token);
-    logger.info('Fix result posted to PR', {
-      taskId: task.id,
-      owner: task.owner,
-      repo: task.repo,
-      prNumber: task.pr_number,
-      filesChanged: fixReport?.files_changed,
-      commentsAddressed: fixReport?.comments_addressed,
-    });
-  } else {
-    logger.error('Fix result but no pr_number on task', { taskId: task.id });
-  }
+  logger.info('Fix result posted to PR', {
+    taskId: task.id,
+    owner: task.owner,
+    repo: task.repo,
+    prNumber: task.pr_number,
+    filesChanged: fixReport?.files_changed,
+    commentsAddressed: fixReport?.comments_addressed,
+  });
 }
 
 /**
