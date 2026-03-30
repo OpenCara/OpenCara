@@ -1,15 +1,16 @@
 import type {
   BatchPollAgent,
   BatchPollRequest,
-  BatchPollResponse,
   PollTask,
   RepoConfig,
   TaskRole,
 } from '@opencara/shared';
 import { isRepoAllowed } from '@opencara/shared';
-import type { ApiClient } from './http.js';
 import type { LocalAgentConfig } from './config.js';
 import { computeRoles } from './commands/agent.js';
+
+/** Estimated bytes per line in unified diff format, used for pre-filtering by diff_size. */
+const ESTIMATED_BYTES_PER_DIFF_LINE = 120;
 
 // ── Repo Access Check ───────────────────────────────────────────
 
@@ -66,13 +67,15 @@ export async function verifyRepoAccess(
  * Only whitelist repos have explicit repo URLs; other modes don't have a fixed list
  * we can verify upfront.
  */
-export function extractRepoUrls(agents: LocalAgentConfig[]): string[] {
+export function extractRepoUrls(
+  agents: Pick<LocalAgentConfig, 'repos' | 'synthesize_repos'>[],
+): string[] {
   const repos = new Set<string>();
   for (const agent of agents) {
-    if (agent.repos?.list) {
+    if (agent.repos?.mode === 'whitelist' && agent.repos.list) {
       for (const repo of agent.repos.list) repos.add(repo);
     }
-    if (agent.synthesize_repos?.list) {
+    if (agent.synthesize_repos?.mode === 'whitelist' && agent.synthesize_repos.list) {
       for (const repo of agent.synthesize_repos.list) repos.add(repo);
     }
   }
@@ -106,9 +109,9 @@ export function buildBatchPollRequest(agents: AgentDescriptor[]): BatchPollReque
     const entry: BatchPollAgent = {
       agent_name: a.name,
       roles: a.roles,
+      model: a.model,
+      tool: a.tool,
     };
-    if (a.model) entry.model = a.model;
-    if (a.tool) entry.tool = a.tool;
     if (a.thinking) entry.thinking = a.thinking;
 
     // Build repo_filters array from repos + synthesize_repos configs
@@ -123,29 +126,6 @@ export function buildBatchPollRequest(agents: AgentDescriptor[]): BatchPollReque
   return { agents: batchAgents };
 }
 
-export interface BatchPollResult {
-  /** Tasks keyed by agent name */
-  assignments: Map<string, PollTask[]>;
-}
-
-/**
- * Execute a single batch poll request.
- * Returns tasks grouped by agent name.
- */
-export async function batchPoll(
-  client: ApiClient,
-  agents: AgentDescriptor[],
-): Promise<BatchPollResult> {
-  const request = buildBatchPollRequest(agents);
-  const response = await client.post<BatchPollResponse>('/api/tasks/poll/batch', request);
-
-  const assignments = new Map<string, PollTask[]>();
-  for (const [agentName, pollResponse] of Object.entries(response.assignments)) {
-    assignments.set(agentName, pollResponse.tasks);
-  }
-  return { assignments };
-}
-
 /**
  * Filter tasks for a specific agent using its repo config and diff size limit.
  * Mirrors the per-agent filtering in the existing pollLoop.
@@ -156,8 +136,13 @@ export function filterTasksForAgent(
   maxDiffSizeKb?: number,
   diffFailCounts?: Map<string, number>,
   maxDiffFetchAttempts: number = 3,
+  accessibleRepos?: ReadonlySet<string>,
 ): PollTask[] {
   return tasks.filter((t) => {
+    // Filter by verified repo access
+    if (accessibleRepos && !accessibleRepos.has(`${t.owner}/${t.repo}`)) {
+      return false;
+    }
     // Filter by repo config
     if (
       agent.repoConfig &&
@@ -165,8 +150,20 @@ export function filterTasksForAgent(
     ) {
       return false;
     }
+    // Filter by synthesize_repos config
+    if (
+      agent.synthesizeRepos &&
+      !isRepoAllowed(agent.synthesizeRepos, t.owner, t.repo, agent.agentOwner, agent.userOrgs)
+    ) {
+      return false;
+    }
     // Skip tasks whose diff_size clearly exceeds maxDiffSizeKb
-    if (maxDiffSizeKb && t.diff_size != null && (t.diff_size * 120) / 1024 > maxDiffSizeKb) {
+    // 120 bytes/line is the estimated average for unified diff format
+    if (
+      maxDiffSizeKb &&
+      t.diff_size != null &&
+      (t.diff_size * ESTIMATED_BYTES_PER_DIFF_LINE) / 1024 > maxDiffSizeKb
+    ) {
       return false;
     }
     // Skip tasks that have failed diff fetch too many times

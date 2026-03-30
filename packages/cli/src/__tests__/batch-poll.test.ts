@@ -192,6 +192,23 @@ describe('extractRepoUrls', () => {
     const urls = extractRepoUrls(agents);
     expect(urls).toEqual([]);
   });
+
+  it('ignores blacklist repos (only extracts whitelist)', () => {
+    const agents: LocalAgentConfig[] = [
+      {
+        model: 'gpt-4',
+        tool: 'claude',
+        repos: { mode: 'blacklist', list: ['owner/excluded-repo'] },
+      },
+      {
+        model: 'gpt-4',
+        tool: 'claude',
+        repos: { mode: 'whitelist', list: ['owner/included-repo'] },
+      },
+    ];
+    const urls = extractRepoUrls(agents);
+    expect(urls).toEqual(['owner/included-repo']);
+  });
 });
 
 describe('buildBatchPollRequest', () => {
@@ -347,6 +364,31 @@ describe('filterTasksForAgent', () => {
     const result = filterTasksForAgent(tasks, agent, undefined, diffFailCounts, 3);
     expect(result).toHaveLength(1);
   });
+
+  it('filters by accessibleRepos set', () => {
+    const tasks = [
+      makeTask({ owner: 'org', repo: 'allowed' }),
+      makeTask({ task_id: 'task-2', owner: 'org', repo: 'denied' }),
+    ];
+    const agent = makeAgent();
+    const accessibleRepos = new Set(['org/allowed']);
+    const result = filterTasksForAgent(tasks, agent, undefined, undefined, 3, accessibleRepos);
+    expect(result).toHaveLength(1);
+    expect(result[0].repo).toBe('allowed');
+  });
+
+  it('filters by synthesizeRepos config', () => {
+    const tasks = [
+      makeTask({ owner: 'org', repo: 'allowed' }),
+      makeTask({ task_id: 'task-2', owner: 'other', repo: 'blocked' }),
+    ];
+    const agent = makeAgent({
+      synthesizeRepos: { mode: 'whitelist', list: ['org/allowed'] },
+    });
+    const result = filterTasksForAgent(tasks, agent);
+    expect(result).toHaveLength(1);
+    expect(result[0].repo).toBe('allowed');
+  });
 });
 
 describe('agentConfigToDescriptor', () => {
@@ -480,8 +522,8 @@ describe('batchPollLoop', () => {
 
     controller.abort();
     await promise;
-    // Should have exited due to auth errors — no exit code set for auth errors
-    // (the loop breaks without setting process.exitCode for auth errors)
+    // Auth errors should set exit code 1
+    expect(process.exitCode).toBe(1);
   });
 
   it('dispatches tasks from batch response', async () => {

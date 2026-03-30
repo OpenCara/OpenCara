@@ -492,6 +492,7 @@ async function pollLoop(
         );
         if (consecutiveAuthErrors >= MAX_CONSECUTIVE_AUTH_ERRORS) {
           logError(`${icons.error} Authentication failed repeatedly. Exiting.`);
+          process.exitCode = 1;
           break;
         }
       } else {
@@ -1524,8 +1525,6 @@ export async function batchPollLoop(
     ) {
       const allRepos = extractRepoUrls(
         agentStates.map((s) => ({
-          model: s.descriptor.model,
-          tool: s.descriptor.tool,
           repos: s.descriptor.repoConfig,
           synthesize_repos: s.descriptor.synthesizeRepos,
         })),
@@ -1599,6 +1598,8 @@ export async function batchPollLoop(
           state.descriptor,
           state.reviewDeps.maxDiffSizeKb,
           state.diffFailCounts,
+          MAX_DIFF_FETCH_ATTEMPTS,
+          accessibleRepos,
         );
 
         const task = eligible[0];
@@ -1641,7 +1642,13 @@ export async function batchPollLoop(
 
       // Wait for all task handlers to complete before next poll
       if (handlePromises.length > 0) {
-        await Promise.allSettled(handlePromises);
+        const results = await Promise.allSettled(handlePromises);
+        for (const r of results) {
+          if (r.status === 'rejected') {
+            logError(`${icons.error} Task handler failed: ${r.reason}`);
+            consecutiveErrors++;
+          }
+        }
       }
 
       // Sweep deferred codebase cleanups for all agents
@@ -1672,6 +1679,7 @@ export async function batchPollLoop(
         );
         if (consecutiveAuthErrors >= MAX_CONSECUTIVE_AUTH_ERRORS) {
           logError(`${icons.error} Authentication failed repeatedly. Exiting.`);
+          process.exitCode = 1;
           break;
         }
       } else {
