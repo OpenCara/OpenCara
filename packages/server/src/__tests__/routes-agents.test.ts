@@ -3,6 +3,7 @@ import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { agentStatus } from '../routes/agents.js';
 import type { AgentsResponse } from '@opencara/shared';
+import { stubOAuthFetch, OAUTH_HEADERS } from './test-oauth-helper.js';
 
 const mockEnv = {
   GITHUB_WEBHOOK_SECRET: 'test-secret',
@@ -13,24 +14,9 @@ const mockEnv = {
   GITHUB_CLIENT_SECRET: 'csecret',
 };
 
-/** Stub fetch for GitHub token verification success. */
-function stubGitHubTokenSuccess() {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      status: 200,
-      json: () => Promise.resolve({ user: { id: 42, login: 'octocat' } }),
-    }),
-  );
-}
-
-function authHeaders(): Record<string, string> {
-  return { Authorization: 'Bearer ghu_valid_token' };
-}
-
 describe('Agent Routes', () => {
   beforeEach(() => {
-    stubGitHubTokenSuccess();
+    stubOAuthFetch();
   });
 
   afterEach(() => {
@@ -43,7 +29,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       expect(res.status).toBe(200);
@@ -62,7 +48,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       expect(res.status).toBe(200);
@@ -79,7 +65,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -96,7 +82,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -111,7 +97,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -206,7 +192,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -227,7 +213,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -253,7 +239,7 @@ describe('Agent Routes', () => {
       const sinceMs = now - 60 * 60_000;
       const res = await app.request(
         `/api/agents?active_since=${sinceMs}`,
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -266,7 +252,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents?active_since=not-a-number',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       expect(res.status).toBe(400);
@@ -277,7 +263,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents?active_since=-1',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       expect(res.status).toBe(400);
@@ -295,7 +281,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -317,7 +303,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
-        { method: 'GET', headers: authHeaders() },
+        { method: 'GET', headers: OAUTH_HEADERS },
         mockEnv,
       );
       expect(res.status).toBe(200);
