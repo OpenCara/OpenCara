@@ -3207,4 +3207,218 @@ describe('Task Routes', () => {
       expect(task?.status).toBe('pending');
     });
   });
+
+  // ── Batch Poll ──────────────────────────────────────────────
+
+  describe('POST /api/tasks/poll/batch', () => {
+    it('returns empty assignments when nothing available', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [{ agent_name: 'agent-a', roles: ['review'] }],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.assignments['agent-a'].tasks).toEqual([]);
+    });
+
+    it('returns tasks for a single agent', async () => {
+      await store.createTask(makeTask({ task_type: 'review', review_count: 3, queue: 'review' }));
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [{ agent_name: 'agent-a', roles: ['review'] }],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.assignments['agent-a'].tasks).toHaveLength(1);
+      expect(body.assignments['agent-a'].tasks[0].task_id).toBe('task-1');
+    });
+
+    it('returns per-agent assignments for multiple agents', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'task-r',
+          task_type: 'review',
+          review_count: 3,
+          queue: 'review',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'task-s',
+          task_type: 'summary',
+          queue: 'summary',
+          group_id: 'g-1',
+        }),
+      );
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'reviewer', roles: ['review'] },
+          { agent_name: 'summarizer', roles: ['summary'] },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.assignments['reviewer'].tasks).toHaveLength(1);
+      expect(body.assignments['reviewer'].tasks[0].task_id).toBe('task-r');
+      expect(body.assignments['summarizer'].tasks).toHaveLength(1);
+      expect(body.assignments['summarizer'].tasks[0].task_id).toBe('task-s');
+    });
+
+    it('deduplicates tasks across agents — no two agents get the same task', async () => {
+      await store.createTask(
+        makeTask({ id: 'task-1', task_type: 'review', review_count: 3, queue: 'review' }),
+      );
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'agent-a', roles: ['review'] },
+          { agent_name: 'agent-b', roles: ['review'] },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Exactly one agent should get the task
+      const aCount = body.assignments['agent-a'].tasks.length;
+      const bCount = body.assignments['agent-b'].tasks.length;
+      expect(aCount + bCount).toBe(1);
+    });
+
+    it('dedup favors preferred model/tool match', async () => {
+      await store.createTask(
+        makeTask({
+          id: 'task-pref',
+          task_type: 'review',
+          review_count: 3,
+          queue: 'review',
+          config: {
+            ...DEFAULT_REVIEW_CONFIG,
+            preferredModels: ['claude-opus'],
+            preferredTools: [],
+          },
+        }),
+      );
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'generic', roles: ['review'], model: 'gpt-4' },
+          { agent_name: 'preferred', roles: ['review'], model: 'claude-opus' },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Preferred agent should win
+      expect(body.assignments['preferred'].tasks).toHaveLength(1);
+      expect(body.assignments['preferred'].tasks[0].task_id).toBe('task-pref');
+      expect(body.assignments['generic'].tasks).toHaveLength(0);
+    });
+
+    it('distributes multiple tasks round-robin across agents', async () => {
+      await store.createTask(
+        makeTask({ id: 'task-1', task_type: 'review', review_count: 3, queue: 'review' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'task-2', task_type: 'review', review_count: 3, queue: 'review' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'task-3', task_type: 'review', review_count: 3, queue: 'review' }),
+      );
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'agent-a', roles: ['review'] },
+          { agent_name: 'agent-b', roles: ['review'] },
+          { agent_name: 'agent-c', roles: ['review'] },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Round-robin: each agent gets exactly 1 task
+      const aCount = body.assignments['agent-a'].tasks.length;
+      const bCount = body.assignments['agent-b'].tasks.length;
+      const cCount = body.assignments['agent-c'].tasks.length;
+      expect(aCount).toBe(1);
+      expect(bCount).toBe(1);
+      expect(cCount).toBe(1);
+      // No duplicates
+      const allTaskIds = [
+        ...body.assignments['agent-a'].tasks.map((t: { task_id: string }) => t.task_id),
+        ...body.assignments['agent-b'].tasks.map((t: { task_id: string }) => t.task_id),
+        ...body.assignments['agent-c'].tasks.map((t: { task_id: string }) => t.task_id),
+      ];
+      expect(new Set(allTaskIds).size).toBe(3);
+    });
+
+    it('filters tasks by agent role', async () => {
+      await store.createTask(
+        makeTask({ id: 'task-r', task_type: 'review', review_count: 3, queue: 'review' }),
+      );
+      await store.createTask(
+        makeTask({ id: 'task-s', task_type: 'summary', queue: 'summary', group_id: 'g-2' }),
+      );
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [{ agent_name: 'review-only', roles: ['review'] }],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Should only see the review task
+      expect(body.assignments['review-only'].tasks).toHaveLength(1);
+      expect(body.assignments['review-only'].tasks[0].task_id).toBe('task-r');
+    });
+
+    it('rejects request with empty agents array', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', { agents: [] });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects request with missing roles', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [{ agent_name: 'agent-a' }],
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects request with empty roles array', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [{ agent_name: 'agent-a', roles: [] }],
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('all agents get entries in assignments even with no tasks', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'agent-a', roles: ['review'] },
+          { agent_name: 'agent-b', roles: ['summary'] },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.assignments['agent-a']).toBeDefined();
+      expect(body.assignments['agent-b']).toBeDefined();
+      expect(body.assignments['agent-a'].tasks).toEqual([]);
+      expect(body.assignments['agent-b'].tasks).toEqual([]);
+    });
+
+    it('rejects request with duplicate agent_name values', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'agent-a', roles: ['review'] },
+          { agent_name: 'agent-a', roles: ['summary'] },
+        ],
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects request with more than 20 agents', async () => {
+      const agents = Array.from({ length: 21 }, (_, i) => ({
+        agent_name: `agent-${i}`,
+        roles: ['review' as const],
+      }));
+      const res = await request('POST', '/api/tasks/poll/batch', { agents });
+      expect(res.status).toBe(400);
+    });
+
+    it('existing single poll endpoint still works (backward compat)', async () => {
+      await store.createTask(makeTask());
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(1);
+    });
+  });
 });

@@ -48,6 +48,26 @@ export const PollRequestSchema = z.object({
   thinking: z.string().max(256).optional(),
 });
 
+const batchPollAgentSchema = z.object({
+  agent_name: z.string().min(1, 'agent_name must be a non-empty string'),
+  roles: z.array(taskRoleSchema).min(1, 'roles must contain at least one role'),
+  model: z.string().optional(),
+  tool: z.string().optional(),
+  thinking: z.string().max(256).optional(),
+  repo_filters: z.array(repoConfigSchema).optional(),
+});
+
+export const BatchPollRequestSchema = z.object({
+  agents: z
+    .array(batchPollAgentSchema)
+    .min(1, 'agents must contain at least one agent')
+    .max(20, 'agents must not exceed 20 entries')
+    .refine(
+      (agents) => new Set(agents.map((a) => a.agent_name)).size === agents.length,
+      'agent_name values must be unique',
+    ),
+});
+
 export const ClaimRequestSchema = z.object({
   agent_id: agentIdSchema,
   role: claimRoleSchema,
