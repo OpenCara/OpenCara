@@ -34,7 +34,7 @@ import {
 } from '../store/constants.js';
 import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
-import { rateLimitByAgent } from '../middleware/rate-limit.js';
+import { rateLimitByAgent, rateLimitByIP } from '../middleware/rate-limit.js';
 import { requireApiKey } from '../middleware/auth.js';
 import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
@@ -694,7 +694,8 @@ interface AgentFilter {
   agentRepos: Set<string> | null;
   model?: string;
   tool?: string;
-  synthesizeRepos?: RepoConfig;
+  /** All repo filters for summary task visibility (any match = allowed). */
+  repoFilters?: RepoConfig[];
   githubUsername?: string;
 }
 
@@ -746,9 +747,10 @@ async function filterTasksForAgent(
     // Grace period visibility checks
     if (isSummaryTask(task)) {
       if (!isSummaryVisibleToAgent(task, agent.agentId, agent.model)) continue;
-      // Repo filter for summary agents
-      if (agent.synthesizeRepos) {
-        if (!isRepoAllowed(agent.synthesizeRepos, task.owner, task.repo)) continue;
+      // Repo filter for summary agents — any matching filter allows the task
+      if (agent.repoFilters && agent.repoFilters.length > 0) {
+        const allowed = agent.repoFilters.some((rf) => isRepoAllowed(rf, task.owner, task.repo));
+        if (!allowed) continue;
       }
     } else {
       // Worker task — check model/tool preference grace period
@@ -944,7 +946,7 @@ export function taskRoutes() {
         agentRepos,
         model: body.model,
         tool: body.tool,
-        synthesizeRepos: synthesize_repos,
+        repoFilters: synthesize_repos ? [synthesize_repos] : undefined,
         githubUsername: verifiedIdentity?.github_username,
       },
       store,
@@ -957,94 +959,106 @@ export function taskRoutes() {
 
   // ── Batch Poll ──────────────────────────────────────────────
 
-  app.post('/api/tasks/poll/batch', rateLimitByAgent(POLL_RATE_LIMIT), async (c) => {
-    const store = c.get('store');
-    const github = c.get('github');
-    const logger = c.get('logger');
-    const verifiedIdentity = c.get('verifiedIdentity');
-    const body = await parseBody(c, BatchPollRequestSchema);
-    if (body instanceof Response) return body;
+  app.post(
+    '/api/tasks/poll/batch',
+    rateLimitByIP({ ...POLL_RATE_LIMIT, prefix: 'batch-poll' }),
+    async (c) => {
+      const store = c.get('store');
+      const github = c.get('github');
+      const logger = c.get('logger');
+      const verifiedIdentity = c.get('verifiedIdentity');
+      const body = await parseBody(c, BatchPollRequestSchema);
+      if (body instanceof Response) return body;
 
-    // Check timeouts lazily (throttled to every 30s per isolate)
-    await maybeCheckTimeouts(store, github, logger);
+      // Check timeouts lazily (throttled to every 30s per isolate)
+      await maybeCheckTimeouts(store, github, logger);
 
-    // Build shared poll context once for all agents
-    const pollCtx = await buildPollContext(store);
+      // Build shared poll context once for all agents
+      const pollCtx = await buildPollContext(store);
 
-    // Collect per-agent task lists
-    const agentTasks = new Map<string, PollTask[]>();
-    for (const agent of body.agents) {
-      // First repo_filter that matches determines synthesize_repos for summary agents
-      // repo_filters also controls private repo access (via whitelist entries)
-      const repoFilterSet =
-        agent.repo_filters && agent.repo_filters.length > 0 ? agent.repo_filters : null;
-      // Build a set of declared repos from whitelist repo_filters
-      const declaredRepos = new Set<string>();
-      if (repoFilterSet) {
-        for (const rf of repoFilterSet) {
-          if (rf.list) {
-            for (const entry of rf.list) declaredRepos.add(entry);
+      // Collect per-agent task lists
+      const agentTasks = new Map<string, PollTask[]>();
+      for (const agent of body.agents) {
+        // repo_filters controls both private repo access and summary task visibility
+        const repoFilterSet =
+          agent.repo_filters && agent.repo_filters.length > 0 ? agent.repo_filters : null;
+        // Build a set of declared repos from whitelist repo_filters
+        const declaredRepos = new Set<string>();
+        if (repoFilterSet) {
+          for (const rf of repoFilterSet) {
+            if (rf.list) {
+              for (const entry of rf.list) declaredRepos.add(entry);
+            }
+          }
+        }
+
+        const available = await filterTasksForAgent(
+          pollCtx,
+          {
+            agentId: agent.agent_name,
+            acceptedRoles: new Set(agent.roles),
+            agentRepos: declaredRepos.size > 0 ? declaredRepos : null,
+            model: agent.model,
+            tool: agent.tool,
+            repoFilters: repoFilterSet ?? undefined,
+            githubUsername: verifiedIdentity?.github_username,
+          },
+          store,
+          github,
+          logger,
+        );
+        agentTasks.set(agent.agent_name, available);
+      }
+
+      // Deduplicate across agents — each task goes to exactly one agent.
+      // Priority: preferred model/tool match wins, then first-come (request order).
+      const assignedTaskIds = new Set<string>();
+      const assignments: Record<string, PollTask[]> = {};
+
+      // Initialize all agents with empty arrays
+      for (const agent of body.agents) {
+        assignments[agent.agent_name] = [];
+      }
+
+      // First pass: assign tasks where agent matches an explicit preferred model/tool
+      for (const agent of body.agents) {
+        const tasks = agentTasks.get(agent.agent_name) ?? [];
+        for (const task of tasks) {
+          if (assignedTaskIds.has(task.task_id)) continue;
+          const reviewTask = pollCtx.tasksById.get(task.task_id);
+          if (!reviewTask) continue;
+          // Only prioritize when the task has explicit preferences AND the agent matches
+          const { preferredModels, preferredTools } = reviewTask.config;
+          if (preferredModels.length === 0 && preferredTools.length === 0) continue;
+          if (isReviewPreferredAgent(reviewTask.config, agent.model, agent.tool)) {
+            assignments[agent.agent_name].push(task);
+            assignedTaskIds.add(task.task_id);
           }
         }
       }
 
-      const available = await filterTasksForAgent(
-        pollCtx,
-        {
-          agentId: agent.agent_name,
-          acceptedRoles: new Set(agent.roles),
-          agentRepos: declaredRepos.size > 0 ? declaredRepos : null,
-          model: agent.model,
-          tool: agent.tool,
-          synthesizeRepos: repoFilterSet?.[0],
-          githubUsername: verifiedIdentity?.github_username,
-        },
-        store,
-        github,
-        logger,
-      );
-      agentTasks.set(agent.agent_name, available);
-    }
-
-    // Deduplicate across agents — each task goes to exactly one agent.
-    // Priority: preferred model/tool match wins, then first-come (request order).
-    const assignedTaskIds = new Set<string>();
-    const assignments: Record<string, PollTask[]> = {};
-
-    // Initialize all agents with empty arrays
-    for (const agent of body.agents) {
-      assignments[agent.agent_name] = [];
-    }
-
-    // First pass: assign tasks where agent has a preferred match
-    for (const agent of body.agents) {
-      const tasks = agentTasks.get(agent.agent_name) ?? [];
-      for (const task of tasks) {
-        if (assignedTaskIds.has(task.task_id)) continue;
-        const reviewTask = pollCtx.tasksById.get(task.task_id);
-        if (reviewTask && isReviewPreferredAgent(reviewTask.config, agent.model, agent.tool)) {
-          assignments[agent.agent_name].push(task);
-          assignedTaskIds.add(task.task_id);
+      // Second pass: distribute remaining tasks round-robin across agents
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const agent of body.agents) {
+          const tasks = agentTasks.get(agent.agent_name) ?? [];
+          const next = tasks.find((t) => !assignedTaskIds.has(t.task_id));
+          if (next) {
+            assignments[agent.agent_name].push(next);
+            assignedTaskIds.add(next.task_id);
+            changed = true;
+          }
         }
       }
-    }
 
-    // Second pass: assign remaining tasks round-robin (first agent that can take it)
-    for (const agent of body.agents) {
-      const tasks = agentTasks.get(agent.agent_name) ?? [];
-      for (const task of tasks) {
-        if (assignedTaskIds.has(task.task_id)) continue;
-        assignments[agent.agent_name].push(task);
-        assignedTaskIds.add(task.task_id);
-      }
-    }
-
-    return c.json<BatchPollResponse>({
-      assignments: Object.fromEntries(
-        Object.entries(assignments).map(([name, tasks]) => [name, { tasks }]),
-      ),
-    });
-  });
+      return c.json<BatchPollResponse>({
+        assignments: Object.fromEntries(
+          Object.entries(assignments).map(([name, tasks]) => [name, { tasks }]),
+        ),
+      });
+    },
+  );
 
   // ── Claim ────────────────────────────────────────────────────
 

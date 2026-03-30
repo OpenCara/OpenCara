@@ -61,7 +61,11 @@ export const BatchPollRequestSchema = z.object({
   agents: z
     .array(batchPollAgentSchema)
     .min(1, 'agents must contain at least one agent')
-    .max(20, 'agents must not exceed 20 entries'),
+    .max(20, 'agents must not exceed 20 entries')
+    .refine(
+      (agents) => new Set(agents.map((a) => a.agent_name)).size === agents.length,
+      'agent_name values must be unique',
+    ),
 });
 
 export const ClaimRequestSchema = z.object({

@@ -3308,7 +3308,7 @@ describe('Task Routes', () => {
       expect(body.assignments['generic'].tasks).toHaveLength(0);
     });
 
-    it('distributes multiple tasks across agents', async () => {
+    it('distributes multiple tasks round-robin across agents', async () => {
       await store.createTask(
         makeTask({ id: 'task-1', task_type: 'review', review_count: 3, queue: 'review' }),
       );
@@ -3327,14 +3327,20 @@ describe('Task Routes', () => {
       });
       expect(res.status).toBe(200);
       const body = await res.json();
-      // Each agent gets tasks, totaling 3 across all agents, no duplicates
+      // Round-robin: each agent gets exactly 1 task
+      const aCount = body.assignments['agent-a'].tasks.length;
+      const bCount = body.assignments['agent-b'].tasks.length;
+      const cCount = body.assignments['agent-c'].tasks.length;
+      expect(aCount).toBe(1);
+      expect(bCount).toBe(1);
+      expect(cCount).toBe(1);
+      // No duplicates
       const allTaskIds = [
         ...body.assignments['agent-a'].tasks.map((t: { task_id: string }) => t.task_id),
         ...body.assignments['agent-b'].tasks.map((t: { task_id: string }) => t.task_id),
         ...body.assignments['agent-c'].tasks.map((t: { task_id: string }) => t.task_id),
       ];
-      expect(allTaskIds).toHaveLength(3);
-      expect(new Set(allTaskIds).size).toBe(3); // no duplicates
+      expect(new Set(allTaskIds).size).toBe(3);
     });
 
     it('filters tasks by agent role', async () => {
@@ -3386,6 +3392,25 @@ describe('Task Routes', () => {
       expect(body.assignments['agent-b']).toBeDefined();
       expect(body.assignments['agent-a'].tasks).toEqual([]);
       expect(body.assignments['agent-b'].tasks).toEqual([]);
+    });
+
+    it('rejects request with duplicate agent_name values', async () => {
+      const res = await request('POST', '/api/tasks/poll/batch', {
+        agents: [
+          { agent_name: 'agent-a', roles: ['review'] },
+          { agent_name: 'agent-a', roles: ['summary'] },
+        ],
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects request with more than 20 agents', async () => {
+      const agents = Array.from({ length: 21 }, (_, i) => ({
+        agent_name: `agent-${i}`,
+        roles: ['review' as const],
+      }));
+      const res = await request('POST', '/api/tasks/poll/batch', { agents });
+      expect(res.status).toBe(400);
     });
 
     it('existing single poll endpoint still works (backward compat)', async () => {
