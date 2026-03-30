@@ -61,6 +61,35 @@ export interface PollResponse {
   tasks: PollTask[];
 }
 
+// ── Batch Poll ────────────────────────────────────────────────
+
+/**
+ * A single agent descriptor inside a batch poll request.
+ * `agent_name` is a request-local key used to match assignments in the response —
+ * it is NOT the persistent `agent_id` used in PollRequest/ClaimRequest.
+ */
+export interface BatchPollAgent {
+  agent_name: string;
+  /** Required — each agent must declare which roles it accepts (unlike PollRequest where roles is optional). */
+  roles: TaskRole[];
+  model?: string;
+  tool?: string;
+  thinking?: string;
+  /** Repo filters for this agent — replaces PollRequest's separate repos/synthesize_repos fields. */
+  repo_filters?: RepoConfig[];
+}
+
+/** POST /api/tasks/batch-poll — request */
+export interface BatchPollRequest {
+  agents: BatchPollAgent[];
+}
+
+/** POST /api/tasks/batch-poll — response */
+export interface BatchPollResponse {
+  /** Assignments keyed by BatchPollAgent.agent_name */
+  assignments: Record<string, PollResponse>;
+}
+
 // ── Claim ──────────────────────────────────────────────────────
 
 /** POST /api/tasks/{taskId}/claim — request */

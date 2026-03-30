@@ -12,6 +12,8 @@ import type {
   TriageReport,
   ImplementReport,
   FixReport,
+  BatchPollResponse,
+  RepoConfig,
 } from '@opencara/shared';
 import { isRepoAllowed, isEntityMatch, isDedupRole } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
@@ -32,7 +34,7 @@ import {
 } from '../store/constants.js';
 import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
-import { rateLimitByAgent } from '../middleware/rate-limit.js';
+import { rateLimitByAgent, rateLimitByIP } from '../middleware/rate-limit.js';
 import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
@@ -47,6 +49,7 @@ import { appendOpenEntry, fetchIndexBody } from '../dedup-index.js';
 import {
   parseBody,
   PollRequestSchema,
+  BatchPollRequestSchema,
   ClaimRequestSchema,
   ResultRequestSchema,
   RejectRequestSchema,
@@ -614,6 +617,249 @@ interface PollCandidate {
   claimId: string;
 }
 
+// ── Poll pre-computation (shared between single and batch poll) ──
+
+/** Data pre-computed once per poll request and shared across agent filtering passes. */
+interface PollContext {
+  tasks: ReviewTask[];
+  tasksById: Map<string, ReviewTask>;
+  dedupBlockedRepos: Set<string>;
+  oldestDedupPerRepo: Map<string, ReviewTask>;
+  groupClaimedModels: Map<string, Set<string>>;
+}
+
+/**
+ * Pre-compute shared poll context: pending tasks, dedup serialization state,
+ * and model diversity maps. This is expensive and should be computed once per
+ * request, then shared across all agents in a batch poll.
+ */
+async function buildPollContext(store: DataStore): Promise<PollContext> {
+  const tasks = await store.listTasks({ status: ['pending'] });
+  const tasksById = new Map(tasks.map((t) => [t.id, t]));
+
+  // Dedup serialization: build blocked-repo set and oldest-per-repo map
+  const reviewingTasks = await store.listTasks({ status: ['reviewing'] });
+  const dedupBlockedRepos = new Set<string>();
+  for (const t of reviewingTasks) {
+    if (isDedupRole(t.task_type)) {
+      dedupBlockedRepos.add(`${t.owner}/${t.repo}`);
+    }
+  }
+  const oldestDedupPerRepo = new Map<string, ReviewTask>();
+  for (const t of tasks) {
+    if (!isDedupRole(t.task_type)) continue;
+    const repoKey = `${t.owner}/${t.repo}`;
+    const existing = oldestDedupPerRepo.get(repoKey);
+    if (!existing || t.created_at < existing.created_at) {
+      oldestDedupPerRepo.set(repoKey, t);
+    }
+  }
+
+  // Model diversity: build claimed-models-per-group map
+  const pendingGroupIds = new Set<string>();
+  for (const t of tasks) {
+    if (t.group_id && t.config.modelDiversityGraceMs > 0) {
+      pendingGroupIds.add(t.group_id);
+    }
+  }
+  const groupClaimedModels = new Map<string, Set<string>>();
+  if (pendingGroupIds.size > 0) {
+    for (const groupId of pendingGroupIds) {
+      const groupTasks = await store.getTasksByGroup(groupId);
+      for (const gt of groupTasks) {
+        if (gt.status !== 'reviewing' && gt.status !== 'completed') continue;
+        const claims = await store.getClaims(gt.id);
+        for (const claim of claims) {
+          if (claim.model) {
+            let models = groupClaimedModels.get(groupId);
+            if (!models) {
+              models = new Set();
+              groupClaimedModels.set(groupId, models);
+            }
+            models.add(claim.model);
+          }
+        }
+      }
+    }
+  }
+
+  return { tasks, tasksById, dedupBlockedRepos, oldestDedupPerRepo, groupClaimedModels };
+}
+
+/** Parameters for filtering tasks for a single agent. */
+interface AgentFilter {
+  agentId: string;
+  acceptedRoles: Set<string> | null;
+  agentRepos: Set<string> | null;
+  model?: string;
+  tool?: string;
+  /** All repo filters for summary task visibility (any match = allowed). */
+  repoFilters?: RepoConfig[];
+  githubUsername?: string;
+}
+
+/**
+ * Filter tasks for a single agent: applies role, repo, eligibility, visibility,
+ * and dedup serialization filters. Returns the list of PollTask objects available
+ * to this agent.
+ *
+ * Shared between POST /api/tasks/poll and POST /api/tasks/poll/batch.
+ */
+async function filterTasksForAgent(
+  ctx: PollContext,
+  agent: AgentFilter,
+  store: DataStore,
+  github: GitHubService,
+  logger: Logger,
+): Promise<PollTask[]> {
+  const { tasks, tasksById, dedupBlockedRepos, oldestDedupPerRepo, groupClaimedModels } = ctx;
+
+  // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
+  const candidates: PollCandidate[] = [];
+
+  for (const task of tasks) {
+    // Private repo tasks: only return to agents declaring matching repos
+    if (
+      task.private &&
+      (!agent.agentRepos || !agent.agentRepos.has(`${task.owner}/${task.repo}`))
+    ) {
+      continue;
+    }
+
+    const remainingMs = task.timeout_at - Date.now();
+    if (remainingMs <= 0) continue;
+
+    // Filter by task_type matching agent's declared roles
+    const taskRole = task.task_type;
+    if (agent.acceptedRoles && !agent.acceptedRoles.has(taskRole)) continue;
+
+    // Eligibility check based on role
+    const eligibilityRole = isSummaryTask(task) ? 'summary' : taskRole;
+    const { eligible } = isAgentEligibleForRole(
+      task.config,
+      eligibilityRole,
+      agent.agentId,
+      agent.githubUsername,
+    );
+    if (!eligible) continue;
+
+    // Grace period visibility checks
+    if (isSummaryTask(task)) {
+      if (!isSummaryVisibleToAgent(task, agent.agentId, agent.model)) continue;
+      // Repo filter for summary agents — any matching filter allows the task
+      if (agent.repoFilters && agent.repoFilters.length > 0) {
+        const allowed = agent.repoFilters.some((rf) => isRepoAllowed(rf, task.owner, task.repo));
+        if (!allowed) continue;
+      }
+    } else {
+      // Worker task — check model/tool preference grace period
+      if (!isWorkerVisibleToAgent(task, agent.model, agent.tool)) continue;
+    }
+
+    // Target model preference: during grace period, only matching agents see the task
+    if (!isTargetModelVisible(task, agent.model)) continue;
+
+    // Model diversity: prefer agents with different models across the group
+    if (!isModelDiversityVisible(task, agent.model, groupClaimedModels)) continue;
+
+    candidates.push({
+      task,
+      role: taskRole,
+      claimId: `${task.id}:${agent.agentId}:${taskRole}`,
+    });
+  }
+
+  // Batch-fetch all candidate claims in a single query (eliminates N+1)
+  const claimIds = candidates.map((c) => c.claimId);
+  const existingClaims = await store.getClaimsBatch(claimIds);
+
+  // Second pass: filter by existing claim status and build result
+  const available: PollTask[] = [];
+  for (const { task, role, claimId } of candidates) {
+    const existing = existingClaims.get(claimId);
+    if (existing && !isClaimFailed(existing)) {
+      continue;
+    }
+
+    // Dedup serialization: skip if repo has a claimed dedup task or this isn't the oldest
+    if (isDedupRole(task.task_type)) {
+      const repoKey = `${task.owner}/${task.repo}`;
+      if (dedupBlockedRepos.has(repoKey)) continue;
+      const oldest = oldestDedupPerRepo.get(repoKey);
+      if (oldest && oldest.id !== task.id) continue;
+    }
+
+    const remainingMs = task.timeout_at - Date.now();
+    const pollTask: PollTask = {
+      task_id: task.id,
+      owner: task.owner,
+      repo: task.repo,
+      pr_number: task.pr_number,
+      diff_url: task.diff_url,
+      diff_size: task.diff_size,
+      timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
+      prompt: task.prompt,
+      role,
+      task_type: task.task_type,
+      issue_number: task.issue_number,
+      issue_title: task.issue_title,
+      issue_body: task.issue_body,
+      target_model: task.target_model,
+      pr_review_comments: task.pr_review_comments,
+      head_sha: task.head_sha,
+      head_ref: task.head_ref || undefined,
+    };
+
+    // For summary tasks, include worker results from the group
+    if (isSummaryTask(task)) {
+      pollTask.reviews = await getWorkerReviews(store, task.group_id);
+    }
+
+    // For dedup tasks with an index issue, fetch the structured index body
+    if (
+      (task.task_type === 'pr_dedup' ||
+        task.task_type === 'issue_dedup' ||
+        task.feature === 'dedup_pr' ||
+        task.feature === 'dedup_issue') &&
+      task.index_issue_number
+    ) {
+      try {
+        const token = await github.getInstallationToken(task.github_installation_id);
+        pollTask.index_issue_body = await fetchIndexBody(
+          github,
+          task.owner,
+          task.repo,
+          task.index_issue_number,
+          token,
+        );
+      } catch (err) {
+        logger.warn('Failed to fetch dedup index body', {
+          taskId: task.id,
+          indexIssue: task.index_issue_number,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    available.push(pollTask);
+  }
+
+  // Sort preferred tasks first (only applies to worker tasks)
+  available.sort((a, b) => {
+    if (isSortableWorkerRole(a.role) && isSortableWorkerRole(b.role)) {
+      const aTask = tasksById.get(a.task_id);
+      const bTask = tasksById.get(b.task_id);
+      const aPref = aTask ? isReviewPreferredAgent(aTask.config, agent.model, agent.tool) : false;
+      const bPref = bTask ? isReviewPreferredAgent(bTask.config, agent.model, agent.tool) : false;
+      if (aPref && !bPref) return -1;
+      if (!aPref && bPref) return 1;
+    }
+    return 0;
+  });
+
+  return available;
+}
+
 /**
  * Get completed worker reviews for a group (used for summary poll/claim responses).
  */
@@ -684,203 +930,128 @@ export function taskRoutes() {
     // Check timeouts lazily (throttled to every 30s per isolate)
     await maybeCheckTimeouts(store, github, logger);
 
-    // Find available tasks — only pending tasks (not yet claimed)
-    const tasks = await store.listTasks({ status: ['pending'] });
-    const tasksById = new Map(tasks.map((t) => [t.id, t]));
-
-    // ── Dedup serialization: build blocked-repo set and oldest-per-repo map ──
-    // Query reviewing (claimed) tasks to find repos with in-progress dedup work
-    const reviewingTasks = await store.listTasks({ status: ['reviewing'] });
-    const dedupBlockedRepos = new Set<string>();
-    for (const t of reviewingTasks) {
-      if (isDedupRole(t.task_type)) {
-        dedupBlockedRepos.add(`${t.owner}/${t.repo}`);
-      }
-    }
-    // Track the oldest pending dedup task per repo (only return one per repo)
-    const oldestDedupPerRepo = new Map<string, ReviewTask>();
-    for (const t of tasks) {
-      if (!isDedupRole(t.task_type)) continue;
-      const repoKey = `${t.owner}/${t.repo}`;
-      const existing = oldestDedupPerRepo.get(repoKey);
-      if (!existing || t.created_at < existing.created_at) {
-        oldestDedupPerRepo.set(repoKey, t);
-      }
-    }
-
-    // ── Model diversity: build claimed-models-per-group map ──
-    // Collect group IDs from pending tasks that have diversity grace enabled
-    const pendingGroupIds = new Set<string>();
-    for (const t of tasks) {
-      if (t.group_id && t.config.modelDiversityGraceMs > 0) {
-        pendingGroupIds.add(t.group_id);
-      }
-    }
-    // For each relevant group, fetch all tasks (bounded by agentCount, max ~10)
-    // and their claims to learn which models are already used. Uses getTasksByGroup
-    // instead of scanning the full completed-tasks table.
-    const groupClaimedModels = new Map<string, Set<string>>();
-    if (pendingGroupIds.size > 0) {
-      for (const groupId of pendingGroupIds) {
-        const groupTasks = await store.getTasksByGroup(groupId);
-        for (const gt of groupTasks) {
-          if (gt.status !== 'reviewing' && gt.status !== 'completed') continue;
-          const claims = await store.getClaims(gt.id);
-          for (const claim of claims) {
-            if (claim.model) {
-              let models = groupClaimedModels.get(groupId);
-              if (!models) {
-                models = new Set();
-                groupClaimedModels.set(groupId, models);
-              }
-              models.add(claim.model);
-            }
-          }
-        }
-      }
-    }
-
-    // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
-    const candidates: PollCandidate[] = [];
-
-    for (const task of tasks) {
-      // Private repo tasks: only return to agents declaring matching repos
-      if (task.private && (!agentRepos || !agentRepos.has(`${task.owner}/${task.repo}`))) {
-        continue;
-      }
-
-      const remainingMs = task.timeout_at - Date.now();
-      if (remainingMs <= 0) continue;
-
-      // Filter by task_type matching agent's declared roles
-      const taskRole = task.task_type;
-      if (acceptedRoles && !acceptedRoles.has(taskRole)) continue;
-
-      // Eligibility check based on role
-      const eligibilityRole = isSummaryTask(task) ? 'summary' : taskRole;
-      const { eligible } = isAgentEligibleForRole(
-        task.config,
-        eligibilityRole,
-        agent_id,
-        verifiedIdentity?.github_username,
-      );
-      if (!eligible) continue;
-
-      // Grace period visibility checks
-      if (isSummaryTask(task)) {
-        if (!isSummaryVisibleToAgent(task, agent_id, body.model)) continue;
-        // Repo filter for summary agents
-        if (synthesize_repos) {
-          if (!isRepoAllowed(synthesize_repos, task.owner, task.repo)) continue;
-        }
-      } else {
-        // Worker task — check model/tool preference grace period
-        if (!isWorkerVisibleToAgent(task, body.model, body.tool)) continue;
-      }
-
-      // Target model preference: during grace period, only matching agents see the task
-      if (!isTargetModelVisible(task, body.model)) continue;
-
-      // Model diversity: prefer agents with different models across the group
-      if (!isModelDiversityVisible(task, body.model, groupClaimedModels)) continue;
-
-      candidates.push({
-        task,
-        role: taskRole,
-        claimId: `${task.id}:${agent_id}:${taskRole}`,
-      });
-    }
-
-    // Batch-fetch all candidate claims in a single query (eliminates N+1)
-    const claimIds = candidates.map((c) => c.claimId);
-    const existingClaims = await store.getClaimsBatch(claimIds);
-
-    // Second pass: filter by existing claim status and build result
-    const available: PollTask[] = [];
-    for (const { task, role, claimId } of candidates) {
-      const existing = existingClaims.get(claimId);
-      if (existing && !isClaimFailed(existing)) {
-        continue;
-      }
-
-      // Dedup serialization: skip if repo has a claimed dedup task or this isn't the oldest
-      if (isDedupRole(task.task_type)) {
-        const repoKey = `${task.owner}/${task.repo}`;
-        if (dedupBlockedRepos.has(repoKey)) continue;
-        const oldest = oldestDedupPerRepo.get(repoKey);
-        if (oldest && oldest.id !== task.id) continue;
-      }
-
-      const remainingMs = task.timeout_at - Date.now();
-      const pollTask: PollTask = {
-        task_id: task.id,
-        owner: task.owner,
-        repo: task.repo,
-        pr_number: task.pr_number,
-        diff_url: task.diff_url,
-        diff_size: task.diff_size,
-        timeout_seconds: Math.max(0, Math.floor(remainingMs / 1000)),
-        prompt: task.prompt,
-        role,
-        task_type: task.task_type,
-        issue_number: task.issue_number,
-        issue_title: task.issue_title,
-        issue_body: task.issue_body,
-        target_model: task.target_model,
-        pr_review_comments: task.pr_review_comments,
-        head_sha: task.head_sha,
-        head_ref: task.head_ref || undefined,
-      };
-
-      // For summary tasks, include worker results from the group
-      if (isSummaryTask(task)) {
-        pollTask.reviews = await getWorkerReviews(store, task.group_id);
-      }
-
-      // For dedup tasks with an index issue, fetch the structured index body
-      if (
-        (task.task_type === 'pr_dedup' ||
-          task.task_type === 'issue_dedup' ||
-          task.feature === 'dedup_pr' ||
-          task.feature === 'dedup_issue') &&
-        task.index_issue_number
-      ) {
-        try {
-          const token = await github.getInstallationToken(task.github_installation_id);
-          pollTask.index_issue_body = await fetchIndexBody(
-            github,
-            task.owner,
-            task.repo,
-            task.index_issue_number,
-            token,
-          );
-        } catch (err) {
-          logger.warn('Failed to fetch dedup index body', {
-            taskId: task.id,
-            indexIssue: task.index_issue_number,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      available.push(pollTask);
-    }
-
-    // Sort preferred tasks first (only applies to worker tasks)
-    available.sort((a, b) => {
-      if (isSortableWorkerRole(a.role) && isSortableWorkerRole(b.role)) {
-        const aTask = tasksById.get(a.task_id);
-        const bTask = tasksById.get(b.task_id);
-        const aPref = aTask ? isReviewPreferredAgent(aTask.config, body.model, body.tool) : false;
-        const bPref = bTask ? isReviewPreferredAgent(bTask.config, body.model, body.tool) : false;
-        if (aPref && !bPref) return -1;
-        if (!aPref && bPref) return 1;
-      }
-      return 0;
-    });
+    const pollCtx = await buildPollContext(store);
+    const available = await filterTasksForAgent(
+      pollCtx,
+      {
+        agentId: agent_id,
+        acceptedRoles,
+        agentRepos,
+        model: body.model,
+        tool: body.tool,
+        repoFilters: synthesize_repos ? [synthesize_repos] : undefined,
+        githubUsername: verifiedIdentity?.github_username,
+      },
+      store,
+      github,
+      logger,
+    );
 
     return c.json<PollResponse>({ tasks: available });
   });
+
+  // ── Batch Poll ──────────────────────────────────────────────
+
+  app.post(
+    '/api/tasks/poll/batch',
+    rateLimitByIP({ ...POLL_RATE_LIMIT, prefix: 'batch-poll' }),
+    async (c) => {
+      const store = c.get('store');
+      const github = c.get('github');
+      const logger = c.get('logger');
+      const verifiedIdentity = c.get('verifiedIdentity');
+      const body = await parseBody(c, BatchPollRequestSchema);
+      if (body instanceof Response) return body;
+
+      // Check timeouts lazily (throttled to every 30s per isolate)
+      await maybeCheckTimeouts(store, github, logger);
+
+      // Build shared poll context once for all agents
+      const pollCtx = await buildPollContext(store);
+
+      // Collect per-agent task lists
+      const agentTasks = new Map<string, PollTask[]>();
+      for (const agent of body.agents) {
+        // repo_filters controls both private repo access and summary task visibility
+        const repoFilterSet =
+          agent.repo_filters && agent.repo_filters.length > 0 ? agent.repo_filters : null;
+        // Build a set of declared repos from whitelist repo_filters
+        const declaredRepos = new Set<string>();
+        if (repoFilterSet) {
+          for (const rf of repoFilterSet) {
+            if (rf.list) {
+              for (const entry of rf.list) declaredRepos.add(entry);
+            }
+          }
+        }
+
+        const available = await filterTasksForAgent(
+          pollCtx,
+          {
+            agentId: agent.agent_name,
+            acceptedRoles: new Set(agent.roles),
+            agentRepos: declaredRepos.size > 0 ? declaredRepos : null,
+            model: agent.model,
+            tool: agent.tool,
+            repoFilters: repoFilterSet ?? undefined,
+            githubUsername: verifiedIdentity?.github_username,
+          },
+          store,
+          github,
+          logger,
+        );
+        agentTasks.set(agent.agent_name, available);
+      }
+
+      // Deduplicate across agents — each task goes to exactly one agent.
+      // Priority: preferred model/tool match wins, then first-come (request order).
+      const assignedTaskIds = new Set<string>();
+      const assignments: Record<string, PollTask[]> = {};
+
+      // Initialize all agents with empty arrays
+      for (const agent of body.agents) {
+        assignments[agent.agent_name] = [];
+      }
+
+      // First pass: assign tasks where agent matches an explicit preferred model/tool
+      for (const agent of body.agents) {
+        const tasks = agentTasks.get(agent.agent_name) ?? [];
+        for (const task of tasks) {
+          if (assignedTaskIds.has(task.task_id)) continue;
+          const reviewTask = pollCtx.tasksById.get(task.task_id);
+          if (!reviewTask) continue;
+          // Only prioritize when the task has explicit preferences AND the agent matches
+          const { preferredModels, preferredTools } = reviewTask.config;
+          if (preferredModels.length === 0 && preferredTools.length === 0) continue;
+          if (isReviewPreferredAgent(reviewTask.config, agent.model, agent.tool)) {
+            assignments[agent.agent_name].push(task);
+            assignedTaskIds.add(task.task_id);
+          }
+        }
+      }
+
+      // Second pass: distribute remaining tasks round-robin across agents
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const agent of body.agents) {
+          const tasks = agentTasks.get(agent.agent_name) ?? [];
+          const next = tasks.find((t) => !assignedTaskIds.has(t.task_id));
+          if (next) {
+            assignments[agent.agent_name].push(next);
+            assignedTaskIds.add(next.task_id);
+            changed = true;
+          }
+        }
+      }
+
+      return c.json<BatchPollResponse>({
+        assignments: Object.fromEntries(
+          Object.entries(assignments).map(([name, tasks]) => [name, { tasks }]),
+        ),
+      });
+    },
+  );
 
   // ── Claim ────────────────────────────────────────────────────
 
