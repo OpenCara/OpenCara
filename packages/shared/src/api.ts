@@ -61,6 +61,28 @@ export interface PollResponse {
   tasks: PollTask[];
 }
 
+// ── Batch Poll ────────────────────────────────────────────────
+
+/** A single agent descriptor inside a batch poll request */
+export interface BatchPollAgent {
+  agent_name: string;
+  roles: TaskRole[];
+  model?: string;
+  tool?: string;
+  thinking_level?: string;
+  repo_filters?: RepoConfig[];
+}
+
+/** POST /api/tasks/batch-poll — request */
+export interface BatchPollRequest {
+  agents: BatchPollAgent[];
+}
+
+/** POST /api/tasks/batch-poll — response */
+export interface BatchPollResponse {
+  assignments: Record<string, PollResponse>; // keyed by agent_name
+}
+
 // ── Claim ──────────────────────────────────────────────────────
 
 /** POST /api/tasks/{taskId}/claim — request */
