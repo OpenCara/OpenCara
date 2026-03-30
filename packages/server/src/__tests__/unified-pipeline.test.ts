@@ -685,6 +685,161 @@ describe('Unified Pipeline (Issue #506)', () => {
     });
   });
 
+  // ── Summary result: implement feature ─────────────────────
+
+  describe('Summary result: implement feature', () => {
+    it('posts implement comment on issue and deletes group', async () => {
+      const groupId = 'impl-group';
+      const postSpy = vi.spyOn(github, 'postPrComment');
+
+      await store.createTask(
+        makeWorkerTask('s1', groupId, 'implement', 'implement', {
+          issue_number: 99,
+          pr_number: 0,
+        }),
+      );
+
+      await request('POST', '/api/tasks/s1/claim', {
+        agent_id: 'impl-agent',
+        role: 'implement',
+      });
+      const res = await request('POST', '/api/tasks/s1/result', {
+        agent_id: 'impl-agent',
+        type: 'implement',
+        review_text:
+          'Implementation complete: created feature branch with 3 files changed. PR #42 opened.',
+        implement_report: {
+          branch: 'feature/issue-99',
+          pr_number: 42,
+          pr_url: 'https://github.com/test-org/test-repo/pull/42',
+          files_changed: 3,
+          summary: 'Added authentication module with JWT support',
+        },
+      });
+      expect(res.status).toBe(200);
+
+      // Posted comment on issue
+      expect(postSpy).toHaveBeenCalledWith(
+        'test-org',
+        'test-repo',
+        99,
+        expect.any(String),
+        expect.any(String),
+      );
+
+      // Group deleted
+      const remaining = await store.getTasksByGroup(groupId);
+      expect(remaining).toHaveLength(0);
+    });
+
+    it('posts implement comment without structured report', async () => {
+      const groupId = 'impl-group-2';
+      const postSpy = vi.spyOn(github, 'postPrComment');
+
+      await store.createTask(
+        makeWorkerTask('s2', groupId, 'implement', 'implement', {
+          issue_number: 100,
+          pr_number: 0,
+        }),
+      );
+
+      await request('POST', '/api/tasks/s2/claim', {
+        agent_id: 'impl-agent',
+        role: 'implement',
+      });
+      const res = await request('POST', '/api/tasks/s2/result', {
+        agent_id: 'impl-agent',
+        type: 'implement',
+        review_text: 'Implementation complete: basic feature added with tests.',
+      });
+      expect(res.status).toBe(200);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'test-org',
+        'test-repo',
+        100,
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+  });
+
+  // ── Summary result: fix feature ──────────────────────────
+
+  describe('Summary result: fix feature', () => {
+    it('posts fix comment on PR and deletes group', async () => {
+      const groupId = 'fix-group';
+      const postSpy = vi.spyOn(github, 'postPrComment');
+
+      await store.createTask(
+        makeWorkerTask('s1', groupId, 'fix', 'fix', {
+          pr_number: 55,
+        }),
+      );
+
+      await request('POST', '/api/tasks/s1/claim', {
+        agent_id: 'fix-agent',
+        role: 'fix',
+      });
+      const res = await request('POST', '/api/tasks/s1/result', {
+        agent_id: 'fix-agent',
+        type: 'fix',
+        review_text:
+          'Fix applied: addressed 2 review comments, changed 4 files. Commit pushed to PR branch.',
+        fix_report: {
+          commit_sha: 'abc123',
+          files_changed: 4,
+          comments_addressed: 2,
+          summary: 'Fixed null pointer and added input validation',
+        },
+      });
+      expect(res.status).toBe(200);
+
+      // Posted comment on PR
+      expect(postSpy).toHaveBeenCalledWith(
+        'test-org',
+        'test-repo',
+        55,
+        expect.any(String),
+        expect.any(String),
+      );
+
+      // Group deleted
+      const remaining = await store.getTasksByGroup(groupId);
+      expect(remaining).toHaveLength(0);
+    });
+
+    it('posts fix comment without structured report', async () => {
+      const groupId = 'fix-group-2';
+      const postSpy = vi.spyOn(github, 'postPrComment');
+
+      await store.createTask(
+        makeWorkerTask('s2', groupId, 'fix', 'fix', {
+          pr_number: 56,
+        }),
+      );
+
+      await request('POST', '/api/tasks/s2/claim', {
+        agent_id: 'fix-agent',
+        role: 'fix',
+      });
+      const res = await request('POST', '/api/tasks/s2/result', {
+        agent_id: 'fix-agent',
+        type: 'fix',
+        review_text: 'Fix applied: resolved code review feedback and pushed changes.',
+      });
+      expect(res.status).toBe(200);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'test-org',
+        'test-repo',
+        56,
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+  });
+
   // ── Reject/Error: release task ────────────────────────────
 
   describe('Reject and Error: task release', () => {
@@ -772,6 +927,45 @@ describe('Unified Pipeline (Issue #506)', () => {
           size: 'M',
           labels: ['bug'],
           comment: 'Triaged as high-priority bug.',
+        },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts implement_report in result', async () => {
+      await store.createTask(
+        makeWorkerTask('s1', 'g1', 'implement', 'implement', { issue_number: 50, pr_number: 0 }),
+      );
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'implement' });
+
+      const res = await request('POST', '/api/tasks/s1/result', {
+        agent_id: 'agent-1',
+        type: 'implement',
+        review_text: 'Implement complete. Created branch and opened PR with the implementation.',
+        implement_report: {
+          branch: 'feature/issue-50',
+          pr_number: 10,
+          pr_url: 'https://github.com/test-org/test-repo/pull/10',
+          files_changed: 5,
+          summary: 'Implemented the requested feature',
+        },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts fix_report in result', async () => {
+      await store.createTask(makeWorkerTask('s1', 'g1', 'fix', 'fix', { pr_number: 60 }));
+      await request('POST', '/api/tasks/s1/claim', { agent_id: 'agent-1', role: 'fix' });
+
+      const res = await request('POST', '/api/tasks/s1/result', {
+        agent_id: 'agent-1',
+        type: 'fix',
+        review_text: 'Fix applied. Addressed review comments and pushed changes to PR branch.',
+        fix_report: {
+          commit_sha: 'def456',
+          files_changed: 2,
+          comments_addressed: 3,
+          summary: 'Fixed issues from code review',
         },
       });
       expect(res.status).toBe(200);

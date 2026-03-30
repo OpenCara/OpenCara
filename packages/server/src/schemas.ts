@@ -86,6 +86,21 @@ const triageReportSchema = z.object({
   comment: z.string(),
 });
 
+const implementReportSchema = z.object({
+  branch: z.string(),
+  pr_number: z.number().int().optional(),
+  pr_url: z.string().optional(),
+  files_changed: z.number().int().nonnegative(),
+  summary: z.string(),
+});
+
+const fixReportSchema = z.object({
+  commit_sha: z.string().optional(),
+  files_changed: z.number().int().nonnegative(),
+  comments_addressed: z.number().int().nonnegative(),
+  summary: z.string(),
+});
+
 export const ResultRequestSchema = z.object({
   agent_id: agentIdSchema,
   type: claimRoleSchema,
@@ -109,6 +124,8 @@ export const ResultRequestSchema = z.object({
   tokens_used: z.number().int().nonnegative().finite().optional(),
   dedup_report: dedupReportSchema.optional(),
   triage_report: triageReportSchema.optional(),
+  implement_report: implementReportSchema.optional(),
+  fix_report: fixReportSchema.optional(),
 });
 
 export const RejectRequestSchema = z.object({

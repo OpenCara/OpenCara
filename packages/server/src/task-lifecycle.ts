@@ -46,7 +46,7 @@
  */
 
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
-import { isDedupRole, isTriageRole } from '@opencara/shared';
+import { isDedupRole, isTriageRole, isCodegenRole } from '@opencara/shared';
 
 // ── Task State Queries ──────────────────────────────────────────
 
@@ -83,7 +83,10 @@ export function isWorkerTask(task: ReviewTask): boolean {
  */
 export function isSummaryTask(task: ReviewTask): boolean {
   return (
-    task.task_type === 'summary' || isDedupRole(task.task_type) || isTriageRole(task.task_type)
+    task.task_type === 'summary' ||
+    isDedupRole(task.task_type) ||
+    isTriageRole(task.task_type) ||
+    isCodegenRole(task.task_type)
   );
 }
 

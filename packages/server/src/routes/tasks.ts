@@ -10,6 +10,8 @@ import type {
   TaskRole,
   DedupReport,
   TriageReport,
+  ImplementReport,
+  FixReport,
 } from '@opencara/shared';
 import { isRepoAllowed, isEntityMatch, isDedupRole } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
@@ -499,6 +501,66 @@ async function handleTriageSummaryResult(
 }
 
 /**
+ * Handle implement summary result — post comment on the issue with the implementation summary.
+ */
+async function handleImplementSummaryResult(
+  _store: DataStore,
+  github: GitHubService,
+  task: ReviewTask,
+  _groupId: string,
+  implementReport: ImplementReport | undefined,
+  reviewText: string,
+  logger: Logger,
+): Promise<void> {
+  if (!task.issue_number) {
+    throw new Error(`Implement result but no issue_number on task ${task.id}`);
+  }
+
+  const token = await github.getInstallationToken(task.github_installation_id);
+  const commentBody = wrapReviewComment(reviewText.trim());
+  await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
+
+  logger.info('Implement result posted to GitHub', {
+    taskId: task.id,
+    owner: task.owner,
+    repo: task.repo,
+    issueNumber: task.issue_number,
+    branch: implementReport?.branch,
+    prNumber: implementReport?.pr_number,
+  });
+}
+
+/**
+ * Handle fix summary result — post comment on the PR with the fix summary.
+ */
+async function handleFixSummaryResult(
+  _store: DataStore,
+  github: GitHubService,
+  task: ReviewTask,
+  _groupId: string,
+  fixReport: FixReport | undefined,
+  reviewText: string,
+  logger: Logger,
+): Promise<void> {
+  if (task.pr_number <= 0) {
+    throw new Error(`Fix result but no pr_number on task ${task.id}`);
+  }
+
+  const token = await github.getInstallationToken(task.github_installation_id);
+  const commentBody = wrapReviewComment(reviewText.trim());
+  await github.postPrComment(task.owner, task.repo, task.pr_number, commentBody, token);
+
+  logger.info('Fix result posted to PR', {
+    taskId: task.id,
+    owner: task.owner,
+    repo: task.repo,
+    prNumber: task.pr_number,
+    filesChanged: fixReport?.files_changed,
+    commentsAddressed: fixReport?.comments_addressed,
+  });
+}
+
+/**
  * Post a fallback consolidated review to GitHub when all summary retries are exhausted.
  * Uses the timeout-style format: individual reviews concatenated.
  */
@@ -976,8 +1038,17 @@ export function taskRoutes() {
       return apiError(c, 400, 'INVALID_REQUEST', messages.join('; '));
     }
 
-    const { agent_id, type, review_text, verdict, tokens_used, dedup_report, triage_report } =
-      result.data;
+    const {
+      agent_id,
+      type,
+      review_text,
+      verdict,
+      tokens_used,
+      dedup_report,
+      triage_report,
+      implement_report,
+      fix_report,
+    } = result.data;
 
     // Role-aware claim lookup
     const claimId = `${taskId}:${agent_id}:${type}`;
@@ -1118,6 +1189,28 @@ export function taskRoutes() {
               task,
               task.group_id,
               triage_report as TriageReport | undefined,
+              review_text,
+              logger,
+            );
+            break;
+          case 'implement':
+            await handleImplementSummaryResult(
+              store,
+              github,
+              task,
+              task.group_id,
+              implement_report as ImplementReport | undefined,
+              review_text,
+              logger,
+            );
+            break;
+          case 'fix':
+            await handleFixSummaryResult(
+              store,
+              github,
+              task,
+              task.group_id,
+              fix_report as FixReport | undefined,
               review_text,
               logger,
             );
