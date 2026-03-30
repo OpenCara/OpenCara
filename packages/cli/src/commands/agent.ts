@@ -168,7 +168,7 @@ export function computeRoles(agent: LocalAgentConfig): TaskRole[] {
   if (agent.roles && agent.roles.length > 0) return agent.roles as TaskRole[];
   if (agent.review_only) return ['review'];
   if (agent.synthesizer_only) return ['summary'];
-  return ['review', 'summary'];
+  return ['review', 'summary', 'implement', 'fix'];
 }
 
 /** Diff fetch method identifier for logging. */
