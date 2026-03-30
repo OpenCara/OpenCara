@@ -224,11 +224,11 @@ pnpm opencara agent --help
    - Missing Authorization header → `AUTH_REQUIRED` (401)
    - Cache hit on second request (GitHub API not called again)
    - Cache expiry: expired entries return null
-   - Backward compatibility: API key auth works when `OAUTH_REQUIRED` is not set
-   - Open mode: no auth required when neither `API_KEYS` nor `OAUTH_REQUIRED` is set
-   - OAuth enforced on all mutation endpoints (claim, result, reject, error)
+   - OAuth is the only auth mechanism — no API key fallback
+   - Returns 500 when GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET not configured
+   - OAuth enforced on all task and agent endpoints
 
-**Expected**: Token verification works correctly. Cache avoids redundant GitHub API calls. Backward compat preserved.
+**Expected**: Token verification works correctly. Cache avoids redundant GitHub API calls. OAuth required on all protected endpoints.
 
 ---
 

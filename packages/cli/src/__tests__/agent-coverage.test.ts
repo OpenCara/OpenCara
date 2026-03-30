@@ -116,7 +116,7 @@ async function stopAgent(promise: Promise<void>, server: FakeServer): Promise<vo
 describe('Agent Coverage Tests', () => {
   let server: FakeServer;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -124,7 +124,7 @@ describe('Agent Coverage Tests', () => {
     vi.spyOn(process, 'on').mockImplementation(() => process);
 
     server = new FakeServer();
-    server.install();
+    await server.install();
 
     mockedExecuteTool.mockReset();
     mockedExecuteTool.mockResolvedValue({

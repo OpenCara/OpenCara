@@ -13,7 +13,8 @@
  *   GITHUB_APP_PRIVATE_KEY  — GitHub App private key, PEM (optional when DEV_MODE=true)
  *   WEB_URL                 — Public URL for the server (default: http://localhost:3000)
  *   TASK_TTL_DAYS           — TTL in days for terminal tasks (default: 7)
- *   API_KEYS                — Comma-separated valid API keys (optional; open mode if unset)
+ *   GITHUB_CLIENT_ID        — GitHub App client ID (required unless DEV_MODE)
+ *   GITHUB_CLIENT_SECRET    — GitHub App client secret (required unless DEV_MODE)
  */
 import { serve } from '@hono/node-server';
 import cron from 'node-cron';
@@ -55,9 +56,14 @@ const GITHUB_APP_ID = DEV_MODE
 const GITHUB_APP_PRIVATE_KEY = DEV_MODE
   ? (process.env.GITHUB_APP_PRIVATE_KEY ?? 'dev-private-key')
   : requiredEnv('GITHUB_APP_PRIVATE_KEY');
+const GITHUB_CLIENT_ID = DEV_MODE
+  ? (process.env.GITHUB_CLIENT_ID ?? 'dev-client-id')
+  : requiredEnv('GITHUB_CLIENT_ID');
+const GITHUB_CLIENT_SECRET = DEV_MODE
+  ? (process.env.GITHUB_CLIENT_SECRET ?? 'dev-client-secret')
+  : requiredEnv('GITHUB_CLIENT_SECRET');
 const WEB_URL = process.env.WEB_URL ?? `http://localhost:${PORT}`;
 const TASK_TTL_DAYS = process.env.TASK_TTL_DAYS;
-const API_KEYS = process.env.API_KEYS;
 
 // ── GitHub service ──────────────────────────────────────────────────
 
@@ -131,7 +137,8 @@ const nodeEnv: Env = {
   DB: sqliteAdapter,
   WEB_URL,
   TASK_TTL_DAYS,
-  API_KEYS,
+  GITHUB_CLIENT_ID,
+  GITHUB_CLIENT_SECRET,
 };
 
 const ttlDays = parseTtlDays(nodeEnv);

@@ -35,7 +35,6 @@ import {
 import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent, rateLimitByIP } from '../middleware/rate-limit.js';
-import { requireApiKey } from '../middleware/auth.js';
 import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
@@ -889,14 +888,8 @@ async function getWorkerReviews(store: DataStore, groupId: string): Promise<Clai
 export function taskRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-  // Auth: OAuth by default, fall back to API key only when OAuth credentials are not configured.
-  // Pre-instantiate middleware to avoid allocating closures per request.
-  const oauthMiddleware = requireOAuth();
-  const apiKeyMiddleware = requireApiKey();
-  app.use('/api/tasks/*', async (c, next) => {
-    const hasOAuthCredentials = c.env.GITHUB_CLIENT_ID && c.env.GITHUB_CLIENT_SECRET;
-    return hasOAuthCredentials ? oauthMiddleware(c, next) : apiKeyMiddleware(c, next);
-  });
+  // OAuth required on all task endpoints
+  app.use('/api/tasks/*', requireOAuth());
 
   // ── Poll ─────────────────────────────────────────────────────
 

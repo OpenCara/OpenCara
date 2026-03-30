@@ -8,7 +8,8 @@
  * - Task TTL cleanup (#285)
  * - Structured logging / X-Request-Id header (#289)
  */
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { stubOAuthFetch, OAUTH_HEADERS } from './test-oauth-helper.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryDataStore } from '../store/memory.js';
@@ -34,6 +35,8 @@ function getMockEnv(): Env {
     GITHUB_APP_ID: '12345',
     GITHUB_APP_PRIVATE_KEY: TEST_PEM,
     WEB_URL: 'https://test.opencara.com',
+    GITHUB_CLIENT_ID: 'cid',
+    GITHUB_CLIENT_SECRET: 'csecret',
   };
 }
 
@@ -46,11 +49,16 @@ describe('M12 Feature E2E Tests', () => {
   }
 
   beforeEach(() => {
+    stubOAuthFetch();
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
     app = createTestApp(store, new MockGitHubService());
     env = getMockEnv();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -73,7 +81,7 @@ describe('M12 Feature E2E Tests', () => {
         '/test/events/pr',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             owner: opts?.owner ?? 'private-org',
             repo: opts?.repo ?? 'secret-repo',
@@ -94,7 +102,7 @@ describe('M12 Feature E2E Tests', () => {
         '/test/events/pr',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             owner: 'public-org',
             repo: 'open-repo',
@@ -125,7 +133,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             agent_id: 'private-agent',
             repos: ['private-org/secret-repo'],
@@ -145,7 +153,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             agent_id: 'wrong-repos-agent',
             repos: ['other-org/other-repo'],
@@ -177,7 +185,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             agent_id: 'mixed-agent',
             repos: ['private-org/secret-repo'],
@@ -199,7 +207,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             agent_id: 'private-worker',
             repos: ['private-org/secret-repo'],
@@ -260,7 +268,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/any/claim',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'a' }), // missing role
         },
         env,
@@ -275,7 +283,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/nonexistent/reject',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'ghost', reason: 'test' }),
         },
         env,
@@ -290,7 +298,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/nonexistent/error',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'ghost', error: 'crash' }),
         },
         env,
@@ -317,7 +325,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({}),
         },
         env,
@@ -349,7 +357,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'spammer' }),
         },
         env,
@@ -390,7 +398,7 @@ describe('M12 Feature E2E Tests', () => {
           `/api/tasks/${taskId}/claim`,
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
             body: JSON.stringify({ agent_id: 'single-flood', role: 'review' }),
           },
           env,
@@ -401,7 +409,7 @@ describe('M12 Feature E2E Tests', () => {
         `/api/tasks/${taskId}/claim`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'single-flood', role: 'review' }),
         },
         env,
@@ -590,7 +598,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'header-test' }),
         },
         env,
@@ -611,7 +619,7 @@ describe('M12 Feature E2E Tests', () => {
         `/api/tasks/${taskId}/claim`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'header-test', role: 'summary' }),
         },
         env,
@@ -628,7 +636,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({}), // missing agent_id
         },
         env,
@@ -648,7 +656,7 @@ describe('M12 Feature E2E Tests', () => {
           '/api/tasks/poll',
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
             body: JSON.stringify({ agent_id: `unique-test-${i}` }),
           },
           env,
@@ -679,7 +687,7 @@ describe('M12 Feature E2E Tests', () => {
         '/test/events/pr',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({
             owner: 'corp',
             repo: 'internal',
@@ -697,7 +705,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'outsider' }),
         },
         env,
@@ -712,7 +720,7 @@ describe('M12 Feature E2E Tests', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'insider', repos: ['corp/internal'] }),
         },
         env,
@@ -727,7 +735,7 @@ describe('M12 Feature E2E Tests', () => {
         `/api/tasks/${taskId}/claim`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'insider', role: 'summary' }),
         },
         env,
@@ -742,7 +750,7 @@ describe('M12 Feature E2E Tests', () => {
         `/api/tasks/${taskId}/claim`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ agent_id: 'outsider', role: 'summary' }),
         },
         env,

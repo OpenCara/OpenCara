@@ -15,7 +15,17 @@ import { MemoryDataStore } from '../../../../server/src/store/memory.js';
 import { createTestApp } from '../../../../server/src/__tests__/helpers/test-server.js';
 import { resetTimeoutThrottle } from '../../../../server/src/routes/tasks.js';
 import { resetRateLimits } from '../../../../server/src/middleware/rate-limit.js';
+import { hashToken, OAUTH_CACHE_TTL_MS } from '../../../../server/src/middleware/oauth.js';
+import type { VerifiedIdentity } from '@opencara/shared';
 import type { Env } from '../../../../server/src/types.js';
+
+/** Pre-computed token hash (resolved at module load, before fake timers). */
+const FAKE_TOKEN_HASH_PROMISE = hashToken('ghu_fake_test_token');
+const FAKE_IDENTITY: VerifiedIdentity = {
+  github_user_id: 42,
+  github_username: 'test-user',
+  verified_at: Date.now(),
+};
 
 export const FAKE_SERVER_URL = 'http://fake-server';
 
@@ -60,15 +70,24 @@ export class FakeServer {
       GITHUB_APP_PRIVATE_KEY: getTestPem(),
       TASK_STORE: {} as KVNamespace,
       WEB_URL: 'https://test.opencara.com',
+      GITHUB_CLIENT_ID: 'fake-client-id',
+      GITHUB_CLIENT_SECRET: 'fake-client-secret',
     };
     this.app = createTestApp(this.store);
     this.originalFetch = globalThis.fetch;
   }
 
-  /** Replace globalThis.fetch with interceptor. Resets rate limiter and throttle state. */
-  install(): void {
+  /** Replace globalThis.fetch with interceptor. Resets rate limiter and throttle state.
+   *  Pre-seeds OAuth cache to avoid recursive fetch during token verification. */
+  async install(): Promise<void> {
     resetRateLimits();
     resetTimeoutThrottle();
+
+    // Pre-seed OAuth cache so the middleware never calls fetch() to verify the token.
+    // This avoids recursive fetch interception and timing issues with fake timers.
+    // Hash was pre-computed at module load (before fake timers).
+    const tokenHash = await FAKE_TOKEN_HASH_PROMISE;
+    await this.store.setOAuthCache(tokenHash, { ...FAKE_IDENTITY }, OAUTH_CACHE_TTL_MS);
     const { app, env, diffContent: _dc, diffFetchError: _de } = this;
     // Use closures to reference mutable properties
     const getDiffError = () => this.diffFetchError;
@@ -88,7 +107,12 @@ export class FakeServer {
           path,
           {
             method,
-            headers: { 'Content-Type': 'application/json', ...headers },
+            headers: {
+              'Content-Type': 'application/json',
+              // Inject OAuth token for server-side auth (OAuth is required on all endpoints)
+              Authorization: 'Bearer ghu_fake_test_token',
+              ...headers,
+            },
             body: init?.body as string | undefined,
           },
           env,
@@ -111,8 +135,15 @@ export class FakeServer {
         return new Response(getDiffContent(), { status: 200 });
       }
 
-      // 3. Server GitHub API calls (installation tokens, review posting, etc.)
+      // 3. Server GitHub API calls (installation tokens, review posting, OAuth verification, etc.)
       if (url.includes('api.github.com') || url.includes('/access_tokens')) {
+        // OAuth token verification (POST /applications/{client_id}/token)
+        if (url.includes('/applications/') && url.includes('/token') && method === 'POST') {
+          return new Response(JSON.stringify({ user: { id: 42, login: 'test-user' } }), {
+            status: 200,
+          });
+        }
+
         // Installation token
         if (url.includes('/access_tokens')) {
           return new Response(JSON.stringify({ token: 'ghs_mock_token' }), { status: 200 });

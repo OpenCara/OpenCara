@@ -8,18 +8,33 @@ export const OAUTH_CACHE_TTL_MS = 60 * 60 * 1000;
 /** Timeout for GitHub token verification API calls (10 seconds). */
 const OAUTH_VERIFY_TIMEOUT_MS = 10_000;
 
+/** Max entries in the hash cache before evicting the oldest. */
+const MAX_HASH_CACHE_SIZE = 1000;
+
+/** In-memory hash cache to avoid re-computing SHA-256 on every request for the same token. */
+const hashCache = new Map<string, string>();
+
 /**
  * Hash a token using SHA-256. Returns hex-encoded digest.
  * Uses the Web Crypto API available in Cloudflare Workers and Node 18+.
+ * Results are cached in-memory (bounded to MAX_HASH_CACHE_SIZE entries).
  */
 export async function hashToken(token: string): Promise<string> {
+  const cached = hashCache.get(token);
+  if (cached) return cached;
   const encoder = new TextEncoder();
   const data = encoder.encode(token);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = new Uint8Array(hashBuffer);
-  return Array.from(hashArray)
+  const hex = Array.from(hashArray)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+  if (hashCache.size >= MAX_HASH_CACHE_SIZE) {
+    const firstKey = hashCache.keys().next().value;
+    if (firstKey !== undefined) hashCache.delete(firstKey);
+  }
+  hashCache.set(token, hex);
+  return hex;
 }
 
 /**

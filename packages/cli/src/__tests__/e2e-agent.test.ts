@@ -117,7 +117,7 @@ async function stopAgent(promise: Promise<void>, server: FakeServer): Promise<vo
 describe('E2E Agent Scenarios', () => {
   let server: FakeServer;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -125,7 +125,7 @@ describe('E2E Agent Scenarios', () => {
     vi.spyOn(process, 'on').mockImplementation(() => process);
 
     server = new FakeServer();
-    server.install();
+    await server.install();
 
     mockedExecuteTool.mockReset();
     mockedExecuteTool.mockResolvedValue({
@@ -222,7 +222,7 @@ describe('E2E Agent Scenarios', () => {
       expect(agent1Calls).toBeGreaterThanOrEqual(1);
 
       await stopAgent(agent1Promise, server);
-      server.install();
+      await server.install();
 
       // Inject a fresh task for agent 2 (different PR to avoid dedup)
       await server.injectTask({ reviewCount: 3, prNumber: 2 });
@@ -234,9 +234,7 @@ describe('E2E Agent Scenarios', () => {
       expect(mockedExecuteTool.mock.calls.length).toBeGreaterThan(agent1Calls);
 
       await stopAgent(agent2Promise, server);
-
-      await stopAgent(agent2Promise, server);
-    }, 15000);
+    }, 30000);
   });
 
   // ═══════════════════════════════════════════════════════════

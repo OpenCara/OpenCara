@@ -14,8 +14,6 @@ export interface Env {
   WEB_URL: string;
   /** TTL in days for terminal tasks (default: 7). Set via wrangler.toml [vars]. */
   TASK_TTL_DAYS?: string;
-  /** Comma-separated list of valid API keys. When set, task endpoints require Bearer auth. */
-  API_KEYS?: string;
   /** GitHub App client ID — used for OAuth token verification and Device Flow proxy. */
   GITHUB_CLIENT_ID?: string;
   /** GitHub App client secret — used for OAuth token verification and Device Flow proxy (never exposed to clients). */
