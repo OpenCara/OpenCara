@@ -7,6 +7,7 @@
  * Mocks only the external boundary (GitHub API via global fetch).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { stubOAuthFetch, OAUTH_HEADERS } from './test-oauth-helper.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 import { MemoryDataStore } from '../store/memory.js';
@@ -32,6 +33,8 @@ function getMockEnv(): Env {
     GITHUB_APP_ID: '12345',
     GITHUB_APP_PRIVATE_KEY: TEST_PEM,
     WEB_URL: 'https://test.opencara.com',
+    GITHUB_CLIENT_ID: 'cid',
+    GITHUB_CLIENT_SECRET: 'csecret',
   };
 }
 
@@ -59,7 +62,7 @@ describe('E2E Scenarios', () => {
       '/test/events/pr',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
         body: JSON.stringify({
           owner: opts?.owner ?? 'test-org',
           repo: opts?.repo ?? 'test-repo',
@@ -88,6 +91,7 @@ describe('E2E Scenarios', () => {
   }
 
   beforeEach(() => {
+    stubOAuthFetch();
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
@@ -581,7 +585,7 @@ describe('E2E Scenarios', () => {
         '/test/events/pr',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
           body: JSON.stringify({ pr_number: 42 }),
         },
         env,
@@ -945,11 +949,14 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
 
       // Server should wrap with exact header and footer structure
+      // OAuth provides verified identity, so contributor attribution is included
       const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
       const expected = [
         '## OpenCara Review',
+        '',
+        '**Contributors**: @test-user',
         '',
         rawReview,
         '',

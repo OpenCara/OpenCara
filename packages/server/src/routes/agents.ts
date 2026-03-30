@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AgentStatus, AgentActivity, AgentsResponse } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
-import { requireApiKey } from '../middleware/auth.js';
+import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 
 /** Thresholds for agent status classification (milliseconds). */
@@ -20,8 +20,8 @@ export function agentStatus(lastSeen: number, now: number): AgentStatus {
 export function agentRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-  // API key auth — skips when API_KEYS is not configured (open mode)
-  app.use('/api/agents', requireApiKey());
+  // OAuth required on agent endpoint
+  app.use('/api/agents', requireOAuth());
 
   /** GET /api/agents — list agents with status and claim stats */
   app.get('/api/agents', async (c) => {

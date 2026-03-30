@@ -14,6 +14,7 @@ import type {
   ErrorResponse,
 } from '@opencara/shared';
 import type { Env, AppVariables } from '../../types.js';
+import { OAUTH_HEADERS } from '../test-oauth-helper.js';
 
 type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
@@ -34,7 +35,7 @@ export class MockAgent {
       path,
       {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
         body: body ? JSON.stringify(body) : undefined,
       },
       this.env,

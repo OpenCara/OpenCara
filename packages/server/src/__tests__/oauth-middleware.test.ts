@@ -390,16 +390,18 @@ describe('OAuth middleware integration', () => {
       expect(body.error.code).toBe('INTERNAL_ERROR');
     });
 
-    it('falls back to API key auth when GITHUB_CLIENT_ID is not configured', async () => {
+    it('returns 500 when GITHUB_CLIENT_ID is not configured', async () => {
       const env = createOAuthApp({
-        // No GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET — falls back to API key
+        // No GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET — OAuth misconfiguration
       });
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
         Authorization: 'Bearer ghu_token',
       });
-      // Open mode (no API_KEYS set) — should allow through
-      expect(res.status).toBe(200);
+      // OAuth not configured — should return 500
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
     });
 
     it('returns 500 on network error during verification', async () => {
@@ -463,32 +465,16 @@ describe('OAuth middleware integration', () => {
     });
   });
 
-  describe('fallback to API key auth (no OAuth credentials)', () => {
-    it('uses API key auth when OAuth credentials are not configured', async () => {
-      const env = createOAuthApp({ API_KEYS: 'valid-key' });
-
-      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
-        Authorization: 'Bearer valid-key',
-      });
-      expect(res.status).toBe(200);
-    });
-
-    it('rejects invalid API key when OAuth credentials are not configured', async () => {
-      const env = createOAuthApp({ API_KEYS: 'valid-key' });
-
-      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
-        Authorization: 'Bearer wrong-key',
-      });
-      expect(res.status).toBe(401);
-      const body = await res.json();
-      expect(body.error.code).toBe('UNAUTHORIZED');
-    });
-
-    it('allows open mode when no API_KEYS and no OAuth credentials', async () => {
+  describe('no OAuth credentials configured', () => {
+    it('returns 500 when no OAuth credentials configured', async () => {
       const env = createOAuthApp();
 
-      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
-      expect(res.status).toBe(200);
+      const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env, {
+        Authorization: 'Bearer ghu_token',
+      });
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.error.code).toBe('INTERNAL_ERROR');
     });
   });
 
@@ -783,8 +769,11 @@ describe('OAuth middleware integration', () => {
       expect(body.tasks).toHaveLength(0);
     });
 
-    it('poll works without OAuth when whitelist has only agent entries', async () => {
-      const env = createOAuthApp();
+    it('poll rejects unauthenticated requests (OAuth required)', async () => {
+      const env = createOAuthApp({
+        GITHUB_CLIENT_ID: 'cid',
+        GITHUB_CLIENT_SECRET: 'csecret',
+      });
 
       await store.createTask(
         makeTask({
@@ -799,14 +788,14 @@ describe('OAuth middleware integration', () => {
       );
 
       const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' }, env);
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.tasks).toHaveLength(1);
+      expect(res.status).toBe(401);
     });
 
-    it('claim stores no github_user_id when OAuth is not enforced', async () => {
-      // No OAuth credentials — uses API key auth, verifiedIdentity is undefined
-      const env = createOAuthApp();
+    it('claim rejects unauthenticated requests (OAuth required)', async () => {
+      const env = createOAuthApp({
+        GITHUB_CLIENT_ID: 'cid',
+        GITHUB_CLIENT_SECRET: 'csecret',
+      });
       await store.createTask(makeTask());
 
       const res = await request(
@@ -815,11 +804,7 @@ describe('OAuth middleware integration', () => {
         { agent_id: 'agent-1', role: 'summary' },
         env,
       );
-      expect(res.status).toBe(200);
-
-      const claim = await store.getClaim('task-1:agent-1:summary');
-      expect(claim).not.toBeNull();
-      expect(claim!.github_user_id).toBeUndefined();
+      expect(res.status).toBe(401);
     });
   });
 });

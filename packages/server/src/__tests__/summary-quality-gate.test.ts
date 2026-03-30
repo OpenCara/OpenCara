@@ -3,7 +3,8 @@
  *
  * Tests the full flow: summary result submission → quality evaluation → rejection/fallback.
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { stubOAuthFetch } from './test-oauth-helper.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { MemoryDataStore } from '../store/memory.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
@@ -26,6 +27,8 @@ function getMockEnv(): Env {
     GITHUB_APP_ID: '12345',
     GITHUB_APP_PRIVATE_KEY: TEST_PEM,
     WEB_URL: 'https://test.opencara.com',
+    GITHUB_CLIENT_ID: 'cid',
+    GITHUB_CLIENT_SECRET: 'csecret',
   };
 }
 
@@ -36,13 +39,17 @@ describe('Summary Quality Gate', () => {
   let env: Env;
 
   beforeEach(() => {
-    vi.restoreAllMocks();
+    stubOAuthFetch();
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
     github = new MockGitHubService();
     env = getMockEnv();
     app = createTestApp(store, github);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function mkAgent(id: string): MockAgent {

@@ -28,7 +28,7 @@ describe('Meta Route', () => {
     const res = await app.request(
       '/api/meta',
       { method: 'GET' },
-      { ...mockEnv, API_KEYS: 'secret-key' },
+      { ...mockEnv, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
     );
     expect(res.status).toBe(200);
   });

@@ -5,7 +5,8 @@
  * Everything else (Hono routing, DataStore, review parsing, formatting)
  * runs for real.
  */
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { stubOAuthFetch, OAUTH_HEADERS } from './test-oauth-helper.js';
 import { generateKeyPairSync } from 'node:crypto';
 import type { ReviewTask } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
@@ -36,6 +37,8 @@ function getMockEnv(): Env {
     GITHUB_APP_ID: '12345',
     GITHUB_APP_PRIVATE_KEY: TEST_PEM,
     WEB_URL: 'https://test.opencara.com',
+    GITHUB_CLIENT_ID: 'cid',
+    GITHUB_CLIENT_SECRET: 'csecret',
   };
 }
 
@@ -96,7 +99,7 @@ describe('Integration: full E2E flows', () => {
       path,
       {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       },
       mockEnv,
@@ -141,6 +144,7 @@ describe('Integration: full E2E flows', () => {
   }
 
   beforeEach(() => {
+    stubOAuthFetch();
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
@@ -148,6 +152,10 @@ describe('Integration: full E2E flows', () => {
     app = createApp(store, github);
     mockEnv = getMockEnv();
     githubCalls = github.calls;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   // ═══════════════════════════════════════════════════════════

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { stubOAuthFetch, OAUTH_HEADERS } from './test-oauth-helper.js';
 import { DEFAULT_REVIEW_CONFIG, type ReviewTask } from '@opencara/shared';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
@@ -42,6 +43,8 @@ const mockEnv = {
   GITHUB_APP_ID: '12345',
   GITHUB_APP_PRIVATE_KEY: 'test-key',
   WEB_URL: 'https://test.com',
+  GITHUB_CLIENT_ID: 'cid',
+  GITHUB_CLIENT_SECRET: 'csecret',
 };
 
 describe('Task Routes', () => {
@@ -49,10 +52,15 @@ describe('Task Routes', () => {
   let app: ReturnType<typeof createApp>;
 
   beforeEach(() => {
+    stubOAuthFetch();
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
     app = createApp(store);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function request(method: string, path: string, body?: unknown) {
@@ -60,7 +68,7 @@ describe('Task Routes', () => {
       path,
       {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
         body: body ? JSON.stringify(body) : undefined,
       },
       mockEnv,

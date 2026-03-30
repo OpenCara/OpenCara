@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
-import { resetKeySetCache } from '../middleware/auth.js';
 import { agentStatus } from '../routes/agents.js';
 import type { AgentsResponse } from '@opencara/shared';
 
@@ -10,27 +9,43 @@ const mockEnv = {
   GITHUB_APP_ID: '12345',
   GITHUB_APP_PRIVATE_KEY: 'test-key',
   WEB_URL: 'https://test.com',
+  GITHUB_CLIENT_ID: 'cid',
+  GITHUB_CLIENT_SECRET: 'csecret',
 };
 
-const mockEnvWithAuth = {
-  ...mockEnv,
-  API_KEYS: 'test-key-123',
-};
+/** Stub fetch for GitHub token verification success. */
+function stubGitHubTokenSuccess() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      status: 200,
+      json: () => Promise.resolve({ user: { id: 42, login: 'octocat' } }),
+    }),
+  );
+}
 
 function authHeaders(): Record<string, string> {
-  return { Authorization: 'Bearer test-key-123' };
+  return { Authorization: 'Bearer ghu_valid_token' };
 }
 
 describe('Agent Routes', () => {
   beforeEach(() => {
-    resetKeySetCache();
+    stubGitHubTokenSuccess();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('GET /api/agents — empty state', () => {
     it('returns empty agents array when no heartbeats exist', async () => {
       const store = new MemoryDataStore();
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       expect(res.status).toBe(200);
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents).toEqual([]);
@@ -45,7 +60,11 @@ describe('Agent Routes', () => {
       await store.setAgentLastSeen('agent-2', now - 120_000); // 2 min ago
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       expect(res.status).toBe(200);
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents).toHaveLength(2);
@@ -58,7 +77,11 @@ describe('Agent Routes', () => {
       await store.setAgentLastSeen('agent-1', now - 60_000); // 1 min ago — active
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents[0].status).toBe('active');
     });
@@ -71,7 +94,11 @@ describe('Agent Routes', () => {
       await store.setAgentLastSeen('agent-1', now - 10 * 60_000); // 10 min ago — idle
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents[0].status).toBe('idle');
     });
@@ -82,7 +109,11 @@ describe('Agent Routes', () => {
       await store.setAgentLastSeen('agent-1', now - 31 * 60_000); // 31 min ago — offline
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents[0].status).toBe('offline');
     });
@@ -173,7 +204,11 @@ describe('Agent Routes', () => {
       });
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents).toHaveLength(1);
       expect(body.agents[0].claims).toEqual({
@@ -190,7 +225,11 @@ describe('Agent Routes', () => {
       await store.setAgentLastSeen('agent-no-claims', Date.now());
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents[0].claims).toEqual({
         total: 0,
@@ -214,7 +253,7 @@ describe('Agent Routes', () => {
       const sinceMs = now - 60 * 60_000;
       const res = await app.request(
         `/api/agents?active_since=${sinceMs}`,
-        { method: 'GET' },
+        { method: 'GET', headers: authHeaders() },
         mockEnv,
       );
       const body = (await res.json()) as AgentsResponse;
@@ -227,7 +266,7 @@ describe('Agent Routes', () => {
       const app = createApp(store);
       const res = await app.request(
         '/api/agents?active_since=not-a-number',
-        { method: 'GET' },
+        { method: 'GET', headers: authHeaders() },
         mockEnv,
       );
       expect(res.status).toBe(400);
@@ -236,7 +275,11 @@ describe('Agent Routes', () => {
     it('returns 400 for negative active_since', async () => {
       const store = new MemoryDataStore();
       const app = createApp(store);
-      const res = await app.request('/api/agents?active_since=-1', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents?active_since=-1',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       expect(res.status).toBe(400);
     });
   });
@@ -250,7 +293,11 @@ describe('Agent Routes', () => {
       await store.setAgentLastSeen('fresh-agent', now - 60_000);
 
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
+      const res = await app.request(
+        '/api/agents',
+        { method: 'GET', headers: authHeaders() },
+        mockEnv,
+      );
       const body = (await res.json()) as AgentsResponse;
       expect(body.agents).toHaveLength(1);
       expect(body.agents[0].agent_id).toBe('fresh-agent');
@@ -258,28 +305,21 @@ describe('Agent Routes', () => {
   });
 
   describe('GET /api/agents — auth', () => {
-    it('requires auth when API_KEYS is configured', async () => {
+    it('requires OAuth token', async () => {
       const store = new MemoryDataStore();
       const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnvWithAuth);
+      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
       expect(res.status).toBe(401);
     });
 
-    it('allows access with valid API key', async () => {
+    it('allows access with valid OAuth token', async () => {
       const store = new MemoryDataStore();
       const app = createApp(store);
       const res = await app.request(
         '/api/agents',
         { method: 'GET', headers: authHeaders() },
-        mockEnvWithAuth,
+        mockEnv,
       );
-      expect(res.status).toBe(200);
-    });
-
-    it('allows access without auth when API_KEYS is not set (open mode)', async () => {
-      const store = new MemoryDataStore();
-      const app = createApp(store);
-      const res = await app.request('/api/agents', { method: 'GET' }, mockEnv);
       expect(res.status).toBe(200);
     });
   });

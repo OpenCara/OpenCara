@@ -65,16 +65,17 @@ Run your own OpenCara server on any VPS, dedicated server, or container platform
 
 ### Environment Variables
 
-| Variable                 | Required | Default                 | Description                                               |
-| ------------------------ | -------- | ----------------------- | --------------------------------------------------------- |
-| `PORT`                   | No       | `3000`                  | HTTP port                                                 |
-| `DATABASE_PATH`          | No       | `./data/opencara.db`    | SQLite database file path                                 |
-| `GITHUB_WEBHOOK_SECRET`  | Yes      | —                       | GitHub App webhook secret                                 |
-| `GITHUB_APP_ID`          | Yes      | —                       | GitHub App ID                                             |
-| `GITHUB_APP_PRIVATE_KEY` | Yes      | —                       | GitHub App private key (PEM)                              |
-| `WEB_URL`                | No       | `http://localhost:3000` | Public URL for the server                                 |
-| `TASK_TTL_DAYS`          | No       | `7`                     | Days to retain completed tasks                            |
-| `API_KEYS`               | No       | —                       | Comma-separated API keys for task endpoint authentication |
+| Variable                 | Required | Default                 | Description                                         |
+| ------------------------ | -------- | ----------------------- | --------------------------------------------------- |
+| `PORT`                   | No       | `3000`                  | HTTP port                                           |
+| `DATABASE_PATH`          | No       | `./data/opencara.db`    | SQLite database file path                           |
+| `GITHUB_WEBHOOK_SECRET`  | Yes      | —                       | GitHub App webhook secret                           |
+| `GITHUB_APP_ID`          | Yes      | —                       | GitHub App ID                                       |
+| `GITHUB_APP_PRIVATE_KEY` | Yes      | —                       | GitHub App private key (PEM)                        |
+| `WEB_URL`                | No       | `http://localhost:3000` | Public URL for the server                           |
+| `TASK_TTL_DAYS`          | No       | `7`                     | Days to retain completed tasks                      |
+| `GITHUB_CLIENT_ID`       | Yes      | —                       | GitHub App client ID (OAuth token verification)     |
+| `GITHUB_CLIENT_SECRET`   | Yes      | —                       | GitHub App client secret (OAuth token verification) |
 
 ### Docker Compose (Recommended)
 
@@ -205,36 +206,32 @@ Platform URL: https://opencara.example.com
 
 ---
 
-## API Key Authentication
+## Authentication (OAuth Only)
 
-By default, task API endpoints are open (no authentication required). To restrict access, set the `API_KEYS` environment variable with one or more comma-separated keys:
+All task and agent API endpoints require OAuth authentication via GitHub user-access tokens. There is no API key fallback.
+
+### Required Environment Variables
 
 ```bash
 # VPS / Docker
-export API_KEYS="key-abc123,key-def456"
+export GITHUB_CLIENT_ID="Iv1.abc123..."
+export GITHUB_CLIENT_SECRET="secret..."
 
 # Cloudflare Workers
-wrangler secret put API_KEYS
-# Enter: key-abc123,key-def456
+wrangler secret put GITHUB_CLIENT_ID
+wrangler secret put GITHUB_CLIENT_SECRET
 ```
 
-When `API_KEYS` is configured:
+How it works:
 
-- All `/api/tasks/*` endpoints require an `Authorization: Bearer <key>` header
-- Requests without a valid key receive `401 Unauthorized`
-- Webhook (`/webhook/github`), health, metrics, and registry endpoints are **not** affected
-
-When `API_KEYS` is not set, all endpoints remain open (backwards-compatible).
+- All `/api/tasks/*` and `/api/agents` endpoints require an `Authorization: Bearer <token>` header with a valid GitHub OAuth user-access token
+- The server verifies tokens via the GitHub API (`POST /applications/{client_id}/token`)
+- Verified identities are cached in D1 for 1 hour to reduce GitHub API calls
+- Webhook (`/webhook/github`), health, meta, and registry endpoints are **not** affected
 
 ### Agent Configuration
 
-Agents must include the matching `api_key` in their config:
-
-```toml
-# ~/.opencara/config.toml
-platform_url = "https://opencara.example.com"
-api_key = "key-abc123"
-```
+Agents authenticate using GitHub OAuth Device Flow — no manual token management required. See the [Agent Guide](agent-guide.md) for setup.
 
 ---
 

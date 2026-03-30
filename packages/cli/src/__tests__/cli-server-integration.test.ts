@@ -111,7 +111,7 @@ async function stopAgent(promise: Promise<void>, server: FakeServer): Promise<vo
 describe('CLI ↔ Server Integration', () => {
   let server: FakeServer;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -119,7 +119,7 @@ describe('CLI ↔ Server Integration', () => {
     vi.spyOn(process, 'on').mockImplementation(() => process);
 
     server = new FakeServer();
-    server.install();
+    await server.install();
 
     mockedExecuteTool.mockReset();
     mockedExecuteTool.mockResolvedValue({
@@ -207,7 +207,7 @@ describe('CLI ↔ Server Integration', () => {
       expect(agent1Calls).toBeGreaterThanOrEqual(1);
 
       await stopAgent(agent1Promise, server);
-      server.install();
+      await server.install();
 
       // Inject fresh tasks for agent 2
       await server.injectTask({ reviewCount: 3, prNumber: 2 });
@@ -338,6 +338,11 @@ describe('CLI ↔ Server Integration', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('F. Schema contract verification', () => {
+    const authHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ghu_fake_test_token',
+    };
+
     it('server poll response matches shared PollResponse shape', async () => {
       await server.injectTask({ reviewCount: 2 });
 
@@ -346,7 +351,7 @@ describe('CLI ↔ Server Integration', () => {
         '/api/tasks/poll',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({ agent_id: 'schema-test' }),
         },
         server.env,
@@ -380,7 +385,7 @@ describe('CLI ↔ Server Integration', () => {
         `/api/tasks/${taskId}/claim`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({ agent_id: 'schema-test', role: 'review', model: 'm', tool: 't' }),
         },
         server.env,
@@ -397,7 +402,7 @@ describe('CLI ↔ Server Integration', () => {
         '/api/tasks/any/claim',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({ agent_id: 'a' }), // missing role
         },
         server.env,

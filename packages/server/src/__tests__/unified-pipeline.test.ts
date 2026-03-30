@@ -10,6 +10,7 @@
  * - Triage handler posts comment/rewrites issue + applies labels
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { stubOAuthFetch, OAUTH_HEADERS } from './test-oauth-helper.js';
 import {
   DEFAULT_REVIEW_CONFIG,
   type ReviewTask,
@@ -87,6 +88,8 @@ const mockEnv = {
   GITHUB_APP_ID: '12345',
   GITHUB_APP_PRIVATE_KEY: 'test-key',
   WEB_URL: 'https://test.com',
+  GITHUB_CLIENT_ID: 'cid',
+  GITHUB_CLIENT_SECRET: 'csecret',
 };
 
 describe('Unified Pipeline (Issue #506)', () => {
@@ -95,6 +98,7 @@ describe('Unified Pipeline (Issue #506)', () => {
   let github: GitHubService;
 
   beforeEach(() => {
+    stubOAuthFetch();
     resetTimeoutThrottle();
     resetRateLimits();
     store = new MemoryDataStore();
@@ -111,7 +115,7 @@ describe('Unified Pipeline (Issue #506)', () => {
       path,
       {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
         body: body ? JSON.stringify(body) : undefined,
       },
       mockEnv,
