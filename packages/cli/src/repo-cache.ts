@@ -342,18 +342,9 @@ export function parseDiffPaths(diff: string): string[] {
  * Includes the files themselves plus common root config files for context.
  */
 export function buildSparsePatterns(filePaths: string[]): string[] {
-  const patterns = new Set<string>();
+  const patterns = new Set<string>(filePaths);
 
-  for (const filePath of filePaths) {
-    patterns.add(filePath);
-    // Include parent directories up to the root for directory-level context
-    const parts = filePath.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      // Don't add intermediate dirs as sparse patterns — just the files
-    }
-  }
-
-  // Add common root config files
+  // Add common root config files for review context
   for (const cfg of SPARSE_ROOT_CONFIGS) {
     patterns.add(cfg);
   }
