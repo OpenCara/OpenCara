@@ -1502,8 +1502,8 @@ export async function batchPollLoop(
     githubToken,
   } = options;
 
-  // Use the first agent's logger for coordinator-level messages
-  const coordLogger = agentStates[0]?.logger ?? createLogger('batch');
+  // Use a dedicated logger for coordinator-level messages
+  const coordLogger = createLogger('batch');
   const { log, logError, logWarn } = coordLogger;
 
   log(
@@ -1651,17 +1651,20 @@ export async function batchPollLoop(
         }
       }
 
-      // Sweep deferred codebase cleanups for all agents
-      for (const state of agentStates) {
-        if (state.cleanupTracker) {
-          const swept = await state.cleanupTracker.sweep(cleanupWorktree);
-          if (swept > 0) {
-            state.logger.log(
-              `${icons.info} Cleaned up ${swept} stale codebase director${swept === 1 ? 'y' : 'ies'}`,
-            );
-          }
-        }
-      }
+      // Sweep deferred codebase cleanups for all agents (in parallel)
+      // sweep() is internally fault-tolerant (re-queues failures), safe with allSettled
+      await Promise.allSettled(
+        agentStates
+          .filter((state) => state.cleanupTracker)
+          .map(async (state) => {
+            const swept = await state.cleanupTracker!.sweep(cleanupWorktree);
+            if (swept > 0) {
+              state.logger.log(
+                `${icons.info} Cleaned up ${swept} stale codebase director${swept === 1 ? 'y' : 'ies'}`,
+              );
+            }
+          }),
+      );
     } catch (err) {
       if (signal?.aborted) break;
 
@@ -1846,22 +1849,24 @@ export async function startBatchAgents(
     );
   }
 
-  // Dry-run test commands for non-router agents
-  for (const state of agentStates) {
-    if (state.reviewDeps.commandTemplate && !state.routerRelay) {
-      state.logger.log('Testing command...');
-      const result = await testCommand(state.reviewDeps.commandTemplate);
-      if (result.ok) {
-        state.logger.log(
-          `${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`,
-        );
-      } else {
-        state.logger.logWarn(
-          `${icons.warn} Command test failed (${result.error}). Reviews may fail.`,
-        );
-      }
-    }
-  }
+  // Dry-run test commands for non-router agents (in parallel — they're independent)
+  await Promise.all(
+    agentStates
+      .filter((state) => state.reviewDeps.commandTemplate && !state.routerRelay)
+      .map(async (state) => {
+        state.logger.log('Testing command...');
+        const result = await testCommand(state.reviewDeps.commandTemplate!);
+        if (result.ok) {
+          state.logger.log(
+            `${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`,
+          );
+        } else {
+          state.logger.logWarn(
+            `${icons.warn} Command test failed (${result.error}). Reviews may fail.`,
+          );
+        }
+      }),
+  );
 
   // Startup scan: remove stale worktree directories
   const codebaseDirs = new Set(
@@ -1892,27 +1897,29 @@ export async function startBatchAgents(
     githubToken: oauthToken,
   });
 
-  // Cleanup on shutdown
-  for (const state of agentStates) {
-    state.routerRelay?.stop();
-    if (state.cleanupTracker && state.cleanupTracker.size > 0) {
-      const swept = await state.cleanupTracker.sweep(cleanupWorktree);
-      if (swept > 0) {
-        state.logger.log(
-          `${icons.info} Cleaned up ${swept} codebase director${swept === 1 ? 'y' : 'ies'} on shutdown`,
-        );
+  // Cleanup on shutdown (in parallel, allSettled so one failure doesn't hide others)
+  await Promise.allSettled(
+    agentStates.map(async (state) => {
+      state.routerRelay?.stop();
+      if (state.cleanupTracker && state.cleanupTracker.size > 0) {
+        const swept = await state.cleanupTracker.sweep(cleanupWorktree);
+        if (swept > 0) {
+          state.logger.log(
+            `${icons.info} Cleaned up ${swept} codebase director${swept === 1 ? 'y' : 'ies'} on shutdown`,
+          );
+        }
       }
-    }
-    if (state.consumptionDeps.usageTracker) {
-      const limits = state.consumptionDeps.usageLimits ?? {
-        maxReviewsPerDay: null,
-        maxTokensPerDay: null,
-        maxTokensPerReview: null,
-      };
-      state.logger.log(state.consumptionDeps.usageTracker.formatSummary(limits));
-    }
-    state.logger.log(formatExitSummary(state.agentSession));
-  }
+      if (state.consumptionDeps.usageTracker) {
+        const limits = state.consumptionDeps.usageLimits ?? {
+          maxReviewsPerDay: null,
+          maxTokensPerDay: null,
+          maxTokensPerReview: null,
+        };
+        state.logger.log(state.consumptionDeps.usageTracker.formatSummary(limits));
+      }
+      state.logger.log(formatExitSummary(state.agentSession));
+    }),
+  );
 }
 
 /**
