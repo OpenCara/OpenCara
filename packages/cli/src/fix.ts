@@ -4,6 +4,8 @@ import type { ToolExecutorResult, TokenUsageDetail } from './tool-executor.js';
 import { executeTool, estimateTokens } from './tool-executor.js';
 import { sanitizeTokens } from './sanitize.js';
 import type { Logger } from './logger.js';
+import { buildFixPrompt } from './prompts.js';
+export { buildFixPrompt };
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -75,44 +77,6 @@ export function commitAndPush(
   gitExec(['push', 'origin', headRef], worktreePath);
 
   return { commitSha, filesChanged };
-}
-
-// ── Prompt Builder ──────────────────────────────────────────
-
-/**
- * Build the fix prompt that instructs the AI to apply fixes based on review comments.
- */
-export function buildFixPrompt(task: {
-  owner: string;
-  repo: string;
-  prNumber: number;
-  diffContent: string;
-  prReviewComments: string;
-  customPrompt?: string;
-}): string {
-  const parts: string[] = [];
-
-  parts.push(`You are fixing issues found during code review on the ${task.owner}/${task.repo} repository, PR #${task.prNumber}.
-
-Your job is to read the review comments below and apply the necessary code changes to address them.
-
-IMPORTANT: Make only the changes needed to address the review comments. Do not refactor unrelated code or add features not requested.
-
-## Instructions
-
-1. Read the review comments carefully
-2. Apply the minimum changes needed to address each comment
-3. Ensure your changes don't break existing functionality`);
-
-  if (task.customPrompt) {
-    parts.push(`\n## Repo-Specific Instructions\n\n${task.customPrompt}`);
-  }
-
-  parts.push(`\n## PR Diff (Current State)\n\n${task.diffContent}`);
-
-  parts.push(`\n## Review Comments to Address\n\n${task.prReviewComments}`);
-
-  return parts.join('\n');
 }
 
 // ── Error Types ────────────────────────────────────────────────────

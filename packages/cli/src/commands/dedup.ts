@@ -7,6 +7,8 @@ import { loadConfig } from '../config.js';
 import { executeTool, type ToolExecutorResult } from '../tool-executor.js';
 import { extractJson } from '../dedup.js';
 import { icons } from '../logger.js';
+import { buildIndexEntryPrompt } from '../prompts.js';
+export { buildIndexEntryPrompt };
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -253,31 +255,6 @@ export function formatEntry(item: GitHubItem, compact: boolean = false): string 
 
 /** Timeout per AI call for index entry generation (60s). */
 const AI_ENTRY_TIMEOUT_MS = 60_000;
-
-/**
- * Build a prompt asking the AI to produce a one-line index entry for a PR/issue.
- */
-export function buildIndexEntryPrompt(item: GitHubItem, kind: 'prs' | 'issues'): string {
-  const typeLabel = kind === 'prs' ? 'PR' : 'Issue';
-  const labels = item.labels.map((l) => l.name).join(', ');
-  return `You are a dedup index entry generator. Given a GitHub ${typeLabel}, produce a concise one-line description suitable for duplicate detection.
-
-## Input
-
-${typeLabel} #${item.number}: ${item.title}
-Labels: ${labels || '(none)'}
-State: ${item.state}
-
-## Output Format
-
-Respond with ONLY a JSON object (no markdown fences, no preamble):
-
-{
-  "description": "<concise one-line description for duplicate detection>"
-}
-
-The description should capture the core intent/change of the ${typeLabel.toLowerCase()} in a way that helps identify duplicates. Keep it under 120 characters.`;
-}
 
 /**
  * Parse the AI response for an index entry description.
