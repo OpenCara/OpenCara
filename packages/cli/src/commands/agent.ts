@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
   PollResponse,
@@ -24,6 +25,7 @@ import {
   resolveCodebaseDir,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   CONFIG_DIR,
+  CONFIG_FILE,
   type LocalAgentConfig,
   type UsageLimits,
 } from '../config.js';
@@ -89,6 +91,7 @@ import {
   type Logger,
   type AgentSessionStats,
 } from '../logger.js';
+import { interactiveSetup } from '../setup.js';
 import {
   type AgentDescriptor,
   buildBatchPollRequest,
@@ -2255,7 +2258,22 @@ agentCommand
       verbose?: boolean;
       instances?: string;
     }) => {
-      const config = loadConfig();
+      let config = loadConfig();
+
+      // First-run interactive setup: trigger only when no config file exists AND stdin is TTY
+      if (!config.agents && !fs.existsSync(CONFIG_FILE)) {
+        const created = await interactiveSetup();
+        if (!created) {
+          if (!process.stdin.isTTY) {
+            console.error('No config found at ~/.opencara/config.toml');
+            console.error('Create a config file or run interactively to use first-run setup.');
+          }
+          process.exit(0);
+          return;
+        }
+        config = loadConfig();
+      }
+
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
       const versionOverride = opts.versionOverride || process.env.OPENCARA_VERSION_OVERRIDE || null;
       let instancesOverride: number | undefined;
