@@ -463,20 +463,21 @@ Parent: #480
 
 Parent: #564 — CLI Agent Implementation/Fix Mode
 
-| #    | Title                                                       | Agent      | Status    | PR   |
-| ---- | ----------------------------------------------------------- | ---------- | --------- | ---- |
-| #566 | Add implement/fix types to shared package                   | architect  | Done      | #584 |
-| #574 | Fixed permission rules for implement/fix triggers           | architect  | In Review | #591 |
-| #567 | Handle PR comment /opencara fix for fix tasks               | server-dev | In Review | #586 |
-| #568 | Handle `/opencara go` comment trigger for implement tasks   | server-dev | In Review | #588 |
-| #569 | Implement task executor — issue to branch to AI to PR       | cli-dev    | In Review | #590 |
-| #570 | Fix task executor — PR comments to AI to push               | cli-dev    | In Review | #589 |
+| #    | Title                                                     | Agent      | Status    | PR   |
+| ---- | --------------------------------------------------------- | ---------- | --------- | ---- |
+| #566 | Add implement/fix types to shared package                 | architect  | Done      | #584 |
+| #574 | Fixed permission rules for implement/fix triggers         | architect  | In Review | #591 |
+| #567 | Handle PR comment /opencara fix for fix tasks             | server-dev | In Review | #586 |
+| #568 | Handle `/opencara go` comment trigger for implement tasks | server-dev | In Review | #588 |
+| #569 | Implement task executor — issue to branch to AI to PR     | cli-dev    | In Review | #590 |
+| #570 | Fix task executor — PR comments to AI to push             | cli-dev    | In Review | #589 |
 
 **STATUS: CODE-COMPLETE** — All 7 code issues merged (PRs #584, #586, #588, #589, #590, #591). QA deferred per team-lead.
 
 ### Dispatch queue
 
 **In Review** (merged, QA pending):
+
 - #567 Handle /opencara fix — PR #586 merged, **CLOSED** 2026-03-30
 - #568 Handle /opencara go — PR #588 merged, **CLOSED** 2026-03-30
 - #569 Implement task executor — PR #590 merged, **CLOSED** 2026-03-30
@@ -486,9 +487,11 @@ Parent: #564 — CLI Agent Implementation/Fix Mode
 - #564 CLI Agent Implementation/Fix Mode (epic) — ALL sub-issues merged, **CLOSED** 2026-03-30
 
 **Ready** (awaiting dispatch):
+
 - (none)
 
 **Done** (closed, QA skipped per team-lead):
+
 - #577 Auth file path config — PR #585 merged, board→Done, closed
 - #580 Share git worktree across tasks — PR #587 merged, board→Done, closed
 
@@ -502,12 +505,12 @@ Parent: #564 — CLI Agent Implementation/Fix Mode
 
 Parent: #593 — broken down 2026-03-30
 
-| Phase | # | Title | Agent | Status | Blocked by |
-|-------|------|-------|-------|--------|------------|
-| 1 | #600 | Remove API key auth — OAuth-only | server-dev | DONE (PR #606) | — |
-| 2a | #601 | Add BatchPoll types to shared package | architect | DONE (PR #604) | — |
-| 2b | #602 | Add POST /api/tasks/poll/batch endpoint | server-dev | DONE (PR #605) | #601 |
-| 2c+3 | #603 | Batch poll coordinator and repo access check | cli-dev | DONE (PR #607) | — |
+| Phase | #    | Title                                        | Agent      | Status         | Blocked by |
+| ----- | ---- | -------------------------------------------- | ---------- | -------------- | ---------- |
+| 1     | #600 | Remove API key auth — OAuth-only             | server-dev | DONE (PR #606) | —          |
+| 2a    | #601 | Add BatchPoll types to shared package        | architect  | DONE (PR #604) | —          |
+| 2b    | #602 | Add POST /api/tasks/poll/batch endpoint      | server-dev | DONE (PR #605) | #601       |
+| 2c+3  | #603 | Batch poll coordinator and repo access check | cli-dev    | DONE (PR #607) | —          |
 
 **ALL 4 SUB-ISSUES COMPLETE.** #593 redesign fully implemented and merged (2026-03-30). PRs: #604, #605, #606, #607. Parent issue #593 **CLOSED** 2026-03-30. QA pending.
 

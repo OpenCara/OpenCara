@@ -305,22 +305,22 @@ Parent issue: #445
 
 Epic: #564
 
-| Issue | Agent      | PR   | Description                                                   |
-| ----- | ---------- | ---- | ------------------------------------------------------------- |
-| #566  | architect  | #584 | Add implement/fix types to shared package [DONE]              |
-| #567  | server-dev | #586 | Handle /opencara fix trigger to create fix tasks [DONE]       |
-| #568  | server-dev | #588 | Handle /opencara go trigger for implement tasks [DONE]        |
-| #569  | cli-dev    | #590 | Implement task executor — issue to branch to AI to PR [DONE]  |
-| #570  | cli-dev    | #589 | Fix task executor — PR review comments to AI to push [DONE]   |
-| #574  | architect  | #591 | Fixed permission rules for implement/fix triggers [DONE]      |
+| Issue | Agent      | PR   | Description                                                  |
+| ----- | ---------- | ---- | ------------------------------------------------------------ |
+| #566  | architect  | #584 | Add implement/fix types to shared package [DONE]             |
+| #567  | server-dev | #586 | Handle /opencara fix trigger to create fix tasks [DONE]      |
+| #568  | server-dev | #588 | Handle /opencara go trigger for implement tasks [DONE]       |
+| #569  | cli-dev    | #590 | Implement task executor — issue to branch to AI to PR [DONE] |
+| #570  | cli-dev    | #589 | Fix task executor — PR review comments to AI to push [DONE]  |
+| #574  | architect  | #591 | Fixed permission rules for implement/fix triggers [DONE]     |
 
 ### Post-M20 Fixes
 
-| Issue | Agent      | PR   | Description                                                      |
-| ----- | ---------- | ---- | ---------------------------------------------------------------- |
-| #594  | server-dev | #595 | Fix taskRoleSchema missing implement/fix enum values [DONE]      |
-| #596  | server-dev | #599 | Summary result handler missing implement/fix cases [DONE]        |
-| #597  | cli-dev    | #598 | Default agent roles missing implement and fix [DONE]             |
+| Issue | Agent      | PR   | Description                                                 |
+| ----- | ---------- | ---- | ----------------------------------------------------------- |
+| #594  | server-dev | #595 | Fix taskRoleSchema missing implement/fix enum values [DONE] |
+| #596  | server-dev | #599 | Summary result handler missing implement/fix cases [DONE]   |
+| #597  | cli-dev    | #598 | Default agent roles missing implement and fix [DONE]        |
 
 ## M21: Redesign CLI Agent Polling (2026-03-30)
 
@@ -332,9 +332,10 @@ Epic: #593
 | #601  | architect  | #604 | Add BatchPoll types to shared package [DONE]             |
 | #602  | server-dev | #605 | Add POST /api/tasks/poll/batch endpoint [DONE]           |
 | #603  | cli-dev    | #607 | Batch poll coordinator and repo access check [DONE]      |
-| #581  | server-dev | #592 | Store PR diff size on task for CLI-side filtering [DONE]  |
+| #581  | server-dev | #592 | Store PR diff size on task for CLI-side filtering [DONE] |
 
 ## Open Issues
+
 - #409 [server-dev, low, Backlog] Add prompt_hash to task creation and claim response
 - #410 [cli-dev, low, Backlog] Include prompt_hash in result submission
 - #404 [architect, medium, Backlog] Design security sandbox container
