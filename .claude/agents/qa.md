@@ -51,7 +51,7 @@ This is NOT just "run the test suite" — you must verify each issue's specific 
 
 1. Start agents against the dev server:
    ```bash
-   OPENCARA_PLATFORM_URL=https://opencara-server-dev.opencara.workers.dev npx opencara agent start --all
+   OPENCARA_PLATFORM_URL=https://opencara-server-dev.opencara.workers.dev OPENCARA_AUTH_FILE=~/.opencara/auth.dev.json npx opencara agent start --all
    ```
 2. Create a test PR on `OpenCara/opencara-dev-test` repo:
    ```bash

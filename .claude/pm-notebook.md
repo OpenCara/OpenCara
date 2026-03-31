@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #423, #428, #430, #431, #473, #544, #545, #546, #551, #555, #557, #560
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #423, #428, #430, #431, #473, #544, #545, #546, #551, #555, #557, #560, #594, #596, #597
 
 ## Merged PRs (processed)
 
@@ -132,7 +132,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552, #558, #559, #562
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552, #558, #559, #562, #563, #571, #572, #573, #575, #579, #582, #583, #584, #585, #586, #587, #588, #589, #590, #591, #592, #595, #598, #599, #604
 
 ### Milestone QA (2026-03-22)
 
@@ -463,35 +463,53 @@ Parent: #480
 
 Parent: #564 — CLI Agent Implementation/Fix Mode
 
-| #    | Title                                                       | Agent      | Status  | Depends On       |
-| ---- | ----------------------------------------------------------- | ---------- | ------- | ---------------- |
-| #566 | Add implement/fix types to shared package                   | architect  | Backlog | —                |
-| #574 | Add allowed_by permission config for implement/fix triggers | architect  | Backlog | — (incl in #566) |
-| #568 | Handle `/opencara go` comment trigger for implement tasks   | server-dev | Backlog | #566             |
-| #567 | Handle PR comment /opencara fix for fix tasks               | server-dev | Backlog | #566             |
-| #569 | Implement task executor — issue to branch to AI to PR       | cli-dev    | Backlog | #566, #568       |
-| #570 | Fix task executor — PR comments to AI to push               | cli-dev    | Backlog | #566, #567       |
+| #    | Title                                                       | Agent      | Status    | PR   |
+| ---- | ----------------------------------------------------------- | ---------- | --------- | ---- |
+| #566 | Add implement/fix types to shared package                   | architect  | Done      | #584 |
+| #574 | Fixed permission rules for implement/fix triggers           | architect  | In Review | #591 |
+| #567 | Handle PR comment /opencara fix for fix tasks               | server-dev | In Review | #586 |
+| #568 | Handle `/opencara go` comment trigger for implement tasks   | server-dev | In Review | #588 |
+| #569 | Implement task executor — issue to branch to AI to PR       | cli-dev    | In Review | #590 |
+| #570 | Fix task executor — PR comments to AI to push               | cli-dev    | In Review | #589 |
 
-Execution: Phase 1 (#566+#574 shared) → Phase 2 (#568+#567 server, parallel) → Phase 3 (#569+#570 cli, parallel)
+**STATUS: CODE-COMPLETE** — All 7 code issues merged (PRs #584, #586, #588, #589, #590, #591). QA deferred per team-lead.
 
-### Multi-instance agent (2026-03-28)
+### Dispatch queue
 
-- #565 [cli-dev, P2, M] Add multi-instance option for running multiple agent instances per config — **READY** (promoted from Backlog by team-lead)
+**In Review** (merged, QA pending):
+- #567 Handle /opencara fix — PR #586 merged, **CLOSED** 2026-03-30
+- #568 Handle /opencara go — PR #588 merged, **CLOSED** 2026-03-30
+- #569 Implement task executor — PR #590 merged, **CLOSED** 2026-03-30
+- #570 Fix task executor — PR #589 merged, **CLOSED** 2026-03-30
+- #574 Fixed permission rules — PR #591 merged, **CLOSED** 2026-03-30
+- #581 Store PR diff size — PR #592 merged, **CLOSED** 2026-03-30
+- #564 CLI Agent Implementation/Fix Mode (epic) — ALL sub-issues merged, **CLOSED** 2026-03-30
 
-### Dispatch queue (Ready)
+**Ready** (awaiting dispatch):
+- (none)
 
-**cli-dev** (sequential):
+**Done** (closed, QA skipped per team-lead):
+- #577 Auth file path config — PR #585 merged, board→Done, closed
+- #580 Share git worktree across tasks — PR #587 merged, board→Done, closed
 
-- #427 — **IN REVIEW** (PR #573 merged 2026-03-28, QA pending)
-- #565 [cli-dev, P2, M] Multi-instance agent — **READY** (next to dispatch after #427 QA)
+### Bug fixes (2026-03-29/30)
 
-**server-dev**:
+- #594 [server-dev, P1, S] taskRoleSchema missing 'implement' and 'fix' enum values — **DONE** (PR #595 merged 2026-03-30, closed)
+- #596 [server-dev, P1, M] Summary result handler missing implement/fix cases — **DONE** (PR #599 merged 2026-03-30)
+- #597 [cli-dev, P2, S] Default agent roles missing implement and fix — **DONE** (PR #598 merged 2026-03-30)
 
-- (none ready)
+### #593 Redesign CLI agent polling: batch poll, permission check, OAuth-only
 
-**Pending team-lead review:**
+Parent: #593 — broken down 2026-03-30
 
-- Epic #564 sub-issues (#566-#570) — all Backlog, team-lead will prioritize later
+| Phase | # | Title | Agent | Status | Blocked by |
+|-------|------|-------|-------|--------|------------|
+| 1 | #600 | Remove API key auth — OAuth-only | server-dev | DONE (PR #606) | — |
+| 2a | #601 | Add BatchPoll types to shared package | architect | DONE (PR #604) | — |
+| 2b | #602 | Add POST /api/tasks/poll/batch endpoint | server-dev | DONE (PR #605) | #601 |
+| 2c+3 | #603 | Batch poll coordinator and repo access check | cli-dev | DONE (PR #607) | — |
+
+**ALL 4 SUB-ISSUES COMPLETE.** #593 redesign fully implemented and merged (2026-03-30). PRs: #604, #605, #606, #607. Parent issue #593 **CLOSED** 2026-03-30. QA pending.
 
 ### Closed (2026-03-28)
 
@@ -519,6 +537,20 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Recently processed
 
+- PR #595 [bug] merged 2026-03-30 — Fix: add implement and fix to taskRoleSchema (#594)
+- PR #592 [server-dev] merged 2026-03-29 — Store PR diff size on task (#581)
+- PR #591 [architect] merged 2026-03-29 — Fixed permission rules for implement/fix triggers (#574)
+- PR #590 [cli-dev] merged 2026-03-29 — Implement task executor (#569)
+- PR #589 [cli-dev] merged 2026-03-29 — Fix task executor (#570)
+- PR #588 [server-dev] merged 2026-03-29 — Handle /opencara go comment trigger (#568)
+- PR #587 [cli-dev] merged 2026-03-29 — Share git worktree across tasks for same PR (#580)
+- PR #586 [server-dev] merged 2026-03-28 — Handle /opencara fix trigger (#567)
+- PR #585 [cli-dev] merged 2026-03-28 — Add auth file path config for per-environment auth (#577)
+- PR #584 [architect] merged 2026-03-28 — Add implement/fix types to shared package (#566)
+- PR #583 [cli-dev] merged 2026-03-28 — Fix auth login re-auth prompt (#576)
+- PR #582 [external/quabug] merged 2026-03-28 — fix: use gh CLI for org membership fetch
+- PR #579 [cli-dev] merged 2026-03-28 — Fix private repo filter mode (#578)
+- PR #575 [cli-dev] merged 2026-03-28 — Add multi-instance agent option (#565)
 - PR #573 [cli-dev] merged 2026-03-28 — Add --verbose mode for debugging (#427)
 - PR #572 [cli-dev] merged 2026-03-28 — Auto-cleanup cloned codebase repos (#553)
 - PR #571 [server-dev] merged 2026-03-28 — Prefer model diversity across all tasks in a group (#554)

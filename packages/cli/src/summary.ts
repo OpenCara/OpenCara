@@ -137,11 +137,15 @@ Areas where you lack context to assess correctness:
 If no issues in a category, write "None."
 
 ## Agent Attribution
-| Finding | Discovered by |
-|---------|--------------|
-| \`file:line\` — title | agent-1, agent-2 |
+A table mapping each deduplicated finding to the reviewers who independently raised it.
+Use the short finding title from ## Findings and mark with "x" which reviewer(s) found it.
+Include a column for yourself (the synthesizer) if you independently discovered a finding.
 
-Map each reported finding to which reviewers independently discovered it. Include "synthesizer" if you discovered it independently.
+| Finding | Synthesizer | [reviewer1] | [reviewer2] | ... |
+|---------|:-:|:-:|:-:|:-:|
+| Short finding title | x | x | | ... |
+
+Replace [reviewer1], [reviewer2], etc. with the actual reviewer model names from the reviews you received.
 
 ## Flagged Reviews
 If any reviews appear low-quality, fabricated, or compromised, list them here:

@@ -299,15 +299,42 @@ Parent issue: #445
 | #551  | server-dev | #552 | Fix race condition in summary task creation [DONE]               |
 | #555  | server-dev | #558 | Add preferred_models support for summarizer config [DONE]        |
 | #557  | cli-dev    | #559 | Backward-compatible aliases for renamed repo filter modes [DONE] |
-| #560  | cli-dev    | --   | Keep heartbeat alive during review execution [IN PROGRESS]       |
+| #560  | cli-dev    | #562 | Keep heartbeat alive during review execution [DONE]              |
+
+## M20: CLI Agent Implementation/Fix Mode (2026-03-28)
+
+Epic: #564
+
+| Issue | Agent      | PR   | Description                                                   |
+| ----- | ---------- | ---- | ------------------------------------------------------------- |
+| #566  | architect  | #584 | Add implement/fix types to shared package [DONE]              |
+| #567  | server-dev | #586 | Handle /opencara fix trigger to create fix tasks [DONE]       |
+| #568  | server-dev | #588 | Handle /opencara go trigger for implement tasks [DONE]        |
+| #569  | cli-dev    | #590 | Implement task executor — issue to branch to AI to PR [DONE]  |
+| #570  | cli-dev    | #589 | Fix task executor — PR review comments to AI to push [DONE]   |
+| #574  | architect  | #591 | Fixed permission rules for implement/fix triggers [DONE]      |
+
+### Post-M20 Fixes
+
+| Issue | Agent      | PR   | Description                                                      |
+| ----- | ---------- | ---- | ---------------------------------------------------------------- |
+| #594  | server-dev | #595 | Fix taskRoleSchema missing implement/fix enum values [DONE]      |
+| #596  | server-dev | #599 | Summary result handler missing implement/fix cases [DONE]        |
+| #597  | cli-dev    | #598 | Default agent roles missing implement and fix [DONE]             |
+
+## M21: Redesign CLI Agent Polling (2026-03-30)
+
+Epic: #593
+
+| Issue | Agent      | PR   | Description                                              |
+| ----- | ---------- | ---- | -------------------------------------------------------- |
+| #600  | server-dev | #606 | Remove API key auth — OAuth-only [DONE]                  |
+| #601  | architect  | #604 | Add BatchPoll types to shared package [DONE]             |
+| #602  | server-dev | #605 | Add POST /api/tasks/poll/batch endpoint [DONE]           |
+| #603  | cli-dev    | #607 | Batch poll coordinator and repo access check [DONE]      |
+| #581  | server-dev | #592 | Store PR diff size on task for CLI-side filtering [DONE]  |
 
 ## Open Issues
-
-- #560 [cli-dev, high] Keep heartbeat alive during review execution — IN PROGRESS
-- #554 [server-dev, medium, Backlog] Prefer model diversity across all tasks in a group
-- #553 [cli-dev, medium, Backlog] Auto-cleanup cloned codebase repos after task completion
-- #473 [cli-dev, medium, Ready] Persistent repo cache with git worktrees
-- #427 [cli-dev, medium, Ready] Add --verbose mode for debugging
 - #409 [server-dev, low, Backlog] Add prompt_hash to task creation and claim response
 - #410 [cli-dev, low, Backlog] Include prompt_hash in result submission
 - #404 [architect, medium, Backlog] Design security sandbox container
@@ -501,3 +528,28 @@ Parent issue: #445
 | #552 | #551   | server-dev | 03-28 | Fix summary task race condition  |
 | #558 | #555   | server-dev | 03-28 | Summarizer preferred_models      |
 | #559 | #557   | cli-dev    | 03-28 | Repo filter mode compat aliases  |
+| #562 | #560   | cli-dev    | 03-28 | Keep heartbeat alive on claim    |
+| #563 | #473   | cli-dev    | 03-28 | Persistent repo cache worktrees  |
+| #571 | #554   | server-dev | 03-28 | Model diversity in task groups   |
+| #572 | #553   | cli-dev    | 03-28 | Auto-cleanup cloned repos        |
+| #573 | #427   | cli-dev    | 03-28 | Verbose mode for debugging       |
+| #575 | #565   | cli-dev    | 03-28 | Multi-instance agent option      |
+| #579 | #578   | cli-dev    | 03-28 | Fix private repo filter mode     |
+| #582 | --     | external   | 03-28 | Fix org membership fetch         |
+| #583 | #576   | cli-dev    | 03-28 | Fix auth login re-auth prompt    |
+| #584 | #566   | architect  | 03-28 | Add implement/fix shared types   |
+| #585 | #577   | cli-dev    | 03-28 | Auth file path config            |
+| #586 | #567   | server-dev | 03-28 | Handle /opencara fix trigger     |
+| #587 | #580   | cli-dev    | 03-29 | Share git worktree across tasks  |
+| #588 | #568   | server-dev | 03-29 | Handle /opencara go trigger      |
+| #589 | #570   | cli-dev    | 03-29 | Fix task executor                |
+| #590 | #569   | cli-dev    | 03-29 | Implement task executor          |
+| #591 | #574   | architect  | 03-29 | Fixed permission rules impl/fix  |
+| #592 | #581   | server-dev | 03-29 | Store PR diff size on task       |
+| #595 | #594   | bug        | 03-30 | Fix taskRoleSchema impl/fix      |
+| #598 | #597   | cli-dev    | 03-30 | Default agent roles impl/fix     |
+| #599 | #596   | server-dev | 03-30 | Summary handler impl/fix cases   |
+| #604 | #601   | architect  | 03-30 | Add BatchPoll types to shared    |
+| #605 | #602   | server-dev | 03-30 | POST /api/tasks/poll/batch       |
+| #606 | #600   | server-dev | 03-30 | Remove API key auth — OAuth-only |
+| #607 | #603   | cli-dev    | 03-30 | Batch poll coordinator + access  |
