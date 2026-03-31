@@ -15,15 +15,6 @@ const GITHUB_OAUTH_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 /** Timeout for GitHub OAuth proxy calls (10 seconds). */
 const OAUTH_PROXY_TIMEOUT_MS = 10_000;
 
-/**
- * Fallback expires_in for OAuth App tokens that don't include one (10 years in seconds).
- * OAuth App tokens don't expire on GitHub's side, so using a large value prevents artificial
- * expiry in the CLI. GitHub App tokens always include expires_in per their refresh token docs,
- * so this fallback is only hit for OAuth Apps.
- * See: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens
- */
-const NON_EXPIRING_EXPIRES_IN = 315_360_000; // 10 years in seconds
-
 /** Safely fetch a URL with timeout, returning null on network/timeout errors. */
 async function safeFetch(url: string, init: RequestInit): Promise<Response | null> {
   const controller = new AbortController();
@@ -220,7 +211,8 @@ export function authRoutes() {
     return c.json<DeviceFlowTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in: typeof data.expires_in === 'number' ? data.expires_in : NON_EXPIRING_EXPIRES_IN,
+      // expires_in is absent for OAuth App tokens — omit rather than fabricate a value
+      expires_in: typeof data.expires_in === 'number' ? data.expires_in : undefined,
       token_type: data.token_type,
     });
   });
@@ -294,7 +286,8 @@ export function authRoutes() {
     return c.json<RefreshTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in: typeof data.expires_in === 'number' ? data.expires_in : NON_EXPIRING_EXPIRES_IN,
+      // expires_in is absent for OAuth App tokens — omit rather than fabricate a value
+      expires_in: typeof data.expires_in === 'number' ? data.expires_in : undefined,
       token_type: data.token_type,
     });
   });

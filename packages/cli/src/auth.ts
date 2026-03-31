@@ -15,7 +15,8 @@ export interface StoredAuth {
   access_token: string;
   /** Optional — present for GitHub App tokens that support refresh. */
   refresh_token?: string;
-  expires_at: number; // unix ms
+  /** Optional — absent for OAuth App tokens that never expire on GitHub's side. */
+  expires_at?: number; // unix ms
   github_username: string;
   github_user_id: number;
 }
@@ -39,9 +40,10 @@ export function loadAuth(configPath?: string | null): StoredAuth | null {
     const data = JSON.parse(raw) as Record<string, unknown>;
     if (
       typeof data.access_token === 'string' &&
-      typeof data.expires_at === 'number' &&
       typeof data.github_username === 'string' &&
       typeof data.github_user_id === 'number' &&
+      // expires_at is optional — absent for OAuth App tokens that never expire
+      (data.expires_at === undefined || typeof data.expires_at === 'number') &&
       // refresh_token is optional — tolerate non-refreshable tokens, but validate type when present
       (data.refresh_token === undefined || typeof data.refresh_token === 'string')
     ) {
@@ -91,6 +93,8 @@ export function deleteAuth(configPath?: string | null): void {
 export function isAuthenticated(configPath?: string | null): boolean {
   const auth = loadAuth(configPath);
   if (!auth) return false;
+  // No expires_at means the token never expires (OAuth App token)
+  if (auth.expires_at === undefined) return true;
   return auth.expires_at > Date.now();
 }
 
@@ -235,7 +239,11 @@ export async function login(platformUrl: string, deps: LoginDeps = {}): Promise<
     const auth: StoredAuth = {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
-      expires_at: Date.now() + tokenData.expires_in * 1000,
+      // expires_in absent means OAuth App token — don't store expires_at
+      expires_at:
+        typeof tokenData.expires_in === 'number'
+          ? Date.now() + tokenData.expires_in * 1000
+          : undefined,
       github_username: user.login,
       github_user_id: user.id,
     };
@@ -279,6 +287,11 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
   const auth = loadAuthFn();
   if (!auth) {
     throw new AuthError('Not authenticated. Run `opencara auth login` first.');
+  }
+
+  // No expires_at means OAuth App token — it never expires, return immediately
+  if (auth.expires_at === undefined) {
+    return auth.access_token;
   }
 
   // Token still valid (with buffer)
@@ -327,7 +340,10 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
     access_token: refreshData.access_token,
     // Use new refresh_token if provided, otherwise keep existing
     refresh_token: refreshData.refresh_token ?? auth.refresh_token,
-    expires_at: nowFn() + refreshData.expires_in * 1000,
+    expires_at:
+      typeof refreshData.expires_in === 'number'
+        ? nowFn() + refreshData.expires_in * 1000
+        : undefined,
   };
 
   saveAuthFn(updated);
