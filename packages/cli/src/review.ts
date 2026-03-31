@@ -195,8 +195,6 @@ const SECTION_VERDICT_PATTERN = /##\s*Verdict\s*\n+\s*(APPROVE|REQUEST_CHANGES|C
 const LEGACY_VERDICT_PATTERN = /^VERDICT:\s*(APPROVE|REQUEST_CHANGES|COMMENT)\s*$/m;
 // Compact format: ## Blocking issues\n yes|no
 const BLOCKING_ISSUES_PATTERN = /##\s*Blocking issues\s*\n+\s*(yes|no)\b/im;
-// Compact format: ## Review confidence\n high|medium|low
-const REVIEW_CONFIDENCE_PATTERN = /##\s*Review confidence\s*\n+\s*(high|medium|low)\b/im;
 
 export function extractVerdict(text: string): { verdict: ReviewVerdict; review: string } {
   // Try new ## Verdict section format first
