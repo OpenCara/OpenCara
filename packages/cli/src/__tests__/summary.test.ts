@@ -101,7 +101,7 @@ describe('buildSummarySystemPrompt', () => {
   it('includes agent attribution table', () => {
     const prompt = buildSummarySystemPrompt('acme', 'widgets', 2);
     expect(prompt).toContain('## Agent Attribution');
-    expect(prompt).toContain('Discovered by');
+    expect(prompt).toContain('Synthesizer');
   });
 
   it('includes large diff triage policy', () => {
