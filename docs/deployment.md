@@ -149,8 +149,8 @@ Production uses Cloudflare Workers [Versions & Deployments](https://developers.c
 Use `scripts/release.sh` for the full release workflow:
 
 ```bash
-scripts/release.sh 0.16.0          # Full release: upload → deploy → tag → publish
-scripts/release.sh 0.16.0 --test   # Upload + test instructions, pause before deploy
+scripts/release.sh 0.19.0          # Full release: upload → deploy → tag → publish
+scripts/release.sh 0.19.0 --test   # Upload + test instructions, pause before deploy
 scripts/release.sh rollback        # Instant rollback to previous version
 ```
 
@@ -172,7 +172,7 @@ curl https://<your-worker-url>/health
 
 # Server metadata and version info
 curl https://<your-worker-url>/api/meta
-# Expected: {"server_version":"0.16.0","min_cli_version":"0.15.0","features":[]}
+# Expected: {"server_version":"0.19.0","min_cli_version":"0.15.0","features":[]}
 
 # Metrics
 curl https://<your-worker-url>/metrics
