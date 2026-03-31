@@ -18,7 +18,7 @@ function todayKey(): string {
 }
 
 const NO_LIMITS: UsageLimits = {
-  maxReviewsPerDay: null,
+  maxTasksPerDay: null,
   maxTokensPerDay: null,
   maxTokensPerReview: null,
 };
@@ -47,13 +47,13 @@ describe('UsageTracker', () => {
     it('loads existing data from file', () => {
       const existing: UsageData = {
         days: [
-          { date: '2026-03-22', reviews: 5, tokens: { input: 1000, output: 500, estimated: 200 } },
+          { date: '2026-03-22', tasks: 5, tokens: { input: 1000, output: 500, estimated: 200 } },
         ],
       };
       fs.writeFileSync(filePath, JSON.stringify(existing));
       const tracker = new UsageTracker(filePath);
       expect(tracker.getData().days).toHaveLength(1);
-      expect(tracker.getData().days[0].reviews).toBe(5);
+      expect(tracker.getData().days[0].tasks).toBe(5);
     });
 
     it('handles corrupt JSON gracefully', () => {
@@ -68,27 +68,44 @@ describe('UsageTracker', () => {
       const tracker = new UsageTracker(filePath);
       const today = tracker.getToday();
       expect(today.date).toBe(todayKey());
-      expect(today.reviews).toBe(0);
+      expect(today.tasks).toBe(0);
       expect(today.tokens).toEqual({ input: 0, output: 0, estimated: 0 });
     });
 
     it('returns existing today entry', () => {
       const existing: UsageData = {
-        days: [{ date: todayKey(), reviews: 3, tokens: { input: 100, output: 50, estimated: 0 } }],
+        days: [{ date: todayKey(), tasks: 3, tokens: { input: 100, output: 50, estimated: 0 } }],
       };
       fs.writeFileSync(filePath, JSON.stringify(existing));
       const tracker = new UsageTracker(filePath);
       const today = tracker.getToday();
-      expect(today.reviews).toBe(3);
+      expect(today.tasks).toBe(3);
+    });
+
+    it('migrates legacy reviews field to tasks on load', () => {
+      const existing: UsageData = {
+        days: [
+          {
+            date: todayKey(),
+            reviews: 5,
+            tasks: undefined as unknown as number,
+            tokens: { input: 10, output: 5, estimated: 0 },
+          },
+        ],
+      };
+      fs.writeFileSync(filePath, JSON.stringify(existing));
+      const tracker = new UsageTracker(filePath);
+      const today = tracker.getToday();
+      expect(today.tasks).toBe(5);
     });
   });
 
-  describe('recordReview', () => {
-    it('increments review count and adds actual tokens', () => {
+  describe('recordTask', () => {
+    it('increments task count and adds actual tokens', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 500, output: 200, estimated: false });
+      tracker.recordTask({ input: 500, output: 200, estimated: false });
       const today = tracker.getToday();
-      expect(today.reviews).toBe(1);
+      expect(today.tasks).toBe(1);
       expect(today.tokens.input).toBe(500);
       expect(today.tokens.output).toBe(200);
       expect(today.tokens.estimated).toBe(0);
@@ -96,29 +113,57 @@ describe('UsageTracker', () => {
 
     it('increments estimated tokens when estimated=true', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 300, output: 100, estimated: true });
+      tracker.recordTask({ input: 300, output: 100, estimated: true });
       const today = tracker.getToday();
       expect(today.tokens.estimated).toBe(400);
       expect(today.tokens.input).toBe(0);
       expect(today.tokens.output).toBe(0);
     });
 
-    it('persists to file after recording', () => {
+    it('persists tasks to file after recording', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 100, output: 50, estimated: false });
+      tracker.recordTask({ input: 100, output: 50, estimated: false });
       const raw = fs.readFileSync(filePath, 'utf-8');
       const data = JSON.parse(raw) as UsageData;
-      expect(data.days[0].reviews).toBe(1);
+      expect(data.days[0].tasks).toBe(1);
     });
 
-    it('accumulates across multiple reviews', () => {
+    it('accumulates across multiple tasks', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 100, output: 50, estimated: false });
-      tracker.recordReview({ input: 200, output: 100, estimated: false });
+      tracker.recordTask({ input: 100, output: 50, estimated: false });
+      tracker.recordTask({ input: 200, output: 100, estimated: false });
       const today = tracker.getToday();
-      expect(today.reviews).toBe(2);
+      expect(today.tasks).toBe(2);
       expect(today.tokens.input).toBe(300);
       expect(today.tokens.output).toBe(150);
+    });
+
+    it('tracks tasks per agent when agentId provided', () => {
+      const tracker = new UsageTracker(filePath);
+      tracker.recordTask({ input: 100, output: 50, estimated: false }, 'claude');
+      tracker.recordTask({ input: 200, output: 100, estimated: false }, 'claude');
+      tracker.recordTask({ input: 50, output: 25, estimated: false }, 'codex');
+      const today = tracker.getToday();
+      expect(today.tasks).toBe(3);
+      expect(today.tasksByAgent?.['claude']).toBe(2);
+      expect(today.tasksByAgent?.['codex']).toBe(1);
+    });
+
+    it('global task count increments even when agentId provided', () => {
+      const tracker = new UsageTracker(filePath);
+      tracker.recordTask({ input: 100, output: 50, estimated: false }, 'claude');
+      const today = tracker.getToday();
+      expect(today.tasks).toBe(1);
+    });
+  });
+
+  describe('recordReview (deprecated alias)', () => {
+    it('still works as deprecated alias for recordTask', () => {
+      const tracker = new UsageTracker(filePath);
+      tracker.recordReview({ input: 100, output: 50, estimated: false });
+      const today = tracker.getToday();
+      expect(today.tasks).toBe(1);
+      expect(today.tokens.input).toBe(100);
     });
   });
 
@@ -129,14 +174,14 @@ describe('UsageTracker', () => {
       expect(result.allowed).toBe(true);
     });
 
-    it('blocks when review limit reached', () => {
+    it('blocks when task limit reached', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 100, output: 50, estimated: false });
-      tracker.recordReview({ input: 100, output: 50, estimated: false });
-      const result = tracker.checkLimits({ ...NO_LIMITS, maxReviewsPerDay: 2 });
+      tracker.recordTask({ input: 100, output: 50, estimated: false });
+      tracker.recordTask({ input: 100, output: 50, estimated: false });
+      const result = tracker.checkLimits({ ...NO_LIMITS, maxTasksPerDay: 2 });
       expect(result.allowed).toBe(false);
       if (!result.allowed) {
-        expect(result.reason).toContain('review limit');
+        expect(result.reason).toContain('task limit');
       }
     });
 
@@ -150,12 +195,12 @@ describe('UsageTracker', () => {
       }
     });
 
-    it('warns at 80% of review limit', () => {
+    it('warns at 80% of task limit', () => {
       const tracker = new UsageTracker(filePath);
       for (let i = 0; i < 8; i++) {
-        tracker.recordReview({ input: 10, output: 5, estimated: false });
+        tracker.recordTask({ input: 10, output: 5, estimated: false });
       }
-      const result = tracker.checkLimits({ ...NO_LIMITS, maxReviewsPerDay: 10 });
+      const result = tracker.checkLimits({ ...NO_LIMITS, maxTasksPerDay: 10 });
       expect(result.allowed).toBe(true);
       if (result.allowed) {
         expect(result.warning).toContain('80%');
@@ -174,12 +219,60 @@ describe('UsageTracker', () => {
 
     it('no warning below 80%', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 100, output: 50, estimated: false });
-      const result = tracker.checkLimits({ ...NO_LIMITS, maxReviewsPerDay: 10 });
+      tracker.recordTask({ input: 100, output: 50, estimated: false });
+      const result = tracker.checkLimits({ ...NO_LIMITS, maxTasksPerDay: 10 });
       expect(result.allowed).toBe(true);
       if (result.allowed) {
         expect(result.warning).toBeUndefined();
       }
+    });
+
+    it('respects per-agent limit override over global', () => {
+      const tracker = new UsageTracker(filePath);
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      // Global limit is 10 (not hit), but per-agent limit is 3 (hit)
+      const result = tracker.checkLimits(
+        { ...NO_LIMITS, maxTasksPerDay: 10 },
+        { maxTasksPerDay: 3 },
+        'claude',
+      );
+      expect(result.allowed).toBe(false);
+      if (!result.allowed) {
+        expect(result.reason).toContain('3/3');
+      }
+    });
+
+    it('falls back to global limit using aggregate count (not per-agent count)', () => {
+      const tracker = new UsageTracker(filePath);
+      // 3 tasks from claude, 2 from codex = 5 total
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'codex');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'codex');
+      // Global limit is 5 (aggregate hits limit), per-agent claude count is only 3
+      // Without per-agent override, should use aggregate (5) not per-agent (3)
+      const result = tracker.checkLimits({ ...NO_LIMITS, maxTasksPerDay: 5 }, undefined, 'claude');
+      expect(result.allowed).toBe(false);
+      if (!result.allowed) {
+        expect(result.reason).toContain('5/5');
+      }
+    });
+
+    it('per-agent null limit means unlimited (overrides global)', () => {
+      const tracker = new UsageTracker(filePath);
+      for (let i = 0; i < 20; i++) {
+        tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      }
+      // Per-agent null means unlimited, even if global limit is set
+      const result = tracker.checkLimits(
+        { ...NO_LIMITS, maxTasksPerDay: 5 },
+        { maxTasksPerDay: null },
+        'claude',
+      );
+      expect(result.allowed).toBe(true);
     });
   });
 
@@ -216,7 +309,7 @@ describe('UsageTracker', () => {
         const date = new Date(2026, 2, i + 1);
         days.push({
           date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
-          reviews: 1,
+          tasks: 1,
           tokens: { input: 10, output: 5, estimated: 0 },
         });
       }
@@ -230,38 +323,86 @@ describe('UsageTracker', () => {
   });
 
   describe('formatSummary', () => {
-    it('includes date, reviews, and tokens', () => {
+    it('includes date, tasks, and tokens', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 500, output: 200, estimated: false });
+      tracker.recordTask({ input: 500, output: 200, estimated: false });
       const summary = tracker.formatSummary(NO_LIMITS);
       expect(summary).toContain('Usage Summary:');
       expect(summary).toContain(todayKey());
-      expect(summary).toContain('Reviews: 1');
+      expect(summary).toContain('Tasks: 1');
       expect(summary).toContain('500');
     });
 
     it('shows limit info when limits are set', () => {
       const tracker = new UsageTracker(filePath);
-      tracker.recordReview({ input: 100, output: 50, estimated: false });
+      tracker.recordTask({ input: 100, output: 50, estimated: false });
       const summary = tracker.formatSummary({
-        maxReviewsPerDay: 10,
+        maxTasksPerDay: 10,
         maxTokensPerDay: 100000,
         maxTokensPerReview: null,
       });
-      expect(summary).toContain('Reviews: 1/10');
+      expect(summary).toContain('Tasks: 1/10');
       expect(summary).toContain('Remaining');
+    });
+
+    it('shows per-agent task count when agentId provided', () => {
+      const tracker = new UsageTracker(filePath);
+      tracker.recordTask({ input: 100, output: 50, estimated: false }, 'claude');
+      tracker.recordTask({ input: 100, output: 50, estimated: false }, 'claude');
+      tracker.recordTask({ input: 100, output: 50, estimated: false }, 'codex');
+      const summary = tracker.formatSummary(
+        { ...NO_LIMITS, maxTasksPerDay: 5 },
+        { maxTasksPerDay: 3 },
+        'claude',
+      );
+      expect(summary).toContain('Tasks: 2/3');
+      expect(summary).toContain('Remaining tasks: 1');
     });
   });
 
   describe('persistence across instances', () => {
     it('data survives tracker recreation', () => {
       const tracker1 = new UsageTracker(filePath);
-      tracker1.recordReview({ input: 500, output: 200, estimated: false });
+      tracker1.recordTask({ input: 500, output: 200, estimated: false });
 
       const tracker2 = new UsageTracker(filePath);
       const today = tracker2.getToday();
-      expect(today.reviews).toBe(1);
+      expect(today.tasks).toBe(1);
       expect(today.tokens.input).toBe(500);
+    });
+  });
+
+  describe('backward compatibility', () => {
+    it('loads legacy usage.json with reviews field', () => {
+      const legacyData = {
+        days: [
+          {
+            date: '2026-03-30',
+            reviews: 7,
+            tokens: { input: 500, output: 200, estimated: 0 },
+          },
+        ],
+      };
+      fs.writeFileSync(filePath, JSON.stringify(legacyData));
+      const tracker = new UsageTracker(filePath);
+      const day = tracker.getData().days[0];
+      expect(day.reviews).toBe(7);
+    });
+
+    it('getToday migrates reviews to tasks for today', () => {
+      const legacyData = {
+        days: [
+          {
+            date: todayKey(),
+            reviews: 4,
+            tokens: { input: 100, output: 50, estimated: 0 },
+          },
+        ],
+      };
+      fs.writeFileSync(filePath, JSON.stringify(legacyData));
+      const tracker = new UsageTracker(filePath);
+      const today = tracker.getToday();
+      expect(today.tasks).toBe(4);
     });
   });
 });

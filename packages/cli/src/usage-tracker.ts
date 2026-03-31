@@ -15,8 +15,11 @@ export interface DailyTokens {
 
 export interface DailyUsage {
   date: string; // YYYY-MM-DD local time
-  reviews: number;
+  tasks: number;
+  tasksByAgent?: Record<string, number>;
   tokens: DailyTokens;
+  /** @deprecated Use `tasks` instead. Accepted when loading for backward compat. */
+  reviews?: number;
 }
 
 export interface UsageData {
@@ -75,17 +78,31 @@ export class UsageTracker {
     const key = todayKey();
     let today = this.data.days.find((d) => d.date === key);
     if (!today) {
-      today = { date: key, reviews: 0, tokens: { input: 0, output: 0, estimated: 0 } };
+      today = { date: key, tasks: 0, tokens: { input: 0, output: 0, estimated: 0 } };
       this.data.days.push(today);
       this.pruneHistory();
+    }
+    // Backward compat: migrate `reviews` field to `tasks` on first access
+    if (today.tasks === undefined && today.reviews !== undefined) {
+      today.tasks = today.reviews;
+    }
+    if (today.tasks === undefined) {
+      today.tasks = 0;
     }
     return today;
   }
 
-  /** Record a completed review with its token usage. */
-  recordReview(tokens: { input: number; output: number; estimated: boolean }): void {
+  /** Record a completed task with its token usage. Optionally track per agent. */
+  recordTask(
+    tokens: { input: number; output: number; estimated: boolean },
+    agentId?: string,
+  ): void {
     const today = this.getToday();
-    today.reviews += 1;
+    today.tasks += 1;
+    if (agentId) {
+      if (!today.tasksByAgent) today.tasksByAgent = {};
+      today.tasksByAgent[agentId] = (today.tasksByAgent[agentId] ?? 0) + 1;
+    }
     if (tokens.estimated) {
       today.tokens.estimated += tokens.input + tokens.output;
     } else {
@@ -95,17 +112,45 @@ export class UsageTracker {
     this.save();
   }
 
-  /** Check whether a new review is allowed under the configured limits. */
-  checkLimits(limits: UsageLimits): LimitStatus {
+  /** @deprecated Use recordTask instead. */
+  recordReview(tokens: { input: number; output: number; estimated: boolean }): void {
+    this.recordTask(tokens);
+  }
+
+  /**
+   * Check whether a new task is allowed under the configured limits.
+   * Per-agent limits (agentLimits.maxTasksPerDay) override global limits for task cap.
+   */
+  checkLimits(
+    limits: UsageLimits,
+    agentLimits?: { maxTasksPerDay?: number | null },
+    agentId?: string,
+  ): LimitStatus {
     const today = this.getToday();
     const todayTokenTotal = totalTokens(today.tokens);
 
-    // Check review cap
-    if (limits.maxReviewsPerDay !== null && today.reviews >= limits.maxReviewsPerDay) {
-      return {
-        allowed: false,
-        reason: `Daily review limit reached (${today.reviews}/${limits.maxReviewsPerDay})`,
-      };
+    // Per-agent limit is active only when explicitly set in agentLimits
+    const perAgentMaxTasks = agentLimits?.maxTasksPerDay;
+    const hasPerAgentLimit = perAgentMaxTasks !== undefined;
+
+    // Resolve effective task cap: per-agent overrides global
+    const effectiveMaxTasksPerDay: number | null = hasPerAgentLimit
+      ? (perAgentMaxTasks ?? null)
+      : limits.maxTasksPerDay;
+
+    // Use per-agent count only when a per-agent limit is active;
+    // global limit is always checked against the aggregate total.
+    const countForCheck =
+      hasPerAgentLimit && agentId ? (today.tasksByAgent?.[agentId] ?? 0) : today.tasks;
+
+    // Check task cap
+    if (effectiveMaxTasksPerDay !== null) {
+      if (countForCheck >= effectiveMaxTasksPerDay) {
+        return {
+          allowed: false,
+          reason: `Daily task limit reached (${countForCheck}/${effectiveMaxTasksPerDay})`,
+        };
+      }
     }
 
     // Check token budget
@@ -118,11 +163,11 @@ export class UsageTracker {
 
     // Check 80% warnings
     const warnings: string[] = [];
-    if (limits.maxReviewsPerDay !== null) {
-      const ratio = today.reviews / limits.maxReviewsPerDay;
+    if (effectiveMaxTasksPerDay !== null) {
+      const ratio = countForCheck / effectiveMaxTasksPerDay;
       if (ratio >= WARNING_THRESHOLD) {
         warnings.push(
-          `Reviews: ${today.reviews}/${limits.maxReviewsPerDay} (${Math.round(ratio * 100)}%)`,
+          `Tasks: ${countForCheck}/${effectiveMaxTasksPerDay} (${Math.round(ratio * 100)}%)`,
         );
       }
     }
@@ -158,13 +203,26 @@ export class UsageTracker {
   }
 
   /** Format a usage summary for display on shutdown. */
-  formatSummary(limits: UsageLimits): string {
+  formatSummary(
+    limits: UsageLimits,
+    agentLimits?: { maxTasksPerDay?: number | null },
+    agentId?: string,
+  ): string {
     const today = this.getToday();
     const todayTokenTotal = totalTokens(today.tokens);
+    const perAgentMaxTasks = agentLimits?.maxTasksPerDay;
+    const hasPerAgentLimit = perAgentMaxTasks !== undefined;
+    const effectiveMaxTasksPerDay: number | null = hasPerAgentLimit
+      ? (perAgentMaxTasks ?? null)
+      : limits.maxTasksPerDay;
+    // Show per-agent count when per-agent limit is active; otherwise show aggregate
+    const taskCount =
+      hasPerAgentLimit && agentId ? (today.tasksByAgent?.[agentId] ?? 0) : today.tasks;
+
     const lines: string[] = ['Usage Summary:'];
     lines.push(`  Date: ${today.date}`);
     lines.push(
-      `  Reviews: ${today.reviews}${limits.maxReviewsPerDay !== null ? `/${limits.maxReviewsPerDay}` : ''}`,
+      `  Tasks: ${taskCount}${effectiveMaxTasksPerDay !== null ? `/${effectiveMaxTasksPerDay}` : ''}`,
     );
 
     const tokenParts: string[] = [];
@@ -181,9 +239,9 @@ export class UsageTracker {
       const remaining = Math.max(0, limits.maxTokensPerDay - todayTokenTotal);
       lines.push(`  Remaining token budget: ${remaining.toLocaleString()}`);
     }
-    if (limits.maxReviewsPerDay !== null) {
-      const remaining = Math.max(0, limits.maxReviewsPerDay - today.reviews);
-      lines.push(`  Remaining reviews: ${remaining}`);
+    if (effectiveMaxTasksPerDay !== null) {
+      const remaining = Math.max(0, effectiveMaxTasksPerDay - taskCount);
+      lines.push(`  Remaining tasks: ${remaining}`);
     }
 
     return lines.join('\n');

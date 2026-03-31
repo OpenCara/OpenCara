@@ -40,7 +40,7 @@ vi.mock('../config.js', () => ({
       { model: 'claude', tool: 'claude-cli', name: 'agent-0', command: 'echo review' },
       { model: 'gpt-4', tool: 'codex', name: 'agent-1', command: 'echo codex' },
     ],
-    usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
+    usageLimits: { maxTasksPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
   })),
   resolveCodebaseDir: vi.fn(() => null),
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 10,

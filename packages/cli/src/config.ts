@@ -19,10 +19,11 @@ export interface LocalAgentConfig {
   codebase_dir?: string;
   repos?: RepoConfig;
   instances?: number;
+  maxTasksPerDay?: number | null;
 }
 
 export interface UsageLimits {
-  maxReviewsPerDay: number | null;
+  maxTasksPerDay: number | null;
   maxTokensPerDay: number | null;
   maxTokensPerReview: number | null;
 }
@@ -217,6 +218,16 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
         agent.instances = obj.instances;
       }
     }
+    if (typeof obj.max_tasks_per_day === 'number') {
+      const v = parsePositiveInt(obj.max_tasks_per_day);
+      if (v === null) {
+        console.warn(
+          `\u26a0 Config warning: agents[${i}].max_tasks_per_day must be a positive integer, got ${obj.max_tasks_per_day}. Value ignored.`,
+        );
+      } else {
+        agent.maxTasksPerDay = v;
+      }
+    }
     const repoConfig = parseRepoConfig(obj, i);
     if (repoConfig) agent.repos = repoConfig;
     const synthesizeRepoConfig = parseRepoConfig(obj, i, 'synthesize_repos');
@@ -286,6 +297,7 @@ function validateConfigData(
 
   // Validate usage limit fields
   for (const field of [
+    'max_tasks_per_day',
     'max_reviews_per_day',
     'max_tokens_per_day',
     'max_tokens_per_review',
@@ -319,7 +331,7 @@ export function loadConfig(): CliConfig {
     agentCommand: null,
     agents: null,
     usageLimits: {
-      maxReviewsPerDay: null,
+      maxTasksPerDay: null,
       maxTokensPerDay: null,
       maxTokensPerReview: null,
     },
@@ -362,6 +374,27 @@ export function loadConfig(): CliConfig {
     );
   }
 
+  // Parse usage limits: prefer [usage_limits] section, fall back to flat top-level fields
+  const usageLimitsSection =
+    data.usage_limits && typeof data.usage_limits === 'object'
+      ? (data.usage_limits as Record<string, unknown>)
+      : null;
+
+  // Resolve max_tasks_per_day: check new name first, then deprecated name
+  const globalMaxTasksPerDay =
+    parsePositiveInt(usageLimitsSection?.max_tasks_per_day ?? data.max_tasks_per_day) ??
+    (() => {
+      const deprecated = parsePositiveInt(
+        usageLimitsSection?.max_reviews_per_day ?? data.max_reviews_per_day,
+      );
+      if (deprecated !== null) {
+        console.warn(
+          '\u26a0 Config warning: max_reviews_per_day is deprecated. Use max_tasks_per_day instead.',
+        );
+      }
+      return deprecated;
+    })();
+
   return {
     platformUrl:
       envPlatformUrl ||
@@ -390,9 +423,13 @@ export function loadConfig(): CliConfig {
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
     usageLimits: {
-      maxReviewsPerDay: parsePositiveInt(data.max_reviews_per_day),
-      maxTokensPerDay: parsePositiveInt(data.max_tokens_per_day),
-      maxTokensPerReview: parsePositiveInt(data.max_tokens_per_review),
+      maxTasksPerDay: globalMaxTasksPerDay,
+      maxTokensPerDay: parsePositiveInt(
+        usageLimitsSection?.max_tokens_per_day ?? data.max_tokens_per_day,
+      ),
+      maxTokensPerReview: parsePositiveInt(
+        usageLimitsSection?.max_tokens_per_review ?? data.max_tokens_per_review,
+      ),
     },
   };
 }
@@ -426,8 +463,8 @@ export function saveConfig(config: CliConfig): void {
   if (config.agents !== null) {
     data.agents = config.agents;
   }
-  if (config.usageLimits?.maxReviewsPerDay != null) {
-    data.max_reviews_per_day = config.usageLimits.maxReviewsPerDay;
+  if (config.usageLimits?.maxTasksPerDay != null) {
+    data.max_tasks_per_day = config.usageLimits.maxTasksPerDay;
   }
   if (config.usageLimits?.maxTokensPerDay != null) {
     data.max_tokens_per_day = config.usageLimits.maxTokensPerDay;

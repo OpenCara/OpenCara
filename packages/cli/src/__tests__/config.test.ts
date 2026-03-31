@@ -291,6 +291,131 @@ describe('config', () => {
         expect(config.platformUrl).toBe('https://from-config.dev');
       });
     });
+
+    describe('usage limits parsing', () => {
+      it('parses global max_tasks_per_day from flat field', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_tasks_per_day = 20\n');
+
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBe(20);
+      });
+
+      it('parses deprecated max_reviews_per_day as max_tasks_per_day with warning', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_reviews_per_day = 15\n');
+
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBe(15);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_reviews_per_day is deprecated'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('max_tasks_per_day takes precedence over max_reviews_per_day', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(
+          'max_tasks_per_day = 10\nmax_reviews_per_day = 5\n',
+        );
+
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBe(10);
+        expect(warnSpy).not.toHaveBeenCalledWith(
+          expect.stringContaining('max_reviews_per_day is deprecated'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('parses max_tasks_per_day from [usage_limits] section', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('[usage_limits]\nmax_tasks_per_day = 30\n');
+
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBe(30);
+      });
+
+      it('[usage_limits] section takes precedence over flat max_tasks_per_day', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(
+          'max_tasks_per_day = 5\n\n[usage_limits]\nmax_tasks_per_day = 30\n',
+        );
+
+        // Section value wins over flat field
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBe(30);
+      });
+
+      it('returns null maxTasksPerDay when not set', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('platform_url = "https://api.opencara.com"\n');
+
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBeNull();
+      });
+
+      it('ignores max_tasks_per_day <= 0 with warning', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_tasks_per_day = -1\n');
+
+        const config = loadConfig();
+        expect(config.usageLimits.maxTasksPerDay).toBeNull();
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('max_tasks_per_day'));
+        warnSpy.mockRestore();
+      });
+    });
+
+    describe('per-agent max_tasks_per_day parsing', () => {
+      it('parses max_tasks_per_day from [[agents]] entry', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(
+          '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nmax_tasks_per_day = 5\n',
+        );
+
+        const config = loadConfig();
+        expect(config.agents).not.toBeNull();
+        expect(config.agents![0].maxTasksPerDay).toBe(5);
+      });
+
+      it('ignores invalid max_tasks_per_day per agent with warning', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(
+          '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nmax_tasks_per_day = 0\n',
+        );
+
+        const config = loadConfig();
+        expect(config.agents![0].maxTasksPerDay).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_tasks_per_day must be a positive integer'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('agent without max_tasks_per_day has undefined field', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(
+          '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\n',
+        );
+
+        const config = loadConfig();
+        expect(config.agents![0].maxTasksPerDay).toBeUndefined();
+      });
+
+      it('multiple agents can have different per-agent limits', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue(
+          '[[agents]]\nmodel = "claude-sonnet-4-6"\ntool = "claude"\nmax_tasks_per_day = 5\n\n[[agents]]\nmodel = "gpt-4"\ntool = "codex"\ncommand = "codex run"\nmax_tasks_per_day = 1\n',
+        );
+
+        const config = loadConfig();
+        expect(config.agents![0].maxTasksPerDay).toBe(5);
+        expect(config.agents![1].maxTasksPerDay).toBe(1);
+      });
+    });
   });
 
   describe('saveConfig', () => {
@@ -379,6 +504,27 @@ describe('config', () => {
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('agent_command');
+    });
+
+    it('saves max_tasks_per_day when set', () => {
+      saveConfig({
+        ...baseConfig,
+        usageLimits: { maxTasksPerDay: 25, maxTokensPerDay: null, maxTokensPerReview: null },
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('max_tasks_per_day = 25');
+    });
+
+    it('does not save max_tasks_per_day when null', () => {
+      saveConfig({
+        ...baseConfig,
+        usageLimits: { maxTasksPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('max_tasks_per_day');
+      expect(content).not.toContain('max_reviews_per_day');
     });
   });
 
@@ -969,7 +1115,7 @@ github_token = "ghp_agent1"
         codebaseDir: null,
         agentCommand: null,
         agents: null,
-        usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
+        usageLimits: { maxTasksPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
       });
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
@@ -1698,7 +1844,7 @@ roles = ["review", "summary", "issue_triage"]
         codebaseDir: null,
         agentCommand: null,
         agents: [{ model: 'claude-opus-4-6', tool: 'claude', roles: ['review', 'pr_dedup'] }],
-        usageLimits: { maxReviewsPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
+        usageLimits: { maxTasksPerDay: null, maxTokensPerDay: null, maxTokensPerReview: null },
       });
 
       const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
