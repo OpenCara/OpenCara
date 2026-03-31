@@ -300,6 +300,14 @@ describe('auth', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(expired));
       expect(isAuthenticated()).toBe(false);
     });
+
+    it('returns true for non-expiring OAuth App token (10-year expires_at)', () => {
+      // OAuth App tokens get a 10-year expires_in from the server — should never be considered expired
+      const TEN_YEARS_MS = 315_360_000 * 1000;
+      const nonExpiring = { ...MOCK_AUTH, expires_at: Date.now() + TEN_YEARS_MS };
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(nonExpiring));
+      expect(isAuthenticated()).toBe(true);
+    });
   });
 
   describe('login', () => {
@@ -575,6 +583,26 @@ describe('auth', () => {
           nowFn: () => now,
         }),
       ).rejects.toThrow('no refresh token available');
+    });
+
+    it('returns token for non-expiring OAuth App token without refresh', async () => {
+      // OAuth App tokens get a 10-year expires_in from server — should be returned directly
+      const now = Date.now();
+      const TEN_YEARS_MS = 315_360_000 * 1000;
+      const auth: StoredAuth = {
+        access_token: 'ghu_oauth_token',
+        expires_at: now + TEN_YEARS_MS,
+        github_username: 'user',
+        github_user_id: 1,
+        // no refresh_token — OAuth Apps don't support it
+      };
+
+      const token = await getValidToken(PLATFORM_URL, {
+        loadAuthFn: () => auth,
+        nowFn: () => now,
+      });
+
+      expect(token).toBe('ghu_oauth_token');
     });
 
     it('preserves existing refresh_token when refresh response omits it', async () => {

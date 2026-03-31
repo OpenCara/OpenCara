@@ -257,6 +257,36 @@ describe('Auth Routes', () => {
       expect(body.refresh_token).toBeUndefined();
     });
 
+    it('returns 10-year expires_in when GitHub omits it (OAuth App token)', async () => {
+      // OAuth Apps return tokens without expires_in — should get 10-year fallback, not 8 hours
+      const ghResponse = {
+        access_token: 'ghu_oauth_token',
+        token_type: 'bearer',
+        // no expires_in — OAuth App behavior
+      };
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(ghResponse), { status: 200 }));
+
+      const res = await postDeviceToken(app, { device_code: 'dc-123' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.expires_in).toBe(315_360_000); // 10 years, not 8 hours (28800)
+    });
+
+    it('preserves expires_in from GitHub when present (GitHub App token)', async () => {
+      const ghResponse = {
+        access_token: 'ghu_app_token',
+        refresh_token: 'ghr_app_refresh',
+        expires_in: 28800, // 8 hours — GitHub App includes this
+        token_type: 'bearer',
+      };
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(ghResponse), { status: 200 }));
+
+      const res = await postDeviceToken(app, { device_code: 'dc-123' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.expires_in).toBe(28800); // preserved as-is
+    });
+
     it('returns authorization_pending error from GitHub', async () => {
       fetchSpy.mockResolvedValueOnce(
         new Response(
@@ -463,6 +493,21 @@ describe('Auth Routes', () => {
       const body = await res.json();
       expect(body.access_token).toBe('ghu_new');
       expect(body.refresh_token).toBeUndefined();
+    });
+
+    it('returns 10-year expires_in when GitHub omits it (OAuth App token)', async () => {
+      // OAuth Apps don't return expires_in on refresh — should get 10-year fallback
+      const ghResponse = {
+        access_token: 'ghu_oauth_refreshed',
+        token_type: 'bearer',
+        // no expires_in
+      };
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(ghResponse), { status: 200 }));
+
+      const res = await postRefresh(app, { refresh_token: 'ghr_old' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.expires_in).toBe(315_360_000); // 10 years, not 8 hours
     });
 
     it('returns error when GitHub returns error response', async () => {

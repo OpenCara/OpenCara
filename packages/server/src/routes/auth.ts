@@ -208,13 +208,14 @@ export function authRoutes() {
       );
     }
 
-    // Default expires_in to 8 hours if not provided (OAuth Apps don't include it)
-    const DEFAULT_EXPIRES_IN = 8 * 60 * 60;
+    // OAuth App tokens don't include expires_in — use 10 years so they never artificially expire.
+    // GitHub App tokens always include expires_in, so this fallback is only hit for OAuth Apps.
+    const NON_EXPIRING_EXPIRES_IN = 315_360_000; // 10 years in seconds
 
     return c.json<DeviceFlowTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in: typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_EXPIRES_IN,
+      expires_in: typeof data.expires_in === 'number' ? data.expires_in : NON_EXPIRING_EXPIRES_IN,
       token_type: data.token_type,
     });
   });
@@ -285,13 +286,13 @@ export function authRoutes() {
       return apiError(c, 500, 'INTERNAL_ERROR', 'Invalid token response from GitHub');
     }
 
-    const DEFAULT_EXPIRES_IN_REFRESH = 8 * 60 * 60;
+    // OAuth App tokens don't include expires_in — use 10 years so they never artificially expire.
+    const NON_EXPIRING_EXPIRES_IN = 315_360_000; // 10 years in seconds
 
     return c.json<RefreshTokenResponse>({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_in:
-        typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_EXPIRES_IN_REFRESH,
+      expires_in: typeof data.expires_in === 'number' ? data.expires_in : NON_EXPIRING_EXPIRES_IN,
       token_type: data.token_type,
     });
   });
