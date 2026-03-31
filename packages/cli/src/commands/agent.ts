@@ -1502,8 +1502,8 @@ export async function batchPollLoop(
     githubToken,
   } = options;
 
-  // Use the first agent's logger for coordinator-level messages
-  const coordLogger = agentStates[0]?.logger ?? createLogger('batch');
+  // Use a dedicated logger for coordinator-level messages
+  const coordLogger = createLogger('batch');
   const { log, logError, logWarn } = coordLogger;
 
   log(
