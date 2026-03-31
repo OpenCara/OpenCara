@@ -103,7 +103,7 @@ export function generateConfig(tools: DiscoveredTool[]): string {
     lines.push('[[agents]]');
     lines.push(`tool = "${tool.toolName}"`);
     lines.push(`model = "${tool.defaultModel}"`);
-    lines.push('roles = ["reviewer", "summarizer"]');
+    lines.push('roles = ["review", "summary"]');
     lines.push(`max_tasks_per_day = ${tool.maxTasksPerDay}`);
     lines.push('');
   }
@@ -152,7 +152,7 @@ export async function interactiveSetup(): Promise<boolean> {
     return false;
   }
 
-  process.stdout.write('\nNo config found at ~/.opencara/config.toml\n');
+  process.stdout.write(`\nNo config found at ${CONFIG_FILE}\n`);
   process.stdout.write('\nChecking prerequisites...\n');
 
   const prereqs = checkPrerequisites();
@@ -227,7 +227,7 @@ export async function interactiveSetup(): Promise<boolean> {
 
     const answer = await prompt(rl, '\nGenerate config.toml with these settings? (Y/n) ');
     if (answer.toLowerCase() === 'n' || answer.toLowerCase() === 'no') {
-      process.stdout.write('\nSkipped. Create config manually at ~/.opencara/config.toml\n');
+      process.stdout.write(`\nSkipped. Create config manually at ${CONFIG_FILE}\n`);
       process.stdout.write('See: https://docs.opencara.com/configuration\n');
       return false;
     }
@@ -235,7 +235,7 @@ export async function interactiveSetup(): Promise<boolean> {
     const content = generateConfig(toolsWithLimits);
     ensureConfigDir();
     fs.writeFileSync(CONFIG_FILE, content, { encoding: 'utf-8', mode: 0o600 });
-    process.stdout.write('\nConfig written to ~/.opencara/config.toml\n');
+    process.stdout.write(`\nConfig written to ${CONFIG_FILE}\n`);
     return true;
   } finally {
     rl.close();

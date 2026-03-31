@@ -2265,10 +2265,10 @@ agentCommand
         const created = await interactiveSetup();
         if (!created) {
           if (!process.stdin.isTTY) {
-            console.error('No config found at ~/.opencara/config.toml');
+            console.error(`No config found at ${CONFIG_FILE}`);
             console.error('Create a config file or run interactively to use first-run setup.');
           }
-          process.exit(0);
+          process.exit(1);
           return;
         }
         config = loadConfig();

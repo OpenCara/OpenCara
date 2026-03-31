@@ -208,7 +208,7 @@ describe('setup', () => {
       expect(config).toContain('[[agents]]');
       expect(config).toContain('tool = "claude"');
       expect(config).toContain('model = "claude-sonnet-4-6"');
-      expect(config).toContain('roles = ["reviewer", "summarizer"]');
+      expect(config).toContain('roles = ["review", "summary"]');
       expect(config).toContain('max_tasks_per_day = 3');
     });
 
