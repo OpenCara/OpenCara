@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
 vi.mock('node:fs');
+vi.mock('node:child_process');
 vi.mock('node:crypto', () => ({
   randomBytes: vi.fn(() => ({
     toString: () => 'abcdef0123456789',
@@ -19,6 +21,7 @@ import {
   getValidToken,
   resolveUser,
   fetchUserOrgs,
+  fetchUserOrgsViaGh,
   getAuthFilePath,
   AuthError,
   type StoredAuth,
@@ -864,6 +867,15 @@ describe('auth', () => {
   });
 
   describe('fetchUserOrgs', () => {
+    beforeEach(() => {
+      // Make execFileSync throw so fetchUserOrgsViaGh returns an empty set,
+      // ensuring tests exercise the fetchFn fallback path regardless of
+      // whether the developer has gh CLI authenticated locally.
+      vi.mocked(childProcess.execFileSync).mockImplementation(() => {
+        throw new Error('gh not available');
+      });
+    });
+
     it('returns set of org logins on success (lowercased)', async () => {
       const fetchFn = vi
         .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
@@ -929,6 +941,77 @@ describe('auth', () => {
 
       const result = await fetchUserOrgs('ghu_token', fetchFn);
       expect(result).toEqual(new Set());
+    });
+
+    it('returns gh orgs directly when fetchUserOrgsViaGh succeeds (skips fetchFn)', async () => {
+      vi.mocked(childProcess.execFileSync).mockReturnValue('org-x\norg-y\n');
+
+      const fetchFn =
+        vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+      const result = await fetchUserOrgs('ghu_token', fetchFn);
+      expect(result).toEqual(new Set(['org-x', 'org-y']));
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fetchUserOrgsViaGh', () => {
+    it('returns lowercased org logins from gh CLI output', () => {
+      vi.mocked(childProcess.execFileSync).mockReturnValue('Org-A\norg-b\nORG-C\n');
+
+      const result = fetchUserOrgsViaGh();
+      expect(result).toEqual(new Set(['org-a', 'org-b', 'org-c']));
+    });
+
+    it('returns empty set when execFileSync throws', () => {
+      vi.mocked(childProcess.execFileSync).mockImplementation(() => {
+        throw new Error('gh not found');
+      });
+
+      const result = fetchUserOrgsViaGh();
+      expect(result).toEqual(new Set());
+    });
+
+    it('skips blank lines in output', () => {
+      vi.mocked(childProcess.execFileSync).mockReturnValue('\norg-a\n\norg-b\n\n');
+
+      const result = fetchUserOrgsViaGh();
+      expect(result).toEqual(new Set(['org-a', 'org-b']));
+    });
+
+    it('returns empty set when output is empty', () => {
+      vi.mocked(childProcess.execFileSync).mockReturnValue('');
+
+      const result = fetchUserOrgsViaGh();
+      expect(result).toEqual(new Set());
+    });
+
+    it('verifies gh user matches expectedLogin before fetching orgs', () => {
+      // First call: get user login, second call: get orgs
+      vi.mocked(childProcess.execFileSync)
+        .mockReturnValueOnce('testuser')
+        .mockReturnValueOnce('org-a\norg-b\n');
+
+      const result = fetchUserOrgsViaGh('testuser');
+      expect(result).toEqual(new Set(['org-a', 'org-b']));
+    });
+
+    it('returns empty set when gh user does not match expectedLogin', () => {
+      vi.mocked(childProcess.execFileSync).mockReturnValueOnce('differentuser');
+
+      const result = fetchUserOrgsViaGh('testuser');
+      expect(result).toEqual(new Set());
+      // Should not call execFileSync a second time for orgs
+      expect(childProcess.execFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('matches expectedLogin case-insensitively', () => {
+      vi.mocked(childProcess.execFileSync)
+        .mockReturnValueOnce('TestUser')
+        .mockReturnValueOnce('org-a\n');
+
+      const result = fetchUserOrgsViaGh('testuser');
+      expect(result).toEqual(new Set(['org-a']));
     });
   });
 
