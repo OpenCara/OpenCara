@@ -53,8 +53,6 @@ export interface DedupInitDeps {
   fetchFn?: typeof fetch;
   log?: (msg: string) => void;
   logError?: (msg: string) => void;
-  /** Platform URL used for ensureAuth when not injecting ensureAuthFn directly. */
-  platformUrl?: string;
   /** Override ensureAuth for testing — returns an access token string. */
   ensureAuthFn?: () => Promise<string>;
   resolveAgentCommandFn?: (toolName: string) => string | null;
@@ -631,8 +629,7 @@ export async function runDedupInit(
   const log = deps.log ?? console.log;
   const logError = deps.logError ?? console.error;
   const resolveCmd = deps.resolveAgentCommandFn ?? resolveAgentCommand;
-  const ensureAuthFn =
-    deps.ensureAuthFn ?? (() => ensureAuth(deps.platformUrl ?? 'https://opencara.workers.dev'));
+  const ensureAuthFn = deps.ensureAuthFn ?? (() => ensureAuth('https://opencara.workers.dev'));
 
   // 1. Require authentication (auto-triggers login if not authenticated)
   let token: string;
@@ -778,7 +775,9 @@ export function dedupCommand(): Command {
         agent?: string;
       }) => {
         const config = loadConfig();
-        await runDedupInit(options, { platformUrl: config.platformUrl });
+        await runDedupInit(options, {
+          ensureAuthFn: () => ensureAuth(config.platformUrl, { configPath: config.authFile }),
+        });
       },
     );
 

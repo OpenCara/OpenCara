@@ -348,7 +348,10 @@ export async function ensureAuth(
   } catch (err) {
     if (err instanceof AuthError) {
       console.log('Not authenticated. Starting login...');
-      const auth = await login(platformUrl, { log: console.log });
+      const auth = await login(platformUrl, {
+        log: console.log,
+        saveAuthFn: (a) => saveAuth(a, opts?.configPath),
+      });
       return auth.access_token;
     }
     throw err;

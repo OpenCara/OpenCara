@@ -1079,6 +1079,44 @@ describe('auth', () => {
       }
     });
 
+    it('forwards configPath to saveAuth during auto-login', async () => {
+      // No stored auth
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockResponse({
+            device_code: 'dev123',
+            user_code: 'USER-CODE',
+            verification_uri: 'https://github.com/login/device',
+            interval: 1,
+            expires_in: 300,
+          }),
+        )
+        .mockResolvedValueOnce(mockResponse({ access_token: 'ghu_new_token', expires_in: 3600 }))
+        .mockResolvedValueOnce(mockResponse({ login: 'newuser', id: 42 }));
+
+      const originalFetch = global.fetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        await ensureAuth('https://platform.example.com', { configPath: '/custom/auth.json' });
+        // saveAuth should have been called with the custom path — verify by checking
+        // that fs.writeFileSync was called with a path under /custom/
+        const writeCall = vi
+          .mocked(fs.writeFileSync)
+          .mock.calls.find((args) => String(args[0]).startsWith('/custom/'));
+        expect(writeCall).toBeDefined();
+      } finally {
+        global.fetch = originalFetch;
+        consoleSpy.mockRestore();
+      }
+    });
+
     it('throws AuthError when login is cancelled', async () => {
       vi.mocked(fs.readFileSync).mockImplementation(() => {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
