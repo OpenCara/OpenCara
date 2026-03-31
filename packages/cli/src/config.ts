@@ -32,6 +32,7 @@ export interface CliConfig {
   authFile: string | null;
   maxDiffSizeKb: number;
   maxConsecutiveErrors: number;
+  maxRepoSizeMb: number;
   codebaseDir: string | null;
   codebaseTtl: string | null;
   agentCommand: string | null;
@@ -53,6 +54,7 @@ export function ensureConfigDir(): void {
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
+export const DEFAULT_MAX_REPO_SIZE_MB = 100;
 
 const VALID_REPO_MODES: RepoFilterMode[] = ['public', 'private', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
@@ -236,6 +238,7 @@ function isValidHttpUrl(value: string): boolean {
 interface ValidatedOverrides {
   maxDiffSizeKb?: number;
   maxConsecutiveErrors?: number;
+  maxRepoSizeMb?: number;
 }
 
 /**
@@ -274,6 +277,13 @@ function validateConfigData(
     overrides.maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS;
   }
 
+  if (typeof data.max_repo_size_mb === 'number' && data.max_repo_size_mb < 0) {
+    console.warn(
+      `\u26a0 Config warning: max_repo_size_mb must be >= 0, got ${data.max_repo_size_mb}, using default (${DEFAULT_MAX_REPO_SIZE_MB})`,
+    );
+    overrides.maxRepoSizeMb = DEFAULT_MAX_REPO_SIZE_MB;
+  }
+
   // Validate usage limit fields
   for (const field of [
     'max_reviews_per_day',
@@ -303,6 +313,7 @@ export function loadConfig(): CliConfig {
     authFile: null,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+    maxRepoSizeMb: DEFAULT_MAX_REPO_SIZE_MB,
     codebaseDir: null,
     codebaseTtl: null,
     agentCommand: null,
@@ -369,6 +380,11 @@ export function loadConfig(): CliConfig {
       (typeof data.max_consecutive_errors === 'number'
         ? data.max_consecutive_errors
         : DEFAULT_MAX_CONSECUTIVE_ERRORS),
+    maxRepoSizeMb:
+      overrides.maxRepoSizeMb ??
+      (typeof data.max_repo_size_mb === 'number'
+        ? data.max_repo_size_mb
+        : DEFAULT_MAX_REPO_SIZE_MB),
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     codebaseTtl: typeof data.codebase_ttl === 'string' ? data.codebase_ttl : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
@@ -400,6 +416,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxConsecutiveErrors !== DEFAULT_MAX_CONSECUTIVE_ERRORS) {
     data.max_consecutive_errors = config.maxConsecutiveErrors;
+  }
+  if (config.maxRepoSizeMb !== DEFAULT_MAX_REPO_SIZE_MB) {
+    data.max_repo_size_mb = config.maxRepoSizeMb;
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;

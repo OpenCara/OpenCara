@@ -27,7 +27,13 @@ import {
   type LocalAgentConfig,
   type UsageLimits,
 } from '../config.js';
-import { checkoutWorktree, cleanupWorktree } from '../repo-cache.js';
+import {
+  checkoutWorktree,
+  cleanupWorktree,
+  getRepoSize,
+  parseDiffPaths,
+  type SparseCheckoutOptions,
+} from '../repo-cache.js';
 import {
   parseTtl,
   CodebaseCleanupTracker,
@@ -625,11 +631,47 @@ async function handleTask(
     }
 
     // Checkout codebase using persistent bare clone + git worktree
+    // For large repos, use sparse checkout with only diff-affected files
     {
       const codebaseDir = reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos');
+      let sparseOptions: SparseCheckoutOptions | undefined;
+
+      // Check repo size and decide on sparse checkout
+      const maxRepoSizeMb = reviewDeps.maxRepoSizeMb ?? 0;
+      if (maxRepoSizeMb > 0) {
+        const repoSizeKb = getRepoSize(owner, repo);
+        if (repoSizeKb === null) {
+          // gh unavailable or API failed — default to sparse checkout (safer fallback)
+          const diffPaths = parseDiffPaths(diffContent);
+          if (diffPaths.length > 0) {
+            log('  Repo size unknown (gh unavailable) — using sparse checkout as safe default');
+            sparseOptions = { diffPaths };
+          }
+        } else {
+          const repoSizeMb = repoSizeKb / 1024;
+          if (repoSizeMb > maxRepoSizeMb) {
+            const diffPaths = parseDiffPaths(diffContent);
+            if (diffPaths.length > 0) {
+              log(
+                `  Large repo detected (${Math.round(repoSizeMb)}MB > ${maxRepoSizeMb}MB) — using sparse checkout (${diffPaths.length} files)`,
+              );
+              sparseOptions = { diffPaths };
+            }
+          }
+        }
+      }
+
       try {
-        const result = await checkoutWorktree(owner, repo, pr_number, codebaseDir, task_id);
-        log(`  Codebase ${result.cloned ? 'cloned' : 'cached'} → worktree: ${result.worktreePath}`);
+        const result = await checkoutWorktree(
+          owner,
+          repo,
+          pr_number,
+          codebaseDir,
+          task_id,
+          sparseOptions,
+        );
+        const mode = result.sparse ? 'sparse' : result.cloned ? 'cloned' : 'cached';
+        log(`  Codebase ${mode} → worktree: ${result.worktreePath}`);
         taskCheckoutPath = result.worktreePath;
         taskBareRepoPath = result.bareRepoPath;
         taskReviewDeps = { ...reviewDeps, codebaseDir: result.worktreePath };
@@ -1794,6 +1836,7 @@ export async function startBatchAgents(
     const reviewDeps: ReviewExecutorDeps = {
       commandTemplate,
       maxDiffSizeKb: config.maxDiffSizeKb,
+      maxRepoSizeMb: config.maxRepoSizeMb,
       codebaseDir,
     };
 
@@ -1975,6 +2018,7 @@ export async function startAgentRouter(): Promise<void> {
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
+    maxRepoSizeMb: config.maxRepoSizeMb,
     codebaseDir,
   };
 
@@ -2071,6 +2115,7 @@ function startAgentByIndex(
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
     maxDiffSizeKb: config.maxDiffSizeKb,
+    maxRepoSizeMb: config.maxRepoSizeMb,
     codebaseDir,
   };
 

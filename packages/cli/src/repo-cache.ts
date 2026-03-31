@@ -10,6 +10,24 @@ const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
 /** Default timeout for git operations (2 minutes). */
 const GIT_TIMEOUT_MS = 120_000;
 
+/** Default max repo size in MB before switching to sparse checkout. */
+export const DEFAULT_MAX_REPO_SIZE_MB = 100;
+
+/** Root config files to always include in sparse checkouts for review context. */
+const SPARSE_ROOT_CONFIGS = [
+  'package.json',
+  'tsconfig.json',
+  'tsconfig.base.json',
+  '.eslintrc.json',
+  '.eslintrc.js',
+  '.prettierrc',
+  '.prettierrc.json',
+  'Cargo.toml',
+  'go.mod',
+  'pyproject.toml',
+  'requirements.txt',
+];
+
 /**
  * Per-repo mutex to serialize git operations (fetch, worktree add/remove).
  * Multiple concurrent tasks on the same repo must not run git commands simultaneously
@@ -31,6 +49,13 @@ export interface WorktreeCheckoutResult {
   bareRepoPath: string;
   /** Whether the bare repo was freshly cloned */
   cloned: boolean;
+  /** Whether sparse checkout was used */
+  sparse: boolean;
+}
+
+export interface SparseCheckoutOptions {
+  /** File paths from the diff to include in sparse checkout */
+  diffPaths: string[];
 }
 
 /**
@@ -204,6 +229,7 @@ export async function checkoutWorktree(
   prNumber: number,
   baseDir: string,
   _taskId?: string,
+  sparseOptions?: SparseCheckoutOptions,
 ): Promise<WorktreeCheckoutResult> {
   validatePathSegment(owner, 'owner');
   validatePathSegment(repo, 'repo');
@@ -211,18 +237,32 @@ export async function checkoutWorktree(
   const repoKey = `${owner}/${repo}`;
   const ghAvailable = isGhAvailable();
   const wtKey = prWorktreeKey(prNumber);
+  const useSparse = !!sparseOptions && sparseOptions.diffPaths.length > 0;
 
   // Serialize all git operations per repo to avoid lock file conflicts
   return withRepoLock(repoKey, () => {
-    const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
+    let bareRepoPath: string;
+    let cloned: boolean;
+
+    if (useSparse) {
+      ({ bareRepoPath, cloned } = ensureSparseBareClone(owner, repo, baseDir, ghAvailable));
+    } else {
+      ({ bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable));
+    }
+
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
+
+    if (useSparse) {
+      configureSparseCheckout(bareRepoPath, sparseOptions.diffPaths);
+    }
+
     const worktreePath = addWorktree(bareRepoPath, wtKey);
 
     // Increment ref count
     const current = worktreeRefCounts.get(worktreePath) ?? 0;
     worktreeRefCounts.set(worktreePath, current + 1);
 
-    return { worktreePath, bareRepoPath, cloned };
+    return { worktreePath, bareRepoPath, cloned, sparse: useSparse };
   });
 }
 
@@ -263,6 +303,117 @@ export function getWorktreeRefCount(worktreePath: string): number {
  */
 export function resetWorktreeRefCounts(): void {
   worktreeRefCounts.clear();
+}
+
+/**
+ * Query GitHub API for repository size in KB.
+ * Returns the size in KB, or null if the API call fails (e.g., gh not available).
+ */
+export function getRepoSize(owner: string, repo: string): number | null {
+  try {
+    const output = gitExec('gh', ['api', `repos/${owner}/${repo}`, '--jq', '.size']);
+    const sizeKb = parseInt(output.trim(), 10);
+    return isNaN(sizeKb) ? null : sizeKb;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a unified diff to extract the list of changed file paths.
+ * Looks for `--- a/path` and `+++ b/path` headers, deduplicates results.
+ * Returns an empty array if parsing fails or no files are found.
+ */
+export function parseDiffPaths(diff: string): string[] {
+  const paths = new Set<string>();
+  const lines = diff.split('\n');
+  for (const line of lines) {
+    // Match +++ b/path or --- a/path (skip /dev/null for new/deleted files)
+    const match = line.match(/^(?:\+\+\+|---) [ab]\/(.+)$/);
+    if (match) {
+      paths.add(match[1]);
+    }
+  }
+  return [...paths];
+}
+
+/**
+ * Build sparse-checkout patterns for the given file paths.
+ * Includes the files themselves plus common root config files for context.
+ */
+export function buildSparsePatterns(filePaths: string[]): string[] {
+  const patterns = new Set<string>();
+
+  for (const filePath of filePaths) {
+    patterns.add(filePath);
+    // Include parent directories up to the root for directory-level context
+    const parts = filePath.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      // Don't add intermediate dirs as sparse patterns — just the files
+    }
+  }
+
+  // Add common root config files
+  for (const cfg of SPARSE_ROOT_CONFIGS) {
+    patterns.add(cfg);
+  }
+
+  return [...patterns];
+}
+
+/**
+ * Configure sparse-checkout on a bare repo with the given file patterns.
+ * Uses `--no-cone` mode for exact file matching.
+ */
+export function configureSparseCheckout(bareRepoPath: string, filePaths: string[]): void {
+  const patterns = buildSparsePatterns(filePaths);
+  gitExec('git', ['sparse-checkout', 'set', '--no-cone', ...patterns], bareRepoPath);
+}
+
+/**
+ * Ensure a persistent bare clone exists with sparse mode.
+ * Like ensureBareClone but adds --sparse to the clone args.
+ */
+export function ensureSparseBareClone(
+  owner: string,
+  repo: string,
+  baseDir: string,
+  ghAvailable: boolean,
+): { bareRepoPath: string; cloned: boolean } {
+  validatePathSegment(owner, 'owner');
+  validatePathSegment(repo, 'repo');
+
+  const bareRepoPath = path.join(baseDir, owner, `${repo}.git`);
+
+  if (fs.existsSync(path.join(bareRepoPath, 'HEAD'))) {
+    // Bare repo already exists — enable sparse checkout on existing repo
+    try {
+      gitExec('git', ['sparse-checkout', 'init', '--no-cone'], bareRepoPath);
+    } catch {
+      // May already be initialized — that's fine
+    }
+    return { bareRepoPath, cloned: false };
+  }
+
+  fs.mkdirSync(path.join(baseDir, owner), { recursive: true });
+
+  if (ghAvailable) {
+    gitExec('gh', [
+      'repo',
+      'clone',
+      `${owner}/${repo}`,
+      bareRepoPath,
+      '--',
+      '--bare',
+      '--filter=blob:none',
+      '--sparse',
+    ]);
+  } else {
+    const cloneUrl = buildCloneUrl(owner, repo);
+    gitExec('git', ['clone', '--bare', '--filter=blob:none', '--sparse', cloneUrl, bareRepoPath]);
+  }
+
+  return { bareRepoPath, cloned: true };
 }
 
 /**

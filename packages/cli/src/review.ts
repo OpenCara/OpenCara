@@ -242,6 +242,7 @@ export function extractVerdict(text: string): { verdict: ReviewVerdict; review: 
 export interface ReviewExecutorDeps {
   commandTemplate: string;
   maxDiffSizeKb: number;
+  maxRepoSizeMb?: number;
   codebaseDir?: string | null;
 }
 
