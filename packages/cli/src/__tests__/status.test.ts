@@ -24,7 +24,7 @@ function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
     agentCommand: null,
     agents: null,
     usageLimits: {
-      maxReviewsPerDay: null,
+      maxTasksPerDay: null,
       maxTokensPerDay: null,
       maxTokensPerReview: null,
     },

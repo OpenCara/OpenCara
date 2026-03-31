@@ -106,6 +106,8 @@ export interface ConsumptionDeps {
   session: SessionStats;
   usageTracker?: UsageTracker;
   usageLimits?: UsageLimits;
+  /** Per-agent limit overrides. maxTasksPerDay overrides global usageLimits.maxTasksPerDay. */
+  agentLimits?: { maxTasksPerDay?: number | null };
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
@@ -398,7 +400,11 @@ async function pollLoop(
   while (!signal?.aborted) {
     // Check daily usage limits before polling
     if (consumptionDeps.usageTracker && consumptionDeps.usageLimits) {
-      const limitStatus = consumptionDeps.usageTracker.checkLimits(consumptionDeps.usageLimits);
+      const limitStatus = consumptionDeps.usageTracker.checkLimits(
+        consumptionDeps.usageLimits,
+        consumptionDeps.agentLimits,
+        consumptionDeps.agentId,
+      );
       if (!limitStatus.allowed) {
         log(`${icons.stop} ${limitStatus.reason}. Stopping.`);
         break;
@@ -745,11 +751,14 @@ async function handleTask(
         estimated: implementResult.tokensEstimated,
       });
       if (consumptionDeps.usageTracker) {
-        consumptionDeps.usageTracker.recordReview({
-          input: implementResult.tokenDetail.input,
-          output: implementResult.tokenDetail.output,
-          estimated: implementResult.tokensEstimated,
-        });
+        consumptionDeps.usageTracker.recordTask(
+          {
+            input: implementResult.tokenDetail.input,
+            output: implementResult.tokenDetail.output,
+            estimated: implementResult.tokensEstimated,
+          },
+          consumptionDeps.agentId,
+        );
       }
     } else if (isFixRole(role)) {
       if (!taskCheckoutPath) {
@@ -776,11 +785,14 @@ async function handleTask(
         estimated: fixResult.tokensEstimated,
       });
       if (consumptionDeps.usageTracker) {
-        consumptionDeps.usageTracker.recordReview({
-          input: fixResult.tokenDetail.input,
-          output: fixResult.tokenDetail.output,
-          estimated: fixResult.tokensEstimated,
-        });
+        consumptionDeps.usageTracker.recordTask(
+          {
+            input: fixResult.tokenDetail.input,
+            output: fixResult.tokenDetail.output,
+            estimated: fixResult.tokensEstimated,
+          },
+          consumptionDeps.agentId,
+        );
       }
     } else if (isTriageRole(role)) {
       const triageDeps: TriageExecutorDeps = {
@@ -804,11 +816,14 @@ async function handleTask(
         estimated: triageResult.tokensEstimated,
       });
       if (consumptionDeps.usageTracker) {
-        consumptionDeps.usageTracker.recordReview({
-          input: triageResult.tokenDetail.input,
-          output: triageResult.tokenDetail.output,
-          estimated: triageResult.tokensEstimated,
-        });
+        consumptionDeps.usageTracker.recordTask(
+          {
+            input: triageResult.tokenDetail.input,
+            output: triageResult.tokenDetail.output,
+            estimated: triageResult.tokensEstimated,
+          },
+          consumptionDeps.agentId,
+        );
       }
     } else if (isDedupRole(role)) {
       await executeDedupTask(
@@ -1088,11 +1103,14 @@ async function executeReviewTask(
   recordSessionUsage(consumptionDeps.session, usageOpts);
   // Record to persistent usage tracker
   if (consumptionDeps.usageTracker) {
-    consumptionDeps.usageTracker.recordReview({
-      input: usageOpts.inputTokens,
-      output: usageOpts.outputTokens,
-      estimated: usageOpts.estimated,
-    });
+    consumptionDeps.usageTracker.recordTask(
+      {
+        input: usageOpts.inputTokens,
+        output: usageOpts.outputTokens,
+        estimated: usageOpts.estimated,
+      },
+      consumptionDeps.agentId,
+    );
   }
   logger.log(`  ${icons.success} Review submitted (${tokensUsed.toLocaleString()} tokens)`);
   logger.log(formatPostReviewStats(consumptionDeps.session));
@@ -1209,11 +1227,14 @@ async function executeSummaryTask(
 
     recordSessionUsage(consumptionDeps.session, usageOpts);
     if (consumptionDeps.usageTracker) {
-      consumptionDeps.usageTracker.recordReview({
-        input: usageOpts.inputTokens,
-        output: usageOpts.outputTokens,
-        estimated: usageOpts.estimated,
-      });
+      consumptionDeps.usageTracker.recordTask(
+        {
+          input: usageOpts.inputTokens,
+          output: usageOpts.outputTokens,
+          estimated: usageOpts.estimated,
+        },
+        consumptionDeps.agentId,
+      );
     }
     logger.log(
       `  ${icons.success} Review submitted as summary (${tokensUsed.toLocaleString()} tokens)`,
@@ -1333,11 +1354,14 @@ async function executeSummaryTask(
 
   recordSessionUsage(consumptionDeps.session, usageOpts);
   if (consumptionDeps.usageTracker) {
-    consumptionDeps.usageTracker.recordReview({
-      input: usageOpts.inputTokens,
-      output: usageOpts.outputTokens,
-      estimated: usageOpts.estimated,
-    });
+    consumptionDeps.usageTracker.recordTask(
+      {
+        input: usageOpts.inputTokens,
+        output: usageOpts.outputTokens,
+        estimated: usageOpts.estimated,
+      },
+      consumptionDeps.agentId,
+    );
   }
   logger.log(`  ${icons.success} Summary submitted (${tokensUsed.toLocaleString()} tokens)`);
   logger.log(formatPostReviewStats(consumptionDeps.session));
@@ -1398,7 +1422,7 @@ export async function startAgent(
   const session = consumptionDeps?.session ?? createSessionTracker();
   const usageTracker = consumptionDeps?.usageTracker ?? new UsageTracker();
   const usageLimits = options?.usageLimits ?? {
-    maxReviewsPerDay: null,
+    maxTasksPerDay: null,
     maxTokensPerDay: null,
     maxTokensPerReview: null,
   };
@@ -1498,7 +1522,13 @@ export async function startAgent(
 
   // Print usage summary on shutdown
   if (deps.usageTracker) {
-    log(deps.usageTracker.formatSummary(deps.usageLimits ?? usageLimits));
+    log(
+      deps.usageTracker.formatSummary(
+        deps.usageLimits ?? usageLimits,
+        deps.agentLimits,
+        deps.agentId,
+      ),
+    );
   }
   log(formatExitSummary(agentSession));
 }
@@ -1602,7 +1632,11 @@ export async function batchPollLoop(
     for (const state of agentStates) {
       const { consumptionDeps } = state;
       if (consumptionDeps.usageTracker && consumptionDeps.usageLimits) {
-        const limitStatus = consumptionDeps.usageTracker.checkLimits(consumptionDeps.usageLimits);
+        const limitStatus = consumptionDeps.usageTracker.checkLimits(
+          consumptionDeps.usageLimits,
+          consumptionDeps.agentLimits,
+          consumptionDeps.agentId,
+        );
         if (limitStatus.allowed) {
           allLimited = false;
           if (limitStatus.warning) {
@@ -1869,6 +1903,10 @@ export async function startBatchAgents(
           session,
           usageTracker,
           usageLimits: config.usageLimits,
+          agentLimits:
+            agentConfig.maxTasksPerDay !== undefined
+              ? { maxTasksPerDay: agentConfig.maxTasksPerDay }
+              : undefined,
         },
         logger: createLogger(instanceLabel),
         agentSession: createAgentSession(),
@@ -1954,11 +1992,17 @@ export async function startBatchAgents(
       }
       if (state.consumptionDeps.usageTracker) {
         const limits = state.consumptionDeps.usageLimits ?? {
-          maxReviewsPerDay: null,
+          maxTasksPerDay: null,
           maxTokensPerDay: null,
           maxTokensPerReview: null,
         };
-        state.logger.log(state.consumptionDeps.usageTracker.formatSummary(limits));
+        state.logger.log(
+          state.consumptionDeps.usageTracker.formatSummary(
+            limits,
+            state.consumptionDeps.agentLimits,
+            state.consumptionDeps.agentId,
+          ),
+        );
       }
       state.logger.log(formatExitSummary(state.agentSession));
     }),
@@ -2043,6 +2087,10 @@ export async function startAgentRouter(): Promise<void> {
       session,
       usageTracker,
       usageLimits: config.usageLimits,
+      agentLimits:
+        agentConfig?.maxTasksPerDay !== undefined
+          ? { maxTasksPerDay: agentConfig.maxTasksPerDay }
+          : undefined,
     },
     {
       maxConsecutiveErrors: config.maxConsecutiveErrors,
@@ -2146,7 +2194,16 @@ function startAgentByIndex(
       config.platformUrl,
       { model, tool, thinking },
       reviewDeps,
-      { agentId, session, usageTracker, usageLimits: config.usageLimits },
+      {
+        agentId,
+        session,
+        usageTracker,
+        usageLimits: config.usageLimits,
+        agentLimits:
+          agentConfig?.maxTasksPerDay !== undefined
+            ? { maxTasksPerDay: agentConfig.maxTasksPerDay }
+            : undefined,
+      },
       {
         pollIntervalMs,
         maxConsecutiveErrors: config.maxConsecutiveErrors,
