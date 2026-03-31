@@ -40,7 +40,7 @@ import {
   scanAndCleanStaleWorktrees,
   DEFAULT_CODEBASE_TTL_MS,
 } from '../codebase-cleanup.js';
-import { getValidToken, loadAuth, fetchUserOrgs, AuthError } from '../auth.js';
+import { getValidToken, loadAuth, fetchUserOrgs, AuthError, ensureAuth } from '../auth.js';
 import { ApiClient, HttpError, UpgradeRequiredError } from '../http.js';
 import { withRetry, NonRetryableError } from '../retry.js';
 import {
@@ -1989,10 +1989,10 @@ export async function startAgentRouter(): Promise<void> {
 
   const logger = createLogger(agentConfig?.name ?? 'agent[0]');
 
-  // Authenticate via OAuth
+  // Authenticate via OAuth (auto-triggers login if not authenticated)
   let oauthToken: string;
   try {
-    oauthToken = await getValidToken(config.platformUrl, { configPath: config.authFile });
+    oauthToken = await ensureAuth(config.platformUrl, { configPath: config.authFile });
   } catch (err) {
     if (err instanceof AuthError) {
       logger.logError(`${icons.error} ${err.message}`);
@@ -2211,10 +2211,10 @@ agentCommand
         instancesOverride = parseInt(opts.instances, 10);
       }
 
-      // Authenticate via OAuth
+      // Authenticate via OAuth (auto-triggers login if not authenticated)
       let oauthToken: string;
       try {
-        oauthToken = await getValidToken(config.platformUrl, { configPath: config.authFile });
+        oauthToken = await ensureAuth(config.platformUrl, { configPath: config.authFile });
       } catch (err) {
         if (err instanceof AuthError) {
           console.error(err.message);

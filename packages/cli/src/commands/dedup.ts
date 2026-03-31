@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import pc from 'picocolors';
 import { parseOpenCaraConfig, DEFAULT_REGISTRY } from '@opencara/shared';
 import type { OpenCaraConfig } from '@opencara/shared';
-import { loadAuth } from '../auth.js';
+import { ensureAuth, AuthError } from '../auth.js';
 import { loadConfig } from '../config.js';
 import { executeTool, type ToolExecutorResult } from '../tool-executor.js';
 import { extractJson } from '../dedup.js';
@@ -53,7 +53,8 @@ export interface DedupInitDeps {
   fetchFn?: typeof fetch;
   log?: (msg: string) => void;
   logError?: (msg: string) => void;
-  loadAuthFn?: typeof loadAuth;
+  /** Override ensureAuth for testing — returns an access token string. */
+  ensureAuthFn?: () => Promise<string>;
   resolveAgentCommandFn?: (toolName: string) => string | null;
   runTool?: (
     commandTemplate: string,
@@ -627,17 +628,21 @@ export async function runDedupInit(
   const fetchFn = deps.fetchFn ?? fetch;
   const log = deps.log ?? console.log;
   const logError = deps.logError ?? console.error;
-  const loadAuthFn = deps.loadAuthFn ?? loadAuth;
   const resolveCmd = deps.resolveAgentCommandFn ?? resolveAgentCommand;
+  const ensureAuthFn = deps.ensureAuthFn ?? (() => ensureAuth('https://opencara.workers.dev'));
 
-  // 1. Require authentication
-  const auth = loadAuthFn();
-  if (!auth || auth.expires_at <= Date.now()) {
-    logError(`${icons.error} Not authenticated. Run: ${pc.cyan('opencara auth login')}`);
-    process.exitCode = 1;
-    return;
+  // 1. Require authentication (auto-triggers login if not authenticated)
+  let token: string;
+  try {
+    token = await ensureAuthFn();
+  } catch (err) {
+    if (err instanceof AuthError) {
+      logError(`${icons.error} ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
   }
-  const token = auth.access_token;
 
   // 2. Parse --repo flag
   if (!options.repo) {
@@ -770,7 +775,9 @@ export function dedupCommand(): Command {
         agent?: string;
       }) => {
         const config = loadConfig();
-        await runDedupInit(options, { loadAuthFn: () => loadAuth(config.authFile) });
+        await runDedupInit(options, {
+          ensureAuthFn: () => ensureAuth(config.platformUrl, { configPath: config.authFile }),
+        });
       },
     );
 

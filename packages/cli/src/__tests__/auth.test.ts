@@ -19,6 +19,7 @@ import {
   isAuthenticated,
   login,
   getValidToken,
+  ensureAuth,
   resolveUser,
   fetchUserOrgs,
   fetchUserOrgsViaGh,
@@ -1025,6 +1026,134 @@ describe('auth', () => {
     it('is instanceof Error', () => {
       const err = new AuthError('test');
       expect(err).toBeInstanceOf(Error);
+    });
+  });
+
+  describe('ensureAuth', () => {
+    it('returns token when already authenticated', async () => {
+      const auth: StoredAuth = {
+        access_token: 'ghu_valid_token',
+        refresh_token: 'ghr_refresh',
+        expires_at: Date.now() + 3_600_000,
+        github_username: 'testuser',
+        github_user_id: 1,
+      };
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(auth));
+
+      const token = await ensureAuth('https://platform.example.com');
+      expect(token).toBe('ghu_valid_token');
+    });
+
+    it('auto-triggers login when not authenticated and returns new token', async () => {
+      // No stored auth
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      // Mock login flow via global.fetch: device init + token poll + user resolution
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockResponse({
+            device_code: 'dev123',
+            user_code: 'USER-CODE',
+            verification_uri: 'https://github.com/login/device',
+            interval: 1,
+            expires_in: 300,
+          }),
+        )
+        .mockResolvedValueOnce(mockResponse({ access_token: 'ghu_new_token', expires_in: 3600 }))
+        .mockResolvedValueOnce(mockResponse({ login: 'newuser', id: 42 }));
+
+      const originalFetch = global.fetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        const token = await ensureAuth('https://platform.example.com');
+        expect(token).toBe('ghu_new_token');
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } finally {
+        global.fetch = originalFetch;
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it('forwards configPath to saveAuth during auto-login', async () => {
+      // No stored auth
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockResponse({
+            device_code: 'dev123',
+            user_code: 'USER-CODE',
+            verification_uri: 'https://github.com/login/device',
+            interval: 1,
+            expires_in: 300,
+          }),
+        )
+        .mockResolvedValueOnce(mockResponse({ access_token: 'ghu_new_token', expires_in: 3600 }))
+        .mockResolvedValueOnce(mockResponse({ login: 'newuser', id: 42 }));
+
+      const originalFetch = global.fetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        await ensureAuth('https://platform.example.com', { configPath: '/custom/auth.json' });
+        // saveAuth should have been called with the custom path — verify by checking
+        // that fs.writeFileSync was called with a path under /custom/
+        const writeCall = vi
+          .mocked(fs.writeFileSync)
+          .mock.calls.find((args) => String(args[0]).startsWith('/custom/'));
+        expect(writeCall).toBeDefined();
+      } finally {
+        global.fetch = originalFetch;
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it('throws AuthError when login is cancelled', async () => {
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      // Mock login flow that returns access_denied
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockResponse({
+            device_code: 'dev123',
+            user_code: 'USER-CODE',
+            verification_uri: 'https://github.com/login/device',
+            interval: 1,
+            expires_in: 300,
+          }),
+        )
+        .mockResolvedValueOnce(mockResponse({ error: 'access_denied' }));
+
+      const originalFetch = global.fetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        await expect(ensureAuth('https://platform.example.com')).rejects.toThrow(AuthError);
+      } finally {
+        global.fetch = originalFetch;
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it('re-throws non-AuthError errors from getValidToken', async () => {
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new TypeError('unexpected error');
+      });
+
+      await expect(ensureAuth('https://platform.example.com')).rejects.toThrow(TypeError);
     });
   });
 });

@@ -335,6 +335,30 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
 }
 
 /**
+ * Ensure the user is authenticated. If not, auto-trigger login flow.
+ * Returns a valid OAuth token string.
+ * Throws AuthError only if the user cancels or login fails.
+ */
+export async function ensureAuth(
+  platformUrl: string,
+  opts?: { configPath?: string | null },
+): Promise<string> {
+  try {
+    return await getValidToken(platformUrl, opts);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      console.log('Not authenticated. Starting login...');
+      const auth = await login(platformUrl, {
+        log: console.log,
+        saveAuthFn: (a) => saveAuth(a, opts?.configPath),
+      });
+      return auth.access_token;
+    }
+    throw err;
+  }
+}
+
+/**
  * Resolve GitHub user info from an access token.
  * GET https://api.github.com/user with Bearer token.
  */
