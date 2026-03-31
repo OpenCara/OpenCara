@@ -512,27 +512,45 @@ describe('runDedupInit', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('requires authentication', async () => {
-    await runDedupInit({ repo: 'owner/repo' }, { log, logError, loadAuthFn: () => null });
-    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Not authenticated'));
+  it('exits when ensureAuth throws AuthError (login cancelled)', async () => {
+    const { AuthError } = await import('../auth.js');
+    const ensureAuthFn = vi.fn().mockRejectedValue(new AuthError('Authorization denied by user'));
+    await runDedupInit({ repo: 'owner/repo' }, { log, logError, ensureAuthFn });
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Authorization denied by user'));
     expect(process.exitCode).toBe(1);
   });
 
-  it('rejects expired auth', async () => {
-    const expiredAuth = { ...validAuth, expires_at: Date.now() - 1000 };
-    await runDedupInit({ repo: 'owner/repo' }, { log, logError, loadAuthFn: () => expiredAuth });
-    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Not authenticated'));
+  it('auto-triggers login when ensureAuth resolves after login flow', async () => {
+    const ensureAuthFn = vi.fn().mockResolvedValue(validAuth.access_token);
+    // Without a fetchFn that returns a valid toml, should fail at toml fetch — not at auth
+    await runDedupInit(
+      { repo: 'owner/repo' },
+      {
+        log,
+        logError,
+        ensureAuthFn,
+        fetchFn: vi
+          .fn()
+          .mockResolvedValue(new Response('', { status: 404 })) as unknown as typeof fetch,
+      },
+    );
+    expect(ensureAuthFn).toHaveBeenCalledOnce();
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('No .opencara.toml'));
     expect(process.exitCode).toBe(1);
   });
 
   it('requires --repo flag', async () => {
-    await runDedupInit({}, { log, logError, loadAuthFn: () => validAuth });
+    const ensureAuthFn = vi.fn().mockResolvedValue(validAuth.access_token);
+    await runDedupInit({}, { log, logError, ensureAuthFn });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('--repo is required'));
     expect(process.exitCode).toBe(1);
   });
 
   it('validates repo format', async () => {
-    await runDedupInit({ repo: 'invalid' }, { log, logError, loadAuthFn: () => validAuth });
+    await runDedupInit(
+      { repo: 'invalid' },
+      { log, logError, ensureAuthFn: () => Promise.resolve(validAuth.access_token) },
+    );
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('Invalid repo format'));
     expect(process.exitCode).toBe(1);
   });
@@ -544,7 +562,12 @@ describe('runDedupInit', () => {
 
     await runDedupInit(
       { repo: 'owner/repo' },
-      { log, logError, loadAuthFn: () => validAuth, fetchFn: mockFetch },
+      {
+        log,
+        logError,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
+        fetchFn: mockFetch,
+      },
     );
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('No .opencara.toml'));
     expect(process.exitCode).toBe(1);
@@ -558,7 +581,12 @@ describe('runDedupInit', () => {
 
     await runDedupInit(
       { repo: 'owner/repo' },
-      { log, logError, loadAuthFn: () => validAuth, fetchFn: mockFetch },
+      {
+        log,
+        logError,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
+        fetchFn: mockFetch,
+      },
     );
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('No dedup index issues'));
     expect(process.exitCode).toBe(1);
@@ -579,7 +607,12 @@ index_issue = 10
 
     await runDedupInit(
       { repo: 'owner/repo' },
-      { log, logError, loadAuthFn: () => validAuth, fetchFn: mockFetch },
+      {
+        log,
+        logError,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
+        fetchFn: mockFetch,
+      },
     );
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('No PR dedup index configured'));
     expect(process.exitCode).toBe(1);
@@ -588,7 +621,7 @@ index_issue = 10
   it('validates --days flag', async () => {
     await runDedupInit(
       { repo: 'owner/repo', days: 'abc' },
-      { log, logError, loadAuthFn: () => validAuth },
+      { log, logError, ensureAuthFn: () => Promise.resolve(validAuth.access_token) },
     );
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('--days must be a positive'));
     expect(process.exitCode).toBe(1);
@@ -624,7 +657,12 @@ index_issue = 53
 
     await runDedupInit(
       { repo: 'acme/widgets' },
-      { log, logError, loadAuthFn: () => validAuth, fetchFn: mockFetch },
+      {
+        log,
+        logError,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
+        fetchFn: mockFetch,
+      },
     );
     expect(process.exitCode).toBeUndefined();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('Initializing prs'));
@@ -667,7 +705,12 @@ index_issue = 54
 
     await runDedupInit(
       { repo: 'acme/widgets', all: true },
-      { log, logError, loadAuthFn: () => validAuth, fetchFn: mockFetch },
+      {
+        log,
+        logError,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
+        fetchFn: mockFetch,
+      },
     );
     expect(process.exitCode).toBeUndefined();
     // Should have logs for both prs and issues
@@ -703,7 +746,12 @@ index_issue = 53
 
     await runDedupInit(
       { repo: 'acme/widgets', dryRun: true },
-      { log, logError, loadAuthFn: () => validAuth, fetchFn: mockFetch },
+      {
+        log,
+        logError,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
+        fetchFn: mockFetch,
+      },
     );
     expect(process.exitCode).toBeUndefined();
     const logCalls = log.mock.calls.map((c: string[]) => c[0]);
@@ -728,7 +776,7 @@ index_issue = 53
       {
         log,
         logError,
-        loadAuthFn: () => validAuth,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
         fetchFn: mockFetch,
         resolveAgentCommandFn: () => null,
       },
@@ -778,7 +826,7 @@ index_issue = 53
       {
         log,
         logError,
-        loadAuthFn: () => validAuth,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
         fetchFn: mockFetch,
         resolveAgentCommandFn: () => 'claude --print',
         runTool: mockRunTool,
@@ -829,7 +877,7 @@ index_issue = 53
       {
         log,
         logError,
-        loadAuthFn: () => validAuth,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
         fetchFn: mockFetch,
         resolveAgentCommandFn: () => 'claude --print',
         runTool: mockRunTool,
@@ -881,7 +929,7 @@ index_issue = 53
       {
         log,
         logError,
-        loadAuthFn: () => validAuth,
+        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
         fetchFn: mockFetch,
         resolveAgentCommandFn: () => 'claude --print',
         runTool: mockRunTool,
