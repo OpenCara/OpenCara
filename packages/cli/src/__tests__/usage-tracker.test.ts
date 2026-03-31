@@ -244,13 +244,21 @@ describe('UsageTracker', () => {
       }
     });
 
-    it('falls back to global limit when no per-agent limit set', () => {
+    it('falls back to global limit using aggregate count (not per-agent count)', () => {
       const tracker = new UsageTracker(filePath);
-      for (let i = 0; i < 5; i++) {
-        tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
-      }
+      // 3 tasks from claude, 2 from codex = 5 total
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'claude');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'codex');
+      tracker.recordTask({ input: 10, output: 5, estimated: false }, 'codex');
+      // Global limit is 5 (aggregate hits limit), per-agent claude count is only 3
+      // Without per-agent override, should use aggregate (5) not per-agent (3)
       const result = tracker.checkLimits({ ...NO_LIMITS, maxTasksPerDay: 5 }, undefined, 'claude');
       expect(result.allowed).toBe(false);
+      if (!result.allowed) {
+        expect(result.reason).toContain('5/5');
+      }
     });
 
     it('per-agent null limit means unlimited (overrides global)', () => {

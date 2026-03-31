@@ -129,18 +129,22 @@ export class UsageTracker {
     const today = this.getToday();
     const todayTokenTotal = totalTokens(today.tokens);
 
+    // Per-agent limit is active only when explicitly set in agentLimits
+    const perAgentMaxTasks = agentLimits?.maxTasksPerDay;
+    const hasPerAgentLimit = perAgentMaxTasks !== undefined;
+
     // Resolve effective task cap: per-agent overrides global
-    const effectiveMaxTasksPerDay =
-      agentLimits?.maxTasksPerDay !== undefined
-        ? agentLimits.maxTasksPerDay
-        : limits.maxTasksPerDay;
+    const effectiveMaxTasksPerDay: number | null = hasPerAgentLimit
+      ? (perAgentMaxTasks ?? null)
+      : limits.maxTasksPerDay;
 
-    // Per-agent task count (if agentId provided)
-    const agentTaskCount = agentId ? (today.tasksByAgent?.[agentId] ?? 0) : null;
+    // Use per-agent count only when a per-agent limit is active;
+    // global limit is always checked against the aggregate total.
+    const countForCheck =
+      hasPerAgentLimit && agentId ? (today.tasksByAgent?.[agentId] ?? 0) : today.tasks;
 
-    // Check task cap (per-agent count vs effective limit)
-    if (effectiveMaxTasksPerDay !== null && effectiveMaxTasksPerDay !== undefined) {
-      const countForCheck = agentTaskCount !== null ? agentTaskCount : today.tasks;
+    // Check task cap
+    if (effectiveMaxTasksPerDay !== null) {
       if (countForCheck >= effectiveMaxTasksPerDay) {
         return {
           allowed: false,
@@ -159,8 +163,7 @@ export class UsageTracker {
 
     // Check 80% warnings
     const warnings: string[] = [];
-    if (effectiveMaxTasksPerDay !== null && effectiveMaxTasksPerDay !== undefined) {
-      const countForCheck = agentTaskCount !== null ? agentTaskCount : today.tasks;
+    if (effectiveMaxTasksPerDay !== null) {
       const ratio = countForCheck / effectiveMaxTasksPerDay;
       if (ratio >= WARNING_THRESHOLD) {
         warnings.push(
@@ -207,16 +210,19 @@ export class UsageTracker {
   ): string {
     const today = this.getToday();
     const todayTokenTotal = totalTokens(today.tokens);
-    const effectiveMaxTasksPerDay =
-      agentLimits?.maxTasksPerDay !== undefined
-        ? agentLimits.maxTasksPerDay
-        : limits.maxTasksPerDay;
-    const taskCount = agentId ? (today.tasksByAgent?.[agentId] ?? 0) : today.tasks;
+    const perAgentMaxTasks = agentLimits?.maxTasksPerDay;
+    const hasPerAgentLimit = perAgentMaxTasks !== undefined;
+    const effectiveMaxTasksPerDay: number | null = hasPerAgentLimit
+      ? (perAgentMaxTasks ?? null)
+      : limits.maxTasksPerDay;
+    // Show per-agent count when per-agent limit is active; otherwise show aggregate
+    const taskCount =
+      hasPerAgentLimit && agentId ? (today.tasksByAgent?.[agentId] ?? 0) : today.tasks;
 
     const lines: string[] = ['Usage Summary:'];
     lines.push(`  Date: ${today.date}`);
     lines.push(
-      `  Tasks: ${taskCount}${effectiveMaxTasksPerDay !== null && effectiveMaxTasksPerDay !== undefined ? `/${effectiveMaxTasksPerDay}` : ''}`,
+      `  Tasks: ${taskCount}${effectiveMaxTasksPerDay !== null ? `/${effectiveMaxTasksPerDay}` : ''}`,
     );
 
     const tokenParts: string[] = [];
@@ -233,7 +239,7 @@ export class UsageTracker {
       const remaining = Math.max(0, limits.maxTokensPerDay - todayTokenTotal);
       lines.push(`  Remaining token budget: ${remaining.toLocaleString()}`);
     }
-    if (effectiveMaxTasksPerDay !== null && effectiveMaxTasksPerDay !== undefined) {
+    if (effectiveMaxTasksPerDay !== null) {
       const remaining = Math.max(0, effectiveMaxTasksPerDay - taskCount);
       lines.push(`  Remaining tasks: ${remaining}`);
     }

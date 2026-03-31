@@ -358,11 +358,14 @@ export async function executeDedupTask(
   };
   recordSessionUsage(consumptionDeps.session, usageOpts);
   if (consumptionDeps.usageTracker) {
-    consumptionDeps.usageTracker.recordReview({
-      input: usageOpts.inputTokens,
-      output: usageOpts.outputTokens,
-      estimated: usageOpts.estimated,
-    });
+    consumptionDeps.usageTracker.recordTask(
+      {
+        input: usageOpts.inputTokens,
+        output: usageOpts.outputTokens,
+        estimated: usageOpts.estimated,
+      },
+      consumptionDeps.agentId,
+    );
   }
 
   logger.log(
