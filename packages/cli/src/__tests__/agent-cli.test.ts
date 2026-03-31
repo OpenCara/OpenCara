@@ -50,6 +50,7 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../auth.js', () => ({
   getValidToken: vi.fn(async () => 'oauth-test-token'),
+  ensureAuth: vi.fn(async () => 'oauth-test-token'),
   loadAuth: vi.fn(() => ({
     access_token: 'oauth-test-token',
     refresh_token: 'refresh-token',
@@ -114,7 +115,7 @@ vi.mock('../router.js', () => {
 
 import { loadConfig } from '../config.js';
 import { validateCommandBinary } from '../tool-executor.js';
-import { getValidToken } from '../auth.js';
+import { ensureAuth } from '../auth.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -313,16 +314,14 @@ describe('Agent CLI tests', () => {
       void startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
       await advanceTime(3000);
 
-      // The OAuth token should be used (verified by getValidToken being called)
-      expect(getValidToken).toHaveBeenCalledWith('http://test-server', { configPath: undefined });
+      // The OAuth token should be used (verified by ensureAuth being called)
+      expect(ensureAuth).toHaveBeenCalledWith('http://test-server', { configPath: undefined });
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Agent'));
     });
 
-    it('exits with error when not authenticated', async () => {
+    it('exits with error when auth login cancelled', async () => {
       const { AuthError } = await import('../auth.js');
-      vi.mocked(getValidToken).mockRejectedValueOnce(
-        new AuthError('Not authenticated. Run `opencara auth login` first.'),
-      );
+      vi.mocked(ensureAuth).mockRejectedValueOnce(new AuthError('Authorization denied by user'));
 
       vi.mocked(loadConfig).mockReturnValue({
         platformUrl: 'http://test-server',
@@ -339,7 +338,9 @@ describe('Agent CLI tests', () => {
 
       await startCmd!.parseAsync(['--agent', '0'], { from: 'user' });
 
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Not authenticated'));
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Authorization denied by user'),
+      );
       expect(exitSpy).toHaveBeenCalledWith(1);
       exitSpy.mockRestore();
     });
