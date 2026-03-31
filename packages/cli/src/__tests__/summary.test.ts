@@ -162,6 +162,12 @@ describe('buildSummaryUserMessage', () => {
     expect(message).toContain('Found a potential null reference');
   });
 
+  it('includes agentId in review headers for attribution', () => {
+    const message = buildSummaryUserMessage('Review', sampleReviews, 'diff');
+    expect(message).toContain('Review by agent-1 (claude-sonnet/claude-code)');
+    expect(message).toContain('Review by agent-2 (gpt-4/copilot)');
+  });
+
   it('omits verdict info when review has empty verdict', () => {
     const reviewsNoVerdict: SummaryReviewInput[] = [
       {
