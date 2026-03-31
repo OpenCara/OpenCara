@@ -1652,7 +1652,8 @@ export async function batchPollLoop(
       }
 
       // Sweep deferred codebase cleanups for all agents (in parallel)
-      await Promise.all(
+      // sweep() is internally fault-tolerant (re-queues failures), safe with allSettled
+      await Promise.allSettled(
         agentStates
           .filter((state) => state.cleanupTracker)
           .map(async (state) => {
@@ -1896,8 +1897,8 @@ export async function startBatchAgents(
     githubToken: oauthToken,
   });
 
-  // Cleanup on shutdown (in parallel)
-  await Promise.all(
+  // Cleanup on shutdown (in parallel, allSettled so one failure doesn't hide others)
+  await Promise.allSettled(
     agentStates.map(async (state) => {
       state.routerRelay?.stop();
       if (state.cleanupTracker && state.cleanupTracker.size > 0) {
