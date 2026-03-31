@@ -27,6 +27,10 @@ import {
   prWorktreeKey,
   getWorktreeRefCount,
   resetWorktreeRefCounts,
+  getRepoSize,
+  parseDiffPaths,
+  buildSparsePatterns,
+  configureSparseCheckout,
 } from '../repo-cache.js';
 
 describe('repo-cache', () => {
@@ -507,7 +511,193 @@ describe('repo-cache', () => {
       const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos');
 
       expect(result.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
+      expect(result.sparse).toBe(false);
       expect(getWorktreeRefCount(result.worktreePath)).toBe(1);
+    });
+
+    it('uses sparse checkout when sparseOptions provided', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos', 'task-1', {
+        diffPaths: ['src/index.ts', 'src/utils.ts'],
+      });
+
+      expect(result.sparse).toBe(true);
+      expect(result.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
+
+      // Should have called sparse-checkout on the WORKTREE path, not bare repo
+      const calls = vi.mocked(execFileSync).mock.calls;
+      const sparseCheckoutCalls = calls.filter(
+        (c) => Array.isArray(c[1]) && (c[1] as string[]).includes('sparse-checkout'),
+      );
+      expect(sparseCheckoutCalls.length).toBe(1);
+      // Verify it targets the worktree, not the bare repo
+      expect(sparseCheckoutCalls[0][2]).toMatchObject({
+        cwd: '/tmp/repos/acme/widgets-worktrees/pr-42',
+      });
+    });
+
+    it('uses full clone when sparseOptions has empty diffPaths', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos', 'task-1', {
+        diffPaths: [],
+      });
+
+      expect(result.sparse).toBe(false);
+    });
+  });
+
+  describe('getRepoSize', () => {
+    it('returns size from gh api response', () => {
+      vi.mocked(execFileSync).mockReturnValue('102400\n');
+
+      const size = getRepoSize('acme', 'widgets');
+
+      expect(size).toBe(102400);
+      const call = vi.mocked(execFileSync).mock.calls[0];
+      expect(call[0]).toBe('gh');
+      expect(call[1]).toEqual(['api', 'repos/acme/widgets', '--jq', '.size']);
+    });
+
+    it('returns null when gh api fails', () => {
+      vi.mocked(execFileSync).mockImplementation(() => {
+        throw new Error('gh not found');
+      });
+
+      const size = getRepoSize('acme', 'widgets');
+
+      expect(size).toBeNull();
+    });
+
+    it('returns null for non-numeric output', () => {
+      vi.mocked(execFileSync).mockReturnValue('not a number\n');
+
+      const size = getRepoSize('acme', 'widgets');
+
+      expect(size).toBeNull();
+    });
+  });
+
+  describe('parseDiffPaths', () => {
+    it('extracts file paths from unified diff', () => {
+      const diff = [
+        'diff --git a/src/index.ts b/src/index.ts',
+        '--- a/src/index.ts',
+        '+++ b/src/index.ts',
+        '@@ -1,3 +1,4 @@',
+        '+import { foo } from "./foo";',
+        'diff --git a/src/utils.ts b/src/utils.ts',
+        '--- a/src/utils.ts',
+        '+++ b/src/utils.ts',
+        '@@ -10,2 +10,3 @@',
+        '+export const bar = 1;',
+      ].join('\n');
+
+      const paths = parseDiffPaths(diff);
+
+      expect(paths).toEqual(['src/index.ts', 'src/utils.ts']);
+    });
+
+    it('handles new file (--- /dev/null)', () => {
+      const diff = [
+        'diff --git a/new-file.ts b/new-file.ts',
+        '--- /dev/null',
+        '+++ b/new-file.ts',
+        '@@ -0,0 +1,5 @@',
+        '+export const x = 1;',
+      ].join('\n');
+
+      const paths = parseDiffPaths(diff);
+
+      expect(paths).toEqual(['new-file.ts']);
+    });
+
+    it('handles deleted file (+++ /dev/null)', () => {
+      const diff = [
+        'diff --git a/old-file.ts b/old-file.ts',
+        '--- a/old-file.ts',
+        '+++ /dev/null',
+        '@@ -1,5 +0,0 @@',
+        '-export const x = 1;',
+      ].join('\n');
+
+      const paths = parseDiffPaths(diff);
+
+      expect(paths).toEqual(['old-file.ts']);
+    });
+
+    it('deduplicates paths', () => {
+      const diff = ['--- a/src/index.ts', '+++ b/src/index.ts'].join('\n');
+
+      const paths = parseDiffPaths(diff);
+
+      expect(paths).toEqual(['src/index.ts']);
+    });
+
+    it('returns empty array for empty diff', () => {
+      expect(parseDiffPaths('')).toEqual([]);
+    });
+
+    it('returns empty array for diff with no file headers', () => {
+      expect(parseDiffPaths('some random text\nanother line')).toEqual([]);
+    });
+
+    it('handles \\r\\n line endings', () => {
+      const diff = '--- a/src/index.ts\r\n+++ b/src/index.ts\r\n@@ -1,3 +1,4 @@\r\n';
+
+      const paths = parseDiffPaths(diff);
+
+      expect(paths).toEqual(['src/index.ts']);
+    });
+  });
+
+  describe('buildSparsePatterns', () => {
+    it('includes diff files and root configs', () => {
+      const patterns = buildSparsePatterns(['src/index.ts', 'src/utils.ts']);
+
+      expect(patterns).toContain('src/index.ts');
+      expect(patterns).toContain('src/utils.ts');
+      expect(patterns).toContain('package.json');
+      expect(patterns).toContain('tsconfig.json');
+    });
+
+    it('deduplicates patterns', () => {
+      const patterns = buildSparsePatterns(['package.json', 'src/index.ts']);
+
+      const packageJsonCount = patterns.filter((p) => p === 'package.json').length;
+      expect(packageJsonCount).toBe(1);
+    });
+
+    it('includes standard root config files', () => {
+      const patterns = buildSparsePatterns([]);
+
+      expect(patterns).toContain('package.json');
+      expect(patterns).toContain('tsconfig.json');
+      expect(patterns).toContain('Cargo.toml');
+      expect(patterns).toContain('go.mod');
+      expect(patterns).toContain('pyproject.toml');
+    });
+  });
+
+  describe('configureSparseCheckout', () => {
+    it('calls git sparse-checkout set with -- separator and correct patterns', () => {
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      configureSparseCheckout('/tmp/worktrees/pr-42', ['src/index.ts']);
+
+      const call = vi.mocked(execFileSync).mock.calls[0];
+      expect(call[0]).toBe('git');
+      const args = call[1] as string[];
+      expect(args[0]).toBe('sparse-checkout');
+      expect(args[1]).toBe('set');
+      expect(args[2]).toBe('--no-cone');
+      expect(args[3]).toBe('--');
+      expect(args).toContain('src/index.ts');
+      expect(args).toContain('package.json');
+      expect(call[2]).toMatchObject({ cwd: '/tmp/worktrees/pr-42' });
     });
   });
 });

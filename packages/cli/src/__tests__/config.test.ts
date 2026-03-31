@@ -26,6 +26,7 @@ import {
   DEFAULT_PLATFORM_URL,
   DEFAULT_MAX_DIFF_SIZE_KB,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
+  DEFAULT_MAX_REPO_SIZE_MB,
 } from '../config.js';
 
 describe('config', () => {
@@ -61,6 +62,7 @@ describe('config', () => {
       expect(config.platformUrl).toBe(DEFAULT_PLATFORM_URL);
       expect(config.maxDiffSizeKb).toBe(DEFAULT_MAX_DIFF_SIZE_KB);
       expect(config.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS);
+      expect(config.maxRepoSizeMb).toBe(DEFAULT_MAX_REPO_SIZE_MB);
       expect(config.codebaseDir).toBeNull();
       expect(config.agentCommand).toBeNull();
     });
@@ -296,6 +298,7 @@ describe('config', () => {
       platformUrl: 'https://api.dev',
       maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+      maxRepoSizeMb: DEFAULT_MAX_REPO_SIZE_MB,
       codebaseDir: null as string | null,
       codebaseTtl: null as string | null,
       agentCommand: null as string | null,
@@ -348,6 +351,20 @@ describe('config', () => {
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).not.toContain('max_consecutive_errors');
+    });
+
+    it('saves max_repo_size_mb when non-default', () => {
+      saveConfig({ ...baseConfig, maxRepoSizeMb: 200 });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('max_repo_size_mb = 200');
+    });
+
+    it('does not save max_repo_size_mb when default', () => {
+      saveConfig(baseConfig);
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('max_repo_size_mb');
     });
 
     it('saves agent_command when present', () => {
@@ -1352,6 +1369,43 @@ tool = "qwen"
 
         const config = loadConfig();
         expect(config.maxConsecutiveErrors).toBe(5);
+      });
+
+      it('warns and uses default for max_repo_size_mb < 0', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_repo_size_mb = -5\n');
+
+        const config = loadConfig();
+        expect(config.maxRepoSizeMb).toBe(DEFAULT_MAX_REPO_SIZE_MB);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('max_repo_size_mb must be >= 0'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('accepts max_repo_size_mb = 0 (always full clone)', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_repo_size_mb = 0\n');
+
+        const config = loadConfig();
+        expect(config.maxRepoSizeMb).toBe(0);
+      });
+
+      it('accepts positive max_repo_size_mb', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_repo_size_mb = 200\n');
+
+        const config = loadConfig();
+        expect(config.maxRepoSizeMb).toBe(200);
+      });
+
+      it('uses default for non-number max_repo_size_mb', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.readFileSync).mockReturnValue('max_repo_size_mb = "big"\n');
+
+        const config = loadConfig();
+        expect(config.maxRepoSizeMb).toBe(DEFAULT_MAX_REPO_SIZE_MB);
       });
     });
 

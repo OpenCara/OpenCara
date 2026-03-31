@@ -10,6 +10,21 @@ const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
 /** Default timeout for git operations (2 minutes). */
 const GIT_TIMEOUT_MS = 120_000;
 
+/** Root config files to always include in sparse checkouts for review context. */
+const SPARSE_ROOT_CONFIGS = [
+  'package.json',
+  'tsconfig.json',
+  'tsconfig.base.json',
+  '.eslintrc.json',
+  '.eslintrc.js',
+  '.prettierrc',
+  '.prettierrc.json',
+  'Cargo.toml',
+  'go.mod',
+  'pyproject.toml',
+  'requirements.txt',
+];
+
 /**
  * Per-repo mutex to serialize git operations (fetch, worktree add/remove).
  * Multiple concurrent tasks on the same repo must not run git commands simultaneously
@@ -31,6 +46,13 @@ export interface WorktreeCheckoutResult {
   bareRepoPath: string;
   /** Whether the bare repo was freshly cloned */
   cloned: boolean;
+  /** Whether sparse checkout was used */
+  sparse: boolean;
+}
+
+export interface SparseCheckoutOptions {
+  /** File paths from the diff to include in sparse checkout */
+  diffPaths: string[];
 }
 
 /**
@@ -204,6 +226,7 @@ export async function checkoutWorktree(
   prNumber: number,
   baseDir: string,
   _taskId?: string,
+  sparseOptions?: SparseCheckoutOptions,
 ): Promise<WorktreeCheckoutResult> {
   validatePathSegment(owner, 'owner');
   validatePathSegment(repo, 'repo');
@@ -211,18 +234,25 @@ export async function checkoutWorktree(
   const repoKey = `${owner}/${repo}`;
   const ghAvailable = isGhAvailable();
   const wtKey = prWorktreeKey(prNumber);
+  const useSparse = !!sparseOptions && sparseOptions.diffPaths.length > 0;
 
   // Serialize all git operations per repo to avoid lock file conflicts
   return withRepoLock(repoKey, () => {
+    // Always use the same bare clone (--filter=blob:none gives us partial clone).
+    // Sparse checkout is a worktree concept — configured after worktree creation.
     const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
     const worktreePath = addWorktree(bareRepoPath, wtKey);
+
+    if (useSparse) {
+      configureSparseCheckout(worktreePath, sparseOptions.diffPaths);
+    }
 
     // Increment ref count
     const current = worktreeRefCounts.get(worktreePath) ?? 0;
     worktreeRefCounts.set(worktreePath, current + 1);
 
-    return { worktreePath, bareRepoPath, cloned };
+    return { worktreePath, bareRepoPath, cloned, sparse: useSparse };
   });
 }
 
@@ -263,6 +293,64 @@ export function getWorktreeRefCount(worktreePath: string): number {
  */
 export function resetWorktreeRefCounts(): void {
   worktreeRefCounts.clear();
+}
+
+/**
+ * Query GitHub API for repository size in KB.
+ * Returns the size in KB, or null if the API call fails (e.g., gh not available).
+ */
+export function getRepoSize(owner: string, repo: string): number | null {
+  try {
+    const output = gitExec('gh', ['api', `repos/${owner}/${repo}`, '--jq', '.size']);
+    const sizeKb = parseInt(output.trim(), 10);
+    return isNaN(sizeKb) ? null : sizeKb;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a unified diff to extract the list of changed file paths.
+ * Looks for `--- a/path` and `+++ b/path` headers, deduplicates results.
+ * Returns an empty array if parsing fails or no files are found.
+ */
+export function parseDiffPaths(diff: string): string[] {
+  const paths = new Set<string>();
+  const lines = diff.split(/\r?\n/);
+  for (const line of lines) {
+    // Match +++ b/path or --- a/path (skip /dev/null for new/deleted files)
+    const match = line.match(/^(?:\+\+\+|---) [ab]\/(.+)$/);
+    if (match) {
+      paths.add(match[1]);
+    }
+  }
+  return [...paths];
+}
+
+/**
+ * Build sparse-checkout patterns for the given file paths.
+ * Includes the files themselves plus common root config files for context.
+ */
+export function buildSparsePatterns(filePaths: string[]): string[] {
+  const patterns = new Set<string>(filePaths);
+
+  // Add common root config files for review context
+  for (const cfg of SPARSE_ROOT_CONFIGS) {
+    patterns.add(cfg);
+  }
+
+  return [...patterns];
+}
+
+/**
+ * Configure sparse-checkout on a worktree with the given file patterns.
+ * Uses `--no-cone` mode for exact file matching.
+ * Must be called with a worktree path (not a bare repo) since sparse-checkout
+ * is a working-tree concept.
+ */
+export function configureSparseCheckout(worktreePath: string, filePaths: string[]): void {
+  const patterns = buildSparsePatterns(filePaths);
+  gitExec('git', ['sparse-checkout', 'set', '--no-cone', '--', ...patterns], worktreePath);
 }
 
 /**
