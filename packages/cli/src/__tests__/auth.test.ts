@@ -782,6 +782,31 @@ describe('auth', () => {
       ).rejects.toThrow('Refresh token expired');
     });
 
+    it('throws AuthError when refresh response is missing expires_in', async () => {
+      // GitHub App refresh responses must include expires_in. A missing one is anomalous
+      // and should fail loudly rather than silently converting the token to non-expiring.
+      const now = Date.now();
+      const auth = { ...MOCK_AUTH, expires_at: now - 1000 };
+
+      const malformedRefresh: RefreshTokenResponse = {
+        access_token: 'ghu_new',
+        token_type: 'bearer',
+        // expires_in intentionally absent — simulates server bug or API change
+      };
+
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse(malformedRefresh));
+
+      await expect(
+        getValidToken(PLATFORM_URL, {
+          fetchFn,
+          loadAuthFn: () => auth,
+          nowFn: () => now,
+        }),
+      ).rejects.toThrow('missing expires_in');
+    });
+
     it('falls back to text body when refresh JSON parse fails', async () => {
       const now = Date.now();
       const auth = { ...MOCK_AUTH, expires_at: now - 1000 };

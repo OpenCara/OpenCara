@@ -335,15 +335,21 @@ export async function getValidToken(platformUrl: string, deps: GetTokenDeps = {}
 
   const refreshData = (await refreshRes.json()) as RefreshTokenResponse;
 
+  // Refresh is only reachable for GitHub App tokens (which always include expires_in).
+  // A missing expires_in in the refresh response is anomalous — fail loudly rather than
+  // silently converting an expiring token into a permanently non-expiring one.
+  if (typeof refreshData.expires_in !== 'number') {
+    throw new AuthError(
+      'Token refresh succeeded but response is missing expires_in. Run `opencara auth login` to re-authenticate.',
+    );
+  }
+
   const updated: StoredAuth = {
     ...auth,
     access_token: refreshData.access_token,
     // Use new refresh_token if provided, otherwise keep existing
     refresh_token: refreshData.refresh_token ?? auth.refresh_token,
-    expires_at:
-      typeof refreshData.expires_in === 'number'
-        ? nowFn() + refreshData.expires_in * 1000
-        : undefined,
+    expires_at: nowFn() + refreshData.expires_in * 1000,
   };
 
   saveAuthFn(updated);
