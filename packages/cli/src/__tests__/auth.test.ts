@@ -180,6 +180,31 @@ describe('auth', () => {
       expect(result?.refresh_token).toBeUndefined();
     });
 
+    it('loads auth without expires_at (OAuth App non-expiring token)', () => {
+      const oauthAuth = {
+        access_token: 'ghu_oauth',
+        github_username: 'user',
+        github_user_id: 1,
+        // no expires_at — OAuth App token never expires
+      };
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(oauthAuth));
+      const result = loadAuth();
+      expect(result).toEqual(oauthAuth);
+      expect(result?.expires_at).toBeUndefined();
+    });
+
+    it('returns null when expires_at is present but not a number', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          access_token: 'ghu_test',
+          expires_at: 'not-a-number', // invalid type
+          github_username: 'user',
+          github_user_id: 1,
+        }),
+      );
+      expect(loadAuth()).toBeNull();
+    });
+
     it('uses OPENCARA_AUTH_FILE env var for file path', () => {
       process.env.OPENCARA_AUTH_FILE = '/custom/auth.json';
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(MOCK_AUTH));
@@ -301,11 +326,10 @@ describe('auth', () => {
       expect(isAuthenticated()).toBe(false);
     });
 
-    it('returns true for non-expiring OAuth App token (10-year expires_at)', () => {
-      // OAuth App tokens get a 10-year expires_in from the server — should never be considered expired
-      const TEN_YEARS_MS = 315_360_000 * 1000;
-      const nonExpiring = { ...MOCK_AUTH, expires_at: Date.now() + TEN_YEARS_MS };
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(nonExpiring));
+    it('returns true for OAuth App token with no expires_at', () => {
+      // OAuth App tokens have no expires_at — they never expire
+      const { expires_at: _unused, ...oauthAuth } = MOCK_AUTH;
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(oauthAuth));
       expect(isAuthenticated()).toBe(true);
     });
   });
@@ -499,6 +523,50 @@ describe('auth', () => {
       );
     });
 
+    it('stores expires_at when server includes expires_in (GitHub App token)', async () => {
+      const saveAuthFn = vi.fn();
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse(DEVICE_RESPONSE))
+        .mockResolvedValueOnce(mockResponse(TOKEN_RESPONSE)) // has expires_in: 28800
+        .mockResolvedValueOnce(mockResponse(USER_RESPONSE));
+
+      await login(PLATFORM_URL, {
+        fetchFn,
+        delayFn: () => Promise.resolve(),
+        saveAuthFn,
+        log: vi.fn(),
+      });
+
+      const saved = saveAuthFn.mock.calls[0][0] as StoredAuth;
+      expect(typeof saved.expires_at).toBe('number');
+      expect(saved.expires_at).toBeGreaterThan(Date.now());
+    });
+
+    it('omits expires_at when server omits expires_in (OAuth App token)', async () => {
+      const oauthTokenResponse: DeviceFlowTokenResponse = {
+        access_token: 'ghu_oauth',
+        token_type: 'bearer',
+        // no expires_in — OAuth App
+      };
+      const saveAuthFn = vi.fn();
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse(DEVICE_RESPONSE))
+        .mockResolvedValueOnce(mockResponse(oauthTokenResponse))
+        .mockResolvedValueOnce(mockResponse(USER_RESPONSE));
+
+      await login(PLATFORM_URL, {
+        fetchFn,
+        delayFn: () => Promise.resolve(),
+        saveAuthFn,
+        log: vi.fn(),
+      });
+
+      const saved = saveAuthFn.mock.calls[0][0] as StoredAuth;
+      expect(saved.expires_at).toBeUndefined();
+    });
+
     it('sends device_code in token poll request', async () => {
       const fetchFn = vi
         .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
@@ -585,21 +653,17 @@ describe('auth', () => {
       ).rejects.toThrow('no refresh token available');
     });
 
-    it('returns token for non-expiring OAuth App token without refresh', async () => {
-      // OAuth App tokens get a 10-year expires_in from server — should be returned directly
-      const now = Date.now();
-      const TEN_YEARS_MS = 315_360_000 * 1000;
+    it('returns token immediately for OAuth App token with no expires_at', async () => {
+      // OAuth App tokens have no expires_at — returned directly without any expiry check
       const auth: StoredAuth = {
         access_token: 'ghu_oauth_token',
-        expires_at: now + TEN_YEARS_MS,
         github_username: 'user',
         github_user_id: 1,
-        // no refresh_token — OAuth Apps don't support it
+        // no expires_at and no refresh_token — OAuth Apps never expire
       };
 
       const token = await getValidToken(PLATFORM_URL, {
         loadAuthFn: () => auth,
-        nowFn: () => now,
       });
 
       expect(token).toBe('ghu_oauth_token');
@@ -716,6 +780,31 @@ describe('auth', () => {
           nowFn: () => now,
         }),
       ).rejects.toThrow('Refresh token expired');
+    });
+
+    it('throws AuthError when refresh response is missing expires_in', async () => {
+      // GitHub App refresh responses must include expires_in. A missing one is anomalous
+      // and should fail loudly rather than silently converting the token to non-expiring.
+      const now = Date.now();
+      const auth = { ...MOCK_AUTH, expires_at: now - 1000 };
+
+      const malformedRefresh: RefreshTokenResponse = {
+        access_token: 'ghu_new',
+        token_type: 'bearer',
+        // expires_in intentionally absent — simulates server bug or API change
+      };
+
+      const fetchFn = vi
+        .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+        .mockResolvedValueOnce(mockResponse(malformedRefresh));
+
+      await expect(
+        getValidToken(PLATFORM_URL, {
+          fetchFn,
+          loadAuthFn: () => auth,
+          nowFn: () => now,
+        }),
+      ).rejects.toThrow('missing expires_in');
     });
 
     it('falls back to text body when refresh JSON parse fails', async () => {

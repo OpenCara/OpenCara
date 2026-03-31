@@ -343,7 +343,8 @@ export interface DeviceFlowTokenResponse {
   access_token: string;
   /** Optional — GitHub Apps always return this, but non-refreshable tokens may omit it. */
   refresh_token?: string;
-  expires_in: number;
+  /** Optional — absent for OAuth App tokens that never expire. */
+  expires_in?: number;
   token_type: string;
 }
 
@@ -356,7 +357,8 @@ export interface RefreshTokenResponse {
   access_token: string;
   /** Optional — a refresh may return a new refresh_token or omit it. */
   refresh_token?: string;
-  expires_in: number;
+  /** Optional — absent for OAuth App tokens that never expire. */
+  expires_in?: number;
   token_type: string;
 }
 

@@ -121,14 +121,14 @@ export function runStatus(deps: AuthCommandDeps = {}): void {
   }
 
   const now = nowFn();
-  const expired = auth.expires_at <= now;
-  const remaining = auth.expires_at - now;
+  // expires_at is absent for OAuth App tokens that never expire
+  const expired = auth.expires_at !== undefined && auth.expires_at <= now;
 
   if (expired) {
     log(
       `${icons.warn} Token expired for ${pc.bold(`@${auth.github_username}`)} (ID: ${auth.github_user_id})`,
     );
-    log(`  Token expired: ${formatExpiry(auth.expires_at)}`);
+    log(`  Token expired: ${formatExpiry(auth.expires_at!)}`);
     log(`  Auth file: ${pc.dim(getAuthFilePathFn())}`);
     log(`  Run: ${pc.cyan('opencara auth login')} to re-authenticate`);
     process.exitCode = 1;
@@ -138,7 +138,12 @@ export function runStatus(deps: AuthCommandDeps = {}): void {
   log(
     `${icons.success} Authenticated as ${pc.bold(`@${auth.github_username}`)} (ID: ${auth.github_user_id})`,
   );
-  log(`  Token expires: ${formatExpiry(auth.expires_at)} (${formatTimeRemaining(remaining)})`);
+  if (auth.expires_at !== undefined) {
+    const remaining = auth.expires_at - now;
+    log(`  Token expires: ${formatExpiry(auth.expires_at)} (${formatTimeRemaining(remaining)})`);
+  } else {
+    log(`  Token expires: never (OAuth App token)`);
+  }
   log(`  Auth file: ${pc.dim(getAuthFilePathFn())}`);
 }
 

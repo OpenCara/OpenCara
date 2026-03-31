@@ -122,7 +122,8 @@ export async function runStatus(deps: {
   log(`Config:     ${pc.cyan(CONFIG_FILE)}`);
   log(`Platform:   ${pc.cyan(config.platformUrl)}`);
   const auth = loadAuth(config.authFile);
-  if (auth && auth.expires_at > Date.now()) {
+  const tokenValid = auth && (auth.expires_at === undefined || auth.expires_at > Date.now());
+  if (tokenValid) {
     log(`Auth:       ${icons.success} ${auth.github_username}`);
   } else if (auth) {
     log(`Auth:       ${icons.warn} token expired for ${auth.github_username}`);

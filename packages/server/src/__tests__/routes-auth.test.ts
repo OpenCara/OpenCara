@@ -257,8 +257,8 @@ describe('Auth Routes', () => {
       expect(body.refresh_token).toBeUndefined();
     });
 
-    it('returns 10-year expires_in when GitHub omits it (OAuth App token)', async () => {
-      // OAuth Apps return tokens without expires_in — should get 10-year fallback, not 8 hours
+    it('omits expires_in when GitHub omits it (OAuth App token)', async () => {
+      // OAuth Apps return tokens without expires_in — server should pass it through as absent
       const ghResponse = {
         access_token: 'ghu_oauth_token',
         token_type: 'bearer',
@@ -269,7 +269,7 @@ describe('Auth Routes', () => {
       const res = await postDeviceToken(app, { device_code: 'dc-123' });
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.expires_in).toBe(315_360_000); // 10 years, not 8 hours (28800)
+      expect(body.expires_in).toBeUndefined(); // no artificial expiry
     });
 
     it('preserves expires_in from GitHub when present (GitHub App token)', async () => {
@@ -495,8 +495,8 @@ describe('Auth Routes', () => {
       expect(body.refresh_token).toBeUndefined();
     });
 
-    it('returns 10-year expires_in when GitHub omits it (OAuth App token)', async () => {
-      // OAuth Apps don't return expires_in on refresh — should get 10-year fallback
+    it('omits expires_in when GitHub omits it (OAuth App token)', async () => {
+      // OAuth Apps don't return expires_in on refresh — server should pass it through as absent
       const ghResponse = {
         access_token: 'ghu_oauth_refreshed',
         token_type: 'bearer',
@@ -507,7 +507,7 @@ describe('Auth Routes', () => {
       const res = await postRefresh(app, { refresh_token: 'ghr_old' });
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.expires_in).toBe(315_360_000); // 10 years, not 8 hours
+      expect(body.expires_in).toBeUndefined(); // no artificial expiry
     });
 
     it('returns error when GitHub returns error response', async () => {
