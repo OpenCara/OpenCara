@@ -18,7 +18,6 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
   ensureBareClone,
-  ensureSparseBareClone,
   fetchPRRef,
   addWorktree,
   removeWorktree,
@@ -527,12 +526,16 @@ describe('repo-cache', () => {
       expect(result.sparse).toBe(true);
       expect(result.worktreePath).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
 
-      // Should have called sparse checkout commands
+      // Should have called sparse-checkout on the WORKTREE path, not bare repo
       const calls = vi.mocked(execFileSync).mock.calls;
       const sparseCheckoutCalls = calls.filter(
         (c) => Array.isArray(c[1]) && (c[1] as string[]).includes('sparse-checkout'),
       );
-      expect(sparseCheckoutCalls.length).toBeGreaterThan(0);
+      expect(sparseCheckoutCalls.length).toBe(1);
+      // Verify it targets the worktree, not the bare repo
+      expect(sparseCheckoutCalls[0][2]).toMatchObject({
+        cwd: '/tmp/repos/acme/widgets-worktrees/pr-42',
+      });
     });
 
     it('uses full clone when sparseOptions has empty diffPaths', async () => {
@@ -641,6 +644,14 @@ describe('repo-cache', () => {
     it('returns empty array for diff with no file headers', () => {
       expect(parseDiffPaths('some random text\nanother line')).toEqual([]);
     });
+
+    it('handles \\r\\n line endings', () => {
+      const diff = '--- a/src/index.ts\r\n+++ b/src/index.ts\r\n@@ -1,3 +1,4 @@\r\n';
+
+      const paths = parseDiffPaths(diff);
+
+      expect(paths).toEqual(['src/index.ts']);
+    });
   });
 
   describe('buildSparsePatterns', () => {
@@ -672,10 +683,10 @@ describe('repo-cache', () => {
   });
 
   describe('configureSparseCheckout', () => {
-    it('calls git sparse-checkout set with correct patterns', () => {
+    it('calls git sparse-checkout set with -- separator and correct patterns', () => {
       vi.mocked(execFileSync).mockReturnValue('');
 
-      configureSparseCheckout('/tmp/repos/acme/widgets.git', ['src/index.ts']);
+      configureSparseCheckout('/tmp/worktrees/pr-42', ['src/index.ts']);
 
       const call = vi.mocked(execFileSync).mock.calls[0];
       expect(call[0]).toBe('git');
@@ -683,57 +694,10 @@ describe('repo-cache', () => {
       expect(args[0]).toBe('sparse-checkout');
       expect(args[1]).toBe('set');
       expect(args[2]).toBe('--no-cone');
+      expect(args[3]).toBe('--');
       expect(args).toContain('src/index.ts');
       expect(args).toContain('package.json');
-      expect(call[2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets.git' });
-    });
-  });
-
-  describe('ensureSparseBareClone', () => {
-    it('creates sparse bare clone via gh when repo does not exist', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
-
-      const result = ensureSparseBareClone('acme', 'widgets', '/tmp/repos', true);
-
-      expect(result.bareRepoPath).toBe('/tmp/repos/acme/widgets.git');
-      expect(result.cloned).toBe(true);
-
-      const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls[0][0]).toBe('gh');
-      expect(calls[0][1]).toContain('--sparse');
-      expect(calls[0][1]).toContain('--bare');
-    });
-
-    it('creates sparse bare clone via git when gh not available', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
-
-      const result = ensureSparseBareClone('acme', 'widgets', '/tmp/repos', false);
-
-      expect(result.cloned).toBe(true);
-
-      const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls[0][0]).toBe('git');
-      expect(calls[0][1]).toContain('--sparse');
-    });
-
-    it('initializes sparse-checkout on existing bare repo', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(execFileSync).mockReturnValue('');
-
-      const result = ensureSparseBareClone('acme', 'widgets', '/tmp/repos', true);
-
-      expect(result.cloned).toBe(false);
-
-      const calls = vi.mocked(execFileSync).mock.calls;
-      const sparseInitCalls = calls.filter(
-        (c) =>
-          Array.isArray(c[1]) &&
-          (c[1] as string[]).includes('sparse-checkout') &&
-          (c[1] as string[]).includes('init'),
-      );
-      expect(sparseInitCalls.length).toBe(1);
+      expect(call[2]).toMatchObject({ cwd: '/tmp/worktrees/pr-42' });
     });
   });
 });

@@ -10,9 +10,6 @@ const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
 /** Default timeout for git operations (2 minutes). */
 const GIT_TIMEOUT_MS = 120_000;
 
-/** Default max repo size in MB before switching to sparse checkout. */
-export const DEFAULT_MAX_REPO_SIZE_MB = 100;
-
 /** Root config files to always include in sparse checkouts for review context. */
 const SPARSE_ROOT_CONFIGS = [
   'package.json',
@@ -241,22 +238,15 @@ export async function checkoutWorktree(
 
   // Serialize all git operations per repo to avoid lock file conflicts
   return withRepoLock(repoKey, () => {
-    let bareRepoPath: string;
-    let cloned: boolean;
-
-    if (useSparse) {
-      ({ bareRepoPath, cloned } = ensureSparseBareClone(owner, repo, baseDir, ghAvailable));
-    } else {
-      ({ bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable));
-    }
-
+    // Always use the same bare clone (--filter=blob:none gives us partial clone).
+    // Sparse checkout is a worktree concept — configured after worktree creation.
+    const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
+    const worktreePath = addWorktree(bareRepoPath, wtKey);
 
     if (useSparse) {
-      configureSparseCheckout(bareRepoPath, sparseOptions.diffPaths);
+      configureSparseCheckout(worktreePath, sparseOptions.diffPaths);
     }
-
-    const worktreePath = addWorktree(bareRepoPath, wtKey);
 
     // Increment ref count
     const current = worktreeRefCounts.get(worktreePath) ?? 0;
@@ -326,7 +316,7 @@ export function getRepoSize(owner: string, repo: string): number | null {
  */
 export function parseDiffPaths(diff: string): string[] {
   const paths = new Set<string>();
-  const lines = diff.split('\n');
+  const lines = diff.split(/\r?\n/);
   for (const line of lines) {
     // Match +++ b/path or --- a/path (skip /dev/null for new/deleted files)
     const match = line.match(/^(?:\+\+\+|---) [ab]\/(.+)$/);
@@ -353,58 +343,14 @@ export function buildSparsePatterns(filePaths: string[]): string[] {
 }
 
 /**
- * Configure sparse-checkout on a bare repo with the given file patterns.
+ * Configure sparse-checkout on a worktree with the given file patterns.
  * Uses `--no-cone` mode for exact file matching.
+ * Must be called with a worktree path (not a bare repo) since sparse-checkout
+ * is a working-tree concept.
  */
-export function configureSparseCheckout(bareRepoPath: string, filePaths: string[]): void {
+export function configureSparseCheckout(worktreePath: string, filePaths: string[]): void {
   const patterns = buildSparsePatterns(filePaths);
-  gitExec('git', ['sparse-checkout', 'set', '--no-cone', ...patterns], bareRepoPath);
-}
-
-/**
- * Ensure a persistent bare clone exists with sparse mode.
- * Like ensureBareClone but adds --sparse to the clone args.
- */
-export function ensureSparseBareClone(
-  owner: string,
-  repo: string,
-  baseDir: string,
-  ghAvailable: boolean,
-): { bareRepoPath: string; cloned: boolean } {
-  validatePathSegment(owner, 'owner');
-  validatePathSegment(repo, 'repo');
-
-  const bareRepoPath = path.join(baseDir, owner, `${repo}.git`);
-
-  if (fs.existsSync(path.join(bareRepoPath, 'HEAD'))) {
-    // Bare repo already exists — enable sparse checkout on existing repo
-    try {
-      gitExec('git', ['sparse-checkout', 'init', '--no-cone'], bareRepoPath);
-    } catch {
-      // May already be initialized — that's fine
-    }
-    return { bareRepoPath, cloned: false };
-  }
-
-  fs.mkdirSync(path.join(baseDir, owner), { recursive: true });
-
-  if (ghAvailable) {
-    gitExec('gh', [
-      'repo',
-      'clone',
-      `${owner}/${repo}`,
-      bareRepoPath,
-      '--',
-      '--bare',
-      '--filter=blob:none',
-      '--sparse',
-    ]);
-  } else {
-    const cloneUrl = buildCloneUrl(owner, repo);
-    gitExec('git', ['clone', '--bare', '--filter=blob:none', '--sparse', cloneUrl, bareRepoPath]);
-  }
-
-  return { bareRepoPath, cloned: true };
+  gitExec('git', ['sparse-checkout', 'set', '--no-cone', '--', ...patterns], worktreePath);
 }
 
 /**
