@@ -11,6 +11,20 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Mock node:fs so existsSync returns true by default (config file exists — skip interactive setup)
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    existsSync: vi.fn(() => true),
+  };
+});
+
+// Mock setup to prevent interactive setup from running in CLI tests
+vi.mock('../setup.js', () => ({
+  interactiveSetup: vi.fn(async () => false),
+}));
+
 // Mock child_process so fetchDiffViaGh falls back to HTTP
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -45,6 +59,7 @@ vi.mock('../config.js', () => ({
   resolveCodebaseDir: vi.fn(() => null),
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 10,
   CONFIG_DIR: '/tmp/test-opencara',
+  CONFIG_FILE: '/tmp/test-opencara/config.toml',
   ensureConfigDir: vi.fn(),
 }));
 
