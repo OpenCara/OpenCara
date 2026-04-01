@@ -7,7 +7,13 @@ import type {
   TaskRole,
   ReviewTask,
 } from '@opencara/shared';
-import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import {
+  DEFAULT_REVIEW_CONFIG,
+  isEventTriggerEnabled,
+  isCommentTriggerEnabled,
+  isLabelTriggerEnabled,
+  isStatusTriggerEnabled,
+} from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
@@ -87,6 +93,22 @@ interface IssuePayload {
     body: string | null;
     user: { login: string };
     pull_request?: { url: string };
+    labels?: Array<{ name: string }>;
+  };
+}
+
+interface ProjectsV2ItemPayload {
+  action: string;
+  installation?: { id: number };
+  projects_v2_item: {
+    content_node_id: string;
+  };
+  changes?: {
+    field_value?: {
+      field_name: string;
+      from?: string | null;
+      to?: string | null;
+    };
   };
 }
 
@@ -432,8 +454,12 @@ async function createIssueTaskGroups(
   // for idempotency; subsequent groups skip dedup (the primary guards).
   let primaryCreated = false;
 
-  // Triage task group
-  if (fullConfig.triage?.enabled && fullConfig.triage.trigger.events?.includes(action)) {
+  // Triage task group (event trigger)
+  if (
+    fullConfig.triage?.enabled &&
+    isEventTriggerEnabled(fullConfig.triage.trigger) &&
+    fullConfig.triage.trigger.events!.includes(action)
+  ) {
     const groupId = await createTaskGroup(
       store,
       'triage',
@@ -515,6 +541,16 @@ export function webhookRoutes() {
           );
         }
         break;
+      case 'projects_v2_item':
+        if (action === 'edited') {
+          return handleProjectsV2Item(
+            github,
+            store,
+            payload as unknown as ProjectsV2ItemPayload,
+            logger,
+          );
+        }
+        break;
       case 'installation':
         logger.info('Installation event', { action });
         break;
@@ -585,11 +621,33 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  if (!reviewConfig.trigger.events?.includes(action)) {
+  // Handle label triggers for PR-scoped features (review, fix)
+  if (action === 'labeled') {
+    const addedLabel = (payload as unknown as { label?: { name: string } }).label?.name;
+    if (addedLabel) {
+      return handlePrLabelTrigger(
+        store,
+        installation.id,
+        owner,
+        repo,
+        pull_request,
+        fullConfig,
+        reviewConfig,
+        addedLabel,
+        repository.private ?? false,
+        logger,
+      );
+    }
+    return new Response('OK', { status: 200 });
+  }
+
+  // Event-based triggers for review
+  const reviewTrigger = reviewConfig.trigger;
+  if (!isEventTriggerEnabled(reviewTrigger) || !reviewTrigger.events!.includes(action)) {
     logger.info('Action not in trigger.events — skipping', {
       prNumber,
       action,
-      triggerEvents: reviewConfig.trigger.events,
+      triggerEvents: reviewTrigger.events,
     });
     return new Response('OK', { status: 200 });
   }
@@ -700,6 +758,48 @@ export async function handleIssueEvent(
     return new Response('OK', { status: 200 });
   }
 
+  // Handle label trigger for issue-scoped features (implement, triage)
+  if (action === 'labeled') {
+    const addedLabel = (payload as unknown as { label?: { name: string } }).label?.name;
+    if (!addedLabel) return new Response('OK', { status: 200 });
+
+    let token: string;
+    try {
+      token = await github.getInstallationToken(installation.id);
+    } catch (err) {
+      logger.error('Failed to get installation token', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+      owner,
+      repo,
+      defaultBranch,
+      token,
+    );
+
+    if (parseError) {
+      logger.info('Aborting due to .opencara.toml parse error', { issueNumber: issue.number });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    return handleIssueLabelTrigger(
+      github,
+      store,
+      installation.id,
+      owner,
+      repo,
+      issue,
+      fullConfig,
+      addedLabel,
+      repository.private ?? false,
+      token,
+      logger,
+    );
+  }
+
   if (action !== 'opened' && action !== 'edited') {
     logger.info('Issue action not handled — skipping', { action, issueNumber: issue.number });
     return new Response('OK', { status: 200 });
@@ -731,9 +831,11 @@ export async function handleIssueEvent(
 
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
-  // Check if any feature is enabled for issues
+  // Check if any feature is enabled for issues via event triggers
   const triageEnabled =
-    fullConfig.triage?.enabled && fullConfig.triage.trigger.events?.includes(action);
+    fullConfig.triage?.enabled &&
+    isEventTriggerEnabled(fullConfig.triage.trigger) &&
+    fullConfig.triage.trigger.events!.includes(action);
   const dedupIssuesEnabled = fullConfig.dedup?.issues?.enabled;
 
   if (!triageEnabled && !dedupIssuesEnabled) {
@@ -857,6 +959,18 @@ export function parseGoCommand(body: string): { targetModel?: string } | null {
   return { targetModel: match[1] || undefined };
 }
 
+/**
+ * Parse a triage command from a comment body.
+ * Matches `/opencara triage [model]` or `@opencara triage [model]`.
+ * Returns the optional target model, or null if not a triage command.
+ */
+export function parseTriageCommand(body: string): { targetModel?: string } | null {
+  const trimmed = body.trim();
+  const match = trimmed.match(/^[/@]opencara\s+triage(?:\s+(\S+))?\s*$/i);
+  if (!match) return null;
+  return { targetModel: match[1] || undefined };
+}
+
 async function handleIssueComment(
   github: GitHubService,
   store: DataStore,
@@ -870,30 +984,47 @@ async function handleIssueComment(
     return new Response('OK', { status: 200 });
   }
 
-  // Check for go command on issues (not PRs)
-  const goCmd = parseGoCommand(comment.body);
-  if (goCmd) {
-    if (issue.pull_request) {
-      // go command is only valid on issues, not PRs
-      return new Response('OK', { status: 200 });
+  // Issue-only commands: go and triage (not valid on PRs)
+  if (!issue.pull_request) {
+    const goCmd = parseGoCommand(comment.body);
+    if (goCmd) {
+      return handleGoCommand(
+        github,
+        store,
+        installation.id,
+        repository.owner.login,
+        repository.name,
+        issue.number,
+        repository.default_branch ?? 'main',
+        comment,
+        goCmd,
+        repository.private ?? false,
+        logger,
+      );
     }
-    return handleGoCommand(
-      github,
-      store,
-      installation.id,
-      repository.owner.login,
-      repository.name,
-      issue.number,
-      repository.default_branch ?? 'main',
-      comment,
-      goCmd,
-      repository.private ?? false,
-      logger,
-    );
+
+    const triageCmd = parseTriageCommand(comment.body);
+    if (triageCmd) {
+      return handleTriageCommand(
+        github,
+        store,
+        installation.id,
+        repository.owner.login,
+        repository.name,
+        issue.number,
+        repository.default_branch ?? 'main',
+        comment,
+        triageCmd,
+        repository.private ?? false,
+        logger,
+      );
+    }
+
+    return new Response('OK', { status: 200 });
   }
 
-  // All remaining commands (fix, review) require a PR context
-  if (!issue.pull_request) {
+  // Check for go command — invalid on PRs, skip silently
+  if (parseGoCommand(comment.body)) {
     return new Response('OK', { status: 200 });
   }
 
@@ -956,11 +1087,11 @@ async function handleIssueComment(
     );
   }
 
-  // Check for review trigger command
-  const triggerCommand = reviewConfig.trigger.comment;
-  if (!triggerCommand) {
+  // Check for review trigger command (gated by isCommentTriggerEnabled)
+  if (!isCommentTriggerEnabled(reviewConfig.trigger)) {
     return new Response('OK', { status: 200 });
   }
+  const triggerCommand = reviewConfig.trigger.comment!;
   const body = comment.body.trim().toLowerCase();
   const cmd = triggerCommand.toLowerCase();
   // Only slash-commands get an @-alias (e.g. /opencara review → @opencara review).
@@ -1056,6 +1187,15 @@ async function handleFixCommand(
 
   if (!fullConfig.fix?.enabled) {
     logger.info('Fix command ignored — [fix].enabled is not true', {
+      owner,
+      repo,
+      prNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  if (!isCommentTriggerEnabled(fullConfig.fix.trigger)) {
+    logger.info('Fix command ignored — comment trigger not enabled', {
       owner,
       repo,
       prNumber,
@@ -1214,6 +1354,15 @@ async function handleGoCommand(
     return new Response('OK', { status: 200 });
   }
 
+  if (!isCommentTriggerEnabled(fullConfig.implement.trigger)) {
+    logger.info('Go command ignored — comment trigger not enabled', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
   // Fetch issue details from GitHub API
   let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
   try {
@@ -1283,6 +1432,523 @@ async function handleGoCommand(
       issueNumber,
     });
     return new Response('Service Unavailable', { status: 503 });
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+/**
+ * Handle `/opencara triage [model]` command on an issue comment.
+ * Creates a triage task group with issue context.
+ */
+async function handleTriageCommand(
+  github: GitHubService,
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  defaultBranch: string,
+  comment: IssueCommentPayload['comment'],
+  triageCmd: { targetModel?: string },
+  isPrivate: boolean,
+  logger: Logger,
+): Promise<Response> {
+  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
+    logger.info('Triage command ignored — not a trusted contributor', {
+      user: comment.user.login,
+      association: comment.author_association,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  logger.info('Triage command received', {
+    user: comment.user.login,
+    owner,
+    repo,
+    issueNumber,
+    targetModel: triageCmd.targetModel,
+  });
+
+  let token: string;
+  try {
+    token = await github.getInstallationToken(installationId);
+  } catch (err) {
+    logger.error('Failed to get installation token', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+    owner,
+    repo,
+    defaultBranch,
+    token,
+  );
+
+  if (parseError) {
+    logger.info('Aborting triage command due to .opencara.toml parse error', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  if (!fullConfig.triage?.enabled) {
+    logger.info('Triage command ignored — [triage].enabled is not true', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  if (!isCommentTriggerEnabled(fullConfig.triage.trigger)) {
+    logger.info('Triage command ignored — comment trigger not enabled', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  // Fetch issue details from GitHub API
+  let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
+  try {
+    issue = await github.fetchIssueDetails(owner, repo, issueNumber, token);
+  } catch (err) {
+    logger.error('Failed to fetch issue details', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+  if (!issue) {
+    logger.error('Issue not found', { owner, repo, issueNumber });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const triageConfig = fullConfig.triage;
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+  const timeoutMs = parseTimeoutMs(triageConfig.timeout);
+
+  const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+    owner,
+    repo,
+    pr_number: 0,
+    pr_url: '',
+    diff_url: '',
+    base_ref: '',
+    head_ref: '',
+    review_count: triageConfig.agentCount,
+    timeout_at: Date.now() + timeoutMs,
+    status: 'pending',
+    queue: 'summary',
+    github_installation_id: installationId,
+    private: isPrivate,
+    config: reviewConfig,
+    created_at: Date.now(),
+  };
+
+  try {
+    await createTaskGroup(store, 'triage', triageConfig, baseTask, logger, {
+      issue_number: issue.number,
+      issue_url: issue.html_url,
+      issue_title: issue.title,
+      issue_body: issue.body ?? undefined,
+      issue_author: issue.user.login,
+      ...(triageCmd.targetModel ? { target_model: triageCmd.targetModel } : {}),
+    });
+  } catch (err) {
+    logger.error('Failed to create triage task group', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+// ── Label Trigger Handlers ──────────────────────────────────────
+
+/**
+ * Handle label triggers on a PR: review and fix features.
+ */
+async function handlePrLabelTrigger(
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  pullRequest: PullRequestPayload['pull_request'],
+  fullConfig: OpenCaraConfig,
+  reviewConfig: ReviewConfig,
+  addedLabel: string,
+  isPrivate: boolean,
+  logger: Logger,
+): Promise<Response> {
+  const prNumber = pullRequest.number;
+  const headRef = pullRequest.head.ref;
+
+  // Skip conditions apply to label triggers too
+  const skipReason = shouldSkipReview(reviewConfig, {
+    draft: pullRequest.draft,
+    labels: pullRequest.labels,
+    headRef,
+  });
+  if (skipReason) {
+    logger.info('PR label trigger skipped', { prNumber, reason: skipReason });
+    return new Response('OK', { status: 200 });
+  }
+
+  const diffSize =
+    typeof pullRequest.additions === 'number' && typeof pullRequest.deletions === 'number'
+      ? pullRequest.additions + pullRequest.deletions
+      : undefined;
+
+  const timeoutMs = parseTimeoutMs(reviewConfig.timeout);
+  const baseTask = buildBaseTask(
+    installationId,
+    owner,
+    repo,
+    prNumber,
+    pullRequest.html_url,
+    pullRequest.diff_url,
+    pullRequest.base.ref,
+    headRef,
+    reviewConfig,
+    isPrivate,
+    timeoutMs,
+    diffSize,
+  );
+
+  let created = false;
+
+  // Review label trigger
+  if (isLabelTriggerEnabled(reviewConfig.trigger) && reviewConfig.trigger.label === addedLabel) {
+    logger.info('Review label trigger matched', { prNumber, label: addedLabel });
+    const groupId = await createTaskGroup(
+      store,
+      'review',
+      reviewConfig,
+      baseTask,
+      logger,
+      undefined,
+      created,
+    );
+    if (groupId !== null) created = true;
+  }
+
+  // Fix label trigger
+  if (
+    fullConfig.fix?.enabled &&
+    isLabelTriggerEnabled(fullConfig.fix.trigger) &&
+    fullConfig.fix.trigger.label === addedLabel
+  ) {
+    logger.info('Fix label trigger matched', { prNumber, label: addedLabel });
+    await createTaskGroup(store, 'fix', fullConfig.fix, baseTask, logger, undefined, created);
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+/**
+ * Handle label triggers on an issue: implement and triage features.
+ */
+async function handleIssueLabelTrigger(
+  github: GitHubService,
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  issue: IssuePayload['issue'],
+  fullConfig: OpenCaraConfig,
+  addedLabel: string,
+  isPrivate: boolean,
+  token: string,
+  logger: Logger,
+): Promise<Response> {
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+  const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+    owner,
+    repo,
+    pr_number: 0,
+    pr_url: '',
+    diff_url: '',
+    base_ref: '',
+    head_ref: '',
+    review_count: 1,
+    timeout_at: Date.now() + 10 * 60 * 1000,
+    status: 'pending',
+    queue: 'summary',
+    github_installation_id: installationId,
+    private: isPrivate,
+    config: reviewConfig,
+    created_at: Date.now(),
+  };
+
+  const issueFields: Partial<ReviewTask> = {
+    issue_number: issue.number,
+    issue_url: issue.html_url,
+    issue_title: issue.title,
+    issue_body: issue.body ?? undefined,
+    issue_author: issue.user.login,
+  };
+
+  let created = false;
+
+  // Implement label trigger
+  if (
+    fullConfig.implement?.enabled &&
+    isLabelTriggerEnabled(fullConfig.implement.trigger) &&
+    fullConfig.implement.trigger.label === addedLabel
+  ) {
+    logger.info('Implement label trigger matched', {
+      issueNumber: issue.number,
+      label: addedLabel,
+    });
+
+    // Fetch full issue details for implement tasks
+    let issueDetails: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
+    try {
+      issueDetails = await github.fetchIssueDetails(owner, repo, issue.number, token);
+    } catch (err) {
+      logger.error('Failed to fetch issue details for implement label trigger', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+    if (!issueDetails) {
+      logger.error('Issue not found for implement label trigger', {
+        issueNumber: issue.number,
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    const implementConfig = fullConfig.implement;
+    const implementTimeoutMs = parseTimeoutMs(implementConfig.timeout);
+    const implementTaskConfig: ReviewConfig = {
+      ...reviewConfig,
+      agentCount: implementConfig.agentCount,
+      timeout: implementConfig.timeout,
+      preferredModels: implementConfig.preferredModels,
+      preferredTools: implementConfig.preferredTools,
+      prompt: implementConfig.prompt,
+      modelDiversityGraceMs: implementConfig.modelDiversityGraceMs,
+    };
+
+    const implementBase: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> =
+      {
+        ...baseTask,
+        review_count: implementConfig.agentCount,
+        timeout_at: Date.now() + implementTimeoutMs,
+        config: implementTaskConfig,
+      };
+
+    const groupId = await createTaskGroup(
+      store,
+      'implement',
+      implementConfig,
+      implementBase,
+      logger,
+      {
+        issue_number: issueDetails.number,
+        issue_url: issueDetails.html_url,
+        issue_title: issueDetails.title,
+        issue_body: issueDetails.body ?? undefined,
+        issue_author: issueDetails.user.login,
+      },
+      created,
+    );
+    if (groupId !== null) created = true;
+  }
+
+  // Triage label trigger
+  if (
+    fullConfig.triage?.enabled &&
+    isLabelTriggerEnabled(fullConfig.triage.trigger) &&
+    fullConfig.triage.trigger.label === addedLabel
+  ) {
+    logger.info('Triage label trigger matched', {
+      issueNumber: issue.number,
+      label: addedLabel,
+    });
+
+    await createTaskGroup(
+      store,
+      'triage',
+      fullConfig.triage,
+      baseTask,
+      logger,
+      issueFields,
+      created,
+    );
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
+// ── Status Trigger Handler ──────────────────────────────────────
+
+/**
+ * Handle `projects_v2_item` webhook for status-based triggers.
+ * When a project item's Status field changes to a configured value,
+ * creates the appropriate task group.
+ */
+async function handleProjectsV2Item(
+  github: GitHubService,
+  store: DataStore,
+  payload: ProjectsV2ItemPayload,
+  logger: Logger,
+): Promise<Response> {
+  const { installation, projects_v2_item, changes } = payload;
+
+  if (!installation) {
+    logger.info('Projects V2 item event without installation — skipping');
+    return new Response('OK', { status: 200 });
+  }
+
+  const fieldChange = changes?.field_value;
+  if (!fieldChange || fieldChange.field_name !== 'Status') {
+    logger.info('Projects V2 item event — not a Status field change, skipping');
+    return new Response('OK', { status: 200 });
+  }
+
+  const newStatus = fieldChange.to;
+  if (!newStatus) {
+    logger.info('Projects V2 item event — no new status value, skipping');
+    return new Response('OK', { status: 200 });
+  }
+
+  logger.info('Projects V2 item status changed', {
+    contentNodeId: projects_v2_item.content_node_id,
+    from: fieldChange.from,
+    to: newStatus,
+  });
+
+  let token: string;
+  try {
+    token = await github.getInstallationToken(installation.id);
+  } catch (err) {
+    logger.error('Failed to get installation token for status trigger', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  // Resolve the project item to an issue or PR
+  const content = await github.resolveProjectItemContent(projects_v2_item.content_node_id, token);
+
+  if (!content) {
+    logger.info('Could not resolve project item content — skipping', {
+      contentNodeId: projects_v2_item.content_node_id,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  const { type, owner, repo, number } = content;
+
+  // Load config from the repo
+  const defaultBranch = 'main'; // GraphQL doesn't give us default_branch, use 'main'
+  const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+    owner,
+    repo,
+    defaultBranch,
+    token,
+  );
+
+  if (parseError) {
+    logger.info('Aborting status trigger due to .opencara.toml parse error', {
+      owner,
+      repo,
+      number,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  // Implement status trigger (primary use case — issues only)
+  if (
+    type === 'Issue' &&
+    fullConfig.implement?.enabled &&
+    isStatusTriggerEnabled(fullConfig.implement.trigger) &&
+    fullConfig.implement.trigger.status === newStatus
+  ) {
+    logger.info('Implement status trigger matched', {
+      owner,
+      repo,
+      issueNumber: number,
+      status: newStatus,
+    });
+
+    let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
+    try {
+      issue = await github.fetchIssueDetails(owner, repo, number, token);
+    } catch (err) {
+      logger.error('Failed to fetch issue details for status trigger', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+    if (!issue) {
+      logger.error('Issue not found for status trigger', { owner, repo, number });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+    const implementConfig = fullConfig.implement;
+    const timeoutMs = parseTimeoutMs(implementConfig.timeout);
+
+    const implementTaskConfig: ReviewConfig = {
+      ...reviewConfig,
+      agentCount: implementConfig.agentCount,
+      timeout: implementConfig.timeout,
+      preferredModels: implementConfig.preferredModels,
+      preferredTools: implementConfig.preferredTools,
+      prompt: implementConfig.prompt,
+      modelDiversityGraceMs: implementConfig.modelDiversityGraceMs,
+    };
+
+    const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+      owner,
+      repo,
+      pr_number: 0,
+      pr_url: '',
+      diff_url: '',
+      base_ref: '',
+      head_ref: '',
+      review_count: implementConfig.agentCount,
+      timeout_at: Date.now() + timeoutMs,
+      status: 'pending',
+      queue: 'summary',
+      github_installation_id: installation.id,
+      private: false,
+      config: implementTaskConfig,
+      created_at: Date.now(),
+    };
+
+    try {
+      await createTaskGroup(store, 'implement', implementConfig, baseTask, logger, {
+        issue_number: issue.number,
+        issue_url: issue.html_url,
+        issue_title: issue.title,
+        issue_body: issue.body ?? undefined,
+        issue_author: issue.user.login,
+      });
+    } catch (err) {
+      logger.error('Failed to create implement task group from status trigger', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        issueNumber: number,
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
   }
 
   return new Response('OK', { status: 200 });
