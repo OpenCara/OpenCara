@@ -690,7 +690,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'],
+          trigger: { events: ['opened'], comment: '/opencara triage' },
         },
       };
 
@@ -715,7 +715,7 @@ describe('Webhook refactor — separate task creation', () => {
       expect(await store.listTasks()).toHaveLength(0);
     });
 
-    it('creates triage task when triage.enabled and action in triage.triggers', async () => {
+    it('creates triage task when triage.enabled and action in triage.trigger.events', async () => {
       github.openCaraConfig = {
         version: 1,
         triage: {
@@ -727,7 +727,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'],
+          trigger: { events: ['opened'], comment: '/opencara triage' },
         },
       };
 
@@ -784,7 +784,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'],
+          trigger: { events: ['opened'], comment: '/opencara triage' },
         },
         dedup: {
           issues: {
@@ -825,7 +825,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'], // only 'opened'
+          trigger: { events: ['opened'], comment: '/opencara triage' }, // only 'opened'
         },
       };
 
@@ -847,7 +847,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened', 'edited'],
+          trigger: { events: ['opened', 'edited'], comment: '/opencara triage' },
         },
       };
 
@@ -872,7 +872,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'],
+          trigger: { events: ['opened'], comment: '/opencara triage' },
         },
       };
 
@@ -907,7 +907,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'],
+          trigger: { events: ['opened'], comment: '/opencara triage' },
         },
       };
 
@@ -1023,7 +1023,7 @@ describe('Webhook refactor — separate task creation', () => {
           preferredTools: [],
           defaultMode: 'comment',
           autoLabel: false,
-          triggers: ['opened'],
+          trigger: { events: ['opened'], comment: '/opencara triage' },
         },
       };
 
@@ -1131,6 +1131,7 @@ describe('Webhook refactor — separate task creation', () => {
       preferredModels: [] as string[],
       preferredTools: [] as string[],
       modelDiversityGraceMs: 30_000,
+      trigger: { comment: '/opencara fix' },
     };
 
     it('/opencara fix creates a fix task when fix.enabled=true', async () => {
@@ -1428,6 +1429,7 @@ describe('Webhook refactor — separate task creation', () => {
       preferredModels: [] as string[],
       preferredTools: [] as string[],
       modelDiversityGraceMs: 30_000,
+      trigger: { comment: '/opencara go', status: 'Ready' },
     };
 
     it('/opencara go creates an implement task when implement.enabled=true', async () => {

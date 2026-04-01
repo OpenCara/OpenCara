@@ -252,7 +252,7 @@ describe('Webhook 503 — transient failure responses', () => {
       expect(res.status).toBe(503);
     });
 
-    it('returns 200 when action is not in trigger.on (intentional skip)', async () => {
+    it('returns 200 when action is not in trigger.events (intentional skip)', async () => {
       const payload = makePRPayload({ action: 'closed' });
       const res = await sendWebhook(app, 'pull_request', payload, env);
       expect(res.status).toBe(200);
