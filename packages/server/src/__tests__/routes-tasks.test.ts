@@ -2069,7 +2069,8 @@ describe('Task Routes', () => {
         expect(body.tasks).toHaveLength(0);
       });
 
-      it('non-preferred agent gets summary after grace period expires', async () => {
+      it('non-preferred agent gets summary after grace period expires (no reviews_completed_at)', async () => {
+        // Single-agent task: falls back to created_at when reviews_completed_at is not set
         await store.createTask(
           makeTask({
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
@@ -2082,6 +2083,37 @@ describe('Task Routes', () => {
         expect(body.tasks).toHaveLength(1);
         expect(body.tasks[0].role).toBe('summary');
       });
+
+      it('non-preferred agent gets summary after grace period expires (reviews_completed_at)', async () => {
+        // Grace period based on reviews_completed_at, not created_at
+        await store.createTask(
+          makeTask({
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            created_at: Date.now() - 300_000, // created 5 min ago (would expire old baseline)
+            reviews_completed_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('non-preferred agent held when reviews_completed_at within grace period despite old created_at', async () => {
+        // created_at is old but reviews_completed_at is recent — grace period still active
+        await store.createTask(
+          makeTask({
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            created_at: Date.now() - 300_000, // created 5 min ago
+            reviews_completed_at: Date.now(), // reviews just completed
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
     });
 
     describe('multi-agent tasks (review_count > 1)', () => {
@@ -2093,6 +2125,7 @@ describe('Task Routes', () => {
             queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
             created_at: Date.now(), // just created
+            reviews_completed_at: Date.now(), // reviews just completed
           }),
         );
 
@@ -2108,7 +2141,8 @@ describe('Task Routes', () => {
             task_type: 'summary',
             queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            created_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
+            created_at: Date.now() - 300_000, // created 5 min ago
+            reviews_completed_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
           }),
         );
 
@@ -2118,13 +2152,30 @@ describe('Task Routes', () => {
         expect(body.tasks[0].role).toBe('summary');
       });
 
+      it('non-preferred agent held when reviews_completed_at within grace period', async () => {
+        await store.createTask(
+          makeTask({
+            task_type: 'summary',
+            queue: 'summary',
+            config: makePreferredConfig([{ agent: 'agent-preferred' }]),
+            created_at: Date.now() - 300_000, // created 5 min ago
+            reviews_completed_at: Date.now(), // reviews just completed
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', { agent_id: 'agent-other' });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
+      });
+
       it('preferred agent can claim summary during grace period', async () => {
         await store.createTask(
           makeTask({
             task_type: 'summary',
             queue: 'summary',
             config: makePreferredConfig([{ agent: 'agent-preferred' }]),
-            created_at: Date.now(), // just created
+            created_at: Date.now(),
+            reviews_completed_at: Date.now(),
           }),
         );
 
@@ -2306,7 +2357,8 @@ describe('Task Routes', () => {
         expect(body.tasks).toHaveLength(0);
       });
 
-      it('non-matching agent gets summary after grace period expires', async () => {
+      it('non-matching agent gets summary after grace period expires (no reviews_completed_at)', async () => {
+        // Falls back to created_at when reviews_completed_at is not set
         await store.createTask(
           makeTask({
             config: makeModelPreferredConfig(['claude-opus-4-6']),
@@ -2321,6 +2373,41 @@ describe('Task Routes', () => {
         const body = await res.json();
         expect(body.tasks).toHaveLength(1);
         expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('non-matching agent gets summary after grace period expires (reviews_completed_at)', async () => {
+        await store.createTask(
+          makeTask({
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now() - 300_000,
+            reviews_completed_at: Date.now() - PREFERRED_SYNTH_GRACE_PERIOD_MS - 1000,
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-a',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(1);
+        expect(body.tasks[0].role).toBe('summary');
+      });
+
+      it('non-matching agent held when reviews_completed_at within grace period despite old created_at', async () => {
+        await store.createTask(
+          makeTask({
+            config: makeModelPreferredConfig(['claude-opus-4-6']),
+            created_at: Date.now() - 300_000, // created 5 min ago
+            reviews_completed_at: Date.now(), // reviews just completed
+          }),
+        );
+
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-a',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        expect(body.tasks).toHaveLength(0);
       });
     });
 
@@ -2403,6 +2490,7 @@ describe('Task Routes', () => {
             queue: 'summary',
             config: makeModelPreferredConfig(['claude-opus-4-6']),
             created_at: Date.now(),
+            reviews_completed_at: Date.now(),
           }),
         );
 
@@ -2422,6 +2510,7 @@ describe('Task Routes', () => {
             queue: 'summary',
             config: makeModelPreferredConfig(['claude-opus-4-6']),
             created_at: Date.now(),
+            reviews_completed_at: Date.now(),
           }),
         );
 

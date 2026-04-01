@@ -144,8 +144,11 @@ function isSummaryVisibleToAgent(task: ReviewTask, agentId: string, model?: stri
   // Check model-based preference
   if (preferredModels.length > 0 && model && preferredModels.includes(model)) return true;
 
-  // Non-preferred agent: check if grace period has elapsed since task creation
-  return Date.now() - task.created_at >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
+  // Non-preferred agent: check if grace period has elapsed since summary phase started.
+  // Use reviews_completed_at (when all reviews finished and summary became claimable)
+  // with fallback to created_at for single-agent tasks that skip the review phase.
+  const summaryPhaseStart = task.reviews_completed_at ?? task.created_at;
+  return Date.now() - summaryPhaseStart >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
 }
 
 /**
