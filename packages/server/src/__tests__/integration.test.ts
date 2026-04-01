@@ -971,7 +971,7 @@ describe('Integration: full E2E flows', () => {
 
     it('non-triggered action is skipped', async () => {
       const payload = {
-        action: 'closed', // not in default trigger.on ['opened']
+        action: 'closed', // not in default trigger.events ['opened']
         installation: { id: 999 },
         repository: { owner: { login: 'acme' }, name: 'widget' },
         pull_request: {

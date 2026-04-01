@@ -139,7 +139,7 @@ describe('POST /api/config/validate', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
-    expect(body.config.review.trigger.on).toEqual(['opened']);
+    expect(body.config.review.trigger.events).toEqual(['opened']);
     expect(body.config.review.agentCount).toBe(1);
     expect(body.config.review.timeout).toBe('10m');
   });
@@ -166,7 +166,7 @@ describe('POST /api/config/validate', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(true);
-    expect(body.config.review.trigger.on).toEqual(['opened', 'synchronize']);
+    expect(body.config.review.trigger.events).toEqual(['opened', 'synchronize']);
     expect(body.config.review.trigger.comment).toBe('/review');
     expect(body.config.review.agentCount).toBe(5);
     expect(body.config.review.preferredModels).toEqual(['claude-opus-4-6']);

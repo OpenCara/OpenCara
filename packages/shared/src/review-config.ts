@@ -1,9 +1,16 @@
 import { parse as parseToml } from 'smol-toml';
 
 export interface TriggerConfig {
-  on: string[];
-  comment: string;
-  skip: string[];
+  /** PR/issue lifecycle events that auto-trigger (e.g. "opened", "synchronize"). Absent = event triggers disabled. */
+  events?: string[];
+  /** Comment text that triggers (e.g. "/opencara review"). Absent = comment triggers disabled. */
+  comment?: string;
+  /** Label name that triggers when added (e.g. "opencara:implement"). Absent = label triggers disabled. */
+  label?: string;
+  /** GitHub Project board status that triggers when changed to this value (e.g. "Ready"). Absent = status triggers disabled. */
+  status?: string;
+  /** Labels/conditions that skip triggering (e.g. ["draft"]) */
+  skip?: string[];
 }
 
 /** An entry in a whitelist/blacklist/preferred list — identifies by agent ID or GitHub username */
@@ -60,20 +67,22 @@ export interface DedupConfig {
 /** Triage section config */
 export interface TriageConfig extends FeatureConfig {
   enabled: boolean;
+  trigger: TriggerConfig;
   defaultMode: 'comment' | 'rewrite';
   autoLabel: boolean;
-  triggers: string[];
   authorModes?: Record<string, 'comment' | 'rewrite'>;
 }
 
 /** Implement section config */
 export interface ImplementConfig extends FeatureConfig {
   enabled: boolean;
+  trigger: TriggerConfig;
 }
 
 /** Fix section config */
 export interface FixConfig extends FeatureConfig {
   enabled: boolean;
+  trigger: TriggerConfig;
 }
 
 /** Top-level .opencara.toml config */
@@ -160,6 +169,88 @@ function parseStringArray(value: unknown): string[] {
   return value.filter((v: unknown) => typeof v === 'string');
 }
 
+/**
+ * Parse a [feature.trigger] section, merging with per-feature defaults.
+ *
+ * - If a field is absent in TOML → use the default value
+ * - If a field is `false` → explicitly disabled (field omitted from result)
+ * - `on` is accepted as an alias for `events` (backward compatibility)
+ */
+export function parseTriggerSection(
+  raw: Record<string, unknown> | undefined,
+  defaults: TriggerConfig,
+): TriggerConfig {
+  if (!raw) return { ...defaults };
+
+  const result: TriggerConfig = {};
+
+  // events (accept `on` as alias for backward compat)
+  const eventsRaw = raw.events !== undefined ? raw.events : raw.on;
+  if (eventsRaw === false) {
+    // explicitly disabled — omit events
+  } else if (Array.isArray(eventsRaw)) {
+    result.events = eventsRaw.filter((v: unknown) => typeof v === 'string');
+  } else if (defaults.events !== undefined) {
+    result.events = defaults.events;
+  }
+
+  // comment
+  if (raw.comment === false) {
+    // explicitly disabled
+  } else if (typeof raw.comment === 'string') {
+    result.comment = raw.comment;
+  } else if (defaults.comment !== undefined) {
+    result.comment = defaults.comment;
+  }
+
+  // label
+  if (raw.label === false) {
+    // explicitly disabled
+  } else if (typeof raw.label === 'string') {
+    result.label = raw.label;
+  } else if (defaults.label !== undefined) {
+    result.label = defaults.label;
+  }
+
+  // status
+  if (raw.status === false) {
+    // explicitly disabled
+  } else if (typeof raw.status === 'string') {
+    result.status = raw.status;
+  } else if (defaults.status !== undefined) {
+    result.status = defaults.status;
+  }
+
+  // skip
+  if (Array.isArray(raw.skip)) {
+    result.skip = raw.skip.filter((v: unknown) => typeof v === 'string');
+  } else if (defaults.skip !== undefined) {
+    result.skip = defaults.skip;
+  }
+
+  return result;
+}
+
+/** Check if event-based triggers are enabled */
+export function isEventTriggerEnabled(trigger: TriggerConfig): boolean {
+  return trigger.events !== undefined && trigger.events.length > 0;
+}
+
+/** Check if comment-based triggers are enabled */
+export function isCommentTriggerEnabled(trigger: TriggerConfig): boolean {
+  return trigger.comment !== undefined;
+}
+
+/** Check if label-based triggers are enabled */
+export function isLabelTriggerEnabled(trigger: TriggerConfig): boolean {
+  return trigger.label !== undefined;
+}
+
+/** Check if status-based triggers are enabled */
+export function isStatusTriggerEnabled(trigger: TriggerConfig): boolean {
+  return trigger.status !== undefined;
+}
+
 /** Default model diversity grace period: 30 seconds */
 export const DEFAULT_MODEL_DIVERSITY_GRACE_MS = 30_000;
 
@@ -194,11 +285,32 @@ export function validateOpenCaraConfig(config: unknown): config is OpenCaraConfi
 /**
  * Default review configuration used when .opencara.toml is not present in the repo.
  */
-const DEFAULT_TRIGGER: TriggerConfig = {
-  on: ['opened'],
+/** Default trigger config for review feature */
+export const DEFAULT_REVIEW_TRIGGER: TriggerConfig = {
+  events: ['opened'],
   comment: '/opencara review',
   skip: ['draft'],
 };
+
+/** Default trigger config for implement feature */
+export const DEFAULT_IMPLEMENT_TRIGGER: TriggerConfig = {
+  comment: '/opencara go',
+  status: 'Ready',
+};
+
+/** Default trigger config for fix feature */
+export const DEFAULT_FIX_TRIGGER: TriggerConfig = {
+  comment: '/opencara fix',
+};
+
+/** Default trigger config for triage feature */
+export const DEFAULT_TRIAGE_TRIGGER: TriggerConfig = {
+  events: ['opened'],
+  comment: '/opencara triage',
+};
+
+/** @deprecated Use DEFAULT_REVIEW_TRIGGER instead */
+const DEFAULT_TRIGGER = DEFAULT_REVIEW_TRIGGER;
 
 const DEFAULT_FEATURE_CONFIG: FeatureConfig = {
   prompt: 'Review this pull request for bugs, security issues, and code quality.',
@@ -323,23 +435,14 @@ function parseFeatureFields(raw: Record<string, unknown>, defaults: FeatureConfi
 
 /** Parse the [review] section from the new .opencara.toml structure */
 function parseReviewSection(raw: Record<string, unknown>): ReviewSectionConfig {
-  const triggerRaw = isObject(raw.trigger) ? raw.trigger : {};
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
 
   const base = parseFeatureFields(raw, DEFAULT_FEATURE_CONFIG);
 
   return {
     ...base,
-    trigger: {
-      on: Array.isArray(triggerRaw.on)
-        ? triggerRaw.on.filter((v: unknown) => typeof v === 'string')
-        : DEFAULT_TRIGGER.on,
-      comment:
-        typeof triggerRaw.comment === 'string' ? triggerRaw.comment : DEFAULT_TRIGGER.comment,
-      skip: Array.isArray(triggerRaw.skip)
-        ? triggerRaw.skip.filter((v: unknown) => typeof v === 'string')
-        : DEFAULT_TRIGGER.skip,
-    },
+    trigger: parseTriggerSection(triggerRaw, DEFAULT_REVIEW_TRIGGER),
     reviewer: {
       whitelist: parseEntityList(reviewerRaw.whitelist),
       blacklist: parseEntityList(reviewerRaw.blacklist),
@@ -408,12 +511,20 @@ function parseTriageSection(raw: Record<string, unknown>): TriageConfig {
     }
   }
 
+  // Backward compat: if no [triage.trigger] section but old `triggers` array exists,
+  // convert it to trigger.events
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
+  let triageDefaults = DEFAULT_TRIAGE_TRIGGER;
+  if (!triggerRaw && Array.isArray(raw.triggers)) {
+    triageDefaults = { ...DEFAULT_TRIAGE_TRIGGER, events: parseStringArray(raw.triggers) };
+  }
+
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+    trigger: parseTriggerSection(triggerRaw, triageDefaults),
     defaultMode: defaultMode,
     autoLabel: typeof raw.auto_label === 'boolean' ? raw.auto_label : false,
-    triggers: Array.isArray(raw.triggers) ? parseStringArray(raw.triggers) : ['opened'],
     ...(authorModes ? { authorModes } : {}),
   };
 }
@@ -430,9 +541,11 @@ const DEFAULT_IMPLEMENT_FEATURE: FeatureConfig = {
 /** Parse the [implement] section */
 function parseImplementSection(raw: Record<string, unknown>): ImplementConfig {
   const base = parseFeatureFields(raw, DEFAULT_IMPLEMENT_FEATURE);
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+    trigger: parseTriggerSection(triggerRaw, DEFAULT_IMPLEMENT_TRIGGER),
   };
 }
 
@@ -448,9 +561,11 @@ const DEFAULT_FIX_FEATURE: FeatureConfig = {
 /** Parse the [fix] section */
 function parseFixSection(raw: Record<string, unknown>): FixConfig {
   const base = parseFeatureFields(raw, DEFAULT_FIX_FEATURE);
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+    trigger: parseTriggerSection(triggerRaw, DEFAULT_FIX_TRIGGER),
   };
 }
 
@@ -534,7 +649,7 @@ export function parseOpenCaraConfig(toml: string): ParseResult {
  * prompt, trigger, agents, reviewer, summarizer, timeout all at top level.
  */
 function parseLegacyReviewConfig(raw: Record<string, unknown>): ReviewSectionConfig {
-  const triggerRaw = isObject(raw.trigger) ? raw.trigger : {};
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
   const agentsRaw = isObject(raw.agents) ? raw.agents : {};
   const reviewerRaw = isObject(raw.reviewer) ? raw.reviewer : {};
 
@@ -552,16 +667,7 @@ function parseLegacyReviewConfig(raw: Record<string, unknown>): ReviewSectionCon
       raw.model_diversity_grace ?? agentsRaw.model_diversity_grace,
       DEFAULT_MODEL_DIVERSITY_GRACE_MS,
     ),
-    trigger: {
-      on: Array.isArray(triggerRaw.on)
-        ? triggerRaw.on.filter((v: unknown) => typeof v === 'string')
-        : DEFAULT_TRIGGER.on,
-      comment:
-        typeof triggerRaw.comment === 'string' ? triggerRaw.comment : DEFAULT_TRIGGER.comment,
-      skip: Array.isArray(triggerRaw.skip)
-        ? triggerRaw.skip.filter((v: unknown) => typeof v === 'string')
-        : DEFAULT_TRIGGER.skip,
-    },
+    trigger: parseTriggerSection(triggerRaw, DEFAULT_REVIEW_TRIGGER),
     reviewer: {
       whitelist: parseEntityList(reviewerRaw.whitelist),
       blacklist: parseEntityList(reviewerRaw.blacklist),

@@ -10,7 +10,7 @@ export function shouldSkipReview(
   config: ReviewConfig,
   pr: { draft?: boolean; labels?: Array<{ name: string }>; headRef: string },
 ): string | null {
-  for (const condition of config.trigger.skip) {
+  for (const condition of config.trigger.skip ?? []) {
     if (condition === 'draft' && pr.draft) {
       return 'PR is a draft';
     }

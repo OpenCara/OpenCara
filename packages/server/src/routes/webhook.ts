@@ -433,7 +433,7 @@ async function createIssueTaskGroups(
   let primaryCreated = false;
 
   // Triage task group
-  if (fullConfig.triage?.enabled && fullConfig.triage.triggers.includes(action)) {
+  if (fullConfig.triage?.enabled && fullConfig.triage.trigger.events?.includes(action)) {
     const groupId = await createTaskGroup(
       store,
       'triage',
@@ -585,11 +585,11 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
-  if (!reviewConfig.trigger.on.includes(action)) {
-    logger.info('Action not in trigger.on — skipping', {
+  if (!reviewConfig.trigger.events?.includes(action)) {
+    logger.info('Action not in trigger.events — skipping', {
       prNumber,
       action,
-      triggerOn: reviewConfig.trigger.on,
+      triggerEvents: reviewConfig.trigger.events,
     });
     return new Response('OK', { status: 200 });
   }
@@ -732,7 +732,8 @@ export async function handleIssueEvent(
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
   // Check if any feature is enabled for issues
-  const triageEnabled = fullConfig.triage?.enabled && fullConfig.triage.triggers.includes(action);
+  const triageEnabled =
+    fullConfig.triage?.enabled && fullConfig.triage.trigger.events?.includes(action);
   const dedupIssuesEnabled = fullConfig.dedup?.issues?.enabled;
 
   if (!triageEnabled && !dedupIssuesEnabled) {
@@ -957,6 +958,9 @@ async function handleIssueComment(
 
   // Check for review trigger command
   const triggerCommand = reviewConfig.trigger.comment;
+  if (!triggerCommand) {
+    return new Response('OK', { status: 200 });
+  }
   const body = comment.body.trim().toLowerCase();
   const cmd = triggerCommand.toLowerCase();
   // Only slash-commands get an @-alias (e.g. /opencara review → @opencara review).

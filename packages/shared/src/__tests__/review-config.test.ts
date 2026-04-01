@@ -4,6 +4,10 @@ import {
   parseReviewConfig,
   parseEntityList,
   isEntityMatch,
+  isEventTriggerEnabled,
+  isCommentTriggerEnabled,
+  isLabelTriggerEnabled,
+  isStatusTriggerEnabled,
   validateReviewConfig,
   validateOpenCaraConfig,
   DEFAULT_REVIEW_CONFIG,
@@ -203,7 +207,7 @@ describe('parseOpenCaraConfig (new format)', () => {
     expect(config.review!.timeout).toBe('15m');
     expect(config.review!.preferredModels).toEqual(['claude-opus-4-6']);
     expect(config.review!.preferredTools).toEqual(['claude']);
-    expect(config.review!.trigger.on).toEqual(['opened', 'synchronize']);
+    expect(config.review!.trigger.events).toEqual(['opened', 'synchronize']);
     expect(config.review!.trigger.comment).toBe('/review');
     expect(config.review!.reviewer.whitelist).toEqual([{ agent: 'agent-a' }]);
     expect(config.review!.summarizer.preferred).toEqual([{ github: 'alice' }]);
@@ -261,7 +265,7 @@ prompt = "Focus on performance"
 
   it('uses defaults when trigger section is missing', () => {
     const result = parseOpenCaraConfig('version = 1\n[review]\nprompt = "test"') as OpenCaraConfig;
-    expect(result.review!.trigger.on).toEqual(['opened']);
+    expect(result.review!.trigger.events).toEqual(['opened']);
     expect(result.review!.trigger.comment).toBe('/opencara review');
     expect(result.review!.trigger.skip).toEqual(['draft']);
   });
@@ -344,7 +348,7 @@ bob = "comment"
     expect(result.triage!.enabled).toBe(true);
     expect(result.triage!.defaultMode).toBe('rewrite');
     expect(result.triage!.autoLabel).toBe(true);
-    expect(result.triage!.triggers).toEqual(['bug', 'feature']);
+    expect(result.triage!.trigger.events).toEqual(['bug', 'feature']);
     expect(result.triage!.agentCount).toBe(2);
     expect(result.triage!.timeout).toBe('5m');
     expect(result.triage!.authorModes).toEqual({ alice: 'rewrite', bob: 'comment' });
@@ -360,7 +364,8 @@ prompt = "Triage"
     expect(result.triage!.enabled).toBe(true);
     expect(result.triage!.defaultMode).toBe('comment');
     expect(result.triage!.autoLabel).toBe(false);
-    expect(result.triage!.triggers).toEqual(['opened']);
+    expect(result.triage!.trigger.events).toEqual(['opened']);
+    expect(result.triage!.trigger.comment).toBe('/opencara triage');
     expect(result.triage!.authorModes).toBeUndefined();
   });
 
@@ -386,7 +391,7 @@ prompt = "Triage"
 triggers = ["opened", "edited"]
 `;
     const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
-    expect(result.triage!.triggers).toEqual(['opened', 'edited']);
+    expect(result.triage!.trigger.events).toEqual(['opened', 'edited']);
   });
 
   it('uses explicit empty triggers when provided', () => {
@@ -397,7 +402,7 @@ prompt = "Triage"
 triggers = []
 `;
     const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
-    expect(result.triage!.triggers).toEqual([]);
+    expect(result.triage!.trigger.events).toEqual([]);
   });
 
   it('defaults default_mode to comment for invalid value', () => {
@@ -444,7 +449,7 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
     expect(DEFAULT_REVIEW_CONFIG.prompt).toBeTruthy();
     expect(DEFAULT_REVIEW_CONFIG.agentCount).toBe(1);
     expect(DEFAULT_REVIEW_CONFIG.timeout).toBe('10m');
-    expect(DEFAULT_REVIEW_CONFIG.trigger.on).toEqual(['opened']);
+    expect(DEFAULT_REVIEW_CONFIG.trigger.events).toEqual(['opened']);
     expect(DEFAULT_REVIEW_CONFIG.trigger.comment).toBe('/opencara review');
     expect(DEFAULT_REVIEW_CONFIG.trigger.skip).toEqual(['draft']);
   });
@@ -470,7 +475,7 @@ describe('trigger config parsing', () => {
     );
     expect('error' in config).toBe(false);
     if (!('error' in config)) {
-      expect(config.trigger.on).toEqual(['opened', 'synchronize']);
+      expect(config.trigger.events).toEqual(['opened', 'synchronize']);
       expect(config.trigger.comment).toBe('/review');
       expect(config.trigger.skip).toEqual(['draft', 'label:wip']);
     }
@@ -480,7 +485,7 @@ describe('trigger config parsing', () => {
     const config = parseReviewConfig('version = 1\nprompt = "test"');
     expect('error' in config).toBe(false);
     if (!('error' in config)) {
-      expect(config.trigger.on).toEqual(['opened']);
+      expect(config.trigger.events).toEqual(['opened']);
       expect(config.trigger.comment).toBe('/opencara review');
       expect(config.trigger.skip).toEqual(['draft']);
     }
@@ -492,7 +497,7 @@ describe('trigger config parsing', () => {
     );
     expect('error' in config).toBe(false);
     if (!('error' in config)) {
-      expect(config.trigger.on).toEqual(['ready_for_review']);
+      expect(config.trigger.events).toEqual(['ready_for_review']);
       expect(config.trigger.comment).toBe('/opencara review');
       expect(config.trigger.skip).toEqual(['draft']);
     }
@@ -1145,5 +1150,259 @@ prompt = "Fix comments"
     expect(result.triage).toBeDefined();
     expect(result.implement).toBeDefined();
     expect(result.fix).toBeDefined();
+  });
+});
+
+// ── Unified trigger config ──
+
+describe('unified trigger config', () => {
+  describe('per-feature default triggers', () => {
+    it('review defaults: events=["opened"], comment="/opencara review", skip=["draft"]', () => {
+      const result = parseOpenCaraConfig(
+        'version = 1\n[review]\nprompt = "test"',
+      ) as OpenCaraConfig;
+      expect(result.review!.trigger.events).toEqual(['opened']);
+      expect(result.review!.trigger.comment).toBe('/opencara review');
+      expect(result.review!.trigger.skip).toEqual(['draft']);
+      expect(result.review!.trigger.label).toBeUndefined();
+      expect(result.review!.trigger.status).toBeUndefined();
+    });
+
+    it('implement defaults: comment="/opencara go", status="Ready"', () => {
+      const result = parseOpenCaraConfig(
+        'version = 1\n[implement]\nprompt = "test"',
+      ) as OpenCaraConfig;
+      expect(result.implement!.trigger.comment).toBe('/opencara go');
+      expect(result.implement!.trigger.status).toBe('Ready');
+      expect(result.implement!.trigger.events).toBeUndefined();
+      expect(result.implement!.trigger.label).toBeUndefined();
+      expect(result.implement!.trigger.skip).toBeUndefined();
+    });
+
+    it('fix defaults: comment="/opencara fix"', () => {
+      const result = parseOpenCaraConfig('version = 1\n[fix]\nprompt = "test"') as OpenCaraConfig;
+      expect(result.fix!.trigger.comment).toBe('/opencara fix');
+      expect(result.fix!.trigger.events).toBeUndefined();
+      expect(result.fix!.trigger.label).toBeUndefined();
+      expect(result.fix!.trigger.status).toBeUndefined();
+      expect(result.fix!.trigger.skip).toBeUndefined();
+    });
+
+    it('triage defaults: events=["opened"], comment="/opencara triage"', () => {
+      const result = parseOpenCaraConfig(
+        'version = 1\n[triage]\nprompt = "test"',
+      ) as OpenCaraConfig;
+      expect(result.triage!.trigger.events).toEqual(['opened']);
+      expect(result.triage!.trigger.comment).toBe('/opencara triage');
+      expect(result.triage!.trigger.label).toBeUndefined();
+      expect(result.triage!.trigger.status).toBeUndefined();
+      expect(result.triage!.trigger.skip).toBeUndefined();
+    });
+  });
+
+  describe('explicit disable via false', () => {
+    it('comment = false disables default comment trigger on implement', () => {
+      const toml = `
+version = 1
+[implement]
+prompt = "test"
+[implement.trigger]
+comment = false
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.implement!.trigger.comment).toBeUndefined();
+      expect(result.implement!.trigger.status).toBe('Ready'); // default still active
+    });
+
+    it('events = false disables default event trigger on review', () => {
+      const toml = `
+version = 1
+[review]
+prompt = "test"
+[review.trigger]
+events = false
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.review!.trigger.events).toBeUndefined();
+      expect(result.review!.trigger.comment).toBe('/opencara review'); // default still active
+      expect(result.review!.trigger.skip).toEqual(['draft']); // default still active
+    });
+
+    it('status = false disables default status trigger on implement', () => {
+      const toml = `
+version = 1
+[implement]
+prompt = "test"
+[implement.trigger]
+status = false
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.implement!.trigger.status).toBeUndefined();
+      expect(result.implement!.trigger.comment).toBe('/opencara go'); // default still active
+    });
+
+    it('multiple fields can be disabled simultaneously', () => {
+      const toml = `
+version = 1
+[implement]
+prompt = "test"
+[implement.trigger]
+comment = false
+status = false
+label = "opencara:implement"
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.implement!.trigger.comment).toBeUndefined();
+      expect(result.implement!.trigger.status).toBeUndefined();
+      expect(result.implement!.trigger.label).toBe('opencara:implement');
+    });
+  });
+
+  describe('custom trigger values', () => {
+    it('parses all trigger fields on review', () => {
+      const toml = `
+version = 1
+[review]
+prompt = "test"
+[review.trigger]
+events = ["opened", "synchronize"]
+comment = "/review"
+label = "opencara:review"
+skip = ["draft", "label:wip"]
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.review!.trigger.events).toEqual(['opened', 'synchronize']);
+      expect(result.review!.trigger.comment).toBe('/review');
+      expect(result.review!.trigger.label).toBe('opencara:review');
+      expect(result.review!.trigger.skip).toEqual(['draft', 'label:wip']);
+    });
+
+    it('adds label trigger to implement', () => {
+      const toml = `
+version = 1
+[implement]
+prompt = "test"
+[implement.trigger]
+label = "opencara:implement"
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.implement!.trigger.label).toBe('opencara:implement');
+      // Defaults still active
+      expect(result.implement!.trigger.comment).toBe('/opencara go');
+      expect(result.implement!.trigger.status).toBe('Ready');
+    });
+
+    it('adds status trigger to fix', () => {
+      const toml = `
+version = 1
+[fix]
+prompt = "test"
+[fix.trigger]
+status = "Fix Ready"
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.fix!.trigger.status).toBe('Fix Ready');
+      expect(result.fix!.trigger.comment).toBe('/opencara fix'); // default still active
+    });
+  });
+
+  describe('backward compatibility', () => {
+    it('trigger.on treated as trigger.events (review)', () => {
+      const toml = `
+version = 1
+[review]
+prompt = "test"
+[review.trigger]
+on = ["opened", "synchronize"]
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.review!.trigger.events).toEqual(['opened', 'synchronize']);
+    });
+
+    it('trigger.on treated as trigger.events (legacy format)', () => {
+      const config = parseReviewConfig(
+        'version = 1\nprompt = "test"\n[trigger]\non = ["opened", "synchronize"]',
+      );
+      expect('error' in config).toBe(false);
+      if (!('error' in config)) {
+        expect(config.trigger.events).toEqual(['opened', 'synchronize']);
+      }
+    });
+
+    it('triage triggers array converted to trigger.events', () => {
+      const toml = `
+version = 1
+[triage]
+prompt = "test"
+triggers = ["opened", "edited"]
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.triage!.trigger.events).toEqual(['opened', 'edited']);
+      expect(result.triage!.trigger.comment).toBe('/opencara triage'); // default still active
+    });
+
+    it('triage triggers array ignored when [triage.trigger] section present', () => {
+      const toml = `
+version = 1
+[triage]
+prompt = "test"
+triggers = ["opened", "edited"]
+[triage.trigger]
+events = ["labeled"]
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.triage!.trigger.events).toEqual(['labeled']);
+    });
+
+    it('events takes priority over on when both present', () => {
+      const toml = `
+version = 1
+[review]
+prompt = "test"
+[review.trigger]
+events = ["synchronize"]
+on = ["opened"]
+`;
+      const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+      expect(result.review!.trigger.events).toEqual(['synchronize']);
+    });
+  });
+
+  describe('helper functions', () => {
+    it('isEventTriggerEnabled returns true when events present and non-empty', () => {
+      expect(isEventTriggerEnabled({ events: ['opened'] })).toBe(true);
+    });
+
+    it('isEventTriggerEnabled returns false when events absent', () => {
+      expect(isEventTriggerEnabled({})).toBe(false);
+    });
+
+    it('isEventTriggerEnabled returns false when events empty', () => {
+      expect(isEventTriggerEnabled({ events: [] })).toBe(false);
+    });
+
+    it('isCommentTriggerEnabled returns true when comment present', () => {
+      expect(isCommentTriggerEnabled({ comment: '/opencara review' })).toBe(true);
+    });
+
+    it('isCommentTriggerEnabled returns false when comment absent', () => {
+      expect(isCommentTriggerEnabled({})).toBe(false);
+    });
+
+    it('isLabelTriggerEnabled returns true when label present', () => {
+      expect(isLabelTriggerEnabled({ label: 'opencara:review' })).toBe(true);
+    });
+
+    it('isLabelTriggerEnabled returns false when label absent', () => {
+      expect(isLabelTriggerEnabled({})).toBe(false);
+    });
+
+    it('isStatusTriggerEnabled returns true when status present', () => {
+      expect(isStatusTriggerEnabled({ status: 'Ready' })).toBe(true);
+    });
+
+    it('isStatusTriggerEnabled returns false when status absent', () => {
+      expect(isStatusTriggerEnabled({})).toBe(false);
+    });
   });
 });
