@@ -1018,7 +1018,8 @@ export function taskRoutes() {
       }
 
       // Deduplicate across agents — each task goes to exactly one agent.
-      // Priority: preferred model/tool match wins, then first-come (request order).
+      // Priority: preferred model/tool match wins, then round-robin.
+      // Shuffle agent order so the first agent in config doesn't always win.
       const assignedTaskIds = new Set<string>();
       const assignments: Record<string, PollTask[]> = {};
 
@@ -1027,15 +1028,20 @@ export function taskRoutes() {
         assignments[agent.agent_name] = [];
       }
 
+      // Shuffle agents for fair distribution across poll cycles
+      const shuffledAgents = [...body.agents];
+      for (let i = shuffledAgents.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffledAgents[i], shuffledAgents[j]] = [shuffledAgents[j], shuffledAgents[i]];
+      }
+
       // First pass: preferred-model round-robin — distribute tasks to agents whose
       // model/tool matches the task's preferred_models/preferred_tools config.
-      // Uses the same round-robin pattern as the second pass (one task per agent
-      // per iteration) to avoid the first matching agent hoarding all tasks.
       {
         let changed = true;
         while (changed) {
           changed = false;
-          for (const agent of body.agents) {
+          for (const agent of shuffledAgents) {
             const tasks = agentTasks.get(agent.agent_name) ?? [];
             const next = tasks.find((t) => {
               if (assignedTaskIds.has(t.task_id)) return false;
@@ -1059,7 +1065,7 @@ export function taskRoutes() {
         let changed = true;
         while (changed) {
           changed = false;
-          for (const agent of body.agents) {
+          for (const agent of shuffledAgents) {
             const tasks = agentTasks.get(agent.agent_name) ?? [];
             const next = tasks.find((t) => !assignedTaskIds.has(t.task_id));
             if (next) {
