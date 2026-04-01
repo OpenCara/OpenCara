@@ -116,6 +116,16 @@ export interface GitHubService {
     body: string,
     token: string,
   ): Promise<void>;
+
+  /**
+   * Resolve a GitHub Projects V2 item's content_node_id to the underlying
+   * issue or PR details via the GraphQL API.
+   * Returns { type, owner, repo, number } or null if unresolvable.
+   */
+  resolveProjectItemContent(
+    nodeId: string,
+    token: string,
+  ): Promise<{ type: 'Issue' | 'PullRequest'; owner: string; repo: string; number: number } | null>;
 }
 
 /**
@@ -404,6 +414,68 @@ export class RealGitHubService implements GitHubService {
       );
     }
   }
+
+  async resolveProjectItemContent(
+    nodeId: string,
+    token: string,
+  ): Promise<{
+    type: 'Issue' | 'PullRequest';
+    owner: string;
+    repo: string;
+    number: number;
+  } | null> {
+    const query = `
+      query($nodeId: ID!) {
+        node(id: $nodeId) {
+          ... on Issue {
+            __typename
+            number
+            repository { owner { login } name }
+          }
+          ... on PullRequest {
+            __typename
+            number
+            repository { owner { login } name }
+          }
+        }
+      }
+    `;
+    const response = await githubFetch('https://api.github.com/graphql', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ query, variables: { nodeId } }),
+    });
+
+    if (!response.ok) {
+      this.logger.warn('GraphQL query failed for project item content', {
+        status: response.status,
+        nodeId,
+      });
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      data?: {
+        node?: {
+          __typename: string;
+          number: number;
+          repository: { owner: { login: string }; name: string };
+        };
+      };
+    };
+
+    const node = data.data?.node;
+    if (!node || (node.__typename !== 'Issue' && node.__typename !== 'PullRequest')) {
+      return null;
+    }
+
+    return {
+      type: node.__typename as 'Issue' | 'PullRequest',
+      owner: node.repository.owner.login,
+      repo: node.repository.name,
+      number: node.number,
+    };
+  }
 }
 
 /**
@@ -568,5 +640,15 @@ export class NoOpGitHubService implements GitHubService {
         return;
       }
     }
+  }
+
+  async resolveProjectItemContent(nodeId: string): Promise<{
+    type: 'Issue' | 'PullRequest';
+    owner: string;
+    repo: string;
+    number: number;
+  } | null> {
+    this.logger.info('Dev mode — returning null for project item content', { nodeId });
+    return null;
   }
 }

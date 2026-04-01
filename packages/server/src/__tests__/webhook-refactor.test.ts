@@ -121,6 +121,20 @@ class TestGitHubService implements GitHubService {
   async createIssue(): Promise<number> {
     return 0;
   }
+  resolveProjectItemResult: {
+    type: 'Issue' | 'PullRequest';
+    owner: string;
+    repo: string;
+    number: number;
+  } | null = null;
+  async resolveProjectItemContent(): Promise<{
+    type: 'Issue' | 'PullRequest';
+    owner: string;
+    repo: string;
+    number: number;
+  } | null> {
+    return this.resolveProjectItemResult;
+  }
   async listIssueComments(): Promise<Array<{ id: number; body: string }>> {
     return [];
   }

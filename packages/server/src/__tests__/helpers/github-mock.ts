@@ -292,6 +292,26 @@ export class MockGitHubService implements GitHubService {
     }
   }
 
+  resolveProjectItemResult: {
+    type: 'Issue' | 'PullRequest';
+    owner: string;
+    repo: string;
+    number: number;
+  } | null = null;
+
+  async resolveProjectItemContent(
+    nodeId: string,
+    token: string,
+  ): Promise<{
+    type: 'Issue' | 'PullRequest';
+    owner: string;
+    repo: string;
+    number: number;
+  } | null> {
+    this.calls.push({ method: 'resolveProjectItemContent', args: { nodeId, token } });
+    return this.resolveProjectItemResult;
+  }
+
   /** Count postPrComment calls (convenience for assertions). */
   get commentCount(): number {
     return this.calls.filter((c) => c.method === 'postPrComment').length;

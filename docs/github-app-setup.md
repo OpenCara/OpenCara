@@ -15,20 +15,28 @@ This document describes how to create and configure the GitHub App for OpenCara.
 
 Configure these **Repository permissions**:
 
-| Permission    | Access       | Purpose                          |
-| ------------- | ------------ | -------------------------------- |
-| Pull requests | Read & Write | Read PR details, post comments   |
-| Issues        | Read         | Read issue context               |
-| Contents      | Read         | Read `.opencara.toml` from repos |
+| Permission    | Access       | Purpose                           |
+| ------------- | ------------ | --------------------------------- |
+| Pull requests | Read & Write | Read PR details, post comments    |
+| Issues        | Read & Write | Read issue context, update labels |
+| Contents      | Read         | Read `.opencara.toml` from repos  |
 
-No **Organization permissions** or **Account permissions** are needed.
+Configure these **Organization permissions** (only needed for status triggers):
+
+| Permission            | Access | Purpose                                          |
+| --------------------- | ------ | ------------------------------------------------ |
+| Organization projects | Read   | Resolve project item content for status triggers |
+
+If you don't use status-based triggers (e.g., `trigger.status = "Ready"`), this permission is not required.
 
 ## Subscribe to Events
 
 Enable these webhook events:
 
-- **Pull request** — triggers review when PRs are opened or updated
-- **Issue comment** — enables `/opencara review` manual trigger on PRs
+- **Pull request** — triggers review when PRs are opened or updated; label triggers on PRs
+- **Issues** — triggers triage/implement on issue events; label triggers on issues
+- **Issue comment** — enables `/opencara review`, `/opencara triage`, `/opencara go`, `/opencara fix` commands
+- **Projects v2 item** — enables status-based triggers (e.g., implement when status changes to "Ready")
 - **Installation** — tracks when the app is installed/uninstalled on repos
 
 ## Post-Creation Setup
