@@ -144,8 +144,11 @@ function isSummaryVisibleToAgent(task: ReviewTask, agentId: string, model?: stri
   // Check model-based preference
   if (preferredModels.length > 0 && model && preferredModels.includes(model)) return true;
 
-  // Non-preferred agent: check if grace period has elapsed since task creation
-  return Date.now() - task.created_at >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
+  // Non-preferred agent: check if grace period has elapsed since summary phase started.
+  // Use reviews_completed_at (when all reviews finished and summary became claimable)
+  // with fallback to created_at for single-agent tasks that skip the review phase.
+  const summaryPhaseStart = task.reviews_completed_at ?? task.created_at;
+  return Date.now() - summaryPhaseStart >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
 }
 
 /**
@@ -1402,6 +1405,7 @@ export function taskRoutes() {
       // ── Worker result — atomically complete and maybe create summary ──
 
       const summaryTaskId = crypto.randomUUID();
+      const now = Date.now();
       const summaryTask: ReviewTask = {
         ...task,
         id: summaryTaskId,
@@ -1409,8 +1413,9 @@ export function taskRoutes() {
         status: 'pending',
         queue: 'summary',
         prompt: task.prompt,
-        created_at: Date.now(),
-        timeout_at: Date.now() + (task.timeout_at - task.created_at),
+        created_at: now,
+        timeout_at: now + (task.timeout_at - task.created_at),
+        reviews_completed_at: now,
       };
 
       // Atomically: mark worker completed + create summary if all workers done.
