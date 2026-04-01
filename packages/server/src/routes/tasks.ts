@@ -1405,6 +1405,7 @@ export function taskRoutes() {
       // ── Worker result — atomically complete and maybe create summary ──
 
       const summaryTaskId = crypto.randomUUID();
+      const now = Date.now();
       const summaryTask: ReviewTask = {
         ...task,
         id: summaryTaskId,
@@ -1412,8 +1413,9 @@ export function taskRoutes() {
         status: 'pending',
         queue: 'summary',
         prompt: task.prompt,
-        created_at: Date.now(),
-        timeout_at: Date.now() + (task.timeout_at - task.created_at),
+        created_at: now,
+        timeout_at: now + (task.timeout_at - task.created_at),
+        reviews_completed_at: now,
       };
 
       // Atomically: mark worker completed + create summary if all workers done.

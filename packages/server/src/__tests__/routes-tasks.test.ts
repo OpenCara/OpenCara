@@ -2232,6 +2232,58 @@ describe('Task Routes', () => {
           (t) => t.task_type === 'summary' && t.group_id === 'grp-pref',
         );
         expect(summaries).toHaveLength(1);
+        expect(summaries[0].reviews_completed_at).toBeDefined();
+        expect(summaries[0].reviews_completed_at).toBeGreaterThan(0);
+      });
+
+      it('summary task reviews_completed_at enables preferred model grace period', async () => {
+        // Worker task with preferred_models config
+        await store.createTask(
+          makeTask({
+            id: 'w-pref',
+            review_count: 2,
+            queue: 'review',
+            task_type: 'review',
+            group_id: 'grp-pref-grace',
+            config: {
+              ...DEFAULT_REVIEW_CONFIG,
+              summarizer: {
+                ...DEFAULT_REVIEW_CONFIG.summarizer,
+                preferredModels: ['claude-opus-4-6'],
+              },
+            },
+          }),
+        );
+
+        // Claim and submit worker result — this creates the summary task
+        await request('POST', '/api/tasks/w-pref/claim', {
+          agent_id: 'agent-a',
+          role: 'review',
+        });
+        await request('POST', '/api/tasks/w-pref/result', {
+          agent_id: 'agent-a',
+          type: 'review',
+          review_text: 'Review analysis',
+          verdict: 'approve',
+        });
+
+        // Summary task should have reviews_completed_at set to ~now
+        const allTasks = await store.listTasks({});
+        const summaries = allTasks.filter(
+          (t) => t.task_type === 'summary' && t.group_id === 'grp-pref-grace',
+        );
+        expect(summaries).toHaveLength(1);
+        expect(summaries[0].reviews_completed_at).toBeDefined();
+
+        // Non-preferred agent should NOT see summary during grace period
+        // because reviews_completed_at was just set (grace period active)
+        const res = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-other',
+          model: 'gpt-4o',
+        });
+        const body = await res.json();
+        const summaryTasks = body.tasks.filter((t: { role: string }) => t.role === 'summary');
+        expect(summaryTasks).toHaveLength(0);
       });
 
       it('does not create summary before all workers are done', async () => {
