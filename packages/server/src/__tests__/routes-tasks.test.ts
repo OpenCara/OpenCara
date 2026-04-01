@@ -2360,9 +2360,7 @@ describe('Task Routes', () => {
         });
         const body = await res.json();
         const opusTasks = body.assignments['Claude Opus']?.tasks ?? [];
-        const summaryTasks = opusTasks.filter(
-          (t: { role: string }) => t.role === 'summary',
-        );
+        const summaryTasks = opusTasks.filter((t: { role: string }) => t.role === 'summary');
         // Claude Opus with private mode should still see the summary
         expect(summaryTasks).toHaveLength(1);
       });
