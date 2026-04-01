@@ -2284,6 +2284,87 @@ describe('Task Routes', () => {
         const body = await res.json();
         const summaryTasks = body.tasks.filter((t: { role: string }) => t.role === 'summary');
         expect(summaryTasks).toHaveLength(0);
+
+        // Preferred agent SHOULD see summary during grace period (single poll)
+        const prefRes = await request('POST', '/api/tasks/poll', {
+          agent_id: 'agent-preferred',
+          model: 'claude-opus-4-6',
+        });
+        const prefBody = await prefRes.json();
+        const prefSummaryTasks = prefBody.tasks.filter(
+          (t: { role: string }) => t.role === 'summary',
+        );
+        expect(prefSummaryTasks).toHaveLength(1);
+
+        // Preferred agent SHOULD see summary via batch poll during grace period
+        const batchRes = await request('POST', '/api/tasks/poll/batch', {
+          agents: [
+            { agent_name: 'Codex', roles: ['review', 'summary'], model: 'gpt-5.4', tool: 'codex' },
+            {
+              agent_name: 'Claude Opus',
+              roles: ['review', 'summary'],
+              model: 'claude-opus-4-6',
+              tool: 'claude',
+            },
+          ],
+        });
+        const batchBody = await batchRes.json();
+        const codexSummary = (batchBody.assignments['Codex']?.tasks ?? []).filter(
+          (t: { role: string }) => t.role === 'summary',
+        );
+        const opusSummary = (batchBody.assignments['Claude Opus']?.tasks ?? []).filter(
+          (t: { role: string }) => t.role === 'summary',
+        );
+        // Non-preferred Codex should NOT get summary during grace period
+        expect(codexSummary).toHaveLength(0);
+        // Preferred Claude Opus SHOULD get summary during grace period
+        expect(opusSummary).toHaveLength(1);
+      });
+
+      it('preferred agent with private repo_filters sees summary via batch poll', async () => {
+        // Summary task with preferred_models config
+        await store.createTask(
+          makeTask({
+            id: 'summary-private',
+            review_count: 1,
+            queue: 'summary',
+            task_type: 'summary',
+            owner: 'OpenCara',
+            repo: 'opencara-prod-test',
+            config: {
+              ...DEFAULT_REVIEW_CONFIG,
+              summarizer: {
+                ...DEFAULT_REVIEW_CONFIG.summarizer,
+                preferredModels: ['claude-opus-4-6'],
+              },
+            },
+          }),
+        );
+
+        // Batch poll with Claude Opus using private mode repo_filters
+        const res = await request('POST', '/api/tasks/poll/batch', {
+          agents: [
+            {
+              agent_name: 'Claude Opus',
+              roles: ['review', 'summary'],
+              model: 'claude-opus-4-6',
+              tool: 'claude',
+              repo_filters: [
+                {
+                  mode: 'private',
+                  list: ['OpenCara/opencara-prod-test', 'OpenCara/OpenCara'],
+                },
+              ],
+            },
+          ],
+        });
+        const body = await res.json();
+        const opusTasks = body.assignments['Claude Opus']?.tasks ?? [];
+        const summaryTasks = opusTasks.filter(
+          (t: { role: string }) => t.role === 'summary',
+        );
+        // Claude Opus with private mode should still see the summary
+        expect(summaryTasks).toHaveLength(1);
       });
 
       it('does not create summary before all workers are done', async () => {

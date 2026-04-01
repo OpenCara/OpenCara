@@ -749,9 +749,20 @@ async function filterTasksForAgent(
     // Grace period visibility checks
     if (isSummaryTask(task)) {
       if (!isSummaryVisibleToAgent(task, agent.agentId, agent.model)) continue;
-      // Repo filter for summary agents — any matching filter allows the task
+      // Repo filter for summary agents — any matching filter allows the task.
+      // For modes that need owner/org context (private), fall back to agentRepos
+      // which was pre-built from the agent's declared repo list.
       if (agent.repoFilters && agent.repoFilters.length > 0) {
-        const allowed = agent.repoFilters.some((rf) => isRepoAllowed(rf, task.owner, task.repo));
+        const repoKey = `${task.owner}/${task.repo}`;
+        const allowed = agent.repoFilters.some((rf) => {
+          if (rf.mode === 'private') {
+            // Private mode needs agentOwner/userOrgs which the server doesn't have.
+            // Fall back to checking the explicit list, which is equivalent to
+            // whitelist behavior for the repos the agent declared.
+            return (rf.list ?? []).includes(repoKey);
+          }
+          return isRepoAllowed(rf, task.owner, task.repo);
+        });
         if (!allowed) continue;
       }
     } else {
