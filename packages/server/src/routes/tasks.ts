@@ -1027,34 +1027,46 @@ export function taskRoutes() {
         assignments[agent.agent_name] = [];
       }
 
-      // First pass: assign tasks where agent matches an explicit preferred model/tool
-      for (const agent of body.agents) {
-        const tasks = agentTasks.get(agent.agent_name) ?? [];
-        for (const task of tasks) {
-          if (assignedTaskIds.has(task.task_id)) continue;
-          const reviewTask = pollCtx.tasksById.get(task.task_id);
-          if (!reviewTask) continue;
-          // Only prioritize when the task has explicit preferences AND the agent matches
-          const { preferredModels, preferredTools } = reviewTask.config;
-          if (preferredModels.length === 0 && preferredTools.length === 0) continue;
-          if (isReviewPreferredAgent(reviewTask.config, agent.model, agent.tool)) {
-            assignments[agent.agent_name].push(task);
-            assignedTaskIds.add(task.task_id);
+      // First pass: preferred-model round-robin — distribute tasks to agents whose
+      // model/tool matches the task's preferred_models/preferred_tools config.
+      // Uses the same round-robin pattern as the second pass (one task per agent
+      // per iteration) to avoid the first matching agent hoarding all tasks.
+      {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const agent of body.agents) {
+            const tasks = agentTasks.get(agent.agent_name) ?? [];
+            const next = tasks.find((t) => {
+              if (assignedTaskIds.has(t.task_id)) return false;
+              const reviewTask = pollCtx.tasksById.get(t.task_id);
+              if (!reviewTask) return false;
+              const { preferredModels, preferredTools } = reviewTask.config;
+              if (preferredModels.length === 0 && preferredTools.length === 0) return false;
+              return isReviewPreferredAgent(reviewTask.config, agent.model, agent.tool);
+            });
+            if (next) {
+              assignments[agent.agent_name].push(next);
+              assignedTaskIds.add(next.task_id);
+              changed = true;
+            }
           }
         }
       }
 
       // Second pass: distribute remaining tasks round-robin across agents
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const agent of body.agents) {
-          const tasks = agentTasks.get(agent.agent_name) ?? [];
-          const next = tasks.find((t) => !assignedTaskIds.has(t.task_id));
-          if (next) {
-            assignments[agent.agent_name].push(next);
-            assignedTaskIds.add(next.task_id);
-            changed = true;
+      {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const agent of body.agents) {
+            const tasks = agentTasks.get(agent.agent_name) ?? [];
+            const next = tasks.find((t) => !assignedTaskIds.has(t.task_id));
+            if (next) {
+              assignments[agent.agent_name].push(next);
+              assignedTaskIds.add(next.task_id);
+              changed = true;
+            }
           }
         }
       }
