@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { StoredAuth } from '../auth.js';
 import type { ToolExecutorResult } from '../tool-executor.js';
 import {
   formatEntry,
@@ -16,7 +15,7 @@ import {
   initIndex,
   runDedupInit,
 } from '../commands/dedup.js';
-import type { GitHubItem } from '../commands/dedup.js';
+import type { GitHubItem, ExecGhFn } from '../commands/dedup.js';
 
 // ── Test Helpers ─────────────────────────────────────────────
 
@@ -34,13 +33,6 @@ function makeItem(overrides: Partial<GitHubItem> = {}): GitHubItem {
 function makePR(overrides: Partial<GitHubItem> = {}): GitHubItem {
   return makeItem({ merged_at: null, ...overrides });
 }
-
-const validAuth: StoredAuth = {
-  access_token: 'ghp_test123',
-  expires_at: Date.now() + 3600_000,
-  github_username: 'testuser',
-  github_user_id: 12345,
-};
 
 // ── formatEntry ──────────────────────────────────────────────
 
@@ -224,39 +216,39 @@ describe('buildCommentBody', () => {
 // ── fetchRepoFile ────────────────────────────────────────────
 
 describe('fetchRepoFile', () => {
-  it('returns file content on success', async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response('version = 1', { status: 200 })) as unknown as typeof fetch;
+  it('returns file content on success', () => {
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue('version = 1');
 
-    const content = await fetchRepoFile('owner', 'repo', '.opencara.toml', 'token', mockFetch);
+    const content = fetchRepoFile('owner', 'repo', '.opencara.toml', mockExecGh);
     expect(content).toBe('version = 1');
-    expect(mockFetch).toHaveBeenCalledWith(
-      'https://api.github.com/repos/owner/repo/contents/.opencara.toml',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer token',
-        }),
-      }),
-    );
+    expect(mockExecGh).toHaveBeenCalledWith([
+      'api',
+      'repos/owner/repo/contents/.opencara.toml',
+      '-H',
+      'Accept: application/vnd.github.raw+json',
+    ]);
   });
 
-  it('returns null on 404', async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response('Not Found', { status: 404 })) as unknown as typeof fetch;
+  it('returns null on 404', () => {
+    const error = new Error('gh failed');
+    (error as { stderr?: string }).stderr = 'HTTP 404: Not Found';
+    const mockExecGh: ExecGhFn = vi.fn().mockImplementation(() => {
+      throw error;
+    });
 
-    const content = await fetchRepoFile('owner', 'repo', 'missing', 'token', mockFetch);
+    const content = fetchRepoFile('owner', 'repo', 'missing', mockExecGh);
     expect(content).toBeNull();
   });
 
-  it('throws on other errors', async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response('Server Error', { status: 500 })) as unknown as typeof fetch;
+  it('throws on other errors', () => {
+    const error = new Error('gh failed');
+    (error as { stderr?: string }).stderr = 'HTTP 500: Internal Server Error';
+    const mockExecGh: ExecGhFn = vi.fn().mockImplementation(() => {
+      throw error;
+    });
 
-    await expect(fetchRepoFile('owner', 'repo', 'file', 'token', mockFetch)).rejects.toThrow(
-      'GitHub API error: 500',
+    expect(() => fetchRepoFile('owner', 'repo', 'file', mockExecGh)).toThrow(
+      'gh API error fetching file',
     );
   });
 });
@@ -264,69 +256,212 @@ describe('fetchRepoFile', () => {
 // ── fetchAllPRs ──────────────────────────────────────────────
 
 describe('fetchAllPRs', () => {
-  it('fetches single page of PRs', async () => {
-    const prs = [makePR({ number: 1, title: 'PR 1' })];
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify(prs), { status: 200 }),
-      ) as unknown as typeof fetch;
+  it('fetches PRs via gh pr list', () => {
+    const ghOutput = JSON.stringify([
+      {
+        number: 1,
+        title: 'PR 1',
+        state: 'OPEN',
+        labels: [{ name: 'bug' }],
+        closedAt: '',
+        mergedAt: '',
+      },
+    ]);
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue(ghOutput);
 
-    const result = await fetchAllPRs('owner', 'repo', 'token', mockFetch);
+    const result = fetchAllPRs('owner', 'repo', mockExecGh);
     expect(result).toHaveLength(1);
     expect(result[0].number).toBe(1);
+    expect(result[0].state).toBe('open');
+    expect(result[0].labels).toEqual([{ name: 'bug' }]);
+    expect(mockExecGh).toHaveBeenCalledWith([
+      'pr',
+      'list',
+      '--repo',
+      'owner/repo',
+      '--state',
+      'all',
+      '--limit',
+      '9999',
+      '--json',
+      'number,title,state,labels,closedAt,mergedAt',
+    ]);
   });
 
-  it('paginates multiple pages', async () => {
-    const page1 = Array.from({ length: 100 }, (_, i) => makePR({ number: i + 1 }));
-    const page2 = [makePR({ number: 101 })];
+  it('maps MERGED state to closed', () => {
+    const ghOutput = JSON.stringify([
+      {
+        number: 2,
+        title: 'Merged PR',
+        state: 'MERGED',
+        labels: [],
+        closedAt: '2026-03-20T00:00:00Z',
+        mergedAt: '2026-03-20T00:00:00Z',
+      },
+    ]);
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue(ghOutput);
 
-    let callCount = 0;
-    const mockFetch = vi.fn(async () => {
-      callCount++;
-      const data = callCount === 1 ? page1 : page2;
-      return new Response(JSON.stringify(data), { status: 200 });
-    }) as unknown as typeof fetch;
-
-    const result = await fetchAllPRs('owner', 'repo', 'token', mockFetch);
-    expect(result).toHaveLength(101);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const result = fetchAllPRs('owner', 'repo', mockExecGh);
+    expect(result[0].state).toBe('closed');
+    expect(result[0].merged_at).toBe('2026-03-20T00:00:00Z');
   });
 
-  it('throws on API error', async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response('Error', { status: 403 })) as unknown as typeof fetch;
+  it('maps CLOSED state to closed', () => {
+    const ghOutput = JSON.stringify([
+      {
+        number: 3,
+        title: 'Closed PR',
+        state: 'CLOSED',
+        labels: [],
+        closedAt: '2026-03-20T00:00:00Z',
+        mergedAt: '',
+      },
+    ]);
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue(ghOutput);
 
-    await expect(fetchAllPRs('owner', 'repo', 'token', mockFetch)).rejects.toThrow(
-      'GitHub API error: 403',
-    );
+    const result = fetchAllPRs('owner', 'repo', mockExecGh);
+    expect(result[0].state).toBe('closed');
+    expect(result[0].merged_at).toBeNull();
+  });
+
+  it('throws on gh CLI error', () => {
+    const mockExecGh: ExecGhFn = vi.fn().mockImplementation(() => {
+      throw new Error('gh not found');
+    });
+
+    expect(() => fetchAllPRs('owner', 'repo', mockExecGh)).toThrow('gh not found');
   });
 });
 
 // ── fetchAllIssues ───────────────────────────────────────────
 
 describe('fetchAllIssues', () => {
-  it('filters out PRs from issues endpoint', async () => {
-    const items = [
-      makeItem({ number: 1, title: 'Issue 1' }),
-      makeItem({ number: 2, title: 'PR 1', pull_request: { url: '...' } }),
-    ];
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify(items), { status: 200 }),
-      ) as unknown as typeof fetch;
+  it('fetches issues via gh issue list', () => {
+    const ghOutput = JSON.stringify([
+      {
+        number: 1,
+        title: 'Issue 1',
+        state: 'OPEN',
+        labels: [],
+        closedAt: '',
+      },
+    ]);
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue(ghOutput);
 
-    const result = await fetchAllIssues('owner', 'repo', 'token', mockFetch);
+    const result = fetchAllIssues('owner', 'repo', mockExecGh);
     expect(result).toHaveLength(1);
     expect(result[0].number).toBe(1);
+    expect(result[0].state).toBe('open');
+    expect(mockExecGh).toHaveBeenCalledWith([
+      'issue',
+      'list',
+      '--repo',
+      'owner/repo',
+      '--state',
+      'all',
+      '--limit',
+      '9999',
+      '--json',
+      'number,title,state,labels,closedAt',
+    ]);
+  });
+
+  it('maps CLOSED state to closed with closedAt', () => {
+    const ghOutput = JSON.stringify([
+      {
+        number: 2,
+        title: 'Closed Issue',
+        state: 'CLOSED',
+        labels: [{ name: 'bug' }],
+        closedAt: '2026-03-20T00:00:00Z',
+      },
+    ]);
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue(ghOutput);
+
+    const result = fetchAllIssues('owner', 'repo', mockExecGh);
+    expect(result[0].state).toBe('closed');
+    expect(result[0].closed_at).toBe('2026-03-20T00:00:00Z');
+    expect(result[0].labels).toEqual([{ name: 'bug' }]);
   });
 });
 
 // ── initIndex ────────────────────────────────────────────────
 
 describe('initIndex', () => {
+  /** Build a mock execGh that returns canned data based on args. */
+  function buildMockExecGh(opts: {
+    prs?: GitHubItem[];
+    issues?: GitHubItem[];
+    existingComments?: Array<{ id: number; body: string }>;
+    createdComments?: string[];
+    updatedBodies?: Array<{ id: number; body: string }>;
+    failOnWrite?: boolean;
+  }): ExecGhFn {
+    const createdComments = opts.createdComments ?? [];
+    const updatedBodies = opts.updatedBodies ?? [];
+    let commentIdCounter = 200;
+
+    return vi.fn((args: string[]): string => {
+      const argsStr = args.join(' ');
+
+      // gh pr list
+      if (args[0] === 'pr' && args[1] === 'list') {
+        const items = (opts.prs ?? []).map((pr) => ({
+          number: pr.number,
+          title: pr.title,
+          state: pr.state === 'closed' ? (pr.merged_at ? 'MERGED' : 'CLOSED') : 'OPEN',
+          labels: pr.labels,
+          closedAt: pr.closed_at ?? '',
+          mergedAt: pr.merged_at ?? '',
+        }));
+        return JSON.stringify(items);
+      }
+
+      // gh issue list
+      if (args[0] === 'issue' && args[1] === 'list') {
+        const items = (opts.issues ?? []).map((issue) => ({
+          number: issue.number,
+          title: issue.title,
+          state: issue.state === 'closed' ? 'CLOSED' : 'OPEN',
+          labels: issue.labels,
+          closedAt: issue.closed_at ?? '',
+        }));
+        return JSON.stringify(items);
+      }
+
+      // gh api --paginate .../comments (fetch comments)
+      if (args.includes('--paginate') && argsStr.includes('/comments')) {
+        return JSON.stringify(opts.existingComments ?? []);
+      }
+
+      // gh api -X POST .../comments (create comment)
+      if (args.includes('-X') && args.includes('POST') && argsStr.includes('/comments')) {
+        if (opts.failOnWrite) throw new Error('Should not write');
+        // -f body=... format: find the arg after `-f` that starts with `body=`
+        const fIdx = args.indexOf('-f');
+        const bodyArg = fIdx >= 0 ? args[fIdx + 1] : '';
+        const body = bodyArg.startsWith('body=') ? bodyArg.slice(5) : bodyArg;
+        createdComments.push(body);
+        commentIdCounter++;
+        return String(commentIdCounter);
+      }
+
+      // gh api -X PATCH .../comments/{id} (update comment)
+      if (args.includes('-X') && args.includes('PATCH') && argsStr.includes('/comments/')) {
+        if (opts.failOnWrite) throw new Error('Should not write');
+        const pathArg = args[1];
+        const idMatch = pathArg.match(/comments\/(\d+)/);
+        const fIdx = args.indexOf('-f');
+        const bodyArg = fIdx >= 0 ? args[fIdx + 1] : '';
+        const body = bodyArg.startsWith('body=') ? bodyArg.slice(5) : bodyArg;
+        updatedBodies.push({ id: parseInt(idMatch![1], 10), body });
+        return '{}';
+      }
+
+      throw new Error(`Unexpected gh call: ${argsStr}`);
+    });
+  }
+
   const baseOpts = {
     owner: 'acme',
     repo: 'widgets',
@@ -334,7 +469,6 @@ describe('initIndex', () => {
     kind: 'prs' as const,
     recentDays: 30,
     dryRun: false,
-    token: 'ghp_test',
     log: vi.fn(),
   };
 
@@ -355,31 +489,10 @@ describe('initIndex', () => {
       }),
     ];
 
-    let callCount = 0;
     const createdComments: string[] = [];
+    const mockExecGh = buildMockExecGh({ prs, createdComments });
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (
-        url.includes(`/issues/${baseOpts.indexIssue}/comments`) &&
-        (!init || init.method !== 'POST')
-      ) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (url.includes(`/issues/${baseOpts.indexIssue}/comments`) && init?.method === 'POST') {
-        callCount++;
-        const body = JSON.parse(init.body as string) as { body: string };
-        createdComments.push(body.body);
-        return new Response(JSON.stringify({ id: callCount }), { status: 201 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
-
-    const result = await initIndex({ ...baseOpts, fetchFn: mockFetch });
+    const result = await initIndex({ ...baseOpts, execGh: mockExecGh });
     expect(result.openCount).toBe(1);
     expect(result.recentCount).toBe(1);
     expect(result.archivedCount).toBe(1);
@@ -409,29 +522,9 @@ describe('initIndex', () => {
     ];
 
     const updatedBodies: Array<{ id: number; body: string }> = [];
+    const mockExecGh = buildMockExecGh({ prs, existingComments, updatedBodies });
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (
-        url.includes(`/issues/${baseOpts.indexIssue}/comments`) &&
-        (!init || (init.method !== 'POST' && init.method !== 'PATCH'))
-      ) {
-        return new Response(JSON.stringify(existingComments), { status: 200 });
-      }
-      if (url.includes('/issues/comments/') && init?.method === 'PATCH') {
-        const idMatch = url.match(/comments\/(\d+)/);
-        const body = JSON.parse(init.body as string) as { body: string };
-        updatedBodies.push({ id: parseInt(idMatch![1], 10), body: body.body });
-        return new Response('{}', { status: 200 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
-
-    const result = await initIndex({ ...baseOpts, fetchFn: mockFetch });
+    const result = await initIndex({ ...baseOpts, execGh: mockExecGh });
     expect(result.openCount).toBe(2);
     expect(result.newEntries).toBe(1); // Only #4 is new
 
@@ -447,48 +540,22 @@ describe('initIndex', () => {
   it('dry run does not call GitHub write APIs', async () => {
     const prs = [makePR({ number: 1, title: 'PR 1', state: 'open' })];
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const mockExecGh = buildMockExecGh({ prs, failOnWrite: true });
 
-      if (init?.method === 'POST' || init?.method === 'PATCH') {
-        throw new Error('Should not write in dry run mode');
-      }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
-
-    const result = await initIndex({ ...baseOpts, dryRun: true, fetchFn: mockFetch });
+    const result = await initIndex({ ...baseOpts, dryRun: true, execGh: mockExecGh });
     expect(result.openCount).toBe(1);
     expect(result.newEntries).toBe(1);
   });
 
   it('works for issues kind', async () => {
     const issues = [makeItem({ number: 10, title: 'Bug report', state: 'open' })];
-
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('/issues?state=all')) {
-        return new Response(JSON.stringify(issues), { status: 200 });
-      }
-      if (url.includes('/comments') && (!init || init.method !== 'POST')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+    const createdComments: string[] = [];
+    const mockExecGh = buildMockExecGh({ issues, createdComments });
 
     const result = await initIndex({
       ...baseOpts,
       kind: 'issues',
-      fetchFn: mockFetch,
+      execGh: mockExecGh,
     });
     expect(result.openCount).toBe(1);
   });
@@ -512,82 +579,35 @@ describe('runDedupInit', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('exits when ensureAuth throws AuthError (login cancelled)', async () => {
-    const { AuthError } = await import('../auth.js');
-    const ensureAuthFn = vi.fn().mockRejectedValue(new AuthError('Authorization denied by user'));
-    await runDedupInit({ repo: 'owner/repo' }, { log, logError, ensureAuthFn });
-    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Authorization denied by user'));
-    expect(process.exitCode).toBe(1);
-  });
-
-  it('auto-triggers login when ensureAuth resolves after login flow', async () => {
-    const ensureAuthFn = vi.fn().mockResolvedValue(validAuth.access_token);
-    // Without a fetchFn that returns a valid toml, should fail at toml fetch — not at auth
-    await runDedupInit(
-      { repo: 'owner/repo' },
-      {
-        log,
-        logError,
-        ensureAuthFn,
-        fetchFn: vi
-          .fn()
-          .mockResolvedValue(new Response('', { status: 404 })) as unknown as typeof fetch,
-      },
-    );
-    expect(ensureAuthFn).toHaveBeenCalledOnce();
-    expect(logError).toHaveBeenCalledWith(expect.stringContaining('No .opencara.toml'));
-    expect(process.exitCode).toBe(1);
-  });
-
   it('requires --repo flag', async () => {
-    const ensureAuthFn = vi.fn().mockResolvedValue(validAuth.access_token);
-    await runDedupInit({}, { log, logError, ensureAuthFn });
+    await runDedupInit({}, { log, logError });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('--repo is required'));
     expect(process.exitCode).toBe(1);
   });
 
   it('validates repo format', async () => {
-    await runDedupInit(
-      { repo: 'invalid' },
-      { log, logError, ensureAuthFn: () => Promise.resolve(validAuth.access_token) },
-    );
+    await runDedupInit({ repo: 'invalid' }, { log, logError });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('Invalid repo format'));
     expect(process.exitCode).toBe(1);
   });
 
   it('errors when .opencara.toml not found', async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response('Not Found', { status: 404 })) as unknown as typeof fetch;
+    const error = new Error('gh failed');
+    (error as { stderr?: string }).stderr = 'HTTP 404: Not Found';
+    const mockExecGh: ExecGhFn = vi.fn().mockImplementation(() => {
+      throw error;
+    });
 
-    await runDedupInit(
-      { repo: 'owner/repo' },
-      {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
-      },
-    );
+    await runDedupInit({ repo: 'owner/repo' }, { log, logError, execGh: mockExecGh });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('No .opencara.toml'));
     expect(process.exitCode).toBe(1);
   });
 
   it('errors when no dedup config in .opencara.toml', async () => {
     const toml = 'version = 1\n\n[review]\nprompt = "Review this"';
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(toml, { status: 200 })) as unknown as typeof fetch;
+    const mockExecGh: ExecGhFn = vi.fn().mockReturnValue(toml);
 
-    await runDedupInit(
-      { repo: 'owner/repo' },
-      {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
-      },
-    );
+    await runDedupInit({ repo: 'owner/repo' }, { log, logError, execGh: mockExecGh });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('No dedup index issues'));
     expect(process.exitCode).toBe(1);
   });
@@ -597,32 +617,20 @@ describe('runDedupInit', () => {
 [dedup.issues]
 index_issue = 10
 `;
-    const mockFetch = vi.fn(async (input: string | URL | Request) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      if (args[0] === 'api' && args[1].includes('contents/')) {
+        return toml;
       }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+      throw new Error(`Unexpected: ${args.join(' ')}`);
+    });
 
-    await runDedupInit(
-      { repo: 'owner/repo' },
-      {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
-      },
-    );
+    await runDedupInit({ repo: 'owner/repo' }, { log, logError, execGh: mockExecGh });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('No PR dedup index configured'));
     expect(process.exitCode).toBe(1);
   });
 
   it('validates --days flag', async () => {
-    await runDedupInit(
-      { repo: 'owner/repo', days: 'abc' },
-      { log, logError, ensureAuthFn: () => Promise.resolve(validAuth.access_token) },
-    );
+    await runDedupInit({ repo: 'owner/repo', days: 'abc' }, { log, logError });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('--days must be a positive'));
     expect(process.exitCode).toBe(1);
   });
@@ -632,38 +640,41 @@ index_issue = 10
 [dedup.prs]
 index_issue = 53
 `;
-    const prs = [makePR({ number: 1, title: 'PR 1', state: 'open' })];
-
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
-      }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (
-        url.includes('/comments') &&
-        (!init || (init.method !== 'POST' && init.method !== 'PATCH'))
-      ) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('{}', { status: 200 });
-    }) as unknown as typeof fetch;
-
-    await runDedupInit(
-      { repo: 'acme/widgets' },
+    const prs = [
       {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
+        number: 1,
+        title: 'PR 1',
+        state: 'OPEN',
+        labels: [],
+        closedAt: '',
+        mergedAt: '',
       },
-    );
+    ];
+
+    let commentIdCounter = 200;
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      const argsStr = args.join(' ');
+      // fetchRepoFile
+      if (args[0] === 'api' && args[1].includes('contents/')) {
+        return toml;
+      }
+      // fetchAllPRs
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return JSON.stringify(prs);
+      }
+      // fetchIssueComments
+      if (args.includes('--paginate') && argsStr.includes('/comments')) {
+        return JSON.stringify([]);
+      }
+      // createIssueComment
+      if (args.includes('-X') && args.includes('POST')) {
+        commentIdCounter++;
+        return String(commentIdCounter);
+      }
+      return '{}';
+    });
+
+    await runDedupInit({ repo: 'acme/widgets' }, { log, logError, execGh: mockExecGh });
     expect(process.exitCode).toBeUndefined();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('Initializing prs'));
   });
@@ -676,44 +687,27 @@ index_issue = 53
 [dedup.issues]
 index_issue = 54
 `;
-    const prs = [makePR({ number: 1, title: 'PR 1', state: 'open' })];
-    const issues = [makeItem({ number: 10, title: 'Issue 1', state: 'open' })];
+    const prs = [
+      { number: 1, title: 'PR 1', state: 'OPEN', labels: [], closedAt: '', mergedAt: '' },
+    ];
+    const issues = [{ number: 10, title: 'Issue 1', state: 'OPEN', labels: [], closedAt: '' }];
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    let commentIdCounter = 200;
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      const argsStr = args.join(' ');
+      if (args[0] === 'api' && args[1].includes('contents/')) return toml;
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(prs);
+      if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify(issues);
+      if (args.includes('--paginate') && argsStr.includes('/comments')) return JSON.stringify([]);
+      if (args.includes('-X') && args.includes('POST')) {
+        commentIdCounter++;
+        return String(commentIdCounter);
+      }
+      return '{}';
+    });
 
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
-      }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/issues?state=all')) {
-        return new Response(JSON.stringify(issues), { status: 200 });
-      }
-      if (
-        url.includes('/comments') &&
-        (!init || (init.method !== 'POST' && init.method !== 'PATCH'))
-      ) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('{}', { status: 200 });
-    }) as unknown as typeof fetch;
-
-    await runDedupInit(
-      { repo: 'acme/widgets', all: true },
-      {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
-      },
-    );
+    await runDedupInit({ repo: 'acme/widgets', all: true }, { log, logError, execGh: mockExecGh });
     expect(process.exitCode).toBeUndefined();
-    // Should have logs for both prs and issues
     const logCalls = log.mock.calls.map((c: string[]) => c[0]);
     expect(logCalls.some((c: string) => c.includes('prs'))).toBe(true);
     expect(logCalls.some((c: string) => c.includes('issues'))).toBe(true);
@@ -724,34 +718,24 @@ index_issue = 54
 [dedup.prs]
 index_issue = 53
 `;
-    const prs = [makePR({ number: 1, title: 'PR 1', state: 'open' })];
+    const prs = [
+      { number: 1, title: 'PR 1', state: 'OPEN', labels: [], closedAt: '', mergedAt: '' },
+    ];
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (init?.method === 'POST' || init?.method === 'PATCH') {
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      const argsStr = args.join(' ');
+      if (args.includes('-X') && (args.includes('POST') || args.includes('PATCH'))) {
         throw new Error('Should not write in dry run');
       }
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
-      }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+      if (args[0] === 'api' && args[1].includes('contents/')) return toml;
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(prs);
+      if (args.includes('--paginate') && argsStr.includes('/comments')) return JSON.stringify([]);
+      throw new Error(`Unexpected: ${argsStr}`);
+    });
 
     await runDedupInit(
       { repo: 'acme/widgets', dryRun: true },
-      {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
-      },
+      { log, logError, execGh: mockExecGh },
     );
     expect(process.exitCode).toBeUndefined();
     const logCalls = log.mock.calls.map((c: string[]) => c[0]);
@@ -763,23 +747,14 @@ index_issue = 53
 [dedup.prs]
 index_issue = 53
 `;
-    const mockFetch = vi.fn(async (input: string | URL | Request) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      if (args[0] === 'api' && args[1].includes('contents/')) return toml;
+      throw new Error(`Unexpected: ${args.join(' ')}`);
+    });
 
     await runDedupInit(
       { repo: 'acme/widgets', agent: 'nonexistent-tool' },
-      {
-        log,
-        logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
-        resolveAgentCommandFn: () => null,
-      },
+      { log, logError, execGh: mockExecGh, resolveAgentCommandFn: () => null },
     );
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('Unknown agent tool'));
     expect(process.exitCode).toBe(1);
@@ -790,28 +765,27 @@ index_issue = 53
 [dedup.prs]
 index_issue = 53
 `;
-    const prs = [makePR({ number: 1, title: 'Fix login bug', state: 'open' })];
+    const prs = [
+      { number: 1, title: 'Fix login bug', state: 'OPEN', labels: [], closedAt: '', mergedAt: '' },
+    ];
     const createdComments: string[] = [];
+    let commentIdCounter = 200;
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      const argsStr = args.join(' ');
+      if (args[0] === 'api' && args[1].includes('contents/')) return toml;
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(prs);
+      if (args.includes('--paginate') && argsStr.includes('/comments')) return JSON.stringify([]);
+      if (args.includes('-X') && args.includes('POST')) {
+        const fIdx = args.indexOf('-f');
+        const bodyArg = fIdx >= 0 ? args[fIdx + 1] : '';
+        const body = bodyArg.startsWith('body=') ? bodyArg.slice(5) : bodyArg;
+        createdComments.push(body);
+        commentIdCounter++;
+        return String(commentIdCounter);
       }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments') && (!init || init.method !== 'POST')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        const body = JSON.parse(init.body as string) as { body: string };
-        createdComments.push(body.body);
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('{}', { status: 200 });
-    }) as unknown as typeof fetch;
+      return '{}';
+    });
 
     const mockRunTool = vi.fn(async () => ({
       stdout: '{"description": "Authentication flow fix for login page"}',
@@ -826,8 +800,7 @@ index_issue = 53
       {
         log,
         logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
+        execGh: mockExecGh,
         resolveAgentCommandFn: () => 'claude --print',
         runTool: mockRunTool,
       },
@@ -844,28 +817,27 @@ index_issue = 53
 [dedup.prs]
 index_issue = 53
 `;
-    const prs = [makePR({ number: 1, title: 'Fix login bug', state: 'open' })];
+    const prs = [
+      { number: 1, title: 'Fix login bug', state: 'OPEN', labels: [], closedAt: '', mergedAt: '' },
+    ];
     const createdComments: string[] = [];
+    let commentIdCounter = 200;
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      const argsStr = args.join(' ');
+      if (args[0] === 'api' && args[1].includes('contents/')) return toml;
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(prs);
+      if (args.includes('--paginate') && argsStr.includes('/comments')) return JSON.stringify([]);
+      if (args.includes('-X') && args.includes('POST')) {
+        const fIdx = args.indexOf('-f');
+        const bodyArg = fIdx >= 0 ? args[fIdx + 1] : '';
+        const body = bodyArg.startsWith('body=') ? bodyArg.slice(5) : bodyArg;
+        createdComments.push(body);
+        commentIdCounter++;
+        return String(commentIdCounter);
       }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments') && (!init || init.method !== 'POST')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        const body = JSON.parse(init.body as string) as { body: string };
-        createdComments.push(body.body);
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('{}', { status: 200 });
-    }) as unknown as typeof fetch;
+      return '{}';
+    });
 
     // AI tool throws an error
     const mockRunTool = vi.fn(async () => {
@@ -877,8 +849,7 @@ index_issue = 53
       {
         log,
         logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
+        execGh: mockExecGh,
         resolveAgentCommandFn: () => 'claude --print',
         runTool: mockRunTool,
       },
@@ -896,25 +867,20 @@ index_issue = 53
 [dedup.prs]
 index_issue = 53
 `;
-    const prs = [makePR({ number: 1, title: 'Fix login bug', state: 'open' })];
+    const prs = [
+      { number: 1, title: 'Fix login bug', state: 'OPEN', labels: [], closedAt: '', mergedAt: '' },
+    ];
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (init?.method === 'POST' || init?.method === 'PATCH') {
+    const mockExecGh: ExecGhFn = vi.fn((args: string[]) => {
+      const argsStr = args.join(' ');
+      if (args.includes('-X') && (args.includes('POST') || args.includes('PATCH'))) {
         throw new Error('Should not write in dry run');
       }
-      if (url.includes('contents/')) {
-        return new Response(toml, { status: 200 });
-      }
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+      if (args[0] === 'api' && args[1].includes('contents/')) return toml;
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(prs);
+      if (args.includes('--paginate') && argsStr.includes('/comments')) return JSON.stringify([]);
+      throw new Error(`Unexpected: ${argsStr}`);
+    });
 
     const mockRunTool = vi.fn(async () => ({
       stdout: '{"description": "AI enriched description"}',
@@ -929,8 +895,7 @@ index_issue = 53
       {
         log,
         logError,
-        ensureAuthFn: () => Promise.resolve(validAuth.access_token),
-        fetchFn: mockFetch,
+        execGh: mockExecGh,
         resolveAgentCommandFn: () => 'claude --print',
         runTool: mockRunTool,
       },
@@ -1091,6 +1056,53 @@ describe('buildCommentBody with AI descriptions', () => {
 // ── initIndex with agent ─────────────────────────────────────
 
 describe('initIndex with agent', () => {
+  function buildMockExecGh(opts: {
+    prs?: Array<{
+      number: number;
+      title: string;
+      state: string;
+      labels: Array<{ name: string }>;
+      closedAt: string;
+      mergedAt: string;
+    }>;
+    existingComments?: Array<{ id: number; body: string }>;
+    createdComments?: string[];
+    updatedBodies?: Array<{ id: number; body: string }>;
+  }): ExecGhFn {
+    const createdComments = opts.createdComments ?? [];
+    const updatedBodies = opts.updatedBodies ?? [];
+    let commentIdCounter = 200;
+
+    return vi.fn((args: string[]): string => {
+      const argsStr = args.join(' ');
+
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return JSON.stringify(opts.prs ?? []);
+      }
+      if (args.includes('--paginate') && argsStr.includes('/comments')) {
+        return JSON.stringify(opts.existingComments ?? []);
+      }
+      if (args.includes('-X') && args.includes('POST') && argsStr.includes('/comments')) {
+        const fIdx = args.indexOf('-f');
+        const bodyArg = fIdx >= 0 ? args[fIdx + 1] : '';
+        const body = bodyArg.startsWith('body=') ? bodyArg.slice(5) : bodyArg;
+        createdComments.push(body);
+        commentIdCounter++;
+        return String(commentIdCounter);
+      }
+      if (args.includes('-X') && args.includes('PATCH') && argsStr.includes('/comments/')) {
+        const pathArg = args[1];
+        const idMatch = pathArg.match(/comments\/(\d+)/);
+        const fIdx = args.indexOf('-f');
+        const bodyArg = fIdx >= 0 ? args[fIdx + 1] : '';
+        const body = bodyArg.startsWith('body=') ? bodyArg.slice(5) : bodyArg;
+        updatedBodies.push({ id: parseInt(idMatch![1], 10), body });
+        return '{}';
+      }
+      throw new Error(`Unexpected gh call: ${argsStr}`);
+    });
+  }
+
   const baseOpts = {
     owner: 'acme',
     repo: 'widgets',
@@ -1098,30 +1110,22 @@ describe('initIndex with agent', () => {
     kind: 'prs' as const,
     recentDays: 30,
     dryRun: false,
-    token: 'ghp_test',
     log: vi.fn(),
   };
 
   it('uses AI-enriched descriptions when agentCommandTemplate is set', async () => {
-    const prs = [makePR({ number: 1, title: 'Open PR', state: 'open' })];
+    const prs = [
+      {
+        number: 1,
+        title: 'Open PR',
+        state: 'OPEN',
+        labels: [] as Array<{ name: string }>,
+        closedAt: '',
+        mergedAt: '',
+      },
+    ];
     const createdComments: string[] = [];
-
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments') && (!init || init.method !== 'POST')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        const body = JSON.parse(init.body as string) as { body: string };
-        createdComments.push(body.body);
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+    const mockExecGh = buildMockExecGh({ prs, createdComments });
 
     const mockRunTool = vi.fn(
       async (): Promise<ToolExecutorResult> => ({
@@ -1135,7 +1139,7 @@ describe('initIndex with agent', () => {
 
     const result = await initIndex({
       ...baseOpts,
-      fetchFn: mockFetch,
+      execGh: mockExecGh,
       agentCommandTemplate: 'claude --print',
       runTool: mockRunTool,
     });
@@ -1148,27 +1152,25 @@ describe('initIndex with agent', () => {
 
   it('falls back to raw title when AI fails for an item', async () => {
     const prs = [
-      makePR({ number: 1, title: 'PR One', state: 'open' }),
-      makePR({ number: 2, title: 'PR Two', state: 'open' }),
+      {
+        number: 1,
+        title: 'PR One',
+        state: 'OPEN',
+        labels: [] as Array<{ name: string }>,
+        closedAt: '',
+        mergedAt: '',
+      },
+      {
+        number: 2,
+        title: 'PR Two',
+        state: 'OPEN',
+        labels: [] as Array<{ name: string }>,
+        closedAt: '',
+        mergedAt: '',
+      },
     ];
     const createdComments: string[] = [];
-
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (url.includes('/comments') && (!init || init.method !== 'POST')) {
-        return new Response(JSON.stringify([]), { status: 200 });
-      }
-      if (init?.method === 'POST') {
-        const body = JSON.parse(init.body as string) as { body: string };
-        createdComments.push(body.body);
-        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+    const mockExecGh = buildMockExecGh({ prs, createdComments });
 
     let callCount = 0;
     const mockRunTool = vi.fn(async (): Promise<ToolExecutorResult> => {
@@ -1188,7 +1190,7 @@ describe('initIndex with agent', () => {
 
     const result = await initIndex({
       ...baseOpts,
-      fetchFn: mockFetch,
+      execGh: mockExecGh,
       agentCommandTemplate: 'claude --print',
       runTool: mockRunTool,
     });
@@ -1200,7 +1202,16 @@ describe('initIndex with agent', () => {
   });
 
   it('skips AI enrichment when no new entries exist', async () => {
-    const prs = [makePR({ number: 1, title: 'Existing PR', state: 'open' })];
+    const prs = [
+      {
+        number: 1,
+        title: 'Existing PR',
+        state: 'OPEN',
+        labels: [] as Array<{ name: string }>,
+        closedAt: '',
+        mergedAt: '',
+      },
+    ];
 
     const existingComments = [
       {
@@ -1211,23 +1222,7 @@ describe('initIndex with agent', () => {
       { id: 102, body: '<!-- opencara-dedup-index:archived -->\n## Archived Items\n' },
     ];
 
-    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      if (url.includes('/pulls?')) {
-        return new Response(JSON.stringify(prs), { status: 200 });
-      }
-      if (
-        url.includes('/comments') &&
-        (!init || (init.method !== 'POST' && init.method !== 'PATCH'))
-      ) {
-        return new Response(JSON.stringify(existingComments), { status: 200 });
-      }
-      if (url.includes('/issues/comments/') && init?.method === 'PATCH') {
-        return new Response('{}', { status: 200 });
-      }
-      return new Response('Not Found', { status: 404 });
-    }) as unknown as typeof fetch;
+    const mockExecGh = buildMockExecGh({ prs, existingComments });
 
     const mockRunTool = vi.fn(
       async (): Promise<ToolExecutorResult> => ({
@@ -1241,7 +1236,7 @@ describe('initIndex with agent', () => {
 
     const result = await initIndex({
       ...baseOpts,
-      fetchFn: mockFetch,
+      execGh: mockExecGh,
       agentCommandTemplate: 'claude --print',
       runTool: mockRunTool,
     });
