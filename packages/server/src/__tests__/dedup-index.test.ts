@@ -21,6 +21,9 @@ import {
   toArchivedEntry,
   moveToRecentlyClosed,
   ageOutToArchived,
+  parseEntry,
+  formatEntryLine,
+  updateOpenEntry,
 } from '../dedup-index.js';
 import { NoOpGitHubService } from '../github/service.js';
 import { createLogger } from '../logger.js';
@@ -591,6 +594,260 @@ describe('Dedup Index (Issue #525)', () => {
       const result = await ensureIndexComments(github, owner, repo, issueNumber, token, logger);
       expect(result.recentBody).toContain('- #2 — Closed');
       expect(result.archivedBody).toContain('- #3 — Old');
+    });
+  });
+
+  // ── Entry update tests (Issue #637) ──────────────────────────────
+
+  describe('parseEntry', () => {
+    it('parses standard entry with hash and labels', () => {
+      const result = parseEntry('- #42(bug, enhancement): Fix crash');
+      expect(result).toEqual({
+        number: 42,
+        labels: 'bug, enhancement',
+        description: 'Fix crash',
+        hasHash: true,
+      });
+    });
+
+    it('parses entry without hash prefix', () => {
+      const result = parseEntry('- 42(bug, enhancement): Fix crash');
+      expect(result).toEqual({
+        number: 42,
+        labels: 'bug, enhancement',
+        description: 'Fix crash',
+        hasHash: false,
+      });
+    });
+
+    it('parses entry with empty labels', () => {
+      const result = parseEntry('- #10(): Add feature');
+      expect(result).toEqual({
+        number: 10,
+        labels: '',
+        description: 'Add feature',
+        hasHash: true,
+      });
+    });
+
+    it('parses entry with single label', () => {
+      const result = parseEntry('- #5(bug): Fix it');
+      expect(result).toEqual({
+        number: 5,
+        labels: 'bug',
+        description: 'Fix it',
+        hasHash: true,
+      });
+    });
+
+    it('returns null for non-entry lines', () => {
+      expect(parseEntry('## Open Items')).toBeNull();
+      expect(parseEntry('')).toBeNull();
+      expect(parseEntry('Some text')).toBeNull();
+    });
+
+    it('returns null for old-format entries without parens', () => {
+      expect(parseEntry('- #42 [bug] — Fix crash')).toBeNull();
+    });
+  });
+
+  describe('formatEntryLine', () => {
+    it('formats entry with labels and hash (default)', () => {
+      expect(formatEntryLine(42, 'bug, enhancement', 'Fix crash')).toBe(
+        '- #42(bug, enhancement): Fix crash',
+      );
+    });
+
+    it('formats entry with empty labels', () => {
+      expect(formatEntryLine(10, '', 'Add feature')).toBe('- #10(): Add feature');
+    });
+
+    it('formats entry without hash prefix', () => {
+      expect(formatEntryLine(42, 'bug', 'Fix crash', false)).toBe('- 42(bug): Fix crash');
+    });
+  });
+
+  describe('updateOpenEntry', () => {
+    it('updates labels on an existing entry', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #42(bug): Fix crash',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        labels: ['bug', 'enhancement'],
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(bug, enhancement): Fix crash');
+      expect(openComment.body).not.toContain('- #42(bug): Fix crash');
+    });
+
+    it('updates title when description matches old title', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #42(bug): Old title',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        newTitle: 'New title',
+        oldTitle: 'Old title',
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(bug): New title');
+    });
+
+    it('preserves AI-generated description when title changes', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #42(bug): AI-generated summary of the issue',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        newTitle: 'New title',
+        oldTitle: 'Old title',
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      // Description should NOT change because it doesn't match oldTitle
+      expect(openComment.body).toContain('- #42(bug): AI-generated summary of the issue');
+    });
+
+    it('updates both labels and title together', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #42(bug): Old title',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        labels: ['enhancement'],
+        newTitle: 'New title',
+        oldTitle: 'Old title',
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(enhancement): New title');
+    });
+
+    it('is a no-op when entry not found', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #1(feat): Feature A',
+        token,
+        logger,
+      );
+
+      const updateSpy = vi.spyOn(github, 'updateIssueComment');
+      await updateOpenEntry(github, owner, repo, issueNumber, 99, token, logger, {
+        labels: ['bug'],
+      });
+
+      // ensureIndexComments may call updateIssueComment, but updateOpenEntry should not
+      // since the entry wasn't found. The spy was set AFTER appendOpenEntry, so it
+      // only tracks calls from updateOpenEntry. No update should happen.
+      expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('preserves other entries when updating one', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #1(feat): Feature A',
+        token,
+        logger,
+      );
+      await appendOpenEntry(github, owner, repo, issueNumber, '- #2(bug): Bug B', token, logger);
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #3(feat): Feature C',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 2, token, logger, {
+        labels: ['bug', 'critical'],
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #1(feat): Feature A');
+      expect(openComment.body).toContain('- #2(bug, critical): Bug B');
+      expect(openComment.body).toContain('- #3(feat): Feature C');
+    });
+
+    it('updates entry without hash prefix (CLI format)', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- 42(bug): Fix crash',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        labels: ['bug', 'enhancement'],
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      // Should preserve the no-hash format
+      expect(openComment.body).toContain('- 42(bug, enhancement): Fix crash');
+      expect(openComment.body).not.toContain('#42');
+    });
+
+    it('clears labels when empty array provided', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- #42(bug, enhancement): Fix crash',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        labels: [],
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(): Fix crash');
     });
   });
 
