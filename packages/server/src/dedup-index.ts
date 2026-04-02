@@ -165,6 +165,96 @@ export function removeEntry(
   return { body: remaining.join('\n'), entry };
 }
 
+/**
+ * Parse an entry line into its components: number, labels, and description.
+ * Entry format: `- #<number>(<labels>): <description>`
+ * Returns null if the line doesn't match the expected format.
+ */
+export function parseEntry(
+  line: string,
+): { number: number; labels: string; description: string } | null {
+  const match = line.match(/^-\s+#(\d+)\(([^)]*)\):\s*(.*)$/);
+  if (!match) return null;
+  return {
+    number: parseInt(match[1], 10),
+    labels: match[2],
+    description: match[3],
+  };
+}
+
+/**
+ * Format an entry line from its components.
+ */
+export function formatEntryLine(itemNumber: number, labels: string, description: string): string {
+  return `- #${itemNumber}(${labels}): ${description}`;
+}
+
+/**
+ * Update an entry in the Open Items comment by item number.
+ *
+ * - Label changes: Always update the `(<labels>)` portion.
+ * - Title changes: Only update the description if it currently matches the old title
+ *   (i.e., it was not AI-enriched). If the description was AI-generated, leave it as-is.
+ *
+ * Returns without error if the entry is not found (no-op).
+ */
+export async function updateOpenEntry(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  indexIssueNumber: number,
+  itemNumber: number,
+  token: string,
+  logger: Logger,
+  update: {
+    labels?: string[];
+    newTitle?: string;
+    oldTitle?: string;
+  },
+): Promise<void> {
+  const ensured = await ensureIndexComments(github, owner, repo, indexIssueNumber, token, logger);
+
+  const lines = ensured.openBody.split('\n');
+  let found = false;
+
+  const updatedLines = lines.map((line) => {
+    if (found) return line;
+    const parsed = parseEntry(line.trim());
+    if (!parsed || parsed.number !== itemNumber) return line;
+
+    found = true;
+
+    // Update labels if provided
+    const newLabels = update.labels !== undefined ? update.labels.join(', ') : parsed.labels;
+
+    // Update description only if it matches the old title (not AI-enriched)
+    let newDescription = parsed.description;
+    if (update.newTitle && update.oldTitle && parsed.description === update.oldTitle) {
+      newDescription = update.newTitle;
+    }
+
+    return formatEntryLine(itemNumber, newLabels, newDescription);
+  });
+
+  if (!found) {
+    logger.info('Entry not found in Open Items — skipping update', {
+      indexIssueNumber,
+      itemNumber,
+    });
+    return;
+  }
+
+  const updatedBody = updatedLines.join('\n');
+  await github.updateIssueComment(owner, repo, ensured.openId, updatedBody, token);
+
+  logger.info('Entry updated in Open Items', {
+    indexIssueNumber,
+    itemNumber,
+    updatedLabels: update.labels !== undefined,
+    updatedTitle: update.newTitle !== undefined,
+  });
+}
+
 // ── Close date annotation ───────────────────────────────────────
 
 /**

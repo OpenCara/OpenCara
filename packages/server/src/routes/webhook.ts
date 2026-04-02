@@ -21,7 +21,7 @@ import type { Logger } from '../logger.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
-import { moveToRecentlyClosed, ageOutToArchived } from '../dedup-index.js';
+import { moveToRecentlyClosed, ageOutToArchived, updateOpenEntry } from '../dedup-index.js';
 
 /** Trusted for review triggers — includes CONTRIBUTOR. */
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
@@ -46,6 +46,7 @@ interface PullRequestPayload {
   };
   pull_request: {
     number: number;
+    title: string;
     html_url: string;
     diff_url: string;
     base: { ref: string };
@@ -55,6 +56,10 @@ interface PullRequestPayload {
     additions?: number;
     deletions?: number;
   };
+  changes?: {
+    title?: { from: string };
+  };
+  label?: { name: string };
 }
 
 interface IssueCommentPayload {
@@ -95,6 +100,10 @@ interface IssuePayload {
     pull_request?: { url: string };
     labels?: Array<{ name: string }>;
   };
+  changes?: {
+    title?: { from: string };
+  };
+  label?: { name: string };
 }
 
 interface ProjectsV2ItemPayload {
@@ -621,9 +630,35 @@ async function handlePullRequest(
     return new Response('OK', { status: 200 });
   }
 
+  // Handle PR edited — update dedup index entry title
+  if (action === 'edited') {
+    const oldTitle = payload.changes?.title?.from;
+    if (oldTitle) {
+      await handlePrIndexUpdate(github, owner, repo, prNumber, fullConfig, token, logger, {
+        newTitle: pull_request.title,
+        oldTitle,
+        labels: pull_request.labels?.map((l) => l.name),
+      });
+    }
+    // Fall through to event-based triggers (edited may also trigger review)
+  }
+
+  // Handle PR unlabeled — update dedup index entry labels
+  if (action === 'unlabeled') {
+    await handlePrIndexUpdate(github, owner, repo, prNumber, fullConfig, token, logger, {
+      labels: pull_request.labels?.map((l) => l.name),
+    });
+    return new Response('OK', { status: 200 });
+  }
+
   // Handle label triggers for PR-scoped features (review, fix)
   if (action === 'labeled') {
-    const addedLabel = (payload as unknown as { label?: { name: string } }).label?.name;
+    // Update dedup index entry labels
+    await handlePrIndexUpdate(github, owner, repo, prNumber, fullConfig, token, logger, {
+      labels: pull_request.labels?.map((l) => l.name),
+    });
+
+    const addedLabel = payload.label?.name;
     if (addedLabel) {
       return handlePrLabelTrigger(
         store,
@@ -758,9 +793,36 @@ export async function handleIssueEvent(
     return new Response('OK', { status: 200 });
   }
 
+  // Handle issue unlabeled — update dedup index entry labels
+  if (action === 'unlabeled') {
+    let token: string;
+    try {
+      token = await github.getInstallationToken(installation.id);
+    } catch (err) {
+      logger.error('Failed to get installation token', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+      owner,
+      repo,
+      defaultBranch,
+      token,
+    );
+
+    if (!parseError) {
+      await handleIssueIndexUpdate(github, owner, repo, issue.number, fullConfig, token, logger, {
+        labels: issue.labels?.map((l) => l.name),
+      });
+    }
+    return new Response('OK', { status: 200 });
+  }
+
   // Handle label trigger for issue-scoped features (implement, triage)
   if (action === 'labeled') {
-    const addedLabel = (payload as unknown as { label?: { name: string } }).label?.name;
+    const addedLabel = payload.label?.name;
     if (!addedLabel) return new Response('OK', { status: 200 });
 
     let token: string;
@@ -784,6 +846,11 @@ export async function handleIssueEvent(
       logger.info('Aborting due to .opencara.toml parse error', { issueNumber: issue.number });
       return new Response('Service Unavailable', { status: 503 });
     }
+
+    // Update dedup index entry labels
+    await handleIssueIndexUpdate(github, owner, repo, issue.number, fullConfig, token, logger, {
+      labels: issue.labels?.map((l) => l.name),
+    });
 
     return handleIssueLabelTrigger(
       github,
@@ -827,6 +894,18 @@ export async function handleIssueEvent(
       issueNumber: issue.number,
     });
     return new Response('Service Unavailable', { status: 503 });
+  }
+
+  // Update dedup index on title change for edited issues
+  if (action === 'edited') {
+    const oldTitle = payload.changes?.title?.from;
+    if (oldTitle) {
+      await handleIssueIndexUpdate(github, owner, repo, issue.number, fullConfig, token, logger, {
+        newTitle: issue.title,
+        oldTitle,
+        labels: issue.labels?.map((l) => l.name),
+      });
+    }
   }
 
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
@@ -924,6 +1003,66 @@ async function handleIssueClose(
     await ageOutToArchived(github, owner, repo, indexIssue, token, logger);
   } catch (err) {
     logger.error('Failed to update dedup index on issue close', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+      indexIssue,
+    });
+  }
+}
+
+// ── Index Update on Edit/Label Change ───────────────────────────
+
+/**
+ * Handle dedup index update when a PR's title or labels change.
+ */
+async function handlePrIndexUpdate(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  config: OpenCaraConfig,
+  token: string,
+  logger: Logger,
+  update: { labels?: string[]; newTitle?: string; oldTitle?: string },
+): Promise<void> {
+  const indexIssue = config.dedup?.prs?.indexIssue;
+  if (!indexIssue || !config.dedup?.prs?.enabled) return;
+
+  try {
+    await updateOpenEntry(github, owner, repo, indexIssue, prNumber, token, logger, update);
+  } catch (err) {
+    logger.error('Failed to update dedup index on PR edit', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      prNumber,
+      indexIssue,
+    });
+  }
+}
+
+/**
+ * Handle dedup index update when an issue's title or labels change.
+ */
+async function handleIssueIndexUpdate(
+  github: GitHubService,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  config: OpenCaraConfig,
+  token: string,
+  logger: Logger,
+  update: { labels?: string[]; newTitle?: string; oldTitle?: string },
+): Promise<void> {
+  const indexIssue = config.dedup?.issues?.indexIssue;
+  if (!indexIssue || !config.dedup?.issues?.enabled) return;
+
+  try {
+    await updateOpenEntry(github, owner, repo, indexIssue, issueNumber, token, logger, update);
+  } catch (err) {
+    logger.error('Failed to update dedup index on issue edit', {
       error: err instanceof Error ? err.message : String(err),
       owner,
       repo,

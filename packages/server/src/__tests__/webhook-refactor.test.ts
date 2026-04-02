@@ -10,7 +10,7 @@
  * - createTaskIfNotExists works for issue-based dedup
  * - Group IDs generated and linked correctly
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   DEFAULT_REVIEW_CONFIG,
   DEFAULT_OPENCARA_CONFIG,
@@ -31,6 +31,7 @@ import {
   parseGoCommand,
 } from '../routes/webhook.js';
 import { Logger } from '../logger.js';
+import { OPEN_MARKER, RECENT_MARKER, ARCHIVED_MARKER } from '../dedup-index.js';
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -1733,6 +1734,337 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks.length).toBeGreaterThan(0);
       expect(tasks[0].diff_size).toBe(100);
+    });
+  });
+
+  // ── Dedup index update on edit/label (Issue #637) ──────────────
+
+  describe('Dedup index update on PR/issue edit/label changes', () => {
+    const dedupConfig = {
+      version: 1 as const,
+      dedup: {
+        prs: {
+          enabled: true,
+          prompt: 'Dedup PRs',
+          agentCount: 1,
+          timeout: '10m',
+          preferredModels: [] as string[],
+          preferredTools: [] as string[],
+          indexIssue: 100,
+        },
+        issues: {
+          enabled: true,
+          prompt: 'Dedup issues',
+          agentCount: 1,
+          timeout: '10m',
+          preferredModels: [] as string[],
+          preferredTools: [] as string[],
+          indexIssue: 200,
+        },
+      },
+    };
+
+    /** Set up github mock with dedup config and comment tracking. */
+    function setupDedupGithub() {
+      github.openCaraConfig = dedupConfig;
+
+      // Set up in-memory comment storage for index tracking
+      const comments = new Map<string, Array<{ id: number; body: string }>>();
+      let commentId = 1000;
+
+      // Seed the open items comment with an entry
+      const prKey = 'acme/widget#100';
+      comments.set(prKey, [
+        {
+          id: 1,
+          body: `${OPEN_MARKER}\n## Open Items\n\n- #42(bug): Fix crash`,
+        },
+        { id: 2, body: `${RECENT_MARKER}\n## Recently Closed Items\n` },
+        { id: 3, body: `${ARCHIVED_MARKER}\n## Archived Items\n` },
+      ]);
+
+      const issueKey = 'acme/widget#200';
+      comments.set(issueKey, [
+        {
+          id: 4,
+          body: `${OPEN_MARKER}\n## Open Items\n\n- #10(enhancement): Something broken`,
+        },
+        { id: 5, body: `${RECENT_MARKER}\n## Recently Closed Items\n` },
+        { id: 6, body: `${ARCHIVED_MARKER}\n## Archived Items\n` },
+      ]);
+
+      github.listIssueComments = async (
+        _owner: string,
+        _repo: string,
+        number: number,
+      ): Promise<Array<{ id: number; body: string }>> => {
+        const key = `acme/widget#${number}`;
+        return comments.get(key) ?? [];
+      };
+
+      github.createIssueComment = async (
+        _owner: string,
+        _repo: string,
+        number: number,
+        body: string,
+      ): Promise<number> => {
+        const key = `acme/widget#${number}`;
+        const id = commentId++;
+        const list = comments.get(key) ?? [];
+        list.push({ id, body });
+        comments.set(key, list);
+        return id;
+      };
+
+      github.updateIssueComment = async (
+        _owner: string,
+        _repo: string,
+        cId: number,
+        body: string,
+      ): Promise<void> => {
+        for (const [, list] of comments) {
+          const comment = list.find((c) => c.id === cId);
+          if (comment) {
+            comment.body = body;
+            return;
+          }
+        }
+      };
+
+      return comments;
+    }
+
+    it('PR edited — updates title when description matches old title', async () => {
+      const comments = setupDedupGithub();
+
+      const payload = makePRPayload({
+        action: 'edited',
+        pull_request: {
+          number: 42,
+          title: 'New PR title',
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          labels: [{ name: 'bug' }],
+        },
+        changes: { title: { from: 'Fix crash' } },
+      });
+
+      const res = await sendWebhook(app, 'pull_request', payload, env);
+      expect(res.status).toBe(200);
+
+      const prComments = comments.get('acme/widget#100')!;
+      const openComment = prComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(bug): New PR title');
+    });
+
+    it('PR edited — preserves AI-generated description', async () => {
+      const comments = setupDedupGithub();
+
+      // Seed with AI-generated description (doesn't match any title)
+      const prComments = comments.get('acme/widget#100')!;
+      prComments[0].body = `${OPEN_MARKER}\n## Open Items\n\n- #42(bug): AI-generated summary`;
+
+      const payload = makePRPayload({
+        action: 'edited',
+        pull_request: {
+          number: 42,
+          title: 'New PR title',
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          labels: [{ name: 'bug' }],
+        },
+        changes: { title: { from: 'Old PR title' } },
+      });
+
+      const res = await sendWebhook(app, 'pull_request', payload, env);
+      expect(res.status).toBe(200);
+
+      const openComment = prComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      // Description should stay as AI-generated, not replaced
+      expect(openComment.body).toContain('AI-generated summary');
+      expect(openComment.body).not.toContain('New PR title');
+    });
+
+    it('PR labeled — updates labels in dedup index', async () => {
+      const comments = setupDedupGithub();
+
+      const payload = makePRPayload({
+        action: 'labeled',
+        pull_request: {
+          number: 42,
+          title: 'Fix crash',
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          labels: [{ name: 'bug' }, { name: 'critical' }],
+        },
+        label: { name: 'critical' },
+      });
+
+      const res = await sendWebhook(app, 'pull_request', payload, env);
+      expect(res.status).toBe(200);
+
+      const prComments = comments.get('acme/widget#100')!;
+      const openComment = prComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(bug, critical): Fix crash');
+    });
+
+    it('PR unlabeled — updates labels in dedup index', async () => {
+      const comments = setupDedupGithub();
+
+      // Start with two labels
+      const prComments = comments.get('acme/widget#100')!;
+      prComments[0].body = `${OPEN_MARKER}\n## Open Items\n\n- #42(bug, critical): Fix crash`;
+
+      const payload = makePRPayload({
+        action: 'unlabeled',
+        pull_request: {
+          number: 42,
+          title: 'Fix crash',
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          labels: [{ name: 'bug' }],
+        },
+        label: { name: 'critical' },
+      });
+
+      const res = await sendWebhook(app, 'pull_request', payload, env);
+      expect(res.status).toBe(200);
+
+      const openComment = prComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #42(bug): Fix crash');
+      expect(openComment.body).not.toContain('critical');
+    });
+
+    it('Issue unlabeled — updates labels in dedup index', async () => {
+      const comments = setupDedupGithub();
+
+      // Start with one label
+      const issueComments = comments.get('acme/widget#200')!;
+      issueComments[0].body = `${OPEN_MARKER}\n## Open Items\n\n- #10(enhancement, help wanted): Something broken`;
+
+      const payload = makeIssuePayload({
+        action: 'unlabeled',
+        issue: {
+          number: 10,
+          html_url: 'https://github.com/acme/widget/issues/10',
+          title: 'Something broken',
+          body: 'Body text',
+          user: { login: 'alice' },
+          labels: [{ name: 'enhancement' }],
+        },
+        label: { name: 'help wanted' },
+      });
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const openComment = issueComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #10(enhancement): Something broken');
+      expect(openComment.body).not.toContain('help wanted');
+    });
+
+    it('Issue edited — updates title when description matches old title', async () => {
+      const comments = setupDedupGithub();
+
+      const payload = makeIssuePayload({
+        action: 'edited',
+        issue: {
+          number: 10,
+          html_url: 'https://github.com/acme/widget/issues/10',
+          title: 'New issue title',
+          body: 'Body text',
+          user: { login: 'alice' },
+          labels: [{ name: 'enhancement' }],
+        },
+        changes: { title: { from: 'Something broken' } },
+      });
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const issueComments = comments.get('acme/widget#200')!;
+      const openComment = issueComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #10(enhancement): New issue title');
+    });
+
+    it('Issue labeled — updates labels in dedup index', async () => {
+      const comments = setupDedupGithub();
+
+      const payload = makeIssuePayload({
+        action: 'labeled',
+        issue: {
+          number: 10,
+          html_url: 'https://github.com/acme/widget/issues/10',
+          title: 'Something broken',
+          body: 'Body text',
+          user: { login: 'alice' },
+          labels: [{ name: 'enhancement' }, { name: 'priority:high' }],
+        },
+        label: { name: 'priority:high' },
+      });
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const issueComments = comments.get('acme/widget#200')!;
+      const openComment = issueComments.find((c) => c.body.includes(OPEN_MARKER))!;
+      expect(openComment.body).toContain('- #10(enhancement, priority:high): Something broken');
+    });
+
+    it('skips index update when dedup is not configured', async () => {
+      // Use default config without dedup
+      github.openCaraConfig = { version: 1 };
+      const updateSpy = vi.spyOn(github, 'updateIssueComment');
+
+      const payload = makePRPayload({
+        action: 'unlabeled',
+        pull_request: {
+          number: 42,
+          title: 'Fix crash',
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          labels: [],
+        },
+        label: { name: 'bug' },
+      });
+
+      const res = await sendWebhook(app, 'pull_request', payload, env);
+      expect(res.status).toBe(200);
+      expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('PR edited without title change — no index update', async () => {
+      setupDedupGithub();
+      const updateSpy = vi.spyOn(github, 'updateIssueComment');
+
+      const payload = makePRPayload({
+        action: 'edited',
+        pull_request: {
+          number: 42,
+          title: 'Fix crash',
+          html_url: 'https://github.com/acme/widget/pull/42',
+          diff_url: 'https://github.com/acme/widget/pull/42.diff',
+          base: { ref: 'main' },
+          head: { ref: 'feat/test' },
+          labels: [{ name: 'bug' }],
+        },
+        // No changes.title — body was edited instead
+      });
+
+      await sendWebhook(app, 'pull_request', payload, env);
+      // updateIssueComment should not be called for index update
+      // (it might still be called for other reasons by the review trigger path)
+      expect(updateSpy).not.toHaveBeenCalled();
     });
   });
 });
