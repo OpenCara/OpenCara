@@ -1,8 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { Command } from 'commander';
 import pc from 'picocolors';
 import { parseOpenCaraConfig, DEFAULT_REGISTRY } from '@opencara/shared';
 import type { OpenCaraConfig } from '@opencara/shared';
-import { ensureAuth, AuthError } from '../auth.js';
 import { loadConfig } from '../config.js';
 import { executeTool, type ToolExecutorResult } from '../tool-executor.js';
 import { extractJson } from '../dedup.js';
@@ -14,9 +14,6 @@ export { buildIndexEntryPrompt };
 
 /** Default window for "recently closed" items (in days). */
 const DEFAULT_RECENT_DAYS = 30;
-
-/** Per-page limit for GitHub API pagination. */
-const PER_PAGE = 100;
 
 /** Comment markers — must match server's dedup-index.ts. */
 const OPEN_MARKER = '<!-- opencara-dedup-index:open -->';
@@ -50,13 +47,24 @@ export interface CategorizedItems {
   archived: GitHubItem[];
 }
 
+/** Type for the injected gh CLI executor — allows mocking in tests. */
+export type ExecGhFn = (args: string[]) => string;
+
+/** Default gh CLI executor using execFileSync. */
+export function defaultExecGh(args: string[]): string {
+  return execFileSync('gh', args, {
+    encoding: 'utf-8',
+    timeout: 30_000,
+    maxBuffer: 50 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
 /** Dependencies for dedup init — allows injection for testing. */
 export interface DedupInitDeps {
-  fetchFn?: typeof fetch;
+  execGh?: ExecGhFn;
   log?: (msg: string) => void;
   logError?: (msg: string) => void;
-  /** Override ensureAuth for testing — returns an access token string. */
-  ensureAuthFn?: () => Promise<string>;
   resolveAgentCommandFn?: (toolName: string) => string | null;
   runTool?: (
     commandTemplate: string,
@@ -65,175 +73,172 @@ export interface DedupInitDeps {
   ) => Promise<ToolExecutorResult>;
 }
 
-// ── GitHub API Helpers ───────────────────────────────────────
+// ── GitHub API Helpers (via gh CLI) ─────────────────────────
 
 /**
- * Fetch a file from a GitHub repo via the Contents API.
+ * Fetch a file from a GitHub repo via `gh api`.
  * Returns the decoded text content, or null if not found.
  */
-export async function fetchRepoFile(
+export function fetchRepoFile(
   owner: string,
   repo: string,
   path: string,
-  token: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<string | null> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-  const res = await fetchFn(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.raw+json',
-    },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status} fetching ${path}`);
-  return res.text();
+  execGh: ExecGhFn = defaultExecGh,
+): string | null {
+  try {
+    return execGh([
+      'api',
+      `repos/${owner}/${repo}/contents/${path}`,
+      '-H',
+      'Accept: application/vnd.github.raw+json',
+    ]);
+  } catch (err) {
+    const message = String((err as { stderr?: string }).stderr ?? err);
+    if (message.includes('404') || message.includes('Not Found')) return null;
+    throw new Error(`gh API error fetching ${path}: ${message}`);
+  }
 }
 
 /**
- * Fetch all PRs from a repo using pagination.
- * Returns items sorted by number.
+ * Fetch all PRs from a repo using `gh pr list --json`.
+ * Returns items as GitHubItem[].
  */
-export async function fetchAllPRs(
+export function fetchAllPRs(
   owner: string,
   repo: string,
-  token: string,
-  fetchFn: typeof fetch = fetch,
+  execGh: ExecGhFn = defaultExecGh,
   log?: (msg: string) => void,
-): Promise<GitHubItem[]> {
-  const items: GitHubItem[] = [];
-  let page = 1;
-
-  while (true) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=all&per_page=${PER_PAGE}&page=${page}&sort=created&direction=desc`;
-    const res = await fetchFn(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-      },
-    });
-    if (!res.ok) throw new Error(`GitHub API error: ${res.status} fetching PRs page ${page}`);
-
-    const batch = (await res.json()) as GitHubItem[];
-    items.push(...batch);
-
-    if (log) log(`  Fetched ${items.length} PRs...`);
-
-    if (batch.length < PER_PAGE) break;
-    page++;
-  }
-
+): GitHubItem[] {
+  const output = execGh([
+    'pr',
+    'list',
+    '--repo',
+    `${owner}/${repo}`,
+    '--state',
+    'all',
+    '--limit',
+    '9999',
+    '--json',
+    'number,title,state,labels,closedAt,mergedAt',
+  ]);
+  const raw = JSON.parse(output) as Array<{
+    number: number;
+    title: string;
+    state: string;
+    labels: Array<{ name: string }>;
+    closedAt: string;
+    mergedAt: string;
+  }>;
+  const items: GitHubItem[] = raw.map((pr) => ({
+    number: pr.number,
+    title: pr.title,
+    state: pr.state === 'MERGED' ? 'closed' : pr.state.toLowerCase(),
+    labels: pr.labels,
+    closed_at: pr.closedAt || null,
+    merged_at: pr.mergedAt || null,
+  }));
+  if (log) log(`  Fetched ${items.length} PRs...`);
   return items;
 }
 
 /**
- * Fetch all issues from a repo using pagination (excludes PRs).
- * The GitHub Issues API returns both issues and PRs — items with
- * `pull_request` field are filtered out.
+ * Fetch all issues from a repo using `gh issue list --json`.
+ * Returns only issues (not PRs) as GitHubItem[].
  */
-export async function fetchAllIssues(
+export function fetchAllIssues(
   owner: string,
   repo: string,
-  token: string,
-  fetchFn: typeof fetch = fetch,
+  execGh: ExecGhFn = defaultExecGh,
   log?: (msg: string) => void,
-): Promise<GitHubItem[]> {
-  const items: GitHubItem[] = [];
-  let page = 1;
-
-  while (true) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=${PER_PAGE}&page=${page}&sort=created&direction=desc`;
-    const res = await fetchFn(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-      },
-    });
-    if (!res.ok) throw new Error(`GitHub API error: ${res.status} fetching issues page ${page}`);
-
-    const batch = (await res.json()) as GitHubItem[];
-    // Filter out PRs (they appear in issues endpoint with pull_request field)
-    const issuesOnly = batch.filter((item) => !item.pull_request);
-    items.push(...issuesOnly);
-
-    if (log) log(`  Fetched ${items.length} issues...`);
-
-    if (batch.length < PER_PAGE) break;
-    page++;
-  }
-
+): GitHubItem[] {
+  const output = execGh([
+    'issue',
+    'list',
+    '--repo',
+    `${owner}/${repo}`,
+    '--state',
+    'all',
+    '--limit',
+    '9999',
+    '--json',
+    'number,title,state,labels,closedAt',
+  ]);
+  const raw = JSON.parse(output) as Array<{
+    number: number;
+    title: string;
+    state: string;
+    labels: Array<{ name: string }>;
+    closedAt: string;
+  }>;
+  const items: GitHubItem[] = raw.map((issue) => ({
+    number: issue.number,
+    title: issue.title,
+    state: issue.state.toLowerCase(),
+    labels: issue.labels,
+    closed_at: issue.closedAt || null,
+  }));
+  if (log) log(`  Fetched ${items.length} issues...`);
   return items;
 }
 
 /**
- * Fetch comments on an issue.
+ * Fetch comments on an issue via `gh api --paginate`.
  */
-async function fetchIssueComments(
+function fetchIssueComments(
   owner: string,
   repo: string,
   issueNumber: number,
-  token: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<Array<{ id: number; body: string }>> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100`;
-  const res = await fetchFn(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-    },
-  });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status} fetching comments`);
-  return (await res.json()) as Array<{ id: number; body: string }>;
+  execGh: ExecGhFn = defaultExecGh,
+): Array<{ id: number; body: string }> {
+  const output = execGh([
+    'api',
+    '--paginate',
+    `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+  ]);
+  return JSON.parse(output) as Array<{ id: number; body: string }>;
 }
 
 /**
- * Create a comment on an issue. Returns the comment ID.
+ * Create a comment on an issue via `gh issue comment`. Returns the comment ID.
  */
-async function createIssueComment(
+function createIssueComment(
   owner: string,
   repo: string,
   issueNumber: number,
   body: string,
-  token: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<number> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`;
-  const res = await fetchFn(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ body }),
-  });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status} creating comment`);
-  const data = (await res.json()) as { id: number };
-  return data.id;
+  execGh: ExecGhFn = defaultExecGh,
+): number {
+  const output = execGh([
+    'api',
+    `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+    '-X',
+    'POST',
+    '-f',
+    `body=${body}`,
+    '--jq',
+    '.id',
+  ]);
+  return parseInt(output.trim(), 10);
 }
 
 /**
- * Update a comment on an issue.
+ * Update a comment on an issue via `gh api -X PATCH`.
  */
-async function updateIssueComment(
+function updateIssueComment(
   owner: string,
   repo: string,
   commentId: number,
   body: string,
-  token: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<void> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}`;
-  const res = await fetchFn(url, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ body }),
-  });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status} updating comment`);
+  execGh: ExecGhFn = defaultExecGh,
+): void {
+  execGh([
+    'api',
+    `repos/${owner}/${repo}/issues/comments/${commentId}`,
+    '-X',
+    'PATCH',
+    '-f',
+    `body=${body}`,
+  ]);
 }
 
 // ── Index Entry Formatting ───────────────────────────────────
@@ -442,10 +447,9 @@ export interface InitIndexOptions {
   kind: 'prs' | 'issues';
   recentDays: number;
   dryRun: boolean;
-  token: string;
   /** When set, uses the AI tool to generate enriched entry descriptions. */
   agentCommandTemplate?: string;
-  fetchFn?: typeof fetch;
+  execGh?: ExecGhFn;
   log?: (msg: string) => void;
   /** Injected tool executor for testing. */
   runTool?: (
@@ -465,8 +469,8 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
   archivedCount: number;
   newEntries: number;
 }> {
-  const { owner, repo, indexIssue, kind, recentDays, dryRun, token } = opts;
-  const fetchFn = opts.fetchFn ?? fetch;
+  const { owner, repo, indexIssue, kind, recentDays, dryRun } = opts;
+  const execGh = opts.execGh ?? defaultExecGh;
   const log = opts.log ?? (() => {});
   const runTool = opts.runTool ?? executeTool;
 
@@ -474,8 +478,8 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
   log(`Scanning ${kind}...`);
   const items =
     kind === 'prs'
-      ? await fetchAllPRs(owner, repo, token, fetchFn, log)
-      : await fetchAllIssues(owner, repo, token, fetchFn, log);
+      ? fetchAllPRs(owner, repo, execGh, log)
+      : fetchAllIssues(owner, repo, execGh, log);
 
   log(`${icons.info} Found ${items.length} ${kind}.`);
 
@@ -487,7 +491,7 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
   );
 
   // 3. Fetch existing comments on the index issue
-  const comments = await fetchIssueComments(owner, repo, indexIssue, token, fetchFn);
+  const comments = fetchIssueComments(owner, repo, indexIssue, execGh);
   const found = findIndexComments(comments);
 
   // Count new entries (needed before AI enrichment to know which items to process)
@@ -566,21 +570,21 @@ export async function initIndex(opts: InitIndexOptions): Promise<{
   log(`Populating index issue #${indexIssue}...`);
 
   if (found.open) {
-    await updateIssueComment(owner, repo, found.open.id, openBody, token, fetchFn);
+    updateIssueComment(owner, repo, found.open.id, openBody, execGh);
   } else {
-    await createIssueComment(owner, repo, indexIssue, openBody, token, fetchFn);
+    createIssueComment(owner, repo, indexIssue, openBody, execGh);
   }
 
   if (found.recent) {
-    await updateIssueComment(owner, repo, found.recent.id, recentBody, token, fetchFn);
+    updateIssueComment(owner, repo, found.recent.id, recentBody, execGh);
   } else {
-    await createIssueComment(owner, repo, indexIssue, recentBody, token, fetchFn);
+    createIssueComment(owner, repo, indexIssue, recentBody, execGh);
   }
 
   if (found.archived) {
-    await updateIssueComment(owner, repo, found.archived.id, archivedBody, token, fetchFn);
+    updateIssueComment(owner, repo, found.archived.id, archivedBody, execGh);
   } else {
-    await createIssueComment(owner, repo, indexIssue, archivedBody, token, fetchFn);
+    createIssueComment(owner, repo, indexIssue, archivedBody, execGh);
   }
 
   log(
@@ -602,26 +606,12 @@ export async function runDedupInit(
   options: { repo?: string; all?: boolean; dryRun?: boolean; days?: string; agent?: string },
   deps: DedupInitDeps = {},
 ): Promise<void> {
-  const fetchFn = deps.fetchFn ?? fetch;
+  const execGh = deps.execGh ?? defaultExecGh;
   const log = deps.log ?? console.log;
   const logError = deps.logError ?? console.error;
   const resolveCmd = deps.resolveAgentCommandFn ?? resolveAgentCommand;
-  const ensureAuthFn = deps.ensureAuthFn ?? (() => ensureAuth('https://opencara.workers.dev'));
 
-  // 1. Require authentication (auto-triggers login if not authenticated)
-  let token: string;
-  try {
-    token = await ensureAuthFn();
-  } catch (err) {
-    if (err instanceof AuthError) {
-      logError(`${icons.error} ${err.message}`);
-      process.exitCode = 1;
-      return;
-    }
-    throw err;
-  }
-
-  // 2. Parse --repo flag
+  // 1. Parse --repo flag
   if (!options.repo) {
     logError(`${icons.error} --repo is required. Usage: opencara dedup init --repo owner/repo`);
     process.exitCode = 1;
@@ -641,9 +631,9 @@ export async function runDedupInit(
     return;
   }
 
-  // 3. Fetch .opencara.toml from the repo
+  // 2. Fetch .opencara.toml from the repo
   log(`Fetching .opencara.toml from ${options.repo}...`);
-  const tomlContent = await fetchRepoFile(owner, repo, '.opencara.toml', token, fetchFn);
+  const tomlContent = fetchRepoFile(owner, repo, '.opencara.toml', execGh);
   if (!tomlContent) {
     logError(`${icons.error} No .opencara.toml found in ${options.repo}`);
     process.exitCode = 1;
@@ -658,7 +648,7 @@ export async function runDedupInit(
   }
   const config = parsed as OpenCaraConfig;
 
-  // 4. Determine which indexes to initialize
+  // 3. Determine which indexes to initialize
   const targets: Array<{ kind: 'prs' | 'issues'; indexIssue: number }> = [];
 
   if (config.dedup?.prs?.indexIssue) {
@@ -694,7 +684,7 @@ export async function runDedupInit(
     return;
   }
 
-  // 5. Resolve agent command template if --agent is specified
+  // 4. Resolve agent command template if --agent is specified
   let agentCommandTemplate: string | undefined;
   if (options.agent) {
     const cmd = resolveCmd(options.agent);
@@ -709,7 +699,7 @@ export async function runDedupInit(
     log(`Using AI agent "${options.agent}" for enriched descriptions`);
   }
 
-  // 6. Initialize each target
+  // 5. Initialize each target
   for (const target of filteredTargets) {
     log(`\n${pc.bold(`Initializing ${target.kind} dedup index (issue #${target.indexIssue})...`)}`);
     await initIndex({
@@ -719,9 +709,8 @@ export async function runDedupInit(
       kind: target.kind,
       recentDays,
       dryRun: options.dryRun ?? false,
-      token,
       agentCommandTemplate,
-      fetchFn,
+      execGh,
       log,
       runTool: deps.runTool,
     });
@@ -751,10 +740,7 @@ export function dedupCommand(): Command {
         days?: string;
         agent?: string;
       }) => {
-        const config = loadConfig();
-        await runDedupInit(options, {
-          ensureAuthFn: () => ensureAuth(config.platformUrl, { configPath: config.authFile }),
-        });
+        await runDedupInit(options);
       },
     );
 
