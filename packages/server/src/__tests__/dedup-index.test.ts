@@ -600,12 +600,23 @@ describe('Dedup Index (Issue #525)', () => {
   // ── Entry update tests (Issue #637) ──────────────────────────────
 
   describe('parseEntry', () => {
-    it('parses standard entry with labels', () => {
+    it('parses standard entry with hash and labels', () => {
       const result = parseEntry('- #42(bug, enhancement): Fix crash');
       expect(result).toEqual({
         number: 42,
         labels: 'bug, enhancement',
         description: 'Fix crash',
+        hasHash: true,
+      });
+    });
+
+    it('parses entry without hash prefix', () => {
+      const result = parseEntry('- 42(bug, enhancement): Fix crash');
+      expect(result).toEqual({
+        number: 42,
+        labels: 'bug, enhancement',
+        description: 'Fix crash',
+        hasHash: false,
       });
     });
 
@@ -615,6 +626,7 @@ describe('Dedup Index (Issue #525)', () => {
         number: 10,
         labels: '',
         description: 'Add feature',
+        hasHash: true,
       });
     });
 
@@ -624,6 +636,7 @@ describe('Dedup Index (Issue #525)', () => {
         number: 5,
         labels: 'bug',
         description: 'Fix it',
+        hasHash: true,
       });
     });
 
@@ -639,7 +652,7 @@ describe('Dedup Index (Issue #525)', () => {
   });
 
   describe('formatEntryLine', () => {
-    it('formats entry with labels', () => {
+    it('formats entry with labels and hash (default)', () => {
       expect(formatEntryLine(42, 'bug, enhancement', 'Fix crash')).toBe(
         '- #42(bug, enhancement): Fix crash',
       );
@@ -647,6 +660,10 @@ describe('Dedup Index (Issue #525)', () => {
 
     it('formats entry with empty labels', () => {
       expect(formatEntryLine(10, '', 'Add feature')).toBe('- #10(): Add feature');
+    });
+
+    it('formats entry without hash prefix', () => {
+      expect(formatEntryLine(42, 'bug', 'Fix crash', false)).toBe('- 42(bug): Fix crash');
     });
   });
 
@@ -789,6 +806,28 @@ describe('Dedup Index (Issue #525)', () => {
       expect(openComment.body).toContain('- #1(feat): Feature A');
       expect(openComment.body).toContain('- #2(bug, critical): Bug B');
       expect(openComment.body).toContain('- #3(feat): Feature C');
+    });
+
+    it('updates entry without hash prefix (CLI format)', async () => {
+      await appendOpenEntry(
+        github,
+        owner,
+        repo,
+        issueNumber,
+        '- 42(bug): Fix crash',
+        token,
+        logger,
+      );
+
+      await updateOpenEntry(github, owner, repo, issueNumber, 42, token, logger, {
+        labels: ['bug', 'enhancement'],
+      });
+
+      const comments = await github.listIssueComments(owner, repo, issueNumber, token);
+      const openComment = comments.find((c) => c.body.includes(OPEN_MARKER))!;
+      // Should preserve the no-hash format
+      expect(openComment.body).toContain('- 42(bug, enhancement): Fix crash');
+      expect(openComment.body).not.toContain('#42');
     });
 
     it('clears labels when empty array provided', async () => {

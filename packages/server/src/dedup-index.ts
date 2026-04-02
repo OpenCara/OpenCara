@@ -167,26 +167,37 @@ export function removeEntry(
 
 /**
  * Parse an entry line into its components: number, labels, and description.
- * Entry format: `- #<number>(<labels>): <description>`
+ * Supports both formats:
+ *   - `- #<number>(<labels>): <description>` (with hash prefix)
+ *   - `- <number>(<labels>): <description>` (without hash prefix)
  * Returns null if the line doesn't match the expected format.
  */
 export function parseEntry(
   line: string,
-): { number: number; labels: string; description: string } | null {
-  const match = line.match(/^-\s+#(\d+)\(([^)]*)\):\s*(.*)$/);
+): { number: number; labels: string; description: string; hasHash: boolean } | null {
+  const match = line.match(/^-\s+(#?)(\d+)\(([^)]*)\):\s*(.*)$/);
   if (!match) return null;
   return {
-    number: parseInt(match[1], 10),
-    labels: match[2],
-    description: match[3],
+    number: parseInt(match[2], 10),
+    labels: match[3],
+    description: match[4],
+    hasHash: match[1] === '#',
   };
 }
 
 /**
  * Format an entry line from its components.
+ * When hasHash is true, includes `#` prefix (e.g. `- #42(labels): desc`).
+ * When false, omits it (e.g. `- 42(labels): desc`).
  */
-export function formatEntryLine(itemNumber: number, labels: string, description: string): string {
-  return `- #${itemNumber}(${labels}): ${description}`;
+export function formatEntryLine(
+  itemNumber: number,
+  labels: string,
+  description: string,
+  hasHash: boolean = true,
+): string {
+  const prefix = hasHash ? '#' : '';
+  return `- ${prefix}${itemNumber}(${labels}): ${description}`;
 }
 
 /**
@@ -233,7 +244,7 @@ export async function updateOpenEntry(
       newDescription = update.newTitle;
     }
 
-    return formatEntryLine(itemNumber, newLabels, newDescription);
+    return formatEntryLine(itemNumber, newLabels, newDescription, parsed.hasHash);
   });
 
   if (!found) {
