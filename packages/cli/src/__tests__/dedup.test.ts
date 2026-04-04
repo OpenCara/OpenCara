@@ -5,8 +5,10 @@ import {
   parseDedupReport,
   executeDedup,
   executeDedupTask,
+  buildIndexFromGitHub,
   TIMEOUT_SAFETY_MARGIN_MS,
 } from '../dedup.js';
+import type { ExecGhFn } from '../dedup.js';
 import type { ToolExecutorResult } from '../tool-executor.js';
 
 // ── buildDedupPrompt ──────────────────────────────────────────
@@ -459,6 +461,118 @@ describe('executeDedup', () => {
     await expect(
       executeDedup('test prompt', 120, { commandTemplate: 'echo' }, mockTool, controller.signal),
     ).rejects.toThrow();
+  });
+});
+
+// ── buildIndexFromGitHub ─────────────────────────────────────
+
+describe('buildIndexFromGitHub', () => {
+  const makeExecGh = (openPrs: unknown[], closedPrs: unknown[]): ExecGhFn => {
+    return vi.fn((args: string[]) => {
+      if (args.includes('--state') && args[args.indexOf('--state') + 1] === 'open') {
+        return JSON.stringify(openPrs);
+      }
+      if (args.includes('--state') && args[args.indexOf('--state') + 1] === 'closed') {
+        return JSON.stringify(closedPrs);
+      }
+      return '[]';
+    });
+  };
+
+  it('formats open and closed PRs into index body', () => {
+    const execGh = makeExecGh(
+      [
+        { number: 10, title: 'Add login', labels: [{ name: 'feature' }] },
+        { number: 20, title: 'Fix bug', labels: [] },
+      ],
+      [{ number: 5, title: 'Old PR', labels: [{ name: 'bug' }] }],
+    );
+
+    const result = buildIndexFromGitHub('acme', 'widgets', 99, { execGh });
+
+    expect(result).toContain('## Open Items');
+    expect(result).toContain('- 10(feature): Add login');
+    expect(result).toContain('- 20(): Fix bug');
+    expect(result).toContain('## Recently Closed Items');
+    expect(result).toContain('- 5(bug): Old PR');
+  });
+
+  it('excludes the current PR from both open and closed lists', () => {
+    const execGh = makeExecGh(
+      [
+        { number: 42, title: 'Current PR', labels: [] },
+        { number: 43, title: 'Other PR', labels: [] },
+      ],
+      [{ number: 42, title: 'Current PR', labels: [] }],
+    );
+
+    const result = buildIndexFromGitHub('acme', 'widgets', 42, { execGh });
+
+    expect(result).not.toContain('Current PR');
+    expect(result).toContain('- 43(): Other PR');
+  });
+
+  it('handles empty PR lists', () => {
+    const execGh = makeExecGh([], []);
+
+    const result = buildIndexFromGitHub('acme', 'widgets', 1, { execGh });
+
+    expect(result).toContain('## Open Items');
+    expect(result).toContain('## Recently Closed Items');
+    // Should only have headers and a blank line between them
+    expect(result).toBe('## Open Items\n\n## Recently Closed Items');
+  });
+
+  it('passes correct repo slug and limits to gh CLI', () => {
+    const execGh = vi.fn().mockReturnValue('[]');
+
+    buildIndexFromGitHub('acme', 'widgets', 1, { execGh });
+
+    expect(execGh).toHaveBeenCalledTimes(2);
+
+    // Open PRs call
+    const openCall = (execGh as ReturnType<typeof vi.fn>).mock.calls[0][0] as string[];
+    expect(openCall).toContain('--repo');
+    expect(openCall).toContain('acme/widgets');
+    expect(openCall).toContain('--state');
+    expect(openCall).toContain('open');
+    expect(openCall).toContain('--limit');
+    expect(openCall).toContain('100');
+
+    // Closed PRs call
+    const closedCall = (execGh as ReturnType<typeof vi.fn>).mock.calls[1][0] as string[];
+    expect(closedCall).toContain('--state');
+    expect(closedCall).toContain('closed');
+    expect(closedCall).toContain('--limit');
+    expect(closedCall).toContain('50');
+  });
+
+  it('formats multiple labels with comma separator', () => {
+    const execGh = makeExecGh(
+      [
+        {
+          number: 10,
+          title: 'Multi-label PR',
+          state: 'OPEN',
+          labels: [{ name: 'bug' }, { name: 'urgent' }, { name: 'cli' }],
+        },
+      ],
+      [],
+    );
+
+    const result = buildIndexFromGitHub('acme', 'widgets', 99, { execGh });
+
+    expect(result).toContain('- 10(bug, urgent, cli): Multi-label PR');
+  });
+
+  it('propagates gh CLI errors', () => {
+    const execGh = vi.fn().mockImplementation(() => {
+      throw new Error('gh: command not found');
+    });
+
+    expect(() => buildIndexFromGitHub('acme', 'widgets', 1, { execGh })).toThrow(
+      'gh: command not found',
+    );
   });
 });
 
