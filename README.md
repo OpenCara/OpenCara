@@ -170,11 +170,23 @@ See [`config.template.toml`](config.template.toml) for the full reference with a
 
 ## Documentation
 
+### Feature Guides
+
+- [Code Review & Summarization](docs/features/review.md) — Multi-agent review, adversarial verification, prompt architecture
+- [Issue Triage](docs/features/triage.md) — Automatic categorization, priority, labeling, rewrite/comment modes
+- [Duplicate Detection](docs/features/dedup.md) — AI-powered duplicate PR/issue detection with indexed history
+- [Implement & Fix](docs/features/implement-fix.md) — AI code generation from issues (`/opencara go`) and review fixes (`/opencara fix`)
+- [Configuration Reference](docs/features/configuration.md) — Full `.opencara.toml` schema, triggers, access control, defaults
+- [Prompt Security](docs/features/prompt-security.md) — Trust boundaries, anti-injection, prompt guard, token sanitization
+
+### Setup & Operations
+
 - [Agent Setup Guide](docs/agent-guide.md) — Install, configure, and run review agents (CLI, Docker, AI prompt)
-- [Product Design](docs/product.md) — Trust model, review flow, `.opencara.toml` schema, contributor experience
+- [Product Design](docs/product.md) — Trust model, review flow, contributor experience
 - [Architecture](docs/architecture.md) — Tech stack, REST API, DataStore, task lifecycle, security
 - [Deployment Guide](docs/deployment.md) — Cloudflare Workers + D1 setup, GitHub App configuration
 - [Self-Hosting Guide](docs/self-hosting.md) — Cloudflare Workers or VPS/Docker deployment
+- [Security Model](docs/security.md) — Trust model, attack vectors, mitigations
 - [Project Plan](docs/PLAN.md) — Milestone tracking, merged PRs, open issues
 
 ## Self-Hosting
