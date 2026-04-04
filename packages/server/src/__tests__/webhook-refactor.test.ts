@@ -2067,4 +2067,90 @@ describe('Webhook refactor — separate task creation', () => {
       expect(updateSpy).not.toHaveBeenCalled();
     });
   });
+
+  // ── Task Cleanup on Close ───────────────────────────────────────
+
+  describe('task cleanup on PR close', () => {
+    it('deletes pending tasks when PR is closed', async () => {
+      const baseTask = {
+        id: 'pending-1',
+        owner: 'acme',
+        repo: 'widget',
+        pr_number: 42,
+        pr_url: 'https://github.com/acme/widget/pull/42',
+        diff_url: 'https://github.com/acme/widget/pull/42.diff',
+        base_ref: 'main',
+        head_ref: 'feat/test',
+        review_count: 1,
+        prompt: 'Review this PR',
+        timeout_at: Date.now() + 600_000,
+        status: 'pending' as const,
+        github_installation_id: 999,
+        private: false,
+        queue: 'review' as const,
+        config: DEFAULT_REVIEW_CONFIG,
+        created_at: Date.now(),
+        task_type: 'review' as const,
+        feature: 'review' as const,
+        group_id: 'grp-1',
+      };
+
+      await store.createTask({ ...baseTask, id: 'pending-1', status: 'pending' });
+      await store.createTask({ ...baseTask, id: 'reviewing-1', status: 'reviewing' });
+      await store.createTask({ ...baseTask, id: 'other-pr', pr_number: 99, status: 'pending' });
+
+      const payload = makePRPayload({ action: 'closed' });
+      const res = await sendWebhook(app, 'pull_request', payload, env);
+      expect(res.status).toBe(200);
+
+      // Pending task for PR 42 should be deleted
+      expect(await store.getTask('pending-1')).toBeNull();
+      // Reviewing task should NOT be deleted
+      expect(await store.getTask('reviewing-1')).not.toBeNull();
+      // Other PR's task should NOT be deleted
+      expect(await store.getTask('other-pr')).not.toBeNull();
+    });
+  });
+
+  describe('task cleanup on issue close', () => {
+    it('deletes pending tasks when issue is closed', async () => {
+      const baseIssueTask = {
+        owner: 'acme',
+        repo: 'widget',
+        pr_number: 0,
+        pr_url: '',
+        diff_url: '',
+        base_ref: 'main',
+        head_ref: '',
+        review_count: 1,
+        prompt: 'Triage this issue',
+        timeout_at: Date.now() + 600_000,
+        github_installation_id: 999,
+        private: false,
+        queue: 'review' as const,
+        config: DEFAULT_REVIEW_CONFIG,
+        created_at: Date.now(),
+        task_type: 'review' as const,
+        feature: 'triage' as const,
+        group_id: 'grp-issue',
+        issue_number: 10,
+        issue_url: 'https://github.com/acme/widget/issues/10',
+        issue_title: 'Bug: something is broken',
+        issue_body: 'Steps to reproduce...',
+        issue_author: 'alice',
+      };
+
+      await store.createTask({ ...baseIssueTask, id: 'issue-pending-1', status: 'pending' });
+      await store.createTask({ ...baseIssueTask, id: 'issue-reviewing-1', status: 'reviewing' });
+
+      const payload = makeIssuePayload({ action: 'closed' });
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      // Pending task should be deleted
+      expect(await store.getTask('issue-pending-1')).toBeNull();
+      // Reviewing task should NOT be deleted
+      expect(await store.getTask('issue-reviewing-1')).not.toBeNull();
+    });
+  });
 });

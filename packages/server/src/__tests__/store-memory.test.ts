@@ -1012,6 +1012,101 @@ describe('MemoryDataStore', () => {
     });
   });
 
+  describe('deletePendingTasksByPr', () => {
+    it('deletes only pending tasks for a specific PR', async () => {
+      await store.createTask(
+        makeTask({ id: 't1', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
+      );
+      await store.createTask(
+        makeTask({ id: 't2', owner: 'org', repo: 'repo', pr_number: 10, status: 'reviewing' }),
+      );
+      await store.createTask(
+        makeTask({ id: 't3', owner: 'org', repo: 'repo', pr_number: 20, status: 'pending' }),
+      );
+      const deleted = await store.deletePendingTasksByPr('org', 'repo', 10);
+      expect(deleted).toBe(1);
+      expect(await store.getTask('t1')).toBeNull();
+      expect(await store.getTask('t2')).not.toBeNull(); // reviewing — not deleted
+      expect(await store.getTask('t3')).not.toBeNull(); // different PR
+    });
+
+    it('deletes associated claims for pending tasks', async () => {
+      await store.createTask(
+        makeTask({ id: 't1', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
+      );
+      await store.createClaim(makeClaim({ id: 'c1', task_id: 't1', agent_id: 'a1' }));
+      await store.deletePendingTasksByPr('org', 'repo', 10);
+      expect(await store.getClaim('c1')).toBeNull();
+    });
+
+    it('returns 0 for no matching tasks', async () => {
+      expect(await store.deletePendingTasksByPr('org', 'repo', 999)).toBe(0);
+    });
+  });
+
+  describe('deletePendingTasksByIssue', () => {
+    it('deletes only pending issue-scoped tasks', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'pending',
+          feature: 'dedup',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 't2',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'reviewing',
+          feature: 'dedup',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 't3',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 99,
+          status: 'pending',
+          feature: 'dedup',
+        }),
+      );
+      const deleted = await store.deletePendingTasksByIssue('org', 'repo', 5);
+      expect(deleted).toBe(1);
+      expect(await store.getTask('t1')).toBeNull();
+      expect(await store.getTask('t2')).not.toBeNull(); // reviewing
+      expect(await store.getTask('t3')).not.toBeNull(); // different issue
+    });
+
+    it('does not delete PR tasks that happen to have an issue_number', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          issue_number: 5,
+          status: 'pending',
+        }),
+      );
+      const deleted = await store.deletePendingTasksByIssue('org', 'repo', 5);
+      expect(deleted).toBe(0);
+      expect(await store.getTask('t1')).not.toBeNull();
+    });
+
+    it('returns 0 for no matching tasks', async () => {
+      expect(await store.deletePendingTasksByIssue('org', 'repo', 999)).toBe(0);
+    });
+  });
+
   describe('completeWorkerAndMaybeCreateSummary', () => {
     it('creates summary when all workers are completed', async () => {
       // Two review worker tasks in the same group

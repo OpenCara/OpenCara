@@ -624,9 +624,22 @@ async function handlePullRequest(
 
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
-  // Handle PR close/merge — move dedup index entries
+  // Handle PR close/merge — move dedup index entries + clean up pending tasks
   if (action === 'closed') {
     await handlePrClose(github, owner, repo, prNumber, fullConfig, token, logger);
+    try {
+      const deleted = await store.deletePendingTasksByPr(owner, repo, prNumber);
+      if (deleted > 0) {
+        logger.info('Cleaned up pending tasks on PR close', { owner, repo, prNumber, deleted });
+      }
+    } catch (err) {
+      logger.error('Failed to clean up pending tasks on PR close', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        prNumber,
+      });
+    }
     return new Response('OK', { status: 200 });
   }
 
@@ -768,7 +781,7 @@ export async function handleIssueEvent(
     action,
   });
 
-  // Handle issue close — move dedup index entries
+  // Handle issue close — move dedup index entries + clean up pending tasks
   if (action === 'closed') {
     let token: string;
     try {
@@ -790,6 +803,26 @@ export async function handleIssueEvent(
     if (!parseError) {
       await handleIssueClose(github, owner, repo, issue.number, fullConfig, token, logger);
     }
+
+    try {
+      const deleted = await store.deletePendingTasksByIssue(owner, repo, issue.number);
+      if (deleted > 0) {
+        logger.info('Cleaned up pending tasks on issue close', {
+          owner,
+          repo,
+          issueNumber: issue.number,
+          deleted,
+        });
+      }
+    } catch (err) {
+      logger.error('Failed to clean up pending tasks on issue close', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        issueNumber: issue.number,
+      });
+    }
+
     return new Response('OK', { status: 200 });
   }
 
