@@ -262,8 +262,11 @@ export async function checkTimeouts(
         const token = await github.getInstallationToken(task.github_installation_id);
         const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
         const body = formatTimeoutComment(timeoutMinutes, allReviews);
-        await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
-        await store.deleteTasksByGroup(task.group_id);
+        // Post to issue_number for issue tasks, pr_number for PR tasks
+        const commentTarget = task.pr_number > 0 ? task.pr_number : task.issue_number;
+        if (commentTarget) {
+          await github.postPrComment(task.owner, task.repo, commentTarget, body, token);
+        }
       } catch (err) {
         log.error('Timeout post failed', {
           taskId: task.id,
@@ -271,6 +274,8 @@ export async function checkTimeouts(
           action: 'timeout_post_failed',
           error: err instanceof Error ? err.message : String(err),
         });
+      } finally {
+        await store.deleteTasksByGroup(task.group_id);
       }
     } else {
       // Non-group task: handle individually (legacy path)
@@ -299,15 +304,19 @@ export async function checkTimeouts(
         }));
 
         const body = formatTimeoutComment(timeoutMinutes, reviews);
-        await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
-
-        await store.deleteTask(task.id);
+        // Post to issue_number for issue tasks, pr_number for PR tasks
+        const commentTarget = task.pr_number > 0 ? task.pr_number : task.issue_number;
+        if (commentTarget) {
+          await github.postPrComment(task.owner, task.repo, commentTarget, body, token);
+        }
       } catch (err) {
         log.error('Timeout post failed', {
           taskId: task.id,
           action: 'timeout_post_failed',
           error: err instanceof Error ? err.message : String(err),
         });
+      } finally {
+        await store.deleteTask(task.id);
       }
     }
   }
@@ -645,13 +654,13 @@ async function buildPollContext(store: DataStore): Promise<PollContext> {
   const dedupBlockedRepos = new Set<string>();
   for (const t of reviewingTasks) {
     if (isDedupRole(t.task_type)) {
-      dedupBlockedRepos.add(`${t.owner}/${t.repo}`);
+      dedupBlockedRepos.add(`${t.owner}/${t.repo}:${t.task_type}`);
     }
   }
   const oldestDedupPerRepo = new Map<string, ReviewTask>();
   for (const t of tasks) {
     if (!isDedupRole(t.task_type)) continue;
-    const repoKey = `${t.owner}/${t.repo}`;
+    const repoKey = `${t.owner}/${t.repo}:${t.task_type}`;
     const existing = oldestDedupPerRepo.get(repoKey);
     if (!existing || t.created_at < existing.created_at) {
       oldestDedupPerRepo.set(repoKey, t);
@@ -797,7 +806,7 @@ async function filterTasksForAgent(
 
     // Dedup serialization: skip if repo has a claimed dedup task or this isn't the oldest
     if (isDedupRole(task.task_type)) {
-      const repoKey = `${task.owner}/${task.repo}`;
+      const repoKey = `${task.owner}/${task.repo}:${task.task_type}`;
       if (dedupBlockedRepos.has(repoKey)) continue;
       const oldest = oldestDedupPerRepo.get(repoKey);
       if (oldest && oldest.id !== task.id) continue;
