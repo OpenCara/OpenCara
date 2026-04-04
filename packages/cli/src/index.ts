@@ -7,11 +7,12 @@ import { dedupCommand } from './commands/dedup.js';
 import { statusCommand } from './commands/status.js';
 
 declare const __CLI_VERSION__: string;
+declare const __GIT_COMMIT__: string;
 
 const program = new Command()
   .name('opencara')
   .description('OpenCara — distributed AI code review agent')
-  .version(__CLI_VERSION__);
+  .version(`${__CLI_VERSION__} (${__GIT_COMMIT__})`);
 
 program.addCommand(agentCommand);
 program.addCommand(authCommand());

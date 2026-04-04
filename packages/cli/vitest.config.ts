@@ -7,6 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   define: {
     __CLI_VERSION__: JSON.stringify('0.0.0-test'),
+    __GIT_COMMIT__: JSON.stringify('test123'),
   },
   test: {
     include: ['src/**/*.test.ts'],

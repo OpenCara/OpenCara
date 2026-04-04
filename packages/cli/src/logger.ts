@@ -115,6 +115,31 @@ export function formatUptime(ms: number): string {
   return `${seconds}s`;
 }
 
+/** Format the startup version banner. */
+export function formatVersionBanner(version: string, commit: string): string {
+  return `OpenCara CLI v${version} (${commit})`;
+}
+
+/**
+ * Format agent tools summary showing each tool and its enabled roles.
+ * Returns an array of lines like: "  claude     — review, summary, implement, fix"
+ */
+export function formatAgentTools(
+  agents: ReadonlyArray<{ tool: string; name?: string; roles: readonly string[] }>,
+): string[] {
+  if (agents.length === 0) return [];
+
+  // Use tool name for display, with agent name as fallback label
+  const entries = agents.map((a) => ({
+    label: a.name ?? a.tool,
+    roles: a.roles.join(', '),
+  }));
+
+  // Align labels by padding to the longest one
+  const maxLen = Math.max(...entries.map((e) => e.label.length));
+  return entries.map((e) => `  ${e.label.padEnd(maxLen)}  — ${e.roles}`);
+}
+
 /** Format exit summary line. */
 export function formatExitSummary(stats: AgentSessionStats): string {
   const uptime = formatUptime(Date.now() - stats.startTime);

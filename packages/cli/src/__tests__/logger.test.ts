@@ -4,6 +4,8 @@ import {
   createAgentSession,
   formatUptime,
   formatExitSummary,
+  formatVersionBanner,
+  formatAgentTools,
   logVerboseToolOutput,
   VERBOSE_TRUNCATE_LIMIT,
   timestamp,
@@ -163,6 +165,65 @@ describe('logger', () => {
       session.startTime = Date.now() - 90_000;
       const summary = formatExitSummary(session);
       expect(summary).toContain('1m30s');
+    });
+  });
+
+  describe('formatVersionBanner', () => {
+    it('formats version and commit hash', () => {
+      expect(formatVersionBanner('0.19.6', 'abc1234')).toBe('OpenCara CLI v0.19.6 (abc1234)');
+    });
+
+    it('handles unknown commit hash', () => {
+      expect(formatVersionBanner('1.0.0', 'unknown')).toBe('OpenCara CLI v1.0.0 (unknown)');
+    });
+  });
+
+  describe('formatAgentTools', () => {
+    it('formats single agent with roles', () => {
+      const lines = formatAgentTools([
+        { tool: 'claude', roles: ['review', 'summary', 'implement', 'fix'] },
+      ]);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('claude');
+      expect(lines[0]).toContain('review, summary, implement, fix');
+    });
+
+    it('formats multiple agents with aligned labels', () => {
+      const lines = formatAgentTools([
+        { tool: 'claude', roles: ['review', 'summary'] },
+        { tool: 'codex', roles: ['review', 'implement'] },
+        { tool: 'gemini', roles: ['review'] },
+      ]);
+      expect(lines).toHaveLength(3);
+      // All lines should have the same prefix length (aligned by tool name padding)
+      const dashPositions = lines.map((l) => l.indexOf('—'));
+      expect(new Set(dashPositions).size).toBe(1);
+    });
+
+    it('uses agent name when provided', () => {
+      const lines = formatAgentTools([{ tool: 'claude', name: 'my-reviewer', roles: ['review'] }]);
+      expect(lines[0]).toContain('my-reviewer');
+    });
+
+    it('falls back to tool name when no agent name', () => {
+      const lines = formatAgentTools([{ tool: 'claude', roles: ['review'] }]);
+      expect(lines[0]).toContain('claude');
+    });
+
+    it('returns empty array for no agents', () => {
+      expect(formatAgentTools([])).toEqual([]);
+    });
+
+    it('handles agents with different label lengths', () => {
+      const lines = formatAgentTools([
+        { tool: 'a', roles: ['review'] },
+        { tool: 'long-tool-name', roles: ['summary'] },
+      ]);
+      expect(lines).toHaveLength(2);
+      // Longer name should not be padded
+      expect(lines[1]).toMatch(/long-tool-name\s{2}—/);
+      // Shorter name should be padded
+      expect(lines[0]).toMatch(/a\s+—/);
     });
   });
 
