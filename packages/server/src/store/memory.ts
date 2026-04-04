@@ -94,6 +94,49 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
+  async deletePendingTasksByPr(owner: string, repo: string, prNumber: number): Promise<number> {
+    let count = 0;
+    for (const [id, task] of this.tasks) {
+      if (
+        task.owner === owner &&
+        task.repo === repo &&
+        task.pr_number === prNumber &&
+        task.status === 'pending'
+      ) {
+        this.tasks.delete(id);
+        for (const [claimId, claim] of this.claims) {
+          if (claim.task_id === id) this.claims.delete(claimId);
+        }
+        count++;
+      }
+    }
+    return count;
+  }
+
+  async deletePendingTasksByIssue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<number> {
+    let count = 0;
+    for (const [id, task] of this.tasks) {
+      if (
+        task.owner === owner &&
+        task.repo === repo &&
+        task.issue_number === issueNumber &&
+        task.pr_number === 0 &&
+        task.status === 'pending'
+      ) {
+        this.tasks.delete(id);
+        for (const [claimId, claim] of this.claims) {
+          if (claim.task_id === id) this.claims.delete(claimId);
+        }
+        count++;
+      }
+    }
+    return count;
+  }
+
   // Claims — returns false if (task_id, agent_id, role) already has an active claim
 
   async createClaim(claim: TaskClaim): Promise<boolean> {

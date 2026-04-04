@@ -599,6 +599,24 @@ async function handlePullRequest(
     headRef,
   });
 
+  // Clean up pending tasks early — this is a pure datastore operation that
+  // doesn't need a token or config, so it must run before any early returns.
+  if (action === 'closed') {
+    try {
+      const deleted = await store.deletePendingTasksByPr(owner, repo, prNumber);
+      if (deleted > 0) {
+        logger.info('Cleaned up pending tasks on PR close', { owner, repo, prNumber, deleted });
+      }
+    } catch (err) {
+      logger.error('Failed to clean up pending tasks on PR close', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        prNumber,
+      });
+    }
+  }
+
   let token: string;
   try {
     token = await github.getInstallationToken(installation.id);
@@ -768,8 +786,28 @@ export async function handleIssueEvent(
     action,
   });
 
-  // Handle issue close — move dedup index entries
+  // Handle issue close — clean up pending tasks + move dedup index entries
   if (action === 'closed') {
+    // Clean up pending tasks first — pure datastore op, no token needed
+    try {
+      const deleted = await store.deletePendingTasksByIssue(owner, repo, issue.number);
+      if (deleted > 0) {
+        logger.info('Cleaned up pending tasks on issue close', {
+          owner,
+          repo,
+          issueNumber: issue.number,
+          deleted,
+        });
+      }
+    } catch (err) {
+      logger.error('Failed to clean up pending tasks on issue close', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        issueNumber: issue.number,
+      });
+    }
+
     let token: string;
     try {
       token = await github.getInstallationToken(installation.id);
@@ -790,6 +828,7 @@ export async function handleIssueEvent(
     if (!parseError) {
       await handleIssueClose(github, owner, repo, issue.number, fullConfig, token, logger);
     }
+
     return new Response('OK', { status: 200 });
   }
 

@@ -1230,6 +1230,89 @@ describe('D1DataStore', () => {
     });
   });
 
+  describe('deletePendingTasksByPr', () => {
+    it('deletes only pending tasks for a specific PR', async () => {
+      await store.createTask(
+        makeTask({ id: 't1', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
+      );
+      await store.createTask(
+        makeTask({ id: 't2', owner: 'org', repo: 'repo', pr_number: 10, status: 'reviewing' }),
+      );
+      await store.createTask(
+        makeTask({ id: 't3', owner: 'org', repo: 'repo', pr_number: 20, status: 'pending' }),
+      );
+      const deleted = await store.deletePendingTasksByPr('org', 'repo', 10);
+      expect(deleted).toBe(1);
+      expect(await store.getTask('t1')).toBeNull();
+      expect(await store.getTask('t2')).not.toBeNull();
+      expect(await store.getTask('t3')).not.toBeNull();
+    });
+
+    it('deletes associated claims via CASCADE', async () => {
+      await store.createTask(
+        makeTask({ id: 't1', owner: 'org', repo: 'repo', pr_number: 10, status: 'pending' }),
+      );
+      await store.createClaim(makeClaim({ id: 'c1', task_id: 't1', agent_id: 'a1' }));
+      await store.deletePendingTasksByPr('org', 'repo', 10);
+      expect(await store.getClaim('c1')).toBeNull();
+    });
+
+    it('returns 0 for no matching tasks', async () => {
+      expect(await store.deletePendingTasksByPr('org', 'repo', 999)).toBe(0);
+    });
+  });
+
+  describe('deletePendingTasksByIssue', () => {
+    it('deletes only pending issue-scoped tasks', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'pending',
+          feature: 'dedup',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 't2',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'reviewing',
+          feature: 'dedup',
+        }),
+      );
+      const deleted = await store.deletePendingTasksByIssue('org', 'repo', 5);
+      expect(deleted).toBe(1);
+      expect(await store.getTask('t1')).toBeNull();
+      expect(await store.getTask('t2')).not.toBeNull();
+    });
+
+    it('does not delete PR tasks that have an issue_number', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          issue_number: 5,
+          status: 'pending',
+        }),
+      );
+      const deleted = await store.deletePendingTasksByIssue('org', 'repo', 5);
+      expect(deleted).toBe(0);
+      expect(await store.getTask('t1')).not.toBeNull();
+    });
+
+    it('returns 0 for no matching tasks', async () => {
+      expect(await store.deletePendingTasksByIssue('org', 'repo', 999)).toBe(0);
+    });
+  });
+
   // NOTE: completeWorkerAndMaybeCreateSummary uses INSERT...SELECT which the
   // MockD1Database cannot parse. These tests live in sqlite-adapter.test.ts
   // which uses real SQLite for accurate SQL execution.

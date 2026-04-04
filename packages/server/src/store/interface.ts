@@ -22,6 +22,10 @@ export interface DataStore {
   listTasks(filter?: TaskFilter): Promise<ReviewTask[]>;
   updateTask(id: string, updates: Partial<ReviewTask>): Promise<boolean>;
   deleteTask(id: string): Promise<void>;
+  /** Delete all pending tasks for a given PR. Returns number of deleted tasks. */
+  deletePendingTasksByPr(owner: string, repo: string, prNumber: number): Promise<number>;
+  /** Delete all pending tasks for a given issue. Returns number of deleted tasks. */
+  deletePendingTasksByIssue(owner: string, repo: string, issueNumber: number): Promise<number>;
 
   // Claims — createClaim returns false if (task_id, agent_id) already exists
   createClaim(claim: TaskClaim): Promise<boolean>;
