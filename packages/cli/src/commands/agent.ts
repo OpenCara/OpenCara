@@ -86,6 +86,8 @@ import {
   createLogger,
   createAgentSession,
   formatExitSummary,
+  formatVersionBanner,
+  formatAgentTools,
   logVerboseToolOutput,
   icons,
   type Logger,
@@ -103,6 +105,7 @@ import {
 } from '../batch-poll.js';
 
 declare const __CLI_VERSION__: string;
+declare const __GIT_COMMIT__: string;
 
 export interface ConsumptionDeps {
   agentId: string;
@@ -2273,6 +2276,22 @@ agentCommand
           return;
         }
         config = loadConfig();
+      }
+
+      // Print startup banner
+      console.log(formatVersionBanner(__CLI_VERSION__, __GIT_COMMIT__));
+
+      // Display agent tools with their enabled roles
+      if (config.agents && config.agents.length > 0) {
+        const toolEntries = config.agents.map((a) => ({
+          tool: a.tool,
+          name: a.name,
+          roles: computeRoles(a),
+        }));
+        console.log('Agent tools:');
+        for (const line of formatAgentTools(toolEntries)) {
+          console.log(line);
+        }
       }
 
       const pollIntervalMs = parseInt(opts.pollInterval, 10) * 1000;
