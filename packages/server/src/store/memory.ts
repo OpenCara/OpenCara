@@ -124,7 +124,7 @@ export class MemoryDataStore implements DataStore {
         task.owner === owner &&
         task.repo === repo &&
         task.issue_number === issueNumber &&
-        !task.pr_number &&
+        task.pr_number === 0 &&
         task.status === 'pending'
       ) {
         this.tasks.delete(id);
