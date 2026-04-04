@@ -482,10 +482,10 @@ describe('buildIndexFromGitHub', () => {
   it('formats open and closed PRs into index body', () => {
     const execGh = makeExecGh(
       [
-        { number: 10, title: 'Add login', state: 'OPEN', labels: [{ name: 'feature' }] },
-        { number: 20, title: 'Fix bug', state: 'OPEN', labels: [] },
+        { number: 10, title: 'Add login', labels: [{ name: 'feature' }] },
+        { number: 20, title: 'Fix bug', labels: [] },
       ],
-      [{ number: 5, title: 'Old PR', state: 'MERGED', labels: [{ name: 'bug' }] }],
+      [{ number: 5, title: 'Old PR', labels: [{ name: 'bug' }] }],
     );
 
     const result = buildIndexFromGitHub('acme', 'widgets', 99, { execGh });
@@ -500,10 +500,10 @@ describe('buildIndexFromGitHub', () => {
   it('excludes the current PR from both open and closed lists', () => {
     const execGh = makeExecGh(
       [
-        { number: 42, title: 'Current PR', state: 'OPEN', labels: [] },
-        { number: 43, title: 'Other PR', state: 'OPEN', labels: [] },
+        { number: 42, title: 'Current PR', labels: [] },
+        { number: 43, title: 'Other PR', labels: [] },
       ],
-      [{ number: 42, title: 'Current PR', state: 'CLOSED', labels: [] }],
+      [{ number: 42, title: 'Current PR', labels: [] }],
     );
 
     const result = buildIndexFromGitHub('acme', 'widgets', 42, { execGh });

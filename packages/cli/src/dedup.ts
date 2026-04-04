@@ -233,7 +233,6 @@ export interface BuildIndexDeps {
 interface GhPrListItem {
   number: number;
   title: string;
-  state: string;
   labels: Array<{ name: string }>;
 }
 
