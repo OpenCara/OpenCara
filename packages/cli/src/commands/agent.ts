@@ -72,7 +72,7 @@ import {
 import { UsageTracker } from '../usage-tracker.js';
 import { sanitizeTokens } from '../sanitize.js';
 import { detectSuspiciousPatterns } from '../prompt-guard.js';
-import { executeDedupTask } from '../dedup.js';
+import { executeDedupTask, defaultExecGh } from '../dedup.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import { executeTriageTask, type TriageExecutorDeps } from '../triage.js';
 import { executeImplementTask, type ImplementExecutorDeps } from '../implement.js';
@@ -850,6 +850,7 @@ async function handleTask(
         logger,
         signal,
         role,
+        { execGh: defaultExecGh },
       );
     } else if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
       await executeSummaryTask(

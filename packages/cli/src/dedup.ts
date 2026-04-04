@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import type { DedupReport, DedupMatch, TaskRole } from '@opencara/shared';
 import type { ApiClient } from './http.js';
 import type { ReviewExecutorDeps } from './review.js';
@@ -209,6 +210,104 @@ export async function executeDedup(
   }
 }
 
+// ── Auto-build Index from GitHub API ─────────────────────────
+
+/** Type for the injected gh CLI executor — matches ExecGhFn in commands/dedup.ts. */
+export type ExecGhFn = (args: string[]) => string;
+
+/** Default gh CLI executor using execFileSync. */
+export function defaultExecGh(args: string[]): string {
+  return execFileSync('gh', args, {
+    encoding: 'utf-8',
+    timeout: 30_000,
+    maxBuffer: 50 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+/** Dependencies for buildIndexFromGitHub — allows injection for testing. */
+export interface BuildIndexDeps {
+  execGh: ExecGhFn;
+}
+
+interface GhPrListItem {
+  number: number;
+  title: string;
+  state: string;
+  labels: Array<{ name: string }>;
+}
+
+/**
+ * Fetch PRs from GitHub via `gh pr list` and format as dedup index body.
+ * Used when no `index_issue` is configured — builds context on the fly.
+ *
+ * @param owner - Repository owner
+ * @param repo - Repository name
+ * @param currentPrNumber - Current PR number to exclude from the index
+ * @param deps - Injectable dependencies (execGh)
+ */
+export function buildIndexFromGitHub(
+  owner: string,
+  repo: string,
+  currentPrNumber: number,
+  deps: BuildIndexDeps,
+): string {
+  const repoSlug = `${owner}/${repo}`;
+
+  // Fetch open PRs (up to 100)
+  const openRaw = deps.execGh([
+    'pr',
+    'list',
+    '--repo',
+    repoSlug,
+    '--state',
+    'open',
+    '--json',
+    'number,title,labels',
+    '--limit',
+    '100',
+  ]);
+  const openPrs: GhPrListItem[] = JSON.parse(openRaw);
+
+  // Fetch recently closed PRs (up to 50)
+  const closedRaw = deps.execGh([
+    'pr',
+    'list',
+    '--repo',
+    repoSlug,
+    '--state',
+    'closed',
+    '--json',
+    'number,title,labels',
+    '--limit',
+    '50',
+  ]);
+  const closedPrs: GhPrListItem[] = JSON.parse(closedRaw);
+
+  // Filter out the current PR
+  const filteredOpen = openPrs.filter((pr) => pr.number !== currentPrNumber);
+  const filteredClosed = closedPrs.filter((pr) => pr.number !== currentPrNumber);
+
+  // Format entries: `- <number>(<labels>): <title>`
+  const formatPr = (pr: GhPrListItem): string => {
+    const labels = pr.labels.map((l) => l.name).join(', ');
+    return `- ${pr.number}(${labels}): ${pr.title}`;
+  };
+
+  const lines: string[] = [];
+  lines.push('## Open Items');
+  for (const pr of filteredOpen) {
+    lines.push(formatPr(pr));
+  }
+  lines.push('');
+  lines.push('## Recently Closed Items');
+  for (const pr of filteredClosed) {
+    lines.push(formatPr(pr));
+  }
+
+  return lines.join('\n');
+}
+
 // ── Agent Loop Integration ────────────────────────────────────
 
 /**
@@ -236,8 +335,24 @@ export async function executeDedupTask(
   logger: Logger,
   signal?: AbortSignal,
   role: TaskRole = 'pr_dedup',
+  buildIndexDeps?: BuildIndexDeps,
 ): Promise<void> {
   logger.log(`  ${icons.running} Executing dedup: ${reviewDeps.commandTemplate}`);
+
+  // Auto-build dedup context from GitHub API when no index issue is configured
+  if (!task.index_issue_body && buildIndexDeps) {
+    logger.log(`  ${icons.info} No index issue configured — building context from GitHub API`);
+    try {
+      task.index_issue_body = buildIndexFromGitHub(
+        task.owner,
+        task.repo,
+        task.pr_number,
+        buildIndexDeps,
+      );
+    } catch (err) {
+      logger.log(`  ${icons.warn} Failed to fetch PR list from GitHub: ${(err as Error).message}`);
+    }
+  }
 
   const prompt = buildDedupPrompt({ ...task, diffContent, customPrompt: task.prompt });
 
