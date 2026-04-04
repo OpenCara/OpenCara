@@ -389,7 +389,7 @@ describe('Integration: full E2E flows', () => {
       expect(res.reason).toContain('timed out');
     });
 
-    it('leaves task in current state when GitHub posting fails during timeout', async () => {
+    it('deletes task even when GitHub posting fails during timeout (#641)', async () => {
       await store.createTask(
         makeTask({
           id: 'task-fail-timeout',
@@ -406,9 +406,9 @@ describe('Integration: full E2E flows', () => {
       // Trigger timeout check via poll
       await poll('any-agent');
 
-      // Task should NOT be marked timeout — GitHub posting failed
+      // Task should be deleted even though posting failed — prevents zombie tasks (#641)
       const task = await store.getTask('task-fail-timeout');
-      expect(task?.status).toBe('pending');
+      expect(task).toBeNull();
     });
 
     it('non-active tasks are not affected by timeout checks', async () => {

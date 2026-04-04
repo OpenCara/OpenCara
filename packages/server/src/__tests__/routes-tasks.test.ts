@@ -645,6 +645,75 @@ describe('Task Routes', () => {
       expect(body.tasks).toHaveLength(1);
       expect(body.tasks[0].task_id).toBe('issue-dedup-old');
     });
+
+    it('does not block pr_dedup tasks when issue_dedup exists for the same repo (#641)', async () => {
+      const now = Date.now();
+      // Create an issue_dedup task for the repo
+      await store.createTask(
+        makeTask({
+          id: 'issue-dedup-1',
+          task_type: 'issue_dedup',
+          feature: 'dedup_issue',
+          group_id: 'grp-issue-1',
+          created_at: now - 10_000,
+        }),
+      );
+      // Create a pr_dedup task for the same repo
+      await store.createTask(
+        makeTask({
+          id: 'pr-dedup-1',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-pr-1',
+          created_at: now,
+        }),
+      );
+
+      // Agent polling for both roles should see both tasks
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['pr_dedup', 'issue_dedup'],
+      });
+      const body = await res.json();
+      expect(body.tasks).toHaveLength(2);
+      const taskIds = body.tasks.map((t: { task_id: string }) => t.task_id).sort();
+      expect(taskIds).toEqual(['issue-dedup-1', 'pr-dedup-1']);
+    });
+
+    it('does not block pr_dedup when issue_dedup is claimed for same repo (#641)', async () => {
+      // Create and claim an issue_dedup task
+      await store.createTask(
+        makeTask({
+          id: 'issue-dedup-claimed',
+          task_type: 'issue_dedup',
+          feature: 'dedup_issue',
+          group_id: 'grp-issue-claimed',
+        }),
+      );
+      await request('POST', '/api/tasks/issue-dedup-claimed/claim', {
+        agent_id: 'agent-other',
+        role: 'issue_dedup',
+      });
+
+      // Create a pending pr_dedup task for the same repo
+      await store.createTask(
+        makeTask({
+          id: 'pr-dedup-pending',
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-pr-pending',
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/poll', {
+        agent_id: 'agent-1',
+        roles: ['pr_dedup'],
+      });
+      const body = await res.json();
+      // pr_dedup should NOT be blocked by a claimed issue_dedup
+      expect(body.tasks).toHaveLength(1);
+      expect(body.tasks[0].task_id).toBe('pr-dedup-pending');
+    });
   });
 
   // ── Claim ────────────────────────────────────────────────
@@ -1551,6 +1620,124 @@ describe('Task Routes', () => {
       const lastCheck = await store.getTimeoutLastCheck();
       expect(lastCheck).toBeGreaterThan(0);
       expect(lastCheck).toBeLessThanOrEqual(Date.now());
+    });
+  });
+
+  // ── Zombie issue task cleanup (#641) ─────────────────────
+
+  describe('zombie issue task cleanup (#641)', () => {
+    it('deletes timed-out grouped task with pr_number=0 even when post fails', async () => {
+      // Create a grouped issue task with pr_number=0 and no issue_number
+      await store.createTask(
+        makeTask({
+          id: 'zombie-1',
+          pr_number: 0,
+          timeout_at: Date.now() - 1000,
+          task_type: 'issue_dedup',
+          feature: 'dedup_issue',
+          group_id: 'grp-zombie-1',
+        }),
+      );
+
+      // Poll triggers checkTimeouts — task should be deleted despite having no valid comment target
+      await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const task = await store.getTask('zombie-1');
+      expect(task).toBeNull();
+    });
+
+    it('deletes timed-out non-grouped task with pr_number=0 even when post fails', async () => {
+      // Create a non-grouped issue task with pr_number=0
+      await store.createTask(
+        makeTask({
+          id: 'zombie-legacy',
+          pr_number: 0,
+          timeout_at: Date.now() - 1000,
+          task_type: 'issue_triage',
+          feature: 'triage',
+          group_id: '', // non-grouped (legacy path)
+        }),
+      );
+
+      await request('POST', '/api/tasks/poll', { agent_id: 'agent-1' });
+      const task = await store.getTask('zombie-legacy');
+      expect(task).toBeNull();
+    });
+
+    it('posts timeout comment to issue_number for grouped issue tasks', async () => {
+      // Use MockGitHubService to track postPrComment calls
+      const { MockGitHubService } = await import('./helpers/github-mock.js');
+      const mockGithub = new MockGitHubService();
+      const trackingApp = createApp(store, mockGithub);
+
+      // Create a grouped issue task with pr_number=0 but valid issue_number
+      await store.createTask(
+        makeTask({
+          id: 'issue-timeout-1',
+          pr_number: 0,
+          issue_number: 42,
+          timeout_at: Date.now() - 1000,
+          task_type: 'issue_dedup',
+          feature: 'dedup_issue',
+          group_id: 'grp-issue-timeout',
+        }),
+      );
+
+      await trackingApp.request(
+        '/api/tasks/poll',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
+          body: JSON.stringify({ agent_id: 'agent-1' }),
+        },
+        mockEnv,
+      );
+
+      // Verify postPrComment was called with issue_number (42), not pr_number (0)
+      const commentCalls = mockGithub.calls.filter((c) => c.method === 'postPrComment');
+      expect(commentCalls).toHaveLength(1);
+      expect(commentCalls[0].args.prNumber).toBe(42);
+
+      // Task should be cleaned up
+      const task = await store.getTask('issue-timeout-1');
+      expect(task).toBeNull();
+    });
+
+    it('posts timeout comment to pr_number for PR tasks (unchanged behavior)', async () => {
+      // Use MockGitHubService to track postPrComment calls
+      const { MockGitHubService } = await import('./helpers/github-mock.js');
+      const mockGithub = new MockGitHubService();
+      const trackingApp = createApp(store, mockGithub);
+
+      // Create a grouped PR task with pr_number=5
+      await store.createTask(
+        makeTask({
+          id: 'pr-timeout-1',
+          pr_number: 5,
+          timeout_at: Date.now() - 1000,
+          task_type: 'pr_dedup',
+          feature: 'dedup_pr',
+          group_id: 'grp-pr-timeout',
+        }),
+      );
+
+      await trackingApp.request(
+        '/api/tasks/poll',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...OAUTH_HEADERS },
+          body: JSON.stringify({ agent_id: 'agent-1' }),
+        },
+        mockEnv,
+      );
+
+      // Verify postPrComment was called with pr_number (5)
+      const commentCalls = mockGithub.calls.filter((c) => c.method === 'postPrComment');
+      expect(commentCalls).toHaveLength(1);
+      expect(commentCalls[0].args.prNumber).toBe(5);
+
+      // Task should be cleaned up
+      const task = await store.getTask('pr-timeout-1');
+      expect(task).toBeNull();
     });
   });
 
