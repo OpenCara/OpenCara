@@ -33,7 +33,7 @@ Enforce unified review standards across your org. Deploy centralized agents with
 ## How It Works
 
 1. **GitHub PR Opened** — Webhook triggers the OpenCara platform
-2. **Task Created** — Server creates a review task in D1/KV
+2. **Task Created** — Server creates a review task in D1
 3. **Agent Polls** — Distributed agents poll for tasks via REST, claim available slots
 4. **Local Review** — Agents fetch the diff from GitHub and review locally using their own AI tools
 5. **Synthesis** — A synthesizer agent consolidates all reviews into a single result
@@ -61,7 +61,10 @@ Poll interval: 30 seconds
 # 1. Install
 npm i -g opencara
 
-# 2. Configure
+# 2. Authenticate with GitHub
+opencara auth login
+
+# 3. Configure
 mkdir -p ~/.opencara
 cat > ~/.opencara/config.toml << 'EOF'
 platform_url = "https://api.opencara.com"
@@ -72,7 +75,7 @@ tool = "claude"
 command = "claude --model claude-sonnet-4-6 --allowedTools '*' --print"
 EOF
 
-# 3. Start
+# 4. Start
 opencara agent start
 ```
 
@@ -85,7 +88,7 @@ OpenCara follows a strict principle of **minimal data storage** to protect contr
 - **No code stored** — PR diffs are fetched on demand and never persisted. Discarded immediately after review.
 - **No API keys on platform** — Contributors' AI API keys never leave their local machine. Zero platform access.
 - **No review text stored** — Reviews post directly to GitHub. Only task metadata (status, verdict) is stored for coordination.
-- **No accounts required** — Agents self-identify by UUID. No login, no OAuth, no user database.
+- **GitHub OAuth identity** — Agents authenticate via GitHub App OAuth Device Flow. No passwords, no API keys to manage.
 
 The platform exists solely as a coordination layer: it matches PRs to agents, tracks task lifecycle, and posts results to GitHub.
 
@@ -97,8 +100,8 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Access control** — Whitelist/blacklist agents per role (reviewer, summarizer) in `.opencara.toml`
 - **Repo filtering** — Agents can choose which repos to review: all, own, whitelist, or blacklist
 - **Configurable triggers** — Control when reviews run: on PR open, on push, via `/opencara review` comment, skip drafts
-- **Codebase context** — Agents can shallow-clone repos locally for context-aware reviews (imports, callers, architecture)
-- **Private repo support** — 4-tier GitHub auth fallback: env var, `gh` CLI, config token, no auth
+- **Codebase context** — Agents maintain persistent repo caches with git worktrees for context-aware reviews
+- **Private repo support** — OAuth token provides automatic access to repos where the GitHub App is installed
 - **Review-only agents** — Dedicate agents to reviewing only, excluding them from synthesis
 - **Docker support** — Multi-stage Dockerfile + docker-compose for containerized agent deployment
 - **Private repo isolation** — Private repo tasks only visible to agents that declare matching repos
@@ -107,9 +110,13 @@ The platform exists solely as a coordination layer: it matches PRs to agents, tr
 - **Config validation** — CLI validates config on startup with actionable error messages
 - **Rate limiting** — API endpoints protected against abuse
 - **Health and metrics** — `/health` and `/metrics` endpoints for monitoring
-- **Consumption limits** — Per-agent token usage limits (daily/monthly) enforced locally
+- **Issue triage** — Automatic issue categorization, priority assessment, and labeling via `/opencara triage`
+- **Duplicate detection** — AI-powered duplicate PR/issue detection with indexed history
+- **AI implementation** — Agents implement issues end-to-end via `/opencara go` (branch → code → PR)
+- **AI fix** — Agents apply review comment fixes via `/opencara fix` (read comments → push fixes)
+- **Consumption limits** — Per-agent token usage limits (daily) enforced locally
 - **Self-hosting** — Run on Cloudflare Workers (free tier) or any VPS with Docker/Node.js
-- **Zero platform cost** — Built entirely on Cloudflare free tier (Workers + D1 + KV)
+- **Zero platform cost** — Built entirely on Cloudflare free tier (Workers + D1)
 
 ## Configuration
 
@@ -134,7 +141,7 @@ skip = ["draft"]
 agent = "agent-abc123" # First choice for synthesis
 ```
 
-See [`docs/product.md`](docs/product.md) for the full schema with all options documented.
+See the [Configuration Reference](docs/features/configuration.md) for the full schema with all options documented.
 
 ### `~/.opencara/config.toml` (contributor, local)
 
@@ -156,7 +163,7 @@ command = "qwen --model qwen3.5-plus -y"
 
 Review prompts are delivered via stdin to your commands. Do not use `${PROMPT}` in command templates.
 
-See [`config.template.toml`](config.template.toml) for the full reference with all options (limits, repo filtering, github_token, codebase_dir).
+See [`config.template.toml`](config.template.toml) for the full reference with all options (limits, repo filtering, codebase_dir).
 
 ## Tech Stack
 
@@ -165,7 +172,7 @@ See [`config.template.toml`](config.template.toml) for the full reference with a
 - **CLI**: npm package (TypeScript) — HTTP polling agent runtime
 - **Shared**: Pure TypeScript types — REST API contracts, review config
 - **Monorepo**: pnpm workspaces, 3 packages (server, cli, shared)
-- **Tests**: Vitest, 1328 tests across 52 files
+- **Tests**: Vitest, 2546 tests across 74 files
 - **CI/CD**: GitHub Actions — build, test, auto-deploy dev worker on merge
 
 ## Documentation
