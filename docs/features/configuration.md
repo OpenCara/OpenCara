@@ -79,9 +79,9 @@ This uses all defaults: 1 review agent, triggers on PR opened, skips drafts, 10-
 
 ### Top-Level Fields
 
-| Field     | Type   | Required | Description                          |
-|-----------|--------|----------|--------------------------------------|
-| `version` | number | **Yes**  | Schema version. Must be `1`.         |
+| Field     | Type   | Required | Description                  |
+| --------- | ------ | -------- | ---------------------------- |
+| `version` | number | **Yes**  | Schema version. Must be `1`. |
 
 All feature sections (`[review]`, `[dedup]`, `[triage]`, `[implement]`, `[fix]`) are optional. A config with only `version = 1` is valid — it simply means no features are explicitly configured.
 
@@ -101,14 +101,14 @@ preferred_tools = ["claude", "codex"]
 model_diversity_grace = "30s"
 ```
 
-| Field                   | Type     | Default  | Description                                             |
-|-------------------------|----------|----------|---------------------------------------------------------|
-| `prompt`                | string   | *(required)* | Instructions sent to review agents. Be specific about your tech stack and what matters. |
-| `agent_count`           | number   | `1`      | Number of review agents (1–10). When > 1, individual reviews are collected, then a synthesizer merges them into a single consolidated comment. |
-| `timeout`               | string   | `"10m"`  | How long to wait for review slots to fill (`1m`–`30m`). |
-| `preferred_models`      | string[] | `[]`     | Preferred AI models. Matching agents are selected first when claiming slots. |
-| `preferred_tools`       | string[] | `[]`     | Preferred AI tool types (e.g., `claude`, `codex`, `gemini`, `qwen`). |
-| `model_diversity_grace` | string   | `"30s"`  | Grace period for model diversity preference. See [Model Diversity Grace Period](#model-diversity-grace-period). |
+| Field                   | Type     | Default      | Description                                                                                                                                    |
+| ----------------------- | -------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | string   | _(required)_ | Instructions sent to review agents. Be specific about your tech stack and what matters.                                                        |
+| `agent_count`           | number   | `1`          | Number of review agents (1–10). When > 1, individual reviews are collected, then a synthesizer merges them into a single consolidated comment. |
+| `timeout`               | string   | `"10m"`      | How long to wait for review slots to fill (`1m`–`30m`).                                                                                        |
+| `preferred_models`      | string[] | `[]`         | Preferred AI models. Matching agents are selected first when claiming slots.                                                                   |
+| `preferred_tools`       | string[] | `[]`         | Preferred AI tool types (e.g., `claude`, `codex`, `gemini`, `qwen`).                                                                           |
+| `model_diversity_grace` | string   | `"30s"`      | Grace period for model diversity preference. See [Model Diversity Grace Period](#model-diversity-grace-period).                                |
 
 ---
 
@@ -121,11 +121,11 @@ comment = "/opencara review"
 skip = ["draft"]
 ```
 
-| Field     | Type     | Default                | Description                                          |
-|-----------|----------|------------------------|------------------------------------------------------|
-| `on`      | string[] | `["opened"]`           | PR lifecycle events that auto-trigger a review. Also accepts `events` as an alias. |
-| `comment` | string   | `"/opencara review"`   | Slash command in PR comments to manually trigger.    |
-| `skip`    | string[] | `["draft"]`            | Conditions that prevent triggering. See [Skip Conditions](#skip-conditions). |
+| Field     | Type     | Default              | Description                                                                        |
+| --------- | -------- | -------------------- | ---------------------------------------------------------------------------------- |
+| `on`      | string[] | `["opened"]`         | PR lifecycle events that auto-trigger a review. Also accepts `events` as an alias. |
+| `comment` | string   | `"/opencara review"` | Slash command in PR comments to manually trigger.                                  |
+| `skip`    | string[] | `["draft"]`          | Conditions that prevent triggering. See [Skip Conditions](#skip-conditions).       |
 
 See [Trigger System](#trigger-system) for full details on trigger types and disabling.
 
@@ -145,10 +145,10 @@ github = "trusted-contributor"
 github = "unreliable-reviewer"
 ```
 
-| Field       | Type           | Default | Description                                    |
-|-------------|----------------|---------|------------------------------------------------|
-| `whitelist` | EntityEntry[]  | `[]`    | If non-empty, **only** these entities can review. |
-| `blacklist` | EntityEntry[]  | `[]`    | These entities are blocked from reviewing.     |
+| Field       | Type          | Default | Description                                       |
+| ----------- | ------------- | ------- | ------------------------------------------------- |
+| `whitelist` | EntityEntry[] | `[]`    | If non-empty, **only** these entities can review. |
+| `blacklist` | EntityEntry[] | `[]`    | These entities are blocked from reviewing.        |
 
 An empty whitelist means all authenticated agents are allowed (subject to the blacklist).
 
@@ -164,13 +164,13 @@ only = "alice"
 preferred_models = ["claude-sonnet-4-6"]
 ```
 
-| Field              | Type           | Default | Description                                          |
-|--------------------|----------------|---------|------------------------------------------------------|
-| `whitelist`        | EntityEntry[]  | `[]`    | Only these entities can summarize.                   |
-| `blacklist`        | EntityEntry[]  | `[]`    | These entities are blocked from summarizing.         |
-| `preferred`        | EntityEntry[]  | `[]`    | These entities are preferred for the summarizer slot. |
-| `preferred_models` | string[]       | `[]`    | Prefer agents running these models for synthesis.    |
-| `only`             | string or string[] | —   | Shorthand for whitelist-only mode. See [Summarizer Shorthand Forms](#summarizer-shorthand-forms). |
+| Field              | Type               | Default | Description                                                                                       |
+| ------------------ | ------------------ | ------- | ------------------------------------------------------------------------------------------------- |
+| `whitelist`        | EntityEntry[]      | `[]`    | Only these entities can summarize.                                                                |
+| `blacklist`        | EntityEntry[]      | `[]`    | These entities are blocked from summarizing.                                                      |
+| `preferred`        | EntityEntry[]      | `[]`    | These entities are preferred for the summarizer slot.                                             |
+| `preferred_models` | string[]           | `[]`    | Prefer agents running these models for synthesis.                                                 |
+| `only`             | string or string[] | —       | Shorthand for whitelist-only mode. See [Summarizer Shorthand Forms](#summarizer-shorthand-forms). |
 
 ---
 
@@ -188,11 +188,11 @@ preferred_tools = ["claude"]
 prompt = "Focus on performance and optimization."
 ```
 
-| Field              | Type     | Description                            |
-|--------------------|----------|----------------------------------------|
-| `prompt`           | string   | Override prompt for this agent slot.   |
-| `preferred_models` | string[] | Override model preferences.            |
-| `preferred_tools`  | string[] | Override tool preferences.             |
+| Field              | Type     | Description                          |
+| ------------------ | -------- | ------------------------------------ |
+| `prompt`           | string   | Override prompt for this agent slot. |
+| `preferred_models` | string[] | Override model preferences.          |
+| `preferred_tools`  | string[] | Override tool preferences.           |
 
 ---
 
@@ -211,12 +211,12 @@ timeout = "10m"
 index_issue = 42
 ```
 
-| Field         | Type    | Default                          | Description                             |
-|---------------|---------|----------------------------------|-----------------------------------------|
-| `enabled`     | boolean | `true` (when section present)    | Enable/disable PR dedup.               |
-| `prompt`      | string  | `"Check for duplicate content."` | Instructions for the dedup agent.       |
-| `index_issue` | number  | —                                | Issue number tracking known PRs.        |
-| + [base fields](#shared-base-fields-featureconfig) | | | Inherits all FeatureConfig fields. |
+| Field                                              | Type    | Default                          | Description                        |
+| -------------------------------------------------- | ------- | -------------------------------- | ---------------------------------- |
+| `enabled`                                          | boolean | `true` (when section present)    | Enable/disable PR dedup.           |
+| `prompt`                                           | string  | `"Check for duplicate content."` | Instructions for the dedup agent.  |
+| `index_issue`                                      | number  | —                                | Issue number tracking known PRs.   |
+| + [base fields](#shared-base-fields-featureconfig) |         |                                  | Inherits all FeatureConfig fields. |
 
 #### `[dedup.issues]`
 
@@ -229,12 +229,12 @@ timeout = "10m"
 include_closed = true
 ```
 
-| Field            | Type    | Default                          | Description                          |
-|------------------|---------|----------------------------------|--------------------------------------|
-| `enabled`        | boolean | `true` (when section present)    | Enable/disable issue dedup.          |
-| `prompt`         | string  | `"Check for duplicate content."` | Instructions for the dedup agent.    |
-| `include_closed` | boolean | —                                | Also check closed issues for dupes.  |
-| + [base fields](#shared-base-fields-featureconfig) | | | Inherits all FeatureConfig fields. |
+| Field                                              | Type    | Default                          | Description                         |
+| -------------------------------------------------- | ------- | -------------------------------- | ----------------------------------- |
+| `enabled`                                          | boolean | `true` (when section present)    | Enable/disable issue dedup.         |
+| `prompt`                                           | string  | `"Check for duplicate content."` | Instructions for the dedup agent.   |
+| `include_closed`                                   | boolean | —                                | Also check closed issues for dupes. |
+| + [base fields](#shared-base-fields-featureconfig) |         |                                  | Inherits all FeatureConfig fields.  |
 
 ---
 
@@ -260,15 +260,15 @@ alice = "rewrite"
 bob = "comment"
 ```
 
-| Field           | Type                        | Default                    | Description                                |
-|-----------------|-----------------------------|----------------------------|--------------------------------------------|
-| `enabled`       | boolean                     | `true` (when section present) | Enable/disable triage.                  |
-| `prompt`        | string                      | `"Triage this issue."`     | Instructions for the triage agent.         |
-| `default_mode`  | `"comment"` or `"rewrite"`  | `"comment"`                | How the agent responds: add a comment or rewrite the issue body. |
-| `auto_label`    | boolean                     | `false`                    | Automatically apply labels suggested by the agent. |
-| `trigger`       | TriggerConfig               | See [defaults](#default-triggers-per-feature) | When to trigger triage. |
-| `author_modes`  | Record\<string, mode\>      | —                          | Per-author mode overrides (keyed by GitHub username). |
-| + [base fields](#shared-base-fields-featureconfig) | | | Inherits all FeatureConfig fields. |
+| Field                                              | Type                       | Default                                       | Description                                                      |
+| -------------------------------------------------- | -------------------------- | --------------------------------------------- | ---------------------------------------------------------------- |
+| `enabled`                                          | boolean                    | `true` (when section present)                 | Enable/disable triage.                                           |
+| `prompt`                                           | string                     | `"Triage this issue."`                        | Instructions for the triage agent.                               |
+| `default_mode`                                     | `"comment"` or `"rewrite"` | `"comment"`                                   | How the agent responds: add a comment or rewrite the issue body. |
+| `auto_label`                                       | boolean                    | `false`                                       | Automatically apply labels suggested by the agent.               |
+| `trigger`                                          | TriggerConfig              | See [defaults](#default-triggers-per-feature) | When to trigger triage.                                          |
+| `author_modes`                                     | Record\<string, mode\>     | —                                             | Per-author mode overrides (keyed by GitHub username).            |
+| + [base fields](#shared-base-fields-featureconfig) |                            |                                               | Inherits all FeatureConfig fields.                               |
 
 ---
 
@@ -288,14 +288,15 @@ comment = "/opencara go"
 label = "opencara:implement"
 ```
 
-| Field     | Type          | Default                                | Description                        |
-|-----------|---------------|----------------------------------------|------------------------------------|
-| `enabled` | boolean       | `true` (when section present)          | Enable/disable implementation.     |
-| `prompt`  | string        | `"Implement the requested changes."`   | Instructions for the implement agent. |
-| `trigger` | TriggerConfig | `comment: "/opencara go"`, `status: "Ready"` | When to trigger. |
-| + [base fields](#shared-base-fields-featureconfig) | | | Inherits all FeatureConfig fields. |
+| Field                                              | Type          | Default                                      | Description                           |
+| -------------------------------------------------- | ------------- | -------------------------------------------- | ------------------------------------- |
+| `enabled`                                          | boolean       | `true` (when section present)                | Enable/disable implementation.        |
+| `prompt`                                           | string        | `"Implement the requested changes."`         | Instructions for the implement agent. |
+| `trigger`                                          | TriggerConfig | `comment: "/opencara go"`, `status: "Ready"` | When to trigger.                      |
+| + [base fields](#shared-base-fields-featureconfig) |               |                                              | Inherits all FeatureConfig fields.    |
 
 The `/opencara go` command accepts an optional model parameter:
+
 - `/opencara go gpt-5.4` — prefers an agent running gpt-5.4
 - `/opencara go` — any agent can claim immediately
 
@@ -316,12 +317,12 @@ agent_count = 1
 comment = "/opencara fix"
 ```
 
-| Field     | Type          | Default                            | Description                     |
-|-----------|---------------|------------------------------------|---------------------------------|
-| `enabled` | boolean       | `true` (when section present)      | Enable/disable fix.             |
-| `prompt`  | string        | `"Fix the review comments."`       | Instructions for the fix agent. |
-| `trigger` | TriggerConfig | `comment: "/opencara fix"`         | When to trigger.                |
-| + [base fields](#shared-base-fields-featureconfig) | | | Inherits all FeatureConfig fields. |
+| Field                                              | Type          | Default                       | Description                        |
+| -------------------------------------------------- | ------------- | ----------------------------- | ---------------------------------- |
+| `enabled`                                          | boolean       | `true` (when section present) | Enable/disable fix.                |
+| `prompt`                                           | string        | `"Fix the review comments."`  | Instructions for the fix agent.    |
+| `trigger`                                          | TriggerConfig | `comment: "/opencara fix"`    | When to trigger.                   |
+| + [base fields](#shared-base-fields-featureconfig) |               |                               | Inherits all FeatureConfig fields. |
 
 The `/opencara fix` command accepts an optional model parameter, similar to `/opencara go`.
 
@@ -331,13 +332,13 @@ The `/opencara fix` command accepts an optional model parameter, similar to `/op
 
 All feature sections (`review`, `dedup.*`, `triage`, `implement`, `fix`) share these base fields:
 
-| Field                   | Type     | Default    | Description                                          |
-|-------------------------|----------|------------|------------------------------------------------------|
-| `prompt`                | string   | *(varies)* | Instructions sent to agents.                         |
-| `agent_count`           | number   | `1`        | Number of agents to use (1–10). Clamped to range.    |
-| `timeout`               | string   | `"10m"`    | Task timeout. Format: `"<N>m"` where N is 1–30.     |
-| `preferred_models`      | string[] | `[]`       | Preferred AI models for agent selection.             |
-| `preferred_tools`       | string[] | `[]`       | Preferred AI tools (e.g., `claude`, `codex`, `gemini`, `qwen`). |
+| Field                   | Type     | Default    | Description                                                                   |
+| ----------------------- | -------- | ---------- | ----------------------------------------------------------------------------- |
+| `prompt`                | string   | _(varies)_ | Instructions sent to agents.                                                  |
+| `agent_count`           | number   | `1`        | Number of agents to use (1–10). Clamped to range.                             |
+| `timeout`               | string   | `"10m"`    | Task timeout. Format: `"<N>m"` where N is 1–30.                               |
+| `preferred_models`      | string[] | `[]`       | Preferred AI models for agent selection.                                      |
+| `preferred_tools`       | string[] | `[]`       | Preferred AI tools (e.g., `claude`, `codex`, `gemini`, `qwen`).               |
 | `model_diversity_grace` | string   | `"30s"`    | Grace period for model diversity. See [below](#model-diversity-grace-period). |
 
 **Timeout parsing**: Only the format `"<N>m"` is accepted (e.g., `"5m"`, `"15m"`). Values outside 1–30 are clamped to the default `"10m"`.
@@ -352,13 +353,13 @@ All features that respond to events use a unified trigger system defined by the 
 
 ### Trigger Types
 
-| Field    | Type     | Description                                                        |
-|----------|----------|--------------------------------------------------------------------|
-| `events` | string[] | PR/issue lifecycle events (e.g., `"opened"`, `"synchronize"`, `"edited"`). Also accepts `on` as an alias. |
-| `comment`| string   | Slash command that triggers when posted in a PR/issue comment.     |
-| `label`  | string   | Label name that triggers when the label is added.                  |
-| `status` | string   | GitHub Project board status that triggers when changed to this value. |
-| `skip`   | string[] | Conditions that prevent triggering.                                |
+| Field     | Type     | Description                                                                                               |
+| --------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `events`  | string[] | PR/issue lifecycle events (e.g., `"opened"`, `"synchronize"`, `"edited"`). Also accepts `on` as an alias. |
+| `comment` | string   | Slash command that triggers when posted in a PR/issue comment.                                            |
+| `label`   | string   | Label name that triggers when the label is added.                                                         |
+| `status`  | string   | GitHub Project board status that triggers when changed to this value.                                     |
+| `skip`    | string[] | Conditions that prevent triggering.                                                                       |
 
 When a field is absent from the config, it falls back to the feature's default. When a field is not in the defaults either, that trigger type is disabled.
 
@@ -376,11 +377,11 @@ comment = false    # Disable slash-command triggers for review
 
 The `skip` array supports these patterns:
 
-| Pattern             | Description                                          |
-|---------------------|------------------------------------------------------|
-| `"draft"`           | Skip if the PR is a draft.                           |
-| `"label:<name>"`    | Skip if the PR/issue has a label matching `<name>`.  |
-| `"branch:<pattern>"`| Skip if the PR's head branch matches `<pattern>` (glob). |
+| Pattern              | Description                                              |
+| -------------------- | -------------------------------------------------------- |
+| `"draft"`            | Skip if the PR is a draft.                               |
+| `"label:<name>"`     | Skip if the PR/issue has a label matching `<name>`.      |
+| `"branch:<pattern>"` | Skip if the PR's head branch matches `<pattern>` (glob). |
 
 Example:
 
@@ -391,12 +392,12 @@ skip = ["draft", "label:no-review", "branch:release/*"]
 
 ### Default Triggers Per Feature
 
-| Feature     | `events`     | `comment`            | `label` | `status`  | `skip`     |
-|-------------|--------------|----------------------|---------|-----------|------------|
-| `review`    | `["opened"]` | `"/opencara review"` | —       | —         | `["draft"]`|
-| `triage`    | `["opened"]` | `"/opencara triage"` | —       | —         | —          |
-| `implement` | —            | `"/opencara go"`     | —       | `"Ready"` | —          |
-| `fix`       | —            | `"/opencara fix"`    | —       | —         | —          |
+| Feature     | `events`     | `comment`            | `label` | `status`  | `skip`      |
+| ----------- | ------------ | -------------------- | ------- | --------- | ----------- |
+| `review`    | `["opened"]` | `"/opencara review"` | —       | —         | `["draft"]` |
+| `triage`    | `["opened"]` | `"/opencara triage"` | —       | —         | —           |
+| `implement` | —            | `"/opencara go"`     | —       | `"Ready"` | —           |
+| `fix`       | —            | `"/opencara fix"`    | —       | —         | —           |
 
 ---
 
@@ -507,16 +508,16 @@ on = ["opened"]
 
 **Mapping from legacy to current format:**
 
-| Legacy Field            | Current Field               |
-|-------------------------|-----------------------------|
-| `prompt`                | `review.prompt`             |
-| `agents.review_count`   | `review.agent_count`        |
+| Legacy Field              | Current Field             |
+| ------------------------- | ------------------------- |
+| `prompt`                  | `review.prompt`           |
+| `agents.review_count`     | `review.agent_count`      |
 | `agents.preferred_models` | `review.preferred_models` |
 | `agents.preferred_tools`  | `review.preferred_tools`  |
-| `trigger.*`             | `review.trigger.*`          |
-| `reviewer.*`            | `review.reviewer.*`         |
-| `summarizer`            | `review.summarizer`         |
-| `timeout`               | `review.timeout`            |
+| `trigger.*`               | `review.trigger.*`        |
+| `reviewer.*`              | `review.reviewer.*`       |
+| `summarizer`              | `review.summarizer`       |
+| `timeout`                 | `review.timeout`          |
 
 > **Note**: The legacy format only supports the review feature. Dedup, triage, implement, and fix require the current `[section]` format.
 
@@ -538,6 +539,7 @@ Content-Type: application/json
 ```
 
 **Response (valid):**
+
 ```json
 {
   "valid": true,
@@ -546,6 +548,7 @@ Content-Type: application/json
 ```
 
 **Response (invalid):**
+
 ```json
 {
   "valid": false,
@@ -564,6 +567,7 @@ When the server encounters a malformed `.opencara.toml` during webhook processin
 3. The default configuration is used (effectively skipping the review if no valid `[review]` section exists).
 
 Specific error messages include:
+
 - `"Invalid TOML syntax"` — file is not valid TOML.
 - `"Configuration must be a TOML document"` — parsed value is not an object.
 - `"Missing required field: version"` — `version` field is absent.
@@ -576,43 +580,43 @@ Specific error messages include:
 
 Complete table of default values used when fields are omitted:
 
-| Field                            | Default Value                                       |
-|----------------------------------|-----------------------------------------------------|
-| `review.prompt`                  | `"Review this pull request for bugs, security issues, and code quality."` |
-| `review.agent_count`             | `1`                                                 |
-| `review.timeout`                 | `"10m"`                                             |
-| `review.preferred_models`        | `[]`                                                |
-| `review.preferred_tools`         | `[]`                                                |
-| `review.model_diversity_grace`   | `"30s"` (30,000ms)                                  |
-| `review.trigger.on`              | `["opened"]`                                        |
-| `review.trigger.comment`         | `"/opencara review"`                                |
-| `review.trigger.skip`            | `["draft"]`                                         |
-| `review.reviewer.whitelist`      | `[]` (all agents allowed)                           |
-| `review.reviewer.blacklist`      | `[]`                                                |
-| `review.summarizer.*`            | `[]` (all lists empty)                              |
-| `dedup.*.enabled`                | `true` (when section present)                       |
-| `dedup.*.prompt`                 | `"Check for duplicate content."`                    |
-| `dedup.*.agent_count`            | `1`                                                 |
-| `dedup.*.timeout`                | `"10m"`                                             |
-| `triage.enabled`                 | `true` (when section present)                       |
-| `triage.prompt`                  | `"Triage this issue."`                              |
-| `triage.default_mode`            | `"comment"`                                         |
-| `triage.auto_label`              | `false`                                             |
-| `triage.agent_count`             | `1`                                                 |
-| `triage.timeout`                 | `"10m"`                                             |
-| `triage.trigger.events`          | `["opened"]`                                        |
-| `triage.trigger.comment`         | `"/opencara triage"`                                |
-| `implement.enabled`              | `true` (when section present)                       |
-| `implement.prompt`               | `"Implement the requested changes."`                |
-| `implement.agent_count`          | `1`                                                 |
-| `implement.timeout`              | `"10m"`                                             |
-| `implement.trigger.comment`      | `"/opencara go"`                                    |
-| `implement.trigger.status`       | `"Ready"`                                           |
-| `fix.enabled`                    | `true` (when section present)                       |
-| `fix.prompt`                     | `"Fix the review comments."`                        |
-| `fix.agent_count`                | `1`                                                 |
-| `fix.timeout`                    | `"10m"`                                             |
-| `fix.trigger.comment`            | `"/opencara fix"`                                   |
+| Field                          | Default Value                                                             |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `review.prompt`                | `"Review this pull request for bugs, security issues, and code quality."` |
+| `review.agent_count`           | `1`                                                                       |
+| `review.timeout`               | `"10m"`                                                                   |
+| `review.preferred_models`      | `[]`                                                                      |
+| `review.preferred_tools`       | `[]`                                                                      |
+| `review.model_diversity_grace` | `"30s"` (30,000ms)                                                        |
+| `review.trigger.on`            | `["opened"]`                                                              |
+| `review.trigger.comment`       | `"/opencara review"`                                                      |
+| `review.trigger.skip`          | `["draft"]`                                                               |
+| `review.reviewer.whitelist`    | `[]` (all agents allowed)                                                 |
+| `review.reviewer.blacklist`    | `[]`                                                                      |
+| `review.summarizer.*`          | `[]` (all lists empty)                                                    |
+| `dedup.*.enabled`              | `true` (when section present)                                             |
+| `dedup.*.prompt`               | `"Check for duplicate content."`                                          |
+| `dedup.*.agent_count`          | `1`                                                                       |
+| `dedup.*.timeout`              | `"10m"`                                                                   |
+| `triage.enabled`               | `true` (when section present)                                             |
+| `triage.prompt`                | `"Triage this issue."`                                                    |
+| `triage.default_mode`          | `"comment"`                                                               |
+| `triage.auto_label`            | `false`                                                                   |
+| `triage.agent_count`           | `1`                                                                       |
+| `triage.timeout`               | `"10m"`                                                                   |
+| `triage.trigger.events`        | `["opened"]`                                                              |
+| `triage.trigger.comment`       | `"/opencara triage"`                                                      |
+| `implement.enabled`            | `true` (when section present)                                             |
+| `implement.prompt`             | `"Implement the requested changes."`                                      |
+| `implement.agent_count`        | `1`                                                                       |
+| `implement.timeout`            | `"10m"`                                                                   |
+| `implement.trigger.comment`    | `"/opencara go"`                                                          |
+| `implement.trigger.status`     | `"Ready"`                                                                 |
+| `fix.enabled`                  | `true` (when section present)                                             |
+| `fix.prompt`                   | `"Fix the review comments."`                                              |
+| `fix.agent_count`              | `1`                                                                       |
+| `fix.timeout`                  | `"10m"`                                                                   |
+| `fix.trigger.comment`          | `"/opencara fix"`                                                         |
 
 ---
 

@@ -120,11 +120,11 @@ packages/
 
 The index is stored as **3 structured comments** on a designated GitHub issue (configured via `index_issue`). Each comment is identified by an HTML marker:
 
-| Comment | Marker | Purpose |
-|---------|--------|---------|
-| **Open Items** | `<!-- opencara-dedup-index:open -->` | Currently open PRs/issues. New entries are appended here. |
-| **Recently Closed** | `<!-- opencara-dedup-index:recent -->` | Items closed within the last 30 days. Entries include a close-date suffix. |
-| **Archived** | `<!-- opencara-dedup-index:archived -->` | Older closed items in compact format (number + title only). Metadata stripped for space. |
+| Comment             | Marker                                   | Purpose                                                                                  |
+| ------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Open Items**      | `<!-- opencara-dedup-index:open -->`     | Currently open PRs/issues. New entries are appended here.                                |
+| **Recently Closed** | `<!-- opencara-dedup-index:recent -->`   | Items closed within the last 30 days. Entries include a close-date suffix.               |
+| **Archived**        | `<!-- opencara-dedup-index:archived -->` | Older closed items in compact format (number + title only). Metadata stripped for space. |
 
 If any of the 3 comments are missing when an update occurs, they are automatically created via `ensureIndexComments()`.
 
@@ -158,11 +158,11 @@ If any of the 3 comments are missing when an update occurs, they are automatical
                 (full format)                (+ close date)                   (compact)
 ```
 
-| Event | Action | AI needed? |
-|-------|--------|------------|
-| New item opened | `appendOpenEntry()` — append to Open Items | Yes (AI generates `index_entry`) |
-| Item closed | `moveToRecentlyClosed()` — move from Open → Recently Closed with `(closed YYYY-MM-DD)` suffix | No |
-| 30-day age-out | `ageOutToArchived()` — move from Recently Closed → Archived (compact format, metadata stripped) | No |
+| Event           | Action                                                                                          | AI needed?                       |
+| --------------- | ----------------------------------------------------------------------------------------------- | -------------------------------- |
+| New item opened | `appendOpenEntry()` — append to Open Items                                                      | Yes (AI generates `index_entry`) |
+| Item closed     | `moveToRecentlyClosed()` — move from Open → Recently Closed with `(closed YYYY-MM-DD)` suffix   | No                               |
+| 30-day age-out  | `ageOutToArchived()` — move from Recently Closed → Archived (compact format, metadata stripped) | No                               |
 
 The age-out runs **lazily** — it is triggered during any index update, not on a timer.
 
@@ -198,11 +198,11 @@ include_closed = true   # Also match against closed issues in the index
 
 interface DedupTargetConfig extends FeatureConfig {
   enabled: boolean;
-  indexIssue?: number;      // GitHub issue number for the index
+  indexIssue?: number; // GitHub issue number for the index
 }
 
 interface DedupIssueTargetConfig extends DedupTargetConfig {
-  includeClosed?: boolean;  // Whether to check closed issues too
+  includeClosed?: boolean; // Whether to check closed issues too
 }
 
 interface DedupConfig {
@@ -223,10 +223,10 @@ interface OpenCaraConfig {
 
 Dedup uses two task roles, defined in `packages/shared/src/types.ts`:
 
-| Role | Feature | Target |
-|------|---------|--------|
-| `pr_dedup` | `dedup_pr` | Pull Requests |
-| `issue_dedup` | `dedup_issue` | Issues |
+| Role          | Feature       | Target        |
+| ------------- | ------------- | ------------- |
+| `pr_dedup`    | `dedup_pr`    | Pull Requests |
+| `issue_dedup` | `dedup_issue` | Issues        |
 
 The `isDedupRole()` helper identifies both:
 
@@ -272,13 +272,13 @@ The AI agent outputs a JSON object matching this schema:
 
 ### Field Reference
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `duplicates` | `DedupMatch[]` | Array of matches found (empty if no duplicates) |
-| `duplicates[].number` | `number` | PR/issue number of the duplicate |
-| `duplicates[].similarity` | `"exact" \| "high" \| "partial"` | Degree of similarity |
-| `duplicates[].description` | `string` | Brief explanation of why it's a duplicate |
-| `index_entry` | `string` | One-line entry to append to the dedup index |
+| Field                      | Type                             | Description                                     |
+| -------------------------- | -------------------------------- | ----------------------------------------------- |
+| `duplicates`               | `DedupMatch[]`                   | Array of matches found (empty if no duplicates) |
+| `duplicates[].number`      | `number`                         | PR/issue number of the duplicate                |
+| `duplicates[].similarity`  | `"exact" \| "high" \| "partial"` | Degree of similarity                            |
+| `duplicates[].description` | `string`                         | Brief explanation of why it's a duplicate       |
+| `index_entry`              | `string`                         | One-line entry to append to the dedup index     |
 
 Server-side validation uses Zod (`packages/server/src/schemas.ts`):
 
@@ -297,11 +297,11 @@ const dedupReportSchema = z.object({
 
 ### Similarity Levels
 
-| Level | Meaning | Example |
-|-------|---------|---------|
-| **exact** | Identical intent or change | Two PRs fixing the same bug in the same way |
-| **high** | Very similar with minor differences | Same bug fix but different approach |
-| **partial** | Overlapping but distinct | Related features with some shared scope |
+| Level       | Meaning                             | Example                                     |
+| ----------- | ----------------------------------- | ------------------------------------------- |
+| **exact**   | Identical intent or change          | Two PRs fixing the same bug in the same way |
+| **high**    | Very similar with minor differences | Same bug fix but different approach         |
+| **partial** | Overlapping but distinct            | Related features with some shared scope     |
 
 ---
 
@@ -388,7 +388,11 @@ When an agent polls for tasks (`packages/server/src/routes/tasks.ts`), the serve
 ```typescript
 if (isDedupRole(task.task_type) && task.index_issue_number) {
   pollTask.index_issue_body = await fetchIndexBody(
-    github, task.owner, task.repo, task.index_issue_number, token,
+    github,
+    task.owner,
+    task.repo,
+    task.index_issue_number,
+    token,
   );
 }
 ```
@@ -443,15 +447,15 @@ When an issue is **edited** (title change), the webhook calls `handleIssueIndexU
 
 ### Retry Logic
 
-| Retry Type | Attempts | Details |
-|------------|----------|---------|
-| **JSON parse failure** | 2 total (1 retry) | If AI output doesn't parse as valid JSON, the AI tool is re-run |
-| **Result submission** | 3 attempts | `withRetry()` wrapper on the POST to `/api/tasks/:id/result` |
-| **Timeout safety margin** | 30 seconds | Subtracted from the configured timeout to ensure the agent has time to submit results |
+| Retry Type                | Attempts          | Details                                                                               |
+| ------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
+| **JSON parse failure**    | 2 total (1 retry) | If AI output doesn't parse as valid JSON, the AI tool is re-run                       |
+| **Result submission**     | 3 attempts        | `withRetry()` wrapper on the POST to `/api/tasks/:id/result`                          |
+| **Timeout safety margin** | 30 seconds        | Subtracted from the configured timeout to ensure the agent has time to submit results |
 
 ```typescript
 const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
-const MAX_PARSE_RETRIES = 1;  // 1 retry = 2 total attempts
+const MAX_PARSE_RETRIES = 1; // 1 retry = 2 total attempts
 ```
 
 ---
@@ -464,13 +468,13 @@ The CLI provides an `opencara dedup init` command for bootstrapping or rebuildin
 opencara dedup init --repo owner/repo [--all] [--dry-run] [--days 30] [--agent claude]
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--repo` | **Required.** Target repository (`owner/repo`) |
-| `--all` | Include all items (not just those with an `index_issue`) |
-| `--dry-run` | Preview changes without writing to GitHub |
-| `--days` | Number of days for "recently closed" window (default: 30) |
-| `--agent` | AI tool to use for generating index entries |
+| Flag        | Description                                               |
+| ----------- | --------------------------------------------------------- |
+| `--repo`    | **Required.** Target repository (`owner/repo`)            |
+| `--all`     | Include all items (not just those with an `index_issue`)  |
+| `--dry-run` | Preview changes without writing to GitHub                 |
+| `--days`    | Number of days for "recently closed" window (default: 30) |
+| `--agent`   | AI tool to use for generating index entries               |
 
 **How it works:**
 
@@ -485,15 +489,15 @@ opencara dedup init --repo owner/repo [--all] [--dry-run] [--days 30] [--agent c
 
 ## Key Source Files
 
-| File | Description |
-|------|-------------|
-| [`packages/shared/src/types.ts`](../../packages/shared/src/types.ts) | `DedupMatch`, `DedupReport`, `TaskRole`, `isDedupRole()` |
-| [`packages/shared/src/review-config.ts`](../../packages/shared/src/review-config.ts) | `DedupConfig`, `DedupTargetConfig`, `DedupIssueTargetConfig` |
-| [`packages/shared/src/api.ts`](../../packages/shared/src/api.ts) | `PollTask.index_issue_body`, `ResultRequest.dedup_report` |
-| [`packages/server/src/dedup-index.ts`](../../packages/server/src/dedup-index.ts) | 3-comment index management: `appendOpenEntry`, `moveToRecentlyClosed`, `ageOutToArchived`, `fetchIndexBody` |
-| [`packages/server/src/schemas.ts`](../../packages/server/src/schemas.ts) | Zod schemas for dedup report validation |
-| [`packages/server/src/routes/webhook.ts`](../../packages/server/src/routes/webhook.ts) | Webhook handler: task creation, close/edit index updates |
-| [`packages/server/src/routes/tasks.ts`](../../packages/server/src/routes/tasks.ts) | Poll route (index body injection), result handler (comment + index update) |
-| [`packages/cli/src/dedup.ts`](../../packages/cli/src/dedup.ts) | `executeDedup()`, `parseDedupReport()`, `executeDedupTask()` |
-| [`packages/cli/src/prompts.ts`](../../packages/cli/src/prompts.ts) | `buildDedupPrompt()`, `buildIndexEntryPrompt()` |
-| [`packages/cli/src/commands/dedup.ts`](../../packages/cli/src/commands/dedup.ts) | `opencara dedup init` CLI command |
+| File                                                                                   | Description                                                                                                 |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`packages/shared/src/types.ts`](../../packages/shared/src/types.ts)                   | `DedupMatch`, `DedupReport`, `TaskRole`, `isDedupRole()`                                                    |
+| [`packages/shared/src/review-config.ts`](../../packages/shared/src/review-config.ts)   | `DedupConfig`, `DedupTargetConfig`, `DedupIssueTargetConfig`                                                |
+| [`packages/shared/src/api.ts`](../../packages/shared/src/api.ts)                       | `PollTask.index_issue_body`, `ResultRequest.dedup_report`                                                   |
+| [`packages/server/src/dedup-index.ts`](../../packages/server/src/dedup-index.ts)       | 3-comment index management: `appendOpenEntry`, `moveToRecentlyClosed`, `ageOutToArchived`, `fetchIndexBody` |
+| [`packages/server/src/schemas.ts`](../../packages/server/src/schemas.ts)               | Zod schemas for dedup report validation                                                                     |
+| [`packages/server/src/routes/webhook.ts`](../../packages/server/src/routes/webhook.ts) | Webhook handler: task creation, close/edit index updates                                                    |
+| [`packages/server/src/routes/tasks.ts`](../../packages/server/src/routes/tasks.ts)     | Poll route (index body injection), result handler (comment + index update)                                  |
+| [`packages/cli/src/dedup.ts`](../../packages/cli/src/dedup.ts)                         | `executeDedup()`, `parseDedupReport()`, `executeDedupTask()`                                                |
+| [`packages/cli/src/prompts.ts`](../../packages/cli/src/prompts.ts)                     | `buildDedupPrompt()`, `buildIndexEntryPrompt()`                                                             |
+| [`packages/cli/src/commands/dedup.ts`](../../packages/cli/src/commands/dedup.ts)       | `opencara dedup init` CLI command                                                                           |

@@ -123,18 +123,18 @@ bob = "comment"
 
 ### Configuration Defaults
 
-| Field               | Default                | Description                              |
-| ------------------- | ---------------------- | ---------------------------------------- |
-| `enabled`           | `true`                 | Active when `[triage]` section is present |
-| `prompt`            | `"Triage this issue."` | Instructions passed to the AI agent      |
-| `default_mode`      | `"comment"`            | Output mode: `comment` or `rewrite`      |
-| `auto_label`        | `false`                | Auto-apply suggested labels              |
-| `agent_count`       | `1`                    | Number of triage agents                  |
-| `timeout`           | `"10m"`                | Task timeout                             |
-| `trigger.events`    | `["opened"]`           | Issue events that auto-trigger           |
-| `trigger.comment`   | `"/opencara triage"`   | Manual trigger comment phrase            |
-| `preferred_models`  | `[]`                   | No model preference                      |
-| `preferred_tools`   | `[]`                   | No tool preference                       |
+| Field              | Default                | Description                               |
+| ------------------ | ---------------------- | ----------------------------------------- |
+| `enabled`          | `true`                 | Active when `[triage]` section is present |
+| `prompt`           | `"Triage this issue."` | Instructions passed to the AI agent       |
+| `default_mode`     | `"comment"`            | Output mode: `comment` or `rewrite`       |
+| `auto_label`       | `false`                | Auto-apply suggested labels               |
+| `agent_count`      | `1`                    | Number of triage agents                   |
+| `timeout`          | `"10m"`                | Task timeout                              |
+| `trigger.events`   | `["opened"]`           | Issue events that auto-trigger            |
+| `trigger.comment`  | `"/opencara triage"`   | Manual trigger comment phrase             |
+| `preferred_models` | `[]`                   | No model preference                       |
+| `preferred_tools`  | `[]`                   | No tool preference                        |
 
 ## Triage Report Schema
 
@@ -155,16 +155,16 @@ The AI agent outputs a JSON object conforming to this schema:
 
 ### Field Definitions
 
-| Field      | Type       | Required | Description                                                    |
-| ---------- | ---------- | -------- | -------------------------------------------------------------- |
-| `category` | `string`   | **Yes**  | Issue type classification                                      |
-| `module`   | `string`   | No       | Most relevant package: `server`, `cli`, or `shared`            |
-| `priority` | `string`   | **Yes**  | Urgency level                                                  |
-| `size`     | `string`   | **Yes**  | Estimated effort to resolve                                    |
-| `labels`   | `string[]` | **Yes**  | Suggested GitHub labels (empty array allowed)                  |
-| `summary`  | `string`   | No       | Rewritten issue title (clear, concise, 1 line)                 |
-| `body`     | `string`   | No       | Rewritten issue body (well-structured, actionable)             |
-| `comment`  | `string`   | **Yes**  | Triage analysis explaining categorization and recommendations  |
+| Field      | Type       | Required | Description                                                   |
+| ---------- | ---------- | -------- | ------------------------------------------------------------- |
+| `category` | `string`   | **Yes**  | Issue type classification                                     |
+| `module`   | `string`   | No       | Most relevant package: `server`, `cli`, or `shared`           |
+| `priority` | `string`   | **Yes**  | Urgency level                                                 |
+| `size`     | `string`   | **Yes**  | Estimated effort to resolve                                   |
+| `labels`   | `string[]` | **Yes**  | Suggested GitHub labels (empty array allowed)                 |
+| `summary`  | `string`   | No       | Rewritten issue title (clear, concise, 1 line)                |
+| `body`     | `string`   | No       | Rewritten issue body (well-structured, actionable)            |
+| `comment`  | `string`   | **Yes**  | Triage analysis explaining categorization and recommendations |
 
 ### Validation Rules
 
@@ -172,33 +172,33 @@ All enum fields are validated strictly. Invalid values cause a parse failure (an
 
 **`category`** — one of:
 
-| Value          | Meaning                                      |
-| -------------- | -------------------------------------------- |
-| `bug`          | Something is broken                          |
-| `feature`      | New functionality                            |
-| `improvement`  | Enhancement to existing functionality        |
-| `question`     | User question or support request             |
-| `docs`         | Documentation update                         |
-| `chore`        | Maintenance, refactoring, CI, dependencies   |
+| Value         | Meaning                                    |
+| ------------- | ------------------------------------------ |
+| `bug`         | Something is broken                        |
+| `feature`     | New functionality                          |
+| `improvement` | Enhancement to existing functionality      |
+| `question`    | User question or support request           |
+| `docs`        | Documentation update                       |
+| `chore`       | Maintenance, refactoring, CI, dependencies |
 
 **`priority`** — one of:
 
-| Value      | Meaning                                |
-| ---------- | -------------------------------------- |
-| `critical` | Service down or data loss              |
-| `high`     | Blocks users                           |
-| `medium`   | Important but not urgent               |
-| `low`      | Nice to have                           |
+| Value      | Meaning                   |
+| ---------- | ------------------------- |
+| `critical` | Service down or data loss |
+| `high`     | Blocks users              |
+| `medium`   | Important but not urgent  |
+| `low`      | Nice to have              |
 
 **`size`** — estimated effort, one of:
 
-| Value | Effort Estimate |
-| ----- | --------------- |
-| `XS`  | < 1 hour        |
-| `S`   | 1–4 hours       |
+| Value | Effort Estimate  |
+| ----- | ---------------- |
+| `XS`  | < 1 hour         |
+| `S`   | 1–4 hours        |
 | `M`   | 4 hours – 2 days |
-| `L`   | 2–5 days        |
-| `XL`  | > 5 days        |
+| `L`   | 2–5 days         |
+| `XL`  | > 5 days         |
 
 ## Output Modes
 
@@ -221,6 +221,7 @@ default_mode = "rewrite"
 ```
 
 When in rewrite mode:
+
 - If `summary` is present → issue title is updated
 - If `body` is present → issue body is replaced
 - If `labels` is non-empty → labels are applied
@@ -283,10 +284,10 @@ Adding the `opencara:triage` label to any issue will create a triage task.
 
 Triage uses dedicated task roles to distinguish from review and other task types:
 
-| Role            | Description                              |
-| --------------- | ---------------------------------------- |
-| `issue_triage`  | Triage task for GitHub issues (primary)  |
-| `pr_triage`     | Triage task for pull requests            |
+| Role           | Description                             |
+| -------------- | --------------------------------------- |
+| `issue_triage` | Triage task for GitHub issues (primary) |
+| `pr_triage`    | Triage task for pull requests           |
 
 The `feature` field on the task group is set to `"triage"`.
 
@@ -387,16 +388,16 @@ The server processes it as follows:
 
 ### Source Files
 
-| File | Description |
-| ---- | ----------- |
-| `packages/shared/src/types.ts` | `TriageReport`, `TriageCategory`, `TriagePriority`, `TriageSize` types |
-| `packages/shared/src/review-config.ts` | `TriageConfig` interface, config parser, defaults |
-| `packages/shared/src/api.ts` | `triage_report` field on `ResultRequest` |
-| `packages/server/src/schemas.ts` | Zod validation schema for triage reports |
-| `packages/server/src/routes/webhook.ts` | Webhook handlers for issue events + comment/label triggers |
-| `packages/server/src/routes/tasks.ts` | `handleTriageSummaryResult()` — applies triage results to GitHub |
-| `packages/cli/src/triage.ts` | `executeTriage()`, `parseTriageOutput()`, `validateTriageReport()` |
-| `packages/cli/src/prompts.ts` | `TRIAGE_SYSTEM_PROMPT`, `buildTriagePrompt()` |
+| File                                    | Description                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| `packages/shared/src/types.ts`          | `TriageReport`, `TriageCategory`, `TriagePriority`, `TriageSize` types |
+| `packages/shared/src/review-config.ts`  | `TriageConfig` interface, config parser, defaults                      |
+| `packages/shared/src/api.ts`            | `triage_report` field on `ResultRequest`                               |
+| `packages/server/src/schemas.ts`        | Zod validation schema for triage reports                               |
+| `packages/server/src/routes/webhook.ts` | Webhook handlers for issue events + comment/label triggers             |
+| `packages/server/src/routes/tasks.ts`   | `handleTriageSummaryResult()` — applies triage results to GitHub       |
+| `packages/cli/src/triage.ts`            | `executeTriage()`, `parseTriageOutput()`, `validateTriageReport()`     |
+| `packages/cli/src/prompts.ts`           | `TRIAGE_SYSTEM_PROMPT`, `buildTriagePrompt()`                          |
 
 ### Related Documentation
 

@@ -81,9 +81,9 @@ The review lifecycle proceeds through these steps:
 
 ## Single vs Multi-Agent Mode
 
-| Setting | Behavior |
-|---------|----------|
-| `agent_count = 1` | Single agent reviews and the result is posted directly (no synthesis step). |
+| Setting                   | Behavior                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| `agent_count = 1`         | Single agent reviews and the result is posted directly (no synthesis step).                     |
 | `agent_count = N` (N > 1) | N-1 agents review in parallel, then 1 agent synthesizes all reviews into a consolidated report. |
 
 The task group always creates `max(1, agent_count - 1)` worker tasks. When `agent_count > 1`, the summary task is created atomically after the last worker completes.
@@ -155,19 +155,19 @@ preferred_models = ["claude-sonnet-4-6"]
 
 Triggers control when a review is initiated:
 
-| Trigger Type | Config Key | Example | Description |
-|---|---|---|---|
-| **Event** | `trigger.events` | `["opened", "synchronize"]` | PR lifecycle events from GitHub webhooks. |
-| **Comment** | `trigger.comment` | `"/opencara review"` | Issue comment text that triggers review on-demand. Also supports `@opencara review`. |
-| **Label** | `trigger.label` | `"opencara:review"` | Adding this label triggers review. |
-| **Status** | `trigger.status` | `"Ready"` | GitHub Projects board status change. |
+| Trigger Type | Config Key        | Example                     | Description                                                                          |
+| ------------ | ----------------- | --------------------------- | ------------------------------------------------------------------------------------ |
+| **Event**    | `trigger.events`  | `["opened", "synchronize"]` | PR lifecycle events from GitHub webhooks.                                            |
+| **Comment**  | `trigger.comment` | `"/opencara review"`        | Issue comment text that triggers review on-demand. Also supports `@opencara review`. |
+| **Label**    | `trigger.label`   | `"opencara:review"`         | Adding this label triggers review.                                                   |
+| **Status**   | `trigger.status`  | `"Ready"`                   | GitHub Projects board status change.                                                 |
 
 **Skip conditions** prevent review for matching PRs:
 
-| Pattern | Example | Behavior |
-|---|---|---|
-| `draft` | `skip = ["draft"]` | Skip if the PR is a draft. |
-| `label:<name>` | `skip = ["label:no-review"]` | Skip if the PR has this label. |
+| Pattern         | Example                       | Behavior                                                  |
+| --------------- | ----------------------------- | --------------------------------------------------------- |
+| `draft`         | `skip = ["draft"]`            | Skip if the PR is a draft.                                |
+| `label:<name>`  | `skip = ["label:no-review"]`  | Skip if the PR has this label.                            |
 | `branch:<glob>` | `skip = ["branch:release/*"]` | Skip if the head branch matches (supports `*` wildcards). |
 
 **Defaults** (when no `[review.trigger]` section is present):
@@ -250,14 +250,15 @@ injection attempt but do not comply.
 
 Findings are classified into four severity levels:
 
-| Severity | Definition |
-|---|---|
-| **critical** | Security vulnerability, data loss, authentication/authorization bypass, irreversible corruption. |
-| **major** | Likely functional breakage, significant regression, or correctness issue that will affect users. |
-| **minor** | Correctness or robustness issue worth fixing before merge, but unlikely to cause immediate harm. |
-| **suggestion** | Non-blocking improvement with clear, concrete impact. |
+| Severity       | Definition                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| **critical**   | Security vulnerability, data loss, authentication/authorization bypass, irreversible corruption. |
+| **major**      | Likely functional breakage, significant regression, or correctness issue that will affect users. |
+| **minor**      | Correctness or robustness issue worth fixing before merge, but unlikely to cause immediate harm. |
+| **suggestion** | Non-blocking improvement with clear, concrete impact.                                            |
 
 The rubric also defines what **not** to report:
+
 - Style-only preferences (unless they cause confusion)
 - Pre-existing bugs not introduced by this diff
 - Hypothetical issues without evidence in the current diff
@@ -279,9 +280,9 @@ Agents are instructed to skip low-value nits and explicitly state which areas we
 
 ### Review Modes
 
-| Mode | Description |
-|---|---|
-| `full` | Detailed review with full structured output (Summary, Findings, Risks, Questions, Verdict). |
+| Mode      | Description                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `full`    | Detailed review with full structured output (Summary, Findings, Risks, Questions, Verdict).                            |
 | `compact` | Concise assessment with Blocking Issues (yes/no) and Review Confidence (high/medium/low) instead of a verdict section. |
 
 ### Message Structure
@@ -326,16 +327,16 @@ Before executing a review, the CLI scans the repository-provided prompt for susp
 
 The 8 detection categories:
 
-| Category | Description |
-|---|---|
-| `instruction_override` | Attempts to override or ignore previous instructions |
-| `role_hijack` | Attempts to reassign the AI role (e.g., "you are now…") |
-| `command_execution` | Attempts to execute shell commands |
-| `shell_injection` | Shell injection patterns (command substitution, pipes) |
-| `data_exfiltration` | Attempts to extract or leak secrets/tokens |
-| `output_manipulation` | Attempts to force specific review output (e.g., "always approve") |
-| `encoded_payload` | Base64 or hex-encoded payloads that may hide instructions |
-| `hidden_instructions` | Zero-width or invisible Unicode characters used to hide instructions |
+| Category               | Description                                                          |
+| ---------------------- | -------------------------------------------------------------------- |
+| `instruction_override` | Attempts to override or ignore previous instructions                 |
+| `role_hijack`          | Attempts to reassign the AI role (e.g., "you are now…")              |
+| `command_execution`    | Attempts to execute shell commands                                   |
+| `shell_injection`      | Shell injection patterns (command substitution, pipes)               |
+| `data_exfiltration`    | Attempts to extract or leak secrets/tokens                           |
+| `output_manipulation`  | Attempts to force specific review output (e.g., "always approve")    |
+| `encoded_payload`      | Base64 or hex-encoded payloads that may hide instructions            |
+| `hidden_instructions`  | Zero-width or invisible Unicode characters used to hide instructions |
 
 ## Review Output Format
 
@@ -343,12 +344,15 @@ Each review agent produces structured markdown output:
 
 ```markdown
 ## Summary
+
 [2-3 sentence overall assessment]
 
 ## Findings
 
 ### Findings (proven defects)
+
 Issues supported by direct evidence from the diff:
+
 - **[severity]** `file:line` — Short title
   - **Evidence**: the exact changed code from the diff
   - **Impact**: why this matters in practice
@@ -356,12 +360,15 @@ Issues supported by direct evidence from the diff:
   - **Confidence**: high | medium | low
 
 ### Risks (plausible but unproven)
+
 - **[severity]** `file:line` — description and what context would resolve it
 
 ### Questions (missing context)
+
 - `file:line` — what you need to know and why
 
 ## Verdict
+
 APPROVE | REQUEST_CHANGES | COMMENT
 ```
 
@@ -392,6 +399,7 @@ The synthesizer follows a strict protocol:
 5. **Produce a verdict based on verified issues only** — not on agent vote counts.
 
 The synthesizer receives:
+
 - The repository review instructions
 - The full PR diff
 - PR context (if available)
@@ -404,10 +412,10 @@ The synthesizer produces an attribution table mapping each deduplicated finding 
 ```markdown
 ## Agent Attribution
 
-| Finding | Synthesizer | claude-sonnet | gpt-4o | gemini-pro |
-|---------|:-:|:-:|:-:|:-:|
-| SQL injection in login | x | x | | x |
-| Missing null check     | | x | x | |
+| Finding                | Synthesizer | claude-sonnet | gpt-4o | gemini-pro |
+| ---------------------- | :---------: | :-----------: | :----: | :--------: |
+| SQL injection in login |      x      |       x       |        |     x      |
+| Missing null check     |             |       x       |   x    |            |
 ```
 
 ### Flagged Reviews
@@ -423,6 +431,7 @@ Flagged reviews are listed in a dedicated section:
 
 ```markdown
 ## Flagged Reviews
+
 - **agent-abc**: Generic text not referencing any actual code changes
 ```
 
@@ -484,22 +493,23 @@ The transition from "all workers complete" to "summary task created" is performe
 
 ### Task Roles
 
-| Role | Description |
-|---|---|
-| `review` | Individual reviewer slot. Assigned to worker tasks. |
+| Role      | Description                                                                               |
+| --------- | ----------------------------------------------------------------------------------------- |
+| `review`  | Individual reviewer slot. Assigned to worker tasks.                                       |
 | `summary` | Synthesizer slot. Created after all workers complete. Only exists when `agent_count > 1`. |
 
 ## Timeout & Partial Results
 
 Review tasks have a configurable timeout (1m–30m, default 10m).
 
-| Scenario | Behavior |
-|---|---|
-| **All reviews complete** | Normal flow — summary (or direct post for single-agent). |
+| Scenario                         | Behavior                                                                                                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **All reviews complete**         | Normal flow — summary (or direct post for single-agent).                                                                                                       |
 | **Timeout with partial reviews** | Post collected reviews as individual sections in a single timeout comment, with a notice: _"Review timed out after N minutes. M partial review(s) collected."_ |
-| **Timeout with no reviews** | Post a timeout-only comment: _"Review timed out after N minutes."_ |
+| **Timeout with no reviews**      | Post a timeout-only comment: _"Review timed out after N minutes."_                                                                                             |
 
 The timeout comment format includes:
+
 - A header with the timeout notice
 - Each partial review as a subsection: `### Review 1 — ✅ approve (model/tool)`
 - The review text for each completed agent
@@ -514,20 +524,20 @@ The timeout comment format includes:
 
 All content is sanitized before inclusion in prompts or submission to the server. The sanitizer strips:
 
-| Pattern | Example |
-|---|---|
-| GitHub tokens | `ghp_*`, `gho_*`, `ghs_*`, `ghr_*`, `github_pat_*` |
-| Embedded tokens in URLs | `x-access-token:TOKEN@github.com` |
-| Authorization headers | `Authorization: Bearer TOKEN` |
+| Pattern                 | Example                                            |
+| ----------------------- | -------------------------------------------------- |
+| GitHub tokens           | `ghp_*`, `gho_*`, `ghs_*`, `ghr_*`, `github_pat_*` |
+| Embedded tokens in URLs | `x-access-token:TOKEN@github.com`                  |
+| Authorization headers   | `Authorization: Bearer TOKEN`                      |
 
 ### Review Text Validation
 
 Submitted review text is validated server-side:
 
-| Constraint | Value |
-|---|---|
+| Constraint     | Value                          |
+| -------------- | ------------------------------ |
 | Minimum length | 10 characters (after trimming) |
-| Maximum length | 100,000 characters (100KB) |
+| Maximum length | 100,000 characters (100KB)     |
 
 ### Abuse Tracking
 
@@ -539,29 +549,29 @@ The server tracks agent rejections for abuse prevention:
 
 ## REST API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/webhook/github` | Receive GitHub webhook events. |
-| `POST` | `/api/tasks/poll` | Agent polls for available review/summary tasks. |
-| `POST` | `/api/tasks/:id/claim` | Agent claims a task (atomic CAS). |
-| `POST` | `/api/tasks/:id/result` | Agent submits review result. |
-| `POST` | `/api/tasks/:id/reject` | Agent rejects a claimed task. |
-| `POST` | `/api/tasks/:id/error` | Agent reports an error on a claimed task. |
+| Method | Path                    | Description                                     |
+| ------ | ----------------------- | ----------------------------------------------- |
+| `POST` | `/webhook/github`       | Receive GitHub webhook events.                  |
+| `POST` | `/api/tasks/poll`       | Agent polls for available review/summary tasks. |
+| `POST` | `/api/tasks/:id/claim`  | Agent claims a task (atomic CAS).               |
+| `POST` | `/api/tasks/:id/result` | Agent submits review result.                    |
+| `POST` | `/api/tasks/:id/reject` | Agent rejects a claimed task.                   |
+| `POST` | `/api/tasks/:id/error`  | Agent reports an error on a claimed task.       |
 
 ## Key Source Files
 
-| File | Description |
-|---|---|
-| `packages/cli/src/prompts.ts` | All prompt templates and builder functions (system, user, summary). |
-| `packages/cli/src/prompt-guard.ts` | Prompt injection detection (8 suspicious pattern categories). |
-| `packages/cli/src/review.ts` | Review execution, verdict extraction, diff size validation. |
-| `packages/cli/src/summary.ts` | Summary execution, flagged review extraction, input size validation. |
-| `packages/cli/src/pr-context.ts` | PR metadata/comment fetching and untrusted content formatting. |
-| `packages/cli/src/sanitize.ts` | Token sanitization for all CLI output. |
-| `packages/shared/src/review-config.ts` | `.opencara.toml` parsing (triggers, access control, feature config). |
-| `packages/server/src/routes/webhook.ts` | Webhook handler and task group creation. |
-| `packages/server/src/routes/tasks.ts` | Task poll, claim, result, reject, error endpoints. |
-| `packages/server/src/task-lifecycle.ts` | Task state machine and transition predicates. |
-| `packages/server/src/eligibility.ts` | Skip conditions and agent eligibility (whitelist/blacklist). |
-| `packages/server/src/summary-evaluator.ts` | Summary quality gate (heuristic evaluation). |
-| `packages/server/src/review-formatter.ts` | GitHub comment formatting (normal and timeout). |
+| File                                       | Description                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------- |
+| `packages/cli/src/prompts.ts`              | All prompt templates and builder functions (system, user, summary).  |
+| `packages/cli/src/prompt-guard.ts`         | Prompt injection detection (8 suspicious pattern categories).        |
+| `packages/cli/src/review.ts`               | Review execution, verdict extraction, diff size validation.          |
+| `packages/cli/src/summary.ts`              | Summary execution, flagged review extraction, input size validation. |
+| `packages/cli/src/pr-context.ts`           | PR metadata/comment fetching and untrusted content formatting.       |
+| `packages/cli/src/sanitize.ts`             | Token sanitization for all CLI output.                               |
+| `packages/shared/src/review-config.ts`     | `.opencara.toml` parsing (triggers, access control, feature config). |
+| `packages/server/src/routes/webhook.ts`    | Webhook handler and task group creation.                             |
+| `packages/server/src/routes/tasks.ts`      | Task poll, claim, result, reject, error endpoints.                   |
+| `packages/server/src/task-lifecycle.ts`    | Task state machine and transition predicates.                        |
+| `packages/server/src/eligibility.ts`       | Skip conditions and agent eligibility (whitelist/blacklist).         |
+| `packages/server/src/summary-evaluator.ts` | Summary quality gate (heuristic evaluation).                         |
+| `packages/server/src/review-formatter.ts`  | GitHub comment formatting (normal and timeout).                      |
