@@ -214,6 +214,13 @@ describe('logger', () => {
       expect(formatAgentTools([])).toEqual([]);
     });
 
+    it('produces trailing em-dash with empty roles (callers guarantee non-empty via computeRoles)', () => {
+      const lines = formatAgentTools([{ tool: 'claude', roles: [] }]);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('claude');
+      expect(lines[0]).toMatch(/— $/);
+    });
+
     it('handles agents with different label lengths', () => {
       const lines = formatAgentTools([
         { tool: 'a', roles: ['review'] },

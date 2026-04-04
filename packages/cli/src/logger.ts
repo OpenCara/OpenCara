@@ -129,7 +129,7 @@ export function formatAgentTools(
 ): string[] {
   if (agents.length === 0) return [];
 
-  // Use tool name for display, with agent name as fallback label
+  // Use agent name when provided, falling back to tool name
   const entries = agents.map((a) => ({
     label: a.name ?? a.tool,
     roles: a.roles.join(', '),
