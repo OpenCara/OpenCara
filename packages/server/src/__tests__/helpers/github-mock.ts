@@ -148,7 +148,10 @@ export class MockGitHubService implements GitHubService {
     event: PrReviewEvent,
     token: string,
   ): Promise<string> {
-    this.calls.push({ method: 'postPrReview', args: { owner, repo, prNumber, body, event, token } });
+    this.calls.push({
+      method: 'postPrReview',
+      args: { owner, repo, prNumber, body, event, token },
+    });
     return `https://github.com/${owner}/${repo}/pull/${prNumber}#review-mock`;
   }
 

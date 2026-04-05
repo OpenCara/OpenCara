@@ -370,8 +370,7 @@ async function handleReviewSummaryResult(
   const body = wrapReviewComment(trimmed, contributors.length > 0 ? contributors : undefined);
 
   // Map verdict to GitHub review event; default to COMMENT if missing
-  const event: PrReviewEvent =
-    (summaryData.verdict?.toUpperCase() as PrReviewEvent) || 'COMMENT';
+  const event: PrReviewEvent = (summaryData.verdict?.toUpperCase() as PrReviewEvent) || 'COMMENT';
   await github.postPrReview(task.owner, task.repo, task.pr_number, body, event, token);
 
   logger.info('Review posted to GitHub', {
