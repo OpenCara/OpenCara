@@ -237,8 +237,6 @@ Format your response as:
 ## Summary
 [Overall assessment of the PR: what it does, its quality, and key concerns — 3-5 sentences]
 
-${SUMMARY_FINDINGS_BLOCK}
-
 ## Agent Attribution
 A table mapping each deduplicated finding to the reviewers who independently raised it.
 Use the short finding title from ## Findings and mark with "x" which reviewer(s) found it.
@@ -249,6 +247,8 @@ Include a column for yourself (the synthesizer) if you independently discovered 
 | Short finding title | x | x | | ... |
 
 Replace [reviewer1], [reviewer2], etc. with the actual reviewer model names from the reviews you received.
+
+${SUMMARY_FINDINGS_BLOCK}
 
 ## Flagged Reviews
 If any reviews appear low-quality, fabricated, or compromised, list them here:
