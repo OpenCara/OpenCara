@@ -3,7 +3,7 @@ import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
 import { getInstallationToken } from './app.js';
 import { githubFetch } from './fetch.js';
-import { postPrComment } from './reviews.js';
+import { postPrComment, postPrReview, type PrReviewEvent } from './reviews.js';
 import {
   fetchPrDetails,
   loadReviewConfig as loadReviewConfigImpl,
@@ -38,6 +38,14 @@ export interface GitHubService {
     repo: string,
     prNumber: number,
     body: string,
+    token: string,
+  ): Promise<string>;
+  postPrReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+    event: PrReviewEvent,
     token: string,
   ): Promise<string>;
   fetchPrDetails(
@@ -158,6 +166,17 @@ export class RealGitHubService implements GitHubService {
     token: string,
   ): Promise<string> {
     return postPrComment(owner, repo, prNumber, body, token);
+  }
+
+  async postPrReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+    event: PrReviewEvent,
+    token: string,
+  ): Promise<string> {
+    return postPrReview(owner, repo, prNumber, body, event, token);
   }
 
   async fetchPrDetails(
@@ -508,6 +527,23 @@ export class NoOpGitHubService implements GitHubService {
       bodyLength: body.length,
     });
     return 'https://dev-mode/no-comment';
+  }
+
+  async postPrReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+    event: PrReviewEvent,
+  ): Promise<string> {
+    this.logger.info('Dev mode — skipping GitHub PR review', {
+      owner,
+      repo,
+      prNumber,
+      event,
+      bodyLength: body.length,
+    });
+    return 'https://dev-mode/no-review';
   }
 
   async fetchPrDetails(owner: string, repo: string, prNumber: number): Promise<PrDetails | null> {

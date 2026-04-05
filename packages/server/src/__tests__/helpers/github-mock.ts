@@ -8,6 +8,7 @@ import { vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
 import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
 import type { GitHubService, PrDetails, IssueDetails } from '../../github/service.js';
+import type { PrReviewEvent } from '../../github/reviews.js';
 
 export interface GitHubCall {
   url: string;
@@ -137,6 +138,21 @@ export class MockGitHubService implements GitHubService {
   ): Promise<string> {
     this.calls.push({ method: 'postPrComment', args: { owner, repo, prNumber, body, token } });
     return `https://github.com/${owner}/${repo}/pull/${prNumber}#comment-mock`;
+  }
+
+  async postPrReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+    event: PrReviewEvent,
+    token: string,
+  ): Promise<string> {
+    this.calls.push({
+      method: 'postPrReview',
+      args: { owner, repo, prNumber, body, event, token },
+    });
+    return `https://github.com/${owner}/${repo}/pull/${prNumber}#review-mock`;
   }
 
   async fetchPrDetails(owner: string, repo: string, prNumber: number): Promise<PrDetails | null> {

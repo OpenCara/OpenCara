@@ -204,11 +204,12 @@ describe('Integration: full E2E flows', () => {
       const finalTask = await store.getTask('task-single');
       expect(finalTask).toBeNull();
 
-      // 6. Verify GitHub API was called to post comment
-      const commentPost = githubCalls.find((c) => c.method === 'postPrComment');
+      // 6. Verify GitHub API was called to post review with event
+      const commentPost = githubCalls.find((c) => c.method === 'postPrReview');
       expect(commentPost).toBeDefined();
-      // Body should contain the formatted review text with verdict
+      // Body should contain the formatted review text
       expect(commentPost!.args.body).toBeDefined();
+      expect(commentPost!.args.event).toBe('APPROVE');
     });
 
     it('second agent sees nothing after task is claimed', async () => {
@@ -632,8 +633,8 @@ describe('Integration: full E2E flows', () => {
       expect(winners).toHaveLength(1);
       const winner = winners[0]!;
 
-      // Count GitHub comment calls before
-      const commentsBefore = githubCalls.filter((c) => c.method === 'postPrComment').length;
+      // Count GitHub review calls before
+      const reviewsBefore = githubCalls.filter((c) => c.method === 'postPrReview').length;
 
       // Winner submits result — should post to GitHub
       await submitResult(
@@ -644,9 +645,9 @@ describe('Integration: full E2E flows', () => {
         'approve',
       );
 
-      // Only 1 comment should have been posted
-      const commentsAfter = githubCalls.filter((c) => c.method === 'postPrComment').length;
-      expect(commentsAfter - commentsBefore).toBe(1);
+      // Only 1 review should have been posted
+      const reviewsAfter = githubCalls.filter((c) => c.method === 'postPrReview').length;
+      expect(reviewsAfter - reviewsBefore).toBe(1);
     });
   });
 

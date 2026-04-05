@@ -135,8 +135,8 @@ describe('E2E Scenarios', () => {
       const finalTask = await store.getTask(taskId);
       expect(finalTask).toBeNull();
 
-      // GitHub comment was posted
-      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
+      // GitHub review was posted with event
+      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
       expect(commentPost).toBeDefined();
 
       // No more tasks for polling
@@ -436,8 +436,8 @@ describe('E2E Scenarios', () => {
       const synthA = agent('synth-a');
       const synthB = agent('synth-b');
 
-      // Count GitHub comment calls before
-      const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
+      // Count GitHub review calls before
+      const commentsBefore = github.calls.filter((c) => c.method === 'postPrReview').length;
 
       // Agent A submits summary — is summary_agent_id, should post
       await synthA.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
@@ -445,8 +445,8 @@ describe('E2E Scenarios', () => {
       // Agent B submits summary — not summary_agent_id, result accepted but no GitHub post
       await synthB.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
-      // Only 1 new comment should have been posted (not 2)
-      const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
+      // Only 1 new review should have been posted (not 2)
+      const commentsAfter = github.calls.filter((c) => c.method === 'postPrReview').length;
       const newComments = commentsAfter - commentsBefore;
       expect(newComments).toBe(1);
     });
@@ -502,14 +502,14 @@ describe('E2E Scenarios', () => {
       expect(winnerIdx).toBeGreaterThanOrEqual(0);
       const winner = claimAgents[winnerIdx]!;
 
-      // Count GitHub comment calls before
-      const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
+      // Count GitHub review calls before
+      const commentsBefore = github.calls.filter((c) => c.method === 'postPrReview').length;
 
       // Winner submits result
       await winner.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
-      // Exactly 1 GitHub comment posted
-      const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
+      // Exactly 1 GitHub review posted
+      const commentsAfter = github.calls.filter((c) => c.method === 'postPrReview').length;
       expect(commentsAfter - commentsBefore).toBe(1);
 
       // Task should be deleted after successful post
@@ -736,10 +736,11 @@ describe('E2E Scenarios', () => {
       );
       expect(result.status).toBe(200);
 
-      // GitHub comment should have been posted (not a review)
-      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
+      // GitHub review should have been posted with event
+      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
       expect(commentPost).toBeDefined();
-      // Verify comment body contains the summary text
+      expect(commentPost!.args.event).toBe('APPROVE');
+      // Verify review body contains the summary text
       expect(commentPost!.args.body as string).toContain('important changes');
     });
 
@@ -759,9 +760,10 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
 
       const commentPost = github.calls.find(
-        (c) => c.method === 'postPrComment' && c.args.prNumber === 2,
+        (c) => c.method === 'postPrReview' && c.args.prNumber === 2,
       );
       expect(commentPost).toBeDefined();
+      expect(commentPost!.args.event).toBe('REQUEST_CHANGES');
       expect(commentPost!.args.body as string).toContain('important changes');
     });
   });
@@ -930,8 +932,8 @@ describe('E2E Scenarios', () => {
       const finalTask = await store.getTask(taskId);
       expect(finalTask).toBeNull();
 
-      // GitHub comment was posted with the correct review text
-      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
+      // GitHub review was posted with the correct review text
+      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
       expect(commentBody).toContain('important changes');
@@ -950,7 +952,7 @@ describe('E2E Scenarios', () => {
 
       // Server should wrap with exact header and footer structure
       // OAuth provides verified identity, so contributor attribution is included
-      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
+      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
       const expected = [

@@ -449,6 +449,9 @@ describe('webhook.ts edge cases', () => {
       async postPrComment() {
         return '';
       },
+      async postPrReview() {
+        return '';
+      },
       async fetchPrDetails() {
         return null;
       },
@@ -486,6 +489,9 @@ describe('webhook.ts edge cases', () => {
         return 'ghs_test';
       },
       async postPrComment() {
+        return '';
+      },
+      async postPrReview() {
         return '';
       },
       async fetchPrDetails() {
@@ -529,6 +535,9 @@ describe('webhook.ts edge cases', () => {
         return 'ghs_test';
       },
       async postPrComment() {
+        return '';
+      },
+      async postPrReview() {
         return '';
       },
       async fetchPrDetails() {
@@ -611,6 +620,9 @@ describe('webhook.ts edge cases', () => {
       async postPrComment() {
         return '';
       },
+      async postPrReview() {
+        return '';
+      },
       async fetchPrDetails() {
         return null;
       },
@@ -643,6 +655,9 @@ describe('webhook.ts edge cases', () => {
         return 'ghs_test';
       },
       async postPrComment() {
+        return '';
+      },
+      async postPrReview() {
         return '';
       },
       async fetchPrDetails() {

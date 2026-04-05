@@ -274,10 +274,11 @@ describe('Summary Quality Gate', () => {
     const remainingTasks = await store.getTasksByGroup(groupId);
     expect(remainingTasks).toHaveLength(0);
 
-    // GitHub should have received the review
-    const comments = github.calls.filter((c) => c.method === 'postPrComment');
-    expect(comments.length).toBe(1);
-    expect(comments[0].args.body).toContain('OpenCara Review');
+    // GitHub should have received the review with event
+    const reviews = github.calls.filter((c) => c.method === 'postPrReview');
+    expect(reviews.length).toBe(1);
+    expect(reviews[0].args.body).toContain('OpenCara Review');
+    expect(reviews[0].args.event).toBe('REQUEST_CHANGES');
   });
 
   // ── Single-reviewer task (review_count=1, skip overlap check) ──
