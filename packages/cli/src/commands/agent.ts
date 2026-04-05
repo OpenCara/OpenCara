@@ -1025,7 +1025,7 @@ async function executeReviewTask(
     const fullPrompt = routerRelay.buildReviewPrompt({
       owner,
       repo,
-      reviewMode: 'full',
+      reviewMode: 'compact',
       prompt,
       diffContent,
       contextBlock,
@@ -1058,7 +1058,7 @@ async function executeReviewTask(
         repo,
         prNumber,
         timeout: timeoutSeconds,
-        reviewMode: 'full',
+        reviewMode: 'compact',
         contextBlock,
       },
       reviewDeps,
