@@ -75,6 +75,10 @@ class FailableGitHubService implements GitHubService {
     return 'https://github.com/test/repo/pull/1#comment-mock';
   }
 
+  async postPrReview(): Promise<string> {
+    return 'https://github.com/test/repo/pull/1#review-mock';
+  }
+
   async fetchPrDetails(
     _owner: string,
     _repo: string,
