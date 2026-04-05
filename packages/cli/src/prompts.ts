@@ -62,24 +62,51 @@ When reviewing large diffs, prioritize in this order:
 
 Skip low-value nits unless they indicate a deeper issue. If you cannot fully review all areas due to diff size, explicitly state which areas were not reviewed.`;
 
-export const FINDINGS_FORMAT_BLOCK = `## Findings
-Classify each finding into one of three categories:
+// Sub-blocks used to compose FINDINGS_FORMAT_BLOCK and SUMMARY_FINDINGS_BLOCK.
+// Kept as named constants so the summary prompt can swap the proven-defects format
+// without fragile string replacement.
 
-### Findings (proven defects)
+const FINDINGS_INTRO = `## Findings
+Classify each finding into one of three categories:`;
+
+const PROVEN_DEFECTS_BLOCK = `### Findings (proven defects)
 Issues supported by direct evidence from the diff. Each finding MUST include:
 - **[severity]** \`file:line\` — Short title
   - **Evidence**: the exact changed code from the diff
   - **Impact**: why this matters in practice
   - **Recommendation**: smallest reasonable fix
-  - **Confidence**: high | medium | low
+  - **Confidence**: high | medium | low`;
 
-### Risks (plausible but unproven)
+const PROVEN_DEFECTS_SUMMARY_BLOCK = `### Findings (proven defects)
+Issues verified against the diff. Each finding MUST include:
+
+#### [severity] \`file:line\` — Short title
+- **Evidence**: the exact changed code from the diff
+- **Impact**: why this matters in practice
+- **Recommendation**: smallest reasonable fix
+- **Confidence**: high | medium | low`;
+
+const RISKS_QUESTIONS_BLOCK = `### Risks (plausible but unproven)
 - **[severity]** \`file:line\` — description and what additional context would resolve it
 
 ### Questions (missing context)
 - \`file:line\` — what you need to know and why
 
 If no issues in a category, write "None."`;
+
+/** Findings format for individual review agents (full & compact modes). */
+export const FINDINGS_FORMAT_BLOCK = `${FINDINGS_INTRO}
+
+${PROVEN_DEFECTS_BLOCK}
+
+${RISKS_QUESTIONS_BLOCK}`;
+
+/** Findings format for the synthesizer — uses #### headings for proven defects. */
+export const SUMMARY_FINDINGS_BLOCK = `${FINDINGS_INTRO}
+
+${PROVEN_DEFECTS_SUMMARY_BLOCK}
+
+${RISKS_QUESTIONS_BLOCK}`;
 
 export const VERDICT_BLOCK = `## Verdict
 APPROVE | REQUEST_CHANGES | COMMENT`;
@@ -178,25 +205,6 @@ export function buildUserMessage(
  * Called by: summary.ts → executeSummary(), router.ts → handleSummaryRequest().
  */
 export function buildSummarySystemPrompt(owner: string, repo: string, reviewCount: number): string {
-  // Override proven defects section to use #### headings for the synthesizer
-  const summaryFindings = FINDINGS_FORMAT_BLOCK.replace(
-    `### Findings (proven defects)
-Issues supported by direct evidence from the diff. Each finding MUST include:
-- **[severity]** \`file:line\` — Short title
-  - **Evidence**: the exact changed code from the diff
-  - **Impact**: why this matters in practice
-  - **Recommendation**: smallest reasonable fix
-  - **Confidence**: high | medium | low`,
-    `### Findings (proven defects)
-Issues verified against the diff. Each finding MUST include:
-
-#### [severity] \`file:line\` — Short title
-- **Evidence**: the exact changed code from the diff
-- **Impact**: why this matters in practice
-- **Recommendation**: smallest reasonable fix
-- **Confidence**: high | medium | low`,
-  );
-
   return `You are a senior code reviewer and adversarial verifier for the ${owner}/${repo} repository.
 
 You will receive a pull request diff and ${reviewCount} review${reviewCount !== 1 ? 's' : ''} from other agents.
@@ -229,7 +237,7 @@ Format your response as:
 ## Summary
 [Overall assessment of the PR: what it does, its quality, and key concerns — 3-5 sentences]
 
-${summaryFindings}
+${SUMMARY_FINDINGS_BLOCK}
 
 ## Agent Attribution
 A table mapping each deduplicated finding to the reviewers who independently raised it.
