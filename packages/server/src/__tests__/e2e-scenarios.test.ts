@@ -136,7 +136,7 @@ describe('E2E Scenarios', () => {
       expect(finalTask).toBeNull();
 
       // GitHub review was posted with event
-      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
 
       // No more tasks for polling
@@ -437,7 +437,7 @@ describe('E2E Scenarios', () => {
       const synthB = agent('synth-b');
 
       // Count GitHub review calls before
-      const commentsBefore = github.calls.filter((c) => c.method === 'postPrReview').length;
+      const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
 
       // Agent A submits summary — is summary_agent_id, should post
       await synthA.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
@@ -446,7 +446,7 @@ describe('E2E Scenarios', () => {
       await synthB.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Only 1 new review should have been posted (not 2)
-      const commentsAfter = github.calls.filter((c) => c.method === 'postPrReview').length;
+      const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
       const newComments = commentsAfter - commentsBefore;
       expect(newComments).toBe(1);
     });
@@ -503,13 +503,13 @@ describe('E2E Scenarios', () => {
       const winner = claimAgents[winnerIdx]!;
 
       // Count GitHub review calls before
-      const commentsBefore = github.calls.filter((c) => c.method === 'postPrReview').length;
+      const commentsBefore = github.calls.filter((c) => c.method === 'postPrComment').length;
 
       // Winner submits result
       await winner.submitResult(taskId, 'summary', VALID_SUMMARY_TEXT, 'approve');
 
       // Exactly 1 GitHub review posted
-      const commentsAfter = github.calls.filter((c) => c.method === 'postPrReview').length;
+      const commentsAfter = github.calls.filter((c) => c.method === 'postPrComment').length;
       expect(commentsAfter - commentsBefore).toBe(1);
 
       // Task should be deleted after successful post
@@ -736,10 +736,9 @@ describe('E2E Scenarios', () => {
       );
       expect(result.status).toBe(200);
 
-      // GitHub review should have been posted with event
-      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
+      // GitHub comment should have been posted
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
-      expect(commentPost!.args.event).toBe('APPROVE');
       // Verify review body contains the summary text
       expect(commentPost!.args.body as string).toContain('important changes');
     });
@@ -760,10 +759,9 @@ describe('E2E Scenarios', () => {
       expect(result.status).toBe(200);
 
       const commentPost = github.calls.find(
-        (c) => c.method === 'postPrReview' && c.args.prNumber === 2,
+        (c) => c.method === 'postPrComment' && c.args.prNumber === 2,
       );
       expect(commentPost).toBeDefined();
-      expect(commentPost!.args.event).toBe('REQUEST_CHANGES');
       expect(commentPost!.args.body as string).toContain('important changes');
     });
   });
@@ -933,7 +931,7 @@ describe('E2E Scenarios', () => {
       expect(finalTask).toBeNull();
 
       // GitHub review was posted with the correct review text
-      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
       expect(commentBody).toContain('important changes');
@@ -952,7 +950,7 @@ describe('E2E Scenarios', () => {
 
       // Server should wrap with exact header and footer structure
       // OAuth provides verified identity, so contributor attribution is included
-      const commentPost = github.calls.find((c) => c.method === 'postPrReview');
+      const commentPost = github.calls.find((c) => c.method === 'postPrComment');
       expect(commentPost).toBeDefined();
       const commentBody = commentPost!.args.body as string;
       const expected = [

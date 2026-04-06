@@ -71,12 +71,12 @@ class FailableGitHubService implements GitHubService {
     _prNumber: number,
     _body: string,
     _token: string,
-  ): Promise<string> {
-    return 'https://github.com/test/repo/pull/1#comment-mock';
+  ): Promise<{ html_url: string; comment_id: number }> {
+    return { html_url: 'https://github.com/test/repo/pull/1#comment-mock', comment_id: 12345 };
   }
 
-  async postPrReview(): Promise<string> {
-    return 'https://github.com/test/repo/pull/1#review-mock';
+  async getCommentReactions(): Promise<Array<{ user_id: number; content: string }>> {
+    return [];
   }
 
   async fetchPrDetails(

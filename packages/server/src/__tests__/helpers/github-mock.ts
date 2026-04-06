@@ -8,7 +8,7 @@ import { vi } from 'vitest';
 import { DEFAULT_REVIEW_CONFIG, DEFAULT_OPENCARA_CONFIG } from '@opencara/shared';
 import type { ReviewConfig, OpenCaraConfig } from '@opencara/shared';
 import type { GitHubService, PrDetails, IssueDetails } from '../../github/service.js';
-import type { PrReviewEvent } from '../../github/reviews.js';
+import type { PostedCommentResult, Reaction } from '../../github/reviews.js';
 
 export interface GitHubCall {
   url: string;
@@ -71,7 +71,10 @@ export function createGitHubMock(): GitHubMock {
       // Post PR comment (issue comment)
       if (url.includes('/issues/') && url.includes('/comments') && method === 'POST') {
         return new Response(
-          JSON.stringify({ html_url: 'https://github.com/test/repo/pull/1#comment-456' }),
+          JSON.stringify({
+            html_url: 'https://github.com/test/repo/pull/1#comment-456',
+            id: 456,
+          }),
           { status: 200 },
         );
       }
@@ -135,24 +138,25 @@ export class MockGitHubService implements GitHubService {
     prNumber: number,
     body: string,
     token: string,
-  ): Promise<string> {
+  ): Promise<PostedCommentResult> {
     this.calls.push({ method: 'postPrComment', args: { owner, repo, prNumber, body, token } });
-    return `https://github.com/${owner}/${repo}/pull/${prNumber}#comment-mock`;
+    return {
+      html_url: `https://github.com/${owner}/${repo}/pull/${prNumber}#comment-mock`,
+      comment_id: 12345,
+    };
   }
 
-  async postPrReview(
+  async getCommentReactions(
     owner: string,
     repo: string,
-    prNumber: number,
-    body: string,
-    event: PrReviewEvent,
+    commentId: number,
     token: string,
-  ): Promise<string> {
+  ): Promise<Reaction[]> {
     this.calls.push({
-      method: 'postPrReview',
-      args: { owner, repo, prNumber, body, event, token },
+      method: 'getCommentReactions',
+      args: { owner, repo, commentId, token },
     });
-    return `https://github.com/${owner}/${repo}/pull/${prNumber}#review-mock`;
+    return [];
   }
 
   async fetchPrDetails(owner: string, repo: string, prNumber: number): Promise<PrDetails | null> {

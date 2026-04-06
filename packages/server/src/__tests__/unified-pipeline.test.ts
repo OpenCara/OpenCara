@@ -430,7 +430,7 @@ describe('Unified Pipeline (Issue #506)', () => {
   describe('Summary result: review feature', () => {
     it('posts review comment and deletes group on review summary', async () => {
       const groupId = 'review-group';
-      const postSpy = vi.spyOn(github, 'postPrReview');
+      const postSpy = vi.spyOn(github, 'postPrComment');
 
       // Create completed worker + summary task
       await store.createTask(
@@ -462,13 +462,12 @@ describe('Unified Pipeline (Issue #506)', () => {
       });
       expect(res.status).toBe(200);
 
-      // Should have posted review to GitHub with event
+      // Should have posted comment to GitHub
       expect(postSpy).toHaveBeenCalledWith(
         'test-org',
         'test-repo',
         1,
         expect.any(String),
-        'APPROVE',
         expect.any(String),
       );
 
@@ -982,7 +981,7 @@ describe('Unified Pipeline (Issue #506)', () => {
   describe('E2E: multi-agent review pipeline', () => {
     it('completes full review pipeline: 2 workers → summary → posted', async () => {
       const groupId = 'e2e-group';
-      const postSpy = vi.spyOn(github, 'postPrReview');
+      const postSpy = vi.spyOn(github, 'postPrComment');
 
       // Create 2 worker tasks
       await store.createTask(makeWorkerTask('w1', groupId));

@@ -19,7 +19,6 @@ import { isRepoAllowed, isEntityMatch, isDedupRole } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
-import type { PrReviewEvent } from '../github/reviews.js';
 import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
 import {
@@ -369,16 +368,21 @@ async function handleReviewSummaryResult(
   const token = await github.getInstallationToken(task.github_installation_id);
   const body = wrapReviewComment(trimmed, contributors.length > 0 ? contributors : undefined);
 
-  // Map verdict to GitHub review event; default to COMMENT if missing
-  const event: PrReviewEvent = (summaryData.verdict?.toUpperCase() as PrReviewEvent) || 'COMMENT';
-  await github.postPrReview(task.owner, task.repo, task.pr_number, body, event, token);
+  const { html_url, comment_id } = await github.postPrComment(
+    task.owner,
+    task.repo,
+    task.pr_number,
+    body,
+    token,
+  );
 
   logger.info('Review posted to GitHub', {
     taskId: task.id,
     owner: task.owner,
     repo: task.repo,
     prNumber: task.pr_number,
-    event,
+    commentUrl: html_url,
+    commentId: comment_id,
   });
 }
 

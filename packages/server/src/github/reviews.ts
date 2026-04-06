@@ -7,9 +7,21 @@ export interface ReviewComment {
   body: string;
 }
 
+/** Result from posting a PR comment — includes the comment ID for reaction tracking. */
+export interface PostedCommentResult {
+  html_url: string;
+  comment_id: number;
+}
+
+/** A reaction on a GitHub issue comment. */
+export interface Reaction {
+  user_id: number;
+  content: string;
+}
+
 /**
  * Post a comment on a GitHub pull request.
- * Returns the html_url of the created comment.
+ * Returns the html_url and comment_id of the created comment.
  */
 export async function postPrComment(
   owner: string,
@@ -17,7 +29,7 @@ export async function postPrComment(
   prNumber: number,
   body: string,
   token: string,
-): Promise<string> {
+): Promise<PostedCommentResult> {
   const response = await githubFetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
     {
@@ -31,39 +43,38 @@ export async function postPrComment(
     throw new Error(`Failed to post PR comment: ${response.status} ${response.statusText}`);
   }
 
-  const data = (await response.json()) as { html_url: string };
-  return data.html_url;
+  const data = (await response.json()) as { html_url: string; id: number };
+  return { html_url: data.html_url, comment_id: data.id };
 }
 
-/** GitHub Pull Request Review event — maps 1:1 to ReviewVerdict (uppercased). */
-export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
-
 /**
- * Submit a pull request review with an event (APPROVE / REQUEST_CHANGES / COMMENT).
- * Uses the GitHub Pull Request Reviews API so the verdict shows as a proper review status.
- * Returns the html_url of the created review.
+ * Fetch reactions on a GitHub issue comment.
+ * Returns an array of { user_id, content } for each reaction.
  */
-export async function postPrReview(
+export async function getCommentReactions(
   owner: string,
   repo: string,
-  prNumber: number,
-  body: string,
-  event: PrReviewEvent,
+  commentId: number,
   token: string,
-): Promise<string> {
+): Promise<Reaction[]> {
   const response = await githubFetch(
-    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+    `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
     {
-      method: 'POST',
       token,
-      body: JSON.stringify({ body, event }),
+      headers: {
+        Accept: 'application/vnd.github+json',
+      },
     },
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to post PR review: ${response.status} ${response.statusText}`);
+    throw new Error(`Failed to fetch comment reactions: ${response.status} ${response.statusText}`);
   }
 
-  const data = (await response.json()) as { html_url: string };
-  return data.html_url;
+  const data = (await response.json()) as Array<{
+    user: { id: number };
+    content: string;
+  }>;
+
+  return data.map((r) => ({ user_id: r.user.id, content: r.content }));
 }
