@@ -120,6 +120,53 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const MAX_CONSECUTIVE_AUTH_ERRORS = 3;
 const MAX_POLL_BACKOFF_MS = 300_000; // 5 minutes
 
+/** Grace period before forced exit after SIGTERM/SIGINT (ms). */
+const SHUTDOWN_GRACE_MS = 5_000;
+
+/**
+ * Register SIGTERM/SIGINT handlers that abort the controller, log the signal,
+ * and force-exit after a grace period if cleanup hangs.
+ *
+ * Returns a cleanup function that removes the listeners (for testing).
+ */
+export function registerShutdownHandlers(
+  controller: AbortController,
+  log: (msg: string) => void,
+  graceMs = SHUTDOWN_GRACE_MS,
+): () => void {
+  let shutdownInitiated = false;
+
+  const onSignal = (signal: string) => {
+    if (shutdownInitiated) {
+      // Second signal — force immediate exit
+      log(`${icons.stop} Received ${signal} again — forcing exit`);
+      process.exit(1);
+    }
+    shutdownInitiated = true;
+    log(`${icons.stop} Received ${signal} — shutting down gracefully...`);
+    controller.abort();
+
+    // Force exit after grace period in case cleanup hangs
+    const forceTimer = setTimeout(() => {
+      log(`${icons.stop} Shutdown timed out after ${graceMs / 1000}s — forcing exit`);
+      process.exit(1);
+    }, graceMs);
+    // Unref so the timer doesn't keep the process alive if cleanup finishes
+    forceTimer.unref();
+  };
+
+  const onSigint = () => onSignal('SIGINT');
+  const onSigterm = () => onSignal('SIGTERM');
+
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+
+  return () => {
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
+  };
+}
+
 /** HTTP statuses that will never succeed on retry (auth/not-found). */
 const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
 
@@ -1493,14 +1540,7 @@ export async function startAgent(
   const cleanupTracker = ttlMs > 0 ? new CodebaseCleanupTracker(ttlMs) : undefined;
 
   const abortController = new AbortController();
-
-  // Handle graceful shutdown
-  process.on('SIGINT', () => {
-    abortController.abort();
-  });
-  process.on('SIGTERM', () => {
-    abortController.abort();
-  });
+  const removeShutdownHandlers = registerShutdownHandlers(abortController, log);
 
   await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, agentSession, {
     pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
@@ -1538,6 +1578,8 @@ export async function startAgent(
     );
   }
   log(formatExitSummary(agentSession));
+
+  removeShutdownHandlers();
 }
 
 // ── Batch Poll Coordinator ────────────────────────────────────
@@ -1972,8 +2014,7 @@ export async function startBatchAgents(
   }
 
   const abortController = new AbortController();
-  process.on('SIGINT', () => abortController.abort());
-  process.on('SIGTERM', () => abortController.abort());
+  const removeShutdownHandlers = registerShutdownHandlers(abortController, log);
 
   log(`${agentStates.length} agent instance(s) running in batch mode. Press Ctrl+C to stop.\n`);
 
@@ -2014,6 +2055,8 @@ export async function startBatchAgents(
       state.logger.log(formatExitSummary(state.agentSession));
     }),
   );
+
+  removeShutdownHandlers();
 }
 
 /**
