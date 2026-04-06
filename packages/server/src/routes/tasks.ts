@@ -31,7 +31,9 @@ import {
   SUMMARY_SLOT_STALE_THRESHOLD_MS,
   AGENT_REJECTION_THRESHOLD,
   AGENT_REJECTION_WINDOW_MS,
+  REPUTATION_SCORE_WINDOW_MS,
 } from '../store/constants.js';
+import { computeAgentReputation, effectiveGracePeriod } from '../reputation.js';
 import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent, rateLimitByIP } from '../middleware/rate-limit.js';
@@ -85,11 +87,17 @@ function isReviewPreferredAgent(
 
 /**
  * Check if a worker task is visible to the given agent, considering
- * the preferred model/tool grace period.
+ * the preferred model/tool grace period adjusted by reputation.
  */
-function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string): boolean {
+function isWorkerVisibleToAgent(
+  task: ReviewTask,
+  model?: string,
+  tool?: string,
+  effectiveGraceMs?: number,
+): boolean {
   if (isReviewPreferredAgent(task.config, model, tool)) return true;
-  return Date.now() - task.created_at >= PREFERRED_REVIEW_GRACE_PERIOD_MS;
+  const graceMs = effectiveGraceMs ?? PREFERRED_REVIEW_GRACE_PERIOD_MS;
+  return Date.now() - task.created_at >= graceMs;
 }
 
 /**
@@ -97,10 +105,15 @@ function isWorkerVisibleToAgent(task: ReviewTask, model?: string, tool?: string)
  * During the grace period, only agents matching the target model can see the task.
  * After the grace period, any agent can claim it.
  */
-function isTargetModelVisible(task: ReviewTask, model?: string): boolean {
+function isTargetModelVisible(
+  task: ReviewTask,
+  model?: string,
+  effectiveGraceMs?: number,
+): boolean {
   if (!task.target_model) return true; // no preference — visible to all
   if (model && model.toLowerCase() === task.target_model.toLowerCase()) return true; // model matches
-  return Date.now() - task.created_at >= TARGET_MODEL_GRACE_PERIOD_MS;
+  const graceMs = effectiveGraceMs ?? TARGET_MODEL_GRACE_PERIOD_MS;
+  return Date.now() - task.created_at >= graceMs;
 }
 
 /**
@@ -127,10 +140,15 @@ function isModelDiversityVisible(
 
 /**
  * Check if a summary task is visible to the given agent, considering
- * the preferred synthesizer grace period.
+ * the preferred synthesizer grace period adjusted by reputation.
  * Checks both entity-based preferences and model-based preferences.
  */
-function isSummaryVisibleToAgent(task: ReviewTask, agentId: string, model?: string): boolean {
+function isSummaryVisibleToAgent(
+  task: ReviewTask,
+  agentId: string,
+  model?: string,
+  effectiveGraceMs?: number,
+): boolean {
   const summarizer = task.config?.summarizer;
   const preferred = summarizer?.preferred ?? [];
   const preferredModels = summarizer?.preferredModels ?? [];
@@ -148,7 +166,8 @@ function isSummaryVisibleToAgent(task: ReviewTask, agentId: string, model?: stri
   // Use reviews_completed_at (when all reviews finished and summary became claimable)
   // with fallback to created_at for single-agent tasks that skip the review phase.
   const summaryPhaseStart = task.reviews_completed_at ?? task.created_at;
-  return Date.now() - summaryPhaseStart >= PREFERRED_SYNTH_GRACE_PERIOD_MS;
+  const graceMs = effectiveGraceMs ?? PREFERRED_SYNTH_GRACE_PERIOD_MS;
+  return Date.now() - summaryPhaseStart >= graceMs;
 }
 
 /**
@@ -641,11 +660,26 @@ async function postFallbackConsolidatedReview(
   }
 }
 
-/** Check if an agent is blocked due to exceeding the rejection threshold. */
-async function isAgentBlocked(store: DataStore, agentId: string): Promise<boolean> {
+/**
+ * Check if an agent is blocked due to exceeding the rejection threshold.
+ * Checks both agent-level and account-level (github_user_id) rejections.
+ */
+async function isAgentBlocked(
+  store: DataStore,
+  agentId: string,
+  githubUserId?: number,
+): Promise<boolean> {
   const since = Date.now() - AGENT_REJECTION_WINDOW_MS;
-  const count = await store.countAgentRejections(agentId, since);
-  return count >= AGENT_REJECTION_THRESHOLD;
+  const agentCount = await store.countAgentRejections(agentId, since);
+  if (agentCount >= AGENT_REJECTION_THRESHOLD) return true;
+
+  // Account-level check — prevents bypassing by rotating agent_id
+  if (githubUserId !== undefined) {
+    const accountCount = await store.countAccountRejections(githubUserId, since);
+    if (accountCount >= AGENT_REJECTION_THRESHOLD) return true;
+  }
+
+  return false;
 }
 
 /** Rate limit configs for task endpoints. */
@@ -738,6 +772,7 @@ interface AgentFilter {
   /** All repo filters for summary task visibility (any match = allowed). */
   repoFilters?: RepoConfig[];
   githubUsername?: string;
+  githubUserId?: number;
 }
 
 /**
@@ -755,6 +790,36 @@ async function filterTasksForAgent(
   logger: Logger,
 ): Promise<PollTask[]> {
   const { tasks, tasksById, dedupBlockedRepos, oldestDedupPerRepo, groupClaimedModels } = ctx;
+
+  // Fetch agent reputation data for grace period multiplier computation
+  const reputationSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
+  const [reputationEvents, lastCompletedAt] = await Promise.all([
+    store.getAgentReputationEvents(agent.agentId, reputationSinceMs),
+    store.getAgentLastCompletedClaimAt(agent.agentId),
+  ]);
+
+  // Only apply reputation multiplier when there are actual reputation events.
+  // Agents with no history get default grace periods (backward-compatible).
+  // Cooldown multiplier always applies for fair task distribution.
+  const hasReputation = reputationEvents.length > 0;
+  const wilsonScore = hasReputation ? computeAgentReputation(reputationEvents) : 0.5;
+
+  // Pre-compute effective grace periods for each base duration
+  const effectiveReviewGraceMs = effectiveGracePeriod(
+    PREFERRED_REVIEW_GRACE_PERIOD_MS,
+    wilsonScore,
+    lastCompletedAt,
+  );
+  const effectiveTargetModelGraceMs = effectiveGracePeriod(
+    TARGET_MODEL_GRACE_PERIOD_MS,
+    wilsonScore,
+    lastCompletedAt,
+  );
+  const effectiveSummaryGraceMs = effectiveGracePeriod(
+    PREFERRED_SYNTH_GRACE_PERIOD_MS,
+    wilsonScore,
+    lastCompletedAt,
+  );
 
   // First pass: filter tasks by non-claim criteria, collecting candidate claim IDs
   const candidates: PollCandidate[] = [];
@@ -785,9 +850,10 @@ async function filterTasksForAgent(
     );
     if (!eligible) continue;
 
-    // Grace period visibility checks
+    // Grace period visibility checks (adjusted by reputation multiplier)
     if (isSummaryTask(task)) {
-      if (!isSummaryVisibleToAgent(task, agent.agentId, agent.model)) continue;
+      if (!isSummaryVisibleToAgent(task, agent.agentId, agent.model, effectiveSummaryGraceMs))
+        continue;
       // Repo filter for summary agents — any matching filter allows the task.
       // For modes that need owner/org context (private), fall back to agentRepos
       // which was pre-built from the agent's declared repo list.
@@ -806,11 +872,11 @@ async function filterTasksForAgent(
       }
     } else {
       // Worker task — check model/tool preference grace period
-      if (!isWorkerVisibleToAgent(task, agent.model, agent.tool)) continue;
+      if (!isWorkerVisibleToAgent(task, agent.model, agent.tool, effectiveReviewGraceMs)) continue;
     }
 
     // Target model preference: during grace period, only matching agents see the task
-    if (!isTargetModelVisible(task, agent.model)) continue;
+    if (!isTargetModelVisible(task, agent.model, effectiveTargetModelGraceMs)) continue;
 
     // Model diversity: prefer agents with different models across the group
     if (!isModelDiversityVisible(task, agent.model, groupClaimedModels)) continue;
@@ -955,8 +1021,8 @@ export function taskRoutes() {
     if (body instanceof Response) return body;
     const { agent_id, roles, review_only, repos, synthesize_repos } = body;
 
-    // Block check — reject agents exceeding the rejection threshold
-    if (await isAgentBlocked(store, agent_id)) {
+    // Block check — reject agents exceeding the rejection threshold (agent + account level)
+    if (await isAgentBlocked(store, agent_id, verifiedIdentity?.github_user_id)) {
       logger.warn('Blocked agent attempted poll', { agentId: agent_id });
       return apiError(
         c,
@@ -994,6 +1060,7 @@ export function taskRoutes() {
         tool: body.tool,
         repoFilters: synthesize_repos ? [synthesize_repos] : undefined,
         githubUsername: verifiedIdentity?.github_username,
+        githubUserId: verifiedIdentity?.github_user_id,
       },
       store,
       github,
@@ -1025,6 +1092,13 @@ export function taskRoutes() {
       // Collect per-agent task lists
       const agentTasks = new Map<string, PollTask[]>();
       for (const agent of body.agents) {
+        // Block check per agent — skip blocked agents
+        if (await isAgentBlocked(store, agent.agent_name, verifiedIdentity?.github_user_id)) {
+          logger.warn('Blocked agent in batch poll', { agentId: agent.agent_name });
+          agentTasks.set(agent.agent_name, []);
+          continue;
+        }
+
         // repo_filters controls both private repo access and summary task visibility
         const repoFilterSet =
           agent.repo_filters && agent.repo_filters.length > 0 ? agent.repo_filters : null;
@@ -1048,6 +1122,7 @@ export function taskRoutes() {
             tool: agent.tool,
             repoFilters: repoFilterSet ?? undefined,
             githubUsername: verifiedIdentity?.github_username,
+            githubUserId: verifiedIdentity?.github_user_id,
           },
           store,
           github,
@@ -1135,8 +1210,8 @@ export function taskRoutes() {
     if (body instanceof Response) return body;
     const { agent_id, role, model, tool, thinking } = body;
 
-    // Block check — reject agents exceeding the rejection threshold
-    if (await isAgentBlocked(store, agent_id)) {
+    // Block check — reject agents exceeding the rejection threshold (agent + account level)
+    if (await isAgentBlocked(store, agent_id, verifiedIdentity?.github_user_id)) {
       logger.warn('Blocked agent attempted claim', { agentId: agent_id, taskId });
       return apiError(
         c,
@@ -1186,9 +1261,46 @@ export function taskRoutes() {
       );
     }
 
-    // Grace period check for summary tasks
-    if (isSummaryTask(task) && !isSummaryVisibleToAgent(task, agent_id, model)) {
-      return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+    // Grace period checks (adjusted by reputation)
+    {
+      const repSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
+      const [repEvents, lastCompleted] = await Promise.all([
+        store.getAgentReputationEvents(agent_id, repSinceMs),
+        store.getAgentLastCompletedClaimAt(agent_id),
+      ]);
+      // Only apply reputation multiplier when there are actual events
+      const score = repEvents.length > 0 ? computeAgentReputation(repEvents) : 0.5;
+
+      if (isSummaryTask(task)) {
+        const effGrace = effectiveGracePeriod(
+          PREFERRED_SYNTH_GRACE_PERIOD_MS,
+          score,
+          lastCompleted,
+        );
+        if (!isSummaryVisibleToAgent(task, agent_id, model, effGrace)) {
+          return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+        }
+      } else {
+        // Worker task — check model/tool preference grace period
+        const effReviewGrace = effectiveGracePeriod(
+          PREFERRED_REVIEW_GRACE_PERIOD_MS,
+          score,
+          lastCompleted,
+        );
+        if (!isWorkerVisibleToAgent(task, model, tool, effReviewGrace)) {
+          return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+        }
+      }
+
+      // Target model grace period check
+      const effTargetGrace = effectiveGracePeriod(
+        TARGET_MODEL_GRACE_PERIOD_MS,
+        score,
+        lastCompleted,
+      );
+      if (!isTargetModelVisible(task, model, effTargetGrace)) {
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+      }
     }
 
     // Atomic CAS: pending → reviewing

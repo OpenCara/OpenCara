@@ -577,6 +577,20 @@ export class MemoryDataStore implements DataStore {
     );
   }
 
+  // Agent cooldown
+
+  async getAgentLastCompletedClaimAt(agentId: string): Promise<number | null> {
+    let latest: number | null = null;
+    for (const claim of this.claims.values()) {
+      if (claim.agent_id === agentId && claim.status === 'completed') {
+        if (latest === null || claim.created_at > latest) {
+          latest = claim.created_at;
+        }
+      }
+    }
+    return latest;
+  }
+
   // OAuth token cache
 
   async getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null> {
