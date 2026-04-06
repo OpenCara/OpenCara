@@ -22,6 +22,7 @@ import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
 import { apiError } from '../errors.js';
 import { moveToRecentlyClosed, ageOutToArchived, updateOpenEntry } from '../dedup-index.js';
+import { collectReputationReactions } from '../reputation.js';
 
 /** Trusted for review triggers — includes CONTRIBUTOR. */
 const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
@@ -642,8 +643,18 @@ async function handlePullRequest(
 
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
-  // Handle PR close/merge — move dedup index entries
+  // Handle PR close/merge — collect reputation reactions, then move dedup index entries
   if (action === 'closed') {
+    try {
+      await collectReputationReactions(store, github, owner, repo, prNumber, token, logger);
+    } catch (err) {
+      logger.error('Failed to collect reputation reactions on PR close', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        prNumber,
+      });
+    }
     await handlePrClose(github, owner, repo, prNumber, fullConfig, token, logger);
     return new Response('OK', { status: 200 });
   }
