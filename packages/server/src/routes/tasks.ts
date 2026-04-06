@@ -36,7 +36,7 @@ import {
 import { computeAgentReputation, effectiveGracePeriod } from '../reputation.js';
 import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
-import { rateLimitByAgent, rateLimitByIP } from '../middleware/rate-limit.js';
+import { rateLimitByAgent, rateLimitByIdentity } from '../middleware/rate-limit.js';
 import { requireOAuth } from '../middleware/oauth.js';
 import { apiError } from '../errors.js';
 import {
@@ -1074,7 +1074,7 @@ export function taskRoutes() {
 
   app.post(
     '/api/tasks/poll/batch',
-    rateLimitByIP({ ...POLL_RATE_LIMIT, prefix: 'batch-poll' }),
+    rateLimitByIdentity({ ...POLL_RATE_LIMIT, prefix: 'batch-poll' }),
     async (c) => {
       const store = c.get('store');
       const github = c.get('github');

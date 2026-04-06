@@ -160,3 +160,45 @@ export function rateLimitByIP(config: RateLimiterConfig & { prefix?: string }): 
     await next();
   };
 }
+
+/**
+ * Create a Hono middleware that rate-limits by authenticated identity.
+ *
+ * Uses the verified `github_user_id` from OAuth (set by requireOAuth middleware)
+ * as the rate limit key. This allows multiple CLI instances from the same IP
+ * to each get their own rate limit budget when authenticated as different users,
+ * while still sharing a budget per-user.
+ *
+ * Falls back to IP-based limiting if no verified identity is present.
+ *
+ * IMPORTANT: This middleware must run AFTER requireOAuth() so that
+ * `verifiedIdentity` is available in the Hono context.
+ */
+export function rateLimitByIdentity(
+  config: RateLimiterConfig & { prefix?: string },
+): MiddlewareHandler {
+  return async (c: HonoContext, next) => {
+    const identity = c.get('verifiedIdentity');
+    let key: string;
+    if (identity?.github_user_id) {
+      key = config.prefix
+        ? `${config.prefix}:user:${identity.github_user_id}`
+        : `user:${identity.github_user_id}`;
+    } else {
+      // Fallback to IP if no identity (shouldn't happen after requireOAuth)
+      const ip = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'unknown';
+      key = config.prefix ? `${config.prefix}:ip:${ip}` : `ip:${ip}`;
+    }
+
+    const retryAfter = checkRateLimit(key, config);
+    if (retryAfter !== null) {
+      c.header('Retry-After', String(retryAfter));
+      return c.json<ErrorResponse>(
+        { error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } },
+        429,
+      );
+    }
+
+    await next();
+  };
+}

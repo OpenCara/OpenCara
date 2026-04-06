@@ -488,6 +488,55 @@ describe('Task Routes', () => {
       const res = await request('POST', '/api/tasks/poll', {});
       expect(res.status).toBe(400);
     });
+
+    it('batch poll rate limits by authenticated identity, not IP', async () => {
+      const batchBody = { agents: [{ agent_name: 'a', roles: ['review'] }] };
+      // POLL_RATE_LIMIT is 12 requests per 60s — all from same user identity (id=42)
+      for (let i = 0; i < 12; i++) {
+        const res = await request('POST', '/api/tasks/poll/batch', batchBody);
+        expect(res.status).toBe(200);
+      }
+      // 13th request from same identity should be rate limited
+      const res = await request('POST', '/api/tasks/poll/batch', batchBody);
+      expect(res.status).toBe(429);
+      const body = await res.json();
+      expect(body.error.code).toBe('RATE_LIMITED');
+    });
+
+    it('batch poll allows different authenticated users from same IP', async () => {
+      const batchBody = { agents: [{ agent_name: 'a', roles: ['review'] }] };
+
+      // User A (id=42) exhausts their budget
+      for (let i = 0; i < 12; i++) {
+        const res = await request('POST', '/api/tasks/poll/batch', batchBody);
+        expect(res.status).toBe(200);
+      }
+      expect((await request('POST', '/api/tasks/poll/batch', batchBody)).status).toBe(429);
+
+      // Switch to User B (id=99) — different identity, same IP
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          status: 200,
+          json: () => Promise.resolve({ user: { id: 99, login: 'user-b' } }),
+        }),
+      );
+      // Need a different token to bypass OAuth cache
+      const resB = await app.request(
+        '/api/tasks/poll/batch',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ghu_user_b_token',
+          },
+          body: JSON.stringify(batchBody),
+        },
+        mockEnv,
+      );
+      // User B should NOT be rate limited — separate identity budget
+      expect(resB.status).toBe(200);
+    });
   });
 
   // ── Dedup serialization ──────────────────────────────────
