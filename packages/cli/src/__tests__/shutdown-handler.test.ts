@@ -132,17 +132,36 @@ describe('registerShutdownHandlers', () => {
     const log = vi.fn();
     cleanup = registerShutdownHandlers(controller, log);
 
+    const countBefore = process.listenerCount('SIGTERM');
+    const countBeforeInt = process.listenerCount('SIGINT');
+
     // Remove listeners
     cleanup();
     cleanup = undefined;
 
-    // Signal should no longer be caught by our handler
-    const listenerCountBefore = process.listenerCount('SIGTERM');
-    // Emit shouldn't abort our controller (listeners removed)
-    // Note: we can't safely emit SIGTERM without a handler, so just verify listener count
+    // Verify listener count decreased
+    expect(process.listenerCount('SIGTERM')).toBe(countBefore - 1);
+    expect(process.listenerCount('SIGINT')).toBe(countBeforeInt - 1);
+    // Controller should not have been aborted
     expect(controller.signal.aborted).toBe(false);
-    // Verify our listeners were removed by checking the controller wasn't aborted
-    // (if they were still registered, emitting would abort it)
-    expect(listenerCountBefore).toBe(process.listenerCount('SIGTERM'));
+  });
+
+  it('clears force timer when cleanup is called after signal', () => {
+    const controller = new AbortController();
+    const log = vi.fn();
+    cleanup = registerShutdownHandlers(controller, log, 5000);
+
+    // Trigger signal — starts the force timer
+    process.emit('SIGTERM');
+    expect(controller.signal.aborted).toBe(true);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Cleanup should clear the force timer
+    cleanup();
+    cleanup = undefined;
+
+    // Advance past grace period — timer should have been cleared
+    vi.advanceTimersByTime(10000);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 });

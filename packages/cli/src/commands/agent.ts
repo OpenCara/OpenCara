@@ -135,6 +135,7 @@ export function registerShutdownHandlers(
   graceMs = SHUTDOWN_GRACE_MS,
 ): () => void {
   let shutdownInitiated = false;
+  let forceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const onSignal = (signal: string) => {
     if (shutdownInitiated) {
@@ -147,7 +148,7 @@ export function registerShutdownHandlers(
     controller.abort();
 
     // Force exit after grace period in case cleanup hangs
-    const forceTimer = setTimeout(() => {
+    forceTimer = setTimeout(() => {
       log(`${icons.stop} Shutdown timed out after ${graceMs / 1000}s — forcing exit`);
       process.exit(1);
     }, graceMs);
@@ -164,6 +165,7 @@ export function registerShutdownHandlers(
   return () => {
     process.removeListener('SIGINT', onSigint);
     process.removeListener('SIGTERM', onSigterm);
+    if (forceTimer) clearTimeout(forceTimer);
   };
 }
 
@@ -1542,44 +1544,46 @@ export async function startAgent(
   const abortController = new AbortController();
   const removeShutdownHandlers = registerShutdownHandlers(abortController, log);
 
-  await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, agentSession, {
-    pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    maxConsecutiveErrors: options?.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
-    routerRelay: options?.routerRelay,
-    reviewOnly: options?.reviewOnly,
-    repoConfig: options?.repoConfig,
-    roles: options?.roles,
-    synthesizeRepos: options?.synthesizeRepos,
-    signal: abortController.signal,
-    cleanupTracker,
-    verbose: options?.verbose,
-    agentOwner: options?.agentOwner,
-    userOrgs: options?.userOrgs,
-  });
+  try {
+    await pollLoop(client, agentId, reviewDeps, deps, agentInfo, logger, agentSession, {
+      pollIntervalMs: options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      maxConsecutiveErrors: options?.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
+      routerRelay: options?.routerRelay,
+      reviewOnly: options?.reviewOnly,
+      repoConfig: options?.repoConfig,
+      roles: options?.roles,
+      synthesizeRepos: options?.synthesizeRepos,
+      signal: abortController.signal,
+      cleanupTracker,
+      verbose: options?.verbose,
+      agentOwner: options?.agentOwner,
+      userOrgs: options?.userOrgs,
+    });
 
-  // Final sweep: clean up any remaining tracked worktrees on shutdown
-  if (cleanupTracker && cleanupTracker.size > 0) {
-    const finalSwept = await cleanupTracker.sweep(cleanupWorktree);
-    if (finalSwept > 0) {
+    // Final sweep: clean up any remaining tracked worktrees on shutdown
+    if (cleanupTracker && cleanupTracker.size > 0) {
+      const finalSwept = await cleanupTracker.sweep(cleanupWorktree);
+      if (finalSwept > 0) {
+        log(
+          `${icons.info} Cleaned up ${finalSwept} codebase director${finalSwept === 1 ? 'y' : 'ies'} on shutdown`,
+        );
+      }
+    }
+
+    // Print usage summary on shutdown
+    if (deps.usageTracker) {
       log(
-        `${icons.info} Cleaned up ${finalSwept} codebase director${finalSwept === 1 ? 'y' : 'ies'} on shutdown`,
+        deps.usageTracker.formatSummary(
+          deps.usageLimits ?? usageLimits,
+          deps.agentLimits,
+          deps.agentId,
+        ),
       );
     }
+    log(formatExitSummary(agentSession));
+  } finally {
+    removeShutdownHandlers();
   }
-
-  // Print usage summary on shutdown
-  if (deps.usageTracker) {
-    log(
-      deps.usageTracker.formatSummary(
-        deps.usageLimits ?? usageLimits,
-        deps.agentLimits,
-        deps.agentId,
-      ),
-    );
-  }
-  log(formatExitSummary(agentSession));
-
-  removeShutdownHandlers();
 }
 
 // ── Batch Poll Coordinator ────────────────────────────────────
@@ -2018,45 +2022,47 @@ export async function startBatchAgents(
 
   log(`${agentStates.length} agent instance(s) running in batch mode. Press Ctrl+C to stop.\n`);
 
-  await batchPollLoop(client, agentStates, {
-    pollIntervalMs,
-    maxConsecutiveErrors: config.maxConsecutiveErrors,
-    signal: abortController.signal,
-    accessibleRepos,
-    githubToken: oauthToken,
-  });
+  try {
+    await batchPollLoop(client, agentStates, {
+      pollIntervalMs,
+      maxConsecutiveErrors: config.maxConsecutiveErrors,
+      signal: abortController.signal,
+      accessibleRepos,
+      githubToken: oauthToken,
+    });
 
-  // Cleanup on shutdown (in parallel, allSettled so one failure doesn't hide others)
-  await Promise.allSettled(
-    agentStates.map(async (state) => {
-      state.routerRelay?.stop();
-      if (state.cleanupTracker && state.cleanupTracker.size > 0) {
-        const swept = await state.cleanupTracker.sweep(cleanupWorktree);
-        if (swept > 0) {
+    // Cleanup on shutdown (in parallel, allSettled so one failure doesn't hide others)
+    await Promise.allSettled(
+      agentStates.map(async (state) => {
+        state.routerRelay?.stop();
+        if (state.cleanupTracker && state.cleanupTracker.size > 0) {
+          const swept = await state.cleanupTracker.sweep(cleanupWorktree);
+          if (swept > 0) {
+            state.logger.log(
+              `${icons.info} Cleaned up ${swept} codebase director${swept === 1 ? 'y' : 'ies'} on shutdown`,
+            );
+          }
+        }
+        if (state.consumptionDeps.usageTracker) {
+          const limits = state.consumptionDeps.usageLimits ?? {
+            maxTasksPerDay: null,
+            maxTokensPerDay: null,
+            maxTokensPerReview: null,
+          };
           state.logger.log(
-            `${icons.info} Cleaned up ${swept} codebase director${swept === 1 ? 'y' : 'ies'} on shutdown`,
+            state.consumptionDeps.usageTracker.formatSummary(
+              limits,
+              state.consumptionDeps.agentLimits,
+              state.consumptionDeps.agentId,
+            ),
           );
         }
-      }
-      if (state.consumptionDeps.usageTracker) {
-        const limits = state.consumptionDeps.usageLimits ?? {
-          maxTasksPerDay: null,
-          maxTokensPerDay: null,
-          maxTokensPerReview: null,
-        };
-        state.logger.log(
-          state.consumptionDeps.usageTracker.formatSummary(
-            limits,
-            state.consumptionDeps.agentLimits,
-            state.consumptionDeps.agentId,
-          ),
-        );
-      }
-      state.logger.log(formatExitSummary(state.agentSession));
-    }),
-  );
-
-  removeShutdownHandlers();
+        state.logger.log(formatExitSummary(state.agentSession));
+      }),
+    );
+  } finally {
+    removeShutdownHandlers();
+  }
 }
 
 /**
