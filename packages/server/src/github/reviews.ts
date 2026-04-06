@@ -59,12 +59,7 @@ export async function getCommentReactions(
 ): Promise<Reaction[]> {
   const response = await githubFetch(
     `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
-    {
-      token,
-      headers: {
-        Accept: 'application/vnd.github+json',
-      },
-    },
+    { token },
   );
 
   if (!response.ok) {
