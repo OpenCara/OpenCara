@@ -10,7 +10,7 @@ import {
   TARGET_MODEL_GRACE_PERIOD_MS,
 } from '../routes/tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
-import { AGENT_REJECTION_THRESHOLD, REPUTATION_SCORE_WINDOW_MS } from '../store/constants.js';
+import { AGENT_REJECTION_THRESHOLD } from '../store/constants.js';
 import { computeAgentReputation, effectiveGracePeriod } from '../reputation.js';
 
 function makeTask(overrides: Partial<ReviewTask> = {}): ReviewTask {
@@ -140,10 +140,7 @@ describe('Reputation-based eligibility integration', () => {
       }
 
       // Verify Wilson score is in the "good" range
-      const repEvents = await store.getAgentReputationEvents(
-        'good-agent',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('good-agent', 0);
       const score = computeAgentReputation(repEvents);
       expect(score).toBeGreaterThanOrEqual(0.7);
 
@@ -186,10 +183,7 @@ describe('Reputation-based eligibility integration', () => {
         await store.recordReputationEvent(e);
       }
 
-      const repEvents = await store.getAgentReputationEvents(
-        'neutral-agent',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('neutral-agent', 0);
       const score = computeAgentReputation(repEvents);
       // Score should be near neutral (0.4-0.7)
       expect(score).toBeGreaterThanOrEqual(0.4);
@@ -232,10 +226,7 @@ describe('Reputation-based eligibility integration', () => {
         await store.recordReputationEvent(e);
       }
 
-      const repEvents = await store.getAgentReputationEvents(
-        'bad-agent',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('bad-agent', 0);
       const score = computeAgentReputation(repEvents);
       expect(score).toBeLessThan(0.4);
 
@@ -295,10 +286,7 @@ describe('Reputation-based eligibility integration', () => {
       });
 
       // Effective grace = 30s * 1.0 (neutral) * 2.0 (cooldown) = 60s
-      const repEvents = await store.getAgentReputationEvents(
-        'recent-agent',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('recent-agent', 0);
       const score = computeAgentReputation(repEvents);
       const lastCompleted = await store.getAgentLastCompletedClaimAt('recent-agent');
       const effGrace = effectiveGracePeriod(PREFERRED_REVIEW_GRACE_PERIOD_MS, score, lastCompleted);
@@ -347,10 +335,7 @@ describe('Reputation-based eligibility integration', () => {
         created_at: Date.now() - 2 * 60_000,
       });
 
-      const repEvents = await store.getAgentReputationEvents(
-        'very-bad-recent',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('very-bad-recent', 0);
       const score = computeAgentReputation(repEvents);
       const lastCompleted = await store.getAgentLastCompletedClaimAt('very-bad-recent');
       const effGrace = effectiveGracePeriod(PREFERRED_REVIEW_GRACE_PERIOD_MS, score, lastCompleted);
@@ -368,10 +353,7 @@ describe('Reputation-based eligibility integration', () => {
         await store.recordReputationEvent(e);
       }
 
-      const repEvents = await store.getAgentReputationEvents(
-        'good-agent-tm',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('good-agent-tm', 0);
       const score = computeAgentReputation(repEvents);
       const effGrace = effectiveGracePeriod(TARGET_MODEL_GRACE_PERIOD_MS, score, null);
       // 120s * 0.5 = 60s
@@ -408,10 +390,7 @@ describe('Reputation-based eligibility integration', () => {
         await store.recordReputationEvent(e);
       }
 
-      const repEvents = await store.getAgentReputationEvents(
-        'good-synth',
-        REPUTATION_SCORE_WINDOW_MS,
-      );
+      const repEvents = await store.getAgentReputationEvents('good-synth', 0);
       const score = computeAgentReputation(repEvents);
       const effGrace = effectiveGracePeriod(PREFERRED_SYNTH_GRACE_PERIOD_MS, score, null);
       // 60s * 0.5 = 30s

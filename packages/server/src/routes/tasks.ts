@@ -792,8 +792,9 @@ async function filterTasksForAgent(
   const { tasks, tasksById, dedupBlockedRepos, oldestDedupPerRepo, groupClaimedModels } = ctx;
 
   // Fetch agent reputation data for grace period multiplier computation
+  const reputationSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
   const [reputationEvents, lastCompletedAt] = await Promise.all([
-    store.getAgentReputationEvents(agent.agentId, REPUTATION_SCORE_WINDOW_MS),
+    store.getAgentReputationEvents(agent.agentId, reputationSinceMs),
     store.getAgentLastCompletedClaimAt(agent.agentId),
   ]);
 
@@ -1255,8 +1256,9 @@ export function taskRoutes() {
 
     // Grace period check for summary tasks (adjusted by reputation)
     if (isSummaryTask(task)) {
+      const repSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
       const [repEvents, lastCompleted] = await Promise.all([
-        store.getAgentReputationEvents(agent_id, REPUTATION_SCORE_WINDOW_MS),
+        store.getAgentReputationEvents(agent_id, repSinceMs),
         store.getAgentLastCompletedClaimAt(agent_id),
       ]);
       // Only apply reputation multiplier when there are actual events
