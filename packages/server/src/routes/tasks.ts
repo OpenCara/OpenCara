@@ -674,7 +674,7 @@ async function isAgentBlocked(
   if (agentCount >= AGENT_REJECTION_THRESHOLD) return true;
 
   // Account-level check — prevents bypassing by rotating agent_id
-  if (githubUserId) {
+  if (githubUserId !== undefined) {
     const accountCount = await store.countAccountRejections(githubUserId, since);
     if (accountCount >= AGENT_REJECTION_THRESHOLD) return true;
   }
@@ -1092,6 +1092,13 @@ export function taskRoutes() {
       // Collect per-agent task lists
       const agentTasks = new Map<string, PollTask[]>();
       for (const agent of body.agents) {
+        // Block check per agent — skip blocked agents
+        if (await isAgentBlocked(store, agent.agent_name, verifiedIdentity?.github_user_id)) {
+          logger.warn('Blocked agent in batch poll', { agentId: agent.agent_name });
+          agentTasks.set(agent.agent_name, []);
+          continue;
+        }
+
         // repo_filters controls both private repo access and summary task visibility
         const repoFilterSet =
           agent.repo_filters && agent.repo_filters.length > 0 ? agent.repo_filters : null;
@@ -1254,8 +1261,8 @@ export function taskRoutes() {
       );
     }
 
-    // Grace period check for summary tasks (adjusted by reputation)
-    if (isSummaryTask(task)) {
+    // Grace period checks (adjusted by reputation)
+    {
       const repSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
       const [repEvents, lastCompleted] = await Promise.all([
         store.getAgentReputationEvents(agent_id, repSinceMs),
@@ -1263,8 +1270,35 @@ export function taskRoutes() {
       ]);
       // Only apply reputation multiplier when there are actual events
       const score = repEvents.length > 0 ? computeAgentReputation(repEvents) : 0.5;
-      const effGrace = effectiveGracePeriod(PREFERRED_SYNTH_GRACE_PERIOD_MS, score, lastCompleted);
-      if (!isSummaryVisibleToAgent(task, agent_id, model, effGrace)) {
+
+      if (isSummaryTask(task)) {
+        const effGrace = effectiveGracePeriod(
+          PREFERRED_SYNTH_GRACE_PERIOD_MS,
+          score,
+          lastCompleted,
+        );
+        if (!isSummaryVisibleToAgent(task, agent_id, model, effGrace)) {
+          return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+        }
+      } else {
+        // Worker task — check model/tool preference grace period
+        const effReviewGrace = effectiveGracePeriod(
+          PREFERRED_REVIEW_GRACE_PERIOD_MS,
+          score,
+          lastCompleted,
+        );
+        if (!isWorkerVisibleToAgent(task, model, tool, effReviewGrace)) {
+          return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
+        }
+      }
+
+      // Target model grace period check
+      const effTargetGrace = effectiveGracePeriod(
+        TARGET_MODEL_GRACE_PERIOD_MS,
+        score,
+        lastCompleted,
+      );
+      if (!isTargetModelVisible(task, model, effTargetGrace)) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
     }
