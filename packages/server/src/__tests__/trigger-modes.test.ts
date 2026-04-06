@@ -76,11 +76,11 @@ class TestGitHubService implements GitHubService {
   async getInstallationToken(): Promise<string> {
     return 'ghs_mock_token';
   }
-  async postPrComment(): Promise<string> {
-    return 'https://github.com/test/repo/pull/1#comment-mock';
+  async postPrComment(): Promise<{ html_url: string; comment_id: number }> {
+    return { html_url: 'https://github.com/test/repo/pull/1#comment-mock', comment_id: 12345 };
   }
-  async postPrReview(): Promise<string> {
-    return 'https://github.com/test/repo/pull/1#review-mock';
+  async getCommentReactions(): Promise<Array<{ user_id: number; content: string }>> {
+    return [];
   }
   async fetchPrDetails(): Promise<PrDetails | null> {
     return this.fetchPrResult;

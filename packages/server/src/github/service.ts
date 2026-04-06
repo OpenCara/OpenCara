@@ -3,7 +3,12 @@ import type { Logger } from '../logger.js';
 import { createLogger } from '../logger.js';
 import { getInstallationToken } from './app.js';
 import { githubFetch } from './fetch.js';
-import { postPrComment, postPrReview, type PrReviewEvent } from './reviews.js';
+import {
+  postPrComment,
+  getCommentReactions,
+  type PostedCommentResult,
+  type Reaction,
+} from './reviews.js';
 import {
   fetchPrDetails,
   loadReviewConfig as loadReviewConfigImpl,
@@ -39,15 +44,13 @@ export interface GitHubService {
     prNumber: number,
     body: string,
     token: string,
-  ): Promise<string>;
-  postPrReview(
+  ): Promise<PostedCommentResult>;
+  getCommentReactions(
     owner: string,
     repo: string,
-    prNumber: number,
-    body: string,
-    event: PrReviewEvent,
+    commentId: number,
     token: string,
-  ): Promise<string>;
+  ): Promise<Reaction[]>;
   fetchPrDetails(
     owner: string,
     repo: string,
@@ -164,19 +167,17 @@ export class RealGitHubService implements GitHubService {
     prNumber: number,
     body: string,
     token: string,
-  ): Promise<string> {
+  ): Promise<PostedCommentResult> {
     return postPrComment(owner, repo, prNumber, body, token);
   }
 
-  async postPrReview(
+  async getCommentReactions(
     owner: string,
     repo: string,
-    prNumber: number,
-    body: string,
-    event: PrReviewEvent,
+    commentId: number,
     token: string,
-  ): Promise<string> {
-    return postPrReview(owner, repo, prNumber, body, event, token);
+  ): Promise<Reaction[]> {
+    return getCommentReactions(owner, repo, commentId, token);
   }
 
   async fetchPrDetails(
@@ -519,31 +520,23 @@ export class NoOpGitHubService implements GitHubService {
     repo: string,
     prNumber: number,
     body: string,
-  ): Promise<string> {
+  ): Promise<PostedCommentResult> {
     this.logger.info('Dev mode — skipping GitHub PR comment', {
       owner,
       repo,
       prNumber,
       bodyLength: body.length,
     });
-    return 'https://dev-mode/no-comment';
+    return { html_url: 'https://dev-mode/no-comment', comment_id: 0 };
   }
 
-  async postPrReview(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    body: string,
-    event: PrReviewEvent,
-  ): Promise<string> {
-    this.logger.info('Dev mode — skipping GitHub PR review', {
+  async getCommentReactions(owner: string, repo: string, commentId: number): Promise<Reaction[]> {
+    this.logger.info('Dev mode — skipping GitHub comment reactions', {
       owner,
       repo,
-      prNumber,
-      event,
-      bodyLength: body.length,
+      commentId,
     });
-    return 'https://dev-mode/no-review';
+    return [];
   }
 
   async fetchPrDetails(owner: string, repo: string, prNumber: number): Promise<PrDetails | null> {

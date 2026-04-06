@@ -447,10 +447,10 @@ describe('webhook.ts edge cases', () => {
         throw new Error('Forbidden');
       },
       async postPrComment() {
-        return '';
+        return { html_url: '', comment_id: 0 };
       },
-      async postPrReview() {
-        return '';
+      async getCommentReactions() {
+        return [];
       },
       async fetchPrDetails() {
         return null;
@@ -489,10 +489,10 @@ describe('webhook.ts edge cases', () => {
         return 'ghs_test';
       },
       async postPrComment() {
-        return '';
+        return { html_url: '', comment_id: 0 };
       },
-      async postPrReview() {
-        return '';
+      async getCommentReactions() {
+        return [];
       },
       async fetchPrDetails() {
         return null;
@@ -535,10 +535,10 @@ describe('webhook.ts edge cases', () => {
         return 'ghs_test';
       },
       async postPrComment() {
-        return '';
+        return { html_url: '', comment_id: 0 };
       },
-      async postPrReview() {
-        return '';
+      async getCommentReactions() {
+        return [];
       },
       async fetchPrDetails() {
         return {
@@ -618,10 +618,10 @@ describe('webhook.ts edge cases', () => {
         throw new Error('Forbidden');
       },
       async postPrComment() {
-        return '';
+        return { html_url: '', comment_id: 0 };
       },
-      async postPrReview() {
-        return '';
+      async getCommentReactions() {
+        return [];
       },
       async fetchPrDetails() {
         return null;
@@ -655,10 +655,10 @@ describe('webhook.ts edge cases', () => {
         return 'ghs_test';
       },
       async postPrComment() {
-        return '';
+        return { html_url: '', comment_id: 0 };
       },
-      async postPrReview() {
-        return '';
+      async getCommentReactions() {
+        return [];
       },
       async fetchPrDetails() {
         return null;
