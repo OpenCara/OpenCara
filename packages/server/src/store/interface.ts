@@ -1,6 +1,28 @@
 import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 
+export interface PostedReview {
+  id: number;
+  owner: string;
+  repo: string;
+  pr_number: number;
+  group_id: string;
+  github_comment_id: number;
+  feature: string;
+  posted_at: string;
+  reactions_checked_at: string | null;
+}
+
+export interface ReputationEvent {
+  id: number;
+  posted_review_id: number;
+  agent_id: string;
+  operator_github_user_id: number;
+  github_user_id: number;
+  delta: number; // +1 or -1
+  created_at: string;
+}
+
 /**
  * DataStore — abstracted storage for tasks, claims, heartbeats, and meta.
  * Implementations: MemoryDataStore (dev/test), D1DataStore (production).
@@ -104,9 +126,50 @@ export interface DataStore {
 
   // Agent rejections (abuse tracking)
   /** Record a review_text validation rejection for an agent. */
-  recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void>;
+  recordAgentRejection(
+    agentId: string,
+    reason: string,
+    timestamp: number,
+    githubUserId?: number,
+  ): Promise<void>;
   /** Count rejections for an agent within a time window. */
   countAgentRejections(agentId: string, sinceMs: number): Promise<number>;
+  /** Count rejections across all agents for a given GitHub user within a time window. */
+  countAccountRejections(githubUserId: number, sinceMs: number): Promise<number>;
+
+  // Posted reviews (reputation reaction tracking)
+  /** Record a posted review comment for later reaction fetching. Returns the inserted row ID. */
+  recordPostedReview(review: {
+    owner: string;
+    repo: string;
+    pr_number: number;
+    group_id: string;
+    github_comment_id: number;
+    feature: string;
+    posted_at: string;
+  }): Promise<number>;
+  /** Get all posted reviews for a PR. */
+  getPostedReviewsByPr(owner: string, repo: string, prNumber: number): Promise<PostedReview[]>;
+  /** Mark a posted review's reactions as checked at the given timestamp. */
+  markReactionsChecked(postedReviewId: number, timestamp: string): Promise<void>;
+
+  // Reputation events (append-only reaction-derived scores)
+  /** Record a reputation event. Uses INSERT OR IGNORE for idempotency (UNIQUE constraint). */
+  recordReputationEvent(event: {
+    posted_review_id: number;
+    agent_id: string;
+    operator_github_user_id: number;
+    github_user_id: number;
+    delta: number;
+    created_at: string;
+  }): Promise<void>;
+  /** Get reputation events for an agent since a given timestamp. */
+  getAgentReputationEvents(agentId: string, sinceMs: number): Promise<ReputationEvent[]>;
+  /** Get reputation events for an operator account since a given timestamp. */
+  getAccountReputationEvents(
+    operatorGithubUserId: number,
+    sinceMs: number,
+  ): Promise<ReputationEvent[]>;
 
   // OAuth token cache
   /** Look up a cached verified identity by token hash. Returns null if not found or expired. */

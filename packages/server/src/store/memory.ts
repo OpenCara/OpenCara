@@ -1,6 +1,6 @@
 import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
-import type { DataStore } from './interface.js';
+import type { DataStore, PostedReview, ReputationEvent } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
 
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
@@ -12,8 +12,17 @@ export class MemoryDataStore implements DataStore {
   private tasks = new Map<string, ReviewTask>();
   private claims = new Map<string, TaskClaim>();
   private agentLastSeen = new Map<string, number>();
-  private agentRejections: Array<{ agent_id: string; reason: string; created_at: number }> = [];
+  private agentRejections: Array<{
+    agent_id: string;
+    reason: string;
+    created_at: number;
+    github_user_id?: number;
+  }> = [];
   private oauthCache = new Map<string, { identity: VerifiedIdentity; expires_at: number }>();
+  private postedReviews: PostedReview[] = [];
+  private postedReviewNextId = 1;
+  private reputationEvents: ReputationEvent[] = [];
+  private reputationEventNextId = 1;
   private readonly ttlMs: number;
 
   constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
@@ -461,13 +470,111 @@ export class MemoryDataStore implements DataStore {
 
   // Agent rejections (abuse tracking)
 
-  async recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void> {
-    this.agentRejections.push({ agent_id: agentId, reason, created_at: timestamp });
+  async recordAgentRejection(
+    agentId: string,
+    reason: string,
+    timestamp: number,
+    githubUserId?: number,
+  ): Promise<void> {
+    this.agentRejections.push({
+      agent_id: agentId,
+      reason,
+      created_at: timestamp,
+      github_user_id: githubUserId,
+    });
   }
 
   async countAgentRejections(agentId: string, sinceMs: number): Promise<number> {
     return this.agentRejections.filter((r) => r.agent_id === agentId && r.created_at >= sinceMs)
       .length;
+  }
+
+  async countAccountRejections(githubUserId: number, sinceMs: number): Promise<number> {
+    return this.agentRejections.filter(
+      (r) => r.github_user_id === githubUserId && r.created_at >= sinceMs,
+    ).length;
+  }
+
+  // Posted reviews (reputation reaction tracking)
+
+  async recordPostedReview(review: {
+    owner: string;
+    repo: string;
+    pr_number: number;
+    group_id: string;
+    github_comment_id: number;
+    feature: string;
+    posted_at: string;
+  }): Promise<number> {
+    const id = this.postedReviewNextId++;
+    this.postedReviews.push({
+      id,
+      owner: review.owner,
+      repo: review.repo,
+      pr_number: review.pr_number,
+      group_id: review.group_id,
+      github_comment_id: review.github_comment_id,
+      feature: review.feature,
+      posted_at: review.posted_at,
+      reactions_checked_at: null,
+    });
+    return id;
+  }
+
+  async getPostedReviewsByPr(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<PostedReview[]> {
+    return this.postedReviews.filter(
+      (r) => r.owner === owner && r.repo === repo && r.pr_number === prNumber,
+    );
+  }
+
+  async markReactionsChecked(postedReviewId: number, timestamp: string): Promise<void> {
+    const review = this.postedReviews.find((r) => r.id === postedReviewId);
+    if (review) {
+      review.reactions_checked_at = timestamp;
+    }
+  }
+
+  // Reputation events (append-only)
+
+  async recordReputationEvent(event: {
+    posted_review_id: number;
+    agent_id: string;
+    operator_github_user_id: number;
+    github_user_id: number;
+    delta: number;
+    created_at: string;
+  }): Promise<void> {
+    // Idempotent: skip if (posted_review_id, agent_id, github_user_id) already exists
+    const exists = this.reputationEvents.some(
+      (e) =>
+        e.posted_review_id === event.posted_review_id &&
+        e.agent_id === event.agent_id &&
+        e.github_user_id === event.github_user_id,
+    );
+    if (exists) return;
+    this.reputationEvents.push({
+      id: this.reputationEventNextId++,
+      ...event,
+    });
+  }
+
+  async getAgentReputationEvents(agentId: string, sinceMs: number): Promise<ReputationEvent[]> {
+    const sinceIso = new Date(sinceMs).toISOString();
+    return this.reputationEvents.filter((e) => e.agent_id === agentId && e.created_at >= sinceIso);
+  }
+
+  async getAccountReputationEvents(
+    operatorGithubUserId: number,
+    sinceMs: number,
+  ): Promise<ReputationEvent[]> {
+    const sinceIso = new Date(sinceMs).toISOString();
+    return this.reputationEvents.filter(
+      (e) => e.operator_github_user_id === operatorGithubUserId && e.created_at >= sinceIso,
+    );
   }
 
   // OAuth token cache
@@ -523,6 +630,10 @@ export class MemoryDataStore implements DataStore {
     this.agentLastSeen.clear();
     this.agentRejections = [];
     this.oauthCache.clear();
+    this.postedReviews = [];
+    this.postedReviewNextId = 1;
+    this.reputationEvents = [];
+    this.reputationEventNextId = 1;
     this.timeoutLastCheck = 0;
   }
 }

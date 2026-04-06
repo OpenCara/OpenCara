@@ -1,6 +1,6 @@
 import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
-import type { DataStore } from './interface.js';
+import type { DataStore, PostedReview, ReputationEvent } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
 
 /** Terminal task statuses eligible for cleanup. */
@@ -891,10 +891,17 @@ export class D1DataStore implements DataStore {
 
   // ── Agent rejections (abuse tracking) ─────────────────────────
 
-  async recordAgentRejection(agentId: string, reason: string, timestamp: number): Promise<void> {
+  async recordAgentRejection(
+    agentId: string,
+    reason: string,
+    timestamp: number,
+    githubUserId?: number,
+  ): Promise<void> {
     await this.db
-      .prepare(`INSERT INTO agent_rejections (agent_id, reason, created_at) VALUES (?, ?, ?)`)
-      .bind(agentId, reason, timestamp)
+      .prepare(
+        `INSERT INTO agent_rejections (agent_id, reason, created_at, github_user_id) VALUES (?, ?, ?, ?)`,
+      )
+      .bind(agentId, reason, timestamp, githubUserId ?? null)
       .run();
   }
 
@@ -906,6 +913,116 @@ export class D1DataStore implements DataStore {
       .bind(agentId, sinceMs)
       .first<{ cnt: number }>();
     return row?.cnt ?? 0;
+  }
+
+  async countAccountRejections(githubUserId: number, sinceMs: number): Promise<number> {
+    const row = await this.db
+      .prepare(
+        'SELECT COUNT(*) as cnt FROM agent_rejections WHERE github_user_id = ? AND created_at >= ?',
+      )
+      .bind(githubUserId, sinceMs)
+      .first<{ cnt: number }>();
+    return row?.cnt ?? 0;
+  }
+
+  // ── Posted reviews (reputation reaction tracking) ──────────────
+
+  async recordPostedReview(review: {
+    owner: string;
+    repo: string;
+    pr_number: number;
+    group_id: string;
+    github_comment_id: number;
+    feature: string;
+    posted_at: string;
+  }): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO posted_reviews (owner, repo, pr_number, group_id, github_comment_id, feature, posted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        review.owner,
+        review.repo,
+        review.pr_number,
+        review.group_id,
+        review.github_comment_id,
+        review.feature,
+        review.posted_at,
+      )
+      .run();
+    return result.meta?.last_row_id ?? 0;
+  }
+
+  async getPostedReviewsByPr(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<PostedReview[]> {
+    const result = await this.db
+      .prepare('SELECT * FROM posted_reviews WHERE owner = ? AND repo = ? AND pr_number = ?')
+      .bind(owner, repo, prNumber)
+      .all<PostedReview>();
+    return result.results ?? [];
+  }
+
+  async markReactionsChecked(postedReviewId: number, timestamp: string): Promise<void> {
+    await this.db
+      .prepare('UPDATE posted_reviews SET reactions_checked_at = ? WHERE id = ?')
+      .bind(timestamp, postedReviewId)
+      .run();
+  }
+
+  // ── Reputation events (append-only) ────────────────────────────
+
+  async recordReputationEvent(event: {
+    posted_review_id: number;
+    agent_id: string;
+    operator_github_user_id: number;
+    github_user_id: number;
+    delta: number;
+    created_at: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT OR IGNORE INTO reputation_events
+        (posted_review_id, agent_id, operator_github_user_id, github_user_id, delta, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        event.posted_review_id,
+        event.agent_id,
+        event.operator_github_user_id,
+        event.github_user_id,
+        event.delta,
+        event.created_at,
+      )
+      .run();
+  }
+
+  async getAgentReputationEvents(agentId: string, sinceMs: number): Promise<ReputationEvent[]> {
+    const sinceIso = new Date(sinceMs).toISOString();
+    const result = await this.db
+      .prepare(
+        'SELECT * FROM reputation_events WHERE agent_id = ? AND created_at >= ? ORDER BY created_at DESC',
+      )
+      .bind(agentId, sinceIso)
+      .all<ReputationEvent>();
+    return result.results ?? [];
+  }
+
+  async getAccountReputationEvents(
+    operatorGithubUserId: number,
+    sinceMs: number,
+  ): Promise<ReputationEvent[]> {
+    const sinceIso = new Date(sinceMs).toISOString();
+    const result = await this.db
+      .prepare(
+        'SELECT * FROM reputation_events WHERE operator_github_user_id = ? AND created_at >= ? ORDER BY created_at DESC',
+      )
+      .bind(operatorGithubUserId, sinceIso)
+      .all<ReputationEvent>();
+    return result.results ?? [];
   }
 
   // ── OAuth token cache ────────────────────────────────────────

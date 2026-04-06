@@ -376,6 +376,26 @@ async function handleReviewSummaryResult(
     token,
   );
 
+  // Record the posted review for later reaction tracking
+  try {
+    await store.recordPostedReview({
+      owner: task.owner,
+      repo: task.repo,
+      pr_number: task.pr_number,
+      group_id: groupId,
+      github_comment_id: comment_id,
+      feature: task.feature,
+      posted_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    // Non-fatal — review was posted, just tracking failed
+    logger.error('Failed to record posted review', {
+      taskId: task.id,
+      commentId: comment_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   logger.info('Review posted to GitHub', {
     taskId: task.id,
     owner: task.owner,
@@ -1216,6 +1236,7 @@ export function taskRoutes() {
     const store = c.get('store');
     const github = c.get('github');
     const logger = c.get('logger');
+    const verifiedIdentity = c.get('verifiedIdentity');
     const taskId = c.req.param('taskId');
 
     // Manual JSON parsing (instead of parseBody) so we can extract agent_id
@@ -1241,7 +1262,12 @@ export function taskRoutes() {
         const trimmed = raw.review_text.trim();
         if (trimmed.length < REVIEW_TEXT_MIN_LENGTH || trimmed.length > REVIEW_TEXT_MAX_LENGTH) {
           const reason = trimmed.length < REVIEW_TEXT_MIN_LENGTH ? 'too_short' : 'too_long';
-          await store.recordAgentRejection(agentId, reason, Date.now());
+          await store.recordAgentRejection(
+            agentId,
+            reason,
+            Date.now(),
+            verifiedIdentity?.github_user_id,
+          );
           logger.warn('Review text rejected — abuse tracking recorded', {
             agentId,
             reason,
@@ -1333,6 +1359,7 @@ export function taskRoutes() {
             agent_id,
             `summary_quality: ${evaluation.reason}`,
             Date.now(),
+            verifiedIdentity?.github_user_id,
           );
 
           const retryCount = await store.incrementSummaryRetryCount(taskId);
