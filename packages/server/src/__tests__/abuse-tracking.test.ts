@@ -192,10 +192,16 @@ describe('Abuse Tracking', () => {
       expect(res.status).toBe(200);
     });
 
-    it('does not block unrelated agents', async () => {
-      await rejectNTimes('bad-agent', AGENT_REJECTION_THRESHOLD);
+    it('does not block unrelated agents from a different account', async () => {
+      // Record rejections directly with a specific github_user_id to avoid
+      // OAuth cache interference (API requests cache the token → user mapping)
+      const now = Date.now();
+      for (let i = 0; i < AGENT_REJECTION_THRESHOLD; i++) {
+        await store.recordAgentRejection('bad-agent', 'too_short', now, 9999);
+      }
       resetRateLimits();
 
+      // Default OAuth stub returns github_user_id=42, different from 9999
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'good-agent',
       });

@@ -171,6 +171,10 @@ export interface DataStore {
     sinceMs: number,
   ): Promise<ReputationEvent[]>;
 
+  // Agent cooldown (last completed claim timestamp)
+  /** Get the timestamp of an agent's most recent completed claim. Returns null if none. */
+  getAgentLastCompletedClaimAt(agentId: string): Promise<number | null>;
+
   // OAuth token cache
   /** Look up a cached verified identity by token hash. Returns null if not found or expired. */
   getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null>;

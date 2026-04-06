@@ -1025,6 +1025,16 @@ export class D1DataStore implements DataStore {
     return result.results ?? [];
   }
 
+  // ── Agent cooldown ───────────────────────────────────────────
+
+  async getAgentLastCompletedClaimAt(agentId: string): Promise<number | null> {
+    const row = await this.db
+      .prepare('SELECT MAX(created_at) as latest FROM claims WHERE agent_id = ? AND status = ?')
+      .bind(agentId, 'completed')
+      .first<{ latest: number | null }>();
+    return row?.latest ?? null;
+  }
+
   // ── OAuth token cache ────────────────────────────────────────
 
   async getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null> {
