@@ -255,10 +255,11 @@ export class MemoryDataStore implements DataStore {
       worker.status = 'completed';
     }
 
-    // Step 2: Check if all review tasks in the group are completed
+    // Step 2: Check if all worker tasks in the group are completed
     const groupId = summaryTask.group_id;
     const groupTasks = [...this.tasks.values()].filter((t) => t.group_id === groupId);
-    const reviewTasks = groupTasks.filter((t) => t.task_type === 'review');
+    const workerTypes = new Set(['review', 'issue_review']);
+    const reviewTasks = groupTasks.filter((t) => workerTypes.has(t.task_type));
     const completedReviews = reviewTasks.filter((t) => t.status === 'completed');
 
     if (completedReviews.length < reviewTasks.length) return false;

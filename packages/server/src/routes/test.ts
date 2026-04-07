@@ -3,11 +3,11 @@
  * Only mounted by createTestApp(), never in production.
  */
 import { Hono } from 'hono';
-import type { ReviewConfig } from '@opencara/shared';
-import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
+import type { ReviewConfig, IssueReviewConfig, ReviewTask } from '@opencara/shared';
+import { DEFAULT_REVIEW_CONFIG, DEFAULT_ISSUE_REVIEW_TRIGGER } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import { MemoryDataStore } from '../store/memory.js';
-import { createTaskForPR } from './webhook.js';
+import { createTaskForPR, createTaskGroup } from './webhook.js';
 import { resetTimeoutThrottle } from './tasks.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 
@@ -105,6 +105,88 @@ export function testRoutes() {
     const taskId = c.req.param('taskId');
     const claims = await store.getClaims(taskId);
     return c.json({ claims });
+  });
+
+  /**
+   * POST /test/events/issue — Inject an issue event without webhook signature.
+   * Creates an issue_review task group for e2e testing of the result pipeline.
+   */
+  app.post('/test/events/issue', async (c) => {
+    const store = c.get('store');
+    const logger = c.get('logger');
+    const body = await c.req.json<{
+      owner?: string;
+      repo?: string;
+      issue_number?: number;
+      issue_title?: string;
+      issue_body?: string;
+      issue_author?: string;
+      installation_id?: number;
+      config?: Partial<IssueReviewConfig>;
+    }>();
+
+    const owner = body.owner ?? 'test-org';
+    const repo = body.repo ?? 'test-repo';
+    const issueNumber = body.issue_number ?? 1;
+    const installationId = body.installation_id ?? 999;
+
+    const defaultConfig: IssueReviewConfig = {
+      enabled: true,
+      prompt: 'Review this issue for clarity, completeness, and actionability.',
+      agentCount: 2,
+      timeout: '5m',
+      preferredModels: [],
+      preferredTools: [],
+      modelDiversityGraceMs: 30_000,
+      trigger: DEFAULT_ISSUE_REVIEW_TRIGGER,
+    };
+    const config: IssueReviewConfig = body.config
+      ? { ...defaultConfig, ...body.config }
+      : defaultConfig;
+
+    const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+      owner,
+      repo,
+      pr_number: 0,
+      pr_url: '',
+      diff_url: '',
+      base_ref: '',
+      head_ref: '',
+      review_count: config.agentCount,
+      timeout_at: Date.now() + 5 * 60 * 1000,
+      status: 'pending',
+      queue: config.agentCount > 1 ? 'review' : 'summary',
+      github_installation_id: installationId,
+      private: false,
+      config: DEFAULT_REVIEW_CONFIG,
+      created_at: Date.now(),
+    };
+
+    const issueFields: Partial<ReviewTask> = {
+      issue_number: issueNumber,
+      issue_url: `https://github.com/${owner}/${repo}/issues/${issueNumber}`,
+      issue_title: body.issue_title ?? `Test issue #${issueNumber}`,
+      issue_body: body.issue_body ?? 'Test issue body',
+      issue_author: body.issue_author ?? 'test-user',
+    };
+
+    const groupId = await createTaskGroup(
+      store,
+      'issue_review',
+      config,
+      baseTask,
+      logger,
+      issueFields,
+    );
+
+    if (!groupId) {
+      return c.json({ created: false, reason: 'Active task already exists for this issue' }, 200);
+    }
+
+    const groupTasks = await store.getTasksByGroup(groupId);
+    const firstTaskId = groupTasks.length > 0 ? groupTasks[0].id : groupId;
+
+    return c.json({ created: true, task_id: firstTaskId, group_id: groupId }, 201);
   });
 
   return app;

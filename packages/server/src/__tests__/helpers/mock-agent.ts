@@ -151,4 +151,29 @@ export class MockAgent {
     const body = (await res.json()) as { created: boolean; task_id?: string; group_id?: string };
     return { created: body.created, taskId: body.task_id, groupId: body.group_id };
   }
+
+  /** Inject an issue event via test routes (bypasses webhook signature). */
+  async injectIssue(opts?: {
+    owner?: string;
+    repo?: string;
+    issueNumber?: number;
+    reviewCount?: number;
+    timeout?: string;
+  }): Promise<{ created: boolean; taskId?: string; groupId?: string }> {
+    const config = {
+      agentCount: opts?.reviewCount ?? 1,
+      preferredModels: [] as string[],
+      preferredTools: [] as string[],
+      ...(opts?.timeout ? { timeout: opts.timeout } : {}),
+    };
+
+    const res = await this.request('POST', '/test/events/issue', {
+      owner: opts?.owner ?? 'test-org',
+      repo: opts?.repo ?? 'test-repo',
+      issue_number: opts?.issueNumber ?? 1,
+      config,
+    });
+    const body = (await res.json()) as { created: boolean; task_id?: string; group_id?: string };
+    return { created: body.created, taskId: body.task_id, groupId: body.group_id };
+  }
 }
