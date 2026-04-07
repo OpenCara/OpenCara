@@ -263,7 +263,7 @@ export async function createTaskGroup(
   const timeoutMs = parseTimeoutMs(featureConfig.timeout);
 
   // Phase 1: Build all tasks up front (validate prompts before any DB writes)
-  // Assign per-task preferred model (round-robin) to ensure model diversity.
+  // Assign one preferred model per task (sequential) to ensure model diversity.
   // Tasks beyond the preferred models list get empty preferredModels (available to all).
   const allPreferredModels = baseTask.config.preferredModels;
   const tasks: ReviewTask[] = [];
