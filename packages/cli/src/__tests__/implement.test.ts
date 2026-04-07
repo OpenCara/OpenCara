@@ -14,6 +14,7 @@ import {
   parseImplementOutput,
   executeImplement,
   executeImplementTask,
+  ensurePromptViaArg,
   detectDefaultBranch,
   resolveStartRef,
   checkoutForImplement,
@@ -243,6 +244,40 @@ describe('parseImplementOutput', () => {
   });
 });
 
+// ── ensurePromptViaArg ──────────────────────────────────────────
+
+describe('ensurePromptViaArg', () => {
+  it('appends -p for claude commands without ${PROMPT}', () => {
+    const cmd = "claude --permission-mode 'dontAsk' --model claude-opus-4-6 --print";
+    expect(ensurePromptViaArg(cmd)).toBe(cmd + " -p '${PROMPT}'");
+  });
+
+  it('leaves claude commands that already have ${PROMPT} unchanged', () => {
+    const cmd = "claude --model claude-opus-4-6 --print -p '${PROMPT}'";
+    expect(ensurePromptViaArg(cmd)).toBe(cmd);
+  });
+
+  it('leaves non-claude commands unchanged', () => {
+    const cmd = 'codex --model gpt-4 --print';
+    expect(ensurePromptViaArg(cmd)).toBe(cmd);
+  });
+
+  it('leaves gemini commands unchanged', () => {
+    const cmd = 'gemini --model gemini-pro';
+    expect(ensurePromptViaArg(cmd)).toBe(cmd);
+  });
+
+  it('does not modify commands with absolute path to non-claude binary', () => {
+    const cmd = '/usr/local/bin/codex --print';
+    expect(ensurePromptViaArg(cmd)).toBe(cmd);
+  });
+
+  it('handles ${PROMPT} in non-claude commands unchanged', () => {
+    const cmd = "codex --print -p '${PROMPT}'";
+    expect(ensurePromptViaArg(cmd)).toBe(cmd);
+  });
+});
+
 // ── executeImplement ────────────────────────────────────────────
 
 describe('executeImplement', () => {
@@ -264,8 +299,9 @@ describe('executeImplement', () => {
       mockTool,
     );
 
+    // Claude commands get -p '${PROMPT}' appended automatically
     expect(mockTool).toHaveBeenCalledWith(
-      deps.commandTemplate,
+      deps.commandTemplate + " -p '${PROMPT}'",
       expect.stringContaining('Issue #42'),
       expect.any(Number),
       undefined,
@@ -274,6 +310,44 @@ describe('executeImplement', () => {
     );
     expect(result.output.summary).toBe('Added feature');
     expect(result.output.filesChanged).toEqual(['src/app.ts']);
+  });
+
+  it('does not modify command template when ${PROMPT} is already present', async () => {
+    const depsWithPrompt: ImplementExecutorDeps = {
+      commandTemplate: "claude --model test --print -p '${PROMPT}'",
+      codebaseDir: '/tmp/repos',
+    };
+    const mockTool = vi.fn().mockResolvedValue(makeToolResult('{"summary": "ok"}'));
+
+    await executeImplement(makeTask(), '/tmp/wt', depsWithPrompt, 300, undefined, mockTool);
+
+    expect(mockTool).toHaveBeenCalledWith(
+      depsWithPrompt.commandTemplate,
+      expect.any(String),
+      expect.any(Number),
+      undefined,
+      undefined,
+      '/tmp/wt',
+    );
+  });
+
+  it('does not modify non-claude command templates', async () => {
+    const depsCodex: ImplementExecutorDeps = {
+      commandTemplate: 'codex --model gpt-4 --print',
+      codebaseDir: '/tmp/repos',
+    };
+    const mockTool = vi.fn().mockResolvedValue(makeToolResult('{"summary": "ok"}'));
+
+    await executeImplement(makeTask(), '/tmp/wt', depsCodex, 300, undefined, mockTool);
+
+    expect(mockTool).toHaveBeenCalledWith(
+      depsCodex.commandTemplate,
+      expect.any(String),
+      expect.any(Number),
+      undefined,
+      undefined,
+      '/tmp/wt',
+    );
   });
 
   it('uses effective timeout minus safety margin', async () => {
@@ -389,9 +463,9 @@ describe('executeImplementTask', () => {
       '/tmp/repos',
     );
 
-    // Verify AI tool was run in worktree
+    // Verify AI tool was run in worktree with -p '${PROMPT}' appended
     expect(mockTool).toHaveBeenCalledWith(
-      deps.commandTemplate,
+      deps.commandTemplate + " -p '${PROMPT}'",
       expect.stringContaining('Issue #42'),
       expect.any(Number),
       undefined,
