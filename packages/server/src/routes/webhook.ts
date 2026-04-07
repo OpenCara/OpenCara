@@ -195,6 +195,7 @@ const FEATURE_ROLE_MAP: Partial<Record<Feature, TaskRole>> = {
   triage: 'issue_triage',
   implement: 'implement',
   fix: 'fix',
+  issue_review: 'issue_review',
 };
 
 /**
@@ -421,7 +422,7 @@ async function createPrTaskGroups(
 }
 
 /**
- * Create task groups for an issue event: triage + dedup.issues.
+ * Create task groups for an issue event: triage + dedup.issues + issue_review.
  */
 async function createIssueTaskGroups(
   store: DataStore,
@@ -501,6 +502,30 @@ async function createIssueTaskGroups(
           : {}),
       },
       primaryCreated, // true if triage group was created → skip dedup
+    );
+  }
+
+  // Issue review task group (event trigger)
+  if (
+    fullConfig.issue_review?.enabled &&
+    isEventTriggerEnabled(fullConfig.issue_review.trigger) &&
+    fullConfig.issue_review.trigger.events!.includes(action)
+  ) {
+    const issueReviewConfig = fullConfig.issue_review;
+    const irBaseTask = {
+      ...baseTask,
+      review_count: issueReviewConfig.agentCount,
+      timeout_at: Date.now() + parseTimeoutMs(issueReviewConfig.timeout),
+      queue: (issueReviewConfig.agentCount > 1 ? 'review' : 'summary') as ReviewTask['queue'],
+    };
+    await createTaskGroup(
+      store,
+      'issue_review',
+      issueReviewConfig,
+      irBaseTask,
+      logger,
+      issueFields,
+      primaryCreated,
     );
   }
 }
@@ -996,8 +1021,12 @@ export async function handleIssueEvent(
     isEventTriggerEnabled(fullConfig.triage.trigger) &&
     fullConfig.triage.trigger.events!.includes(action);
   const dedupIssuesEnabled = fullConfig.dedup?.issues?.enabled;
+  const issueReviewEnabled =
+    fullConfig.issue_review?.enabled &&
+    isEventTriggerEnabled(fullConfig.issue_review.trigger) &&
+    fullConfig.issue_review.trigger.events!.includes(action);
 
-  if (!triageEnabled && !dedupIssuesEnabled) {
+  if (!triageEnabled && !dedupIssuesEnabled && !issueReviewEnabled) {
     logger.info('No issue features enabled — skipping', {
       owner,
       repo,
@@ -1260,6 +1289,21 @@ export function parseTriageCommand(body: string): { targetModel?: string } | nul
   return { targetModel: match[1] || undefined };
 }
 
+/**
+ * Parse an issue review command from a comment body.
+ * Matches `/opencara review-issue` or `@opencara review-issue`.
+ * Also matches `/opencara review` or `@opencara review` (when used on issues).
+ * Returns an empty object if matched, null if not.
+ */
+export function parseIssueReviewCommand(body: string): Record<string, never> | null {
+  const trimmed = body.trim();
+  // Match /opencara review-issue or @opencara review-issue
+  if (/^[/@]opencara\s+review-issue\s*$/i.test(trimmed)) return {};
+  // Match /opencara review or @opencara review (bare, no subcommand)
+  if (/^[/@]opencara\s+review\s*$/i.test(trimmed)) return {};
+  return null;
+}
+
 async function handleIssueComment(
   github: GitHubService,
   store: DataStore,
@@ -1273,7 +1317,7 @@ async function handleIssueComment(
     return new Response('OK', { status: 200 });
   }
 
-  // Issue-only commands: go and triage (not valid on PRs)
+  // Issue-only commands: go, triage, and issue review (not valid on PRs)
   if (!issue.pull_request) {
     const goCmd = parseGoCommand(comment.body);
     if (goCmd) {
@@ -1304,6 +1348,22 @@ async function handleIssueComment(
         repository.default_branch ?? 'main',
         comment,
         triageCmd,
+        repository.private ?? false,
+        logger,
+      );
+    }
+
+    const issueReviewCmd = parseIssueReviewCommand(comment.body);
+    if (issueReviewCmd) {
+      return handleIssueReviewCommand(
+        github,
+        store,
+        installation.id,
+        repository.owner.login,
+        repository.name,
+        issue.number,
+        repository.default_branch ?? 'main',
+        comment,
         repository.private ?? false,
         logger,
       );
@@ -2034,6 +2094,145 @@ async function handleTriageCommand(
   return new Response('OK', { status: 200 });
 }
 
+/**
+ * Handle `/opencara review-issue` or `/opencara review` command on an issue comment.
+ * Creates an issue_review task group with issue context.
+ */
+async function handleIssueReviewCommand(
+  github: GitHubService,
+  store: DataStore,
+  installationId: number,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  defaultBranch: string,
+  comment: IssueCommentPayload['comment'],
+  isPrivate: boolean,
+  logger: Logger,
+): Promise<Response> {
+  if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
+    logger.info('Issue review command ignored — not a trusted contributor', {
+      owner,
+      repo,
+      issueNumber,
+      user: comment.user.login,
+      association: comment.author_association,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  logger.info('Issue review command received', {
+    user: comment.user.login,
+    owner,
+    repo,
+    issueNumber,
+  });
+
+  let token: string;
+  try {
+    token = await github.getInstallationToken(installationId);
+  } catch (err) {
+    logger.error('Failed to get installation token', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const { config: fullConfig, parseError } = await github.loadOpenCaraConfig(
+    owner,
+    repo,
+    defaultBranch,
+    token,
+  );
+
+  if (parseError) {
+    logger.info('Aborting issue review command due to .opencara.toml parse error', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  if (!fullConfig.issue_review?.enabled) {
+    logger.info('Issue review command ignored — [issue_review].enabled is not true', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  if (!isCommentTriggerEnabled(fullConfig.issue_review.trigger)) {
+    logger.info('Issue review command ignored — comment trigger not enabled', {
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  // Fetch issue details from GitHub API
+  let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
+  try {
+    issue = await github.fetchIssueDetails(owner, repo, issueNumber, token);
+  } catch (err) {
+    logger.error('Failed to fetch issue details', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+  if (!issue) {
+    logger.error('Issue not found', { owner, repo, issueNumber });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  const issueReviewConfig = fullConfig.issue_review;
+  const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+  const timeoutMs = parseTimeoutMs(issueReviewConfig.timeout);
+
+  const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+    owner,
+    repo,
+    pr_number: 0,
+    pr_url: '',
+    diff_url: '',
+    base_ref: '',
+    head_ref: '',
+    review_count: issueReviewConfig.agentCount,
+    timeout_at: Date.now() + timeoutMs,
+    status: 'pending',
+    queue: issueReviewConfig.agentCount > 1 ? 'review' : 'summary',
+    github_installation_id: installationId,
+    private: isPrivate,
+    config: reviewConfig,
+    created_at: Date.now(),
+  };
+
+  try {
+    await createTaskGroup(store, 'issue_review', issueReviewConfig, baseTask, logger, {
+      issue_number: issue.number,
+      issue_url: issue.html_url,
+      issue_title: issue.title,
+      issue_body: issue.body ?? undefined,
+      issue_author: issue.user.login,
+    });
+  } catch (err) {
+    logger.error('Failed to create issue review task group', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      issueNumber,
+    });
+    return new Response('Service Unavailable', { status: 503 });
+  }
+
+  return new Response('OK', { status: 200 });
+}
+
 // ── Label Trigger Handlers ──────────────────────────────────────
 
 /**
@@ -2432,6 +2631,40 @@ async function handleIssueLabelTrigger(
     );
   }
 
+  // Issue review label trigger
+  if (
+    fullConfig.issue_review?.enabled &&
+    isLabelTriggerEnabled(fullConfig.issue_review.trigger) &&
+    fullConfig.issue_review.trigger.label === addedLabel
+  ) {
+    logger.info('Issue review label trigger matched', {
+      owner,
+      repo,
+      issueNumber: issue.number,
+      label: addedLabel,
+    });
+
+    const issueReviewConfig = fullConfig.issue_review;
+    const irTimeoutMs = parseTimeoutMs(issueReviewConfig.timeout);
+    const irBaseTask = {
+      ...baseTask,
+      review_count: issueReviewConfig.agentCount,
+      timeout_at: Date.now() + irTimeoutMs,
+      queue: (issueReviewConfig.agentCount > 1 ? 'review' : 'summary') as ReviewTask['queue'],
+    };
+
+    const groupId = await createTaskGroup(
+      store,
+      'issue_review',
+      issueReviewConfig,
+      irBaseTask,
+      logger,
+      issueFields,
+      created,
+    );
+    if (groupId !== null) created = true;
+  }
+
   if (!created) {
     logger.info('Issue label did not match any trigger — no tasks created', {
       owner,
@@ -2624,6 +2857,75 @@ async function handleProjectsV2Item(
       });
     } catch (err) {
       logger.error('Failed to create implement task group from status trigger', {
+        error: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        issueNumber: number,
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+  }
+
+  // Issue review status trigger (issues only)
+  if (
+    type === 'Issue' &&
+    fullConfig.issue_review?.enabled &&
+    isStatusTriggerEnabled(fullConfig.issue_review.trigger) &&
+    fullConfig.issue_review.trigger.status === newStatus
+  ) {
+    logger.info('Issue review status trigger matched', {
+      owner,
+      repo,
+      issueNumber: number,
+      status: newStatus,
+    });
+
+    let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
+    try {
+      issue = await github.fetchIssueDetails(owner, repo, number, token);
+    } catch (err) {
+      logger.error('Failed to fetch issue details for issue review status trigger', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+    if (!issue) {
+      logger.error('Issue not found for issue review status trigger', { owner, repo, number });
+      return new Response('Service Unavailable', { status: 503 });
+    }
+
+    const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
+    const issueReviewConfig = fullConfig.issue_review;
+    const timeoutMs = parseTimeoutMs(issueReviewConfig.timeout);
+
+    const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+      owner,
+      repo,
+      pr_number: 0,
+      pr_url: '',
+      diff_url: '',
+      base_ref: '',
+      head_ref: '',
+      review_count: issueReviewConfig.agentCount,
+      timeout_at: Date.now() + timeoutMs,
+      status: 'pending',
+      queue: issueReviewConfig.agentCount > 1 ? 'review' : 'summary',
+      github_installation_id: installation.id,
+      private: false,
+      config: reviewConfig,
+      created_at: Date.now(),
+    };
+
+    try {
+      await createTaskGroup(store, 'issue_review', issueReviewConfig, baseTask, logger, {
+        issue_number: issue.number,
+        issue_url: issue.html_url,
+        issue_title: issue.title,
+        issue_body: issue.body ?? undefined,
+        issue_author: issue.user.login,
+      });
+    } catch (err) {
+      logger.error('Failed to create issue review task group from status trigger', {
         error: err instanceof Error ? err.message : String(err),
         owner,
         repo,

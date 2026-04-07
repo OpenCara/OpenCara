@@ -644,6 +644,53 @@ async function handleFixSummaryResult(
 }
 
 /**
+ * Handle issue review summary result — post comment on the issue with
+ * "OpenCara Issue Review" title and contributor attribution.
+ */
+async function handleIssueReviewSummaryResult(
+  store: DataStore,
+  github: GitHubService,
+  task: ReviewTask,
+  groupId: string,
+  reviewText: string,
+  logger: Logger,
+): Promise<void> {
+  if (!task.issue_number) {
+    throw new Error(`Issue review result but no issue_number on task ${task.id}`);
+  }
+
+  // Collect unique contributors from all claims in the group
+  let contributors: string[] = [];
+  try {
+    const groupTasks = await store.getTasksByGroup(groupId);
+    for (const gt of groupTasks) {
+      const claims = await store.getClaims(gt.id);
+      for (const c of claims) {
+        if (c.github_username) contributors.push(c.github_username);
+      }
+    }
+    contributors = [...new Set(contributors)];
+  } catch {
+    // Non-fatal — post review without contributor attribution
+  }
+
+  const token = await github.getInstallationToken(task.github_installation_id);
+  const commentBody = wrapReviewComment(
+    reviewText.trim(),
+    contributors.length > 0 ? contributors : undefined,
+    'OpenCara Issue Review',
+  );
+  await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
+
+  logger.info('Issue review result posted to GitHub', {
+    taskId: task.id,
+    owner: task.owner,
+    repo: task.repo,
+    issueNumber: task.issue_number,
+  });
+}
+
+/**
  * Post a fallback consolidated review to GitHub when all summary retries are exhausted.
  * Uses the timeout-style format: individual reviews concatenated.
  */
@@ -1585,6 +1632,16 @@ export function taskRoutes() {
               task,
               task.group_id,
               fix_report as FixReport | undefined,
+              review_text,
+              logger,
+            );
+            break;
+          case 'issue_review':
+            await handleIssueReviewSummaryResult(
+              store,
+              github,
+              task,
+              task.group_id,
               review_text,
               logger,
             );

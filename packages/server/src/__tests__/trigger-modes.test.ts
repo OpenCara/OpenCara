@@ -22,7 +22,7 @@ import { MemoryDataStore } from '../store/memory.js';
 import { createApp } from '../index.js';
 import { resetRateLimits } from '../middleware/rate-limit.js';
 import { resetTimeoutThrottle } from '../routes/tasks.js';
-import { parseTriageCommand } from '../routes/webhook.js';
+import { parseTriageCommand, parseIssueReviewCommand } from '../routes/webhook.js';
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -128,6 +128,9 @@ class TestGitHubService implements GitHubService {
     number: number;
   } | null> {
     return this.resolveProjectItemResult;
+  }
+  async readProjectFieldValue(): Promise<string | null> {
+    return null;
   }
 }
 
@@ -318,6 +321,17 @@ const DEFAULT_FIX_CONFIG = {
   preferredTools: [] as string[],
   modelDiversityGraceMs: 30_000,
   trigger: { comment: '/opencara fix' },
+};
+
+const DEFAULT_ISSUE_REVIEW_CONFIG = {
+  enabled: true,
+  prompt: 'Review this issue for clarity, completeness, and actionability.',
+  agentCount: 2,
+  timeout: '5m',
+  preferredModels: [] as string[],
+  preferredTools: [] as string[],
+  modelDiversityGraceMs: 30_000,
+  trigger: { comment: '/opencara review-issue' },
 };
 
 // ── Tests ──────────────────────────────────────────────────────
@@ -1605,6 +1619,578 @@ describe('Unified trigger modes', () => {
       const prTasks = await store.listTasks();
       expect(prTasks).toHaveLength(1);
       expect(prTasks[0].feature).toBe('review');
+    });
+  });
+
+  // ── parseIssueReviewCommand ───────────────────────────────────
+
+  describe('parseIssueReviewCommand', () => {
+    it('parses /opencara review-issue', () => {
+      expect(parseIssueReviewCommand('/opencara review-issue')).toEqual({});
+    });
+
+    it('parses @opencara review-issue', () => {
+      expect(parseIssueReviewCommand('@opencara review-issue')).toEqual({});
+    });
+
+    it('parses /opencara review (bare)', () => {
+      expect(parseIssueReviewCommand('/opencara review')).toEqual({});
+    });
+
+    it('parses @opencara review (bare)', () => {
+      expect(parseIssueReviewCommand('@opencara review')).toEqual({});
+    });
+
+    it('is case-insensitive', () => {
+      expect(parseIssueReviewCommand('/OpenCara Review-Issue')).toEqual({});
+      expect(parseIssueReviewCommand('/OPENCARA REVIEW')).toEqual({});
+    });
+
+    it('handles leading/trailing whitespace', () => {
+      expect(parseIssueReviewCommand('  /opencara review-issue  ')).toEqual({});
+      expect(parseIssueReviewCommand('  /opencara review  ')).toEqual({});
+    });
+
+    it('returns null for non-review commands', () => {
+      expect(parseIssueReviewCommand('/opencara triage')).toBeNull();
+      expect(parseIssueReviewCommand('/opencara go')).toBeNull();
+      expect(parseIssueReviewCommand('/opencara fix')).toBeNull();
+      expect(parseIssueReviewCommand('hello world')).toBeNull();
+      expect(parseIssueReviewCommand('')).toBeNull();
+    });
+
+    it('returns null for review with extra arguments', () => {
+      expect(parseIssueReviewCommand('/opencara review-issue extra')).toBeNull();
+      expect(parseIssueReviewCommand('/opencara review extra')).toBeNull();
+    });
+  });
+
+  // ── Issue Review Triggers ──────────────────────────────────────
+
+  describe('Issue review triggers', () => {
+    it('comment trigger: /opencara review-issue creates issue_review task group', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { comment: '/opencara review-issue' },
+        },
+      };
+
+      const payload = makeIssueCommentPayload('/opencara review-issue');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+      expect(tasks[0].issue_number).toBe(10);
+      expect(tasks[0].issue_title).toBe('Test issue #10');
+    });
+
+    it('comment trigger: /opencara review on issue creates issue_review tasks', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { comment: '/opencara review-issue' },
+        },
+      };
+
+      const payload = makeIssueCommentPayload('/opencara review');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+    });
+
+    it('comment trigger on PR still creates review tasks (no regression)', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig({
+          trigger: { comment: '/opencara review' },
+        }),
+        issue_review: DEFAULT_ISSUE_REVIEW_CONFIG,
+      };
+
+      const payload = makePrCommentPayload('/opencara review');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      // PR comment should create review tasks, NOT issue_review
+      expect(tasks.every((t) => t.feature === 'review')).toBe(true);
+    });
+
+    it('comment trigger ignored for untrusted users', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { comment: '/opencara review-issue' },
+        },
+      };
+
+      const payload = makeIssueCommentPayload('/opencara review-issue', {
+        comment: {
+          body: '/opencara review-issue',
+          user: { login: 'stranger' },
+          author_association: 'NONE',
+        },
+      });
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('comment trigger ignored when issue_review disabled', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          enabled: false,
+          trigger: { comment: '/opencara review-issue' },
+        },
+      };
+
+      const payload = makeIssueCommentPayload('/opencara review-issue');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('comment trigger ignored when comment trigger not enabled', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          // No comment in trigger → not enabled
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = makeIssueCommentPayload('/opencara review-issue');
+      const res = await sendWebhook(app, 'issue_comment', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('event trigger: issues.opened creates issue_review task group', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'New feature request',
+          body: 'Please add feature X',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+      expect(tasks[0].issue_number).toBe(15);
+      expect(tasks[0].issue_title).toBe('New feature request');
+      expect(tasks[0].issue_body).toBe('Please add feature X');
+      expect(tasks[0].issue_author).toBe('alice');
+    });
+
+    it('event trigger: issues.edited creates issue_review task group', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { events: ['opened', 'edited'] },
+        },
+      };
+
+      const payload = {
+        action: 'edited',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'Updated feature request',
+          body: 'Please add feature Y',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+    });
+
+    it('event trigger: no tasks when issue_review not in config', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        // No issue_review section
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'New feature request',
+          body: 'Please add feature X',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('event trigger: no tasks when issue_review disabled', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          enabled: false,
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'New feature request',
+          body: 'Please add feature X',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('event trigger: skips PR events (issues with pull_request field)', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 42,
+          html_url: 'https://github.com/acme/widget/pull/42',
+          title: 'PR title',
+          body: 'PR body',
+          user: { login: 'alice' },
+          pull_request: { url: 'https://api.github.com/repos/acme/widget/pulls/42' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('label trigger: creates issue_review task group', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { label: 'needs-review' },
+        },
+      };
+
+      const payload = makeIssueLabelPayload('needs-review');
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+      expect(tasks[0].issue_number).toBe(10);
+    });
+
+    it('label trigger: no tasks when label does not match', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { label: 'needs-review' },
+        },
+      };
+
+      const payload = makeIssueLabelPayload('other-label');
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('status trigger: creates issue_review task group', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { status: 'Needs Review' },
+        },
+      };
+
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 20,
+      };
+
+      const payload = makeProjectsV2ItemPayload('Needs Review');
+      const res = await sendWebhook(app, 'projects_v2_item', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks.length).toBeGreaterThan(0);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+      expect(tasks[0].issue_number).toBe(20);
+    });
+
+    it('status trigger: no tasks for PR items', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { status: 'Needs Review' },
+        },
+      };
+
+      github.resolveProjectItemResult = {
+        type: 'PullRequest',
+        owner: 'acme',
+        repo: 'widget',
+        number: 42,
+      };
+
+      const payload = makeProjectsV2ItemPayload('Needs Review');
+      const res = await sendWebhook(app, 'projects_v2_item', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('status trigger: no tasks when status does not match', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { status: 'Needs Review' },
+        },
+      };
+
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 20,
+      };
+
+      const payload = makeProjectsV2ItemPayload('In Progress');
+      const res = await sendWebhook(app, 'projects_v2_item', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('issue_review tasks have correct task_type (issue_review)', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          agentCount: 1, // single agent → task_type should be issue_review
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'Test issue',
+          body: 'Body',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].task_type).toBe('issue_review');
+    });
+
+    it('multi-agent issue_review creates worker + summary tasks', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          agentCount: 3, // 3 agents → 2 worker tasks (issue_review type)
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'Test issue',
+          body: 'Body',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      // agentCount=3 → taskCount = 3-1 = 2 worker tasks
+      expect(tasks).toHaveLength(2);
+      expect(tasks.every((t) => t.feature === 'issue_review')).toBe(true);
+      expect(tasks.every((t) => t.task_type === 'issue_review')).toBe(true);
+    });
+
+    it('combined triggers: event + triage both create tasks', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        triage: {
+          ...DEFAULT_TRIAGE_CONFIG,
+          trigger: { events: ['opened'] },
+        },
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { events: ['opened'] },
+        },
+      };
+
+      const payload = {
+        action: 'opened',
+        installation: { id: 999 },
+        repository: {
+          owner: { login: 'acme' },
+          name: 'widget',
+          default_branch: 'main',
+          private: false,
+        },
+        issue: {
+          number: 15,
+          html_url: 'https://github.com/acme/widget/issues/15',
+          title: 'New issue',
+          body: 'Body',
+          user: { login: 'alice' },
+          labels: [],
+        },
+      };
+
+      const res = await sendWebhook(app, 'issues', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      const features = tasks.map((t) => t.feature);
+      expect(features).toContain('triage');
+      expect(features).toContain('issue_review');
     });
   });
 });
