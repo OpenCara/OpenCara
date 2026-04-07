@@ -5,6 +5,7 @@ import {
   LARGE_DIFF_TRIAGE_BLOCK,
   TRIAGE_SYSTEM_PROMPT,
   IMPLEMENT_SYSTEM_PROMPT,
+  ISSUE_REVIEW_SYSTEM_PROMPT,
   buildSystemPrompt,
   buildUserMessage,
   buildSummarySystemPrompt,
@@ -14,6 +15,7 @@ import {
   buildFixPrompt,
   buildDedupPrompt,
   buildIndexEntryPrompt,
+  buildIssueReviewPrompt,
 } from '../prompts.js';
 import type { PollTask } from '@opencara/shared';
 
@@ -380,5 +382,64 @@ describe('buildIndexEntryPrompt', () => {
   it('requests description under 120 characters', () => {
     const prompt = buildIndexEntryPrompt(prItem, 'prs');
     expect(prompt).toContain('120 characters');
+  });
+});
+
+// ── ISSUE_REVIEW_SYSTEM_PROMPT ──────────────────────────────────
+
+describe('ISSUE_REVIEW_SYSTEM_PROMPT', () => {
+  it('contains review criteria', () => {
+    expect(ISSUE_REVIEW_SYSTEM_PROMPT).toContain('quality reviewer');
+    expect(ISSUE_REVIEW_SYSTEM_PROMPT).toContain('Clarity');
+    expect(ISSUE_REVIEW_SYSTEM_PROMPT).toContain('Completeness');
+    expect(ISSUE_REVIEW_SYSTEM_PROMPT).toContain('Actionability');
+    expect(ISSUE_REVIEW_SYSTEM_PROMPT).toContain('UNTRUSTED');
+  });
+});
+
+// ── buildIssueReviewPrompt ──────────────────────────────────────
+
+describe('buildIssueReviewPrompt', () => {
+  const baseTask: PollTask = {
+    task_id: 'task-1',
+    pr_number: 0,
+    owner: 'org',
+    repo: 'project',
+    diff_url: '',
+    role: 'issue_review',
+    issue_number: 10,
+  };
+
+  it('uses issue title when available', () => {
+    const prompt = buildIssueReviewPrompt({ ...baseTask, issue_title: 'Fix login' });
+    expect(prompt).toContain('Fix login');
+  });
+
+  it('falls back to issue number when no title', () => {
+    const prompt = buildIssueReviewPrompt(baseTask);
+    expect(prompt).toContain('Issue #10');
+  });
+
+  it('includes issue body in untrusted content tags', () => {
+    const prompt = buildIssueReviewPrompt({ ...baseTask, issue_body: 'body text' });
+    expect(prompt).toContain('<UNTRUSTED_CONTENT>');
+    expect(prompt).toContain('body text');
+  });
+
+  it('truncates large bodies', () => {
+    const bigBody = 'a'.repeat(11 * 1024);
+    const prompt = buildIssueReviewPrompt({ ...baseTask, issue_body: bigBody });
+    expect(prompt).toContain('truncated');
+  });
+
+  it('includes repo-specific prompt when provided', () => {
+    const prompt = buildIssueReviewPrompt({ ...baseTask, prompt: 'custom instructions' });
+    expect(prompt).toContain('Repo-Specific Instructions');
+    expect(prompt).toContain('custom instructions');
+  });
+
+  it('handles missing body gracefully', () => {
+    const prompt = buildIssueReviewPrompt(baseTask);
+    expect(prompt).toContain('(no body provided)');
   });
 });
