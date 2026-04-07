@@ -1807,7 +1807,11 @@ describe('resolveNamedAgent', () => {
       modelDiversityGraceMs: 30_000,
       trigger: { comment: '/opencara fix' },
       agents: [
-        { id: 'security-fixer', prompt: 'Fix security issues', model: 'claude-sonnet-4-5-20250514' },
+        {
+          id: 'security-fixer',
+          prompt: 'Fix security issues',
+          model: 'claude-sonnet-4-5-20250514',
+        },
         { id: 'perf-fixer', prompt: 'Fix performance issues', tool: 'codex' },
       ],
     };
