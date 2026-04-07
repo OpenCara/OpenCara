@@ -29,6 +29,7 @@ import {
   MAX_PROMPT_LENGTH,
   parseFixCommand,
   parseGoCommand,
+  parseAgentLabel,
 } from '../routes/webhook.js';
 import { Logger } from '../logger.js';
 import { OPEN_MARKER, RECENT_MARKER, ARCHIVED_MARKER } from '../dedup-index.js';
@@ -1391,32 +1392,32 @@ describe('Webhook refactor — separate task creation', () => {
   describe('parseGoCommand', () => {
     it('parses /opencara go without model', () => {
       const result = parseGoCommand('/opencara go');
-      expect(result).toEqual({ targetModel: undefined });
+      expect(result).toEqual({ targetAgent: undefined });
     });
 
     it('parses /opencara go with model', () => {
       const result = parseGoCommand('/opencara go gpt-5.4');
-      expect(result).toEqual({ targetModel: 'gpt-5.4' });
+      expect(result).toEqual({ targetAgent: 'gpt-5.4' });
     });
 
     it('parses @opencara go without model', () => {
       const result = parseGoCommand('@opencara go');
-      expect(result).toEqual({ targetModel: undefined });
+      expect(result).toEqual({ targetAgent: undefined });
     });
 
     it('parses @opencara go with model', () => {
       const result = parseGoCommand('@opencara go claude-opus');
-      expect(result).toEqual({ targetModel: 'claude-opus' });
+      expect(result).toEqual({ targetAgent: 'claude-opus' });
     });
 
     it('is case-insensitive', () => {
-      expect(parseGoCommand('/OpenCara Go')).toEqual({ targetModel: undefined });
-      expect(parseGoCommand('/OPENCARA GO gpt-5')).toEqual({ targetModel: 'gpt-5' });
+      expect(parseGoCommand('/OpenCara Go')).toEqual({ targetAgent: undefined });
+      expect(parseGoCommand('/OPENCARA GO gpt-5')).toEqual({ targetAgent: 'gpt-5' });
     });
 
     it('handles leading/trailing whitespace', () => {
-      expect(parseGoCommand('  /opencara go  ')).toEqual({ targetModel: undefined });
-      expect(parseGoCommand('  @opencara go  gpt-5  ')).toEqual({ targetModel: 'gpt-5' });
+      expect(parseGoCommand('  /opencara go  ')).toEqual({ targetAgent: undefined });
+      expect(parseGoCommand('  @opencara go  gpt-5  ')).toEqual({ targetAgent: 'gpt-5' });
     });
 
     it('returns null for non-go commands', () => {
@@ -1434,6 +1435,32 @@ describe('Webhook refactor — separate task creation', () => {
     it('returns null for conversational comments starting with trigger', () => {
       expect(parseGoCommand('/opencara go implement this feature please')).toBeNull();
       expect(parseGoCommand('@opencara go ahead and fix the bug')).toBeNull();
+    });
+  });
+
+  // ── parseAgentLabel unit tests ──────────────────────────────────
+
+  describe('parseAgentLabel', () => {
+    it('extracts agent ID from agent:xxx label', () => {
+      expect(parseAgentLabel('agent:security-auditor')).toBe('security-auditor');
+    });
+
+    it('extracts agent ID with dots and numbers', () => {
+      expect(parseAgentLabel('agent:perf-v2.1')).toBe('perf-v2.1');
+    });
+
+    it('returns undefined for non-agent labels', () => {
+      expect(parseAgentLabel('opencara:implement')).toBeUndefined();
+      expect(parseAgentLabel('bug')).toBeUndefined();
+      expect(parseAgentLabel('')).toBeUndefined();
+    });
+
+    it('returns undefined for agent: with no ID', () => {
+      expect(parseAgentLabel('agent:')).toBeUndefined();
+    });
+
+    it('does not match labels with prefix before agent:', () => {
+      expect(parseAgentLabel('x-agent:foo')).toBeUndefined();
     });
   });
 
@@ -1497,17 +1524,27 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks[0].feature).toBe('implement');
     });
 
-    it('/opencara go with model sets target_model', async () => {
+    it('/opencara go with valid agent ID uses agent config', async () => {
       github.openCaraConfig = {
         version: 1,
         review: makeReviewConfig(),
-        implement: DEFAULT_IMPLEMENT_CONFIG,
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+          agents: [
+            {
+              id: 'security-auditor',
+              prompt: 'Focus on security.',
+              model: 'gpt-5.4',
+              tool: 'codex',
+            },
+          ],
+        },
       };
 
       const res = await sendWebhook(
         app,
         'issue_comment',
-        makeIssueCommentPayload('/opencara go gpt-5.4'),
+        makeIssueCommentPayload('/opencara go security-auditor'),
         env,
       );
       expect(res.status).toBe(200);
@@ -1515,9 +1552,37 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].target_model).toBe('gpt-5.4');
+      expect(tasks[0].config.prompt).toBe('Focus on security.');
+      expect(tasks[0].config.preferredModels).toEqual(['gpt-5.4']);
+      expect(tasks[0].config.preferredTools).toEqual(['codex']);
     });
 
-    it('go command without model does not set target_model', async () => {
+    it('/opencara go with invalid agent ID posts error comment', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      const createCommentSpy = vi.spyOn(github, 'createIssueComment');
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go nonexistent'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+
+      expect(createCommentSpy).toHaveBeenCalledOnce();
+      expect(createCommentSpy.mock.calls[0][3]).toContain('Unknown agent ID');
+      expect(createCommentSpy.mock.calls[0][3]).toContain('nonexistent');
+    });
+
+    it('go command without agent ID uses default implement config', async () => {
       github.openCaraConfig = {
         version: 1,
         review: makeReviewConfig(),
@@ -1535,6 +1600,40 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].target_model).toBeUndefined();
+      expect(tasks[0].config.prompt).toBe('Implement the requested changes.');
+    });
+
+    it('/opencara go with agent that has only prompt overrides prompt only', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+          preferredModels: ['default-model'],
+          preferredTools: ['default-tool'],
+          agents: [
+            {
+              id: 'simple-agent',
+              prompt: 'Custom prompt only.',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeIssueCommentPayload('/opencara go simple-agent'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].target_model).toBeUndefined();
+      expect(tasks[0].config.prompt).toBe('Custom prompt only.');
+      expect(tasks[0].config.preferredModels).toEqual(['default-model']);
+      expect(tasks[0].config.preferredTools).toEqual(['default-tool']);
     });
 
     it('go command is ignored when implement.enabled=false', async () => {
