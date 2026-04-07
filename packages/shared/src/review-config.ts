@@ -86,6 +86,8 @@ export interface ImplementConfig extends FeatureConfig {
   enabled: boolean;
   trigger: TriggerConfig;
   agents?: NamedAgentConfig[];
+  /** GitHub Project field name whose value maps to a named agent ID */
+  agent_field?: string;
 }
 
 /** Fix section config */
@@ -93,6 +95,8 @@ export interface FixConfig extends FeatureConfig {
   enabled: boolean;
   trigger: TriggerConfig;
   agents?: NamedAgentConfig[];
+  /** GitHub Project field name whose value maps to a named agent ID */
+  agent_field?: string;
 }
 
 /** Top-level .opencara.toml config */
@@ -580,11 +584,13 @@ function parseImplementSection(raw: Record<string, unknown>): ImplementConfig {
   const { agents: _slots, ...base } = parseFeatureFields(raw, DEFAULT_IMPLEMENT_FEATURE);
   const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
   const namedAgents = parseNamedAgents(raw.agents);
+  const agentField = typeof raw.agent_field === 'string' ? raw.agent_field : undefined;
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
     trigger: parseTriggerSection(triggerRaw, DEFAULT_IMPLEMENT_TRIGGER),
     ...(namedAgents ? { agents: namedAgents } : {}),
+    ...(agentField ? { agent_field: agentField } : {}),
   };
 }
 
@@ -602,11 +608,13 @@ function parseFixSection(raw: Record<string, unknown>): FixConfig {
   const { agents: _slots, ...base } = parseFeatureFields(raw, DEFAULT_FIX_FEATURE);
   const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
   const namedAgents = parseNamedAgents(raw.agents);
+  const agentField = typeof raw.agent_field === 'string' ? raw.agent_field : undefined;
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
     trigger: parseTriggerSection(triggerRaw, DEFAULT_FIX_TRIGGER),
     ...(namedAgents ? { agents: namedAgents } : {}),
+    ...(agentField ? { agent_field: agentField } : {}),
   };
 }
 
