@@ -470,6 +470,107 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks[0].task_type).toBe('pr_dedup');
       expect(tasks[0].index_issue_number).toBe(99);
     });
+
+    // ── Per-task preferred model assignment ──────────────────────
+
+    it('assigns one preferred model per task (round-robin)', async () => {
+      const models = ['claude-sonnet-4-6', 'gpt-5.4', 'glm-5'];
+      const config = makeReviewConfig({ agentCount: 4, preferredModels: models });
+      const taskBase = {
+        ...baseTask,
+        config: { ...DEFAULT_REVIEW_CONFIG, preferredModels: models },
+      };
+      await createTaskGroup(store, 'review', config, taskBase, logger);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(3); // 4 - 1 = 3
+      tasks.sort((a, b) => a.created_at - b.created_at);
+
+      expect(tasks[0].config.preferredModels).toEqual(['claude-sonnet-4-6']);
+      expect(tasks[1].config.preferredModels).toEqual(['gpt-5.4']);
+      expect(tasks[2].config.preferredModels).toEqual(['glm-5']);
+    });
+
+    it('extra tasks get empty preferredModels when agent_count > models', async () => {
+      const models = ['claude-sonnet-4-6', 'gpt-5.4'];
+      const config = makeReviewConfig({ agentCount: 5, preferredModels: models });
+      const taskBase = {
+        ...baseTask,
+        config: { ...DEFAULT_REVIEW_CONFIG, preferredModels: models },
+      };
+      await createTaskGroup(store, 'review', config, taskBase, logger);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(4); // 5 - 1 = 4
+      tasks.sort((a, b) => a.created_at - b.created_at);
+
+      // First 2 tasks get one model each
+      expect(tasks[0].config.preferredModels).toEqual(['claude-sonnet-4-6']);
+      expect(tasks[1].config.preferredModels).toEqual(['gpt-5.4']);
+      // Extra tasks get empty preferredModels (available to all)
+      expect(tasks[2].config.preferredModels).toEqual([]);
+      expect(tasks[3].config.preferredModels).toEqual([]);
+    });
+
+    it('fewer tasks than models assigns first N models', async () => {
+      const models = ['claude-sonnet-4-6', 'gpt-5.4', 'glm-5', 'kimi-k2.5', 'qwen3.5-plus'];
+      const config = makeReviewConfig({ agentCount: 3, preferredModels: models });
+      const taskBase = {
+        ...baseTask,
+        config: { ...DEFAULT_REVIEW_CONFIG, preferredModels: models },
+      };
+      await createTaskGroup(store, 'review', config, taskBase, logger);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2); // 3 - 1 = 2
+      tasks.sort((a, b) => a.created_at - b.created_at);
+
+      expect(tasks[0].config.preferredModels).toEqual(['claude-sonnet-4-6']);
+      expect(tasks[1].config.preferredModels).toEqual(['gpt-5.4']);
+    });
+
+    it('empty preferredModels leaves all tasks with empty array', async () => {
+      const config = makeReviewConfig({ agentCount: 3, preferredModels: [] });
+      await createTaskGroup(store, 'review', config, baseTask, logger);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2); // 3 - 1 = 2
+      for (const task of tasks) {
+        expect(task.config.preferredModels).toEqual([]);
+      }
+    });
+
+    it('single task gets first preferred model', async () => {
+      const models = ['claude-sonnet-4-6', 'gpt-5.4'];
+      const config = makeReviewConfig({ agentCount: 1, preferredModels: models });
+      const taskBase = {
+        ...baseTask,
+        config: { ...DEFAULT_REVIEW_CONFIG, preferredModels: models },
+      };
+      await createTaskGroup(store, 'review', config, taskBase, logger);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].config.preferredModels).toEqual(['claude-sonnet-4-6']);
+    });
+
+    it('each task config is independent (modifying one does not affect others)', async () => {
+      const models = ['claude-sonnet-4-6', 'gpt-5.4'];
+      const config = makeReviewConfig({ agentCount: 3, preferredModels: models });
+      const taskBase = {
+        ...baseTask,
+        config: { ...DEFAULT_REVIEW_CONFIG, preferredModels: models },
+      };
+      await createTaskGroup(store, 'review', config, taskBase, logger);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(2);
+      tasks.sort((a, b) => a.created_at - b.created_at);
+
+      // Each task should have its own config object (not shared reference)
+      expect(tasks[0].config).not.toBe(tasks[1].config);
+      expect(tasks[0].config.preferredModels).not.toEqual(tasks[1].config.preferredModels);
+    });
   });
 
   // ── createTaskForPR backward compat ─────────────────────────

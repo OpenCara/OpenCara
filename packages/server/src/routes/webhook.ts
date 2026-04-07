@@ -263,6 +263,9 @@ export async function createTaskGroup(
   const timeoutMs = parseTimeoutMs(featureConfig.timeout);
 
   // Phase 1: Build all tasks up front (validate prompts before any DB writes)
+  // Assign per-task preferred model (round-robin) to ensure model diversity.
+  // Tasks beyond the preferred models list get empty preferredModels (available to all).
+  const allPreferredModels = baseTask.config.preferredModels;
   const tasks: ReviewTask[] = [];
   for (let i = 0; i < taskCount; i++) {
     const prompt = getAgentPrompt(featureConfig, i);
@@ -277,8 +280,13 @@ export async function createTaskGroup(
       return null;
     }
 
+    // Clone config with per-task preferred model assignment
+    const taskPreferredModels = i < allPreferredModels.length ? [allPreferredModels[i]] : [];
+    const taskConfig = { ...baseTask.config, preferredModels: taskPreferredModels };
+
     tasks.push({
       ...baseTask,
+      config: taskConfig,
       id: crypto.randomUUID(),
       prompt,
       task_type: role,
