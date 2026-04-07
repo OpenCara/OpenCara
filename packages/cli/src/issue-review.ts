@@ -13,6 +13,9 @@ export { buildIssueReviewPrompt };
 
 const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
 
+/** Server requires review_text to be at least this many characters. */
+const MIN_REVIEW_TEXT_LENGTH = 10;
+
 // ── Executor ─────────────────────────────────────────────────────
 
 export interface IssueReviewResponse {
@@ -55,6 +58,11 @@ export async function executeIssueReview(
   const reviewText = result.stdout.trim();
   if (!reviewText) {
     throw new Error('Issue review produced empty output');
+  }
+  if (reviewText.length < MIN_REVIEW_TEXT_LENGTH) {
+    throw new Error(
+      `Issue review output too short (${reviewText.length} chars, minimum ${MIN_REVIEW_TEXT_LENGTH})`,
+    );
   }
 
   // Compute token usage

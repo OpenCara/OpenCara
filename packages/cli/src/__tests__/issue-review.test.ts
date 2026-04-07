@@ -133,6 +133,13 @@ describe('executeIssueReview', () => {
     );
   });
 
+  it('throws when output is too short for server', async () => {
+    const runTool = vi.fn().mockResolvedValue(makeToolResult('LGTM'));
+    await expect(executeIssueReview(makeTask(), deps, 300, undefined, runTool)).rejects.toThrow(
+      'Issue review output too short',
+    );
+  });
+
   it('throws when timeout too short', async () => {
     const runTool = vi.fn();
     await expect(executeIssueReview(makeTask(), deps, 25, undefined, runTool)).rejects.toThrow(
@@ -142,7 +149,7 @@ describe('executeIssueReview', () => {
   });
 
   it('computes token usage with estimation', async () => {
-    const runTool = vi.fn().mockResolvedValue(makeToolResult('review'));
+    const runTool = vi.fn().mockResolvedValue(makeToolResult('This is a valid review output'));
     const result = await executeIssueReview(makeTask(), deps, 300, undefined, runTool);
     expect(result.tokensEstimated).toBe(true);
     expect(result.tokenDetail.parsed).toBe(false);
@@ -165,7 +172,7 @@ describe('executeIssueReview', () => {
 
   it('passes signal and timeout to tool', async () => {
     const controller = new AbortController();
-    const runTool = vi.fn().mockResolvedValue(makeToolResult('review'));
+    const runTool = vi.fn().mockResolvedValue(makeToolResult('This is a valid review output'));
     await executeIssueReview(makeTask(), deps, 300, controller.signal, runTool);
     expect(runTool).toHaveBeenCalledWith(
       'echo {{prompt}}',
@@ -246,7 +253,7 @@ describe('executeIssueReviewTask', () => {
 
   it('uses custom role when provided', async () => {
     const client = { post: vi.fn().mockResolvedValue({}) };
-    const runTool = vi.fn().mockResolvedValue(makeToolResult('review'));
+    const runTool = vi.fn().mockResolvedValue(makeToolResult('This is a valid review output'));
 
     await executeIssueReviewTask(
       client,
@@ -269,7 +276,7 @@ describe('executeIssueReviewTask', () => {
   it('falls back to issue number when no title', async () => {
     const logFn = vi.fn();
     const client = { post: vi.fn().mockResolvedValue({}) };
-    const runTool = vi.fn().mockResolvedValue(makeToolResult('review'));
+    const runTool = vi.fn().mockResolvedValue(makeToolResult('This is a valid review output'));
 
     await executeIssueReviewTask(
       client,
