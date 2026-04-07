@@ -1750,6 +1750,114 @@ id = "no-prompt-only-id"
   });
 });
 
+// ── agent_field in implement/fix sections ──
+
+describe('parseOpenCaraConfig — agent_field in implement section', () => {
+  it('parses agent_field from implement section', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement"
+agent_field = "Agent"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agent_field).toBe('Agent');
+  });
+
+  it('agent_field is undefined when absent', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agent_field).toBeUndefined();
+    expect('agent_field' in result.implement!).toBe(false);
+  });
+
+  it('ignores non-string agent_field', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement"
+agent_field = 42
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agent_field).toBeUndefined();
+    expect('agent_field' in result.implement!).toBe(false);
+  });
+
+  it('works alongside named agents', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement"
+agent_field = "Agent"
+
+[[implement.agents]]
+id = "security-auditor"
+prompt = "Focus on security"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agent_field).toBe('Agent');
+    expect(result.implement!.agents).toHaveLength(1);
+    expect(result.implement!.agents![0].id).toBe('security-auditor');
+  });
+});
+
+describe('parseOpenCaraConfig — agent_field in fix section', () => {
+  it('parses agent_field from fix section', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix"
+agent_field = "Agent"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agent_field).toBe('Agent');
+  });
+
+  it('agent_field is undefined when absent', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agent_field).toBeUndefined();
+    expect('agent_field' in result.fix!).toBe(false);
+  });
+
+  it('ignores non-string agent_field', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix"
+agent_field = true
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agent_field).toBeUndefined();
+    expect('agent_field' in result.fix!).toBe(false);
+  });
+
+  it('works alongside named agents', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix"
+agent_field = "Fixer"
+
+[[fix.agents]]
+id = "security-fixer"
+prompt = "Fix security issues"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agent_field).toBe('Fixer');
+    expect(result.fix!.agents).toHaveLength(1);
+    expect(result.fix!.agents![0].id).toBe('security-fixer');
+  });
+});
+
 describe('resolveNamedAgent', () => {
   const implementConfig: ImplementConfig = {
     enabled: true,
