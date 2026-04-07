@@ -171,6 +171,18 @@ describe('task-lifecycle', () => {
         ),
       ).toBe(false);
     });
+
+    it('returns true for completed issue_review claims with text', () => {
+      expect(
+        isCompletedReview(
+          makeClaim({ role: 'issue_review', status: 'completed', review_text: 'Issue LGTM' }),
+        ),
+      ).toBe(true);
+    });
+
+    it('returns false for pending issue_review claims', () => {
+      expect(isCompletedReview(makeClaim({ role: 'issue_review', status: 'pending' }))).toBe(false);
+    });
   });
 
   describe('shouldTransitionToSummary', () => {

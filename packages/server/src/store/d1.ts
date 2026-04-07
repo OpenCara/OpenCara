@@ -597,10 +597,10 @@ export class D1DataStore implements DataStore {
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE (
           SELECT COUNT(*) FROM tasks
-          WHERE group_id = ? AND task_type = 'review' AND status = 'completed'
+          WHERE group_id = ? AND task_type IN ('review', 'issue_review') AND status = 'completed'
         ) >= (
           SELECT COUNT(*) FROM tasks
-          WHERE group_id = ? AND task_type = 'review'
+          WHERE group_id = ? AND task_type IN ('review', 'issue_review')
         )
         AND NOT EXISTS (
           SELECT 1 FROM tasks

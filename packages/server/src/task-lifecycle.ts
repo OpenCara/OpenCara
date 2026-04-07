@@ -65,13 +65,14 @@ export function isTaskTerminal(task: ReviewTask): boolean {
 }
 
 /**
- * True if the task is a worker task (review only — needs summary after all workers complete).
+ * True if the task is a worker task (needs summary after all workers complete).
+ * Includes both PR review workers and issue review workers.
  *
  * NOTE: isWorkerTask and isSummaryTask form a binary partition of all TaskRole values.
  * When adding a new TaskRole, update one of these functions to include it.
  */
 export function isWorkerTask(task: ReviewTask): boolean {
-  return task.task_type === 'review';
+  return task.task_type === 'review' || task.task_type === 'issue_review';
 }
 
 /**
@@ -114,7 +115,11 @@ export function isClaimFailed(claim: TaskClaim): boolean {
 
 /** True if the claim completed with a review text. */
 export function isCompletedReview(claim: TaskClaim): boolean {
-  return claim.role === 'review' && claim.status === 'completed' && !!claim.review_text;
+  return (
+    (claim.role === 'review' || claim.role === 'issue_review') &&
+    claim.status === 'completed' &&
+    !!claim.review_text
+  );
 }
 
 // ── Transition Predicates ───────────────────────────────────────
