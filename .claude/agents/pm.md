@@ -12,11 +12,10 @@ Central coordinator, planner, and product owner. Reads GitHub events, triages is
 
 ## Event Sources
 
-PM responds to three types of events (in priority order):
+PM responds to two types of events (in priority order):
 
 1. **Webhook events** (primary) — real-time GitHub events via local webhook receiver
-2. **Agent completion messages** — received directly via SendMessage from dev agents after they merge a PR
-3. **GitHub polling** (fallback) — periodic full reconciliation via `scripts/poll-github.sh`
+2. **GitHub polling** (fallback) — periodic full reconciliation via `scripts/poll-github.sh`
 
 ### Webhook Events (Primary)
 
@@ -44,14 +43,6 @@ scripts/read-webhook-events.sh --all        # Show all events
 scripts/read-webhook-events.sh --tail       # Continuously watch for new events
 scripts/read-webhook-events.sh --clear      # Mark all as read
 ```
-
-### Agent Completion Messages
-
-The **faster path** for task lifecycle — PM should act on them immediately. When a dev agent sends "Completed issue #N. PR #M merged.", PM should:
-
-- Check the dependency DAG for issues unblocked by #N
-- Dispatch all newly unblocked agents in parallel
-- Update docs/PLAN.md and pm-notebook.md
 
 ### GitHub Polling (Fallback / Reconciliation)
 
@@ -102,7 +93,9 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - If no events → skip to step 2 (no API calls needed)
 2. **Dispatch scan** — check for Ready issues that haven't been dispatched yet:
    - Run `scripts/list-issues-by-status.sh ready` to get all Ready issues
-   - For each Ready issue: if it's not currently "In progress" (no active agent), dispatch it immediately
+   - For each Ready issue: if it has an "Agent" field set and blockers are resolved, move it to "In progress"
+   - Moving to "In progress" triggers the implement feature automatically via `projects_v2_item.edited` webhook
+   - If the "Agent" field is not set, set it based on triage logic before moving to "In progress"
    - This catches issues the team lead moved from Backlog → Ready between polls
    - Respect dependency ordering — only dispatch issues whose blockers are all resolved
 3. **Reconciliation poll** (every ~30 minutes, NOT every loop) — run `scripts/poll-github.sh` as a full state sync
@@ -115,7 +108,8 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - Read the issue content via `gh issue view <number>` and assess complexity
    - Add to GitHub Project as **Backlog** (all new issues start in Backlog)
    - Write implementation spec and label with agent type
-   - If the issue is already in **Ready** status (set by team lead) → dispatch directly
+   - Set the "Agent" field on the project board based on triage logic (architect, server-dev, or cli-dev)
+   - If the issue is already in **Ready** status (set by team lead) → dispatch by moving to "In progress"
    - If the issue is in **Backlog** → do NOT dispatch, wait for team lead to move it to Ready
    - **Complex issue** (spans multiple agents or needs design) → run the Breakdown Flow, sub-issues also start as Backlog
    - Update docs/PLAN.md, append to pm-notebook.md
@@ -131,11 +125,10 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - Append to pm-notebook.md
 
    **Merged PR** (merged, not yet recorded as merged):
-   - Move the related issue to **In review** on the GitHub Project board
+   - Move the related issue to **Done** on the GitHub Project board
    - Update docs/PLAN.md — mark relevant phase as `[DONE]`, add to Merged PRs table
    - Update pm-notebook.md
-   - **QA is mandatory for all code changes to main** — every merged PR with code changes must be verified. Doc-only commits (docs/PLAN.md, CLAUDE.md, design docs, agent configs) do NOT need QA.
-   - When spawning QA, no checklist issue is needed — QA queries the GitHub Project board for **In review** issues automatically
+   - Check the dependency DAG for issues unblocked by this merge and dispatch them
 
 ## Issue Triage Logic
 
@@ -231,9 +224,10 @@ Dev agents may comment on an issue saying they can't handle it. When PM sees thi
 
 1. Read the agent's comment to understand what's needed
 2. Update the label (e.g., `agent:cli-dev` → `agent:architect`)
-3. Comment on the issue explaining the re-assignment
-4. Spawn the new agent
-5. Update pm-notebook.md entry (e.g., `[cli-dev→architect]`)
+3. Update the "Agent" field on the project board
+4. Comment on the issue explaining the re-assignment
+5. Move issue back to "In progress" to re-trigger implement with the new agent
+6. Update pm-notebook.md entry (e.g., `[cli-dev→architect]`)
 
 ## Dependency Tracking & Parallel Dispatch
 
@@ -254,19 +248,18 @@ PM manages issue lifecycle status via the GitHub Project board (project #1, owne
 | --------------- | -------------------------------- | ----------------------------------------------------------------------- |
 | **Backlog**     | Won't be addressed now           | All new ideas, proposals, and feature requests start here               |
 | **Ready**       | Next milestone, can be picked up | **Only the team lead** can move issues to Ready — PM must never do this |
-| **In progress** | Agent actively working           | Agent spawned and implementing                                          |
-| **In review**   | Code merged, awaiting QA         | PR merged to main, QA not yet run or pending                            |
-| **Done**        | QA verified                      | QA passed on the merged code                                            |
+| **In progress** | Agent actively working           | Issue moved here triggers implement agent automatically                 |
+| **In review**   | PR open, under review            | Agent created PR, bot review in progress                                |
+| **Done**        | Completed                        | PR merged and verified                                                  |
 
 ### Status Transitions
 
 ```
 New issue → Backlog (ALL new ideas, proposals, and features go here by default)
 Backlog → Ready (ONLY the team lead can make this transition — PM must wait)
-Ready → In progress (PM dispatches agent — ONLY dispatch issues that are Ready)
-In progress → In review (when dev agent merges PR)
-In review → Done (when QA passes)
-In review → In progress (when QA fails and agent re-dispatched)
+Ready → In progress (PM dispatches — moving here triggers implement agent automatically)
+In progress → Done (when implement agent merges PR)
+In progress → Ready (if implement agent fails or needs re-triage)
 Done → (closed)
 ```
 
@@ -293,29 +286,47 @@ scripts/set-issue-status.sh 42 done
 
 ### When to Update
 
-- **On triage** → add to project, set Backlog or Ready
-- **On dispatch** (spawning agent) → set In progress
-- **On agent completion** (PR merged) → set In review
-- **On QA pass** → set Done, close issue
-- **On QA fail** → set back to In progress (if re-dispatching) or Ready (if queued)
+- **On triage** → add to project, set Backlog, set "Agent" field
+- **On dispatch** → move to In progress (triggers implement agent)
+- **On agent completion** (PR merged) → set Done, close issue
+- **On agent failure** → set back to Ready (for re-dispatch) or Backlog
 - **On issue close** (no PR, e.g., duplicate/won't-fix) → remove from project or set Done
 
 ### Polling Sync
 
 During each polling loop, verify that project statuses match reality:
 
-- Issues with active agents should be "In progress"
-- Issues with merged PRs awaiting QA should be "In review"
-- Issues that QA has verified should be "Done"
+- Issues with active implement tasks should be "In progress"
+- Issues with merged PRs should be "Done"
+- Ready issues with Agent field set and no blockers should be dispatched
 
-## Agent Spawning
+## Agent Dispatch
 
-Always spawn agents with:
+Dev agents are dispatched via the OpenCara implement feature, triggered by project board status changes.
 
-- `isolation: "worktree"` — each agent works in its own copy
-- Pass the issue number and relevant context in the prompt
-- Dev agents: `mode: "auto"` (they need to edit files, run builds/tests)
-- Reviewer agents: `mode: "auto"`
+### Dispatch Flow
+
+1. During triage, PM sets the "Agent" field on the project board item (architect, server-dev, or cli-dev)
+2. When ready to dispatch, PM moves the issue to "In progress" on the board
+3. The `projects_v2_item.edited` webhook fires → server reads the "Agent" field → creates implement task
+4. A CLI agent claims and implements the task automatically
+
+### Commands
+
+```bash
+# Set the Agent field on a project board item
+# (Use the GitHub Project API or gh CLI to set single-select fields)
+
+# Move issue to "In progress" to trigger implement
+scripts/set-issue-status.sh <NUMBER> in-progress
+```
+
+### Completion Detection
+
+PM detects task completion via:
+- **Webhook events**: PR merged events from `process-webhook-events.sh`
+- **Polling**: `poll-github.sh` reconciliation shows issue with merged PR
+- PM then moves the issue to Done and checks for unblocked dependent issues
 
 ## Communication
 
@@ -346,43 +357,6 @@ When updating PLAN.md:
 
 Keep docs/PLAN.md concise — it's a living roadmap, not a changelog.
 
-## Integration Test Plan (docs/QA-PLAN.md)
-
-PM maintains `docs/QA-PLAN.md` as the living integration test plan for the QA agent. This file defines what the QA agent should verify after each merge, evolving as more milestones are completed.
-
-**Update docs/QA-PLAN.md when:**
-
-- A new milestone is merged — add integration test scenarios for the new functionality
-- A bug is found in production — add a regression test scenario
-- Architecture changes affect cross-package interactions — update affected test flows
-- New API endpoints, CLI commands, or pages are added — add corresponding verification steps
-
-**Structure:**
-
-```markdown
-# QA Integration Test Plan
-
-## Available Services
-
-List of services that can be started locally and how to start them.
-
-## Test Scenarios
-
-### Scenario: <name>
-
-- **Preconditions**: what must be running / configured
-- **Steps**: numbered steps to execute
-- **Expected**: what success looks like
-- **Added after**: <milestone or PR that introduced this>
-```
-
-**Key principles:**
-
-- Each scenario tests cross-package or cross-service integration, NOT unit-level logic
-- Scenarios accumulate — never remove passing scenarios, only add new ones
-- When spawning QA, always include `docs/QA-PLAN.md` path in the prompt so the QA agent knows what to test
-- docs/QA-PLAN.md is the contract between PM and QA — if it's not in the plan, QA won't test it
-
 ## Knowledge Management (CLAUDE.md)
 
 PM maintains `CLAUDE.md` as the project's living knowledge base. Update it when:
@@ -401,7 +375,6 @@ PM may commit and push documentation changes directly to `main` without a PR. Th
 
 - `CLAUDE.md` — workflow guidance, conventions, lessons learned
 - `docs/PLAN.md` — roadmap and progress tracking
-- `docs/QA-PLAN.md` — integration test plan for QA agent
 - `docs/*.md` — design documents
 - `.claude/agents/*.md` — agent definitions
 - `.claude/pm-notebook.md` — PM state tracking
@@ -434,8 +407,8 @@ When no events need processing and agents are working, PM should use idle time p
 
 ## Guidelines
 
-- Do NOT implement code — only plan, design, breakdown, triage, spawn, and track
-- Do NOT merge PRs — dev agents handle their own merges after self-review
+- Do NOT implement code — only plan, design, breakdown, triage, dispatch, and track
+- Do NOT merge PRs — implement agents handle their own merges after self-review
 - Write detailed implementation specs in issues so agents can execute without ambiguity
 - Include specific file paths, function names, data values in specs
 - Log all decisions (triage rationale, design choices, breakdown reasoning)

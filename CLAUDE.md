@@ -101,38 +101,23 @@ cd packages/cli && pnpm dev               # CLI development mode
 
 ## Agent Team
 
-Event-driven, PM-centric multi-agent workflow. All agents defined in `.claude/agents/`.
+Event-driven, PM-centric workflow. Dev agents are implemented via OpenCara's own `[implement]` feature (dogfooding).
 
-| Agent          | Role                                               | Lifecycle            |
-| -------------- | -------------------------------------------------- | -------------------- |
-| **pm**         | Coordinator — triages, designs, dispatches, tracks | Long-running         |
-| **architect**  | Shared types, infrastructure, cross-package        | Ephemeral (worktree) |
-| **server-dev** | Hono server backend                                | Ephemeral (worktree) |
-| **cli-dev**    | CLI npm package                                    | Ephemeral (worktree) |
-| **qa**         | Post-merge verification                            | Ephemeral (worktree) |
-| **clarifier**  | Multi-AI issue analysis                            | Ephemeral            |
-
-All agents inherit their model and context window from the team lead.
+| Agent          | Role                                               | How it runs                                       |
+| -------------- | -------------------------------------------------- | ------------------------------------------------- |
+| **pm**         | Coordinator — triages, designs, dispatches, tracks | Claude Code team agent (`.claude/agents/pm.md`)   |
+| **architect**  | Shared types, infrastructure, cross-package        | OpenCara implement agent (`[[implement.agents]]`) |
+| **server-dev** | Hono server backend                                | OpenCara implement agent (`[[implement.agents]]`) |
+| **cli-dev**    | CLI npm package                                    | OpenCara implement agent (`[[implement.agents]]`) |
+| **clarifier**  | Multi-AI issue analysis                            | Claude Code team agent (ephemeral)                |
 
 ### Agent Rules
 
 - Only one PM at a time; PM never implements code, only plans and dispatches
-- Use `/spawn <agent-type> [issue-number]` to spawn agents
-- Team lead stays on `main`; dev agents work only in worktrees
-- After creating a PR, agents run multi-AI self-review (`/simplify` or manual multi-AI review)
+- PM dispatches by setting the "Agent" field on the project board and moving issue to "In progress"
+- Moving to "In progress" triggers the implement feature via `projects_v2_item.edited` webhook
+- After creating a PR, implement agents wait for OpenCara bot review and self-review
 - Team name: `opencara-dev`
-
-### Worktree Isolation (CRITICAL)
-
-- Dev agents MUST work in worktrees — never modify the root project `/home/quabug/opencara/`
-- Root project must always stay on `main` branch
-- Pre-create worktrees from root project directory, never from inside another worktree:
-  ```bash
-  cd /home/quabug/opencara
-  git pull origin main
-  git worktree add .claude/worktrees/<name> origin/main -b <branch-name>
-  ```
-- Each parallel agent needs its own unique worktree
 
 ### Workflow Rules (auto-loaded)
 

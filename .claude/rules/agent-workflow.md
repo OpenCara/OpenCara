@@ -1,19 +1,29 @@
 # Agent Workflow
 
-Event-driven, PM-centric architecture. All agents defined in `.claude/agents/`.
+Event-driven, PM-centric architecture. Dev agents are implemented via OpenCara's own `[implement]` feature with named agents configured in `.opencara.toml`.
 
-| Agent          | Role                                                                                                                  | Lifecycle                      |
-| -------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Long-running                   |
-| **architect**  | Architecture, shared types, infrastructure                                                                            | Ephemeral per-issue (worktree) |
-| **server-dev** | Hono server backend, REST API, KV storage                                                                             | Ephemeral per-issue (worktree) |
-| **cli-dev**    | CLI npm package, HTTP polling, review execution                                                                       | Ephemeral per-issue (worktree) |
-| **qa**         | Post-merge verification (build, tests, smoke tests)                                                                   | Ephemeral (worktree)           |
-| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Ephemeral                      |
+## Agent Roster
 
-All agents inherit their model and context window from the team lead.
+| Agent         | Role                                                                                                                  | How it runs                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| **pm**        | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running)                    |
+| **architect** | Architecture, shared types, infrastructure, cross-package                                                             | OpenCara implement agent (`[[implement.agents]]`)        |
+| **server-dev**| Hono server backend, REST API, D1 storage                                                                             | OpenCara implement agent (`[[implement.agents]]`)        |
+| **cli-dev**   | CLI npm package, HTTP polling, review execution                                                                       | OpenCara implement agent (`[[implement.agents]]`)        |
+| **clarifier** | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)                       |
 
-**Flow**: PM polls GitHub via `gh` → triages new issues/PRs → spawns dev agent in worktree → dev implements → self-reviews (multi-AI) → merges → done. At milestone end, PM creates QA checklist issue → spawns QA → QA tests every item → reopens failed issues → PM triages fixes.
+## Implementation Flow
+
+```
+PM triages issue → PM sets "Agent" field on project board (e.g., "server-dev")
+  → Team lead or PM moves issue to "In progress"
+  → projects_v2_item.edited webhook fires
+  → Server reads "Agent" field via agent_field config
+  → Resolves agent config from [[implement.agents]]
+  → Creates implement task with agent's prompt/model/tool
+  → CLI agent claims and implements → Creates PR → Self-reviews → Merges
+  → PM detects merged PR via webhook/polling → Updates board
+```
 
 Dev agents escalate to architect (via issue comment) if cross-package changes are needed. PM owns product and design decisions.
 
@@ -26,3 +36,4 @@ Dev agents escalate to architect (via issue comment) if cross-package changes ar
 - **REST-only, no WebSocket** — stateless HTTP polling, no Durable Objects, no persistent connections
 - **D1 (SQL) is the primary data store** — DataStore abstraction supports D1 and in-memory backends; KVDataStore was removed
 - **Agents fetch diffs directly** — server never sends diff content, agents fetch from GitHub
+- **Dogfooding** — dev agents use OpenCara's own implement feature to build OpenCara

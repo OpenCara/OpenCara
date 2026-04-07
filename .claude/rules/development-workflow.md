@@ -1,33 +1,31 @@
 # Development Workflow
 
-All dev agents (architect, server-dev, cli-dev) follow this standard lifecycle.
+Dev agents (architect, server-dev, cli-dev) are OpenCara implement agents configured in `.opencara.toml`. They are triggered automatically when an issue moves to "In progress" on the GitHub Project board.
 
 ## Lifecycle
 
-1. Spawned by PM in an isolated **git worktree** (auto-created branch)
-2. Receive an issue number from PM (issue body contains detailed specs from PM)
-3. Read the issue and understand the requirements
-4. Rename the worktree branch to `issue-<NUMBER>-<short-description>`
-5. Implement the changes
-6. Write tests for new code
-7. Build and test: `pnpm build && pnpm test`
-8. Commit, push, and create a PR (referencing the issue)
-9. **Self-review**: wait for OpenCara bot review → fix findings → re-review (max 3 iterations)
-10. When clean → merge the PR
-11. Shut down
-
-**CRITICAL**: You are always running in a worktree — NEVER modify files in the root project directory. All work MUST happen in your agent's worktree. The root project must always stay on the `main` branch — never check out other branches there. If you find yourself working in the root project, STOP immediately.
+1. PM triages issue and sets the "Agent" field on the project board
+2. Issue moves to "In progress" (by team lead or PM)
+3. `projects_v2_item.edited` webhook fires → server creates implement task
+4. CLI agent claims the task and receives the issue context + agent prompt
+5. Agent reads the issue and understands the requirements
+6. Agent creates branch `issue-<NUMBER>-<short-description>`
+7. Agent implements changes with tests
+8. Agent runs build and test: `pnpm build && pnpm test`
+9. Agent commits, pushes, and creates a PR (referencing the issue)
+10. **Self-review**: wait for OpenCara bot review → fix findings → re-review (max 3 iterations)
+11. When clean → run pre-merge checks → merge the PR
 
 ## Implementation Phase
 
 ```bash
-# Rename the auto-created worktree branch
-git branch -m issue-<NUMBER>-<short-description>
+# Create branch
+git checkout -b issue-<NUMBER>-<short-description>
 
 # ... implement changes ...
 
 # Build and test
-pnpm build && pnpm test
+pnpm build && pnpm test && pnpm lint && pnpm run format:check && pnpm run typecheck
 
 # Commit with issue reference (do NOT use "Closes" or "Fixes" — PM manages issue lifecycle)
 git add <specific files>
@@ -56,7 +54,7 @@ After creating the PR, the OpenCara GitHub App (our own product) automatically r
 
 ### Step 1: Wait for OpenCara Bot Review
 
-The OpenCara GitHub App is installed on this repo with `.opencara.toml` configured (agent_count: 3). When you push and create a PR, the bot automatically dispatches review agents.
+The OpenCara GitHub App is installed on this repo with `.opencara.toml` configured (agent_count: 5). When you push and create a PR, the bot automatically dispatches review agents.
 
 1. After creating the PR, run the bot review wait script:
    ```bash
@@ -89,25 +87,6 @@ The script merges latest main, runs build + test + lint + format + typecheck, th
 gh pr merge <PR_NUMBER> --squash --delete-branch
 ```
 
-### Step 5: Report Completion to PM
-
-After merging, notify PM so it can update project status and dispatch any newly unblocked issues:
-
-```
-SendMessage to PM: "Completed issue #<NUMBER>. PR #<PR_NUMBER> merged (squash). Ready for shutdown."
-```
-
-PM will then move the issue to **In review** status on the GitHub Project board and schedule QA verification. This enables PM to dispatch dependent work without waiting for the GitHub webhook round-trip.
-
-## QA Process
-
-QA verifies issues that are in **In review** status on the GitHub Project board. No separate checklist issue is needed — the project board IS the checklist.
-
-1. PM spawns QA agent with the list of **In review** issues
-2. QA verifies each issue one-by-one against its acceptance criteria
-3. QA reports per-issue PASS/FAIL to PM
-4. PM moves verified issues to **Done**, failed issues back to **In progress**
-
 ## Auto-Deploy
 
 The dev worker (`opencara-server-dev`) is automatically deployed when code is merged to `main` via the `deploy-dev.yml` GitHub Actions workflow. No manual deployment is needed for dev. The `scripts/deploy-worker.sh` script remains available for manual and production deployments.
@@ -138,5 +117,5 @@ If any check fails, fix it before pushing. Never push broken code to main.
 - Follow **SOLID**, **KISS**, **YAGNI** principles
 - Use Vitest for unit tests across all packages — **test coverage must be close to 100%**. Run `pnpm vitest run --coverage` to verify before creating PRs
 - ESLint + Prettier for code quality (run `pnpm lint` before committing)
-- If the issue spec is unclear, comment on the issue asking PM for clarification and shut down
-- If an issue requires work outside your scope, comment on the issue explaining what's needed and shut down — PM will re-triage
+- If the issue spec is unclear, comment on the issue asking PM for clarification
+- If an issue requires work outside your scope, comment on the issue explaining what's needed — PM will re-triage
