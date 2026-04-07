@@ -109,6 +109,13 @@ interface IssuePayload {
   label?: { name: string };
 }
 
+interface ProjectFieldValueOption {
+  id: string;
+  name: string;
+  color?: string;
+  description?: string;
+}
+
 interface ProjectsV2ItemPayload {
   action: string;
   installation?: { id: number };
@@ -118,8 +125,8 @@ interface ProjectsV2ItemPayload {
   changes?: {
     field_value?: {
       field_name: string;
-      from?: string | null;
-      to?: string | null;
+      from?: ProjectFieldValueOption | null;
+      to?: ProjectFieldValueOption | null;
     };
   };
 }
@@ -2768,13 +2775,13 @@ async function handleProjectsV2Item(
     type === 'Issue' &&
     fullConfig.implement?.enabled &&
     isStatusTriggerEnabled(fullConfig.implement.trigger) &&
-    fullConfig.implement.trigger.status === newStatus
+    fullConfig.implement.trigger.status === newStatus.name
   ) {
     logger.info('Implement status trigger matched', {
       owner,
       repo,
       issueNumber: number,
-      status: newStatus,
+      status: newStatus.name,
     });
 
     let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
@@ -2879,13 +2886,13 @@ async function handleProjectsV2Item(
     type === 'Issue' &&
     fullConfig.issue_review?.enabled &&
     isStatusTriggerEnabled(fullConfig.issue_review.trigger) &&
-    fullConfig.issue_review.trigger.status === newStatus
+    fullConfig.issue_review.trigger.status === newStatus.name
   ) {
     logger.info('Issue review status trigger matched', {
       owner,
       repo,
       issueNumber: number,
-      status: newStatus,
+      status: newStatus.name,
     });
 
     let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;

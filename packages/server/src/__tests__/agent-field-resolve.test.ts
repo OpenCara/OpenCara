@@ -277,6 +277,10 @@ function makePRLabelPayload(labelName: string, overrides: Record<string, unknown
   };
 }
 
+function makeStatusFieldValue(name: string) {
+  return { id: `id-${name.toLowerCase().replace(/\s+/g, '-')}`, name };
+}
+
 function makeProjectsV2ItemPayload(statusTo: string, overrides: Record<string, unknown> = {}) {
   return {
     action: 'edited',
@@ -285,8 +289,8 @@ function makeProjectsV2ItemPayload(statusTo: string, overrides: Record<string, u
     changes: {
       field_value: {
         field_name: 'Status',
-        from: 'Backlog',
-        to: statusTo,
+        from: makeStatusFieldValue('Backlog'),
+        to: makeStatusFieldValue(statusTo),
       },
     },
     ...overrides,

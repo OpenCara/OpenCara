@@ -199,6 +199,10 @@ function makeIssueLabelPayload(labelName: string, overrides: Record<string, unkn
   };
 }
 
+function makeStatusFieldValue(name: string) {
+  return { id: `id-${name.toLowerCase().replace(/\s+/g, '-')}`, name };
+}
+
 function makeProjectsV2ItemPayload(statusTo: string, overrides: Record<string, unknown> = {}) {
   return {
     action: 'edited',
@@ -207,8 +211,8 @@ function makeProjectsV2ItemPayload(statusTo: string, overrides: Record<string, u
     changes: {
       field_value: {
         field_name: 'Status',
-        from: 'Backlog',
-        to: statusTo,
+        from: makeStatusFieldValue('Backlog'),
+        to: makeStatusFieldValue(statusTo),
       },
     },
     ...overrides,
@@ -1144,6 +1148,70 @@ describe('Unified trigger modes', () => {
 
     it('ignores when no installation', async () => {
       const payload = makeProjectsV2ItemPayload('Ready', { installation: undefined });
+      const res = await sendWebhook(app, 'projects_v2_item', payload, env);
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('matches status using object with extra fields (color, description)', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 10,
+      };
+
+      const payload = {
+        action: 'edited',
+        installation: { id: 999 },
+        projects_v2_item: { content_node_id: 'node123' },
+        changes: {
+          field_value: {
+            field_name: 'Status',
+            from: { id: 'f1', name: 'Backlog', color: 'GRAY', description: 'Not started' },
+            to: { id: 'f2', name: 'Ready', color: 'GREEN', description: 'Ready to work' },
+          },
+        },
+      };
+
+      const res = await sendWebhook(app, 'projects_v2_item', payload, env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+      expect(tasks[0].task_type).toBe('implement');
+    });
+
+    it('does not match when object name differs from trigger status', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 10,
+      };
+
+      const payload = {
+        action: 'edited',
+        installation: { id: 999 },
+        projects_v2_item: { content_node_id: 'node123' },
+        changes: {
+          field_value: {
+            field_name: 'Status',
+            from: { id: 'f1', name: 'Backlog' },
+            to: { id: 'f2', name: 'In Progress' },
+          },
+        },
+      };
+
       const res = await sendWebhook(app, 'projects_v2_item', payload, env);
       expect(res.status).toBe(200);
       expect(await store.listTasks()).toHaveLength(0);
