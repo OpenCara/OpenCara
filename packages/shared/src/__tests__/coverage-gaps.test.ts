@@ -10,6 +10,7 @@ import {
   isImplementRole,
   isFixRole,
   isCodegenRole,
+  isIssueReviewRole,
 } from '../types.js';
 
 describe('isRepoAllowed edge cases', () => {
@@ -165,6 +166,20 @@ describe('role helper functions', () => {
       expect(isTriageRole('review')).toBe(false);
       expect(isTriageRole('implement')).toBe(false);
       expect(isTriageRole('fix')).toBe(false);
+    });
+  });
+
+  describe('isIssueReviewRole', () => {
+    it('returns true for issue_review', () => {
+      expect(isIssueReviewRole('issue_review')).toBe(true);
+    });
+
+    it('returns false for other roles', () => {
+      expect(isIssueReviewRole('review')).toBe(false);
+      expect(isIssueReviewRole('implement')).toBe(false);
+      expect(isIssueReviewRole('fix')).toBe(false);
+      expect(isIssueReviewRole('summary')).toBe(false);
+      expect(isIssueReviewRole('pr_triage')).toBe(false);
     });
   });
 });

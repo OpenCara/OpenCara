@@ -14,6 +14,7 @@ import {
   DEFAULT_REVIEW_CONFIG,
   DEFAULT_OPENCARA_CONFIG,
   DEFAULT_MODEL_DIVERSITY_GRACE_MS,
+  DEFAULT_ISSUE_REVIEW_TRIGGER,
   type ReviewConfig,
   type OpenCaraConfig,
   type ImplementConfig,
@@ -1937,5 +1938,167 @@ describe('resolveNamedAgent', () => {
       agents: [{ id: 'test', prompt: 'Test agent' }],
     };
     expect(resolveNamedAgent(config, 'test')).toEqual({ id: 'test', prompt: 'Test agent' });
+  });
+});
+
+// ── Issue Review Section ───────────────────────────────────────────
+
+describe('parseOpenCaraConfig — issue_review section', () => {
+  it('parses issue_review section with all fields', () => {
+    const toml = `
+version = 1
+[issue_review]
+enabled = true
+prompt = "Review this issue for clarity and completeness."
+agent_count = 3
+timeout = "5m"
+preferred_models = ["claude-opus-4-6"]
+preferred_tools = ["claude-code"]
+
+[issue_review.trigger]
+comment = "/opencara review-issue"
+events = ["opened", "edited"]
+skip = ["draft"]
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review).toBeDefined();
+    const ir = result.issue_review!;
+    expect(ir.enabled).toBe(true);
+    expect(ir.prompt).toBe('Review this issue for clarity and completeness.');
+    expect(ir.agentCount).toBe(3);
+    expect(ir.timeout).toBe('5m');
+    expect(ir.preferredModels).toEqual(['claude-opus-4-6']);
+    expect(ir.preferredTools).toEqual(['claude-code']);
+    expect(ir.trigger.comment).toBe('/opencara review-issue');
+    expect(ir.trigger.events).toEqual(['opened', 'edited']);
+    expect(ir.trigger.skip).toEqual(['draft']);
+  });
+
+  it('defaults issue_review fields when minimal config provided', () => {
+    const toml = `
+version = 1
+[issue_review]
+prompt = "Check this issue."
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review).toBeDefined();
+    const ir = result.issue_review!;
+    expect(ir.enabled).toBe(true);
+    expect(ir.prompt).toBe('Check this issue.');
+    expect(ir.agentCount).toBe(2); // default for issue_review is 2
+    expect(ir.timeout).toBe('5m'); // default for issue_review is 5m
+    expect(ir.preferredModels).toEqual([]);
+    expect(ir.preferredTools).toEqual([]);
+    expect(ir.trigger.comment).toBe('/opencara review-issue');
+    expect(ir.trigger.events).toBeUndefined();
+  });
+
+  it('uses all defaults when no fields specified', () => {
+    const toml = `
+version = 1
+[issue_review]
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review).toBeDefined();
+    const ir = result.issue_review!;
+    expect(ir.enabled).toBe(true);
+    expect(ir.prompt).toBe('Review this issue for clarity, completeness, and actionability.');
+    expect(ir.agentCount).toBe(2);
+    expect(ir.timeout).toBe('5m');
+    expect(ir.trigger).toEqual(DEFAULT_ISSUE_REVIEW_TRIGGER);
+  });
+
+  it('enabled defaults to true', () => {
+    const toml = `
+version = 1
+[issue_review]
+prompt = "Review"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review!.enabled).toBe(true);
+  });
+
+  it('respects enabled = false', () => {
+    const toml = `
+version = 1
+[issue_review]
+prompt = "Review"
+enabled = false
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review!.enabled).toBe(false);
+  });
+
+  it('trigger parsing works correctly', () => {
+    const toml = `
+version = 1
+[issue_review]
+prompt = "Review"
+
+[issue_review.trigger]
+comment = "/review-issue"
+label = "needs-review"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    const trigger = result.issue_review!.trigger;
+    expect(trigger.comment).toBe('/review-issue');
+    expect(trigger.label).toBe('needs-review');
+    expect(trigger.events).toBeUndefined();
+  });
+
+  it('absent issue_review section results in undefined', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "Review this PR."
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review).toBeUndefined();
+  });
+
+  it('coexists with other feature sections', () => {
+    const toml = `
+version = 1
+[review]
+prompt = "Review this PR."
+agent_count = 3
+
+[triage]
+prompt = "Triage this issue."
+
+[issue_review]
+prompt = "Review this issue."
+agent_count = 2
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.review).toBeDefined();
+    expect(result.review!.prompt).toBe('Review this PR.');
+    expect(result.triage).toBeDefined();
+    expect(result.triage!.prompt).toBe('Triage this issue.');
+    expect(result.issue_review).toBeDefined();
+    expect(result.issue_review!.prompt).toBe('Review this issue.');
+    expect(result.issue_review!.agentCount).toBe(2);
+  });
+
+  it('clamps agent_count within bounds', () => {
+    const toml = `
+version = 1
+[issue_review]
+prompt = "Review"
+agent_count = 15
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review!.agentCount).toBe(10); // clamped to max
+  });
+
+  it('parses model_diversity_grace', () => {
+    const toml = `
+version = 1
+[issue_review]
+prompt = "Review"
+model_diversity_grace = "60s"
+`;
+    const result = parseOpenCaraConfig(toml) as OpenCaraConfig;
+    expect(result.issue_review!.modelDiversityGraceMs).toBe(60_000);
   });
 });
