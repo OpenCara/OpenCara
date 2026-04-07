@@ -1564,19 +1564,20 @@ async function handleGoCommand(
 
   const implementConfig = fullConfig.implement;
 
-  // If agent ID specified, resolve from config
-  if (goCmd.targetAgent) {
-    const agent = resolveNamedAgent(implementConfig, goCmd.targetAgent);
-    if (!agent) {
-      await github.createIssueComment(
-        owner,
-        repo,
-        issueNumber,
-        `⚠️ Unknown agent ID: \`${goCmd.targetAgent}\`. Check \`[[implement.agents]]\` in your \`.opencara.toml\`.`,
-        token,
-      );
-      return new Response('OK', { status: 200 });
-    }
+  // Resolve named agent if specified
+  const agent = goCmd.targetAgent
+    ? resolveNamedAgent(implementConfig, goCmd.targetAgent)
+    : undefined;
+
+  if (goCmd.targetAgent && !agent) {
+    await github.createIssueComment(
+      owner,
+      repo,
+      issueNumber,
+      `⚠️ Unknown agent ID: \`${goCmd.targetAgent}\`. Check \`[[implement.agents]]\` in your \`.opencara.toml\`.`,
+      token,
+    );
+    return new Response('OK', { status: 200 });
   }
 
   // Fetch issue details from GitHub API
@@ -1596,11 +1597,6 @@ async function handleGoCommand(
     logger.error('Issue not found', { owner, repo, issueNumber });
     return new Response('Service Unavailable', { status: 503 });
   }
-
-  // Resolve agent overrides (prompt, model, tool)
-  const agent = goCmd.targetAgent
-    ? resolveNamedAgent(implementConfig, goCmd.targetAgent)
-    : undefined;
 
   const agentPrompt = agent?.prompt ?? implementConfig.prompt;
   const agentPreferredModels = agent?.model ? [agent.model] : implementConfig.preferredModels;
@@ -1940,23 +1936,24 @@ async function handleIssueLabelTrigger(
   if (fullConfig.implement?.enabled && (isExactLabelMatch || agentIdFromLabel !== undefined)) {
     const implementConfig = fullConfig.implement;
 
-    // If agent ID from label, resolve named agent
-    if (agentIdFromLabel) {
-      const agentOverride = resolveNamedAgent(implementConfig, agentIdFromLabel);
-      if (!agentOverride) {
-        logger.warn('agent:xxx label does not match any configured implement agent', {
-          label: addedLabel,
-          agentId: agentIdFromLabel,
-        });
-        await github.createIssueComment(
-          owner,
-          repo,
-          issue.number,
-          `⚠️ Unknown agent ID: \`${agentIdFromLabel}\`. Check \`[[implement.agents]]\` in your \`.opencara.toml\`.`,
-          token,
-        );
-        return new Response('OK', { status: 200 });
-      }
+    // Resolve named agent from label
+    const agent = agentIdFromLabel
+      ? resolveNamedAgent(implementConfig, agentIdFromLabel)
+      : undefined;
+
+    if (agentIdFromLabel && !agent) {
+      logger.warn('agent:xxx label does not match any configured implement agent', {
+        label: addedLabel,
+        agentId: agentIdFromLabel,
+      });
+      await github.createIssueComment(
+        owner,
+        repo,
+        issue.number,
+        `⚠️ Unknown agent ID: \`${agentIdFromLabel}\`. Check \`[[implement.agents]]\` in your \`.opencara.toml\`.`,
+        token,
+      );
+      return new Response('OK', { status: 200 });
     }
 
     logger.info('Implement label trigger matched', {
@@ -1981,11 +1978,6 @@ async function handleIssueLabelTrigger(
       });
       return new Response('Service Unavailable', { status: 503 });
     }
-
-    // Resolve agent overrides from label
-    const agent = agentIdFromLabel
-      ? resolveNamedAgent(implementConfig, agentIdFromLabel)
-      : undefined;
 
     const agentPrompt = agent?.prompt ?? implementConfig.prompt;
     const agentPreferredModels = agent?.model ? [agent.model] : implementConfig.preferredModels;

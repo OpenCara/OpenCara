@@ -724,7 +724,7 @@ describe('Unified trigger modes', () => {
       expect(tasks[0].target_model).toBeUndefined();
     });
 
-    it('agent:xxx works even without implement.enabled when implement section exists', async () => {
+    it('agent:xxx is ignored when implement.enabled=false', async () => {
       github.openCaraConfig = {
         version: 1,
         implement: {
