@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { PollTask } from '@opencara/shared';
 import type { ToolExecutorResult } from '../tool-executor.js';
 import {
@@ -10,6 +14,9 @@ import {
   parseImplementOutput,
   executeImplement,
   executeImplementTask,
+  detectDefaultBranch,
+  resolveStartRef,
+  checkoutForImplement,
   MAX_ISSUE_BODY_BYTES,
   type ImplementExecutorDeps,
 } from '../implement.js';
@@ -643,5 +650,149 @@ describe('executeImplementTask', () => {
       expect.stringContaining('issue-42'),
       expect.any(String),
     );
+  });
+});
+
+// ── Bare clone branch detection (real git repos) ────────────────
+
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/** Create a normal (non-bare) git repo with one commit on the given branch. */
+function createSourceRepo(dir: string, branch: string = 'main'): void {
+  fs.mkdirSync(dir, { recursive: true });
+  git(['init', '-b', branch], dir);
+  git(['config', 'user.email', 'test@test.com'], dir);
+  git(['config', 'user.name', 'Test'], dir);
+  fs.writeFileSync(path.join(dir, 'README.md'), '# test');
+  git(['add', '.'], dir);
+  git(['commit', '-m', 'init'], dir);
+}
+
+describe('detectDefaultBranch', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocara-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('detects "main" in a bare clone', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    const bareDir = path.join(tmpDir, 'bare.git');
+    createSourceRepo(srcDir, 'main');
+    git(['clone', '--bare', srcDir, bareDir], tmpDir);
+
+    expect(detectDefaultBranch(bareDir)).toBe('main');
+  });
+
+  it('detects "master" in a bare clone with master branch', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    const bareDir = path.join(tmpDir, 'bare.git');
+    createSourceRepo(srcDir, 'master');
+    git(['clone', '--bare', srcDir, bareDir], tmpDir);
+
+    expect(detectDefaultBranch(bareDir)).toBe('master');
+  });
+
+  it('detects "main" in a non-bare clone with remote tracking', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    const cloneDir = path.join(tmpDir, 'clone');
+    createSourceRepo(srcDir, 'main');
+    git(['clone', srcDir, cloneDir], tmpDir);
+
+    expect(detectDefaultBranch(cloneDir)).toBe('main');
+  });
+
+  it('throws when neither main nor master exists', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    const bareDir = path.join(tmpDir, 'bare.git');
+    createSourceRepo(srcDir, 'develop');
+    git(['clone', '--bare', srcDir, bareDir], tmpDir);
+
+    expect(() => detectDefaultBranch(bareDir)).toThrow('Cannot determine default branch');
+  });
+});
+
+describe('resolveStartRef', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocara-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns origin/<branch> for non-bare clones', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    const cloneDir = path.join(tmpDir, 'clone');
+    createSourceRepo(srcDir, 'main');
+    git(['clone', srcDir, cloneDir], tmpDir);
+
+    expect(resolveStartRef(cloneDir, 'main')).toBe('origin/main');
+  });
+
+  it('returns branch name for bare clones (no origin/ prefix)', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    const bareDir = path.join(tmpDir, 'bare.git');
+    createSourceRepo(srcDir, 'main');
+    git(['clone', '--bare', srcDir, bareDir], tmpDir);
+
+    expect(resolveStartRef(bareDir, 'main')).toBe('main');
+  });
+});
+
+describe('checkoutForImplement (bare clone integration)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocara-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('creates worktree from bare clone with main branch', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    createSourceRepo(srcDir, 'main');
+
+    // Simulate bare clone structure that checkoutForImplement creates
+    const baseDir = path.join(tmpDir, 'repos');
+    const bareDir = path.join(baseDir, 'acme', 'widgets.git');
+    fs.mkdirSync(path.join(baseDir, 'acme'), { recursive: true });
+    git(['clone', '--bare', '--filter=blob:none', srcDir, bareDir], tmpDir);
+
+    const result = checkoutForImplement('acme', 'widgets', 42, 'opencara/issue-42-test', baseDir);
+
+    expect(result.bareRepoPath).toBe(bareDir);
+    expect(result.worktreePath).toContain('implement-42');
+    expect(fs.existsSync(path.join(result.worktreePath, 'README.md'))).toBe(true);
+
+    // Verify worktree is on the correct branch
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], result.worktreePath).trim();
+    expect(branch).toBe('opencara/issue-42-test');
+  });
+
+  it('creates worktree from bare clone with master branch', () => {
+    const srcDir = path.join(tmpDir, 'src');
+    createSourceRepo(srcDir, 'master');
+
+    const baseDir = path.join(tmpDir, 'repos');
+    const bareDir = path.join(baseDir, 'acme', 'widgets.git');
+    fs.mkdirSync(path.join(baseDir, 'acme'), { recursive: true });
+    git(['clone', '--bare', '--filter=blob:none', srcDir, bareDir], tmpDir);
+
+    const result = checkoutForImplement('acme', 'widgets', 99, 'opencara/issue-99-test', baseDir);
+
+    expect(fs.existsSync(path.join(result.worktreePath, 'README.md'))).toBe(true);
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], result.worktreePath).trim();
+    expect(branch).toBe('opencara/issue-99-test');
   });
 });

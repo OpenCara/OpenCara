@@ -151,6 +151,46 @@ function ghExec(args: string[], cwd?: string): string {
   }
 }
 
+/**
+ * Detect the default branch by trying known ref paths.
+ * Non-bare repos use origin/main, origin/master; bare clones use refs/heads/main, refs/heads/master.
+ */
+export function detectDefaultBranch(repoPath: string): string {
+  // Non-bare clone refs (remote tracking branches)
+  const candidates: Array<{ ref: string; branch: string }> = [
+    { ref: 'origin/main', branch: 'main' },
+    { ref: 'origin/master', branch: 'master' },
+    // Bare clone refs (local branches — no remote tracking in bare repos)
+    { ref: 'refs/heads/main', branch: 'main' },
+    { ref: 'refs/heads/master', branch: 'master' },
+  ];
+
+  for (const { ref, branch } of candidates) {
+    try {
+      gitExec(['rev-parse', '--verify', ref], repoPath);
+      return branch;
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  throw new Error('Cannot determine default branch — neither main nor master exists');
+}
+
+/**
+ * Resolve the start-point ref for worktree creation.
+ * Prefers origin/<branch> (non-bare), falls back to refs/heads/<branch> (bare clone).
+ */
+export function resolveStartRef(repoPath: string, branch: string): string {
+  try {
+    gitExec(['rev-parse', '--verify', `origin/${branch}`], repoPath);
+    return `origin/${branch}`;
+  } catch {
+    // Bare clone — use local ref
+    return branch;
+  }
+}
+
 export interface ImplementCheckoutResult {
   /** Absolute path to the worktree directory */
   worktreePath: string;
@@ -199,7 +239,8 @@ export function checkoutForImplement(
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
   gitExec([...credArgs, 'fetch', '--force', 'origin'], bareRepoPath);
 
-  // Determine default branch (usually main or master)
+  // Determine default branch (usually main or master).
+  // In bare clones, refs live under refs/heads/ (not refs/remotes/origin/).
   let defaultBranch: string;
   try {
     defaultBranch = gitExec(
@@ -209,21 +250,13 @@ export function checkoutForImplement(
     // Strip "origin/" prefix if present
     defaultBranch = defaultBranch.replace(/^origin\//, '');
   } catch {
-    // Fallback: try main, then master
-    try {
-      gitExec(['rev-parse', '--verify', 'origin/main'], bareRepoPath);
-      defaultBranch = 'main';
-    } catch {
-      try {
-        gitExec(['rev-parse', '--verify', 'origin/master'], bareRepoPath);
-        defaultBranch = 'master';
-      } catch {
-        throw new Error(
-          'Cannot determine default branch — neither origin/main nor origin/master exists',
-        );
-      }
-    }
+    // Fallback: try origin/main, origin/master (non-bare), then refs/heads/ (bare)
+    defaultBranch = detectDefaultBranch(bareRepoPath);
   }
+
+  // Resolve the start point ref for worktree creation.
+  // In bare clones, origin/<branch> doesn't exist — use refs/heads/<branch> instead.
+  const startRef = resolveStartRef(bareRepoPath, defaultBranch);
 
   // Create worktree with new branch from default branch
   const worktreeBase = path.join(path.dirname(bareRepoPath), `${repo}-worktrees`);
@@ -248,10 +281,7 @@ export function checkoutForImplement(
   }
 
   fs.mkdirSync(worktreeBase, { recursive: true });
-  gitExec(
-    ['worktree', 'add', '-b', branchName, worktreePath, `origin/${defaultBranch}`],
-    bareRepoPath,
-  );
+  gitExec(['worktree', 'add', '-b', branchName, worktreePath, startRef], bareRepoPath);
 
   return { worktreePath, bareRepoPath };
 }
