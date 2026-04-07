@@ -332,6 +332,22 @@ export class MockGitHubService implements GitHubService {
     return this.resolveProjectItemResult;
   }
 
+  projectFieldValue: string | null = null;
+
+  async readProjectFieldValue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    fieldName: string,
+    token: string,
+  ): Promise<string | null> {
+    this.calls.push({
+      method: 'readProjectFieldValue',
+      args: { owner, repo, issueNumber, fieldName, token },
+    });
+    return this.projectFieldValue;
+  }
+
   /** Count postPrComment calls (convenience for assertions). */
   get commentCount(): number {
     return this.calls.filter((c) => c.method === 'postPrComment').length;

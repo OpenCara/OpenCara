@@ -6,6 +6,7 @@ import type {
   Feature,
   TaskRole,
   ReviewTask,
+  NamedAgentConfig,
 } from '@opencara/shared';
 import {
   DEFAULT_REVIEW_CONFIG,
@@ -1161,6 +1162,65 @@ export function parseAgentLabel(label: string): string | undefined {
 }
 
 /**
+ * Resolve a named agent from the project board field value.
+ * Used as a fallback when no explicit agent ID is provided via command or label.
+ *
+ * Returns:
+ * - { agent, error: false } if field value resolves to a named agent
+ * - { agent: undefined, error: false } if field is empty/not set (use default)
+ * - { agent: undefined, error: true } if field value doesn't match any agent (caller should post error)
+ * - { agent: undefined, error: false, fieldValue: undefined } if agent_field is not configured
+ */
+async function resolveAgentFromProjectField(
+  github: GitHubService,
+  config: { agents?: NamedAgentConfig[]; agent_field?: string },
+  owner: string,
+  repo: string,
+  issueOrPrNumber: number,
+  token: string,
+  logger: Logger,
+): Promise<{
+  agent: NamedAgentConfig | undefined;
+  error: boolean;
+  fieldValue: string | undefined;
+}> {
+  if (!config.agent_field) {
+    return { agent: undefined, error: false, fieldValue: undefined };
+  }
+
+  let fieldValue: string | null;
+  try {
+    fieldValue = await github.readProjectFieldValue(
+      owner,
+      repo,
+      issueOrPrNumber,
+      config.agent_field,
+      token,
+    );
+  } catch (err) {
+    logger.warn('Failed to read project field value', {
+      error: err instanceof Error ? err.message : String(err),
+      owner,
+      repo,
+      number: issueOrPrNumber,
+      fieldName: config.agent_field,
+    });
+    return { agent: undefined, error: false, fieldValue: undefined };
+  }
+
+  if (!fieldValue) {
+    return { agent: undefined, error: false, fieldValue: undefined };
+  }
+
+  const agent = resolveNamedAgent(config, fieldValue);
+  if (!agent) {
+    return { agent: undefined, error: true, fieldValue };
+  }
+
+  return { agent, error: false, fieldValue };
+}
+
+/**
  * Parse a triage command from a comment body.
  * Matches `/opencara triage [model]` or `@opencara triage [model]`.
  * Returns the optional target model, or null if not a triage command.
@@ -1406,8 +1466,8 @@ async function handleFixCommand(
 
   const fixConfig = fullConfig.fix;
 
-  // Resolve named agent if specified
-  const agent = fixCmd.targetAgent ? resolveNamedAgent(fixConfig, fixCmd.targetAgent) : undefined;
+  // Resolve named agent: explicit command argument takes priority
+  let agent = fixCmd.targetAgent ? resolveNamedAgent(fixConfig, fixCmd.targetAgent) : undefined;
 
   if (fixCmd.targetAgent && !agent) {
     await github.createIssueComment(
@@ -1418,6 +1478,33 @@ async function handleFixCommand(
       token,
     );
     return new Response('OK', { status: 200 });
+  }
+
+  // Fallback: if no explicit agent, try project board field
+  if (!fixCmd.targetAgent && fixConfig.agent_field) {
+    const fieldResult = await resolveAgentFromProjectField(
+      github,
+      fixConfig,
+      owner,
+      repo,
+      prNumber,
+      token,
+      logger,
+    );
+    if (fieldResult.error) {
+      const availableIds = fixConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
+      await github.createIssueComment(
+        owner,
+        repo,
+        prNumber,
+        `⚠️ Project field "${fixConfig.agent_field}" value \`${fieldResult.fieldValue}\` does not match any configured agent. Available: ${availableIds}`,
+        token,
+      );
+      return new Response('OK', { status: 200 });
+    }
+    if (fieldResult.agent) {
+      agent = fieldResult.agent;
+    }
   }
 
   logger.info('Fix command received', {
@@ -1586,10 +1673,8 @@ async function handleGoCommand(
 
   const implementConfig = fullConfig.implement;
 
-  // Resolve named agent if specified
-  const agent = goCmd.targetAgent
-    ? resolveNamedAgent(implementConfig, goCmd.targetAgent)
-    : undefined;
+  // Resolve named agent: explicit command argument takes priority
+  let agent = goCmd.targetAgent ? resolveNamedAgent(implementConfig, goCmd.targetAgent) : undefined;
 
   if (goCmd.targetAgent && !agent) {
     await github.createIssueComment(
@@ -1600,6 +1685,33 @@ async function handleGoCommand(
       token,
     );
     return new Response('OK', { status: 200 });
+  }
+
+  // Fallback: if no explicit agent, try project board field
+  if (!goCmd.targetAgent && implementConfig.agent_field) {
+    const fieldResult = await resolveAgentFromProjectField(
+      github,
+      implementConfig,
+      owner,
+      repo,
+      issueNumber,
+      token,
+      logger,
+    );
+    if (fieldResult.error) {
+      const availableIds = implementConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
+      await github.createIssueComment(
+        owner,
+        repo,
+        issueNumber,
+        `⚠️ Project field "${implementConfig.agent_field}" value \`${fieldResult.fieldValue}\` does not match any configured agent. Available: ${availableIds}`,
+        token,
+      );
+      return new Response('OK', { status: 200 });
+    }
+    if (fieldResult.agent) {
+      agent = fieldResult.agent;
+    }
   }
 
   // Fetch issue details from GitHub API
@@ -1903,7 +2015,7 @@ async function handlePrLabelTrigger(
     const fixConfig = fullConfig.fix;
 
     // Resolve named agent from label
-    const agent = agentIdFromLabel ? resolveNamedAgent(fixConfig, agentIdFromLabel) : undefined;
+    let agent = agentIdFromLabel ? resolveNamedAgent(fixConfig, agentIdFromLabel) : undefined;
 
     if (agentIdFromLabel && !agent && !isExactFixLabelMatch) {
       logger.warn('agent:xxx label does not match any configured fix agent', {
@@ -1918,6 +2030,33 @@ async function handlePrLabelTrigger(
         token,
       );
       return new Response('OK', { status: 200 });
+    }
+
+    // Fallback: if no agent from label, try project board field
+    if (!agent && !agentIdFromLabel && fixConfig.agent_field) {
+      const fieldResult = await resolveAgentFromProjectField(
+        github,
+        fixConfig,
+        owner,
+        repo,
+        prNumber,
+        token,
+        logger,
+      );
+      if (fieldResult.error) {
+        const availableIds = fixConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
+        await github.createIssueComment(
+          owner,
+          repo,
+          prNumber,
+          `⚠️ Project field "${fixConfig.agent_field}" value \`${fieldResult.fieldValue}\` does not match any configured agent. Available: ${availableIds}`,
+          token,
+        );
+        return new Response('OK', { status: 200 });
+      }
+      if (fieldResult.agent) {
+        agent = fieldResult.agent;
+      }
     }
 
     logger.info('Fix label trigger matched', {
@@ -2023,9 +2162,7 @@ async function handleIssueLabelTrigger(
     const implementConfig = fullConfig.implement;
 
     // Resolve named agent from label
-    const agent = agentIdFromLabel
-      ? resolveNamedAgent(implementConfig, agentIdFromLabel)
-      : undefined;
+    let agent = agentIdFromLabel ? resolveNamedAgent(implementConfig, agentIdFromLabel) : undefined;
 
     if (agentIdFromLabel && !agent && !isExactLabelMatch) {
       logger.warn('agent:xxx label does not match any configured implement agent', {
@@ -2040,6 +2177,33 @@ async function handleIssueLabelTrigger(
         token,
       );
       return new Response('OK', { status: 200 });
+    }
+
+    // Fallback: if no agent from label, try project board field
+    if (!agent && !agentIdFromLabel && implementConfig.agent_field) {
+      const fieldResult = await resolveAgentFromProjectField(
+        github,
+        implementConfig,
+        owner,
+        repo,
+        issue.number,
+        token,
+        logger,
+      );
+      if (fieldResult.error) {
+        const availableIds = implementConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
+        await github.createIssueComment(
+          owner,
+          repo,
+          issue.number,
+          `⚠️ Project field "${implementConfig.agent_field}" value \`${fieldResult.fieldValue}\` does not match any configured agent. Available: ${availableIds}`,
+          token,
+        );
+        return new Response('OK', { status: 200 });
+      }
+      if (fieldResult.agent) {
+        agent = fieldResult.agent;
+      }
     }
 
     logger.info('Implement label trigger matched', {
@@ -2243,13 +2407,44 @@ async function handleProjectsV2Item(
     const implementConfig = fullConfig.implement;
     const timeoutMs = parseTimeoutMs(implementConfig.timeout);
 
+    // Resolve agent from project board field if configured
+    let agent: NamedAgentConfig | undefined;
+    if (implementConfig.agent_field) {
+      const fieldResult = await resolveAgentFromProjectField(
+        github,
+        implementConfig,
+        owner,
+        repo,
+        number,
+        token,
+        logger,
+      );
+      if (fieldResult.error) {
+        const availableIds = implementConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
+        await github.createIssueComment(
+          owner,
+          repo,
+          number,
+          `⚠️ Project field "${implementConfig.agent_field}" value \`${fieldResult.fieldValue}\` does not match any configured agent. Available: ${availableIds}`,
+          token,
+        );
+        return new Response('OK', { status: 200 });
+      }
+      agent = fieldResult.agent;
+    }
+
+    const agentPrompt = agent?.prompt ?? implementConfig.prompt;
+    const agentPreferredModels = agent?.model ? [agent.model] : implementConfig.preferredModels;
+    const agentPreferredTools = agent?.tool ? [agent.tool] : implementConfig.preferredTools;
+    const targetModel = agent?.model;
+
     const implementTaskConfig: ReviewConfig = {
       ...reviewConfig,
       agentCount: implementConfig.agentCount,
       timeout: implementConfig.timeout,
-      preferredModels: implementConfig.preferredModels,
-      preferredTools: implementConfig.preferredTools,
-      prompt: implementConfig.prompt,
+      preferredModels: agentPreferredModels,
+      preferredTools: agentPreferredTools,
+      prompt: agentPrompt,
       modelDiversityGraceMs: implementConfig.modelDiversityGraceMs,
     };
 
@@ -2278,6 +2473,7 @@ async function handleProjectsV2Item(
         issue_title: issue.title,
         issue_body: issue.body ?? undefined,
         issue_author: issue.user.login,
+        ...(targetModel ? { target_model: targetModel } : {}),
       });
     } catch (err) {
       logger.error('Failed to create implement task group from status trigger', {

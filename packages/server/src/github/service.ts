@@ -137,6 +137,19 @@ export interface GitHubService {
     nodeId: string,
     token: string,
   ): Promise<{ type: 'Issue' | 'PullRequest'; owner: string; repo: string; number: number } | null>;
+
+  /**
+   * Read a custom project field value from an issue's or PR's project item
+   * via the GitHub Projects V2 GraphQL API.
+   * Returns the field's text/single-select value, or null if not found.
+   */
+  readProjectFieldValue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    fieldName: string,
+    token: string,
+  ): Promise<string | null>;
 }
 
 /**
@@ -496,6 +509,118 @@ export class RealGitHubService implements GitHubService {
       number: node.number,
     };
   }
+
+  async readProjectFieldValue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    fieldName: string,
+    token: string,
+  ): Promise<string | null> {
+    // Use GraphQL to find the issue's project items and read the named field value.
+    // The query traverses: repository → issue → projectItems → fieldValues,
+    // looking for a field matching fieldName.
+    const query = `
+      query($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+          issueOrPullRequest(number: $number) {
+            ... on Issue {
+              projectItems(first: 10) {
+                nodes {
+                  fieldValues(first: 20) {
+                    nodes {
+                      ... on ProjectV2ItemFieldTextValue {
+                        text
+                        field { ... on ProjectV2Field { name } }
+                      }
+                      ... on ProjectV2ItemFieldSingleSelectValue {
+                        name
+                        field { ... on ProjectV2SingleSelectField { name } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            ... on PullRequest {
+              projectItems(first: 10) {
+                nodes {
+                  fieldValues(first: 20) {
+                    nodes {
+                      ... on ProjectV2ItemFieldTextValue {
+                        text
+                        field { ... on ProjectV2Field { name } }
+                      }
+                      ... on ProjectV2ItemFieldSingleSelectValue {
+                        name
+                        field { ... on ProjectV2SingleSelectField { name } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await githubFetch('https://api.github.com/graphql', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({
+        query,
+        variables: { owner, repo, number: issueNumber },
+      }),
+    });
+
+    if (!response.ok) {
+      this.logger.warn('GraphQL query failed for project field value', {
+        status: response.status,
+        owner,
+        repo,
+        issueNumber,
+        fieldName,
+      });
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      data?: {
+        repository?: {
+          issueOrPullRequest?: {
+            projectItems?: {
+              nodes: Array<{
+                fieldValues: {
+                  nodes: Array<{
+                    text?: string;
+                    name?: string;
+                    field?: { name: string };
+                  }>;
+                };
+              }>;
+            };
+          };
+        };
+      };
+    };
+
+    const projectItems = data.data?.repository?.issueOrPullRequest?.projectItems?.nodes;
+    if (!projectItems) return null;
+
+    // Search across all project items for the named field
+    for (const item of projectItems) {
+      for (const fieldValue of item.fieldValues.nodes) {
+        if (fieldValue.field?.name === fieldName) {
+          // Text fields use .text, single-select fields use .name
+          const value = fieldValue.text ?? fieldValue.name;
+          if (value && value.trim().length > 0) return value.trim();
+        }
+      }
+    }
+
+    return null;
+  }
 }
 
 /**
@@ -678,6 +803,21 @@ export class NoOpGitHubService implements GitHubService {
     number: number;
   } | null> {
     this.logger.info('Dev mode — returning null for project item content', { nodeId });
+    return null;
+  }
+
+  async readProjectFieldValue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    fieldName: string,
+  ): Promise<string | null> {
+    this.logger.info('Dev mode — returning null for project field value', {
+      owner,
+      repo,
+      issueNumber,
+      fieldName,
+    });
     return null;
   }
 }
