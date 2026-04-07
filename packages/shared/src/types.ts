@@ -10,7 +10,8 @@ export type TaskRole =
   | 'pr_triage'
   | 'issue_triage'
   | 'implement'
-  | 'fix';
+  | 'fix'
+  | 'issue_review';
 
 /** Check if a role is a dedup variant */
 export function isDedupRole(role: TaskRole): boolean {
@@ -37,8 +38,20 @@ export function isCodegenRole(role: TaskRole): boolean {
   return role === 'implement' || role === 'fix';
 }
 
+/** Check if a role is the issue review role */
+export function isIssueReviewRole(role: TaskRole): boolean {
+  return role === 'issue_review';
+}
+
 /** Feature pipeline — which feature spawned this task group */
-export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage' | 'implement' | 'fix';
+export type Feature =
+  | 'review'
+  | 'dedup_pr'
+  | 'dedup_issue'
+  | 'triage'
+  | 'implement'
+  | 'fix'
+  | 'issue_review';
 
 /**
  * @deprecated Use TaskRole instead. Kept for backward compatibility during migration.

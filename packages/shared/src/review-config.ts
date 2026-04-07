@@ -99,6 +99,12 @@ export interface FixConfig extends FeatureConfig {
   agent_field?: string;
 }
 
+/** Issue review section config */
+export interface IssueReviewConfig extends FeatureConfig {
+  enabled: boolean;
+  trigger: TriggerConfig;
+}
+
 /** Top-level .opencara.toml config */
 export interface OpenCaraConfig {
   version: number;
@@ -107,6 +113,7 @@ export interface OpenCaraConfig {
   triage?: TriageConfig;
   implement?: ImplementConfig;
   fix?: FixConfig;
+  issue_review?: IssueReviewConfig;
 }
 
 /**
@@ -321,6 +328,11 @@ export const DEFAULT_FIX_TRIGGER: TriggerConfig = {
 export const DEFAULT_TRIAGE_TRIGGER: TriggerConfig = {
   events: ['opened'],
   comment: '/opencara triage',
+};
+
+/** Default trigger config for issue review feature */
+export const DEFAULT_ISSUE_REVIEW_TRIGGER: TriggerConfig = {
+  comment: '/opencara review',
 };
 
 /** @deprecated Use DEFAULT_REVIEW_TRIGGER instead */
@@ -618,6 +630,26 @@ function parseFixSection(raw: Record<string, unknown>): FixConfig {
   };
 }
 
+const DEFAULT_ISSUE_REVIEW_FEATURE: FeatureConfig = {
+  prompt: 'Review this issue for clarity, completeness, and actionability.',
+  agentCount: 2,
+  timeout: '5m',
+  preferredModels: [],
+  preferredTools: [],
+  modelDiversityGraceMs: DEFAULT_MODEL_DIVERSITY_GRACE_MS,
+};
+
+/** Parse the [issue_review] section */
+function parseIssueReviewSection(raw: Record<string, unknown>): IssueReviewConfig {
+  const base = parseFeatureFields(raw, DEFAULT_ISSUE_REVIEW_FEATURE);
+  const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
+  return {
+    ...base,
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
+    trigger: parseTriggerSection(triggerRaw, DEFAULT_ISSUE_REVIEW_TRIGGER),
+  };
+}
+
 /**
  * Parse a .opencara.toml config string into OpenCaraConfig.
  *
@@ -688,6 +720,11 @@ export function parseOpenCaraConfig(toml: string): ParseResult {
   // Parse optional fix section
   if (isObject(raw.fix)) {
     config.fix = parseFixSection(raw.fix);
+  }
+
+  // Parse optional issue_review section
+  if (isObject(raw.issue_review)) {
+    config.issue_review = parseIssueReviewSection(raw.issue_review);
   }
 
   return config;

@@ -29,6 +29,7 @@ export {
   isImplementRole,
   isFixRole,
   isCodegenRole,
+  isIssueReviewRole,
 } from './types.js';
 
 // API request/response types
@@ -92,6 +93,7 @@ export {
   DEFAULT_IMPLEMENT_TRIGGER,
   DEFAULT_FIX_TRIGGER,
   DEFAULT_TRIAGE_TRIGGER,
+  DEFAULT_ISSUE_REVIEW_TRIGGER,
   type OpenCaraConfig,
   type ReviewSectionConfig,
   type ReviewConfig,
@@ -106,4 +108,5 @@ export {
   type TriageConfig,
   type ImplementConfig,
   type FixConfig,
+  type IssueReviewConfig,
 } from './review-config.js';
