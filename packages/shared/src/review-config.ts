@@ -18,9 +18,20 @@ export type EntityEntry = { agent?: string; github?: string };
 
 /** Per-agent slot overrides within a feature section */
 export interface AgentSlotConfig {
+  id?: string;
   prompt?: string;
+  model?: string;
+  tool?: string;
   preferredModels?: string[];
   preferredTools?: string[];
+}
+
+/** A named agent definition with required id and prompt */
+export interface NamedAgentConfig {
+  id: string;
+  prompt: string;
+  model?: string;
+  tool?: string;
 }
 
 /** Base config shared by all features (review, dedup, triage) */
@@ -77,6 +88,7 @@ export interface TriageConfig extends FeatureConfig {
 export interface ImplementConfig extends FeatureConfig {
   enabled: boolean;
   trigger: TriggerConfig;
+  agents?: NamedAgentConfig[];
 }
 
 /** Fix section config */
@@ -412,6 +424,32 @@ function parseAgentSlots(value: unknown): AgentSlotConfig[] | undefined {
   return slots.length > 0 ? slots : undefined;
 }
 
+/** Parse [[implement.agents]] array into NamedAgentConfig[] (requires id + prompt) */
+function parseNamedAgents(value: unknown): NamedAgentConfig[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const agents: NamedAgentConfig[] = [];
+  for (const item of value) {
+    if (!isObject(item)) continue;
+    if (typeof item.id !== 'string' || typeof item.prompt !== 'string') continue;
+    const agent: NamedAgentConfig = { id: item.id, prompt: item.prompt };
+    if (typeof item.model === 'string') agent.model = item.model;
+    if (typeof item.tool === 'string') agent.tool = item.tool;
+    agents.push(agent);
+  }
+  return agents.length > 0 ? agents : undefined;
+}
+
+/**
+ * Look up a named agent by ID in the implement config.
+ * Returns undefined if not found.
+ */
+export function resolveNamedAgent(
+  config: ImplementConfig,
+  agentId: string,
+): NamedAgentConfig | undefined {
+  return config.agents?.find((a) => a.id === agentId);
+}
+
 /** Parse base FeatureConfig fields from a TOML section object */
 function parseFeatureFields(raw: Record<string, unknown>, defaults: FeatureConfig): FeatureConfig {
   const agentSlots = parseAgentSlots(raw.agents);
@@ -540,12 +578,14 @@ const DEFAULT_IMPLEMENT_FEATURE: FeatureConfig = {
 
 /** Parse the [implement] section */
 function parseImplementSection(raw: Record<string, unknown>): ImplementConfig {
-  const base = parseFeatureFields(raw, DEFAULT_IMPLEMENT_FEATURE);
+  const { agents: _slots, ...base } = parseFeatureFields(raw, DEFAULT_IMPLEMENT_FEATURE);
   const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
+  const namedAgents = parseNamedAgents(raw.agents);
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
     trigger: parseTriggerSection(triggerRaw, DEFAULT_IMPLEMENT_TRIGGER),
+    ...(namedAgents ? { agents: namedAgents } : {}),
   };
 }
 
