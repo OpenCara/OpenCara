@@ -332,7 +332,7 @@ export const DEFAULT_TRIAGE_TRIGGER: TriggerConfig = {
 
 /** Default trigger config for issue review feature */
 export const DEFAULT_ISSUE_REVIEW_TRIGGER: TriggerConfig = {
-  comment: '/opencara review',
+  comment: '/opencara review-issue',
 };
 
 /** @deprecated Use DEFAULT_REVIEW_TRIGGER instead */

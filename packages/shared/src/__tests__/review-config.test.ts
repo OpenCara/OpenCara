@@ -1989,7 +1989,7 @@ prompt = "Check this issue."
     expect(ir.timeout).toBe('5m'); // default for issue_review is 5m
     expect(ir.preferredModels).toEqual([]);
     expect(ir.preferredTools).toEqual([]);
-    expect(ir.trigger.comment).toBe('/opencara review');
+    expect(ir.trigger.comment).toBe('/opencara review-issue');
     expect(ir.trigger.events).toBeUndefined();
   });
 
