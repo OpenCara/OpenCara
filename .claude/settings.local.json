@@ -9,7 +9,13 @@
       "Bash(python3 -c \"import json,sys; prs=json.load\\(sys.stdin\\); print\\([p[''''number''''] for p in prs] if prs else ''''None''''\\)\")",
       "Bash(gh issue:*)",
       "Bash(python3 -c \"import json,sys; print\\(sorted\\(i[''''number''''] for i in json.load\\(sys.stdin\\)\\)\\)\")",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(gh api:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm install:*)",
+      "Bash(bash scripts/process-webhook-events.sh)",
+      "Bash(bash scripts/list-issues-by-status.sh ready)",
+      "Bash(bash scripts/poll-github.sh)"
     ]
   }
 }

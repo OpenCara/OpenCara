@@ -123,7 +123,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #423, #428, #430, #431, #473, #544, #545, #546, #551, #555, #557, #560, #594, #596, #597
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #423, #428, #430, #431, #473, #544, #545, #546, #551, #555, #557, #560, #594, #596, #597, #624, #627, #628, #631, #636, #637, #641, #643, #644, #645, #646, #652, #653, #654, #655, #656, #657, #662, #664, #666, #667, #669, #670, #672, #673
 
 ## Merged PRs (processed)
 
@@ -132,7 +132,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552, #558, #559, #562, #563, #571, #572, #573, #575, #579, #582, #583, #584, #585, #586, #587, #588, #589, #590, #591, #592, #595, #598, #599, #604
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552, #558, #559, #562, #563, #571, #572, #573, #575, #579, #582, #583, #584, #585, #586, #587, #588, #589, #590, #591, #592, #595, #598, #599, #604, #605, #606, #607, #625, #626, #629, #630, #632, #633, #634, #635, #638, #639, #642, #647, #648, #649, #650, #651, #658, #659, #660, #661, #663, #665, #668, #671
 
 ### Milestone QA (2026-03-22)
 
@@ -530,6 +530,110 @@ Parent: #593 — broken down 2026-03-30
 
 Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test#68, confirming full pipeline. Previous AUTH_TOKEN_REVOKED issue resolved.
 
+### Post-M21 QA (2026-04-05)
+
+- #652 [qa] Post-M21 QA Verification (PRs #575–#651) — **DONE** (44/44 PASS, all green, closed)
+
+### OAuth token fix (2026-03-31)
+
+- #624 [server-dev, P1] Remove artificial 8-hour token expiry for OAuth App tokens — **DONE** (PR #625, PR #626 merged)
+
+### Unified trigger config (2026-04-01)
+
+- #627 [architect, P1] Unify trigger config across all features — **DONE** (PR #629 merged)
+- #628 [server-dev, P1] Handle unified trigger modes in webhook handlers — **DONE** (PR #630 merged)
+- #631 [server-dev, P1] Fix preferred_models grace period baseline for summary tasks — **DONE** (PR #632 merged)
+
+### Bug fixes (2026-04-01)
+
+- PR #633 [direct] Fix summary task repo filter for private mode agents — **DONE**
+- PR #634 [direct] Fix preferred review round-robin fair distribution — **DONE**
+- PR #635 [direct] Shuffle agent order in batch poll for fair task distribution — **DONE**
+
+### Bug fixes / improvements (2026-04-02)
+
+- #636 [cli-dev, P1] Fix dedup init to use gh CLI instead of platform OAuth token — **DONE** (PR #639 merged)
+- #637 [server-dev, P2] Update dedup index entries on PR/issue title and label changes — **DONE** (PR #638 merged)
+
+### Bug fixes / improvements (2026-04-04)
+
+- #641 [server-dev, P1] Zombie issue tasks with pr_number=0 block dedup serialization — **DONE** (PR #642 merged)
+- #643 [server-dev, P2] Clean up pending tasks when PR is merged or closed — **DONE** (PR #647 merged)
+- #644 [cli-dev, P3] Display version and commit hash on CLI launch — **DONE** (PR #649 merged)
+- #645 [cli-dev, P2] Display enabled features of each agent tool on CLI launch — **DONE** (PR #649 merged)
+- #646 [cli-dev, P2] Auto-build dedup context from GitHub API — **DONE** (PR #648 merged)
+
+### Prompt/review refactoring (2026-04-05)
+
+- PR #650 [direct] Share prompt blocks across review modes, compact for multi-agent — **DONE**
+- PR #651 [direct] Post review verdict as GitHub review event — **DONE**
+
+### M22: Reputation System (2026-04-06)
+
+- #653 [breakdown] Emoji reaction-based reputation system with account-level blocking — **DONE** (all sub-issues merged)
+  - #654 [server-dev, P1] Revert to issue comment posting + capture comment ID — **DONE** (PR #658 merged)
+  - #655 [server-dev, P1] D1 migration + DataStore methods + reputation constants — **DONE** (PR #659 merged)
+  - #656 [server-dev, P1] Reputation module — Wilson score, decay, multipliers, reaction collection — **DONE** (PR #660 merged)
+  - #657 [server-dev, P1] Eligibility integration — reputation multipliers + account-level blocking — **DONE** (PR #661 merged)
+
+### Bug fixes (2026-04-06)
+
+- #662 [server-dev, P1] Batch poll rate limit blocks multiple CLI instances from same IP — **DONE** (PR #663 merged)
+- #664 [cli-dev, P1] CLI agent process doesn't terminate on SIGTERM — zombie processes — **DONE** (PR #665 merged)
+
+### Configurable Named Agents (2026-04-07)
+
+#### Implement agents
+- #666 [architect, P2, M] Add named agent definitions to implement config types and parser — **DONE** (PR #668 merged 2026-04-07, board→Done, closed)
+- #667 [server-dev, P2, S] Resolve named agent ID in /opencara go command — **DONE** (PR #671 merged 2026-04-07, board→Done, closed)
+
+#### Fix agents
+- #669 [architect] — **CLOSED** (round 1, created without approval)
+- #670 [server-dev] — **CLOSED** (round 1, created without approval)
+- #672 [architect] Add named agent definitions to fix config types and parser — **DONE** (PR #674 merged 2026-04-07)
+- #673 [server-dev] Resolve named agent ID in /opencara fix command — **DONE** (PR #675 merged 2026-04-07)
+
+### Triage bugs (external repo, 2026-04-07)
+
+- #676 [cli-dev, HIGH] Triage prompt hardcoded to OpenCara's monorepo structure — **DONE** (PR #678 merged 2026-04-07)
+- #677 [server-dev, HIGH] Triage comment missing proper header and contributor info — **DONE** (PR #679 merged 2026-04-07)
+
+### Project field as agent ID selector (2026-04-07)
+
+- #680 [architect, HIGH] Add agent_field config to implement and fix sections — **DONE** (PR merged, prerequisite for #681)
+- #681 [server-dev, HIGH] Resolve agent ID from project board field for implement/fix tasks — **DONE** (PR #683 merged 2026-04-07)
+
+### Observability (2026-04-07)
+
+- #684 [server-dev, HIGH] Add structured logging to webhook handler critical paths — **DONE** (PR #685 merged 2026-04-07)
+
+### Issue Review Feature (2026-04-07)
+
+- #686 [architect, HIGH] Add issue_review types, config, and TOML parser — **DONE** (PR #690 merged 2026-04-07)
+- #687 [server-dev, HIGH] Handle issue review triggers in webhook handler — **DONE** (PR #693 merged 2026-04-07)
+- #688 [cli-dev, HIGH] Issue review executor and prompt builder — **DONE** (PR #691 merged 2026-04-07)
+- #689 [server-dev, HIGH] Handle issue review result synthesis and posting — **DONE** (PR #695 merged)
+
+### Issue Review Feature hardening (2026-04-07)
+
+- #696 [server-dev, HIGH] Fix eligibility.ts: issue_review role falls through to summarizer rules — **DONE** (PR #697 merged)
+
+### Workflow migration: implement-based agents (2026-04-07)
+
+- Replaced team-system dev agents with OpenCara implement feature (dogfooding)
+- Deleted: architect.md, server-dev.md, cli-dev.md, qa.md from .claude/agents/
+- Updated: .opencara.toml, pm.md, agent-workflow.md, development-workflow.md, CLAUDE.md
+- New dispatch: PM sets Agent field → moves to In progress → status trigger creates implement task
+- Committed directly to main (doc-only changes)
+
+### CLI improvements (2026-04-07)
+
+- #698 [cli-dev, LOW] Make command test timeout configurable in config.toml — **BACKLOG**
+
+### Bug fix (2026-04-07)
+
+- #692 [server-dev, HIGH] Assign per-task preferred model instead of shared preference list — **DONE** (PR #694 merged 2026-04-07)
+
 ## Open PRs
 
 (none)
@@ -540,6 +644,43 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Recently processed
 
+- PR #697 [server-dev] merged 2026-04-07 — Fix eligibility.ts issue_review fallthrough (#696)
+- PR #695 [server-dev] merged 2026-04-07 — Issue review result synthesis and posting (#689)
+- PR #694 [server-dev] merged 2026-04-07 — Per-task preferred model assignment (#692)
+- PR #691 [cli-dev] merged 2026-04-07 — Issue review executor and prompt builder (#688)
+- PR #693 [server-dev] merged 2026-04-07 — Handle issue review triggers in webhook (#687)
+- PR #690 [architect] merged 2026-04-07 — Add issue_review types, config, TOML parser (#686)
+- PR #685 [server-dev] merged 2026-04-07 — Add structured logging to webhook critical paths (#684)
+- PR #683 [server-dev] merged 2026-04-07 — Resolve agent ID from project board field (#681)
+- PR #682 [architect] merged 2026-04-07 — Add agent_field config to implement and fix sections (#680)
+- PR #679 [server-dev] merged 2026-04-07 — Triage comment header + contributor info (#677)
+- PR #678 [cli-dev] merged 2026-04-07 — Generic triage prompt (#676)
+- PR #675 [server-dev] merged 2026-04-07 — Resolve named agent ID in /opencara fix command (#673)
+- PR #674 [architect] merged 2026-04-07 — Add named agent definitions to fix config types and parser (#672)
+- PR #671 [server-dev] merged 2026-04-07 — Resolve named agent ID in /opencara go command (#667)
+- PR #668 [architect] merged 2026-04-07 — Add named agent definitions to implement config types and parser (#666)
+- PR #665 [cli-dev] merged 2026-04-06 — Fix SIGTERM/SIGINT handlers to prevent zombie processes (#664)
+- PR #663 [server-dev] merged 2026-04-06 — Rate limit batch poll by authenticated identity (#662)
+- PR #661 [server-dev] merged 2026-04-06 — Eligibility integration — reputation multipliers (#657)
+- PR #660 [server-dev] merged 2026-04-06 — Reputation module — Wilson score, decay (#656)
+- PR #659 [server-dev] merged 2026-04-06 — D1 migration + DataStore reputation methods (#655)
+- PR #658 [server-dev] merged 2026-04-06 — Revert to issue comment posting (#654)
+- PR #651 [direct] merged 2026-04-05 — Post review verdict as GitHub review event
+- PR #650 [direct] merged 2026-04-05 — Share prompt blocks across review modes
+- PR #649 [cli-dev] merged 2026-04-04 — Display version/commit hash and tool features (#644, #645)
+- PR #648 [cli-dev] merged 2026-04-04 — Auto-build dedup context from GitHub API (#646)
+- PR #647 [server-dev] merged 2026-04-04 — Clean up pending tasks on PR/issue close (#643)
+- PR #642 [server-dev] merged 2026-04-04 — Fix zombie issue tasks and dedup namespace (#641)
+- PR #639 [cli-dev] merged 2026-04-02 — Fix dedup init to use gh CLI (#636)
+- PR #638 [server-dev] merged 2026-04-02 — Update dedup index entries on title/label changes (#637)
+- PR #635 [direct] merged 2026-04-01 — Shuffle agent order in batch poll
+- PR #634 [direct] merged 2026-04-01 — Preferred review round-robin fair distribution
+- PR #633 [direct] merged 2026-04-01 — Summary task repo filter for private mode agents
+- PR #632 [server-dev] merged 2026-04-01 — Fix preferred_models grace period baseline (#631)
+- PR #630 [server-dev] merged 2026-04-01 — Handle unified trigger modes (#628)
+- PR #629 [architect] merged 2026-04-01 — Unify trigger config across features (#627)
+- PR #626 [server-dev] merged 2026-03-31 — Remove expires_in/expires_at for OAuth tokens (#624)
+- PR #625 [server-dev] merged 2026-03-31 — Remove 8-hour token expiry (#624)
 - PR #595 [bug] merged 2026-03-30 — Fix: add implement and fix to taskRoleSchema (#594)
 - PR #592 [server-dev] merged 2026-03-29 — Store PR diff size on task (#581)
 - PR #591 [architect] merged 2026-03-29 — Fixed permission rules for implement/fix triggers (#574)

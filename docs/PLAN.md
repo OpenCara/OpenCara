@@ -334,8 +334,55 @@ Epic: #593
 | #603  | cli-dev    | #607 | Batch poll coordinator and repo access check [DONE]      |
 | #581  | server-dev | #592 | Store PR diff size on task for CLI-side filtering [DONE] |
 
+## Post-M21: OAuth & Trigger Fixes (2026-03-31 — 2026-04-02)
+
+| Issue | Agent      | PR   | Description                                                         |
+| ----- | ---------- | ---- | ------------------------------------------------------------------- |
+| #624  | server-dev | #625,#626 | Remove artificial 8-hour token expiry for OAuth App tokens [DONE] |
+| #627  | architect  | #629 | Unify trigger config across all features [DONE]                     |
+| #628  | server-dev | #630 | Handle unified trigger modes in webhook handlers [DONE]             |
+| #631  | server-dev | #632 | Fix preferred_models grace period baseline for summary tasks [DONE] |
+| #636  | cli-dev    | #639 | Fix dedup init to use gh CLI instead of platform OAuth token [DONE] |
+| #637  | server-dev | #638 | Update dedup index entries on PR/issue title and label changes [DONE] |
+| --    | direct     | #633 | Fix summary task repo filter for private mode agents [DONE]         |
+| --    | direct     | #634 | Fix preferred review round-robin fair distribution [DONE]           |
+| --    | direct     | #635 | Shuffle agent order in batch poll for fair distribution [DONE]      |
+
+## Post-M21: Task Cleanup & CLI DX (2026-04-04 — 2026-04-05)
+
+| Issue | Agent      | PR   | Description                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------- |
+| #641  | server-dev | #642 | Fix zombie issue tasks and dedup namespace collision [DONE]     |
+| #643  | server-dev | #647 | Clean up pending tasks when PR/issue is closed [DONE]           |
+| #644  | cli-dev    | #649 | Display version and commit hash on CLI launch [DONE]            |
+| #645  | cli-dev    | #649 | Display enabled features of each agent tool on launch [DONE]    |
+| #646  | cli-dev    | #648 | Auto-build dedup context from GitHub API [DONE]                 |
+| --    | direct     | #650 | Share prompt blocks across review modes, compact for multi-agent [DONE] |
+| --    | direct     | #651 | Post review verdict as GitHub review event [DONE]               |
+
+## M22: Reputation System [DONE — 2026-04-06]
+
+Emoji reaction-based reputation system. Wilson confidence interval scoring with decay, grace period multipliers, and account-level blocking.
+
+Epic: #653
+
+| Issue | Agent      | PR   | Description                                                              |
+| ----- | ---------- | ---- | ------------------------------------------------------------------------ |
+| #654  | server-dev | #658 | Revert to issue comment posting + capture comment ID [DONE]              |
+| #655  | server-dev | #659 | D1 migration + DataStore methods + reputation constants [DONE]           |
+| #656  | server-dev | #660 | Reputation module — Wilson score, decay, multipliers, reaction collection [DONE] |
+| #657  | server-dev | #661 | Eligibility integration — reputation multipliers + account-level blocking [DONE] |
+
+### Post-M22 Bug Fixes
+
+| Issue | Agent      | PR   | Description                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------- |
+| #662  | server-dev | #663 | Batch poll rate limit blocks multiple CLI instances from same IP [DONE] |
+| #664  | cli-dev    | #665 | CLI agent process doesn't terminate on SIGTERM — zombie processes [DONE] |
+
 ## Open Issues
 
+- #640 [enhancement, Backlog] Add `opencara review <pr-link>` CLI command with user-posted results
 - #409 [server-dev, low, Backlog] Add prompt_hash to task creation and claim response
 - #410 [cli-dev, low, Backlog] Include prompt_hash in result submission
 - #404 [architect, medium, Backlog] Design security sandbox container
