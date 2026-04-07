@@ -1905,7 +1905,7 @@ async function handlePrLabelTrigger(
     // Resolve named agent from label
     const agent = agentIdFromLabel ? resolveNamedAgent(fixConfig, agentIdFromLabel) : undefined;
 
-    if (agentIdFromLabel && !agent) {
+    if (agentIdFromLabel && !agent && !isExactFixLabelMatch) {
       logger.warn('agent:xxx label does not match any configured fix agent', {
         label: addedLabel,
         agentId: agentIdFromLabel,
@@ -2027,7 +2027,7 @@ async function handleIssueLabelTrigger(
       ? resolveNamedAgent(implementConfig, agentIdFromLabel)
       : undefined;
 
-    if (agentIdFromLabel && !agent) {
+    if (agentIdFromLabel && !agent && !isExactLabelMatch) {
       logger.warn('agent:xxx label does not match any configured implement agent', {
         label: addedLabel,
         agentId: agentIdFromLabel,
