@@ -4,13 +4,13 @@ Event-driven, PM-centric architecture. Dev agents are implemented via OpenCara's
 
 ## Agent Roster
 
-| Agent         | Role                                                                                                                  | How it runs                                              |
-| ------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **pm**        | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running)                    |
-| **architect** | Architecture, shared types, infrastructure, cross-package                                                             | OpenCara implement agent (`[[implement.agents]]`)        |
-| **server-dev**| Hono server backend, REST API, D1 storage                                                                             | OpenCara implement agent (`[[implement.agents]]`)        |
-| **cli-dev**   | CLI npm package, HTTP polling, review execution                                                                       | OpenCara implement agent (`[[implement.agents]]`)        |
-| **clarifier** | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)                       |
+| Agent          | Role                                                                                                                  | How it runs                                       |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running)             |
+| **architect**  | Architecture, shared types, infrastructure, cross-package                                                             | OpenCara implement agent (`[[implement.agents]]`) |
+| **server-dev** | Hono server backend, REST API, D1 storage                                                                             | OpenCara implement agent (`[[implement.agents]]`) |
+| **cli-dev**    | CLI npm package, HTTP polling, review execution                                                                       | OpenCara implement agent (`[[implement.agents]]`) |
+| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)                |
 
 ## Implementation Flow
 

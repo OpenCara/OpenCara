@@ -584,10 +584,12 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 ### Configurable Named Agents (2026-04-07)
 
 #### Implement agents
+
 - #666 [architect, P2, M] Add named agent definitions to implement config types and parser — **DONE** (PR #668 merged 2026-04-07, board→Done, closed)
 - #667 [server-dev, P2, S] Resolve named agent ID in /opencara go command — **DONE** (PR #671 merged 2026-04-07, board→Done, closed)
 
 #### Fix agents
+
 - #669 [architect] — **CLOSED** (round 1, created without approval)
 - #670 [server-dev] — **CLOSED** (round 1, created without approval)
 - #672 [architect] Add named agent definitions to fix config types and parser — **DONE** (PR #674 merged 2026-04-07)

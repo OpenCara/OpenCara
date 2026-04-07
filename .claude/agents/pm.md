@@ -324,6 +324,7 @@ scripts/set-issue-status.sh <NUMBER> in-progress
 ### Completion Detection
 
 PM detects task completion via:
+
 - **Webhook events**: PR merged events from `process-webhook-events.sh`
 - **Polling**: `poll-github.sh` reconciliation shows issue with merged PR
 - PM then moves the issue to Done and checks for unblocked dependent issues
