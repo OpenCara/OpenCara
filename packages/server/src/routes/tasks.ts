@@ -486,10 +486,10 @@ async function handleDedupSummaryResult(
  * Handle triage summary result — comment or rewrite issue + apply labels.
  */
 async function handleTriageSummaryResult(
-  _store: DataStore,
+  store: DataStore,
   github: GitHubService,
   task: ReviewTask,
-  _groupId: string,
+  groupId: string,
   triageReport: TriageReport | undefined,
   reviewText: string,
   logger: Logger,
@@ -498,6 +498,22 @@ async function handleTriageSummaryResult(
     logger.error('Triage result but no issue_number on task', { taskId: task.id });
     return;
   }
+
+  // Collect unique contributors from all claims in the group
+  let contributors: string[] = [];
+  try {
+    const groupTasks = await store.getTasksByGroup(groupId);
+    for (const gt of groupTasks) {
+      const claims = await store.getClaims(gt.id);
+      for (const c of claims) {
+        if (c.github_username) contributors.push(c.github_username);
+      }
+    }
+    contributors = [...new Set(contributors)];
+  } catch {
+    // Non-fatal — post triage without contributor attribution
+  }
+  const triageContributors = contributors.length > 0 ? contributors : undefined;
 
   const token = await github.getInstallationToken(task.github_installation_id);
 
@@ -532,7 +548,11 @@ async function handleTriageSummaryResult(
       });
     } else {
       // Post comment on the issue
-      const commentBody = wrapReviewComment(triageReport.comment || reviewText.trim());
+      const commentBody = wrapReviewComment(
+        triageReport.comment || reviewText.trim(),
+        triageContributors,
+        'OpenCara Triage',
+      );
       await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
 
       // Apply labels if configured
@@ -554,7 +574,7 @@ async function handleTriageSummaryResult(
     }
   } else {
     // No structured report — just post review text as a comment
-    const commentBody = wrapReviewComment(reviewText.trim());
+    const commentBody = wrapReviewComment(reviewText.trim(), triageContributors, 'OpenCara Triage');
     await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
     logger.info('Triage fallback comment posted', {
       taskId: task.id,

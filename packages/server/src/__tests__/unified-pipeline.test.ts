@@ -611,14 +611,16 @@ describe('Unified Pipeline (Issue #506)', () => {
       });
       expect(res.status).toBe(200);
 
-      // Posted comment
+      // Posted comment with "OpenCara Triage" header (not "OpenCara Review")
       expect(postSpy).toHaveBeenCalledWith(
         'test-org',
         'test-repo',
         42,
-        expect.any(String),
+        expect.stringContaining('## OpenCara Triage'),
         expect.any(String),
       );
+      const commentBody = postSpy.mock.calls[0][3] as string;
+      expect(commentBody).not.toContain('## OpenCara Review');
 
       // Applied labels
       expect(updateSpy).toHaveBeenCalledWith(

@@ -118,6 +118,24 @@ describe('review-formatter edge cases', () => {
     expect(result).toContain('LGTM');
     expect(result).toContain('<sub>Reviewed by');
   });
+
+  it('wrapReviewComment uses custom title when provided', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('Triage result', undefined, 'OpenCara Triage');
+    expect(result).toContain('## OpenCara Triage');
+    expect(result).not.toContain('## OpenCara Review');
+    expect(result).toContain('Triage result');
+    expect(result).toContain('<sub>Reviewed by');
+  });
+
+  it('wrapReviewComment uses custom title with contributors', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('Triage result', ['carol'], 'OpenCara Triage');
+    expect(result).toContain('## OpenCara Triage');
+    expect(result).not.toContain('## OpenCara Review');
+    expect(result).toContain('**Contributors**: @carol');
+    expect(result).toContain('Triage result');
+  });
 });
 
 // ── github/config.ts ─────────────────────────────────────────
