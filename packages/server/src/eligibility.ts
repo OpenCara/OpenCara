@@ -57,7 +57,8 @@ export function isAgentEligibleForRole(
   agentId: string,
   githubUsername?: string,
 ): { eligible: boolean; reason?: string } {
-  const roleConfig = role === 'review' ? config.reviewer : config.summarizer;
+  const roleConfig =
+    role === 'review' || role === 'issue_review' ? config.reviewer : config.summarizer;
   const { whitelist, blacklist } = roleConfig;
 
   // Blacklist check — deny takes priority

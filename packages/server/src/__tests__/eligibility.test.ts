@@ -237,6 +237,57 @@ describe('isAgentEligibleForRole', () => {
     });
   });
 
+  describe('issue_review role uses reviewer config', () => {
+    it('allows any agent with default (empty) reviewer config', () => {
+      const result = isAgentEligibleForRole(baseConfig, 'issue_review', 'agent-xyz');
+      expect(result.eligible).toBe(true);
+    });
+
+    it('respects reviewer whitelist for issue_review', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [{ agent: 'agent-abc' }],
+        },
+      };
+      expect(isAgentEligibleForRole(config, 'issue_review', 'agent-abc').eligible).toBe(true);
+      expect(isAgentEligibleForRole(config, 'issue_review', 'agent-other').eligible).toBe(false);
+    });
+
+    it('respects reviewer blacklist for issue_review', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          blacklist: [{ agent: 'agent-bad' }],
+        },
+      };
+      const result = isAgentEligibleForRole(config, 'issue_review', 'agent-bad');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('blacklisted');
+    });
+
+    it('does not use summarizer config for issue_review', () => {
+      const config = {
+        ...baseConfig,
+        reviewer: {
+          ...baseConfig.reviewer,
+          whitelist: [],
+          blacklist: [],
+        },
+        summarizer: {
+          whitelist: [{ agent: 'agent-synth' }],
+          blacklist: [],
+          preferred: [],
+        },
+      };
+      // With summarizer whitelist restricting to agent-synth, issue_review should
+      // still be open (uses reviewer config which has no restrictions)
+      expect(isAgentEligibleForRole(config, 'issue_review', 'agent-other').eligible).toBe(true);
+    });
+  });
+
   describe('user-only entries are filtered out during parsing', () => {
     it('allows all agents when whitelist had only user entries (filtered to empty)', () => {
       // After parsing, user-only entries are stripped, so whitelist is empty → open access
