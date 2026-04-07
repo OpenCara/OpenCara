@@ -13,6 +13,7 @@ import {
   isCommentTriggerEnabled,
   isLabelTriggerEnabled,
   isStatusTriggerEnabled,
+  resolveNamedAgent,
 } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
@@ -1137,15 +1138,24 @@ export function parseFixCommand(body: string): { targetModel?: string } | null {
 
 /**
  * Parse a go command from a comment body.
- * Matches `/opencara go [model]` or `@opencara go [model]`.
- * Returns the optional target model, or null if not a go command.
+ * Matches `/opencara go [agent_id]` or `@opencara go [agent_id]`.
+ * Returns the optional target agent ID, or null if not a go command.
  */
-export function parseGoCommand(body: string): { targetModel?: string } | null {
+export function parseGoCommand(body: string): { targetAgent?: string } | null {
   const trimmed = body.trim();
-  // Match /opencara go or @opencara go (case-insensitive), optional model after
+  // Match /opencara go or @opencara go (case-insensitive), optional agent ID after
   const match = trimmed.match(/^[/@]opencara\s+go(?:\s+(\S+))?\s*$/i);
   if (!match) return null;
-  return { targetModel: match[1] || undefined };
+  return { targetAgent: match[1] || undefined };
+}
+
+/**
+ * Extract agent ID from an `agent:xxx` label.
+ * Returns the agent ID string, or undefined if the label doesn't match.
+ */
+export function parseAgentLabel(label: string): string | undefined {
+  const match = label.match(/^agent:(.+)$/);
+  return match ? match[1] : undefined;
 }
 
 /**
@@ -1488,7 +1498,7 @@ async function handleGoCommand(
   issueNumber: number,
   defaultBranch: string,
   comment: IssueCommentPayload['comment'],
-  goCmd: { targetModel?: string },
+  goCmd: { targetAgent?: string },
   isPrivate: boolean,
   logger: Logger,
 ): Promise<Response> {
@@ -1505,7 +1515,7 @@ async function handleGoCommand(
     owner,
     repo,
     issueNumber,
-    targetModel: goCmd.targetModel,
+    targetAgent: goCmd.targetAgent,
   });
 
   let token: string;
@@ -1552,6 +1562,24 @@ async function handleGoCommand(
     return new Response('OK', { status: 200 });
   }
 
+  const implementConfig = fullConfig.implement;
+
+  // Resolve named agent if specified
+  const agent = goCmd.targetAgent
+    ? resolveNamedAgent(implementConfig, goCmd.targetAgent)
+    : undefined;
+
+  if (goCmd.targetAgent && !agent) {
+    await github.createIssueComment(
+      owner,
+      repo,
+      issueNumber,
+      `⚠️ Unknown agent ID: \`${goCmd.targetAgent}\`. Check \`[[implement.agents]]\` in your \`.opencara.toml\`.`,
+      token,
+    );
+    return new Response('OK', { status: 200 });
+  }
+
   // Fetch issue details from GitHub API
   let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
   try {
@@ -1570,7 +1598,11 @@ async function handleGoCommand(
     return new Response('Service Unavailable', { status: 503 });
   }
 
-  const implementConfig = fullConfig.implement;
+  const agentPrompt = agent?.prompt ?? implementConfig.prompt;
+  const agentPreferredModels = agent?.model ? [agent.model] : implementConfig.preferredModels;
+  const agentPreferredTools = agent?.tool ? [agent.tool] : implementConfig.preferredTools;
+  const targetModel = agent?.model;
+
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
   const timeoutMs = parseTimeoutMs(implementConfig.timeout);
 
@@ -1580,9 +1612,9 @@ async function handleGoCommand(
     ...reviewConfig,
     agentCount: implementConfig.agentCount,
     timeout: implementConfig.timeout,
-    preferredModels: implementConfig.preferredModels,
-    preferredTools: implementConfig.preferredTools,
-    prompt: implementConfig.prompt,
+    preferredModels: agentPreferredModels,
+    preferredTools: agentPreferredTools,
+    prompt: agentPrompt,
     modelDiversityGraceMs: implementConfig.modelDiversityGraceMs,
   };
 
@@ -1611,7 +1643,7 @@ async function handleGoCommand(
       issue_title: issue.title,
       issue_body: issue.body ?? undefined,
       issue_author: issue.user.login,
-      ...(goCmd.targetModel ? { target_model: goCmd.targetModel } : {}),
+      ...(targetModel ? { target_model: targetModel } : {}),
     });
   } catch (err) {
     logger.error('Failed to create implement task group', {
@@ -1892,15 +1924,42 @@ async function handleIssueLabelTrigger(
 
   let created = false;
 
-  // Implement label trigger
-  if (
+  // Check for agent:xxx label prefix
+  const agentIdFromLabel = parseAgentLabel(addedLabel);
+
+  // Implement triggers: either exact label match OR agent:xxx label
+  const isExactLabelMatch =
     fullConfig.implement?.enabled &&
     isLabelTriggerEnabled(fullConfig.implement.trigger) &&
-    fullConfig.implement.trigger.label === addedLabel
-  ) {
+    fullConfig.implement.trigger.label === addedLabel;
+
+  if (fullConfig.implement?.enabled && (isExactLabelMatch || agentIdFromLabel !== undefined)) {
+    const implementConfig = fullConfig.implement;
+
+    // Resolve named agent from label
+    const agent = agentIdFromLabel
+      ? resolveNamedAgent(implementConfig, agentIdFromLabel)
+      : undefined;
+
+    if (agentIdFromLabel && !agent) {
+      logger.warn('agent:xxx label does not match any configured implement agent', {
+        label: addedLabel,
+        agentId: agentIdFromLabel,
+      });
+      await github.createIssueComment(
+        owner,
+        repo,
+        issue.number,
+        `⚠️ Unknown agent ID: \`${agentIdFromLabel}\`. Check \`[[implement.agents]]\` in your \`.opencara.toml\`.`,
+        token,
+      );
+      return new Response('OK', { status: 200 });
+    }
+
     logger.info('Implement label trigger matched', {
       issueNumber: issue.number,
       label: addedLabel,
+      agentId: agentIdFromLabel,
     });
 
     // Fetch full issue details for implement tasks
@@ -1920,15 +1979,19 @@ async function handleIssueLabelTrigger(
       return new Response('Service Unavailable', { status: 503 });
     }
 
-    const implementConfig = fullConfig.implement;
+    const agentPrompt = agent?.prompt ?? implementConfig.prompt;
+    const agentPreferredModels = agent?.model ? [agent.model] : implementConfig.preferredModels;
+    const agentPreferredTools = agent?.tool ? [agent.tool] : implementConfig.preferredTools;
+    const targetModel = agent?.model;
+
     const implementTimeoutMs = parseTimeoutMs(implementConfig.timeout);
     const implementTaskConfig: ReviewConfig = {
       ...reviewConfig,
       agentCount: implementConfig.agentCount,
       timeout: implementConfig.timeout,
-      preferredModels: implementConfig.preferredModels,
-      preferredTools: implementConfig.preferredTools,
-      prompt: implementConfig.prompt,
+      preferredModels: agentPreferredModels,
+      preferredTools: agentPreferredTools,
+      prompt: agentPrompt,
       modelDiversityGraceMs: implementConfig.modelDiversityGraceMs,
     };
 
@@ -1952,6 +2015,7 @@ async function handleIssueLabelTrigger(
         issue_title: issueDetails.title,
         issue_body: issueDetails.body ?? undefined,
         issue_author: issueDetails.user.login,
+        ...(targetModel ? { target_model: targetModel } : {}),
       },
       created,
     );

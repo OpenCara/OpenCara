@@ -9,7 +9,7 @@
  * - Backward compatibility: configs without trigger section use defaults
  * - Dedup: no duplicate tasks from combined triggers
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   DEFAULT_REVIEW_CONFIG,
   DEFAULT_OPENCARA_CONFIG,
@@ -632,6 +632,167 @@ describe('Unified trigger modes', () => {
       const res = await sendWebhook(app, 'issues', payload, env);
       expect(res.status).toBe(200);
       expect(await store.listTasks()).toHaveLength(0);
+    });
+  });
+
+  // ── Agent label triggers: Issue ──────────────────────────────
+
+  describe('Issue agent:xxx label triggers', () => {
+    it('creates implement task when agent:xxx label matches configured agent', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+          agents: [
+            {
+              id: 'security-auditor',
+              prompt: 'Focus on security.',
+              model: 'gpt-5.4',
+              tool: 'codex',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issues',
+        makeIssueLabelPayload('agent:security-auditor'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+      expect(tasks[0].config.prompt).toBe('Focus on security.');
+      expect(tasks[0].config.preferredModels).toEqual(['gpt-5.4']);
+      expect(tasks[0].config.preferredTools).toEqual(['codex']);
+      expect(tasks[0].target_model).toBe('gpt-5.4');
+    });
+
+    it('posts error comment when agent:xxx label does not match any agent', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+        },
+      };
+
+      const createCommentSpy = vi.spyOn(github, 'createIssueComment');
+
+      const res = await sendWebhook(app, 'issues', makeIssueLabelPayload('agent:nonexistent'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+
+      expect(createCommentSpy).toHaveBeenCalledOnce();
+      expect(createCommentSpy.mock.calls[0][3]).toContain('Unknown agent ID');
+      expect(createCommentSpy.mock.calls[0][3]).toContain('nonexistent');
+    });
+
+    it('agent label with only prompt overrides prompt only', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+          preferredModels: ['default-model'],
+          preferredTools: ['default-tool'],
+          agents: [
+            {
+              id: 'simple-agent',
+              prompt: 'Custom prompt.',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issues',
+        makeIssueLabelPayload('agent:simple-agent'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].config.prompt).toBe('Custom prompt.');
+      expect(tasks[0].config.preferredModels).toEqual(['default-model']);
+      expect(tasks[0].config.preferredTools).toEqual(['default-tool']);
+      expect(tasks[0].target_model).toBeUndefined();
+    });
+
+    it('agent:xxx is ignored when implement.enabled=false', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+          enabled: false,
+          agents: [
+            {
+              id: 'security-auditor',
+              prompt: 'Security.',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issues',
+        makeIssueLabelPayload('agent:security-auditor'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      // Should be ignored because implement.enabled=false
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('agent:xxx label is ignored when no implement section', async () => {
+      github.openCaraConfig = {
+        version: 1,
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issues',
+        makeIssueLabelPayload('agent:security-auditor'),
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('exact label match still works alongside agent:xxx support', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: {
+          ...DEFAULT_IMPLEMENT_CONFIG,
+          trigger: {
+            comment: '/opencara go',
+            status: 'Ready',
+            label: 'opencara:implement',
+          },
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issues',
+        makeIssueLabelPayload('opencara:implement'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+      // Uses default config since it's an exact label match, not an agent label
+      expect(tasks[0].config.prompt).toBe('Implement the requested changes.');
     });
   });
 
