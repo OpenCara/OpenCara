@@ -691,6 +691,7 @@ async function handlePullRequest(
     const addedLabel = payload.label?.name;
     if (addedLabel) {
       return handlePrLabelTrigger(
+        github,
         store,
         installation.id,
         owner,
@@ -700,6 +701,7 @@ async function handlePullRequest(
         reviewConfig,
         addedLabel,
         repository.private ?? false,
+        token,
         logger,
       );
     }
@@ -1125,15 +1127,15 @@ async function handleIssueIndexUpdate(
 
 /**
  * Parse a fix command from a comment body.
- * Matches `/opencara fix [model]` or `@opencara fix [model]`.
- * Returns the optional target model, or null if not a fix command.
+ * Matches `/opencara fix [agent_id]` or `@opencara fix [agent_id]`.
+ * Returns the optional target agent ID, or null if not a fix command.
  */
-export function parseFixCommand(body: string): { targetModel?: string } | null {
+export function parseFixCommand(body: string): { targetAgent?: string } | null {
   const trimmed = body.trim();
-  // Match /opencara fix or @opencara fix (case-insensitive), optional model after
+  // Match /opencara fix or @opencara fix (case-insensitive), optional agent ID after
   const match = trimmed.match(/^[/@]opencara\s+fix(?:\s+(\S+))?\s*$/i);
   if (!match) return null;
-  return { targetModel: match[1] || undefined };
+  return { targetAgent: match[1] || undefined };
 }
 
 /**
@@ -1354,7 +1356,7 @@ async function handleIssueComment(
 }
 
 /**
- * Handle `/opencara fix [model]` command on a PR comment.
+ * Handle `/opencara fix [agent_id]` command on a PR comment.
  * Creates a fix task group with PR review comments.
  */
 async function handleFixCommand(
@@ -1368,7 +1370,7 @@ async function handleFixCommand(
   fullConfig: OpenCaraConfig,
   reviewConfig: ReviewConfig,
   comment: IssueCommentPayload['comment'],
-  fixCmd: { targetModel?: string },
+  fixCmd: { targetAgent?: string },
   isPrivate: boolean,
   token: string,
   logger: Logger,
@@ -1402,12 +1404,28 @@ async function handleFixCommand(
     return new Response('OK', { status: 200 });
   }
 
+  const fixConfig = fullConfig.fix;
+
+  // Resolve named agent if specified
+  const agent = fixCmd.targetAgent ? resolveNamedAgent(fixConfig, fixCmd.targetAgent) : undefined;
+
+  if (fixCmd.targetAgent && !agent) {
+    await github.createIssueComment(
+      owner,
+      repo,
+      prNumber,
+      `⚠️ Unknown agent ID: \`${fixCmd.targetAgent}\`. Check \`[[fix.agents]]\` in your \`.opencara.toml\`.`,
+      token,
+    );
+    return new Response('OK', { status: 200 });
+  }
+
   logger.info('Fix command received', {
     user: comment.user.login,
     owner,
     repo,
     prNumber,
-    targetModel: fixCmd.targetModel,
+    targetAgent: fixCmd.targetAgent,
   });
 
   // Fetch PR review comments (truncate to 64KB to bound task size)
@@ -1433,7 +1451,11 @@ async function handleFixCommand(
     });
   }
 
-  const fixConfig = fullConfig.fix;
+  const agentPrompt = agent?.prompt ?? fixConfig.prompt;
+  const agentPreferredModels = agent?.model ? [agent.model] : fixConfig.preferredModels;
+  const agentPreferredTools = agent?.tool ? [agent.tool] : fixConfig.preferredTools;
+  const targetModel = agent?.model;
+
   const timeoutMs = parseTimeoutMs(fixConfig.timeout);
   // Merge fix feature preferences into a ReviewConfig so the stored task.config
   // reflects the fix section's preferred models/tools (used for poll matching).
@@ -1441,9 +1463,9 @@ async function handleFixCommand(
     ...reviewConfig,
     agentCount: fixConfig.agentCount,
     timeout: fixConfig.timeout,
-    preferredModels: fixConfig.preferredModels,
-    preferredTools: fixConfig.preferredTools,
-    prompt: fixConfig.prompt,
+    preferredModels: agentPreferredModels,
+    preferredTools: agentPreferredTools,
+    prompt: agentPrompt,
     modelDiversityGraceMs: fixConfig.modelDiversityGraceMs,
   };
   // Compute diff size from PR details (additions + deletions)
@@ -1470,7 +1492,7 @@ async function handleFixCommand(
     await createTaskGroup(store, 'fix', fixConfig, baseTask, logger, {
       pr_review_comments: prReviewComments,
       head_sha: pr.head.sha,
-      ...(fixCmd.targetModel ? { target_model: fixCmd.targetModel } : {}),
+      ...(targetModel ? { target_model: targetModel } : {}),
     });
   } catch (err) {
     logger.error('Failed to create fix task group', {
@@ -1803,6 +1825,7 @@ async function handleTriageCommand(
  * Handle label triggers on a PR: review and fix features.
  */
 async function handlePrLabelTrigger(
+  github: GitHubService,
   store: DataStore,
   installationId: number,
   owner: string,
@@ -1812,6 +1835,7 @@ async function handlePrLabelTrigger(
   reviewConfig: ReviewConfig,
   addedLabel: string,
   isPrivate: boolean,
+  token: string,
   logger: Logger,
 ): Promise<Response> {
   const prNumber = pullRequest.number;
@@ -1851,6 +1875,9 @@ async function handlePrLabelTrigger(
 
   let created = false;
 
+  // Check for agent:xxx label prefix
+  const agentIdFromLabel = parseAgentLabel(addedLabel);
+
   // Review label trigger
   if (isLabelTriggerEnabled(reviewConfig.trigger) && reviewConfig.trigger.label === addedLabel) {
     logger.info('Review label trigger matched', { prNumber, label: addedLabel });
@@ -1866,14 +1893,73 @@ async function handlePrLabelTrigger(
     if (groupId !== null) created = true;
   }
 
-  // Fix label trigger
-  if (
+  // Fix triggers: either exact label match OR agent:xxx label
+  const isExactFixLabelMatch =
     fullConfig.fix?.enabled &&
     isLabelTriggerEnabled(fullConfig.fix.trigger) &&
-    fullConfig.fix.trigger.label === addedLabel
-  ) {
-    logger.info('Fix label trigger matched', { prNumber, label: addedLabel });
-    await createTaskGroup(store, 'fix', fullConfig.fix, baseTask, logger, undefined, created);
+    fullConfig.fix.trigger.label === addedLabel;
+
+  if (fullConfig.fix?.enabled && (isExactFixLabelMatch || agentIdFromLabel !== undefined)) {
+    const fixConfig = fullConfig.fix;
+
+    // Resolve named agent from label
+    const agent = agentIdFromLabel ? resolveNamedAgent(fixConfig, agentIdFromLabel) : undefined;
+
+    if (agentIdFromLabel && !agent) {
+      logger.warn('agent:xxx label does not match any configured fix agent', {
+        label: addedLabel,
+        agentId: agentIdFromLabel,
+      });
+      await github.createIssueComment(
+        owner,
+        repo,
+        prNumber,
+        `⚠️ Unknown agent ID: \`${agentIdFromLabel}\`. Check \`[[fix.agents]]\` in your \`.opencara.toml\`.`,
+        token,
+      );
+      return new Response('OK', { status: 200 });
+    }
+
+    logger.info('Fix label trigger matched', {
+      prNumber,
+      label: addedLabel,
+      agentId: agentIdFromLabel,
+    });
+
+    const agentPrompt = agent?.prompt ?? fixConfig.prompt;
+    const agentPreferredModels = agent?.model ? [agent.model] : fixConfig.preferredModels;
+    const agentPreferredTools = agent?.tool ? [agent.tool] : fixConfig.preferredTools;
+    const targetModel = agent?.model;
+
+    const fixTimeoutMs = parseTimeoutMs(fixConfig.timeout);
+    const fixTaskConfig: ReviewConfig = {
+      ...reviewConfig,
+      agentCount: fixConfig.agentCount,
+      timeout: fixConfig.timeout,
+      preferredModels: agentPreferredModels,
+      preferredTools: agentPreferredTools,
+      prompt: agentPrompt,
+      modelDiversityGraceMs: fixConfig.modelDiversityGraceMs,
+    };
+
+    const fixBase: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
+      ...baseTask,
+      review_count: fixConfig.agentCount,
+      timeout_at: Date.now() + fixTimeoutMs,
+      config: fixTaskConfig,
+    };
+
+    await createTaskGroup(
+      store,
+      'fix',
+      fixConfig,
+      fixBase,
+      logger,
+      {
+        ...(targetModel ? { target_model: targetModel } : {}),
+      },
+      created,
+    );
   }
 
   return new Response('OK', { status: 200 });

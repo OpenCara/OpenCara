@@ -1092,34 +1092,34 @@ describe('Webhook refactor — separate task creation', () => {
   // ── parseFixCommand unit tests ────────────────────────────────
 
   describe('parseFixCommand', () => {
-    it('parses /opencara fix without model', () => {
+    it('parses /opencara fix without agent ID', () => {
       const result = parseFixCommand('/opencara fix');
-      expect(result).toEqual({ targetModel: undefined });
+      expect(result).toEqual({ targetAgent: undefined });
     });
 
-    it('parses /opencara fix with model', () => {
-      const result = parseFixCommand('/opencara fix gpt-5.4');
-      expect(result).toEqual({ targetModel: 'gpt-5.4' });
+    it('parses /opencara fix with agent ID', () => {
+      const result = parseFixCommand('/opencara fix security-fixer');
+      expect(result).toEqual({ targetAgent: 'security-fixer' });
     });
 
-    it('parses @opencara fix without model', () => {
+    it('parses @opencara fix without agent ID', () => {
       const result = parseFixCommand('@opencara fix');
-      expect(result).toEqual({ targetModel: undefined });
+      expect(result).toEqual({ targetAgent: undefined });
     });
 
-    it('parses @opencara fix with model', () => {
+    it('parses @opencara fix with agent ID', () => {
       const result = parseFixCommand('@opencara fix claude-opus');
-      expect(result).toEqual({ targetModel: 'claude-opus' });
+      expect(result).toEqual({ targetAgent: 'claude-opus' });
     });
 
     it('is case-insensitive', () => {
-      expect(parseFixCommand('/OpenCara Fix')).toEqual({ targetModel: undefined });
-      expect(parseFixCommand('/OPENCARA FIX gpt-5')).toEqual({ targetModel: 'gpt-5' });
+      expect(parseFixCommand('/OpenCara Fix')).toEqual({ targetAgent: undefined });
+      expect(parseFixCommand('/OPENCARA FIX gpt-5')).toEqual({ targetAgent: 'gpt-5' });
     });
 
     it('handles leading/trailing whitespace', () => {
-      expect(parseFixCommand('  /opencara fix  ')).toEqual({ targetModel: undefined });
-      expect(parseFixCommand('  @opencara fix  gpt-5  ')).toEqual({ targetModel: 'gpt-5' });
+      expect(parseFixCommand('  /opencara fix  ')).toEqual({ targetAgent: undefined });
+      expect(parseFixCommand('  @opencara fix  gpt-5  ')).toEqual({ targetAgent: 'gpt-5' });
     });
 
     it('returns null for non-fix commands', () => {
@@ -1188,17 +1188,27 @@ describe('Webhook refactor — separate task creation', () => {
       expect(tasks[0].feature).toBe('fix');
     });
 
-    it('/opencara fix with model sets target_model', async () => {
+    it('/opencara fix with valid agent ID uses agent config', async () => {
       github.openCaraConfig = {
         version: 1,
         review: makeReviewConfig(),
-        fix: DEFAULT_FIX_CONFIG,
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+          agents: [
+            {
+              id: 'security-fixer',
+              prompt: 'Focus on security fixes.',
+              model: 'gpt-5.4',
+              tool: 'codex',
+            },
+          ],
+        },
       };
 
       const res = await sendWebhook(
         app,
         'issue_comment',
-        makeCommentPayload('/opencara fix gpt-5.4'),
+        makeCommentPayload('/opencara fix security-fixer'),
         env,
       );
       expect(res.status).toBe(200);
@@ -1206,9 +1216,37 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].target_model).toBe('gpt-5.4');
+      expect(tasks[0].config.prompt).toBe('Focus on security fixes.');
+      expect(tasks[0].config.preferredModels).toEqual(['gpt-5.4']);
+      expect(tasks[0].config.preferredTools).toEqual(['codex']);
     });
 
-    it('fix command without model does not set target_model', async () => {
+    it('/opencara fix with invalid agent ID posts error comment', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: DEFAULT_FIX_CONFIG,
+      };
+
+      const createCommentSpy = vi.spyOn(github, 'createIssueComment');
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeCommentPayload('/opencara fix nonexistent'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+
+      expect(createCommentSpy).toHaveBeenCalledOnce();
+      expect(createCommentSpy.mock.calls[0][3]).toContain('Unknown agent ID');
+      expect(createCommentSpy.mock.calls[0][3]).toContain('nonexistent');
+    });
+
+    it('fix command without agent ID uses default fix config', async () => {
       github.openCaraConfig = {
         version: 1,
         review: makeReviewConfig(),
@@ -1221,6 +1259,40 @@ describe('Webhook refactor — separate task creation', () => {
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
       expect(tasks[0].target_model).toBeUndefined();
+      expect(tasks[0].config.prompt).toBe('Fix the review comments.');
+    });
+
+    it('/opencara fix with agent that has only prompt overrides prompt only', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+          preferredModels: ['default-model'],
+          preferredTools: ['default-tool'],
+          agents: [
+            {
+              id: 'simple-fixer',
+              prompt: 'Custom fix prompt only.',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'issue_comment',
+        makeCommentPayload('/opencara fix simple-fixer'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].target_model).toBeUndefined();
+      expect(tasks[0].config.prompt).toBe('Custom fix prompt only.');
+      expect(tasks[0].config.preferredModels).toEqual(['default-model']);
+      expect(tasks[0].config.preferredTools).toEqual(['default-tool']);
     });
 
     it('fix command is ignored when fix.enabled=false', async () => {

@@ -796,6 +796,168 @@ describe('Unified trigger modes', () => {
     });
   });
 
+  // ── Agent label triggers: PR (fix) ─────────────────────────
+
+  describe('PR agent:xxx label triggers for fix', () => {
+    it('creates fix task when agent:xxx label matches configured fix agent', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+          agents: [
+            {
+              id: 'security-fixer',
+              prompt: 'Focus on security fixes.',
+              model: 'gpt-5.4',
+              tool: 'codex',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'pull_request',
+        makePRLabelPayload('agent:security-fixer'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('fix');
+      expect(tasks[0].config.prompt).toBe('Focus on security fixes.');
+      expect(tasks[0].config.preferredModels).toEqual(['gpt-5.4']);
+      expect(tasks[0].config.preferredTools).toEqual(['codex']);
+      expect(tasks[0].target_model).toBe('gpt-5.4');
+    });
+
+    it('posts error comment when agent:xxx label does not match any fix agent', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+        },
+      };
+
+      const createCommentSpy = vi.spyOn(github, 'createIssueComment');
+
+      const res = await sendWebhook(
+        app,
+        'pull_request',
+        makePRLabelPayload('agent:nonexistent'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(0);
+
+      expect(createCommentSpy).toHaveBeenCalledOnce();
+      expect(createCommentSpy.mock.calls[0][3]).toContain('Unknown agent ID');
+      expect(createCommentSpy.mock.calls[0][3]).toContain('nonexistent');
+    });
+
+    it('agent label with only prompt overrides prompt only for fix', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+          preferredModels: ['default-model'],
+          preferredTools: ['default-tool'],
+          agents: [
+            {
+              id: 'simple-fixer',
+              prompt: 'Custom fix prompt.',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'pull_request',
+        makePRLabelPayload('agent:simple-fixer'),
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].config.prompt).toBe('Custom fix prompt.');
+      expect(tasks[0].config.preferredModels).toEqual(['default-model']);
+      expect(tasks[0].config.preferredTools).toEqual(['default-tool']);
+      expect(tasks[0].target_model).toBeUndefined();
+    });
+
+    it('agent:xxx is ignored when fix.enabled=false', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+          enabled: false,
+          agents: [
+            {
+              id: 'security-fixer',
+              prompt: 'Security.',
+            },
+          ],
+        },
+      };
+
+      const res = await sendWebhook(
+        app,
+        'pull_request',
+        makePRLabelPayload('agent:security-fixer'),
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('agent:xxx label is ignored when no fix section', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+      };
+
+      const res = await sendWebhook(
+        app,
+        'pull_request',
+        makePRLabelPayload('agent:security-fixer'),
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('exact fix label match still works alongside agent:xxx support', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        review: makeReviewConfig(),
+        fix: {
+          ...DEFAULT_FIX_CONFIG,
+          trigger: {
+            comment: '/opencara fix',
+            label: 'opencara:fix',
+          },
+        },
+      };
+
+      const res = await sendWebhook(app, 'pull_request', makePRLabelPayload('opencara:fix'), env);
+      expect(res.status).toBe(200);
+
+      const tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('fix');
+      expect(tasks[0].config.prompt).toBe('Fix the review comments.');
+    });
+  });
+
   // ── Status triggers ───────────────────────────────────────
 
   describe('Status triggers (projects_v2_item)', () => {
