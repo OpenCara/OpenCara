@@ -639,9 +639,18 @@ async function handlePullRequest(
   );
 
   if (parseError) {
-    logger.info('Aborting due to .opencara.toml parse error', { prNumber });
+    logger.info('Aborting due to .opencara.toml parse error', { owner, repo, prNumber });
     return new Response('Service Unavailable', { status: 503 });
   }
+
+  logger.info('Config loaded', {
+    owner,
+    repo,
+    prNumber,
+    reviewEnabled: fullConfig.review !== undefined,
+    fixEnabled: fullConfig.fix?.enabled ?? false,
+    dedupPrsEnabled: fullConfig.dedup?.prs?.enabled ?? false,
+  });
 
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
@@ -713,6 +722,8 @@ async function handlePullRequest(
   const reviewTrigger = reviewConfig.trigger;
   if (!isEventTriggerEnabled(reviewTrigger) || !reviewTrigger.events!.includes(action)) {
     logger.info('Action not in trigger.events — skipping', {
+      owner,
+      repo,
       prNumber,
       action,
       triggerEvents: reviewTrigger.events,
@@ -726,7 +737,7 @@ async function handlePullRequest(
     headRef,
   });
   if (skipReason) {
-    logger.info('PR skipped', { prNumber, reason: skipReason });
+    logger.info('PR skipped', { owner, repo, prNumber, reason: skipReason });
     return new Response('OK', { status: 200 });
   }
 
@@ -783,14 +794,18 @@ export async function handleIssueEvent(
     return new Response('OK', { status: 200 });
   }
 
-  // Skip issue events for pull requests (GitHub sends issues events for PRs too)
-  if (issue.pull_request) {
-    logger.info('Issue event is a PR — skipping', { issueNumber: issue.number });
-    return new Response('OK', { status: 200 });
-  }
-
   const owner = repository.owner.login;
   const repo = repository.name;
+
+  // Skip issue events for pull requests (GitHub sends issues events for PRs too)
+  if (issue.pull_request) {
+    logger.info('Issue event is a PR — skipping', {
+      owner,
+      repo,
+      issueNumber: issue.number,
+    });
+    return new Response('OK', { status: 200 });
+  }
   const defaultBranch = repository.default_branch ?? 'main';
 
   logger.info('Webhook received', {
@@ -897,7 +912,11 @@ export async function handleIssueEvent(
     );
 
     if (parseError) {
-      logger.info('Aborting due to .opencara.toml parse error', { issueNumber: issue.number });
+      logger.info('Aborting due to .opencara.toml parse error', {
+        owner,
+        repo,
+        issueNumber: issue.number,
+      });
       return new Response('Service Unavailable', { status: 503 });
     }
 
@@ -922,7 +941,12 @@ export async function handleIssueEvent(
   }
 
   if (action !== 'opened' && action !== 'edited') {
-    logger.info('Issue action not handled — skipping', { action, issueNumber: issue.number });
+    logger.info('Issue action not handled — skipping', {
+      owner,
+      repo,
+      action,
+      issueNumber: issue.number,
+    });
     return new Response('OK', { status: 200 });
   }
 
@@ -945,6 +969,8 @@ export async function handleIssueEvent(
 
   if (parseError) {
     logger.info('Aborting due to .opencara.toml parse error', {
+      owner,
+      repo,
       issueNumber: issue.number,
     });
     return new Response('Service Unavailable', { status: 503 });
@@ -973,6 +999,8 @@ export async function handleIssueEvent(
 
   if (!triageEnabled && !dedupIssuesEnabled) {
     logger.info('No issue features enabled — skipping', {
+      owner,
+      repo,
       issueNumber: issue.number,
     });
     return new Response('OK', { status: 200 });
@@ -1281,11 +1309,21 @@ async function handleIssueComment(
       );
     }
 
+    logger.info('Issue comment does not match any command — skipping', {
+      owner: repository.owner.login,
+      repo: repository.name,
+      issueNumber: issue.number,
+    });
     return new Response('OK', { status: 200 });
   }
 
-  // Check for go command — invalid on PRs, skip silently
+  // Check for go command — invalid on PRs, skip
   if (parseGoCommand(comment.body)) {
+    logger.info('Go command ignored on PR — only valid on issues', {
+      owner: repository.owner.login,
+      repo: repository.name,
+      prNumber: issue.number,
+    });
     return new Response('OK', { status: 200 });
   }
 
@@ -1325,6 +1363,14 @@ async function handleIssueComment(
     return new Response('Service Unavailable', { status: 503 });
   }
 
+  logger.info('Config loaded for comment trigger', {
+    owner,
+    repo,
+    prNumber,
+    reviewEnabled: fullConfig.review !== undefined,
+    fixEnabled: fullConfig.fix?.enabled ?? false,
+  });
+
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
 
   // Check for fix command first
@@ -1350,6 +1396,11 @@ async function handleIssueComment(
 
   // Check for review trigger command (gated by isCommentTriggerEnabled)
   if (!isCommentTriggerEnabled(reviewConfig.trigger)) {
+    logger.info('Comment trigger not enabled for review — skipping', {
+      owner,
+      repo,
+      prNumber,
+    });
     return new Response('OK', { status: 200 });
   }
   const triggerCommand = reviewConfig.trigger.comment!;
@@ -1360,11 +1411,20 @@ async function handleIssueComment(
   const atVariant = cmd.startsWith('/') ? '@' + cmd.slice(1) : null;
   const triggered = body.startsWith(cmd) || (atVariant !== null && body.startsWith(atVariant));
   if (!triggered) {
+    logger.info('Comment does not match review trigger command — skipping', {
+      owner,
+      repo,
+      prNumber,
+      triggerCommand,
+    });
     return new Response('OK', { status: 200 });
   }
 
   if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
     logger.info('Trigger command ignored — not a trusted contributor', {
+      owner,
+      repo,
+      prNumber,
       command: triggerCommand,
       user: comment.user.login,
       association: comment.author_association,
@@ -1439,6 +1499,9 @@ async function handleFixCommand(
   const isPrAuthor = comment.user.login.toLowerCase() === pr.user.login.toLowerCase();
   if (!isMaintainer && !isPrAuthor) {
     logger.info('Fix command ignored — not a maintainer or PR author', {
+      owner,
+      repo,
+      prNumber,
       user: comment.user.login,
       association: comment.author_association,
       prAuthor: pr.user.login,
@@ -1470,6 +1533,12 @@ async function handleFixCommand(
   let agent = fixCmd.targetAgent ? resolveNamedAgent(fixConfig, fixCmd.targetAgent) : undefined;
 
   if (fixCmd.targetAgent && !agent) {
+    logger.warn('Fix command — unknown agent ID', {
+      owner,
+      repo,
+      prNumber,
+      targetAgent: fixCmd.targetAgent,
+    });
     await github.createIssueComment(
       owner,
       repo,
@@ -1492,6 +1561,12 @@ async function handleFixCommand(
       logger,
     );
     if (fieldResult.error) {
+      logger.warn('Fix command — agent_field value does not match any agent', {
+        owner,
+        repo,
+        prNumber,
+        fieldValue: fieldResult.fieldValue,
+      });
       const availableIds = fixConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
       await github.createIssueComment(
         owner,
@@ -1513,6 +1588,8 @@ async function handleFixCommand(
     repo,
     prNumber,
     targetAgent: fixCmd.targetAgent,
+    agentId: agent?.id ?? 'default',
+    source: fixCmd.targetAgent ? 'command' : agent ? 'project_field' : 'default',
   });
 
   // Fetch PR review comments (truncate to 64KB to bound task size)
@@ -1613,6 +1690,9 @@ async function handleGoCommand(
 ): Promise<Response> {
   if (!MAINTAINER_ASSOCIATIONS.has(comment.author_association)) {
     logger.info('Go command ignored — not a maintainer', {
+      owner,
+      repo,
+      issueNumber,
       user: comment.user.login,
       association: comment.author_association,
     });
@@ -1677,6 +1757,12 @@ async function handleGoCommand(
   let agent = goCmd.targetAgent ? resolveNamedAgent(implementConfig, goCmd.targetAgent) : undefined;
 
   if (goCmd.targetAgent && !agent) {
+    logger.warn('Go command — unknown agent ID', {
+      owner,
+      repo,
+      issueNumber,
+      targetAgent: goCmd.targetAgent,
+    });
     await github.createIssueComment(
       owner,
       repo,
@@ -1699,6 +1785,12 @@ async function handleGoCommand(
       logger,
     );
     if (fieldResult.error) {
+      logger.warn('Go command — agent_field value does not match any agent', {
+        owner,
+        repo,
+        issueNumber,
+        fieldValue: fieldResult.fieldValue,
+      });
       const availableIds = implementConfig.agents?.map((a) => a.id).join(', ') ?? 'none';
       await github.createIssueComment(
         owner,
@@ -1713,6 +1805,14 @@ async function handleGoCommand(
       agent = fieldResult.agent;
     }
   }
+
+  logger.info('Go command — agent resolved', {
+    owner,
+    repo,
+    issueNumber,
+    agentId: agent?.id ?? 'default',
+    source: goCmd.targetAgent ? 'command' : agent ? 'project_field' : 'default',
+  });
 
   // Fetch issue details from GitHub API
   let issue: Awaited<ReturnType<GitHubService['fetchIssueDetails']>>;
@@ -1811,6 +1911,9 @@ async function handleTriageCommand(
 ): Promise<Response> {
   if (!TRUSTED_ASSOCIATIONS.has(comment.author_association)) {
     logger.info('Triage command ignored — not a trusted contributor', {
+      owner,
+      repo,
+      issueNumber,
       user: comment.user.login,
       association: comment.author_association,
     });
@@ -1953,6 +2056,13 @@ async function handlePrLabelTrigger(
   const prNumber = pullRequest.number;
   const headRef = pullRequest.head.ref;
 
+  logger.info('Evaluating PR label trigger', {
+    owner,
+    repo,
+    prNumber,
+    label: addedLabel,
+  });
+
   // Skip conditions apply to label triggers too
   const skipReason = shouldSkipReview(reviewConfig, {
     draft: pullRequest.draft,
@@ -1960,7 +2070,7 @@ async function handlePrLabelTrigger(
     headRef,
   });
   if (skipReason) {
-    logger.info('PR label trigger skipped', { prNumber, reason: skipReason });
+    logger.info('PR label trigger skipped', { owner, repo, prNumber, reason: skipReason });
     return new Response('OK', { status: 200 });
   }
 
@@ -1992,7 +2102,7 @@ async function handlePrLabelTrigger(
 
   // Review label trigger
   if (isLabelTriggerEnabled(reviewConfig.trigger) && reviewConfig.trigger.label === addedLabel) {
-    logger.info('Review label trigger matched', { prNumber, label: addedLabel });
+    logger.info('Review label trigger matched', { owner, repo, prNumber, label: addedLabel });
     const groupId = await createTaskGroup(
       store,
       'review',
@@ -2019,6 +2129,9 @@ async function handlePrLabelTrigger(
 
     if (agentIdFromLabel && !agent && !isExactFixLabelMatch) {
       logger.warn('agent:xxx label does not match any configured fix agent', {
+        owner,
+        repo,
+        prNumber,
         label: addedLabel,
         agentId: agentIdFromLabel,
       });
@@ -2060,6 +2173,8 @@ async function handlePrLabelTrigger(
     }
 
     logger.info('Fix label trigger matched', {
+      owner,
+      repo,
       prNumber,
       label: addedLabel,
       agentId: agentIdFromLabel,
@@ -2101,6 +2216,15 @@ async function handlePrLabelTrigger(
     );
   }
 
+  if (!created) {
+    logger.info('PR label did not match any trigger — no tasks created', {
+      owner,
+      repo,
+      prNumber,
+      label: addedLabel,
+    });
+  }
+
   return new Response('OK', { status: 200 });
 }
 
@@ -2120,6 +2244,13 @@ async function handleIssueLabelTrigger(
   token: string,
   logger: Logger,
 ): Promise<Response> {
+  logger.info('Evaluating issue label trigger', {
+    owner,
+    repo,
+    issueNumber: issue.number,
+    label: addedLabel,
+  });
+
   const reviewConfig = fullConfig.review ?? DEFAULT_REVIEW_CONFIG;
   const baseTask: Omit<ReviewTask, 'id' | 'prompt' | 'task_type' | 'feature' | 'group_id'> = {
     owner,
@@ -2166,6 +2297,9 @@ async function handleIssueLabelTrigger(
 
     if (agentIdFromLabel && !agent && !isExactLabelMatch) {
       logger.warn('agent:xxx label does not match any configured implement agent', {
+        owner,
+        repo,
+        issueNumber: issue.number,
         label: addedLabel,
         agentId: agentIdFromLabel,
       });
@@ -2207,6 +2341,8 @@ async function handleIssueLabelTrigger(
     }
 
     logger.info('Implement label trigger matched', {
+      owner,
+      repo,
       issueNumber: issue.number,
       label: addedLabel,
       agentId: agentIdFromLabel,
@@ -2279,6 +2415,8 @@ async function handleIssueLabelTrigger(
     fullConfig.triage.trigger.label === addedLabel
   ) {
     logger.info('Triage label trigger matched', {
+      owner,
+      repo,
       issueNumber: issue.number,
       label: addedLabel,
     });
@@ -2292,6 +2430,15 @@ async function handleIssueLabelTrigger(
       issueFields,
       created,
     );
+  }
+
+  if (!created) {
+    logger.info('Issue label did not match any trigger — no tasks created', {
+      owner,
+      repo,
+      issueNumber: issue.number,
+      label: addedLabel,
+    });
   }
 
   return new Response('OK', { status: 200 });
