@@ -10,11 +10,13 @@ import {
   isStatusTriggerEnabled,
   validateReviewConfig,
   validateOpenCaraConfig,
+  resolveNamedAgent,
   DEFAULT_REVIEW_CONFIG,
   DEFAULT_OPENCARA_CONFIG,
   DEFAULT_MODEL_DIVERSITY_GRACE_MS,
   type ReviewConfig,
   type OpenCaraConfig,
+  type ImplementConfig,
 } from '../review-config.js';
 
 // ── Legacy flat format (backward-compat via parseReviewConfig) ──
@@ -1404,5 +1406,232 @@ on = ["opened"]
     it('isStatusTriggerEnabled returns false when status absent', () => {
       expect(isStatusTriggerEnabled({})).toBe(false);
     });
+  });
+});
+
+// ── Named agent definitions ([[implement.agents]]) ──
+
+describe('parseOpenCaraConfig — named agents in implement section', () => {
+  it('parses named agents with all fields', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+id = "security-auditor"
+prompt = "Focus on security vulnerabilities."
+model = "claude-sonnet-4-5-20250514"
+tool = "claude"
+
+[[implement.agents]]
+id = "perf-reviewer"
+prompt = "Focus on performance."
+model = "gpt-4o"
+tool = "codex"
+`) as OpenCaraConfig;
+
+    expect(result.implement).toBeDefined();
+    expect(result.implement!.agents).toBeDefined();
+    expect(result.implement!.agents).toHaveLength(2);
+
+    expect(result.implement!.agents![0]).toEqual({
+      id: 'security-auditor',
+      prompt: 'Focus on security vulnerabilities.',
+      model: 'claude-sonnet-4-5-20250514',
+      tool: 'claude',
+    });
+    expect(result.implement!.agents![1]).toEqual({
+      id: 'perf-reviewer',
+      prompt: 'Focus on performance.',
+      model: 'gpt-4o',
+      tool: 'codex',
+    });
+  });
+
+  it('parses named agents with only required fields (id + prompt)', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+id = "basic-agent"
+prompt = "Do the work."
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toHaveLength(1);
+    expect(result.implement!.agents![0]).toEqual({
+      id: 'basic-agent',
+      prompt: 'Do the work.',
+    });
+    // model and tool should be absent, not undefined
+    expect('model' in result.implement!.agents![0]).toBe(false);
+    expect('tool' in result.implement!.agents![0]).toBe(false);
+  });
+
+  it('skips entries missing id', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+prompt = "No id here"
+
+[[implement.agents]]
+id = "valid"
+prompt = "Has id"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toHaveLength(1);
+    expect(result.implement!.agents![0].id).toBe('valid');
+  });
+
+  it('skips entries missing prompt', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+id = "no-prompt"
+
+[[implement.agents]]
+id = "valid"
+prompt = "Has prompt"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toHaveLength(1);
+    expect(result.implement!.agents![0].id).toBe('valid');
+  });
+
+  it('returns undefined agents when all entries are invalid', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+prompt = "No id"
+
+[[implement.agents]]
+id = "no-prompt"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toBeUndefined();
+  });
+
+  it('returns undefined agents when agents array is empty', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toBeUndefined();
+  });
+
+  it('handles mixed valid and invalid entries', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+id = "first"
+prompt = "Valid agent"
+model = "gpt-4o"
+
+[[implement.agents]]
+prompt = "Missing id"
+
+[[implement.agents]]
+id = "second"
+prompt = "Another valid"
+tool = "codex"
+
+[[implement.agents]]
+id = "no-prompt-only-id"
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toHaveLength(2);
+    expect(result.implement!.agents![0]).toEqual({
+      id: 'first',
+      prompt: 'Valid agent',
+      model: 'gpt-4o',
+    });
+    expect(result.implement!.agents![1]).toEqual({
+      id: 'second',
+      prompt: 'Another valid',
+      tool: 'codex',
+    });
+  });
+
+  it('ignores non-string model and tool fields', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[implement]
+prompt = "Implement changes"
+
+[[implement.agents]]
+id = "agent1"
+prompt = "Test agent"
+model = 123
+tool = true
+`) as OpenCaraConfig;
+
+    expect(result.implement!.agents).toHaveLength(1);
+    expect(result.implement!.agents![0]).toEqual({
+      id: 'agent1',
+      prompt: 'Test agent',
+    });
+  });
+});
+
+describe('resolveNamedAgent', () => {
+  const implementConfig: ImplementConfig = {
+    enabled: true,
+    prompt: 'Implement changes',
+    agentCount: 1,
+    timeout: '10m',
+    preferredModels: [],
+    preferredTools: [],
+    modelDiversityGraceMs: 30_000,
+    trigger: { comment: '/opencara go' },
+    agents: [
+      { id: 'security-auditor', prompt: 'Security focus', model: 'claude-sonnet-4-5-20250514' },
+      { id: 'perf-reviewer', prompt: 'Performance focus', tool: 'codex' },
+    ],
+  };
+
+  it('finds agent by id', () => {
+    const agent = resolveNamedAgent(implementConfig, 'security-auditor');
+    expect(agent).toEqual({
+      id: 'security-auditor',
+      prompt: 'Security focus',
+      model: 'claude-sonnet-4-5-20250514',
+    });
+  });
+
+  it('finds second agent by id', () => {
+    const agent = resolveNamedAgent(implementConfig, 'perf-reviewer');
+    expect(agent).toEqual({
+      id: 'perf-reviewer',
+      prompt: 'Performance focus',
+      tool: 'codex',
+    });
+  });
+
+  it('returns undefined for unknown id', () => {
+    expect(resolveNamedAgent(implementConfig, 'nonexistent')).toBeUndefined();
+  });
+
+  it('returns undefined when agents is undefined', () => {
+    const config: ImplementConfig = {
+      ...implementConfig,
+      agents: undefined,
+    };
+    expect(resolveNamedAgent(config, 'any')).toBeUndefined();
   });
 });
