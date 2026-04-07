@@ -18,10 +18,7 @@ export type EntityEntry = { agent?: string; github?: string };
 
 /** Per-agent slot overrides within a feature section */
 export interface AgentSlotConfig {
-  id?: string;
   prompt?: string;
-  model?: string;
-  tool?: string;
   preferredModels?: string[];
   preferredTools?: string[];
 }
