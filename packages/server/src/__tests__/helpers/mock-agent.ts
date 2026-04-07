@@ -160,15 +160,12 @@ export class MockAgent {
     reviewCount?: number;
     timeout?: string;
   }): Promise<{ created: boolean; taskId?: string; groupId?: string }> {
-    const config =
-      opts?.reviewCount || opts?.timeout
-        ? {
-            agentCount: opts.reviewCount ?? 1,
-            preferredModels: [] as string[],
-            preferredTools: [] as string[],
-            ...(opts.timeout ? { timeout: opts.timeout } : {}),
-          }
-        : undefined;
+    const config = {
+      agentCount: opts?.reviewCount ?? 1,
+      preferredModels: [] as string[],
+      preferredTools: [] as string[],
+      ...(opts?.timeout ? { timeout: opts.timeout } : {}),
+    };
 
     const res = await this.request('POST', '/test/events/issue', {
       owner: opts?.owner ?? 'test-org',
