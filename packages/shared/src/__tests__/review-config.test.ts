@@ -17,6 +17,7 @@ import {
   type ReviewConfig,
   type OpenCaraConfig,
   type ImplementConfig,
+  type FixConfig,
 } from '../review-config.js';
 
 // ── Legacy flat format (backward-compat via parseReviewConfig) ──
@@ -1589,6 +1590,166 @@ tool = true
   });
 });
 
+// ── Named agent definitions ([[fix.agents]]) ──
+
+describe('parseOpenCaraConfig — named agents in fix section', () => {
+  it('parses named agents with all fields', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+
+[[fix.agents]]
+id = "security-fixer"
+prompt = "Focus on fixing security vulnerabilities."
+model = "claude-sonnet-4-5-20250514"
+tool = "claude"
+
+[[fix.agents]]
+id = "perf-fixer"
+prompt = "Focus on fixing performance issues."
+model = "gpt-4o"
+tool = "codex"
+`) as OpenCaraConfig;
+
+    expect(result.fix).toBeDefined();
+    expect(result.fix!.agents).toBeDefined();
+    expect(result.fix!.agents).toHaveLength(2);
+
+    expect(result.fix!.agents![0]).toEqual({
+      id: 'security-fixer',
+      prompt: 'Focus on fixing security vulnerabilities.',
+      model: 'claude-sonnet-4-5-20250514',
+      tool: 'claude',
+    });
+    expect(result.fix!.agents![1]).toEqual({
+      id: 'perf-fixer',
+      prompt: 'Focus on fixing performance issues.',
+      model: 'gpt-4o',
+      tool: 'codex',
+    });
+  });
+
+  it('parses named agents with only required fields (id + prompt)', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+
+[[fix.agents]]
+id = "basic-fixer"
+prompt = "Fix the issues."
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agents).toHaveLength(1);
+    expect(result.fix!.agents![0]).toEqual({
+      id: 'basic-fixer',
+      prompt: 'Fix the issues.',
+    });
+    // model and tool should be absent, not undefined
+    expect('model' in result.fix!.agents![0]).toBe(false);
+    expect('tool' in result.fix!.agents![0]).toBe(false);
+  });
+
+  it('skips entries missing id', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+
+[[fix.agents]]
+prompt = "No id here"
+
+[[fix.agents]]
+id = "valid"
+prompt = "Has id"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agents).toHaveLength(1);
+    expect(result.fix!.agents![0].id).toBe('valid');
+  });
+
+  it('skips entries missing prompt', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+
+[[fix.agents]]
+id = "no-prompt"
+
+[[fix.agents]]
+id = "valid"
+prompt = "Has prompt"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agents).toHaveLength(1);
+    expect(result.fix!.agents![0].id).toBe('valid');
+  });
+
+  it('returns undefined agents when all entries are invalid', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+
+[[fix.agents]]
+prompt = "No id"
+
+[[fix.agents]]
+id = "no-prompt"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agents).toBeUndefined();
+  });
+
+  it('returns undefined agents when agents array is empty', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agents).toBeUndefined();
+  });
+
+  it('handles mixed valid and invalid entries', () => {
+    const result = parseOpenCaraConfig(`
+version = 1
+[fix]
+prompt = "Fix the review comments."
+
+[[fix.agents]]
+id = "first"
+prompt = "Valid fixer"
+model = "gpt-4o"
+
+[[fix.agents]]
+prompt = "Missing id"
+
+[[fix.agents]]
+id = "second"
+prompt = "Another valid"
+tool = "codex"
+
+[[fix.agents]]
+id = "no-prompt-only-id"
+`) as OpenCaraConfig;
+
+    expect(result.fix!.agents).toHaveLength(2);
+    expect(result.fix!.agents![0]).toEqual({
+      id: 'first',
+      prompt: 'Valid fixer',
+      model: 'gpt-4o',
+    });
+    expect(result.fix!.agents![1]).toEqual({
+      id: 'second',
+      prompt: 'Another valid',
+      tool: 'codex',
+    });
+  });
+});
+
 describe('resolveNamedAgent', () => {
   const implementConfig: ImplementConfig = {
     enabled: true,
@@ -1633,5 +1794,40 @@ describe('resolveNamedAgent', () => {
       agents: undefined,
     };
     expect(resolveNamedAgent(config, 'any')).toBeUndefined();
+  });
+
+  it('works with FixConfig', () => {
+    const fixConfig: FixConfig = {
+      enabled: true,
+      prompt: 'Fix the review comments.',
+      agentCount: 1,
+      timeout: '10m',
+      preferredModels: [],
+      preferredTools: [],
+      modelDiversityGraceMs: 30_000,
+      trigger: { comment: '/opencara fix' },
+      agents: [
+        {
+          id: 'security-fixer',
+          prompt: 'Fix security issues',
+          model: 'claude-sonnet-4-5-20250514',
+        },
+        { id: 'perf-fixer', prompt: 'Fix performance issues', tool: 'codex' },
+      ],
+    };
+    const agent = resolveNamedAgent(fixConfig, 'security-fixer');
+    expect(agent).toEqual({
+      id: 'security-fixer',
+      prompt: 'Fix security issues',
+      model: 'claude-sonnet-4-5-20250514',
+    });
+    expect(resolveNamedAgent(fixConfig, 'nonexistent')).toBeUndefined();
+  });
+
+  it('works with a plain object containing agents', () => {
+    const config = {
+      agents: [{ id: 'test', prompt: 'Test agent' }],
+    };
+    expect(resolveNamedAgent(config, 'test')).toEqual({ id: 'test', prompt: 'Test agent' });
   });
 });

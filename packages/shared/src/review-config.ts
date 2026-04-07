@@ -92,6 +92,7 @@ export interface ImplementConfig extends FeatureConfig {
 export interface FixConfig extends FeatureConfig {
   enabled: boolean;
   trigger: TriggerConfig;
+  agents?: NamedAgentConfig[];
 }
 
 /** Top-level .opencara.toml config */
@@ -437,11 +438,12 @@ function parseNamedAgents(value: unknown): NamedAgentConfig[] | undefined {
 }
 
 /**
- * Look up a named agent by ID in the implement config.
+ * Look up a named agent by ID in a config with named agents.
+ * Works with ImplementConfig, FixConfig, or any config with agents.
  * Returns undefined if not found.
  */
 export function resolveNamedAgent(
-  config: ImplementConfig,
+  config: { agents?: NamedAgentConfig[] },
   agentId: string,
 ): NamedAgentConfig | undefined {
   return config.agents?.find((a) => a.id === agentId);
@@ -597,12 +599,14 @@ const DEFAULT_FIX_FEATURE: FeatureConfig = {
 
 /** Parse the [fix] section */
 function parseFixSection(raw: Record<string, unknown>): FixConfig {
-  const base = parseFeatureFields(raw, DEFAULT_FIX_FEATURE);
+  const { agents: _slots, ...base } = parseFeatureFields(raw, DEFAULT_FIX_FEATURE);
   const triggerRaw = isObject(raw.trigger) ? raw.trigger : undefined;
+  const namedAgents = parseNamedAgents(raw.agents);
   return {
     ...base,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
     trigger: parseTriggerSection(triggerRaw, DEFAULT_FIX_TRIGGER),
+    ...(namedAgents ? { agents: namedAgents } : {}),
   };
 }
 
