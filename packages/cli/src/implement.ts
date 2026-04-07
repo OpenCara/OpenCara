@@ -391,6 +391,23 @@ export interface ImplementExecutorDeps {
 }
 
 /**
+ * Ensure the command template delivers the prompt via `-p` argument for
+ * implement tasks. Claude requires `-p` to run in agentic mode (using tools
+ * like Edit/Write/Bash). Without it, stdin delivery causes single-turn text
+ * generation with no file modifications.
+ *
+ * If the template already contains `${PROMPT}`, it is returned unchanged.
+ * If the tool is not Claude-based, it is returned unchanged.
+ */
+export function ensurePromptViaArg(commandTemplate: string): string {
+  if (commandTemplate.includes('${PROMPT}')) return commandTemplate;
+  // Only modify Claude-based commands (binary name starts with "claude")
+  const binaryName = commandTemplate.trim().split(/\s+/)[0];
+  if (binaryName !== 'claude') return commandTemplate;
+  return commandTemplate + " -p '${PROMPT}'";
+}
+
+/**
  * Execute the AI tool for an implement task.
  * Runs the tool in the worktree directory so it can read/modify files.
  */
@@ -422,8 +439,11 @@ export async function executeImplement(
   const effectiveTimeout = timeoutMs - TIMEOUT_SAFETY_MARGIN_MS;
   const prompt = buildImplementPrompt(task);
 
+  // For implement tasks, Claude needs -p argument (not stdin) to enable tool use
+  const effectiveCommand = ensurePromptViaArg(deps.commandTemplate);
+
   const result = await runTool(
-    deps.commandTemplate,
+    effectiveCommand,
     prompt,
     effectiveTimeout,
     signal,
