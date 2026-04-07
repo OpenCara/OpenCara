@@ -19,6 +19,7 @@ import {
   isTriageRole,
   isFixRole,
   isImplementRole,
+  isIssueReviewRole,
 } from '@opencara/shared';
 import {
   loadConfig,
@@ -75,6 +76,7 @@ import { detectSuspiciousPatterns } from '../prompt-guard.js';
 import { executeDedupTask, defaultExecGh } from '../dedup.js';
 import { fetchPRContext, formatPRContext, hasContent } from '../pr-context.js';
 import { executeTriageTask, type TriageExecutorDeps } from '../triage.js';
+import { executeIssueReviewTask, type IssueReviewExecutorDeps } from '../issue-review.js';
 import { executeImplementTask, type ImplementExecutorDeps } from '../implement.js';
 import {
   executeFixTask,
@@ -876,6 +878,35 @@ async function handleTask(
             input: triageResult.tokenDetail.input,
             output: triageResult.tokenDetail.output,
             estimated: triageResult.tokensEstimated,
+          },
+          consumptionDeps.agentId,
+        );
+      }
+    } else if (isIssueReviewRole(role)) {
+      const issueReviewDeps: IssueReviewExecutorDeps = {
+        commandTemplate: reviewDeps.commandTemplate,
+      };
+      const issueReviewResult = await executeIssueReviewTask(
+        client,
+        agentId,
+        task,
+        issueReviewDeps,
+        timeout_seconds,
+        logger,
+        signal,
+      );
+      recordSessionUsage(consumptionDeps.session, {
+        inputTokens: issueReviewResult.tokenDetail.input,
+        outputTokens: issueReviewResult.tokenDetail.output,
+        totalTokens: issueReviewResult.tokensUsed,
+        estimated: issueReviewResult.tokensEstimated,
+      });
+      if (consumptionDeps.usageTracker) {
+        consumptionDeps.usageTracker.recordTask(
+          {
+            input: issueReviewResult.tokenDetail.input,
+            output: issueReviewResult.tokenDetail.output,
+            estimated: issueReviewResult.tokensEstimated,
           },
           consumptionDeps.agentId,
         );
