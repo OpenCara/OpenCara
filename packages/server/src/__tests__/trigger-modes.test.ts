@@ -72,6 +72,7 @@ class TestGitHubService implements GitHubService {
     repo: string;
     number: number;
   } | null = null;
+  projectFieldValues: Record<string, string | null> = {};
 
   async getInstallationToken(): Promise<string> {
     return 'ghs_mock_token';
@@ -129,8 +130,13 @@ class TestGitHubService implements GitHubService {
   } | null> {
     return this.resolveProjectItemResult;
   }
-  async readProjectFieldValue(): Promise<string | null> {
-    return null;
+  async readProjectFieldValue(
+    _owner: string,
+    _repo: string,
+    _issueNumber: number,
+    fieldName: string,
+  ): Promise<string | null> {
+    return this.projectFieldValues[fieldName] ?? null;
   }
 }
 
@@ -990,6 +996,7 @@ describe('Unified trigger modes', () => {
         repo: 'widget',
         number: 10,
       };
+      github.projectFieldValues['Status'] = 'Ready';
 
       const res = await sendWebhook(
         app,
@@ -1164,6 +1171,7 @@ describe('Unified trigger modes', () => {
         repo: 'widget',
         number: 10,
       };
+      github.projectFieldValues['Status'] = 'Ready';
 
       const payload = {
         action: 'edited',
@@ -1212,6 +1220,76 @@ describe('Unified trigger modes', () => {
         },
       };
 
+      const res = await sendWebhook(app, 'projects_v2_item', payload, env);
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('skips task when webhook status matches but verified board status differs', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 10,
+      };
+      // Webhook says "Ready" (matches trigger) but board actually says "Backlog"
+      github.projectFieldValues['Status'] = 'Backlog';
+
+      const res = await sendWebhook(
+        app,
+        'projects_v2_item',
+        makeProjectsV2ItemPayload('Ready'),
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('skips task when verified board status is null', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 10,
+      };
+      // Board API returns null (field not found)
+
+      const res = await sendWebhook(
+        app,
+        'projects_v2_item',
+        makeProjectsV2ItemPayload('Ready'),
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await store.listTasks()).toHaveLength(0);
+    });
+
+    it('skips issue_review task when verified board status differs', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        issue_review: {
+          ...DEFAULT_ISSUE_REVIEW_CONFIG,
+          trigger: { status: 'Needs Review' },
+        },
+      };
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 20,
+      };
+      // Webhook says "Needs Review" but board says "In Progress"
+      github.projectFieldValues['Status'] = 'In Progress';
+
+      const payload = makeProjectsV2ItemPayload('Needs Review');
       const res = await sendWebhook(app, 'projects_v2_item', payload, env);
       expect(res.status).toBe(200);
       expect(await store.listTasks()).toHaveLength(0);
@@ -1634,6 +1712,7 @@ describe('Unified trigger modes', () => {
         repo: 'widget',
         number: 10,
       };
+      github.projectFieldValues['Status'] = 'Ready';
 
       await sendWebhook(app, 'projects_v2_item', makeProjectsV2ItemPayload('Ready'), env);
       await sendWebhook(app, 'projects_v2_item', makeProjectsV2ItemPayload('Ready'), env);
@@ -2085,6 +2164,7 @@ describe('Unified trigger modes', () => {
         repo: 'widget',
         number: 20,
       };
+      github.projectFieldValues['Status'] = 'Needs Review';
 
       const payload = makeProjectsV2ItemPayload('Needs Review');
       const res = await sendWebhook(app, 'projects_v2_item', payload, env);

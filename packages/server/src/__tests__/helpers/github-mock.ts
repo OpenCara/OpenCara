@@ -333,6 +333,7 @@ export class MockGitHubService implements GitHubService {
   }
 
   projectFieldValue: string | null = null;
+  projectFieldValues: Record<string, string | null> = {};
 
   async readProjectFieldValue(
     owner: string,
@@ -345,6 +346,7 @@ export class MockGitHubService implements GitHubService {
       method: 'readProjectFieldValue',
       args: { owner, repo, issueNumber, fieldName, token },
     });
+    if (fieldName in this.projectFieldValues) return this.projectFieldValues[fieldName];
     return this.projectFieldValue;
   }
 

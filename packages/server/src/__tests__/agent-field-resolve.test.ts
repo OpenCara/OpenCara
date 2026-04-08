@@ -73,8 +73,10 @@ class TestGitHubService implements GitHubService {
     number: number;
   } | null = null;
 
-  /** Configurable return value for readProjectFieldValue */
+  /** Configurable return value for readProjectFieldValue (default for all fields) */
   projectFieldValue: string | null = null;
+  /** Per-field overrides for readProjectFieldValue (takes precedence over projectFieldValue) */
+  projectFieldValues: Record<string, string | null> = {};
   readProjectFieldValueSpy = vi.fn<
     [string, string, number, string, string],
     Promise<string | null>
@@ -154,6 +156,7 @@ class TestGitHubService implements GitHubService {
     token: string,
   ): Promise<string | null> {
     this.readProjectFieldValueSpy(owner, repo, issueNumber, fieldName, token);
+    if (fieldName in this.projectFieldValues) return this.projectFieldValues[fieldName];
     return this.projectFieldValue;
   }
 }
@@ -749,6 +752,7 @@ describe('Agent field resolution', () => {
         implement: IMPLEMENT_CONFIG_WITH_AGENTS,
       };
       github.projectFieldValue = 'perf-reviewer';
+      github.projectFieldValues['Status'] = 'Ready';
 
       const res = await sendWebhook(
         app,
@@ -786,6 +790,7 @@ describe('Agent field resolution', () => {
         implement: IMPLEMENT_CONFIG_WITH_AGENTS,
       };
       github.projectFieldValue = null;
+      github.projectFieldValues['Status'] = 'Ready';
 
       const res = await sendWebhook(
         app,
@@ -814,6 +819,7 @@ describe('Agent field resolution', () => {
         implement: IMPLEMENT_CONFIG_WITH_AGENTS,
       };
       github.projectFieldValue = 'nonexistent';
+      github.projectFieldValues['Status'] = 'Ready';
 
       const res = await sendWebhook(
         app,
@@ -832,7 +838,7 @@ describe('Agent field resolution', () => {
       expect(tasks).toHaveLength(0);
     });
 
-    it('no agent_field config — no project query on status trigger', async () => {
+    it('no agent_field config — no Agent field query on status trigger', async () => {
       github.resolveProjectItemResult = {
         type: 'Issue',
         owner: 'acme',
@@ -847,6 +853,7 @@ describe('Agent field resolution', () => {
           agent_field: undefined,
         },
       };
+      github.projectFieldValues['Status'] = 'Ready';
 
       const res = await sendWebhook(
         app,
@@ -856,7 +863,12 @@ describe('Agent field resolution', () => {
       );
       expect(res.status).toBe(200);
 
-      expect(github.readProjectFieldValueSpy).not.toHaveBeenCalled();
+      // Verification guard calls readProjectFieldValue with 'Status',
+      // but no 'Agent' field query should be made when agent_field is not configured
+      const agentFieldCalls = github.readProjectFieldValueSpy.mock.calls.filter(
+        (call) => call[3] === 'Agent',
+      );
+      expect(agentFieldCalls).toHaveLength(0);
 
       const tasks = await store.listTasks();
       expect(tasks).toHaveLength(1);
@@ -876,6 +888,7 @@ describe('Agent field resolution', () => {
         implement: IMPLEMENT_CONFIG_WITH_AGENTS,
       };
       github.projectFieldValue = 'security-auditor';
+      github.projectFieldValues['Status'] = 'Ready';
 
       const res = await sendWebhook(
         app,

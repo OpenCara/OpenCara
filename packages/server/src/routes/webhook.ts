@@ -2726,8 +2726,9 @@ async function handleProjectsV2Item(
 
   logger.info('Projects V2 item status changed', {
     contentNodeId: projects_v2_item.content_node_id,
-    from: fieldChange.from,
-    to: newStatus,
+    fromName: fieldChange.from?.name ?? null,
+    toName: newStatus.name,
+    toId: newStatus.id,
   });
 
   let token: string;
@@ -2771,13 +2772,47 @@ async function handleProjectsV2Item(
   }
 
   // Implement status trigger (primary use case — issues only)
+  const implementTriggerStatus = fullConfig.implement?.enabled
+    ? fullConfig.implement.trigger.status
+    : undefined;
+  logger.info('Implement status trigger check', {
+    owner,
+    repo,
+    number,
+    type,
+    webhookStatus: newStatus.name,
+    triggerStatus: implementTriggerStatus ?? '<not configured>',
+    enabled: !!fullConfig.implement?.enabled,
+    statusTriggerEnabled: fullConfig.implement
+      ? isStatusTriggerEnabled(fullConfig.implement.trigger)
+      : false,
+    match: implementTriggerStatus === newStatus.name,
+  });
+
   if (
     type === 'Issue' &&
     fullConfig.implement?.enabled &&
     isStatusTriggerEnabled(fullConfig.implement.trigger) &&
     fullConfig.implement.trigger.status === newStatus.name
   ) {
-    logger.info('Implement status trigger matched', {
+    // Verify the issue's actual current status on the project board via API
+    // to guard against stale/out-of-order webhook payloads
+    const verifiedStatus = await github.readProjectFieldValue(owner, repo, number, 'Status', token);
+    if (verifiedStatus !== newStatus.name) {
+      logger.warn(
+        'Implement status trigger — webhook status does not match verified board status, skipping',
+        {
+          owner,
+          repo,
+          issueNumber: number,
+          webhookStatus: newStatus.name,
+          verifiedStatus,
+        },
+      );
+      return new Response('OK', { status: 200 });
+    }
+
+    logger.info('Implement status trigger matched (verified)', {
       owner,
       repo,
       issueNumber: number,
@@ -2888,7 +2923,23 @@ async function handleProjectsV2Item(
     isStatusTriggerEnabled(fullConfig.issue_review.trigger) &&
     fullConfig.issue_review.trigger.status === newStatus.name
   ) {
-    logger.info('Issue review status trigger matched', {
+    // Verify the issue's actual current status on the project board via API
+    const verifiedStatus = await github.readProjectFieldValue(owner, repo, number, 'Status', token);
+    if (verifiedStatus !== newStatus.name) {
+      logger.warn(
+        'Issue review status trigger — webhook status does not match verified board status, skipping',
+        {
+          owner,
+          repo,
+          issueNumber: number,
+          webhookStatus: newStatus.name,
+          verifiedStatus,
+        },
+      );
+      return new Response('OK', { status: 200 });
+    }
+
+    logger.info('Issue review status trigger matched (verified)', {
       owner,
       repo,
       issueNumber: number,

@@ -16,6 +16,7 @@ Dev agents (architect, server-dev, cli-dev) are OpenCara implement agents config
 10. **STOP** — agent shuts down after creating the PR
 
 **Post-PR phases are handled by PM** (not the implement agent):
+
 - PM waits for OpenCara bot review
 - PM comments `/opencara fix` to trigger fix agent for review findings + merge conflicts
 - PM checks if PR is clean → merges with `gh pr merge --squash --delete-branch` (max 3 fix iterations)
