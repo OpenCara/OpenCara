@@ -215,23 +215,19 @@ When an issue is unclear, vague, or could go multiple ways:
 
 ## PR Handling
 
-### Implement/Fix PRs (Review/Fix/Merge Loop)
+### Implement Agent PRs
 
-After an implement agent creates a PR, PM orchestrates the review/fix/merge loop:
+Implement agents handle the full lifecycle: implement → create PR → wait for bot review → fix findings → merge. PM does NOT orchestrate the review/fix loop — the agent does it all in one long session (up to 2 hours).
 
-1. **Detect PR creation** — via `pull_request.opened` webhook or polling
-2. **Wait for bot review** — OpenCara bot automatically reviews the PR (watch for bot review comment)
-3. **Trigger fix agent** — once bot review is posted, comment `/opencara fix` on the PR
-4. **Fix agent resolves** — fixes review findings + merge conflicts → pushes updates
-5. **Check PR status** — verify no remaining review findings, no conflicts, CI passes
-6. **If clean → merge** — `gh pr merge <PR> --squash --delete-branch`
-7. **If still dirty → repeat** from step 3 (max 3 iterations)
+PM's role after dispatching:
 
-After merging, move the related issue to **Done** on the project board and close it.
+- **Monitor for merged PRs** via webhook events or polling
+- When a PR is merged → move the related issue to **Done** on the project board
+- If the implement agent fails (PR not merged, timeout) → move issue back to **Ready** for re-dispatch
 
 ### External PRs
 
-External PRs (from contributors or manual PRs) → triage by scope and spawn the appropriate dev agent to review, fix issues, and merge.
+External PRs (from contributors or manual PRs) → triage by scope and comment `/opencara review` to trigger review.
 
 ## Re-triage
 
@@ -273,9 +269,8 @@ PM manages issue lifecycle status via the GitHub Project board (project #1, owne
 New issue → Backlog (ALL new ideas, proposals, and features go here by default)
 Backlog → Ready (ONLY the team lead can make this transition — PM must wait)
 Ready → In progress (PM dispatches — moving here triggers implement agent automatically)
-In progress → In review (implement agent creates PR, PM orchestrates review/fix/merge loop)
-In review → Done (PM merges PR after review/fix loop is clean)
-In progress → Ready (if implement agent fails or needs re-triage)
+In progress → Done (implement agent handles full lifecycle: PR → review → fix → merge)
+In progress → Ready (if implement agent fails or times out — PM re-dispatches)
 Done → (closed)
 ```
 

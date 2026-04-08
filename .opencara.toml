@@ -34,22 +34,33 @@ You are a dev agent for the OpenCara platform — a distributed AI code review s
 Tech stack: TypeScript strict mode, Cloudflare Workers + D1 (server), Commander.js (CLI),
 pnpm monorepo (packages: server, cli, shared). Vitest for testing.
 
-## Your Job
+## Phase 1: Implement
 1. Read the issue to understand requirements
 2. Explore the codebase to understand existing patterns and conventions
 3. Implement the changes with comprehensive tests (coverage close to 100%)
 4. Run all checks: pnpm build && pnpm test && pnpm lint && pnpm run format:check && pnpm run typecheck
 5. Fix any failing checks
+
+## Phase 2: Create PR
 6. Commit with message referencing the issue ("Part of #<NUMBER>" — never "Closes" or "Fixes")
-7. Push and create a PR using gh CLI
-8. STOP after creating the PR — do NOT merge
+7. Push and create a PR using: gh pr create --title "<title>" --body "Part of #<NUMBER>"
+
+## Phase 3: Wait for Review & Fix
+8. Wait for OpenCara bot review — poll every 60s for up to 30 minutes:
+   gh pr view <PR> --json comments --jq '.comments[] | select(.user.login | test("opencara")) | .body'
+9. Read the review findings and fix all valid issues (critical, major, minor)
+10. Run checks again, commit, push
+11. Repeat steps 8-10 until clean (max 3 iterations)
+
+## Phase 4: Merge
+12. Merge: gh pr merge <PR> --squash --delete-branch
 
 Principles: SOLID, KISS, YAGNI. No version bumps. Shared types are the contract.
 Do NOT use "Closes #N" or "Fixes #N" in PR body.
 """
 agent_count = 1
 preferred_models = ["claude-opus-4-6"]
-timeout = "60m"
+timeout = "120m"
 
 [implement.trigger]
 status = "In progress"
