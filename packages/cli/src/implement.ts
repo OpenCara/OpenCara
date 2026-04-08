@@ -521,27 +521,63 @@ export async function executeImplementTask(
     );
     logger.log(`  AI completed (${aiResult.tokensUsed.toLocaleString()} tokens)`);
 
-    // Step 3: Commit and push
-    logger.log('  Committing and pushing changes...');
-    const filesChanged = gitOps.commitAndPush(worktreePath, issueNumber, issueTitle);
-    logger.log(`  Pushed ${filesChanged} file(s) to ${branchName}`);
+    // Step 3: Commit and push (skip if AI already committed)
+    let filesChanged = 0;
+    let uncommitted = 0;
+    try {
+      uncommitted = countChangedFiles(worktreePath);
+    } catch {
+      // git not available or worktree issue — assume changes exist
+      uncommitted = 1;
+    }
+    if (uncommitted > 0) {
+      logger.log('  Committing and pushing changes...');
+      filesChanged = gitOps.commitAndPush(worktreePath, issueNumber, issueTitle);
+      logger.log(`  Pushed ${filesChanged} file(s) to ${branchName}`);
+    } else {
+      logger.log('  No uncommitted changes — AI agent handled commit/push');
+    }
 
-    // Step 4: Create PR
-    logger.log('  Creating pull request...');
-    const pr = gitOps.createPR(
-      worktreePath,
-      issueNumber,
-      issueTitle,
-      aiResult.output.summary,
-      branchName,
-    );
-    logger.log(`  PR #${pr.prNumber} created: ${pr.prUrl}`);
+    // Step 4: Create PR (skip if AI already created one)
+    let prNumber = 0;
+    let prUrl = '';
+    try {
+      logger.log('  Creating pull request...');
+      const pr = gitOps.createPR(
+        worktreePath,
+        issueNumber,
+        issueTitle,
+        aiResult.output.summary,
+        branchName,
+      );
+      prNumber = pr.prNumber;
+      prUrl = pr.prUrl;
+      logger.log(`  PR #${prNumber} created: ${prUrl}`);
+    } catch (prErr) {
+      // PR may already exist (AI created it) — check for existing PR
+      try {
+        const existing = ghExec(
+          ['pr', 'list', '--head', branchName, '--json', 'number,url', '--limit', '1'],
+          worktreePath,
+        );
+        const parsed = JSON.parse(existing) as Array<{ number: number; url: string }>;
+        if (parsed.length > 0) {
+          prNumber = parsed[0].number;
+          prUrl = parsed[0].url;
+          logger.log(`  PR #${prNumber} already exists: ${prUrl}`);
+        } else {
+          throw prErr; // Re-throw if no existing PR found
+        }
+      } catch {
+        throw prErr; // gh not available or check failed — re-throw original error
+      }
+    }
 
     // Step 5: Submit result to server
     const report: ImplementReport = {
       branch: branchName,
-      pr_number: pr.prNumber,
-      pr_url: pr.prUrl,
+      pr_number: prNumber,
+      pr_url: prUrl,
       files_changed: filesChanged,
       summary: aiResult.output.summary,
     };
