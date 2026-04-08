@@ -177,7 +177,7 @@ function parseTimeout(value: unknown): string {
   const match = value.match(/^(\d+)m$/);
   if (!match) return '10m';
   const minutes = parseInt(match[1], 10);
-  if (minutes < 1 || minutes > 120) return '10m';
+  if (minutes < 1) return '10m';
   return value;
 }
 
