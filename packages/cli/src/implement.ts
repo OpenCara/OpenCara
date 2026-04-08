@@ -349,6 +349,7 @@ export function createPR(
   issueNumber: number,
   issueTitle: string,
   summary: string,
+  branchName?: string,
 ): { prNumber: number; prUrl: string } {
   const title = `Implement #${issueNumber}: ${issueTitle}`;
   const body = [
@@ -363,7 +364,13 @@ export function createPR(
 
   // Note: no --label flag — label may not exist on arbitrary repos.
   // Server/webhook handles labeling after PR creation.
-  const output = ghExec(['pr', 'create', '--title', title, '--body', body], worktreePath);
+  // Use --head to specify the branch explicitly — worktrees from bare clones
+  // don't have upstream tracking visible to gh.
+  const args = ['pr', 'create', '--title', title, '--body', body];
+  if (branchName) {
+    args.push('--head', branchName);
+  }
+  const output = ghExec(args, worktreePath);
 
   // Parse PR URL from gh output (last line is the URL)
   const prUrl = output.trim().split('\n').pop()?.trim() ?? '';
@@ -521,7 +528,7 @@ export async function executeImplementTask(
 
     // Step 4: Create PR
     logger.log('  Creating pull request...');
-    const pr = gitOps.createPR(worktreePath, issueNumber, issueTitle, aiResult.output.summary);
+    const pr = gitOps.createPR(worktreePath, issueNumber, issueTitle, aiResult.output.summary, branchName);
     logger.log(`  PR #${pr.prNumber} created: ${pr.prUrl}`);
 
     // Step 5: Submit result to server

@@ -412,6 +412,7 @@ describe('executeImplementTask', () => {
       42,
       'Add dark mode support',
       'Added dark mode toggle',
+      'opencara/issue-42-add-dark-mode-support',
     );
 
     // Verify result submitted to server
