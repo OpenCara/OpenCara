@@ -1249,7 +1249,7 @@ describe('Unified trigger modes', () => {
       expect(await store.listTasks()).toHaveLength(0);
     });
 
-    it('skips task when verified board status is null', async () => {
+    it('allows task when verified board status is null (trusts webhook)', async () => {
       github.openCaraConfig = {
         version: 1,
         implement: DEFAULT_IMPLEMENT_CONFIG,
@@ -1260,7 +1260,8 @@ describe('Unified trigger modes', () => {
         repo: 'widget',
         number: 10,
       };
-      // Board API returns null (field not found)
+      // Board API returns null (field not found) — trust webhook payload
+      github.issueDetails = { title: 'Test', body: '', user: { login: 'user' } };
 
       const res = await sendWebhook(
         app,
@@ -1269,7 +1270,7 @@ describe('Unified trigger modes', () => {
         env,
       );
       expect(res.status).toBe(200);
-      expect(await store.listTasks()).toHaveLength(0);
+      expect(await store.listTasks()).toHaveLength(1);
     });
 
     it('skips issue_review task when verified board status differs', async () => {

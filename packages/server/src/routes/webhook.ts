@@ -2798,7 +2798,7 @@ async function handleProjectsV2Item(
     // Verify the issue's actual current status on the project board via API
     // to guard against stale/out-of-order webhook payloads
     const verifiedStatus = await github.readProjectFieldValue(owner, repo, number, 'Status', token);
-    if (verifiedStatus !== newStatus.name) {
+    if (verifiedStatus !== null && verifiedStatus !== newStatus.name) {
       logger.warn(
         'Implement status trigger — webhook status does not match verified board status, skipping',
         {
@@ -2925,7 +2925,7 @@ async function handleProjectsV2Item(
   ) {
     // Verify the issue's actual current status on the project board via API
     const verifiedStatus = await github.readProjectFieldValue(owner, repo, number, 'Status', token);
-    if (verifiedStatus !== newStatus.name) {
+    if (verifiedStatus !== null && verifiedStatus !== newStatus.name) {
       logger.warn(
         'Issue review status trigger — webhook status does not match verified board status, skipping',
         {
