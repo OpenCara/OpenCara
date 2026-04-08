@@ -1,9 +1,14 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PollTask, ImplementReport, TaskRole } from '@opencara/shared';
 import type { ToolExecutorResult, TokenUsageDetail } from './tool-executor.js';
-import { executeTool, estimateTokens } from './tool-executor.js';
+import {
+  executeTool,
+  estimateTokens,
+  parseCommandTemplate,
+  ToolTimeoutError,
+} from './tool-executor.js';
 import { sanitizeTokens } from './sanitize.js';
 import { validatePathSegment, isGhAvailable, buildCloneUrl } from './codebase.js';
 import { buildImplementPrompt } from './prompts.js';
@@ -238,10 +243,7 @@ export function checkoutForImplement(
   // Fetch latest and force-update local refs (bare clones need explicit refspec
   // to update refs/heads/* when worktrees hold the branch)
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
-  gitExec(
-    [...credArgs, 'fetch', '--force', 'origin', '+refs/heads/*:refs/heads/*'],
-    bareRepoPath,
-  );
+  gitExec([...credArgs, 'fetch', '--force', 'origin', '+refs/heads/*:refs/heads/*'], bareRepoPath);
 
   // Determine default branch (usually main or master).
   // In bare clones, refs live under refs/heads/ (not refs/remotes/origin/).
@@ -402,6 +404,81 @@ export interface ImplementExecutorDeps {
 }
 
 /**
+ * Check if a command template uses agentic mode (prompt via arg, no --print).
+ * Agentic mode lets the AI run as a full interactive agent with file access.
+ */
+export function isAgenticCommand(commandTemplate: string): boolean {
+  return commandTemplate.includes('${PROMPT}') && !commandTemplate.includes('--print');
+}
+
+/**
+ * Execute the AI tool in agentic mode — stdio: 'inherit', no stdout capture.
+ * The AI handles everything (implement, commit, push, PR, review, merge).
+ * Returns only the exit code; no output parsing.
+ */
+function executeAgentic(
+  commandTemplate: string,
+  prompt: string,
+  timeoutMs: number,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<{ exitCode: number }> {
+  const allVars: Record<string, string> = { PROMPT: prompt, CODEBASE_DIR: cwd };
+  const { command, args } = parseCommandTemplate(commandTemplate, allVars);
+
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new ToolTimeoutError('Tool execution aborted'));
+      return;
+    }
+
+    const child = spawn(command, args, {
+      stdio: 'inherit',
+      cwd,
+    });
+
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        child.kill('SIGTERM');
+        setTimeout(() => {
+          if (!settled) child.kill('SIGKILL');
+        }, 5000);
+      }
+    }, timeoutMs);
+
+    let onAbort: (() => void) | undefined;
+    if (signal) {
+      onAbort = () => {
+        if (!settled) child.kill('SIGTERM');
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+
+    child.on('close', (code, sig) => {
+      clearTimeout(timer);
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      if (sig === 'SIGTERM' || sig === 'SIGKILL') {
+        reject(new ToolTimeoutError(`Tool timed out after ${Math.round(timeoutMs / 1000)}s`));
+        return;
+      }
+      resolve({ exitCode: code ?? 1 });
+    });
+  });
+}
+
+/**
  * Execute the AI tool for an implement task.
  * Runs the tool in the worktree directory so it can read/modify files.
  */
@@ -424,6 +501,7 @@ export async function executeImplement(
   tokensUsed: number;
   tokensEstimated: boolean;
   tokenDetail: TokenUsageDetail;
+  agentic: boolean;
 }> {
   const timeoutMs = timeoutSeconds * 1000;
   if (timeoutMs <= TIMEOUT_SAFETY_MARGIN_MS) {
@@ -433,6 +511,28 @@ export async function executeImplement(
   const effectiveTimeout = timeoutMs - TIMEOUT_SAFETY_MARGIN_MS;
   const prompt = buildImplementPrompt(task);
 
+  // Agentic mode: AI handles everything, no output capture needed
+  if (isAgenticCommand(deps.commandTemplate)) {
+    const result = await executeAgentic(
+      deps.commandTemplate,
+      prompt,
+      effectiveTimeout,
+      worktreePath,
+      signal,
+    );
+    return {
+      output: {
+        summary: result.exitCode === 0 ? 'Implementation completed' : 'Implementation failed',
+        filesChanged: [],
+      },
+      tokensUsed: 0,
+      tokensEstimated: true,
+      tokenDetail: { input: 0, output: 0, total: 0, parsed: false },
+      agentic: true,
+    };
+  }
+
+  // Standard mode: capture stdout, parse output
   const result = await runTool(
     deps.commandTemplate,
     prompt,
@@ -460,6 +560,7 @@ export async function executeImplement(
     tokensUsed: result.tokensUsed + inputTokens,
     tokensEstimated: !result.tokensParsed,
     tokenDetail,
+    agentic: false,
   };
 }
 
@@ -525,13 +626,38 @@ export async function executeImplementTask(
     );
     logger.log(`  AI completed (${aiResult.tokensUsed.toLocaleString()} tokens)`);
 
+    // In agentic mode, the AI handles everything — skip executor post-processing
+    if (aiResult.agentic) {
+      logger.log('  Agentic mode — AI handled commit/push/PR/review/merge');
+      // Try to submit result, but don't fail if claim expired (agent may have run for hours)
+      try {
+        await client.post(`/api/tasks/${task.task_id}/result`, {
+          agent_id: agentId,
+          type: role,
+          review_text: sanitizeTokens(aiResult.output.summary),
+          tokens_used: aiResult.tokensUsed,
+        });
+        logger.log('  Result submitted');
+      } catch {
+        logger.log(
+          '  Result submission skipped (claim may have expired — normal for agentic mode)',
+        );
+      }
+      return {
+        tokensUsed: aiResult.tokensUsed,
+        tokensEstimated: aiResult.tokensEstimated,
+        tokenDetail: aiResult.tokenDetail,
+      };
+    }
+
+    // Standard mode: executor handles commit/push/PR
+
     // Step 3: Commit and push (skip if AI already committed)
     let filesChanged = 0;
     let uncommitted = 0;
     try {
       uncommitted = countChangedFiles(worktreePath);
     } catch {
-      // git not available or worktree issue — assume changes exist
       uncommitted = 1;
     }
     if (uncommitted > 0) {
@@ -558,7 +684,6 @@ export async function executeImplementTask(
       prUrl = pr.prUrl;
       logger.log(`  PR #${prNumber} created: ${prUrl}`);
     } catch (prErr) {
-      // PR may already exist (AI created it) — check for existing PR
       try {
         const existing = ghExec(
           ['pr', 'list', '--head', branchName, '--json', 'number,url', '--limit', '1'],
@@ -570,10 +695,10 @@ export async function executeImplementTask(
           prUrl = parsed[0].url;
           logger.log(`  PR #${prNumber} already exists: ${prUrl}`);
         } else {
-          throw prErr; // Re-throw if no existing PR found
+          throw prErr;
         }
       } catch {
-        throw prErr; // gh not available or check failed — re-throw original error
+        throw prErr;
       }
     }
 
