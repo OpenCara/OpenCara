@@ -16,6 +16,7 @@ import {
   loadConfig,
   resolveCodebaseDir,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
+  DEFAULT_COMMAND_TEST_TIMEOUT_MS,
   CONFIG_DIR,
   type LocalAgentConfig,
   type UsageLimits,
@@ -1238,6 +1239,7 @@ export async function startAgent(
     usageLimits?: UsageLimits;
     versionOverride?: string | null;
     codebaseTtl?: string | null;
+    commandTestTimeout?: string | null;
     verbose?: boolean;
   },
 ): Promise<void> {
@@ -1284,8 +1286,11 @@ export async function startAgent(
   // Dry-run test: verify command works before entering poll loop.
   // Skip in router mode (stdin/stdout relay) since there's no local command to test.
   if (reviewDeps.commandTemplate && !options?.routerRelay) {
+    const testTimeoutMs = options?.commandTestTimeout
+      ? parseTtl(options.commandTestTimeout)
+      : DEFAULT_COMMAND_TEST_TIMEOUT_MS;
     log('Testing command...');
-    const result = await testCommand(reviewDeps.commandTemplate);
+    const result = await testCommand(reviewDeps.commandTemplate, testTimeoutMs);
     if (result.ok) {
       log(`${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
     } else {
@@ -1438,6 +1443,7 @@ export async function startAgentRouter(): Promise<void> {
       usageLimits: config.usageLimits,
       versionOverride,
       codebaseTtl: config.codebaseTtl,
+      commandTestTimeout: config.commandTestTimeout,
     },
   );
 
@@ -1537,6 +1543,7 @@ function startAgentByIndex(
         usageLimits: config.usageLimits,
         versionOverride,
         codebaseTtl: config.codebaseTtl,
+        commandTestTimeout: config.commandTestTimeout,
         verbose,
       },
     ).finally(() => {

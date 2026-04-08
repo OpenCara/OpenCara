@@ -33,6 +33,7 @@ export interface CliConfig {
   maxConsecutiveErrors: number;
   codebaseDir: string | null;
   codebaseTtl: string | null;
+  commandTestTimeout: string | null;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
   usageLimits: UsageLimits;
@@ -52,6 +53,7 @@ export function ensureConfigDir(): void {
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
+export const DEFAULT_COMMAND_TEST_TIMEOUT_MS = 10_000;
 
 const VALID_REPO_MODES: RepoFilterMode[] = ['public', 'private', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
@@ -303,6 +305,7 @@ export function loadConfig(): CliConfig {
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     codebaseDir: null,
     codebaseTtl: null,
+    commandTestTimeout: null,
     agentCommand: null,
     agents: null,
     usageLimits: {
@@ -365,6 +368,8 @@ export function loadConfig(): CliConfig {
         : DEFAULT_MAX_CONSECUTIVE_ERRORS),
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     codebaseTtl: typeof data.codebase_ttl === 'string' ? data.codebase_ttl : null,
+    commandTestTimeout:
+      typeof data.command_test_timeout === 'string' ? data.command_test_timeout : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
     usageLimits: {
@@ -385,6 +390,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.codebaseTtl) {
     data.codebase_ttl = config.codebaseTtl;
+  }
+  if (config.commandTestTimeout) {
+    data.command_test_timeout = config.commandTestTimeout;
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;

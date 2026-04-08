@@ -36,7 +36,7 @@ export function parseTtl(value: string): number {
     return parseInt(trimmed, 10) * 1000;
   }
 
-  throw new Error(`Invalid codebase_ttl: "${value}". Use "0", "30m", "2h", "24h", "1d", etc.`);
+  throw new Error(`Invalid duration: "${value}". Use "0", "30s", "30m", "2h", "1d", etc.`);
 }
 
 /** Entry tracking a completed task's worktree dir for deferred cleanup. */

@@ -199,6 +199,12 @@ command = "qwen --model qwen3.5-plus -y"
 # Default: 10
 # max_consecutive_errors = 10
 
+# Timeout for the startup command test (dry-run before entering the poll loop).
+# Many AI tools need more than the default 10s for cold starts.
+# Supports duration strings: "10s", "30s", "1m"
+# Default: "10s"
+# command_test_timeout = "30s"
+
 # Codebase context: persistent repo cache for context-aware reviews.
 # When set, the CLI maintains bare clones of repos and creates isolated git
 # worktrees per task. Repos are cached across tasks for fast subsequent checkouts.

@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { DEFAULT_COMMAND_TEST_TIMEOUT_MS } from './config.js';
 
 export interface TokenUsageDetail {
   input: number;
@@ -357,7 +358,6 @@ export function executeTool(
 }
 
 const TEST_COMMAND_PROMPT = 'Respond with: OK';
-const TEST_COMMAND_TIMEOUT_MS = 10_000;
 
 export interface TestCommandResult {
   ok: boolean;
@@ -368,11 +368,17 @@ export interface TestCommandResult {
 /**
  * Dry-run a command template with a tiny test prompt to verify it works.
  * Returns success/failure + elapsed time. Never throws.
+ *
+ * @param timeoutMs — override the default test timeout (10s). Configurable via
+ *   `command_test_timeout` in config.toml.
  */
-export async function testCommand(commandTemplate: string): Promise<TestCommandResult> {
+export async function testCommand(
+  commandTemplate: string,
+  timeoutMs: number = DEFAULT_COMMAND_TEST_TIMEOUT_MS,
+): Promise<TestCommandResult> {
   const start = Date.now();
   try {
-    await executeTool(commandTemplate, TEST_COMMAND_PROMPT, TEST_COMMAND_TIMEOUT_MS);
+    await executeTool(commandTemplate, TEST_COMMAND_PROMPT, timeoutMs);
     return { ok: true, elapsedMs: Date.now() - start };
   } catch (err) {
     const elapsed = Date.now() - start;
@@ -380,7 +386,7 @@ export async function testCommand(commandTemplate: string): Promise<TestCommandR
       return {
         ok: false,
         elapsedMs: elapsed,
-        error: `command timed out after ${TEST_COMMAND_TIMEOUT_MS / 1000}s`,
+        error: `command timed out after ${timeoutMs / 1000}s`,
       };
     }
     const msg = err instanceof Error ? err.message : String(err);

@@ -109,6 +109,45 @@ describe('testCommand', () => {
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('uses default 10s timeout when no timeoutMs specified', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = testCommand('slow-tool');
+
+    emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('command timed out after 10s');
+  });
+
+  it('uses custom timeout when timeoutMs is provided', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = testCommand('slow-tool', 30_000);
+
+    emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('command timed out after 30s');
+  });
+
+  it('uses custom timeout of 60s (1m) when provided', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = testCommand('slow-tool', 60_000);
+
+    emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('command timed out after 60s');
+  });
+
   it('returns failure on spawn error without throwing', async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);

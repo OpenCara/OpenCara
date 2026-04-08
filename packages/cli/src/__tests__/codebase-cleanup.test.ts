@@ -58,15 +58,15 @@ describe('codebase-cleanup', () => {
     });
 
     it('throws on invalid format', () => {
-      expect(() => parseTtl('abc')).toThrow('Invalid codebase_ttl');
+      expect(() => parseTtl('abc')).toThrow('Invalid duration');
     });
 
     it('throws on negative numbers', () => {
-      expect(() => parseTtl('-1')).toThrow('Invalid codebase_ttl');
+      expect(() => parseTtl('-1')).toThrow('Invalid duration');
     });
 
     it('throws on unknown unit', () => {
-      expect(() => parseTtl('30x')).toThrow('Invalid codebase_ttl');
+      expect(() => parseTtl('30x')).toThrow('Invalid duration');
     });
   });
 
