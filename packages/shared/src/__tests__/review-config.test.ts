@@ -147,9 +147,16 @@ describe('parseReviewConfig (legacy backward compat)', () => {
 
   it('uses default timeout for out-of-range minutes', () => {
     const result = parseReviewConfig(
-      'version = 1\nprompt = "test"\ntimeout = "60m"',
+      'version = 1\nprompt = "test"\ntimeout = "150m"',
     ) as ReviewConfig;
     expect(result.timeout).toBe('10m');
+  });
+
+  it('accepts timeout up to 120 minutes', () => {
+    const result = parseReviewConfig(
+      'version = 1\nprompt = "test"\ntimeout = "60m"',
+    ) as ReviewConfig;
+    expect(result.timeout).toBe('60m');
   });
 
   it('accepts valid timeout values', () => {
