@@ -21,8 +21,10 @@ PM triages issue → PM sets "Agent" field on project board (e.g., "server-dev")
   → Server reads "Agent" field via agent_field config
   → Resolves agent config from [[implement.agents]]
   → Creates implement task with agent's prompt/model/tool
-  → CLI agent claims and implements → Creates PR → Self-reviews → Merges
-  → PM detects merged PR via webhook/polling → Updates board
+  → CLI agent claims and implements → Creates PR → STOPS
+  → Bot reviews PR → PM comments /opencara fix → Fix agent resolves findings
+  → PM checks if clean → Merges PR (max 3 fix iterations)
+  → PM updates board → Done
 ```
 
 Dev agents escalate to architect (via issue comment) if cross-package changes are needed. PM owns product and design decisions.

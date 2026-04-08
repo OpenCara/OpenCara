@@ -116,7 +116,11 @@ Event-driven, PM-centric workflow. Dev agents are implemented via OpenCara's own
 - Only one PM at a time; PM never implements code, only plans and dispatches
 - PM dispatches by setting the "Agent" field on the project board and moving issue to "In progress"
 - Moving to "In progress" triggers the implement feature via `projects_v2_item.edited` webhook
-- After creating a PR, implement agents wait for OpenCara bot review and self-review
+- After implement agent creates a PR, PM orchestrates the review/fix/merge loop:
+  1. Wait for OpenCara bot review
+  2. Comment `/opencara fix` to trigger fix agent
+  3. Check if clean → merge with `gh pr merge --squash --delete-branch` (max 3 fix iterations)
+- Implement agents STOP after creating the PR — they do NOT self-review or merge
 - Team name: `opencara-dev`
 
 ### Workflow Rules (auto-loaded)

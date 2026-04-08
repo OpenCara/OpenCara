@@ -13,8 +13,12 @@ Dev agents (architect, server-dev, cli-dev) are OpenCara implement agents config
 7. Agent implements changes with tests
 8. Agent runs build and test: `pnpm build && pnpm test`
 9. Agent commits, pushes, and creates a PR (referencing the issue)
-10. **Self-review**: wait for OpenCara bot review → fix findings → re-review (max 3 iterations)
-11. When clean → run pre-merge checks → merge the PR
+10. **STOP** — agent shuts down after creating the PR
+
+**Post-PR phases are handled by PM** (not the implement agent):
+- PM waits for OpenCara bot review
+- PM comments `/opencara fix` to trigger fix agent for review findings + merge conflicts
+- PM checks if PR is clean → merges with `gh pr merge --squash --delete-branch` (max 3 fix iterations)
 
 ## Implementation Phase
 
@@ -48,44 +52,16 @@ gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --bod
 
 **Version bumps are manual** — do NOT bump versions in PRs. The team lead controls version numbers.
 
-## Self-Review Phase
+## Post-PR: Review/Fix/Merge (PM-Orchestrated)
 
-After creating the PR, the OpenCara GitHub App (our own product) automatically reviews it. Wait for the bot review, then self-review combining its findings with your own analysis.
+After the implement agent creates a PR and shuts down, **PM handles the rest**:
 
-### Step 1: Wait for OpenCara Bot Review
+1. **Bot review** — OpenCara bot automatically reviews the PR (5 agents)
+2. **Fix agent** — PM comments `/opencara fix` to trigger the fix agent, which resolves review findings + merge conflicts
+3. **Merge** — PM merges with `gh pr merge <PR> --squash --delete-branch` when the PR is clean
+4. **Iterate** — if still dirty after fix, PM repeats the fix cycle (max 3 iterations)
 
-The OpenCara GitHub App is installed on this repo with `.opencara.toml` configured (agent_count: 5). When you push and create a PR, the bot automatically dispatches review agents.
-
-1. After creating the PR, run the bot review wait script:
-   ```bash
-   scripts/wait-bot-review.sh <PR_NUMBER>
-   ```
-   The script polls for 20 minutes, then auto-triggers `/opencara review` up to 2 times (5 min wait each). Exit code 0 = review found, exit code 1 = no review after all attempts.
-2. **NEVER merge without at least running the wait script.** If the bot truly cannot review after all attempts (no agents online), document this in the PR and proceed with self-review only.
-
-### Step 2: Fix & Re-review (max 3 iterations)
-
-1. Read the bot review findings posted on the PR
-2. Perform your own review of the diff, combining bot findings with your analysis
-3. Fix all valid issues found (critical, major, minor — not just critical/major)
-4. Run tests, commit, push, and re-review until clean
-5. If no remaining issues → proceed to merge
-
-### Step 3: Pre-merge Verification
-
-**MANDATORY**: Before merging, run the pre-merge check script:
-
-```bash
-scripts/pre-merge-check.sh <PR_NUMBER>
-```
-
-The script merges latest main, runs build + test + lint + format + typecheck, then posts a coverage report to the PR. If any check fails, fix the issue before merging.
-
-### Step 4: Merge
-
-```bash
-gh pr merge <PR_NUMBER> --squash --delete-branch
-```
+Implement agents do NOT wait for bot review, do NOT self-review, and do NOT merge.
 
 ## Auto-Deploy
 

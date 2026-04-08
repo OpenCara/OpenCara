@@ -628,9 +628,37 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 - New dispatch: PM sets Agent field → moves to In progress → status trigger creates implement task
 - Committed directly to main (doc-only changes)
 
+### Status trigger bug (2026-04-07)
+
+- #699 [server-dev, CRITICAL] Fix status trigger: string-to-object comparison never matches — **DONE** (PR #700 merged)
+
 ### CLI improvements (2026-04-07)
 
-- #698 [cli-dev, LOW] Make command test timeout configurable in config.toml — **BACKLOG**
+- #698 [cli-dev, LOW] Make command test timeout configurable in config.toml — **IN PROGRESS** (PR #707 open, bot review posted, /opencara fix triggered 2026-04-07)
+
+### Feature request (2026-04-02)
+
+- #640 [breakdown, P2, L] Add `opencara review <pr-link>` CLI command with user-posted results — **BACKLOG** (user-created, needs breakdown before dispatch)
+
+### Bare clone bug (2026-04-07)
+
+- #701 [cli-dev, CRITICAL] Implement executor fails to detect default branch in bare clone — **DONE** (PR #702 merged 2026-04-07)
+
+### Coordinator feature (2026-04-07)
+
+- #703 [breakdown, P2, L] Add coordinator feature — configurable task orchestration in .opencara.toml — **BACKLOG** (needs design finalization + breakdown before dispatch)
+
+### Implement executor bug (2026-04-07)
+
+- #704 [cli-dev, CRITICAL] Implement executor: prompt delivered via stdin instead of -p argument — **DONE** (PR #706 merged 2026-04-07)
+
+### Spurious task creation bug (2026-04-07)
+
+- #705 [server-dev, MEDIUM] Investigate spurious implement task creation for non-In-Progress issues — **BACKLOG**
+
+### Feature-specific titles (2026-04-07)
+
+- #708 [server-dev, HIGH] Implement/fix results and timeouts should use feature-specific titles — **BACKLOG**
 
 ### Bug fix (2026-04-07)
 
@@ -638,7 +666,7 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Open PRs
 
-(none)
+- PR #707 [cli-dev] Implement #698: Make command test timeout configurable — bot review posted (APPROVE w/ findings), /opencara fix triggered, has merge conflicts
 
 ## Merged PRs (pending processing)
 
@@ -646,6 +674,9 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Recently processed
 
+- PR #706 [cli-dev] merged 2026-04-07 — Fix implement executor prompt delivery via -p (#704)
+- PR #702 [cli-dev] merged 2026-04-07 — Fix bare clone default branch detection (#701)
+- PR #700 [server-dev] merged 2026-04-07 — Fix status trigger string-to-object comparison (#699)
 - PR #697 [server-dev] merged 2026-04-07 — Fix eligibility.ts issue_review fallthrough (#696)
 - PR #695 [server-dev] merged 2026-04-07 — Issue review result synthesis and posting (#689)
 - PR #694 [server-dev] merged 2026-04-07 — Per-task preferred model assignment (#692)

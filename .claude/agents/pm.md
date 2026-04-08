@@ -120,7 +120,7 @@ To check if an item is already processed, scan for `#<number>` in the relevant s
    - Update pm-notebook.md
 
    **New PR** (open, not in pm-notebook.md):
-   - **Agent-created PRs** (title prefixed with `[architect]`, `[server-dev]`, `[cli-dev]`) → no action needed, the dev agent handles its own review and merge
+   - **Implement agent PRs** → orchestrate the review/fix/merge loop (see PR Handling section)
    - **External PRs** (from contributors or manual PRs) → triage and spawn the appropriate dev agent to review, fix, and merge
    - Append to pm-notebook.md
 
@@ -215,8 +215,23 @@ When an issue is unclear, vague, or could go multiple ways:
 
 ## PR Handling
 
-- **Agent-created PRs** (title prefixed with `[architect]`, `[server-dev]`, `[cli-dev]`) → no action needed. Dev agents handle their own self-review and merge.
-- **External PRs** (from contributors or manual PRs) → triage by scope and spawn the appropriate dev agent to review, fix issues, and merge.
+### Implement/Fix PRs (Review/Fix/Merge Loop)
+
+After an implement agent creates a PR, PM orchestrates the review/fix/merge loop:
+
+1. **Detect PR creation** — via `pull_request.opened` webhook or polling
+2. **Wait for bot review** — OpenCara bot automatically reviews the PR (watch for bot review comment)
+3. **Trigger fix agent** — once bot review is posted, comment `/opencara fix` on the PR
+4. **Fix agent resolves** — fixes review findings + merge conflicts → pushes updates
+5. **Check PR status** — verify no remaining review findings, no conflicts, CI passes
+6. **If clean → merge** — `gh pr merge <PR> --squash --delete-branch`
+7. **If still dirty → repeat** from step 3 (max 3 iterations)
+
+After merging, move the related issue to **Done** on the project board and close it.
+
+### External PRs
+
+External PRs (from contributors or manual PRs) → triage by scope and spawn the appropriate dev agent to review, fix issues, and merge.
 
 ## Re-triage
 
@@ -258,7 +273,8 @@ PM manages issue lifecycle status via the GitHub Project board (project #1, owne
 New issue → Backlog (ALL new ideas, proposals, and features go here by default)
 Backlog → Ready (ONLY the team lead can make this transition — PM must wait)
 Ready → In progress (PM dispatches — moving here triggers implement agent automatically)
-In progress → Done (when implement agent merges PR)
+In progress → In review (implement agent creates PR, PM orchestrates review/fix/merge loop)
+In review → Done (PM merges PR after review/fix loop is clean)
 In progress → Ready (if implement agent fails or needs re-triage)
 Done → (closed)
 ```
@@ -409,7 +425,7 @@ When no events need processing and agents are working, PM should use idle time p
 ## Guidelines
 
 - Do NOT implement code — only plan, design, breakdown, triage, dispatch, and track
-- Do NOT merge PRs — implement agents handle their own merges after self-review
+- PM merges PRs after the review/fix loop is clean — implement agents do NOT merge
 - Write detailed implementation specs in issues so agents can execute without ambiguity
 - Include specific file paths, function names, data values in specs
 - Log all decisions (triage rationale, design choices, breakdown reasoning)
