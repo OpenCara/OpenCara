@@ -1107,6 +1107,136 @@ describe('MemoryDataStore', () => {
     });
   });
 
+  describe('deleteActiveTasksByIssueAndFeature', () => {
+    it('deletes pending and reviewing tasks for matching issue+feature', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'pending',
+          feature: 'implement',
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 't2',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'reviewing',
+          feature: 'implement',
+        }),
+      );
+      const deleted = await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 5, 'implement');
+      expect(deleted).toBe(2);
+      expect(await store.getTask('t1')).toBeNull();
+      expect(await store.getTask('t2')).toBeNull();
+    });
+
+    it('skips completed/failed/timeout tasks', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'completed',
+          feature: 'implement',
+        }),
+      );
+      const deleted = await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 5, 'implement');
+      expect(deleted).toBe(0);
+      expect(await store.getTask('t1')).not.toBeNull();
+    });
+
+    it('skips tasks with different feature', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'pending',
+          feature: 'review',
+        }),
+      );
+      const deleted = await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 5, 'implement');
+      expect(deleted).toBe(0);
+      expect(await store.getTask('t1')).not.toBeNull();
+    });
+
+    it('skips tasks with different issue number', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 99,
+          status: 'pending',
+          feature: 'implement',
+        }),
+      );
+      const deleted = await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 5, 'implement');
+      expect(deleted).toBe(0);
+      expect(await store.getTask('t1')).not.toBeNull();
+    });
+
+    it('does not delete PR tasks that have an issue_number', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 10,
+          issue_number: 5,
+          status: 'pending',
+          feature: 'implement',
+        }),
+      );
+      const deleted = await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 5, 'implement');
+      expect(deleted).toBe(0);
+      expect(await store.getTask('t1')).not.toBeNull();
+    });
+
+    it('deletes associated claims', async () => {
+      await store.createTask(
+        makeTask({
+          id: 't1',
+          owner: 'org',
+          repo: 'repo',
+          pr_number: 0,
+          issue_number: 5,
+          status: 'reviewing',
+          feature: 'implement',
+        }),
+      );
+      await store.createClaim(
+        makeClaim({
+          id: 't1:agent-1:summary',
+          task_id: 't1',
+          agent_id: 'agent-1',
+          role: 'summary',
+        }),
+      );
+      const deleted = await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 5, 'implement');
+      expect(deleted).toBe(1);
+      expect(await store.getClaim('t1:agent-1:summary')).toBeNull();
+    });
+
+    it('returns 0 for no matching tasks', async () => {
+      expect(await store.deleteActiveTasksByIssueAndFeature('org', 'repo', 999, 'implement')).toBe(
+        0,
+      );
+    });
+  });
+
   describe('completeWorkerAndMaybeCreateSummary', () => {
     it('creates summary when all workers are completed', async () => {
       // Two review worker tasks in the same group

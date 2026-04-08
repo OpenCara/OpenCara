@@ -1945,6 +1945,23 @@ async function handleGoCommand(
     created_at: Date.now(),
   };
 
+  // Clean up any stale active tasks for this issue+feature so the dedup guard
+  // doesn't block re-triggering after a local agent failure.
+  const cleaned = await store.deleteActiveTasksByIssueAndFeature(
+    owner,
+    repo,
+    issueNumber,
+    'implement',
+  );
+  if (cleaned > 0) {
+    logger.info('Cleaned up stale implement tasks before re-trigger', {
+      owner,
+      repo,
+      issueNumber,
+      cleaned,
+    });
+  }
+
   try {
     await createTaskGroup(store, 'implement', implementConfig, baseTask, logger, {
       issue_number: issue.number,
@@ -2603,6 +2620,23 @@ async function handleIssueLabelTrigger(
         config: implementTaskConfig,
       };
 
+    // Clean up any stale active tasks for this issue+feature so the dedup guard
+    // doesn't block re-triggering after a local agent failure.
+    const implCleaned = await store.deleteActiveTasksByIssueAndFeature(
+      owner,
+      repo,
+      issue.number,
+      'implement',
+    );
+    if (implCleaned > 0) {
+      logger.info('Cleaned up stale implement tasks before label re-trigger', {
+        owner,
+        repo,
+        issueNumber: issue.number,
+        cleaned: implCleaned,
+      });
+    }
+
     const groupId = await createTaskGroup(
       store,
       'implement',
@@ -2895,6 +2929,23 @@ async function handleProjectsV2Item(
       config: implementTaskConfig,
       created_at: Date.now(),
     };
+
+    // Clean up any stale active tasks for this issue+feature so the dedup guard
+    // doesn't block re-triggering after a local agent failure.
+    const cleaned = await store.deleteActiveTasksByIssueAndFeature(
+      owner,
+      repo,
+      number,
+      'implement',
+    );
+    if (cleaned > 0) {
+      logger.info('Cleaned up stale implement tasks before status re-trigger', {
+        owner,
+        repo,
+        issueNumber: number,
+        cleaned,
+      });
+    }
 
     try {
       await createTaskGroup(store, 'implement', implementConfig, baseTask, logger, {

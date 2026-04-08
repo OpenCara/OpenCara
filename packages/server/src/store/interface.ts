@@ -48,6 +48,13 @@ export interface DataStore {
   deletePendingTasksByPr(owner: string, repo: string, prNumber: number): Promise<number>;
   /** Delete all pending tasks for a given issue. Returns number of deleted tasks. */
   deletePendingTasksByIssue(owner: string, repo: string, issueNumber: number): Promise<number>;
+  /** Delete all active (pending/reviewing) tasks for a given issue and feature. Returns number deleted. */
+  deleteActiveTasksByIssueAndFeature(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    feature: string,
+  ): Promise<number>;
 
   // Claims — createClaim returns false if (task_id, agent_id) already exists
   createClaim(claim: TaskClaim): Promise<boolean>;

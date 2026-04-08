@@ -410,6 +410,23 @@ export class D1DataStore implements DataStore {
     return result.meta?.changes ?? 0;
   }
 
+  async deleteActiveTasksByIssueAndFeature(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    feature: string,
+  ): Promise<number> {
+    // Claims are deleted via ON DELETE CASCADE.
+    // Only delete issue-scoped tasks (pr_number = 0 means issue-only).
+    const result = await this.db
+      .prepare(
+        `DELETE FROM tasks WHERE owner = ? AND repo = ? AND issue_number = ? AND pr_number = ? AND feature = ? AND status IN (?, ?)`,
+      )
+      .bind(owner, repo, issueNumber, 0, feature, 'pending', 'reviewing')
+      .run();
+    return result.meta?.changes ?? 0;
+  }
+
   // ── Claims ─────────────────────────────────────────────────────
 
   async createClaim(claim: TaskClaim): Promise<boolean> {

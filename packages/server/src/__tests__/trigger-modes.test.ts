@@ -1723,6 +1723,61 @@ describe('Unified trigger modes', () => {
     });
   });
 
+  // ── Re-trigger after stale task ──────────────────────────
+
+  describe('Re-trigger cleans up stale tasks', () => {
+    it('go command re-creates implement task when prior task is stuck reviewing', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+
+      // First trigger: create a task via go command
+      await sendWebhook(app, 'issue_comment', makeIssueCommentPayload('/opencara go'), env);
+      let tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+
+      // Simulate agent claiming the task (status → reviewing)
+      await store.updateTask(tasks[0].id, { status: 'reviewing' });
+
+      // Re-trigger: go command should clean up the stale task and create a new one
+      await sendWebhook(app, 'issue_comment', makeIssueCommentPayload('/opencara go'), env);
+      tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+      expect(tasks[0].status).toBe('pending');
+    });
+
+    it('status trigger re-creates implement task when prior task is stuck reviewing', async () => {
+      github.openCaraConfig = {
+        version: 1,
+        implement: DEFAULT_IMPLEMENT_CONFIG,
+      };
+      github.resolveProjectItemResult = {
+        type: 'Issue',
+        owner: 'acme',
+        repo: 'widget',
+        number: 10,
+      };
+      github.projectFieldValues['Status'] = 'Ready';
+
+      // First trigger
+      await sendWebhook(app, 'projects_v2_item', makeProjectsV2ItemPayload('Ready'), env);
+      let tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+
+      // Simulate agent claiming the task (status → reviewing)
+      await store.updateTask(tasks[0].id, { status: 'reviewing' });
+
+      // Re-trigger: status trigger should clean up and create a new task
+      await sendWebhook(app, 'projects_v2_item', makeProjectsV2ItemPayload('Ready'), env);
+      tasks = await store.listTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].feature).toBe('implement');
+      expect(tasks[0].status).toBe('pending');
+    });
+  });
+
   // ── All triggers together ─────────────────────────────────
 
   describe('All triggers work together', () => {
