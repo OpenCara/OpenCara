@@ -21,7 +21,7 @@ export function isTriageRole(role: TaskRole): boolean {
 }
 
 /** Feature pipeline — which feature spawned this task group */
-export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage';
+export type Feature = 'review' | 'dedup_pr' | 'dedup_issue' | 'triage' | 'go' | 'fix';
 
 /**
  * @deprecated Use TaskRole instead. Kept for backward compatibility during migration.

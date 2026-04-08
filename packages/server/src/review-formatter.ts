@@ -1,6 +1,23 @@
-import type { ReviewVerdict } from '@opencara/shared';
+import type { Feature, ReviewVerdict } from '@opencara/shared';
 
-const REVIEW_HEADER = '## OpenCara Review';
+const FEATURE_HEADERS: Record<Feature, string> = {
+  review: '## OpenCara Review',
+  go: '## OpenCara Go',
+  fix: '## OpenCara Fix',
+  dedup_pr: '## OpenCara Review',
+  dedup_issue: '## OpenCara Review',
+  triage: '## OpenCara Review',
+};
+
+const FEATURE_TIMEOUT_LABELS: Record<Feature, string> = {
+  review: 'Review',
+  go: 'Go',
+  fix: 'Fix',
+  dedup_pr: 'Review',
+  dedup_issue: 'Review',
+  triage: 'Review',
+};
+
 const REVIEW_FOOTER =
   '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>';
 
@@ -24,26 +41,37 @@ export interface TimeoutReview {
  * Used for normal review comments posted to GitHub.
  * If contributors are provided, adds "Contributors: @user1, @user2" to the header.
  */
-export function wrapReviewComment(reviewText: string, contributors?: string[]): string {
+export function wrapReviewComment(
+  reviewText: string,
+  contributors?: string[],
+  feature?: Feature,
+): string {
+  const header = FEATURE_HEADERS[feature ?? 'review'];
   const contributorLine =
     contributors && contributors.length > 0
       ? `\n**Contributors**: ${contributors.map((c) => `@${c}`).join(', ')}\n`
       : '';
-  return `${REVIEW_HEADER}\n${contributorLine}\n${reviewText}\n\n---\n${REVIEW_FOOTER}`;
+  return `${header}\n${contributorLine}\n${reviewText}\n\n---\n${REVIEW_FOOTER}`;
 }
 
 /**
  * Format a consolidated timeout comment containing all partial reviews
  * and the timeout message in a single GitHub comment.
  */
-export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutReview[]): string {
-  const parts: string[] = [REVIEW_HEADER, ''];
+export function formatTimeoutComment(
+  timeoutMinutes: number,
+  reviews: TimeoutReview[],
+  feature?: Feature,
+): string {
+  const header = FEATURE_HEADERS[feature ?? 'review'];
+  const label = FEATURE_TIMEOUT_LABELS[feature ?? 'review'];
+  const parts: string[] = [header, ''];
 
   if (reviews.length === 0) {
-    parts.push(`> Review timed out after ${timeoutMinutes} minutes.`);
+    parts.push(`> ${label} timed out after ${timeoutMinutes} minutes.`);
   } else {
     parts.push(
-      `> Review timed out after ${timeoutMinutes} minutes. ${reviews.length} partial review(s) collected.`,
+      `> ${label} timed out after ${timeoutMinutes} minutes. ${reviews.length} partial review(s) collected.`,
     );
 
     for (let i = 0; i < reviews.length; i++) {

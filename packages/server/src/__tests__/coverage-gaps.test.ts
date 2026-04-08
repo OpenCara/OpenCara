@@ -118,6 +118,65 @@ describe('review-formatter edge cases', () => {
     expect(result).toContain('LGTM');
     expect(result).toContain('<sub>Reviewed by');
   });
+
+  it('wrapReviewComment uses "OpenCara Go" header for go feature', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('Implementation looks good.', undefined, 'go');
+    expect(result).toContain('## OpenCara Go');
+    expect(result).not.toContain('## OpenCara Review');
+    expect(result).toContain('Implementation looks good.');
+    expect(result).toContain('<sub>Reviewed by');
+  });
+
+  it('wrapReviewComment uses "OpenCara Fix" header for fix feature', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('Fix applied.', undefined, 'fix');
+    expect(result).toContain('## OpenCara Fix');
+    expect(result).not.toContain('## OpenCara Review');
+    expect(result).toContain('Fix applied.');
+    expect(result).toContain('<sub>Reviewed by');
+  });
+
+  it('wrapReviewComment defaults to "OpenCara Review" when no feature specified', async () => {
+    const { wrapReviewComment } = await import('../review-formatter.js');
+    const result = wrapReviewComment('LGTM');
+    expect(result).toContain('## OpenCara Review');
+  });
+
+  it('formatTimeoutComment uses "Go timed out" for go feature', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(15, [], 'go');
+    expect(result).toContain('## OpenCara Go');
+    expect(result).toContain('> Go timed out after 15 minutes.');
+    expect(result).not.toContain('Review timed out');
+  });
+
+  it('formatTimeoutComment uses "Fix timed out" for fix feature', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(20, [], 'fix');
+    expect(result).toContain('## OpenCara Fix');
+    expect(result).toContain('> Fix timed out after 20 minutes.');
+    expect(result).not.toContain('Review timed out');
+  });
+
+  it('formatTimeoutComment uses "Review timed out" for review feature', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(10, [], 'review');
+    expect(result).toContain('## OpenCara Review');
+    expect(result).toContain('> Review timed out after 10 minutes.');
+  });
+
+  it('formatTimeoutComment with partial reviews uses feature-specific header and label', async () => {
+    const { formatTimeoutComment } = await import('../review-formatter.js');
+    const result = formatTimeoutComment(
+      15,
+      [{ model: 'claude', tool: 'cli', verdict: 'approve', review_text: 'Partial' }],
+      'go',
+    );
+    expect(result).toContain('## OpenCara Go');
+    expect(result).toContain('> Go timed out after 15 minutes. 1 partial review(s) collected.');
+    expect(result).not.toContain('Review timed out');
+  });
 });
 
 // ── github/config.ts ─────────────────────────────────────────

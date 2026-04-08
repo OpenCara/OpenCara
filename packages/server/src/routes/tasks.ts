@@ -240,7 +240,7 @@ export async function checkTimeouts(
       try {
         const token = await github.getInstallationToken(task.github_installation_id);
         const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
-        const body = formatTimeoutComment(timeoutMinutes, allReviews);
+        const body = formatTimeoutComment(timeoutMinutes, allReviews, task.feature);
         await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
         await store.deleteTasksByGroup(task.group_id);
       } catch (err) {
@@ -277,7 +277,7 @@ export async function checkTimeouts(
           review_text: claim.review_text!,
         }));
 
-        const body = formatTimeoutComment(timeoutMinutes, reviews);
+        const body = formatTimeoutComment(timeoutMinutes, reviews, task.feature);
         await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
         await store.deleteTask(task.id);
@@ -335,7 +335,11 @@ async function handleReviewSummaryResult(
   }
 
   const token = await github.getInstallationToken(task.github_installation_id);
-  const body = wrapReviewComment(trimmed, contributors.length > 0 ? contributors : undefined);
+  const body = wrapReviewComment(
+    trimmed,
+    contributors.length > 0 ? contributors : undefined,
+    task.feature,
+  );
   await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
   logger.info('Review posted to GitHub', {
@@ -359,7 +363,7 @@ async function handleDedupSummaryResult(
   logger: Logger,
 ): Promise<void> {
   const token = await github.getInstallationToken(task.github_installation_id);
-  const commentBody = wrapReviewComment(reviewText.trim());
+  const commentBody = wrapReviewComment(reviewText.trim(), undefined, task.feature);
 
   if (task.task_type === 'pr_dedup' && task.pr_number > 0) {
     // Post comment on the PR
@@ -453,7 +457,11 @@ async function handleTriageSummaryResult(
       });
     } else {
       // Post comment on the issue
-      const commentBody = wrapReviewComment(triageReport.comment || reviewText.trim());
+      const commentBody = wrapReviewComment(
+        triageReport.comment || reviewText.trim(),
+        undefined,
+        task.feature,
+      );
       await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
 
       // Apply labels if configured
@@ -475,7 +483,7 @@ async function handleTriageSummaryResult(
     }
   } else {
     // No structured report — just post review text as a comment
-    const commentBody = wrapReviewComment(reviewText.trim());
+    const commentBody = wrapReviewComment(reviewText.trim(), undefined, task.feature);
     await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
     logger.info('Triage fallback comment posted', {
       taskId: task.id,
@@ -506,7 +514,7 @@ async function postFallbackConsolidatedReview(
       review_text: c.review_text!,
     }));
 
-    const body = formatTimeoutComment(timeoutMinutes, reviews);
+    const body = formatTimeoutComment(timeoutMinutes, reviews, task.feature);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     logger.info('Fallback consolidated review posted', {
