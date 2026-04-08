@@ -134,6 +134,17 @@ describe('repo-cache', () => {
       expect(args).toContain('fetch');
       expect(args).not.toContain('-c');
     });
+
+    it('force-updates refs/heads/main to prevent stale branch base', () => {
+      vi.mocked(execFileSync).mockReturnValue('');
+
+      fetchPRRef('/tmp/repos/acme/widgets.git', 42, true);
+
+      const call = vi.mocked(execFileSync).mock.calls[0];
+      const args = call[1] as string[];
+      expect(args).toContain('main:refs/heads/main');
+      expect(args).toContain('--force');
+    });
   });
 
   describe('addWorktree', () => {
@@ -342,8 +353,9 @@ describe('repo-cache', () => {
       // Verify bare clone
       expect(calls[1][1]).toContain('--bare');
 
-      // Verify fetch
+      // Verify fetch includes both PR ref and main force-update
       expect(calls[2][1]).toContain('pull/42/head');
+      expect(calls[2][1]).toContain('main:refs/heads/main');
 
       // Verify worktree add
       expect(calls[3][1]).toContain('worktree');

@@ -96,14 +96,20 @@ export function ensureBareClone(
 }
 
 /**
- * Fetch a PR ref into the bare repo.
+ * Fetch a PR ref into the bare repo and force-update refs/heads/main.
+ *
+ * In a bare clone, `git fetch origin` does NOT update refs/heads/main when
+ * another worktree has that branch checked out. Explicitly fetching
+ * `main:refs/heads/main` with --force ensures new branches always start
+ * from the latest remote main, preventing stale-base merge conflicts.
+ *
  * Uses credential helper when gh is available.
  */
 export function fetchPRRef(bareRepoPath: string, prNumber: number, ghAvailable: boolean): void {
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
   gitExec(
     'git',
-    [...credArgs, 'fetch', '--force', 'origin', `pull/${prNumber}/head`],
+    [...credArgs, 'fetch', '--force', 'origin', 'main:refs/heads/main', `pull/${prNumber}/head`],
     bareRepoPath,
   );
 }
