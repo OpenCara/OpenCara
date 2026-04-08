@@ -146,14 +146,10 @@ describe('parseReviewConfig (legacy backward compat)', () => {
   });
 
   it('accepts any positive timeout', () => {
-    const r1 = parseReviewConfig(
-      'version = 1\nprompt = "test"\ntimeout = "60m"',
-    ) as ReviewConfig;
+    const r1 = parseReviewConfig('version = 1\nprompt = "test"\ntimeout = "60m"') as ReviewConfig;
     expect(r1.timeout).toBe('60m');
 
-    const r2 = parseReviewConfig(
-      'version = 1\nprompt = "test"\ntimeout = "240m"',
-    ) as ReviewConfig;
+    const r2 = parseReviewConfig('version = 1\nprompt = "test"\ntimeout = "240m"') as ReviewConfig;
     expect(r2.timeout).toBe('240m');
   });
 

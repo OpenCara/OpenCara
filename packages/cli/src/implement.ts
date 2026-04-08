@@ -528,7 +528,13 @@ export async function executeImplementTask(
 
     // Step 4: Create PR
     logger.log('  Creating pull request...');
-    const pr = gitOps.createPR(worktreePath, issueNumber, issueTitle, aiResult.output.summary, branchName);
+    const pr = gitOps.createPR(
+      worktreePath,
+      issueNumber,
+      issueTitle,
+      aiResult.output.summary,
+      branchName,
+    );
     logger.log(`  PR #${pr.prNumber} created: ${pr.prUrl}`);
 
     // Step 5: Submit result to server
