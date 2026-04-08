@@ -235,9 +235,13 @@ export function checkoutForImplement(
     }
   }
 
-  // Fetch latest default branch
+  // Fetch latest and force-update local refs (bare clones need explicit refspec
+  // to update refs/heads/* when worktrees hold the branch)
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
-  gitExec([...credArgs, 'fetch', '--force', 'origin'], bareRepoPath);
+  gitExec(
+    [...credArgs, 'fetch', '--force', 'origin', '+refs/heads/*:refs/heads/*'],
+    bareRepoPath,
+  );
 
   // Determine default branch (usually main or master).
   // In bare clones, refs live under refs/heads/ (not refs/remotes/origin/).
