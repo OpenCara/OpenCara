@@ -133,4 +133,42 @@ describe('testCommand', () => {
     // Should resolve (not reject)
     await expect(promise).resolves.toBeDefined();
   });
+
+  it('accepts custom timeout parameter', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = testCommand('echo test', 30_000);
+
+    emitOutput(child, { stdout: 'OK', code: 0 });
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
+
+  it('reports custom timeout in error message', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = testCommand('slow-tool', 30_000);
+
+    emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('30s');
+  });
+
+  it('uses default 10s timeout when not specified', async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = testCommand('slow-tool');
+
+    emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('10s');
+  });
 });

@@ -1227,6 +1227,7 @@ export async function startAgent(
   options?: {
     pollIntervalMs?: number;
     maxConsecutiveErrors?: number;
+    commandTestTimeoutMs?: number;
     routerRelay?: RouterRelay;
     reviewOnly?: boolean;
     repoConfig?: RepoConfig;
@@ -1285,7 +1286,7 @@ export async function startAgent(
   // Skip in router mode (stdin/stdout relay) since there's no local command to test.
   if (reviewDeps.commandTemplate && !options?.routerRelay) {
     log('Testing command...');
-    const result = await testCommand(reviewDeps.commandTemplate);
+    const result = await testCommand(reviewDeps.commandTemplate, options?.commandTestTimeoutMs);
     if (result.ok) {
       log(`${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
     } else {
@@ -1427,6 +1428,7 @@ export async function startAgentRouter(): Promise<void> {
     },
     {
       maxConsecutiveErrors: config.maxConsecutiveErrors,
+      commandTestTimeoutMs: config.commandTestTimeoutMs,
       routerRelay: router,
       reviewOnly: agentConfig?.review_only,
       repoConfig: agentConfig?.repos,
@@ -1526,6 +1528,7 @@ function startAgentByIndex(
       {
         pollIntervalMs,
         maxConsecutiveErrors: config.maxConsecutiveErrors,
+        commandTestTimeoutMs: config.commandTestTimeoutMs,
         routerRelay,
         reviewOnly: agentConfig?.review_only,
         repoConfig: agentConfig?.repos,

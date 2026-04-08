@@ -31,6 +31,7 @@ export interface CliConfig {
   platformUrl: string;
   maxDiffSizeKb: number;
   maxConsecutiveErrors: number;
+  commandTestTimeoutMs: number;
   codebaseDir: string | null;
   codebaseTtl: string | null;
   agentCommand: string | null;
@@ -52,6 +53,39 @@ export function ensureConfigDir(): void {
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
+export const DEFAULT_COMMAND_TEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Parse a duration string into milliseconds.
+ * Supports: "10s", "30s", "1m", "2m", plain number-string as seconds.
+ */
+export function parseDuration(value: string, fieldName: string = 'duration'): number {
+  const trimmed = value.trim();
+
+  const match = trimmed.match(/^(\d+)\s*(ms|s|m)$/);
+  if (match) {
+    const num = parseInt(match[1], 10);
+    switch (match[2]) {
+      case 'ms':
+        return num;
+      case 's':
+        return num * 1000;
+      case 'm':
+        return num * 60 * 1000;
+      default:
+        throw new Error(`Unreachable: unhandled unit "${match[2]}"`);
+    }
+  }
+
+  // Plain number = seconds (must be all digits)
+  if (/^\d+$/.test(trimmed)) {
+    return parseInt(trimmed, 10) * 1000;
+  }
+
+  throw new ConfigValidationError(
+    `Invalid ${fieldName}: "${value}". Use "10s", "30s", "1m", etc.`,
+  );
+}
 
 const VALID_REPO_MODES: RepoFilterMode[] = ['public', 'private', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
@@ -301,6 +335,7 @@ export function loadConfig(): CliConfig {
     platformUrl: envPlatformUrl || DEFAULT_PLATFORM_URL,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+    commandTestTimeoutMs: DEFAULT_COMMAND_TEST_TIMEOUT_MS,
     codebaseDir: null,
     codebaseTtl: null,
     agentCommand: null,
@@ -363,6 +398,10 @@ export function loadConfig(): CliConfig {
       (typeof data.max_consecutive_errors === 'number'
         ? data.max_consecutive_errors
         : DEFAULT_MAX_CONSECUTIVE_ERRORS),
+    commandTestTimeoutMs:
+      typeof data.command_test_timeout === 'string'
+        ? parseDuration(data.command_test_timeout, 'command_test_timeout')
+        : DEFAULT_COMMAND_TEST_TIMEOUT_MS,
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     codebaseTtl: typeof data.codebase_ttl === 'string' ? data.codebase_ttl : null,
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
@@ -391,6 +430,15 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxConsecutiveErrors !== DEFAULT_MAX_CONSECUTIVE_ERRORS) {
     data.max_consecutive_errors = config.maxConsecutiveErrors;
+  }
+  if (config.commandTestTimeoutMs !== DEFAULT_COMMAND_TEST_TIMEOUT_MS) {
+    // Convert back to human-readable duration string for TOML
+    const ms = config.commandTestTimeoutMs;
+    if (ms % 60_000 === 0) {
+      data.command_test_timeout = `${ms / 60_000}m`;
+    } else {
+      data.command_test_timeout = `${ms / 1000}s`;
+    }
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;
