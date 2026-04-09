@@ -1670,6 +1670,11 @@ export async function batchPollLoop(
   let consecutiveErrors = 0;
   let pollCycleCount = 0;
 
+  // Track agents currently executing a task so we don't assign them a second one
+  const busyAgents = new Set<BatchAgentState>();
+  // Track in-flight task promises so we can await them on shutdown
+  const inflightPromises = new Set<Promise<void>>();
+
   while (!signal?.aborted) {
     // Periodic repo access re-check
     if (
@@ -1737,17 +1742,23 @@ export async function batchPollLoop(
     }
 
     try {
-      // Build and send batch poll request
-      const descriptors = agentStates.map((s) => s.descriptor);
+      // Only poll for agents that are not currently handling a task
+      const availableStates = agentStates.filter((s) => !busyAgents.has(s));
+      if (availableStates.length === 0) {
+        await sleep(pollIntervalMs, signal);
+        continue;
+      }
+
+      // Build and send batch poll request for available agents only
+      const descriptors = availableStates.map((s) => s.descriptor);
       const request = buildBatchPollRequest(descriptors);
       const response = await client.post<BatchPollResponse>('/api/tasks/poll/batch', request);
 
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
 
-      // Dispatch tasks to per-agent workers
-      const handlePromises: Promise<void>[] = [];
-      for (const state of agentStates) {
+      // Dispatch tasks to per-agent workers (fire-and-forget — no synchronization barrier)
+      for (const state of availableStates) {
         const agentName = state.descriptor.name;
         const pollResponse = response.assignments[agentName];
         if (!pollResponse || pollResponse.tasks.length === 0) continue;
@@ -1765,9 +1776,11 @@ export async function batchPollLoop(
         const task = eligible[0];
         if (!task) continue;
 
-        // Dispatch task to the agent worker
-        handlePromises.push(
-          (async () => {
+        // Mark agent busy and dispatch task in the background so other agents
+        // can start immediately — no waiting for this agent to finish.
+        busyAgents.add(state);
+        const p: Promise<void> = (async () => {
+          try {
             const result = await handleTask(
               client,
               state.descriptor.agentId,
@@ -1796,35 +1809,29 @@ export async function batchPollLoop(
                 );
               }
             }
-          })(),
-        );
-      }
-
-      // Wait for all task handlers to complete before next poll
-      if (handlePromises.length > 0) {
-        const results = await Promise.allSettled(handlePromises);
-        for (const r of results) {
-          if (r.status === 'rejected') {
-            logError(`${icons.error} Task handler failed: ${r.reason}`);
+          } catch (err) {
+            logError(`${icons.error} Task handler failed: ${(err as Error).message}`);
             consecutiveErrors++;
-          }
-        }
-      }
-
-      // Sweep deferred codebase cleanups for all agents (in parallel)
-      // sweep() is internally fault-tolerant (re-queues failures), safe with allSettled
-      await Promise.allSettled(
-        agentStates
-          .filter((state) => state.cleanupTracker)
-          .map(async (state) => {
-            const swept = await state.cleanupTracker!.sweep(cleanupWorktree);
-            if (swept > 0) {
-              state.logger.log(
-                `${icons.info} Cleaned up ${swept} stale codebase director${swept === 1 ? 'y' : 'ies'}`,
-              );
+          } finally {
+            busyAgents.delete(state);
+            // Sweep deferred codebase cleanups for this agent on task completion
+            if (state.cleanupTracker) {
+              try {
+                const swept = await state.cleanupTracker.sweep(cleanupWorktree);
+                if (swept > 0) {
+                  state.logger.log(
+                    `${icons.info} Cleaned up ${swept} stale codebase director${swept === 1 ? 'y' : 'ies'}`,
+                  );
+                }
+              } catch {
+                // cleanup is best-effort
+              }
             }
-          }),
-      );
+          }
+        })();
+        inflightPromises.add(p);
+        void p.finally(() => inflightPromises.delete(p));
+      }
     } catch (err) {
       if (signal?.aborted) break;
 
@@ -1875,6 +1882,12 @@ export async function batchPollLoop(
     }
 
     await sleep(pollIntervalMs, signal);
+  }
+
+  // Wait for any in-flight tasks to complete before returning
+  if (inflightPromises.size > 0) {
+    log(`${icons.info} Waiting for ${inflightPromises.size} in-flight task(s) to complete...`);
+    await Promise.allSettled([...inflightPromises]);
   }
 }
 
