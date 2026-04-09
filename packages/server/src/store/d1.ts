@@ -624,9 +624,7 @@ export class D1DataStore implements DataStore {
     if (total === 0 || completed < total) return false;
 
     const activeSummary = await this.db
-      .prepare(
-        `SELECT 1 FROM tasks WHERE group_id = ? AND task_type = ? AND status IN (?, ?)`,
-      )
+      .prepare(`SELECT 1 FROM tasks WHERE group_id = ? AND task_type = ? AND status IN (?, ?)`)
       .bind(summaryTask.group_id, 'summary', 'pending', 'reviewing')
       .first();
 

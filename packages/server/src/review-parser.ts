@@ -38,7 +38,9 @@ export function parseStructuredReview(text: string): ParsedReview {
   const comments: ReviewComment[] = [];
 
   // Extract ## Verdict section
-  const verdictMatch = text.match(/##\s*Verdict\s*\n+\s*\*{0,3}(APPROVE|REQUEST_CHANGES|COMMENT)\b/im);
+  const verdictMatch = text.match(
+    /##\s*Verdict\s*\n+\s*\*{0,3}(APPROVE|REQUEST_CHANGES|COMMENT)\b/im,
+  );
   const verdict: ReviewVerdict | null = verdictMatch
     ? (verdictMatch[1].toLowerCase() as ReviewVerdict)
     : null;
