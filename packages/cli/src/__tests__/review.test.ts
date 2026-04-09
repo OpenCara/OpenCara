@@ -281,6 +281,33 @@ describe('extractVerdict', () => {
     expect(verdict).toBe('approve');
   });
 
+  it('handles bold-formatted verdict (**APPROVE**)', () => {
+    const text = '## Summary\nOK.\n\n## Verdict\n\n**APPROVE**';
+    const { verdict, review } = extractVerdict(text);
+    expect(verdict).toBe('approve');
+    expect(review).not.toContain('## Verdict');
+  });
+
+  it('handles bold-formatted REQUEST_CHANGES', () => {
+    const { verdict } = extractVerdict('Some review.\n\n## Verdict\n**REQUEST_CHANGES**');
+    expect(verdict).toBe('request_changes');
+  });
+
+  it('handles lowercase verdict (approve)', () => {
+    const { verdict } = extractVerdict('Some review.\n\n## Verdict\napprove');
+    expect(verdict).toBe('approve');
+  });
+
+  it('handles italic verdict (*COMMENT*)', () => {
+    const { verdict } = extractVerdict('Some review.\n\n## Verdict\n*COMMENT*');
+    expect(verdict).toBe('comment');
+  });
+
+  it('handles bold-italic verdict (***APPROVE***)', () => {
+    const { verdict } = extractVerdict('Some review.\n\n## Verdict\n***APPROVE***');
+    expect(verdict).toBe('approve');
+  });
+
   it('handles blocking issues with mixed case', () => {
     const text = '## Summary\nOK.\n\n## Blocking issues\nYes\n\n## Review confidence\nLow';
     const { verdict } = extractVerdict(text);

@@ -634,7 +634,7 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ### CLI improvements (2026-04-07)
 
-- #698 [cli-dev, LOW] Make command test timeout configurable in config.toml — **IN PROGRESS** (PR #707 open, bot review posted, /opencara fix triggered 2026-04-07)
+- #698 [cli-dev, LOW] Make command test timeout configurable in config.toml — **READY** (PR #707 closed — stale main/conflicts, will re-trigger after prod deploy)
 
 ### Feature request (2026-04-02)
 
@@ -654,11 +654,16 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ### Spurious task creation bug (2026-04-07)
 
-- #705 [server-dev, MEDIUM] Investigate spurious implement task creation for non-In-Progress issues — **BACKLOG**
+- #705 [server-dev, HIGH/CRITICAL] Spurious implement task creation for non-In-Progress issues — **DONE** (PR #712 merged 2026-04-07, board→Done, closed)
+  - Spurious PRs closed: #709 (for #708), #711 (for #710)
 
 ### Feature-specific titles (2026-04-07)
 
 - #708 [server-dev, HIGH] Implement/fix results and timeouts should use feature-specific titles — **BACKLOG**
+
+### Stale main in bare clone (2026-04-07)
+
+- #710 [cli-dev, HIGH] Implement checkout creates branch from stale main in bare clone — **BACKLOG** (added to board 2026-04-07)
 
 ### Bug fix (2026-04-07)
 
@@ -666,11 +671,11 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ## Open PRs
 
-- PR #707 [cli-dev] Implement #698: Make command test timeout configurable — bot review posted (APPROVE w/ findings), /opencara fix triggered, has merge conflicts
+(none)
 
 ## Merged PRs (pending processing)
 
-(none)
+- PR #712 [server-dev] merged 2026-04-07 — Fix spurious implement task creation (#705)
 
 ## Recently processed
 

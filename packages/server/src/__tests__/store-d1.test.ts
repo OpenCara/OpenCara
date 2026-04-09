@@ -1313,11 +1313,7 @@ describe('D1DataStore', () => {
     });
   });
 
-  // NOTE: completeWorkerAndMaybeCreateSummary uses INSERT...SELECT which the
-  // MockD1Database cannot parse. These tests live in sqlite-adapter.test.ts
-  // which uses real SQLite for accurate SQL execution.
-
-  describe.skip('completeWorkerAndMaybeCreateSummary (see sqlite-adapter.test.ts)', () => {
+  describe('completeWorkerAndMaybeCreateSummary', () => {
     it('creates summary when all workers are completed', async () => {
       await store.createTask(
         makeTask({ id: 'w1', group_id: 'grp-1', task_type: 'review', status: 'completed' }),

@@ -594,46 +594,56 @@ export class D1DataStore implements DataStore {
     workerTaskId: string,
     summaryTask: ReviewTask,
   ): Promise<boolean> {
-    // Use D1 batch to run both statements in a single transaction.
-    // The INSERT...SELECT atomically checks that all review-type tasks in the
-    // group are completed AND no active summary task already exists before
-    // inserting. This prevents the race where concurrent result submissions
-    // could both miss or both create the summary task.
-    const updateStmt = this.db
-      .prepare(`UPDATE tasks SET status = 'completed' WHERE id = ?`)
-      .bind(workerTaskId);
+    // Step 1: Mark the worker as completed first.
+    // Done as a separate statement (not batched with the count check) so the
+    // count check below sees the updated status. D1 batch statements share a
+    // transaction but the INSERT...SELECT subqueries do NOT see same-batch
+    // UPDATE changes, causing the condition to evaluate with stale counts and
+    // the summary to never be created.
+    await this.db
+      .prepare(`UPDATE tasks SET status = ? WHERE id = ?`)
+      .bind('completed', workerTaskId)
+      .run();
 
-    const insertStmt = this.db
+    // Step 2: Check whether all worker tasks in the group are now completed
+    // and no active summary task already exists.
+    const completedRow = await this.db
       .prepare(
-        `INSERT INTO tasks (id, owner, repo, pr_number, pr_url, diff_url, base_ref, head_ref,
-          review_count, prompt, timeout_at, status, queue, github_installation_id, private, config,
-          created_at, review_claims, completed_reviews, reviews_completed_at, summary_agent_id,
-          summary_retry_count, task_type, feature, group_id,
-          issue_number, issue_url, issue_title, issue_body, issue_author,
-          dedup_target, index_issue_number, diff_size)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE (
-          SELECT COUNT(*) FROM tasks
-          WHERE group_id = ? AND task_type IN ('review', 'issue_review') AND status = 'completed'
-        ) >= (
-          SELECT COUNT(*) FROM tasks
-          WHERE group_id = ? AND task_type IN ('review', 'issue_review')
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM tasks
-          WHERE group_id = ? AND task_type = 'summary' AND status IN ('pending', 'reviewing')
-        )`,
+        `SELECT COUNT(*) AS cnt FROM tasks WHERE group_id = ? AND task_type IN (?, ?) AND status = ?`,
       )
-      .bind(
-        ...this.bindTaskParams(summaryTask),
-        summaryTask.group_id,
-        summaryTask.group_id,
-        summaryTask.group_id,
-      );
+      .bind(summaryTask.group_id, 'review', 'issue_review', 'completed')
+      .first<{ cnt: number }>();
 
-    const results = await this.db.batch([updateStmt, insertStmt]);
-    // The second result (INSERT...SELECT) tells us if the summary was created
-    return (results[1]?.meta?.changes ?? 0) > 0;
+    const totalRow = await this.db
+      .prepare(`SELECT COUNT(*) AS cnt FROM tasks WHERE group_id = ? AND task_type IN (?, ?)`)
+      .bind(summaryTask.group_id, 'review', 'issue_review')
+      .first<{ cnt: number }>();
+
+    const completed = completedRow?.cnt ?? 0;
+    const total = totalRow?.cnt ?? 0;
+    if (total === 0 || completed < total) return false;
+
+    const activeSummary = await this.db
+      .prepare(
+        `SELECT 1 FROM tasks WHERE group_id = ? AND task_type = ? AND status IN (?, ?)`,
+      )
+      .bind(summaryTask.group_id, 'summary', 'pending', 'reviewing')
+      .first();
+
+    if (activeSummary) return false;
+
+    // Step 3: Insert the summary task. Use UNIQUE constraint as a safety net
+    // for the rare race where two concurrent workers both pass the checks above
+    // and both try to insert.
+    try {
+      await this.createTask(summaryTask);
+      return true;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
+        return false;
+      }
+      throw err;
+    }
   }
 
   // ── Deprecated: Completed reviews (atomic increment) ───────

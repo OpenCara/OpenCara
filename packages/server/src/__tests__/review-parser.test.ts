@@ -38,6 +38,39 @@ REQUEST_CHANGES`;
     expect(result.verdict).toBe('request_changes');
   });
 
+  it('handles bold-formatted verdict (**APPROVE**)', () => {
+    const text = `## Summary
+Looks good.
+
+## Verdict
+
+**APPROVE**`;
+    const result = parseStructuredReview(text);
+    expect(result.verdict).toBe('approve');
+  });
+
+  it('handles bold-formatted REQUEST_CHANGES', () => {
+    const text = `## Summary
+Fix needed.
+
+## Verdict
+**REQUEST_CHANGES**`;
+    const result = parseStructuredReview(text);
+    expect(result.verdict).toBe('request_changes');
+  });
+
+  it('handles lowercase verdict (approve)', () => {
+    const text = `## Summary\nOK.\n\n## Verdict\napprove`;
+    const result = parseStructuredReview(text);
+    expect(result.verdict).toBe('approve');
+  });
+
+  it('handles italic verdict (*COMMENT*)', () => {
+    const text = `## Summary\nOK.\n\n## Verdict\n*COMMENT*`;
+    const result = parseStructuredReview(text);
+    expect(result.verdict).toBe('comment');
+  });
+
   it('skips findings with line number 0', () => {
     const text = `## Summary
 Zero line.

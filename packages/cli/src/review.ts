@@ -71,7 +71,7 @@ export function buildMetadataHeader(verdict: ReviewVerdict, meta?: ReviewMetadat
 }
 
 // New format: ## Verdict section at end of markdown
-const SECTION_VERDICT_PATTERN = /##\s*Verdict\s*\n+\s*(APPROVE|REQUEST_CHANGES|COMMENT)\b/im;
+const SECTION_VERDICT_PATTERN = /##\s*Verdict\s*\n+\s*\*{0,3}(APPROVE|REQUEST_CHANGES|COMMENT)\b/im;
 // Legacy format: VERDICT: X on its own line
 const LEGACY_VERDICT_PATTERN = /^VERDICT:\s*(APPROVE|REQUEST_CHANGES|COMMENT)\s*$/m;
 // Compact format: ## Blocking issues\n yes|no
