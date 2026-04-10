@@ -594,7 +594,7 @@ describe('agent poll loop', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await promise;
 
-    expect(testCommand).toHaveBeenCalledWith('echo test');
+    expect(testCommand).toHaveBeenCalledWith('echo test', undefined);
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Testing command...'));
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Command test ok (1.2s)'));
   });

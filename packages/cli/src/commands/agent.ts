@@ -1498,6 +1498,7 @@ export async function startAgent(
     verbose?: boolean;
     agentOwner?: string;
     userOrgs?: ReadonlySet<string>;
+    commandTestTimeoutMs?: number;
   },
 ): Promise<void> {
   const client = new ApiClient(platformUrl, {
@@ -1544,7 +1545,7 @@ export async function startAgent(
   // Skip in router mode (stdin/stdout relay) since there's no local command to test.
   if (reviewDeps.commandTemplate && !options?.routerRelay) {
     log('Testing command...');
-    const result = await testCommand(reviewDeps.commandTemplate);
+    const result = await testCommand(reviewDeps.commandTemplate, options?.commandTestTimeoutMs);
     if (result.ok) {
       log(`${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`);
     } else {
@@ -2035,7 +2036,10 @@ export async function startBatchAgents(
       .filter((state) => state.reviewDeps.commandTemplate && !state.routerRelay)
       .map(async (state) => {
         state.logger.log('Testing command...');
-        const result = await testCommand(state.reviewDeps.commandTemplate!);
+        const result = await testCommand(
+          state.reviewDeps.commandTemplate!,
+          config.commandTestTimeoutMs,
+        );
         if (result.ok) {
           state.logger.log(
             `${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`,
@@ -2211,6 +2215,7 @@ export async function startAgentRouter(): Promise<void> {
       usageLimits: config.usageLimits,
       versionOverride,
       codebaseTtl: config.codebaseTtl,
+      commandTestTimeoutMs: config.commandTestTimeoutMs,
     },
   );
 
@@ -2327,6 +2332,7 @@ function startAgentByIndex(
         verbose,
         agentOwner,
         userOrgs,
+        commandTestTimeoutMs: config.commandTestTimeoutMs,
       },
     ).finally(() => {
       routerRelay?.stop();

@@ -19,6 +19,7 @@ import {
   ensureConfigDir,
   resolveCodebaseDir,
   resolveFilePath,
+  parseDurationMs,
   RepoConfigError,
   ConfigValidationError,
   CONFIG_DIR,
@@ -27,6 +28,7 @@ import {
   DEFAULT_MAX_DIFF_SIZE_KB,
   DEFAULT_MAX_CONSECUTIVE_ERRORS,
   DEFAULT_MAX_REPO_SIZE_MB,
+  DEFAULT_COMMAND_TEST_TIMEOUT_MS,
 } from '../config.js';
 
 describe('config', () => {
@@ -1250,6 +1252,143 @@ tool = "qwen"
     });
   });
 
+  describe('command_test_timeout config', () => {
+    it('defaults to 10s when not set', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('\n');
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(DEFAULT_COMMAND_TEST_TIMEOUT_MS);
+    });
+
+    it('parses seconds duration string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('command_test_timeout = "30s"\n');
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(30_000);
+    });
+
+    it('parses minutes duration string', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('command_test_timeout = "1m"\n');
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(60_000);
+    });
+
+    it('warns and uses default for invalid duration string', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('command_test_timeout = "invalid"\n');
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(DEFAULT_COMMAND_TEST_TIMEOUT_MS);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('command_test_timeout must be a duration string'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('warns and uses default for numeric value', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('command_test_timeout = 30\n');
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(DEFAULT_COMMAND_TEST_TIMEOUT_MS);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('command_test_timeout must be a duration string'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('warns and uses default for "0s"', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('command_test_timeout = "0s"\n');
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(DEFAULT_COMMAND_TEST_TIMEOUT_MS);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('command_test_timeout must be a positive duration'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('defaults to 10s when config file does not exist', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+
+      const config = loadConfig();
+      expect(config.commandTestTimeoutMs).toBe(DEFAULT_COMMAND_TEST_TIMEOUT_MS);
+    });
+
+    it('saveConfig writes command_test_timeout when non-default (seconds)', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        commandTestTimeoutMs: 30_000,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('command_test_timeout = "30s"');
+    });
+
+    it('saveConfig writes command_test_timeout in minutes when >= 60s', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        commandTestTimeoutMs: 120_000,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).toContain('command_test_timeout = "2m"');
+    });
+
+    it('saveConfig writes non-round values as whole seconds', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        commandTestTimeoutMs: 90_000,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      // 90s is not evenly divisible by 60_000 — should serialize as "90s", not "1.5m"
+      expect(content).toContain('command_test_timeout = "90s"');
+    });
+
+    it('saveConfig omits command_test_timeout when default', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        commandTestTimeoutMs: DEFAULT_COMMAND_TEST_TIMEOUT_MS,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(content).not.toContain('command_test_timeout');
+    });
+  });
+
   describe('auth_file config', () => {
     it('parses auth_file with tilde expansion', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -1392,6 +1531,38 @@ tool = "qwen"
 
     it('returns null for empty string agent dir with null global', () => {
       expect(resolveCodebaseDir('', null)).toBeNull();
+    });
+  });
+
+  describe('parseDurationMs', () => {
+    it('parses seconds', () => {
+      expect(parseDurationMs('10s')).toBe(10_000);
+      expect(parseDurationMs('30s')).toBe(30_000);
+      expect(parseDurationMs('1s')).toBe(1_000);
+    });
+
+    it('parses minutes', () => {
+      expect(parseDurationMs('1m')).toBe(60_000);
+      expect(parseDurationMs('5m')).toBe(300_000);
+    });
+
+    it('returns null for invalid strings', () => {
+      expect(parseDurationMs('invalid')).toBeNull();
+      expect(parseDurationMs('10')).toBeNull();
+      expect(parseDurationMs('10ms')).toBeNull();
+      expect(parseDurationMs('1h')).toBeNull();
+      expect(parseDurationMs('')).toBeNull();
+    });
+
+    it('returns null for non-string values', () => {
+      expect(parseDurationMs(10)).toBeNull();
+      expect(parseDurationMs(null)).toBeNull();
+      expect(parseDurationMs(undefined)).toBeNull();
+    });
+
+    it('parses zero correctly', () => {
+      expect(parseDurationMs('0s')).toBe(0);
+      expect(parseDurationMs('0m')).toBe(0);
     });
   });
 

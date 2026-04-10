@@ -37,6 +37,7 @@ export interface CliConfig {
   maxRepoSizeMb: number;
   codebaseDir: string | null;
   codebaseTtl: string | null;
+  commandTestTimeoutMs: number;
   agentCommand: string | null;
   agents: LocalAgentConfig[] | null; // null = key absent = old server-side behavior
   usageLimits: UsageLimits;
@@ -57,6 +58,20 @@ export function ensureConfigDir(): void {
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
 export const DEFAULT_MAX_REPO_SIZE_MB = 100;
+export const DEFAULT_COMMAND_TEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Parse a duration string like "10s", "30s", or "1m" into milliseconds.
+ * Returns null if the value is not a valid duration string.
+ */
+export function parseDurationMs(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const secMatch = value.match(/^(\d+)s$/);
+  if (secMatch) return parseInt(secMatch[1], 10) * 1000;
+  const minMatch = value.match(/^(\d+)m$/);
+  if (minMatch) return parseInt(minMatch[1], 10) * 60_000;
+  return null;
+}
 
 const VALID_REPO_MODES: RepoFilterMode[] = ['public', 'private', 'whitelist', 'blacklist'];
 const REPO_PATTERN = /^[^/]+\/[^/]+$/;
@@ -344,6 +359,7 @@ export function loadConfig(): CliConfig {
     maxRepoSizeMb: DEFAULT_MAX_REPO_SIZE_MB,
     codebaseDir: null,
     codebaseTtl: null,
+    commandTestTimeoutMs: DEFAULT_COMMAND_TEST_TIMEOUT_MS,
     agentCommand: null,
     agents: null,
     usageLimits: {
@@ -436,6 +452,23 @@ export function loadConfig(): CliConfig {
         : DEFAULT_MAX_REPO_SIZE_MB),
     codebaseDir: typeof data.codebase_dir === 'string' ? data.codebase_dir : null,
     codebaseTtl: typeof data.codebase_ttl === 'string' ? data.codebase_ttl : null,
+    commandTestTimeoutMs: (() => {
+      if (data.command_test_timeout === undefined) return DEFAULT_COMMAND_TEST_TIMEOUT_MS;
+      const ms = parseDurationMs(data.command_test_timeout);
+      if (ms === null) {
+        console.warn(
+          `\u26a0 Config warning: command_test_timeout must be a duration string like "10s" or "1m", got "${data.command_test_timeout}", using default (${DEFAULT_COMMAND_TEST_TIMEOUT_MS / 1000}s)`,
+        );
+        return DEFAULT_COMMAND_TEST_TIMEOUT_MS;
+      }
+      if (ms <= 0) {
+        console.warn(
+          `\u26a0 Config warning: command_test_timeout must be a positive duration, got "${data.command_test_timeout}", using default (${DEFAULT_COMMAND_TEST_TIMEOUT_MS / 1000}s)`,
+        );
+        return DEFAULT_COMMAND_TEST_TIMEOUT_MS;
+      }
+      return ms;
+    })(),
     agentCommand: typeof data.agent_command === 'string' ? data.agent_command : null,
     agents: parseAgents(data),
     usageLimits: {
@@ -472,6 +505,12 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxRepoSizeMb !== DEFAULT_MAX_REPO_SIZE_MB) {
     data.max_repo_size_mb = config.maxRepoSizeMb;
+  }
+  if (config.commandTestTimeoutMs !== DEFAULT_COMMAND_TEST_TIMEOUT_MS) {
+    data.command_test_timeout =
+      config.commandTestTimeoutMs % 60_000 === 0
+        ? `${config.commandTestTimeoutMs / 60_000}m`
+        : `${Math.round(config.commandTestTimeoutMs / 1000)}s`;
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;
