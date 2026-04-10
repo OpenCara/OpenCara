@@ -1969,6 +1969,8 @@ export async function startBatchAgents(
       maxDiffSizeKb: config.maxDiffSizeKb,
       maxRepoSizeMb: config.maxRepoSizeMb,
       codebaseDir,
+      livenessTimeoutMs:
+        agentConfig.livenessTimeout != null ? agentConfig.livenessTimeout * 1000 : undefined,
     };
 
     // Share session stats and usage tracker across instances of the same agent config
@@ -2164,6 +2166,8 @@ export async function startAgentRouter(): Promise<void> {
     maxDiffSizeKb: config.maxDiffSizeKb,
     maxRepoSizeMb: config.maxRepoSizeMb,
     codebaseDir,
+    livenessTimeoutMs:
+      agentConfig?.livenessTimeout != null ? agentConfig.livenessTimeout * 1000 : undefined,
   };
 
   const session = createSessionTracker();
@@ -2265,6 +2269,8 @@ function startAgentByIndex(
     maxDiffSizeKb: config.maxDiffSizeKb,
     maxRepoSizeMb: config.maxRepoSizeMb,
     codebaseDir,
+    livenessTimeoutMs:
+      agentConfig?.livenessTimeout != null ? agentConfig.livenessTimeout * 1000 : undefined,
   };
 
   const model = agentConfig?.model ?? 'unknown';

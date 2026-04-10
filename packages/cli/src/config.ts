@@ -20,6 +20,7 @@ export interface LocalAgentConfig {
   repos?: RepoConfig;
   instances?: number;
   maxTasksPerDay?: number | null;
+  livenessTimeout?: number;
 }
 
 export interface UsageLimits {
@@ -226,6 +227,21 @@ function parseAgents(data: Record<string, unknown>): LocalAgentConfig[] | null {
         );
       } else {
         agent.maxTasksPerDay = v;
+      }
+    }
+    if (typeof obj.liveness_timeout === 'number') {
+      if (obj.liveness_timeout === 0) {
+        // Explicit 0 disables liveness timeout
+        agent.livenessTimeout = 0;
+      } else {
+        const v = parsePositiveInt(obj.liveness_timeout);
+        if (v === null) {
+          console.warn(
+            `\u26a0 Config warning: agents[${i}].liveness_timeout must be a non-negative integer (seconds), got ${obj.liveness_timeout}. Value ignored.`,
+          );
+        } else {
+          agent.livenessTimeout = v;
+        }
       }
     }
     const repoConfig = parseRepoConfig(obj, i);

@@ -375,6 +375,7 @@ describe('executeReview', () => {
       expect.any(AbortSignal),
       undefined,
       undefined,
+      undefined,
     );
     // Prompt should contain both system and user content
     const prompt = mockRunTool.mock.calls[0][1];

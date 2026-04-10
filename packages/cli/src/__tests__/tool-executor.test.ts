@@ -7,6 +7,7 @@ import {
   estimateTokens,
   ToolTimeoutError,
   SIGKILL_GRACE_MS,
+  STDOUT_LIVENESS_TIMEOUT_MS,
 } from '../tool-executor.js';
 
 import EventEmitter from 'node:events';
@@ -552,6 +553,204 @@ describe('executeTool', () => {
       // Advance past grace period — SIGKILL should NOT be sent
       vi.advanceTimersByTime(SIGKILL_GRACE_MS);
       expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    });
+  });
+
+  describe('stdout liveness timeout', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('kills process when no stdout for livenessTimeoutMs', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const livenessMs = 30_000;
+      const promise = executeTool(
+        'stuck-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        livenessMs,
+      );
+
+      // Advance past liveness timeout — SIGTERM fires
+      vi.advanceTimersByTime(livenessMs);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Process exits with SIGTERM
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+      await expect(promise).rejects.toThrow(/no stdout for 30s/);
+    });
+
+    it('resets liveness timer on stdout data', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const livenessMs = 30_000;
+      const promise = executeTool(
+        'alive-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        livenessMs,
+      );
+
+      // Advance 20s (before liveness fires)
+      vi.advanceTimersByTime(20_000);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Emit stdout — resets timer
+      child.stdout.emit('data', Buffer.from('partial output'));
+
+      // Advance another 20s (40s total, but only 20s since last stdout)
+      vi.advanceTimersByTime(20_000);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Advance past the reset liveness window (30s since last stdout)
+      vi.advanceTimersByTime(10_000);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+    });
+
+    it('does NOT reset liveness timer on stderr-only data', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const livenessMs = 30_000;
+      const promise = executeTool(
+        'stderr-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        livenessMs,
+      );
+
+      // Advance 20s
+      vi.advanceTimersByTime(20_000);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Emit stderr only — should NOT reset liveness
+      child.stderr.emit('data', Buffer.from('retrying... 429'));
+
+      // Advance past original liveness window
+      vi.advanceTimersByTime(10_000);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+      await expect(promise).rejects.toThrow(/no stdout for 30s/);
+    });
+
+    it('uses default liveness timeout when not specified', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      // No livenessTimeoutMs arg — uses STDOUT_LIVENESS_TIMEOUT_MS default
+      const promise = executeTool('default-tool', 'test', 600_000);
+
+      // Advance past default liveness
+      vi.advanceTimersByTime(STDOUT_LIVENESS_TIMEOUT_MS);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+      await expect(promise).rejects.toThrow(/no stdout for 300s/);
+    });
+
+    it('disabled when livenessTimeoutMs is 0', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const promise = executeTool(
+        'no-liveness',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+      );
+
+      // Advance past default liveness — should NOT kill
+      vi.advanceTimersByTime(STDOUT_LIVENESS_TIMEOUT_MS + 10_000);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Complete normally
+      emitOutput(child, { stdout: 'done', code: 0 });
+      const result = await promise;
+      expect(result.stdout).toBe('done');
+    });
+
+    it('liveness fires before main timeout', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const mainTimeout = 600_000;
+      const livenessMs = 30_000;
+      const promise = executeTool(
+        'stuck-tool',
+        'test',
+        mainTimeout,
+        undefined,
+        undefined,
+        undefined,
+        livenessMs,
+      );
+
+      // Advance past liveness (well before main timeout)
+      vi.advanceTimersByTime(livenessMs);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+      // Should report liveness kill, not main timeout
+      await expect(promise).rejects.toThrow(/no stdout for 30s/);
+      await expect(promise).rejects.not.toThrow(/timed out after/);
+    });
+
+    it('coexists with main timeout — main fires when liveness is reset', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const mainTimeout = 60_000;
+      const livenessMs = 30_000;
+      const promise = executeTool(
+        'slow-tool',
+        'test',
+        mainTimeout,
+        undefined,
+        undefined,
+        undefined,
+        livenessMs,
+      );
+
+      // Keep resetting liveness with stdout every 20s
+      vi.advanceTimersByTime(20_000);
+      child.stdout.emit('data', Buffer.from('chunk1'));
+      vi.advanceTimersByTime(20_000);
+      child.stdout.emit('data', Buffer.from('chunk2'));
+
+      // Now at 40s — advance past main timeout (60s)
+      vi.advanceTimersByTime(20_000);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+
+      // Should report main timeout, not liveness
+      await expect(promise).rejects.toThrow(/timed out after 60s/);
     });
   });
 });

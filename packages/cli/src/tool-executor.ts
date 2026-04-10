@@ -33,6 +33,9 @@ export const SIGKILL_GRACE_MS = 5_000;
 /** Minimum stdout length to treat a non-zero exit as a partial success */
 const MIN_PARTIAL_RESULT_LENGTH = 50;
 
+/** Default stdout liveness timeout (ms). Kill process if no stdout for this long. */
+export const STDOUT_LIVENESS_TIMEOUT_MS = 300_000;
+
 /** Maximum stderr length included in error/warning messages */
 const MAX_STDERR_LENGTH = 1000;
 
@@ -206,6 +209,7 @@ export function executeTool(
   signal?: AbortSignal,
   vars?: Record<string, string>,
   cwd?: string,
+  livenessTimeoutMs?: number,
 ): Promise<ToolExecutorResult> {
   const promptViaArg = commandTemplate.includes('${PROMPT}');
   const allVars: Record<string, string> = { ...vars, PROMPT: prompt };
@@ -231,6 +235,11 @@ export function executeTool(
     let stderr = '';
     let settled = false;
     let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
+    let killedByLiveness = false;
+
+    // Resolve effective liveness timeout: undefined → default, 0 → disabled
+    const effectiveLivenessMs =
+      livenessTimeoutMs === undefined ? STDOUT_LIVENESS_TIMEOUT_MS : livenessTimeoutMs;
 
     function scheduleKillEscalation(): void {
       child.kill('SIGTERM');
@@ -247,8 +256,29 @@ export function executeTool(
     // Timeout handling via manual timer since spawn doesn't support timeout
     const timer = setTimeout(scheduleKillEscalation, timeoutMs);
 
+    // Stdout liveness timer: kill if no stdout for effectiveLivenessMs
+    let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+    if (effectiveLivenessMs > 0) {
+      livenessTimer = setTimeout(() => {
+        if (!settled) {
+          killedByLiveness = true;
+          scheduleKillEscalation();
+        }
+      }, effectiveLivenessMs);
+    }
+
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
+      // Reset liveness timer on stdout activity
+      if (livenessTimer) {
+        clearTimeout(livenessTimer);
+        livenessTimer = setTimeout(() => {
+          if (!settled) {
+            killedByLiveness = true;
+            scheduleKillEscalation();
+          }
+        }, effectiveLivenessMs);
+      }
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -270,6 +300,7 @@ export function executeTool(
 
     function cleanup(): void {
       clearTimeout(timer);
+      if (livenessTimer) clearTimeout(livenessTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
       if (onAbort && signal) {
         signal.removeEventListener('abort', onAbort);
@@ -298,11 +329,19 @@ export function executeTool(
       }
 
       if (sig === 'SIGTERM' || sig === 'SIGKILL') {
-        reject(
-          new ToolTimeoutError(
-            `Tool "${command}" timed out after ${Math.round(timeoutMs / 1000)}s`,
-          ),
-        );
+        if (killedByLiveness) {
+          reject(
+            new ToolTimeoutError(
+              `Tool "${command}" killed: no stdout for ${Math.round(effectiveLivenessMs / 1000)}s (process may be stuck)`,
+            ),
+          );
+        } else {
+          reject(
+            new ToolTimeoutError(
+              `Tool "${command}" timed out after ${Math.round(timeoutMs / 1000)}s`,
+            ),
+          );
+        }
         return;
       }
 

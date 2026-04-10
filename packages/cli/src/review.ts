@@ -125,6 +125,7 @@ export interface ReviewExecutorDeps {
   maxDiffSizeKb: number;
   maxRepoSizeMb?: number;
   codebaseDir?: string | null;
+  livenessTimeoutMs?: number;
 }
 
 export async function executeReview(
@@ -137,6 +138,7 @@ export async function executeReview(
     signal?: AbortSignal,
     vars?: Record<string, string>,
     cwd?: string,
+    livenessTimeoutMs?: number,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<ReviewResponse> {
   const diffSizeKb = Buffer.byteLength(req.diffContent, 'utf-8') / 1024;
@@ -169,6 +171,7 @@ export async function executeReview(
       abortController.signal,
       undefined,
       deps.codebaseDir ?? undefined,
+      deps.livenessTimeoutMs,
     );
 
     const { verdict, review } = extractVerdict(result.stdout);
