@@ -387,6 +387,7 @@ describe('executeSummary', () => {
       expect.any(AbortSignal),
       undefined,
       undefined,
+      undefined,
     );
   });
 

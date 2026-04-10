@@ -130,6 +130,7 @@ export async function executeSummary(
     signal?: AbortSignal,
     vars?: Record<string, string>,
     cwd?: string,
+    livenessTimeoutMs?: number,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
   const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent, req.contextBlock);
@@ -167,6 +168,7 @@ export async function executeSummary(
       abortController.signal,
       undefined,
       deps.codebaseDir ?? undefined,
+      deps.livenessTimeoutMs,
     );
 
     const { verdict, review } = extractVerdict(result.stdout);

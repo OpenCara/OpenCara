@@ -119,6 +119,7 @@ command = "qwen --model qwen3.5-plus -y"
 # thinking = "high"
 # roles = ["review"]               # Only review, never synthesize
 # codebase_dir = "~/.opencara/repos/claude"
+# liveness_timeout = 300            # Kill if no stdout for 300s (default: 300, 0 = disable)
 #
 # # Repo filtering: control which repos this agent reviews
 # [agents.repos]
