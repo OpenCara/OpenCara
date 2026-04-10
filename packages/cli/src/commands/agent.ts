@@ -14,6 +14,7 @@ import type {
   BatchPollResponse,
 } from '@opencara/shared';
 import {
+  DEFAULT_REGISTRY,
   isRepoAllowed,
   isDedupRole,
   isTriageRole,
@@ -108,6 +109,28 @@ import {
 
 declare const __CLI_VERSION__: string;
 declare const __GIT_COMMIT__: string;
+
+/**
+ * Resolve the command template for an agent config.
+ * Priority: explicit command → global agentCommand → registry commandTemplate.
+ */
+function resolveCommandTemplate(
+  agentConfig: LocalAgentConfig | undefined,
+  globalCommand: string | undefined,
+): string | undefined {
+  // 1. Explicit command on agent config
+  if (agentConfig?.command) return agentConfig.command;
+  // 2. Global agentCommand fallback
+  if (globalCommand) return globalCommand;
+  // 3. Fall back to DEFAULT_REGISTRY using tool + model
+  if (agentConfig?.tool) {
+    const registryTool = DEFAULT_REGISTRY.tools.find((t) => t.name === agentConfig.tool);
+    if (registryTool) {
+      return registryTool.commandTemplate.replaceAll('${MODEL}', agentConfig.model ?? '');
+    }
+  }
+  return undefined;
+}
 
 export interface ConsumptionDeps {
   agentId: string;
@@ -1948,7 +1971,7 @@ export async function startBatchAgents(
 
   for (let i = 0; i < agents.length; i++) {
     const agentConfig = agents[i];
-    const commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
+    const commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
     const label = agentConfig.name ?? `agent[${i}]`;
 
     if (!commandTemplate) {
@@ -2129,10 +2152,8 @@ export async function startAgentRouter(): Promise<void> {
 
   if (config.agents && config.agents.length > 0) {
     agentConfig = config.agents.find((a) => a.router) ?? config.agents[0];
-    commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
-  } else {
-    commandTemplate = config.agentCommand ?? undefined;
   }
+  commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
 
   const router = new RouterRelay();
   router.start();
@@ -2247,10 +2268,8 @@ function startAgentByIndex(
 
   if (config.agents && config.agents.length > agentIndex) {
     agentConfig = config.agents[agentIndex];
-    commandTemplate = agentConfig.command ?? config.agentCommand ?? undefined;
-  } else {
-    commandTemplate = config.agentCommand ?? undefined;
   }
+  commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
 
   const label = agentConfig?.name ?? `agent[${agentIndex}]`;
 
