@@ -561,7 +561,9 @@ describe('config', () => {
 
     it('parses agents without command field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('\n[[agents]]\nmodel = "glm-5"\ntool = "gemini"\n');
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '\n[[agents]]\nmodel = "glm-5"\ntool = "gemini"\n',
+      );
 
       const config = loadConfig();
       expect(config.agents).toEqual([{ model: 'glm-5', tool: 'gemini' }]);

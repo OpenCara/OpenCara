@@ -689,7 +689,9 @@ export async function runDedupInit(
     const cmd = resolveCmd(options.agent);
     if (!cmd) {
       logError(
-        `${icons.error} Unknown agent tool "${options.agent}". Available: ${loadToolDefs().map((t) => t.name).join(', ')}`,
+        `${icons.error} Unknown agent tool "${options.agent}". Available: ${loadToolDefs()
+          .map((t) => t.name)
+          .join(', ')}`,
       );
       process.exitCode = 1;
       return;
