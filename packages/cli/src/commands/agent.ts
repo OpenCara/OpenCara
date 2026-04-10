@@ -2036,7 +2036,10 @@ export async function startBatchAgents(
       .filter((state) => state.reviewDeps.commandTemplate && !state.routerRelay)
       .map(async (state) => {
         state.logger.log('Testing command...');
-        const result = await testCommand(state.reviewDeps.commandTemplate!, config.commandTestTimeoutMs);
+        const result = await testCommand(
+          state.reviewDeps.commandTemplate!,
+          config.commandTestTimeoutMs,
+        );
         if (result.ok) {
           state.logger.log(
             `${icons.success} Command test ok (${(result.elapsedMs / 1000).toFixed(1)}s)`,

@@ -455,9 +455,15 @@ export function loadConfig(): CliConfig {
     commandTestTimeoutMs: (() => {
       if (data.command_test_timeout === undefined) return DEFAULT_COMMAND_TEST_TIMEOUT_MS;
       const ms = parseDurationMs(data.command_test_timeout);
-      if (ms === null || ms <= 0) {
+      if (ms === null) {
         console.warn(
           `\u26a0 Config warning: command_test_timeout must be a duration string like "10s" or "1m", got "${data.command_test_timeout}", using default (${DEFAULT_COMMAND_TEST_TIMEOUT_MS / 1000}s)`,
+        );
+        return DEFAULT_COMMAND_TEST_TIMEOUT_MS;
+      }
+      if (ms <= 0) {
+        console.warn(
+          `\u26a0 Config warning: command_test_timeout must be a positive duration, got "${data.command_test_timeout}", using default (${DEFAULT_COMMAND_TEST_TIMEOUT_MS / 1000}s)`,
         );
         return DEFAULT_COMMAND_TEST_TIMEOUT_MS;
       }
@@ -501,9 +507,10 @@ export function saveConfig(config: CliConfig): void {
     data.max_repo_size_mb = config.maxRepoSizeMb;
   }
   if (config.commandTestTimeoutMs !== DEFAULT_COMMAND_TEST_TIMEOUT_MS) {
-    data.command_test_timeout = config.commandTestTimeoutMs >= 60_000
-      ? `${config.commandTestTimeoutMs / 60_000}m`
-      : `${config.commandTestTimeoutMs / 1000}s`;
+    data.command_test_timeout =
+      config.commandTestTimeoutMs % 60_000 === 0
+        ? `${config.commandTestTimeoutMs / 60_000}m`
+        : `${Math.round(config.commandTestTimeoutMs / 1000)}s`;
   }
   if (config.agentCommand) {
     data.agent_command = config.agentCommand;

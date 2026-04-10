@@ -1311,7 +1311,7 @@ tool = "qwen"
       const config = loadConfig();
       expect(config.commandTestTimeoutMs).toBe(DEFAULT_COMMAND_TEST_TIMEOUT_MS);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('command_test_timeout must be a duration string'),
+        expect.stringContaining('command_test_timeout must be a positive duration'),
       );
       warnSpy.mockRestore();
     });
@@ -1353,6 +1353,23 @@ tool = "qwen"
 
       const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
       expect(content).toContain('command_test_timeout = "2m"');
+    });
+
+    it('saveConfig writes non-round values as whole seconds', () => {
+      saveConfig({
+        platformUrl: DEFAULT_PLATFORM_URL,
+        maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+        maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
+        codebaseDir: null,
+        codebaseTtl: null,
+        commandTestTimeoutMs: 90_000,
+        agentCommand: null,
+        agents: null,
+      });
+
+      const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      // 90s is not evenly divisible by 60_000 — should serialize as "90s", not "1.5m"
+      expect(content).toContain('command_test_timeout = "90s"');
     });
 
     it('saveConfig omits command_test_timeout when default', () => {
