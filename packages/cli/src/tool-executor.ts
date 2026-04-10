@@ -241,7 +241,11 @@ export function executeTool(
     const effectiveLivenessMs =
       livenessTimeoutMs === undefined ? STDOUT_LIVENESS_TIMEOUT_MS : livenessTimeoutMs;
 
+    let killScheduled = false;
+
     function scheduleKillEscalation(): void {
+      if (killScheduled) return;
+      killScheduled = true;
       child.kill('SIGTERM');
       // Clear any existing SIGKILL timer to prevent leaks
       if (sigkillTimer) clearTimeout(sigkillTimer);
