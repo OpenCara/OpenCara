@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import pc from 'picocolors';
-import { DEFAULT_REGISTRY } from '@opencara/shared';
 import { loadConfig, CONFIG_FILE, type LocalAgentConfig } from '../config.js';
+import { getToolDef } from '../tool-defs.js';
 import { loadAuth } from '../auth.js';
 import { validateCommandBinary } from '../tool-executor.js';
 import { icons } from '../logger.js';
@@ -40,22 +40,22 @@ export function agentRoleLabel(agent: LocalAgentConfig): string {
   return 'reviewer+synthesizer';
 }
 
-/** Resolve the binary name for a given tool from the registry. */
+/** Resolve the binary name for a given tool from tool definitions. */
 export function resolveToolBinary(toolName: string): string {
-  const entry = DEFAULT_REGISTRY.tools.find((t) => t.name === toolName);
-  return entry?.binary ?? toolName;
+  const def = getToolDef(toolName);
+  return def?.binary ?? toolName;
 }
 
 /**
  * Resolve the command template for a given agent.
- * Uses agent.command override, then falls back to registry template.
+ * Uses agent.command override, then falls back to tool definition.
  * Note: config.ts parseAgents already filters unknown tools, so the
- * registry lookup should always succeed for valid config.
+ * lookup should always succeed for valid config.
  */
 function resolveCommand(agent: LocalAgentConfig): string | null {
   if (agent.command) return agent.command;
-  const entry = DEFAULT_REGISTRY.tools.find((t) => t.name === agent.tool);
-  return entry?.commandTemplate ?? null;
+  const def = getToolDef(agent.tool);
+  return def?.command ?? null;
 }
 
 /** Check platform connectivity by hitting /health. Returns elapsed ms or error message. */

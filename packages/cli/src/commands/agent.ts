@@ -14,7 +14,6 @@ import type {
   BatchPollResponse,
 } from '@opencara/shared';
 import {
-  DEFAULT_REGISTRY,
   isRepoAllowed,
   isDedupRole,
   isTriageRole,
@@ -97,6 +96,7 @@ import {
   type AgentSessionStats,
 } from '../logger.js';
 import { interactiveSetup } from '../setup.js';
+import { getToolDef } from '../tool-defs.js';
 import {
   type AgentDescriptor,
   buildBatchPollRequest,
@@ -116,17 +116,17 @@ declare const __GIT_COMMIT__: string;
  */
 function resolveCommandTemplate(
   agentConfig: LocalAgentConfig | undefined,
-  globalCommand: string | undefined,
+  globalCommand: string | null | undefined,
 ): string | undefined {
   // 1. Explicit command on agent config
   if (agentConfig?.command) return agentConfig.command;
   // 2. Global agentCommand fallback
   if (globalCommand) return globalCommand;
-  // 3. Fall back to DEFAULT_REGISTRY using tool + model
+  // 3. Fall back to tool definition from tools/*.toml
   if (agentConfig?.tool) {
-    const registryTool = DEFAULT_REGISTRY.tools.find((t) => t.name === agentConfig.tool);
-    if (registryTool) {
-      return registryTool.commandTemplate.replaceAll('${MODEL}', agentConfig.model ?? '');
+    const toolDef = getToolDef(agentConfig.tool);
+    if (toolDef) {
+      return toolDef.command.replaceAll('${MODEL}', agentConfig.model ?? '');
     }
   }
   return undefined;
@@ -2147,13 +2147,12 @@ export async function startAgentRouter(): Promise<void> {
   const agentId = crypto.randomUUID();
 
   // Build agent config from the first local agent or defaults
-  let commandTemplate: string | undefined;
   let agentConfig: LocalAgentConfig | undefined;
 
   if (config.agents && config.agents.length > 0) {
     agentConfig = config.agents.find((a) => a.router) ?? config.agents[0];
   }
-  commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
+  const commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
 
   const router = new RouterRelay();
   router.start();
@@ -2263,13 +2262,12 @@ function startAgentByIndex(
   agentOwner?: string,
   userOrgs?: ReadonlySet<string>,
 ): Promise<void>[] | null {
-  let commandTemplate: string | undefined;
   let agentConfig: LocalAgentConfig | undefined;
 
   if (config.agents && config.agents.length > agentIndex) {
     agentConfig = config.agents[agentIndex];
   }
-  commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
+  const commandTemplate = resolveCommandTemplate(agentConfig, config.agentCommand);
 
   const label = agentConfig?.name ?? `agent[${agentIndex}]`;
 

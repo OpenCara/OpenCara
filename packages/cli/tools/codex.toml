@@ -1,0 +1,5 @@
+binary = "codex"
+models = ["gpt-5-codex"]
+command = "codex --model ${MODEL} exec"
+scannable = true
+install_link = "https://github.com/openai/codex"

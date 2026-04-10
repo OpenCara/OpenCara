@@ -1,26 +1,9 @@
-import { DEFAULT_REGISTRY } from '@opencara/shared';
 import { validateCommandBinary } from './tool-executor.js';
 import { CONFIG_FILE, ensureConfigDir } from './config.js';
+import { getScannableTools, getToolDef } from './tool-defs.js';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-
-/** Tools to scan for — restricted set per project owner decision. */
-export const SCANNABLE_TOOLS = ['claude', 'codex', 'gemini'] as const;
-
-/** Cost-effective default models per tool. */
-export const DEFAULT_MODELS: Record<string, string> = {
-  claude: 'claude-sonnet-4-6',
-  codex: 'gpt-5-codex',
-  gemini: 'gemini-2.5-pro',
-};
-
-/** Install links for each scannable tool. */
-const INSTALL_LINKS: Record<string, string> = {
-  claude: 'https://docs.anthropic.com/en/docs/claude-code',
-  codex: 'https://github.com/openai/codex',
-  gemini: 'https://github.com/google-gemini/gemini-cli',
-};
 
 export interface DiscoveredTool {
   toolName: string;
@@ -65,14 +48,13 @@ export function checkPrerequisites(): PrerequisiteCheck {
   return { git: gitInstalled, gh: ghInstalled, ghAuthenticated, ghUsername };
 }
 
-/** Scan for installed AI tools from the SCANNABLE_TOOLS list. */
+/** Scan for installed AI tools from the scannable tool definitions. */
 export function discoverTools(): Omit<DiscoveredTool, 'maxTasksPerDay'>[] {
   const results: Omit<DiscoveredTool, 'maxTasksPerDay'>[] = [];
 
-  for (const toolName of SCANNABLE_TOOLS) {
-    if (validateCommandBinary(toolName)) {
-      const defaultModel = resolveDefaultModel(toolName);
-      results.push({ toolName, defaultModel });
+  for (const tool of getScannableTools()) {
+    if (validateCommandBinary(tool.binary)) {
+      results.push({ toolName: tool.name, defaultModel: tool.models[0] });
     }
   }
 
@@ -81,14 +63,11 @@ export function discoverTools(): Omit<DiscoveredTool, 'maxTasksPerDay'>[] {
 
 /**
  * Resolve the default model for a tool.
- * Uses DEFAULT_MODELS map, falls back to the first model in the registry for the tool.
+ * Uses the first model from the tool definition.
  */
 export function resolveDefaultModel(toolName: string): string {
-  if (DEFAULT_MODELS[toolName]) {
-    return DEFAULT_MODELS[toolName];
-  }
-  const registryModel = DEFAULT_REGISTRY.models.find((m) => m.tools.includes(toolName));
-  return registryModel?.name ?? toolName;
+  const def = getToolDef(toolName);
+  return def?.models[0] ?? toolName;
 }
 
 /** Generate config.toml content from discovered tools with per-tool limits. */
@@ -194,20 +173,25 @@ export async function interactiveSetup(): Promise<boolean> {
 
   process.stdout.write('\nScanning for AI tools...\n');
 
+  const scannableTools = getScannableTools();
   const found = discoverTools();
-  for (const tool of SCANNABLE_TOOLS) {
-    const disc = found.find((t) => t.toolName === tool);
+  for (const tool of scannableTools) {
+    const disc = found.find((t) => t.toolName === tool.name);
     if (disc) {
-      process.stdout.write(`  \u2713 ${tool} (${disc.defaultModel})\n`);
+      process.stdout.write(`  \u2713 ${tool.name} (${disc.defaultModel})\n`);
     } else {
-      process.stdout.write(`  \u2717 ${tool} (not found)\n`);
+      process.stdout.write(`  \u2717 ${tool.name} (not found)\n`);
     }
   }
 
   if (found.length === 0) {
-    process.stdout.write('\nNo AI tools found. Install one of: claude, codex, gemini\n');
-    for (const tool of SCANNABLE_TOOLS) {
-      process.stdout.write(`  ${tool}:  ${INSTALL_LINKS[tool]}\n`);
+    process.stdout.write(
+      `\nNo AI tools found. Install one of: ${scannableTools.map((t) => t.name).join(', ')}\n`,
+    );
+    for (const tool of scannableTools) {
+      if (tool.installLink) {
+        process.stdout.write(`  ${tool.name}:  ${tool.installLink}\n`);
+      }
     }
     return false;
   }

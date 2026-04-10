@@ -561,10 +561,10 @@ describe('config', () => {
 
     it('parses agents without command field', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue('\n[[agents]]\nmodel = "glm-5"\ntool = "qwen"\n');
+      vi.mocked(fs.readFileSync).mockReturnValue('\n[[agents]]\nmodel = "glm-5"\ntool = "gemini"\n');
 
       const config = loadConfig();
-      expect(config.agents).toEqual([{ model: 'glm-5', tool: 'qwen' }]);
+      expect(config.agents).toEqual([{ model: 'glm-5', tool: 'gemini' }]);
     });
 
     it('parses agents with thinking field as string', () => {
@@ -729,7 +729,7 @@ model = "claude-sonnet-4-6"
 tool = "claude"
 [[agents]]
 model = "glm-5"
-tool = "qwen"
+tool = "gemini"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -793,7 +793,7 @@ tool = "claude"
 router = true
 [[agents]]
 model = "glm-5"
-tool = "qwen"
+tool = "gemini"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
@@ -1188,7 +1188,7 @@ tool = "claude"
 codebase_dir = "~/repos"
 [[agents]]
 model = "glm-5"
-tool = "qwen"
+tool = "gemini"
 `);
       const config = loadConfig();
       expect(config.agents![0].codebase_dir).toBe('~/repos');
@@ -1762,7 +1762,7 @@ model = "gemini-2.5-pro"
 tool = "gemini"
 [[agents]]
 model = "qwen3.5-plus"
-tool = "qwen"
+tool = "gemini"
 `);
 
         const config = loadConfig();
@@ -1801,7 +1801,6 @@ tool = "unknown"
         expect(msg).toContain('claude');
         expect(msg).toContain('codex');
         expect(msg).toContain('gemini');
-        expect(msg).toContain('qwen');
         warnSpy.mockRestore();
       });
     });
@@ -1851,7 +1850,7 @@ tool = "claude"
 synthesizer_only = true
 [[agents]]
 model = "glm-5"
-tool = "qwen"
+tool = "gemini"
 `);
       const config = loadConfig();
       expect(config.agents).toHaveLength(2);
