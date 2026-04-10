@@ -280,7 +280,7 @@ export async function checkTimeouts(
       try {
         const token = await github.getInstallationToken(task.github_installation_id);
         const timeoutMinutes = Math.round((task.timeout_at - task.created_at) / 60000);
-        const body = formatTimeoutComment(timeoutMinutes, allReviews);
+        const body = formatTimeoutComment(timeoutMinutes, allReviews, task.feature);
         // Post to issue_number for issue tasks, pr_number for PR tasks
         const commentTarget = task.pr_number > 0 ? task.pr_number : task.issue_number;
         if (commentTarget) {
@@ -322,7 +322,7 @@ export async function checkTimeouts(
           review_text: claim.review_text!,
         }));
 
-        const body = formatTimeoutComment(timeoutMinutes, reviews);
+        const body = formatTimeoutComment(timeoutMinutes, reviews, task.feature);
         // Post to issue_number for issue tasks, pr_number for PR tasks
         const commentTarget = task.pr_number > 0 ? task.pr_number : task.issue_number;
         if (commentTarget) {
@@ -600,7 +600,7 @@ async function handleImplementSummaryResult(
   }
 
   const token = await github.getInstallationToken(task.github_installation_id);
-  const commentBody = wrapReviewComment(reviewText.trim());
+  const commentBody = wrapReviewComment(reviewText.trim(), undefined, 'OpenCara Go');
   await github.postPrComment(task.owner, task.repo, task.issue_number, commentBody, token);
 
   logger.info('Implement result posted to GitHub', {
@@ -630,7 +630,7 @@ async function handleFixSummaryResult(
   }
 
   const token = await github.getInstallationToken(task.github_installation_id);
-  const commentBody = wrapReviewComment(reviewText.trim());
+  const commentBody = wrapReviewComment(reviewText.trim(), undefined, 'OpenCara Fix');
   await github.postPrComment(task.owner, task.repo, task.pr_number, commentBody, token);
 
   logger.info('Fix result posted to PR', {
@@ -712,7 +712,7 @@ async function postFallbackConsolidatedReview(
       review_text: c.review_text!,
     }));
 
-    const body = formatTimeoutComment(timeoutMinutes, reviews);
+    const body = formatTimeoutComment(timeoutMinutes, reviews, task.feature);
     await github.postPrComment(task.owner, task.repo, task.pr_number, body, token);
 
     logger.info('Fallback consolidated review posted', {

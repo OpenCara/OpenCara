@@ -1,6 +1,24 @@
-import type { ReviewVerdict } from '@opencara/shared';
+import type { Feature, ReviewVerdict } from '@opencara/shared';
 
-const REVIEW_HEADER = '## OpenCara Review';
+const FEATURE_HEADERS: Record<Feature, string> = {
+  review: '## OpenCara Review',
+  implement: '## OpenCara Go',
+  fix: '## OpenCara Fix',
+  issue_review: '## OpenCara Issue Review',
+  dedup_pr: '## OpenCara Review',
+  dedup_issue: '## OpenCara Review',
+  triage: '## OpenCara Review',
+};
+
+const FEATURE_TIMEOUT_LABELS: Record<Feature, string> = {
+  review: 'Review',
+  implement: 'Go',
+  fix: 'Fix',
+  issue_review: 'Review',
+  dedup_pr: 'Review',
+  dedup_issue: 'Review',
+  triage: 'Review',
+};
 const REVIEW_FOOTER =
   '<sub>Reviewed by <a href="https://github.com/apps/opencara">OpenCara</a></sub>';
 
@@ -42,14 +60,20 @@ export function wrapReviewComment(
  * Format a consolidated timeout comment containing all partial reviews
  * and the timeout message in a single GitHub comment.
  */
-export function formatTimeoutComment(timeoutMinutes: number, reviews: TimeoutReview[]): string {
-  const parts: string[] = [REVIEW_HEADER, ''];
+export function formatTimeoutComment(
+  timeoutMinutes: number,
+  reviews: TimeoutReview[],
+  feature?: Feature,
+): string {
+  const header = FEATURE_HEADERS[feature ?? 'review'];
+  const label = FEATURE_TIMEOUT_LABELS[feature ?? 'review'];
+  const parts: string[] = [header, ''];
 
   if (reviews.length === 0) {
-    parts.push(`> Review timed out after ${timeoutMinutes} minutes.`);
+    parts.push(`> ${label} timed out after ${timeoutMinutes} minutes.`);
   } else {
     parts.push(
-      `> Review timed out after ${timeoutMinutes} minutes. ${reviews.length} partial review(s) collected.`,
+      `> ${label} timed out after ${timeoutMinutes} minutes. ${reviews.length} partial review(s) collected.`,
     );
 
     for (let i = 0; i < reviews.length; i++) {
