@@ -1,6 +1,8 @@
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { defineConfig } from 'tsup';
+import { loadToolDefsFromDir } from './scripts/load-tool-defs.js';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 
@@ -10,6 +12,8 @@ try {
 } catch {
   // Not a git repo or git not installed — use fallback
 }
+
+const toolDefs = loadToolDefsFromDir(resolve(import.meta.dirname, 'tools'));
 
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -22,5 +26,6 @@ export default defineConfig({
   define: {
     __CLI_VERSION__: JSON.stringify(pkg.version),
     __GIT_COMMIT__: JSON.stringify(gitCommit),
+    __TOOL_DEFS__: JSON.stringify(JSON.stringify(toolDefs)),
   },
 });

@@ -2,8 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
-import { DEFAULT_REGISTRY } from '@opencara/shared';
 import type { RepoConfig, RepoFilterMode } from '@opencara/shared';
+import { getKnownToolNames } from './tool-defs.js';
 
 export interface LocalAgentConfig {
   model: string;
@@ -96,7 +96,7 @@ export class ConfigValidationError extends Error {
   }
 }
 
-const KNOWN_TOOL_NAMES = new Set(DEFAULT_REGISTRY.tools.map((t) => t.name));
+const KNOWN_TOOL_NAMES = getKnownToolNames();
 
 /** Backward-compatible aliases for renamed tools. */
 const TOOL_ALIASES: Record<string, string> = {

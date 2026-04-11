@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { Command } from 'commander';
 import pc from 'picocolors';
-import { parseOpenCaraConfig, DEFAULT_REGISTRY } from '@opencara/shared';
+import { parseOpenCaraConfig } from '@opencara/shared';
 import type { OpenCaraConfig } from '@opencara/shared';
 import { loadConfig } from '../config.js';
+import { getToolDef, loadToolDefs } from '../tool-defs.js';
 import { executeTool, type ToolExecutorResult } from '../tool-executor.js';
 import { extractJson } from '../dedup.js';
 import { icons } from '../logger.js';
@@ -285,7 +286,7 @@ export function parseIndexEntryResponse(stdout: string): string | null {
  *
  * Priority:
  * 1. Matching agent in user's config (by tool name) — uses agent.command or global agentCommand
- * 2. DEFAULT_REGISTRY command template (with MODEL placeholder left as-is or using first matching model)
+ * 2. Tool definition from tools/*.toml (with MODEL placeholder filled from default model)
  *
  * Returns null if the tool is not found anywhere.
  */
@@ -300,13 +301,11 @@ export function resolveAgentCommand(toolName: string): string | null {
     }
   }
 
-  // 2. Fall back to DEFAULT_REGISTRY
-  const registryTool = DEFAULT_REGISTRY.tools.find((t) => t.name === toolName);
-  if (registryTool) {
-    // Find a default model for this tool
-    const defaultModel = DEFAULT_REGISTRY.models.find((m) => m.tools.includes(toolName));
-    const modelName = defaultModel?.name ?? '';
-    return registryTool.commandTemplate.replaceAll('${MODEL}', modelName);
+  // 2. Fall back to tool definition
+  const toolDef = getToolDef(toolName);
+  if (toolDef) {
+    const modelName = toolDef.models[0] ?? '';
+    return toolDef.command.replaceAll('${MODEL}', modelName);
   }
 
   return null;
@@ -690,7 +689,9 @@ export async function runDedupInit(
     const cmd = resolveCmd(options.agent);
     if (!cmd) {
       logError(
-        `${icons.error} Unknown agent tool "${options.agent}". Available: ${DEFAULT_REGISTRY.tools.map((t) => t.name).join(', ')}`,
+        `${icons.error} Unknown agent tool "${options.agent}". Available: ${loadToolDefs()
+          .map((t) => t.name)
+          .join(', ')}`,
       );
       process.exitCode = 1;
       return;

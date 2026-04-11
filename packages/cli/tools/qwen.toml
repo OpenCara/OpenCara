@@ -1,0 +1,4 @@
+binary = "qwen"
+models = ["qwen3.5-plus", "glm-5", "kimi-k2.5", "minimax-m2.5"]
+command = "qwen --model ${MODEL} -y"
+scannable = false

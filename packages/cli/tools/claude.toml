@@ -1,0 +1,5 @@
+binary = "claude"
+models = ["claude-sonnet-4-6", "claude-opus-4-6"]
+command = "claude --model ${MODEL} --allowedTools '*' --print"
+scannable = true
+install_link = "https://docs.anthropic.com/en/docs/claude-code"

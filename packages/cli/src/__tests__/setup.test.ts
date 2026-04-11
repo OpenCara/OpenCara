@@ -50,11 +50,10 @@ import {
   discoverTools,
   generateConfig,
   interactiveSetup,
-  SCANNABLE_TOOLS,
-  DEFAULT_MODELS,
   resolveDefaultModel,
   type DiscoveredTool,
 } from '../setup.js';
+import { getScannableTools, getToolDef } from '../tool-defs.js';
 
 const mockedValidateCommandBinary = vi.mocked(validateCommandBinary);
 const mockedExecFileSync = vi.mocked(childProcess.execFileSync);
@@ -67,32 +66,29 @@ describe('setup', () => {
     vi.clearAllMocks();
   });
 
-  describe('SCANNABLE_TOOLS', () => {
-    it('contains exactly claude, codex, gemini', () => {
-      expect(SCANNABLE_TOOLS).toEqual(['claude', 'codex', 'gemini']);
+  describe('tool definitions', () => {
+    it('scannable tools are exactly claude, codex, gemini', () => {
+      const scannable = getScannableTools();
+      expect(scannable.map((t) => t.name)).toEqual(['claude', 'codex', 'gemini']);
     });
 
-    it('does not contain qwen or others', () => {
-      expect(SCANNABLE_TOOLS).not.toContain('qwen');
-    });
-  });
-
-  describe('DEFAULT_MODELS', () => {
-    it('maps claude to claude-sonnet-4-6', () => {
-      expect(DEFAULT_MODELS['claude']).toBe('claude-sonnet-4-6');
+    it('each scannable tool has models, command, and binary', () => {
+      for (const tool of getScannableTools()) {
+        expect(tool.models.length).toBeGreaterThan(0);
+        expect(tool.command).toBeTruthy();
+        expect(tool.binary).toBeTruthy();
+      }
     });
 
-    it('maps codex to gpt-5-codex', () => {
-      expect(DEFAULT_MODELS['codex']).toBe('gpt-5-codex');
-    });
-
-    it('maps gemini to gemini-2.5-pro', () => {
-      expect(DEFAULT_MODELS['gemini']).toBe('gemini-2.5-pro');
+    it('default models match expected values', () => {
+      expect(getToolDef('claude')?.models[0]).toBe('claude-sonnet-4-6');
+      expect(getToolDef('codex')?.models[0]).toBe('gpt-5-codex');
+      expect(getToolDef('gemini')?.models[0]).toBe('gemini-2.5-pro');
     });
   });
 
   describe('resolveDefaultModel', () => {
-    it('returns DEFAULT_MODELS entry for known tools', () => {
+    it('returns first model from tool definition for known tools', () => {
       expect(resolveDefaultModel('claude')).toBe('claude-sonnet-4-6');
       expect(resolveDefaultModel('codex')).toBe('gpt-5-codex');
       expect(resolveDefaultModel('gemini')).toBe('gemini-2.5-pro');
@@ -191,7 +187,7 @@ describe('setup', () => {
       expect(result[0].defaultModel).toBe('gpt-5-codex');
     });
 
-    it('only scans SCANNABLE_TOOLS (not qwen or others)', () => {
+    it('only scans scannable tools (not qwen or others)', () => {
       mockedValidateCommandBinary.mockReturnValue(true);
       const result = discoverTools();
       // Should only have claude, codex, gemini — not qwen
