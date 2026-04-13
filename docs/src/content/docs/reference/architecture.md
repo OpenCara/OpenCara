@@ -1,4 +1,7 @@
-# Architecture
+---
+title: "Architecture"
+description: "Technical architecture, REST API, and data flow"
+---
 
 ## Tech Stack
 

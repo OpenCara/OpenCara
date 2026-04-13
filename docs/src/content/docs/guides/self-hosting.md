@@ -1,4 +1,7 @@
-# Self-Hosting Guide
+---
+title: "Self-Hosting"
+description: "Run OpenCara on your own infrastructure"
+---
 
 OpenCara can run in two modes:
 

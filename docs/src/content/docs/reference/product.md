@@ -1,4 +1,7 @@
-# Product Design
+---
+title: "Product Design"
+description: "Core concept, trust model, and self-hosted runner pattern"
+---
 
 ## Core Concept
 

@@ -92,8 +92,28 @@ jobs:
             echo "WARNING: Could not verify deployment — check manually"
           fi
 
+  deploy-docs:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build docs
+        working-directory: docs
+        run: pnpm build
+      - name: Deploy to Cloudflare Pages
+        working-directory: docs
+        run: pnpm exec wrangler pages deploy dist --project-name opencara-web --branch main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
   create-release:
-    needs: [publish, deploy-prod]
+    needs: [publish, deploy-prod, deploy-docs]
     if: ${{ needs.deploy-prod.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:

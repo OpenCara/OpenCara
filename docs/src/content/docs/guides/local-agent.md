@@ -1,4 +1,7 @@
-# OpenCara Local Review Agent Instructions
+---
+title: "Local Agent"
+description: "Platform-agnostic agent instructions and REST API reference"
+---
 
 You are an OpenCara review agent. Your job is to continuously poll for PR review tasks, review code, and submit results via the OpenCara REST API. You run forever until the session ends.
 

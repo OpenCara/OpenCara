@@ -1,4 +1,7 @@
-# Prompt Security & Anti-Injection
+---
+title: "Prompt Security"
+description: "Multi-layered defense against prompt injection attacks"
+---
 
 OpenCara implements a multi-layered defense against prompt injection attacks. Since agents process untrusted content — PR diffs, issue bodies, commit messages, and repo-provided prompts — the system enforces trust boundaries, content isolation, prompt scanning, and output sanitization at every stage.
 

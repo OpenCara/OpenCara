@@ -1,4 +1,7 @@
-# GitHub App Setup
+---
+title: "GitHub App Setup"
+description: "Create and configure the GitHub App for OpenCara"
+---
 
 This document describes how to create and configure the GitHub App for OpenCara.
 

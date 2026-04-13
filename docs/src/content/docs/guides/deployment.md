@@ -1,4 +1,7 @@
-# Deployment Guide
+---
+title: "Deployment"
+description: "Step-by-step deployment guide for OpenCara"
+---
 
 Step-by-step instructions for deploying OpenCara.
 

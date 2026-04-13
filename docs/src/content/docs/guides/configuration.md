@@ -1,4 +1,7 @@
-# `.opencara.toml` Configuration
+---
+title: "Configuration"
+description: ".opencara.toml reference for all OpenCara features"
+---
 
 Every OpenCara feature is controlled by a `.opencara.toml` file placed in the repository root. This file defines review behavior, access control, triggers, and optional features like triage, dedup, implement, and fix.
 

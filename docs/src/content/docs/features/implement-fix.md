@@ -1,4 +1,7 @@
-# AI Implementation & Fix
+---
+title: "Implement & Fix"
+description: "AI code generation from issues and review fix automation"
+---
 
 OpenCara supports two code-generation features that let agents write and modify code directly on GitHub repositories. **Implement** creates new PRs from issue descriptions; **Fix** applies corrections to existing PRs based on review comments. Both are triggered on-demand via slash commands.
 
