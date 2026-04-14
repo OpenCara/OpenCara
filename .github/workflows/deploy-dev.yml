@@ -22,7 +22,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r --filter '!@opencara/docs' run build
+      - run: pnpm -r --filter './packages/*' run build
       - name: Inject infrastructure IDs
         run: |
           sed -i "s/REPLACE_WITH_DEV_KV_NAMESPACE_ID/${{ secrets.CF_DEV_KV_ID }}/" packages/server/wrangler.toml
