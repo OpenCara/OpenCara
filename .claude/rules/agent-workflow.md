@@ -1,29 +1,25 @@
 # Agent Workflow
 
-Event-driven, PM-centric architecture. Dev agents are implemented via OpenCara's own `[implement]` feature with named agents configured in `.opencara.toml`.
+PM-centric architecture. Dev agents are Claude Code team agents spawned by the team lead in worktrees.
 
 ## Agent Roster
 
-| Agent          | Role                                                                                                                  | How it runs                                       |
-| -------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running)             |
-| **architect**  | Architecture, shared types, infrastructure, cross-package                                                             | OpenCara implement agent (`[[implement.agents]]`) |
-| **server-dev** | Hono server backend, REST API, D1 storage                                                                             | OpenCara implement agent (`[[implement.agents]]`) |
-| **cli-dev**    | CLI npm package, HTTP polling, review execution                                                                       | OpenCara implement agent (`[[implement.agents]]`) |
-| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)                |
+| Agent          | Role                                                                                                                  | How it runs                              |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running)    |
+| **architect**  | Architecture, shared types, infrastructure, cross-package                                                             | Claude Code team agent (worktree)        |
+| **server-dev** | Hono server backend, REST API, D1 storage                                                                             | Claude Code team agent (worktree)        |
+| **cli-dev**    | CLI npm package, HTTP polling, review execution                                                                       | Claude Code team agent (worktree)        |
+| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)       |
 
 ## Implementation Flow
 
 ```
-PM triages issue → PM sets "Agent" field on project board (e.g., "server-dev")
-  → Team lead or PM moves issue to "In progress"
-  → projects_v2_item.edited webhook fires
-  → Server reads "Agent" field via agent_field config
-  → Resolves agent config from [[implement.agents]]
-  → Creates implement task with agent's prompt/model/tool
-  → CLI agent claims and implements → Creates PR → STOPS
-  → Bot reviews PR → PM comments /opencara fix → Fix agent resolves findings
-  → PM checks if clean → Merges PR (max 3 fix iterations)
+PM triages issue → PM writes implementation spec → PM notifies team lead
+  → Team lead spawns dev agent in worktree: /spawn <agent-type> <issue-number>
+  → Agent implements → Creates PR
+  → Agent waits for bot review → Fixes findings (max 3 iterations)
+  → Agent reports PR is clean → Team lead or PM merges
   → PM updates board → Done
 ```
 
