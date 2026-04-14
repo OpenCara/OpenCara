@@ -232,13 +232,12 @@ export function isRepoAllowed(
     case 'public':
       return true;
     case 'private': {
-      // Explicitly-listed repos are always allowed — actual access is verified
-      // by verifyRepoAccess() which checks GET /repos/{owner}/{repo}.
-      // This ensures collaborator-access repos (not org members) are included.
-      if (repoConfig.list && repoConfig.list.length > 0) {
-        return repoConfig.list.includes(fullRepo);
+      // Explicitly-listed repos are always allowed — actual GitHub access
+      // is verified later when the agent fetches the diff.
+      if (repoConfig.list && repoConfig.list.length > 0 && repoConfig.list.includes(fullRepo)) {
+        return true;
       }
-      // No explicit list — fall back to org/owner heuristic
+      // Fall back to org/owner heuristic for unlisted repos
       const normalizedTarget = targetOwner.toLowerCase();
       const normalizedOwner = agentOwner?.toLowerCase();
       return (

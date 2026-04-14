@@ -24,3 +24,23 @@ timeout = "30m"
 [review.summarizer]
 only = "quabug"
 preferred_models = ["claude-opus-4-6"]
+
+[issue_review]
+prompt = """
+Review this issue for the OpenCara platform — a distributed AI code review service.
+
+Tech stack: TypeScript, Cloudflare Workers + D1 (stateless REST polling),
+pnpm monorepo (packages: server, cli, shared).
+
+Evaluate:
+- Clarity and completeness of the issue description
+- Whether acceptance criteria are well-defined
+- Feasibility and potential impact on existing architecture
+- Security implications
+- Suggested implementation approach
+
+Be concise. Provide actionable feedback.
+"""
+agent_count = 3
+preferred_models = ["claude-sonnet-4-6", "glm-5", "kimi-k2.5"]
+timeout = "5m"

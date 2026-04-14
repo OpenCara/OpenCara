@@ -15,7 +15,10 @@
       "Bash(pnpm install:*)",
       "Bash(bash scripts/process-webhook-events.sh)",
       "Bash(bash scripts/list-issues-by-status.sh ready)",
-      "Bash(bash scripts/poll-github.sh)"
+      "Bash(bash scripts/poll-github.sh)",
+      "Bash(mkdir -p .claude packages/server/sql)",
+      "Bash(mv docs/PLAN.md docs/QA-PLAN.md docs/QA-PLAN-M19.md docs/mvp.md .claude/)",
+      "Bash(mv docs/schema.sql packages/server/sql/)"
     ]
   }
 }
