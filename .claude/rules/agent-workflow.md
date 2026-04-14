@@ -4,13 +4,13 @@ PM-centric architecture. Dev agents are Claude Code team agents spawned by the t
 
 ## Agent Roster
 
-| Agent          | Role                                                                                                                  | How it runs                              |
-| -------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running)    |
-| **architect**  | Architecture, shared types, infrastructure, cross-package                                                             | Claude Code team agent (worktree)        |
-| **server-dev** | Hono server backend, REST API, D1 storage                                                                             | Claude Code team agent (worktree)        |
-| **cli-dev**    | CLI npm package, HTTP polling, review execution                                                                       | Claude Code team agent (worktree)        |
-| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)       |
+| Agent          | Role                                                                                                                  | How it runs                           |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| **pm**         | Central coordinator — triages events, designs solutions, breaks down features, dispatches agents, tracks docs/PLAN.md | Claude Code team agent (long-running) |
+| **architect**  | Architecture, shared types, infrastructure, cross-package                                                             | Claude Code team agent (worktree)     |
+| **server-dev** | Hono server backend, REST API, D1 storage                                                                             | Claude Code team agent (worktree)     |
+| **cli-dev**    | CLI npm package, HTTP polling, review execution                                                                       | Claude Code team agent (worktree)     |
+| **clarifier**  | Multi-AI analysis of ambiguous issues                                                                                 | Claude Code team agent (ephemeral)    |
 
 ## Implementation Flow
 
