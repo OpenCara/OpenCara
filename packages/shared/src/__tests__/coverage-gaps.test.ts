@@ -48,11 +48,14 @@ describe('isRepoAllowed edge cases', () => {
     expect(isRepoAllowed({ mode: 'private' }, 'ALICE', 'repo', 'alice')).toBe(true);
   });
 
-  it('mode=private with list narrows within accessible repos', () => {
+  it('mode=private with list: listed repos always allowed, unlisted fall back to org/owner', () => {
     const orgs = new Set(['my-org']);
     const config = { mode: 'private' as const, list: ['my-org/allowed-repo'] };
     expect(isRepoAllowed(config, 'my-org', 'allowed-repo', 'alice', orgs)).toBe(true);
-    expect(isRepoAllowed(config, 'my-org', 'other-repo', 'alice', orgs)).toBe(false);
+    // Unlisted repo under org owner — falls back to org heuristic (allowed)
+    expect(isRepoAllowed(config, 'my-org', 'other-repo', 'alice', orgs)).toBe(true);
+    // Unlisted repo under unknown org — org heuristic rejects
+    expect(isRepoAllowed(config, 'unknown-org', 'other-repo', 'alice', orgs)).toBe(false);
     // Explicitly-listed repo under non-org owner — allowed (collaborator access)
     expect(
       isRepoAllowed(
@@ -68,7 +71,8 @@ describe('isRepoAllowed edge cases', () => {
   it('mode=private with list and own repos', () => {
     const config = { mode: 'private' as const, list: ['alice/my-repo'] };
     expect(isRepoAllowed(config, 'alice', 'my-repo', 'alice')).toBe(true);
-    expect(isRepoAllowed(config, 'alice', 'other-repo', 'alice')).toBe(false);
+    // Unlisted repo under own name — falls back to owner heuristic (allowed)
+    expect(isRepoAllowed(config, 'alice', 'other-repo', 'alice')).toBe(true);
   });
 
   it('mode=private without list allows all own repos', () => {
