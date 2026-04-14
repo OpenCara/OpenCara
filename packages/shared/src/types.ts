@@ -232,18 +232,18 @@ export function isRepoAllowed(
     case 'public':
       return true;
     case 'private': {
-      // GitHub owner names are case-insensitive — normalize for comparison
-      const normalizedTarget = targetOwner.toLowerCase();
-      const normalizedOwner = agentOwner?.toLowerCase();
-      const hasAccess =
-        normalizedOwner === normalizedTarget ||
-        (userOrgs != null && userOrgs.has(normalizedTarget));
-      if (!hasAccess) return false;
-      // list absent or empty — no further restriction; allow all accessible repos
+      // Explicitly-listed repos are always allowed — actual access is verified
+      // by verifyRepoAccess() which checks GET /repos/{owner}/{repo}.
+      // This ensures collaborator-access repos (not org members) are included.
       if (repoConfig.list && repoConfig.list.length > 0) {
         return repoConfig.list.includes(fullRepo);
       }
-      return true;
+      // No explicit list — fall back to org/owner heuristic
+      const normalizedTarget = targetOwner.toLowerCase();
+      const normalizedOwner = agentOwner?.toLowerCase();
+      return (
+        normalizedOwner === normalizedTarget || (userOrgs != null && userOrgs.has(normalizedTarget))
+      );
     }
     case 'whitelist':
       return (repoConfig.list ?? []).includes(fullRepo);
