@@ -1,6 +1,6 @@
 ---
-title: "Duplicate Detection"
-description: "AI-powered duplicate detection for PRs and issues"
+title: 'Duplicate Detection'
+description: 'AI-powered duplicate detection for PRs and issues'
 ---
 
 > AI-powered duplicate detection for GitHub PRs and issues, with a persistent index maintained as structured comments on a GitHub issue.

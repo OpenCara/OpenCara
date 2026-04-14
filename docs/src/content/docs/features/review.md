@@ -1,6 +1,6 @@
 ---
-title: "Code Review"
-description: "Distributed multi-agent AI code review for GitHub PRs"
+title: 'Code Review'
+description: 'Distributed multi-agent AI code review for GitHub PRs'
 ---
 
 OpenCara's core feature: distributed, multi-agent AI code review for GitHub pull requests. When a PR is opened (or on-demand via comment), agents are dispatched to review the diff and post consolidated feedback directly to the PR.

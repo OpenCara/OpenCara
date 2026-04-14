@@ -1,378 +1,490 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en" class="scroll-smooth">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenCara | Distributed AI Code Review</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-        rel="stylesheet">
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'monospace'],
-                    },
-                    colors: {
-                        brand: {
-                            400: '#7ddbf0', // Lighter cyan for hovers/gradients
-                            500: '#5cc9e8', // Primary Cyan
-                            600: '#3eb0d0', // Darker cyan
-                        },
-                        dark: {
-                            bg: '#20221f', // Primary Dark
-                            card: 'rgba(32, 34, 31, 0.7)', // Glassmorphism dark base
-                            border: 'rgba(249, 254, 250, 0.1)', // Light border
-                        },
-                        light: '#f9fefa' // Primary Light/Off-white
-                    }
-                }
-            }
-        }
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
+            colors: {
+              brand: {
+                400: '#7ddbf0', // Lighter cyan for hovers/gradients
+                500: '#5cc9e8', // Primary Cyan
+                600: '#3eb0d0', // Darker cyan
+              },
+              dark: {
+                bg: '#20221f', // Primary Dark
+                card: 'rgba(32, 34, 31, 0.7)', // Glassmorphism dark base
+                border: 'rgba(249, 254, 250, 0.1)', // Light border
+              },
+              light: '#f9fefa', // Primary Light/Off-white
+            },
+          },
+        },
+      };
     </script>
     <style>
-        body {
-            background-color: #20221f;
-            color: #f9fefa;
-            overflow-x: hidden;
-        }
+      body {
+        background-color: #20221f;
+        color: #f9fefa;
+        overflow-x: hidden;
+      }
 
-        /* Fixed canvas background */
-        #network-canvas {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: -1;
-            background: linear-gradient(to bottom, #20221f, #181a17);
-        }
+      /* Fixed canvas background */
+      #network-canvas {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: -1;
+        background: linear-gradient(to bottom, #20221f, #181a17);
+      }
 
-        /* Glassmorphism utilities */
-        .glass-panel {
-            background: var(--tw-colors-dark-card);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid var(--tw-colors-dark-border);
-        }
+      /* Glassmorphism utilities */
+      .glass-panel {
+        background: var(--tw-colors-dark-card);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--tw-colors-dark-border);
+      }
 
-        .code-block {
-            background: #1a1c19;
-            border: 1px solid #2d302b;
-        }
+      .code-block {
+        background: #1a1c19;
+        border: 1px solid #2d302b;
+      }
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
+      /* Custom scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
 
-        ::-webkit-scrollbar-track {
-            background: #20221f;
-        }
+      ::-webkit-scrollbar-track {
+        background: #20221f;
+      }
 
-        ::-webkit-scrollbar-thumb {
-            background: #475569;
-            border-radius: 4px;
-        }
+      ::-webkit-scrollbar-thumb {
+        background: #475569;
+        border-radius: 4px;
+      }
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: #64748b;
-        }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b;
+      }
     </style>
-</head>
+  </head>
 
-<body id="top" class="antialiased selection:bg-brand-500 selection:text-[#20221f]">
-
+  <body id="top" class="antialiased selection:bg-brand-500 selection:text-[#20221f]">
     <!-- Interactive Background -->
     <canvas id="network-canvas"></canvas>
 
     <!-- Navigation -->
-    <nav class="fixed w-full z-50 glass-panel border-b border-t-0 border-l-0 border-r-0 transition-all duration-300"
-        id="navbar">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex items-center justify-between h-16">
-                <a href="#top" class="flex items-center gap-2 hover:opacity-90 transition-opacity"
-                    aria-label="Back to top">
-                    <div class="relative w-8 h-8 shrink-0">
-                        <!-- Fallback icon -->
-                        <div
-                            class="absolute inset-0 rounded-lg bg-gradient-to-br from-brand-400 to-brand-500 flex items-center justify-center text-[#20221f]">
-                            <i data-lucide="network" class="w-5 h-5"></i>
-                        </div>
-                        <!-- Uploaded image (hides itself if broken) -->
-                        <img src="icon.jpg" alt="OpenCara"
-                            class="absolute inset-0 w-8 h-8 rounded-lg object-cover z-10 bg-[#20221f]"
-                            onerror="this.style.display='none'">
-                    </div>
-                    <span class="font-bold text-xl tracking-tight text-light">Open<span
-                            class="text-brand-500">Cara</span></span>
-                </a>
-                <div class="flex items-center gap-3 md:hidden">
-                    <a href="https://discord.gg/JGnmrUXF" target="_blank" rel="noopener noreferrer"
-                        class="text-slate-400 hover:text-[#5865F2] transition-colors p-2" title="Join Discord"
-                        aria-label="Join Discord">
-                        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path
-                                d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0 a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
-                        </svg>
-                    </a>
-                    <a href="https://github.com/OpenCara/OpenCara" target="_blank" rel="noopener noreferrer"
-                        class="text-slate-400 hover:text-light transition-colors p-2" title="GitHub Repository"
-                        aria-label="GitHub Repository">
-                        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
-                    </a>
-                </div>
-                <div class="hidden md:block">
-                    <div class="ml-10 flex items-center space-x-8">
-                        <a href="#features"
-                            class="hover:text-brand-500 px-3 py-2 rounded-md text-sm font-medium transition-colors">Features</a>
-                        <a href="#how-it-works"
-                            class="hover:text-brand-500 px-3 py-2 rounded-md text-sm font-medium transition-colors">How
-                            it Works</a>
-                        <a href="#privacy"
-                            class="hover:text-brand-500 px-3 py-2 rounded-md text-sm font-medium transition-colors">Privacy</a>
-
-                        <div class="flex items-center gap-4 pl-4 border-l border-light/20">
-                            <a href="https://discord.gg/JGnmrUXF" target="_blank" rel="noopener noreferrer"
-                                class="text-slate-400 hover:text-[#5865F2] transition-colors" title="Join Discord"
-                                aria-label="Join Discord">
-                                <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"
-                                    xmlns="http://www.w3.org/2000/svg">
-                                    <path
-                                        d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0 a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
-                                </svg>
-                            </a>
-                            <a href="https://github.com/OpenCara/OpenCara" target="_blank" rel="noopener noreferrer"
-                                class="text-slate-400 hover:text-light transition-colors" title="GitHub Repository"
-                                aria-label="GitHub Repository">
-                                <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
-                            </a>
-                        </div>
-                    </div>
-                </div>
+    <nav
+      class="fixed w-full z-50 glass-panel border-b border-t-0 border-l-0 border-r-0 transition-all duration-300"
+      id="navbar"
+    >
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center justify-between h-16">
+          <a
+            href="#top"
+            class="flex items-center gap-2 hover:opacity-90 transition-opacity"
+            aria-label="Back to top"
+          >
+            <div class="relative w-8 h-8 shrink-0">
+              <!-- Fallback icon -->
+              <div
+                class="absolute inset-0 rounded-lg bg-gradient-to-br from-brand-400 to-brand-500 flex items-center justify-center text-[#20221f]"
+              >
+                <i data-lucide="network" class="w-5 h-5"></i>
+              </div>
+              <!-- Uploaded image (hides itself if broken) -->
+              <img
+                src="icon.jpg"
+                alt="OpenCara"
+                class="absolute inset-0 w-8 h-8 rounded-lg object-cover z-10 bg-[#20221f]"
+                onerror="this.style.display = 'none'"
+              />
             </div>
+            <span class="font-bold text-xl tracking-tight text-light"
+              >Open<span class="text-brand-500">Cara</span></span
+            >
+          </a>
+          <div class="flex items-center gap-3 md:hidden">
+            <a
+              href="https://discord.gg/JGnmrUXF"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-slate-400 hover:text-[#5865F2] transition-colors p-2"
+              title="Join Discord"
+              aria-label="Join Discord"
+            >
+              <svg
+                class="w-5 h-5 fill-current"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0 a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"
+                />
+              </svg>
+            </a>
+            <a
+              href="https://github.com/OpenCara/OpenCara"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-slate-400 hover:text-light transition-colors p-2"
+              title="GitHub Repository"
+              aria-label="GitHub Repository"
+            >
+              <svg
+                class="w-5 h-5 fill-current"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+                />
+              </svg>
+            </a>
+          </div>
+          <div class="hidden md:block">
+            <div class="ml-10 flex items-center space-x-8">
+              <a
+                href="#features"
+                class="hover:text-brand-500 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                >Features</a
+              >
+              <a
+                href="#how-it-works"
+                class="hover:text-brand-500 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                >How it Works</a
+              >
+              <a
+                href="#privacy"
+                class="hover:text-brand-500 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                >Privacy</a
+              >
+
+              <div class="flex items-center gap-4 pl-4 border-l border-light/20">
+                <a
+                  href="https://discord.gg/JGnmrUXF"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-slate-400 hover:text-[#5865F2] transition-colors"
+                  title="Join Discord"
+                  aria-label="Join Discord"
+                >
+                  <svg
+                    class="w-5 h-5 fill-current"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0 a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"
+                    />
+                  </svg>
+                </a>
+                <a
+                  href="https://github.com/OpenCara/OpenCara"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-slate-400 hover:text-light transition-colors"
+                  title="GitHub Repository"
+                  aria-label="GitHub Repository"
+                >
+                  <svg
+                    class="w-5 h-5 fill-current"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+                    />
+                  </svg>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
+      </div>
     </nav>
 
     <!-- Hero Section -->
     <main class="pt-32 pb-16 sm:pt-40 sm:pb-24 lg:pb-32 overflow-hidden z-10 relative">
-        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 text-center">
-            <div
-                class="inline-flex items-center gap-2 px-3 py-1 rounded-full glass-panel border-brand-500/30 text-brand-500 text-sm font-medium mb-8">
-                <span class="flex h-2 w-2 relative">
-                    <span
-                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-brand-500"></span>
-                </span>
-                Distributed AI Agents are live
-            </div>
-            <h1 class="text-4xl sm:text-6xl font-extrabold text-light tracking-tight mb-6 drop-shadow-lg">
-                Distributed AI <span
-                    class="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 to-brand-600">Code
-                    Review</span>
-            </h1>
-            <p class="mt-4 max-w-2xl mx-auto text-lg sm:text-xl text-slate-300 mb-10">
-                Install the GitHub App once, get consistent reviews across all your repos. Contributors run review
-                agents locally using their own AI tools; we coordinate the distribution.
-            </p>
-            <div class="flex flex-col sm:flex-row justify-center gap-4">
-                <a href="https://github.com/apps/opencara"
-                    class="bg-brand-500 hover:bg-brand-400 text-[#20221f] px-8 py-3 rounded-lg font-semibold text-lg transition-all shadow-[0_0_20px_rgba(92,201,232,0.3)] hover:shadow-[0_0_30px_rgba(92,201,232,0.5)] flex items-center justify-center gap-2">
-                    <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
-                    Install on GitHub
-                </a>
-                <a href="#quickstart"
-                    class="glass-panel hover:bg-light/10 text-light px-8 py-3 rounded-lg font-semibold text-lg transition-all flex items-center justify-center gap-2">
-                    <i data-lucide="terminal" class="w-5 h-5"></i>
-                    Contributor CLI
-                </a>
-            </div>
+      <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 text-center">
+        <div
+          class="inline-flex items-center gap-2 px-3 py-1 rounded-full glass-panel border-brand-500/30 text-brand-500 text-sm font-medium mb-8"
+        >
+          <span class="flex h-2 w-2 relative">
+            <span
+              class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"
+            ></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-brand-500"></span>
+          </span>
+          Distributed AI Agents are live
         </div>
+        <h1
+          class="text-4xl sm:text-6xl font-extrabold text-light tracking-tight mb-6 drop-shadow-lg"
+        >
+          Distributed AI
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 to-brand-600"
+            >Code Review</span
+          >
+        </h1>
+        <p class="mt-4 max-w-2xl mx-auto text-lg sm:text-xl text-slate-300 mb-10">
+          Install the GitHub App once, get consistent reviews across all your repos. Contributors
+          run review agents locally using their own AI tools; we coordinate the distribution.
+        </p>
+        <div class="flex flex-col sm:flex-row justify-center gap-4">
+          <a
+            href="https://github.com/apps/opencara"
+            class="bg-brand-500 hover:bg-brand-400 text-[#20221f] px-8 py-3 rounded-lg font-semibold text-lg transition-all shadow-[0_0_20px_rgba(92,201,232,0.3)] hover:shadow-[0_0_30px_rgba(92,201,232,0.5)] flex items-center justify-center gap-2"
+          >
+            <svg
+              class="w-5 h-5 fill-current"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+              />
+            </svg>
+            Install on GitHub
+          </a>
+          <a
+            href="#quickstart"
+            class="glass-panel hover:bg-light/10 text-light px-8 py-3 rounded-lg font-semibold text-lg transition-all flex items-center justify-center gap-2"
+          >
+            <i data-lucide="terminal" class="w-5 h-5"></i>
+            Contributor CLI
+          </a>
+        </div>
+      </div>
     </main>
 
     <!-- Who It's For Grid -->
     <section id="features" class="py-20 relative z-10">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="text-center mb-16">
-                <h2 class="text-3xl font-bold text-light mb-4">Who is OpenCara for?</h2>
-                <p class="text-slate-400 max-w-3xl mx-auto">Stop configuring agents for every repo. Unify your review
-                    standards, scale your community's review capacity, and protect open-source maintainers from
-                    AI-driven pull request floods.</p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8">
-                <!-- Card 1 -->
-                <div
-                    class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors">
-                    <div
-                        class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                    </div>
-                    <div
-                        class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6">
-                        <i data-lucide="globe-2" class="w-6 h-6"></i>
-                    </div>
-                    <h3 class="text-xl font-bold text-light mb-3">Maintainers</h3>
-                    <p class="text-slate-400 leading-relaxed">
-                        AI coding tools cause PR explosions that bury maintainers in review queues. Let community
-                        members contribute their own AI tokens to review overflow PRs before things get out of
-                        control.
-                    </p>
-                </div>
-                <!-- Card 2 -->
-                <div
-                    class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors">
-                    <div
-                        class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                    </div>
-                    <div
-                        class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6">
-                        <i class="w-6 h-6" data-lucide="shield-check"></i>
-                    </div>
-                    <h3 class="text-xl font-bold text-light mb-3">Contributors</h3>
-                    <p class="text-slate-400 leading-relaxed">
-                        Give back to the projects you depend on by reviewing overflow PRs with your local AI tools,
-                        helping protect open-source communities from low-signal review floods.
-                    </p>
-                </div>
-                <!-- Card 3 -->
-                <div
-                    class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors">
-                    <div
-                        class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                    </div>
-                    <div
-                        class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6">
-                        <i class="w-6 h-6" data-lucide="user"></i>
-                    </div>
-                    <h3 class="text-xl font-bold text-light mb-3">Developers</h3>
-                    <p class="text-slate-400 leading-relaxed">
-                        Stop wiring up review agents or GitHub Actions for every new repo. Install the app once, and
-                        your personal repositories get AI-powered code review automatically.
-                    </p>
-                </div>
-                <!-- Card 4 -->
-                <div
-                    class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors">
-                    <div
-                        class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                    </div>
-                    <div
-                        class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6">
-                        <i class="w-6 h-6" data-lucide="users"></i>
-                    </div>
-                    <h3 class="text-xl font-bold text-light mb-3">Teams</h3>
-                    <p class="text-slate-400 leading-relaxed">
-                        Enforce unified review standards across your org. Deploy centralized agents with consistent
-                        review criteria that automatically apply to every PR.
-                    </p>
-                </div>
-            </div>
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+          <h2 class="text-3xl font-bold text-light mb-4">Who is OpenCara for?</h2>
+          <p class="text-slate-400 max-w-3xl mx-auto">
+            Stop configuring agents for every repo. Unify your review standards, scale your
+            community's review capacity, and protect open-source maintainers from AI-driven pull
+            request floods.
+          </p>
         </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8">
+          <!-- Card 1 -->
+          <div
+            class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors"
+          >
+            <div
+              class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity"
+            ></div>
+            <div
+              class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6"
+            >
+              <i data-lucide="globe-2" class="w-6 h-6"></i>
+            </div>
+            <h3 class="text-xl font-bold text-light mb-3">Maintainers</h3>
+            <p class="text-slate-400 leading-relaxed">
+              AI coding tools cause PR explosions that bury maintainers in review queues. Let
+              community members contribute their own AI tokens to review overflow PRs before things
+              get out of control.
+            </p>
+          </div>
+          <!-- Card 2 -->
+          <div
+            class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors"
+          >
+            <div
+              class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity"
+            ></div>
+            <div
+              class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6"
+            >
+              <i class="w-6 h-6" data-lucide="shield-check"></i>
+            </div>
+            <h3 class="text-xl font-bold text-light mb-3">Contributors</h3>
+            <p class="text-slate-400 leading-relaxed">
+              Give back to the projects you depend on by reviewing overflow PRs with your local AI
+              tools, helping protect open-source communities from low-signal review floods.
+            </p>
+          </div>
+          <!-- Card 3 -->
+          <div
+            class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors"
+          >
+            <div
+              class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity"
+            ></div>
+            <div
+              class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6"
+            >
+              <i class="w-6 h-6" data-lucide="user"></i>
+            </div>
+            <h3 class="text-xl font-bold text-light mb-3">Developers</h3>
+            <p class="text-slate-400 leading-relaxed">
+              Stop wiring up review agents or GitHub Actions for every new repo. Install the app
+              once, and your personal repositories get AI-powered code review automatically.
+            </p>
+          </div>
+          <!-- Card 4 -->
+          <div
+            class="glass-panel p-8 rounded-2xl relative overflow-hidden group hover:border-brand-500/50 transition-colors"
+          >
+            <div
+              class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity"
+            ></div>
+            <div
+              class="w-12 h-12 bg-brand-500/20 rounded-xl flex items-center justify-center text-brand-500 mb-6"
+            >
+              <i class="w-6 h-6" data-lucide="users"></i>
+            </div>
+            <h3 class="text-xl font-bold text-light mb-3">Teams</h3>
+            <p class="text-slate-400 leading-relaxed">
+              Enforce unified review standards across your org. Deploy centralized agents with
+              consistent review criteria that automatically apply to every PR.
+            </p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- How It Works & Code -->
-    <section id="how-it-works" class="py-20 relative z-10 border-t border-light/5 bg-black/20 backdrop-blur-sm">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex flex-col lg:flex-row gap-16 items-center">
-
-                <div class="w-full lg:w-1/2">
-                    <h2 class="text-3xl font-bold text-light mb-6">How OpenCara Works</h2>
-                    <div
-                        class="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-700 before:to-transparent">
-
-                        <!-- Step 1 -->
-                        <div
-                            class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                            <div
-                                class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-brand-500 text-[#20221f] font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                                1
-                            </div>
-                            <div
-                                class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <i data-lucide="git-pull-request" class="w-4 h-4 text-brand-500"></i>
-                                    <h4 class="font-bold text-light">GitHub PR Opened</h4>
-                                </div>
-                                <p class="text-sm text-slate-400">Webhook triggers the OpenCara Platform.</p>
-                            </div>
-                        </div>
-
-                        <!-- Step 2 -->
-                        <div
-                            class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                            <div
-                                class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-blue-500 text-light font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                                2
-                            </div>
-                            <div
-                                class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <i data-lucide="cpu" class="w-4 h-4 text-blue-400"></i>
-                                    <h4 class="font-bold text-light">Agent Selection</h4>
-                                </div>
-                                <p class="text-sm text-slate-400">Platform selects agents using reputation-weighted load
-                                    balancing.</p>
-                            </div>
-                        </div>
-
-                        <!-- Step 3 -->
-                        <div
-                            class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                            <div
-                                class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-purple-500 text-light font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                                3
-                            </div>
-                            <div
-                                class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <i data-lucide="terminal" class="w-4 h-4 text-purple-400"></i>
-                                    <h4 class="font-bold text-light">Local Review</h4>
-                                </div>
-                                <p class="text-sm text-slate-400">Distributed agents review code locally via WebSocket
-                                    using their own AI API keys.</p>
-                            </div>
-                        </div>
-
-                        <!-- Step 4 -->
-                        <div
-                            class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                            <div
-                                class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-brand-500 text-[#20221f] font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                                4
-                            </div>
-                            <div
-                                class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <i data-lucide="message-square-text" class="w-4 h-4 text-brand-500"></i>
-                                    <h4 class="font-bold text-light">Synthesis</h4>
-                                </div>
-                                <p class="text-sm text-slate-400">Platform posts a synthesized review with inline
-                                    comments directly to the PR.</p>
-                            </div>
-                        </div>
-                    </div>
+    <section
+      id="how-it-works"
+      class="py-20 relative z-10 border-t border-light/5 bg-black/20 backdrop-blur-sm"
+    >
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-col lg:flex-row gap-16 items-center">
+          <div class="w-full lg:w-1/2">
+            <h2 class="text-3xl font-bold text-light mb-6">How OpenCara Works</h2>
+            <div
+              class="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-700 before:to-transparent"
+            >
+              <!-- Step 1 -->
+              <div
+                class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active"
+              >
+                <div
+                  class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-brand-500 text-[#20221f] font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10"
+                >
+                  1
                 </div>
+                <div
+                  class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg"
+                >
+                  <div class="flex items-center gap-2 mb-1">
+                    <i data-lucide="git-pull-request" class="w-4 h-4 text-brand-500"></i>
+                    <h4 class="font-bold text-light">GitHub PR Opened</h4>
+                  </div>
+                  <p class="text-sm text-slate-400">Webhook triggers the OpenCara Platform.</p>
+                </div>
+              </div>
 
-                <div class="w-full lg:w-1/2" id="quickstart">
-                    <div class="code-block rounded-xl overflow-hidden shadow-2xl">
-                        <div class="flex items-center justify-between px-4 py-3 border-b border-[#2d302b] bg-[#1a1c19]">
-                            <div class="flex space-x-2">
-                                <div class="w-3 h-3 rounded-full bg-red-500"></div>
-                                <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
-                                <div class="w-3 h-3 rounded-full bg-green-500"></div>
-                            </div>
-                            <div class="text-xs font-mono flex gap-4">
-                                <span
-                                    class="border-b border-brand-500 text-brand-500 pb-1">~/.opencara/config.yml</span>
-                            </div>
-                        </div>
-                        <div class="p-4 overflow-auto text-sm font-mono leading-relaxed h-[340px]">
-                            <pre id="code-config"><code class="text-slate-300"><span class="text-slate-500"># Local Contributor Config (~/.opencara/config.yml)</span>
+              <!-- Step 2 -->
+              <div
+                class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active"
+              >
+                <div
+                  class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-blue-500 text-light font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10"
+                >
+                  2
+                </div>
+                <div
+                  class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg"
+                >
+                  <div class="flex items-center gap-2 mb-1">
+                    <i data-lucide="cpu" class="w-4 h-4 text-blue-400"></i>
+                    <h4 class="font-bold text-light">Agent Selection</h4>
+                  </div>
+                  <p class="text-sm text-slate-400">
+                    Platform selects agents using reputation-weighted load balancing.
+                  </p>
+                </div>
+              </div>
+
+              <!-- Step 3 -->
+              <div
+                class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active"
+              >
+                <div
+                  class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-purple-500 text-light font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10"
+                >
+                  3
+                </div>
+                <div
+                  class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg"
+                >
+                  <div class="flex items-center gap-2 mb-1">
+                    <i data-lucide="terminal" class="w-4 h-4 text-purple-400"></i>
+                    <h4 class="font-bold text-light">Local Review</h4>
+                  </div>
+                  <p class="text-sm text-slate-400">
+                    Distributed agents review code locally via WebSocket using their own AI API
+                    keys.
+                  </p>
+                </div>
+              </div>
+
+              <!-- Step 4 -->
+              <div
+                class="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active"
+              >
+                <div
+                  class="flex items-center justify-center w-10 h-10 rounded-full border-4 border-[#20221f] bg-brand-500 text-[#20221f] font-bold shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10"
+                >
+                  4
+                </div>
+                <div
+                  class="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] glass-panel p-4 rounded-xl border border-light/10 ml-4 md:ml-0 shadow-lg"
+                >
+                  <div class="flex items-center gap-2 mb-1">
+                    <i data-lucide="message-square-text" class="w-4 h-4 text-brand-500"></i>
+                    <h4 class="font-bold text-light">Synthesis</h4>
+                  </div>
+                  <p class="text-sm text-slate-400">
+                    Platform posts a synthesized review with inline comments directly to the PR.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="w-full lg:w-1/2" id="quickstart">
+            <div class="code-block rounded-xl overflow-hidden shadow-2xl">
+              <div
+                class="flex items-center justify-between px-4 py-3 border-b border-[#2d302b] bg-[#1a1c19]"
+              >
+                <div class="flex space-x-2">
+                  <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                  <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                  <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                </div>
+                <div class="text-xs font-mono flex gap-4">
+                  <span class="border-b border-brand-500 text-brand-500 pb-1"
+                    >~/.opencara/config.yml</span
+                  >
+                </div>
+              </div>
+              <div class="p-4 overflow-auto text-sm font-mono leading-relaxed h-[340px]">
+                <pre
+                  id="code-config"
+                ><code class="text-slate-300"><span class="text-slate-500"># Local Contributor Config (~/.opencara/config.yml)</span>
 <span class="text-slate-500"># Defines your local AI agents, tools, and usage limits.</span>
 
 <span class="text-purple-400">agents:</span>
@@ -393,287 +505,306 @@
   <span class="text-blue-400">list:</span>
     <span class="text-slate-500">-</span> <span class="text-green-300">myorg/my-project</span>
     <span class="text-slate-500">-</span> <span class="text-green-300">OpenCara/OpenCara</span></code></pre>
-                        </div>
-                        <div
-                            class="px-5 py-4 border-t border-[#2d302b] bg-[#111310] flex justify-between items-center font-mono rounded-b-xl">
-                            <span class="text-brand-500 text-sm md:text-base font-semibold tracking-wide"><span
-                                    class="text-slate-500 font-normal mr-2">$</span>npm i -g opencara</span>
-                            <button onclick="copyCode()"
-                                class="hover:text-light bg-brand-500/10 hover:bg-brand-500/20 text-brand-500 border border-brand-500/30 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 text-xs font-sans"><i
-                                    data-lucide="copy" class="w-3.5 h-3.5"></i> Copy</button>
-                        </div>
-                    </div>
-                </div>
+              </div>
+              <div
+                class="px-5 py-4 border-t border-[#2d302b] bg-[#111310] flex justify-between items-center font-mono rounded-b-xl"
+              >
+                <span class="text-brand-500 text-sm md:text-base font-semibold tracking-wide"
+                  ><span class="text-slate-500 font-normal mr-2">$</span>npm i -g opencara</span
+                >
+                <button
+                  onclick="copyCode()"
+                  class="hover:text-light bg-brand-500/10 hover:bg-brand-500/20 text-brand-500 border border-brand-500/30 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 text-xs font-sans"
+                >
+                  <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy
+                </button>
+              </div>
             </div>
+          </div>
         </div>
+      </div>
     </section>
 
     <!-- Privacy Section -->
     <section id="privacy" class="py-20 relative z-10">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="glass-panel rounded-3xl p-8 md:p-12 relative overflow-hidden">
-                <!-- Decorative background elements inside the card -->
-                <div
-                    class="absolute top-0 right-0 w-64 h-64 bg-brand-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3">
-                </div>
-                <div
-                    class="absolute bottom-0 left-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/3">
-                </div>
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="glass-panel rounded-3xl p-8 md:p-12 relative overflow-hidden">
+          <!-- Decorative background elements inside the card -->
+          <div
+            class="absolute top-0 right-0 w-64 h-64 bg-brand-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"
+          ></div>
+          <div
+            class="absolute bottom-0 left-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/3"
+          ></div>
 
-                <div class="relative z-10">
-                    <div
-                        class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-500/10 text-brand-500 text-sm font-medium mb-6">
-                        <i data-lucide="shield-check" class="w-4 h-4"></i> Strict Data Policy
-                    </div>
-                    <h2 class="text-3xl md:text-4xl font-bold text-light mb-6">Privacy: Minimal Data Storage</h2>
-                    <p class="text-lg text-slate-300 mb-10 max-w-3xl">
-                        OpenCara follows a strict principle of minimal data storage to protect contributor and
-                        maintainer privacy. We are just a coordination layer.
-                    </p>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8">
-                        <div class="flex gap-4">
-                            <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="code-2"></i></div>
-                            <div>
-                                <h4 class="text-light font-semibold text-lg mb-1">No code stored</h4>
-                                <p class="text-slate-400 text-sm">PR diffs are fetched on demand and never persisted.
-                                    Discarded immediately after review.</p>
-                            </div>
-                        </div>
-                        <div class="flex gap-4">
-                            <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="key"></i></div>
-                            <div>
-                                <h4 class="text-light font-semibold text-lg mb-1">No API keys on platform</h4>
-                                <p class="text-slate-400 text-sm">Contributors' AI API keys never leave their local
-                                    machine. Zero platform access.</p>
-                            </div>
-                        </div>
-                        <div class="flex gap-4">
-                            <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="server-off"></i></div>
-                            <div>
-                                <h4 class="text-light font-semibold text-lg mb-1">No review text stored</h4>
-                                <p class="text-slate-400 text-sm">Reviews post directly to GitHub. We only store
-                                    metadata (status, verdict, URL) for coordination.</p>
-                            </div>
-                        </div>
-                        <div class="flex gap-4">
-                            <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="user-x"></i></div>
-                            <div>
-                                <h4 class="text-light font-semibold text-lg mb-1">Minimal user data</h4>
-                                <p class="text-slate-400 text-sm">Only GitHub ID, display name, and avatar. No email, no
-                                    private profile data, zero tracking or telemetry.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+          <div class="relative z-10">
+            <div
+              class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-500/10 text-brand-500 text-sm font-medium mb-6"
+            >
+              <i data-lucide="shield-check" class="w-4 h-4"></i> Strict Data Policy
             </div>
+            <h2 class="text-3xl md:text-4xl font-bold text-light mb-6">
+              Privacy: Minimal Data Storage
+            </h2>
+            <p class="text-lg text-slate-300 mb-10 max-w-3xl">
+              OpenCara follows a strict principle of minimal data storage to protect contributor and
+              maintainer privacy. We are just a coordination layer.
+            </p>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8">
+              <div class="flex gap-4">
+                <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="code-2"></i></div>
+                <div>
+                  <h4 class="text-light font-semibold text-lg mb-1">No code stored</h4>
+                  <p class="text-slate-400 text-sm">
+                    PR diffs are fetched on demand and never persisted. Discarded immediately after
+                    review.
+                  </p>
+                </div>
+              </div>
+              <div class="flex gap-4">
+                <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="key"></i></div>
+                <div>
+                  <h4 class="text-light font-semibold text-lg mb-1">No API keys on platform</h4>
+                  <p class="text-slate-400 text-sm">
+                    Contributors' AI API keys never leave their local machine. Zero platform access.
+                  </p>
+                </div>
+              </div>
+              <div class="flex gap-4">
+                <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="server-off"></i></div>
+                <div>
+                  <h4 class="text-light font-semibold text-lg mb-1">No review text stored</h4>
+                  <p class="text-slate-400 text-sm">
+                    Reviews post directly to GitHub. We only store metadata (status, verdict, URL)
+                    for coordination.
+                  </p>
+                </div>
+              </div>
+              <div class="flex gap-4">
+                <div class="mt-1 shrink-0 text-brand-500"><i data-lucide="user-x"></i></div>
+                <div>
+                  <h4 class="text-light font-semibold text-lg mb-1">Minimal user data</h4>
+                  <p class="text-slate-400 text-sm">
+                    Only GitHub ID, display name, and avatar. No email, no private profile data,
+                    zero tracking or telemetry.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+      </div>
     </section>
 
     <!-- Footer -->
     <footer class="border-t border-light/10 bg-[#181a17] relative z-10 py-8">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="text-center text-xs text-slate-600">
-                &copy; 2026 <a href="#top" class="text-slate-500 hover:text-light transition-colors"
-                    aria-label="OpenCara home">OpenCara</a> Project. Licensed under the MIT License. Designed for
-                distributed open-source collaboration.
-            </div>
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center text-xs text-slate-600">
+          &copy; 2026
+          <a
+            href="#top"
+            class="text-slate-500 hover:text-light transition-colors"
+            aria-label="OpenCara home"
+            >OpenCara</a
+          >
+          Project. Licensed under the MIT License. Designed for distributed open-source
+          collaboration.
         </div>
+      </div>
     </footer>
 
     <!-- Scripts -->
     <script>
-        // Initialize Lucide Icons
-        lucide.createIcons();
+      // Initialize Lucide Icons
+      lucide.createIcons();
 
-        // Copy Code Functionality
-        function copyCode() {
-            const command = "npm i -g opencara && opencara agent start --all";
-            // Standard way to copy in modern browsers, ignoring iframe restrictions where possible
-            if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(command);
-            } else {
-                let textArea = document.createElement("textarea");
-                textArea.value = command;
-                textArea.style.position = "fixed";
-                textArea.style.left = "-999999px";
-                textArea.style.top = "-999999px";
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                } catch (error) {
-                    console.error('Copy failed', error);
-                }
-                textArea.remove();
-            }
-            alert("CLI command copied to clipboard!");
+      // Copy Code Functionality
+      function copyCode() {
+        const command = 'npm i -g opencara && opencara agent start --all';
+        // Standard way to copy in modern browsers, ignoring iframe restrictions where possible
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(command);
+        } else {
+          let textArea = document.createElement('textarea');
+          textArea.value = command;
+          textArea.style.position = 'fixed';
+          textArea.style.left = '-999999px';
+          textArea.style.top = '-999999px';
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          try {
+            document.execCommand('copy');
+          } catch (error) {
+            console.error('Copy failed', error);
+          }
+          textArea.remove();
+        }
+        alert('CLI command copied to clipboard!');
+      }
+
+      // --- Interactive Neural Network Canvas ---
+      const canvas = document.getElementById('network-canvas');
+      const ctx = canvas.getContext('2d');
+
+      let width, height;
+      let particles = [];
+
+      // Configuration to match the uploaded image aesthetic
+      const PARTICLE_COUNT = Math.min(window.innerWidth / 15, 120); // Responsive count
+      const MAX_DISTANCE = 150; // Max distance to draw lines
+      const MOUSE_RADIUS = 200; // Radius of mouse interaction
+
+      const COLORS = {
+        particle: 'rgba(249, 254, 250, ', // f9fefa base
+        glow: '#5cc9e8', // Primary cyan
+        line: 'rgba(92, 201, 232, ', // 5cc9e8 converted to rgb
+      };
+
+      let mouse = {
+        x: null,
+        y: null,
+      };
+
+      // Resize Canvas
+      function resizeCanvas() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+      }
+
+      window.addEventListener('resize', () => {
+        resizeCanvas();
+        initParticles();
+      });
+
+      // Mouse Events
+      window.addEventListener('mousemove', (e) => {
+        mouse.x = e.x;
+        mouse.y = e.y;
+      });
+
+      window.addEventListener('mouseout', () => {
+        mouse.x = null;
+        mouse.y = null;
+      });
+
+      // Particle Class
+      class Particle {
+        constructor() {
+          this.x = Math.random() * width;
+          this.y = Math.random() * height;
+          this.vx = (Math.random() - 0.5) * 0.8; // Slow drift
+          this.vy = (Math.random() - 0.5) * 0.8;
+          // Varying sizes based on the image (some are bright/large, some are dim/small)
+          this.radius = Math.random() * 1.5 + 0.5;
+          this.baseAlpha = Math.random() * 0.5 + 0.5;
         }
 
-        // --- Interactive Neural Network Canvas ---
-        const canvas = document.getElementById('network-canvas');
-        const ctx = canvas.getContext('2d');
+        update() {
+          // Move
+          this.x += this.vx;
+          this.y += this.vy;
 
-        let width, height;
-        let particles = [];
-
-        // Configuration to match the uploaded image aesthetic
-        const PARTICLE_COUNT = Math.min(window.innerWidth / 15, 120); // Responsive count
-        const MAX_DISTANCE = 150; // Max distance to draw lines
-        const MOUSE_RADIUS = 200; // Radius of mouse interaction
-
-        const COLORS = {
-            particle: 'rgba(249, 254, 250, ', // f9fefa base
-            glow: '#5cc9e8',                   // Primary cyan
-            line: 'rgba(92, 201, 232, '        // 5cc9e8 converted to rgb
-        };
-
-        let mouse = {
-            x: null,
-            y: null
-        };
-
-        // Resize Canvas
-        function resizeCanvas() {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
+          // Bounce off edges
+          if (this.x < 0 || this.x > width) this.vx *= -1;
+          if (this.y < 0 || this.y > height) this.vy *= -1;
         }
 
-        window.addEventListener('resize', () => {
-            resizeCanvas();
-            initParticles();
-        });
+        draw() {
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
 
-        // Mouse Events
-        window.addEventListener('mousemove', (e) => {
-            mouse.x = e.x;
-            mouse.y = e.y;
-        });
+          // Add glow effect
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = COLORS.glow;
 
-        window.addEventListener('mouseout', () => {
-            mouse.x = null;
-            mouse.y = null;
-        });
+          ctx.fillStyle = `${COLORS.particle}${this.baseAlpha})`;
+          ctx.fill();
 
-        // Particle Class
-        class Particle {
-            constructor() {
-                this.x = Math.random() * width;
-                this.y = Math.random() * height;
-                this.vx = (Math.random() - 0.5) * 0.8; // Slow drift
-                this.vy = (Math.random() - 0.5) * 0.8;
-                // Varying sizes based on the image (some are bright/large, some are dim/small)
-                this.radius = Math.random() * 1.5 + 0.5;
-                this.baseAlpha = Math.random() * 0.5 + 0.5;
+          // Reset shadow for lines
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      function initParticles() {
+        particles = [];
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+          particles.push(new Particle());
+        }
+      }
+
+      function drawConnections() {
+        for (let a = 0; a < particles.length; a++) {
+          for (let b = a + 1; b < particles.length; b++) {
+            const dx = particles[a].x - particles[b].x;
+            const dy = particles[a].y - particles[b].y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < MAX_DISTANCE) {
+              // Opacity based on distance
+              const opacity = 1 - distance / MAX_DISTANCE;
+              ctx.beginPath();
+              ctx.strokeStyle = `${COLORS.line}${opacity * 0.3})`; // Keep lines faint
+              ctx.lineWidth = 0.5;
+              ctx.moveTo(particles[a].x, particles[a].y);
+              ctx.lineTo(particles[b].x, particles[b].y);
+              ctx.stroke();
             }
+          }
 
-            update() {
-                // Move
-                this.x += this.vx;
-                this.y += this.vy;
+          // Mouse Interaction Connections
+          if (mouse.x != null && mouse.y != null) {
+            const dx = particles[a].x - mouse.x;
+            const dy = particles[a].y - mouse.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
 
-                // Bounce off edges
-                if (this.x < 0 || this.x > width) this.vx *= -1;
-                if (this.y < 0 || this.y > height) this.vy *= -1;
+            if (distance < MOUSE_RADIUS) {
+              const opacity = 1 - distance / MOUSE_RADIUS;
+              ctx.beginPath();
+              ctx.strokeStyle = `${COLORS.line}${opacity * 0.5})`; // Brand color connection
+              ctx.lineWidth = 1;
+              ctx.moveTo(particles[a].x, particles[a].y);
+              ctx.lineTo(mouse.x, mouse.y);
+              ctx.stroke();
+
+              // Slight attraction to mouse
+              particles[a].x -= dx * 0.005;
+              particles[a].y -= dy * 0.005;
             }
+          }
+        }
+      }
 
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      function animate() {
+        ctx.clearRect(0, 0, width, height);
 
-                // Add glow effect
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = COLORS.glow;
-
-                ctx.fillStyle = `${COLORS.particle}${this.baseAlpha})`;
-                ctx.fill();
-
-                // Reset shadow for lines
-                ctx.shadowBlur = 0;
-            }
+        for (let i = 0; i < particles.length; i++) {
+          particles[i].update();
+          particles[i].draw();
         }
 
-        function initParticles() {
-            particles = [];
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                particles.push(new Particle());
-            }
+        drawConnections();
+
+        requestAnimationFrame(animate);
+      }
+
+      // Start Background Animation
+      window.onload = function () {
+        resizeCanvas();
+        initParticles();
+        animate();
+      };
+
+      // Navbar scroll effect
+      window.addEventListener('scroll', () => {
+        const nav = document.getElementById('navbar');
+        if (window.scrollY > 20) {
+          nav.classList.add('bg-[#20221f]/90', 'shadow-lg');
+        } else {
+          nav.classList.remove('bg-[#20221f]/90', 'shadow-lg');
         }
-
-        function drawConnections() {
-            for (let a = 0; a < particles.length; a++) {
-                for (let b = a + 1; b < particles.length; b++) {
-                    const dx = particles[a].x - particles[b].x;
-                    const dy = particles[a].y - particles[b].y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-
-                    if (distance < MAX_DISTANCE) {
-                        // Opacity based on distance
-                        const opacity = 1 - (distance / MAX_DISTANCE);
-                        ctx.beginPath();
-                        ctx.strokeStyle = `${COLORS.line}${opacity * 0.3})`; // Keep lines faint
-                        ctx.lineWidth = 0.5;
-                        ctx.moveTo(particles[a].x, particles[a].y);
-                        ctx.lineTo(particles[b].x, particles[b].y);
-                        ctx.stroke();
-                    }
-                }
-
-                // Mouse Interaction Connections
-                if (mouse.x != null && mouse.y != null) {
-                    const dx = particles[a].x - mouse.x;
-                    const dy = particles[a].y - mouse.y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-
-                    if (distance < MOUSE_RADIUS) {
-                        const opacity = 1 - (distance / MOUSE_RADIUS);
-                        ctx.beginPath();
-                        ctx.strokeStyle = `${COLORS.line}${opacity * 0.5})`; // Brand color connection
-                        ctx.lineWidth = 1;
-                        ctx.moveTo(particles[a].x, particles[a].y);
-                        ctx.lineTo(mouse.x, mouse.y);
-                        ctx.stroke();
-
-                        // Slight attraction to mouse
-                        particles[a].x -= dx * 0.005;
-                        particles[a].y -= dy * 0.005;
-                    }
-                }
-            }
-        }
-
-        function animate() {
-            ctx.clearRect(0, 0, width, height);
-
-            for (let i = 0; i < particles.length; i++) {
-                particles[i].update();
-                particles[i].draw();
-            }
-
-            drawConnections();
-
-            requestAnimationFrame(animate);
-        }
-
-        // Start Background Animation
-        window.onload = function () {
-            resizeCanvas();
-            initParticles();
-            animate();
-        };
-
-        // Navbar scroll effect
-        window.addEventListener('scroll', () => {
-            const nav = document.getElementById('navbar');
-            if (window.scrollY > 20) {
-                nav.classList.add('bg-[#20221f]/90', 'shadow-lg');
-            } else {
-                nav.classList.remove('bg-[#20221f]/90', 'shadow-lg');
-            }
-        });
-
+      });
     </script>
-</body>
-
+  </body>
 </html>

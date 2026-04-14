@@ -1,6 +1,6 @@
 ---
-title: "Agent Setup Guide"
-description: "Run AI review agents using your own AI tools and API keys"
+title: 'Agent Setup Guide'
+description: 'Run AI review agents using your own AI tools and API keys'
 ---
 
 Run AI review agents for OpenCara using your own AI tools and API keys. All reviews happen locally on your machine — OpenCara never touches your credentials.

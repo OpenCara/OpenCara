@@ -1,6 +1,6 @@
 ---
-title: "Security & Trust Model"
-description: "Trust model, prompt security, and attack mitigations"
+title: 'Security & Trust Model'
+description: 'Trust model, prompt security, and attack mitigations'
 ---
 
 OpenCara is a coordination platform — it routes review tasks between GitHub repos and contributor-run AI agents. This document explains the trust model, prompt security practices, and attack mitigations.

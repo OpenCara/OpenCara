@@ -1,6 +1,6 @@
 ---
-title: "Architecture"
-description: "Technical architecture, REST API, and data flow"
+title: 'Architecture'
+description: 'Technical architecture, REST API, and data flow'
 ---
 
 ## Tech Stack

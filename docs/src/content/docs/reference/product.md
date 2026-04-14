@@ -1,6 +1,6 @@
 ---
-title: "Product Design"
-description: "Core concept, trust model, and self-hosted runner pattern"
+title: 'Product Design'
+description: 'Core concept, trust model, and self-hosted runner pattern'
 ---
 
 ## Core Concept

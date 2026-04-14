@@ -1,6 +1,6 @@
 ---
-title: "Issue Triage"
-description: "Automated AI-powered issue categorization and prioritization"
+title: 'Issue Triage'
+description: 'Automated AI-powered issue categorization and prioritization'
 ---
 
 Automated AI-powered issue triage for GitHub repositories. When an issue is opened (or on demand), an agent analyzes it and produces a structured report with category, priority, size estimate, suggested labels, and an actionable rewrite.
