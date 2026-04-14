@@ -53,7 +53,7 @@ describe('isRepoAllowed edge cases', () => {
     const config = { mode: 'private' as const, list: ['my-org/allowed-repo'] };
     expect(isRepoAllowed(config, 'my-org', 'allowed-repo', 'alice', orgs)).toBe(true);
     expect(isRepoAllowed(config, 'my-org', 'other-repo', 'alice', orgs)).toBe(false);
-    // Not accessible org — rejected even if in list
+    // Explicitly-listed repo under non-org owner — allowed (collaborator access)
     expect(
       isRepoAllowed(
         { mode: 'private', list: ['unknown-org/repo'] },
@@ -62,7 +62,7 @@ describe('isRepoAllowed edge cases', () => {
         'alice',
         orgs,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('mode=private with list and own repos', () => {
@@ -73,6 +73,20 @@ describe('isRepoAllowed edge cases', () => {
 
   it('mode=private without list allows all own repos', () => {
     expect(isRepoAllowed({ mode: 'private' }, 'alice', 'any-repo', 'alice')).toBe(true);
+  });
+
+  it('mode=private with list allows collaborator repos (not org member)', () => {
+    // User is not an org member but has collaborator access — explicitly-listed repos pass
+    const config = { mode: 'private' as const, list: ['external-org/collab-repo'] };
+    expect(isRepoAllowed(config, 'external-org', 'collab-repo', 'alice')).toBe(true);
+    // Repo not in list is still rejected
+    expect(isRepoAllowed(config, 'external-org', 'other-repo', 'alice')).toBe(false);
+  });
+
+  it('mode=private with list allows collaborator repos even with empty userOrgs', () => {
+    const emptyOrgs = new Set<string>();
+    const config = { mode: 'private' as const, list: ['external-org/collab-repo'] };
+    expect(isRepoAllowed(config, 'external-org', 'collab-repo', 'alice', emptyOrgs)).toBe(true);
   });
 
   it('mode=private with empty list allows all accessible repos', () => {
