@@ -1,25 +1,19 @@
 # Development Workflow
 
-Dev agents (architect, server-dev, cli-dev) are OpenCara implement agents configured in `.opencara.toml`. They are triggered automatically when an issue moves to "In progress" on the GitHub Project board.
+Dev agents (architect, server-dev, cli-dev) are Claude Code team agents spawned by the team lead in worktrees. PM triages and specs issues, then asks the team lead to spawn agents.
 
 ## Lifecycle
 
-1. PM triages issue and sets the "Agent" field on the project board
-2. Issue moves to "In progress" (by team lead or PM)
-3. `projects_v2_item.edited` webhook fires → server creates implement task
-4. CLI agent claims the task and receives the issue context + agent prompt
-5. Agent reads the issue and understands the requirements
-6. Agent creates branch `issue-<NUMBER>-<short-description>`
-7. Agent implements changes with tests
-8. Agent runs build and test: `pnpm build && pnpm test`
-9. Agent commits, pushes, and creates a PR (referencing the issue)
-10. **STOP** — agent shuts down after creating the PR
-
-**Post-PR phases are handled by PM** (not the implement agent):
-
-- PM waits for OpenCara bot review
-- PM comments `/opencara fix` to trigger fix agent for review findings + merge conflicts
-- PM checks if PR is clean → merges with `gh pr merge --squash --delete-branch` (max 3 fix iterations)
+1. PM triages issue, writes implementation spec, and notifies team lead
+2. Team lead spawns a Claude Code agent in a worktree: `/spawn <agent-type> <issue-number>`
+3. Agent reads the issue and understands the requirements
+4. Agent creates branch `issue-<NUMBER>-<short-description>`
+5. Agent implements changes with tests
+6. Agent runs build and test: `pnpm build && pnpm test`
+7. Agent commits, pushes, and creates a PR (referencing the issue)
+8. Agent waits for OpenCara bot review
+9. Agent fixes review findings (max 3 iterations)
+10. Agent reports back — team lead or PM merges when clean
 
 ## Implementation Phase
 
@@ -53,16 +47,18 @@ gh pr create --title "[<agent-name>] <title>" --label "agent:<agent-name>" --bod
 
 **Version bumps are manual** — do NOT bump versions in PRs. The team lead controls version numbers.
 
-## Post-PR: Review/Fix/Merge (PM-Orchestrated)
+## Post-PR: Review/Fix Loop (Agent-Owned)
 
-After the implement agent creates a PR and shuts down, **PM handles the rest**:
+After creating the PR, the dev agent handles the review/fix loop:
 
-1. **Bot review** — OpenCara bot automatically reviews the PR (5 agents)
-2. **Fix agent** — PM comments `/opencara fix` to trigger the fix agent, which resolves review findings + merge conflicts
-3. **Merge** — PM merges with `gh pr merge <PR> --squash --delete-branch` when the PR is clean
-4. **Iterate** — if still dirty after fix, PM repeats the fix cycle (max 3 iterations)
+1. **Wait for bot review** — OpenCara bot automatically reviews the PR (multiple agents)
+2. **Read review findings** — check PR comments for the OpenCara review
+3. **Fix findings** — address proven defects and major issues from the review
+4. **Push fixes** — commit and push to the same branch, re-run build/test
+5. **Iterate** — repeat fix cycle until clean (max 3 iterations)
+6. **Report back** — notify team lead that PR is ready to merge (agent does NOT merge)
 
-Implement agents do NOT wait for bot review, do NOT self-review, and do NOT merge.
+Dev agents wait for bot review, fix findings, but do NOT merge — team lead or PM merges.
 
 ## Auto-Deploy
 
