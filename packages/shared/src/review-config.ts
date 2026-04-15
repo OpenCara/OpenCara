@@ -272,8 +272,8 @@ export function isStatusTriggerEnabled(trigger: TriggerConfig): boolean {
   return trigger.status !== undefined;
 }
 
-/** Default model diversity grace period: 30 seconds */
-export const DEFAULT_MODEL_DIVERSITY_GRACE_MS = 30_000;
+/** Default model diversity grace period: 5 minutes */
+export const DEFAULT_MODEL_DIVERSITY_GRACE_MS = 300_000;
 
 /**
  * Parse a duration string like "30s" or "60s" into milliseconds.

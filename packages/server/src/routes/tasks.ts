@@ -120,11 +120,15 @@ function isTargetModelVisible(
  * Check if a task is visible to the given agent considering model diversity.
  * During the grace window, hides tasks from agents whose model is already
  * used by another claim in the same group. After the grace window, visible to all.
+ *
+ * Grace period starts from when the model was first claimed in the group,
+ * not from task creation time. This ensures the diversity window covers
+ * the actual review period.
  */
 function isModelDiversityVisible(
   task: ReviewTask,
   model: string | undefined,
-  groupClaimedModels: Map<string, Set<string>>,
+  groupClaimedModels: Map<string, Map<string, number>>,
 ): boolean {
   const graceMs = task.config.modelDiversityGraceMs;
   if (graceMs <= 0) return true; // diversity disabled
@@ -134,8 +138,9 @@ function isModelDiversityVisible(
   const claimedModels = groupClaimedModels.get(task.group_id);
   if (!claimedModels || !claimedModels.has(model)) return true; // model not yet used
 
-  // Model already used — check if grace period has elapsed
-  return Date.now() - task.created_at >= graceMs;
+  // Model already used — check if grace period has elapsed since the model was claimed
+  const claimedAt = claimedModels.get(model)!;
+  return Date.now() - claimedAt >= graceMs;
 }
 
 /**
@@ -768,7 +773,7 @@ interface PollContext {
   tasksById: Map<string, ReviewTask>;
   dedupBlockedRepos: Set<string>;
   oldestDedupPerRepo: Map<string, ReviewTask>;
-  groupClaimedModels: Map<string, Set<string>>;
+  groupClaimedModels: Map<string, Map<string, number>>;
 }
 
 /**
@@ -798,14 +803,14 @@ async function buildPollContext(store: DataStore): Promise<PollContext> {
     }
   }
 
-  // Model diversity: build claimed-models-per-group map
+  // Model diversity: build claimed-models-per-group map (model → earliest claim timestamp)
   const pendingGroupIds = new Set<string>();
   for (const t of tasks) {
     if (t.group_id && t.config.modelDiversityGraceMs > 0) {
       pendingGroupIds.add(t.group_id);
     }
   }
-  const groupClaimedModels = new Map<string, Set<string>>();
+  const groupClaimedModels = new Map<string, Map<string, number>>();
   if (pendingGroupIds.size > 0) {
     for (const groupId of pendingGroupIds) {
       const groupTasks = await store.getTasksByGroup(groupId);
@@ -816,10 +821,14 @@ async function buildPollContext(store: DataStore): Promise<PollContext> {
           if (claim.model) {
             let models = groupClaimedModels.get(groupId);
             if (!models) {
-              models = new Set();
+              models = new Map();
               groupClaimedModels.set(groupId, models);
             }
-            models.add(claim.model);
+            const existing = models.get(claim.model);
+            const claimTime = claim.created_at;
+            if (existing === undefined || claimTime < existing) {
+              models.set(claim.model, claimTime);
+            }
           }
         }
       }
