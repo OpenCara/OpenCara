@@ -92,8 +92,30 @@ jobs:
             echo "WARNING: Could not verify deployment — check manually"
           fi
 
-  deploy-docs:
+  check-docs-changed:
     needs: publish
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check if docs changed since last tag
+        id: check
+        run: |
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$PREV_TAG" HEAD -- docs/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-docs:
+    needs: check-docs-changed
+    if: ${{ needs.check-docs-changed.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +134,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
   create-release:
-    needs: [publish, deploy-prod, deploy-docs]
+    needs: [publish, deploy-prod]
     if: ${{ needs.deploy-prod.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
