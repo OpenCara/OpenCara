@@ -427,6 +427,14 @@ function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Arra
 
 /** Max times an agent will attempt a task that fails diff fetch before skipping it. */
 const MAX_DIFF_FETCH_ATTEMPTS = 3;
+const MAX_TASK_ERROR_ATTEMPTS = 3;
+
+/** Weight penalty applied on each tool error (multiplicative). */
+const WEIGHT_PENALTY_FACTOR = 0.5;
+/** Minimum weight before agent is excluded from dispatch. */
+const MIN_DISPATCH_WEIGHT = 0.1;
+/** Weight recovery on successful task completion (additive, capped at 1.0). */
+const WEIGHT_RECOVERY = 0.25;
 
 /**
  * Poll → Claim → Review → Submit loop for a single agent.
@@ -626,6 +634,7 @@ async function pollLoop(
 /** Result from handleTask indicating what happened. */
 interface HandleTaskResult {
   diffFetchFailed?: boolean;
+  toolFailed?: boolean;
 }
 
 /**
@@ -1016,6 +1025,7 @@ async function handleTask(
       logError(`  ${icons.error} Error on task ${task_id}: ${(err as Error).message}`);
       await safeError(client, task_id, agentId, (err as Error).message, logger);
     }
+    return { toolFailed: true };
   } finally {
     // Clean up task worktree (bare repo stays for reuse)
     if (taskCheckoutPath && taskBareRepoPath) {
@@ -1655,6 +1665,10 @@ interface BatchAgentState {
   verbose?: boolean;
   /** Tasks that repeatedly failed diff fetch — skip on future polls. */
   diffFailCounts: Map<string, number>;
+  /** Tasks that repeatedly failed tool execution — skip on future polls. */
+  taskErrorCounts: Map<string, number>;
+  /** Dispatch weight (0.0–1.0). Starts at 1.0, decreases on tool errors, recovers on success. */
+  weight: number;
 }
 
 /**
@@ -1781,8 +1795,27 @@ export async function batchPollLoop(
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
 
-      // Dispatch tasks to per-agent workers (fire-and-forget — no synchronization barrier)
-      for (const state of availableStates) {
+      // Dispatch tasks to per-agent workers using weighted random selection.
+      // Agents with higher weight (fewer recent errors) are more likely to be dispatched first.
+      // Agents below MIN_DISPATCH_WEIGHT are temporarily excluded.
+      const eligibleStates = availableStates.filter((s) => s.weight >= MIN_DISPATCH_WEIGHT);
+
+      // Weighted shuffle: sort by weight * random, so higher-weight agents are more likely first
+      const dispatchOrder = eligibleStates
+        .map((s) => ({ state: s, score: s.weight * Math.random() }))
+        .sort((a, b) => b.score - a.score)
+        .map((e) => e.state);
+
+      // Log agents excluded due to low weight
+      for (const s of availableStates) {
+        if (s.weight < MIN_DISPATCH_WEIGHT) {
+          s.logger.logWarn(
+            `${icons.warn} Agent paused (weight ${s.weight.toFixed(2)} < ${MIN_DISPATCH_WEIGHT})`,
+          );
+        }
+      }
+
+      for (const state of dispatchOrder) {
         const agentName = state.descriptor.name;
         const pollResponse = response.assignments[agentName];
         if (!pollResponse || pollResponse.tasks.length === 0) continue;
@@ -1798,7 +1831,10 @@ export async function batchPollLoop(
           (msg) => state.logger.logWarn(`${icons.warn} ${msg}`),
         );
 
-        const task = eligible[0];
+        // Skip tasks this agent has failed too many times
+        const task = eligible.find(
+          (t) => (state.taskErrorCounts.get(t.task_id) ?? 0) < MAX_TASK_ERROR_ATTEMPTS,
+        );
         if (!task) continue;
 
         // Mark agent busy and dispatch task in the background so other agents
@@ -1833,10 +1869,43 @@ export async function batchPollLoop(
                   `  Skipping task ${task.task_id} after ${count} diff fetch failures`,
                 );
               }
+              state.weight = Math.max(0, state.weight * WEIGHT_PENALTY_FACTOR);
+              state.logger.logWarn(
+                `${icons.warn} Weight reduced to ${state.weight.toFixed(2)} after diff fetch failure`,
+              );
+            } else if (result.toolFailed) {
+              // Track per-task tool error count
+              const errCount = (state.taskErrorCounts.get(task.task_id) ?? 0) + 1;
+              state.taskErrorCounts.set(task.task_id, errCount);
+              if (errCount >= MAX_TASK_ERROR_ATTEMPTS) {
+                state.logger.logWarn(
+                  `${icons.warn} Giving up on task ${task.task_id.slice(0, 8)}… after ${errCount} tool failures`,
+                );
+              }
+              state.weight = Math.max(0, state.weight * WEIGHT_PENALTY_FACTOR);
+              state.logger.logWarn(
+                `${icons.warn} Weight reduced to ${state.weight.toFixed(2)} after tool error`,
+              );
+            } else {
+              // Successful task — recover weight
+              state.weight = Math.min(1.0, state.weight + WEIGHT_RECOVERY);
             }
           } catch (err) {
             logError(`${icons.error} Task handler failed: ${(err as Error).message}`);
             consecutiveErrors++;
+            // Track per-task error count so this agent stops retrying the same task
+            const errCount = (state.taskErrorCounts.get(task.task_id) ?? 0) + 1;
+            state.taskErrorCounts.set(task.task_id, errCount);
+            if (errCount >= MAX_TASK_ERROR_ATTEMPTS) {
+              state.logger.logWarn(
+                `${icons.warn} Giving up on task ${task.task_id.slice(0, 8)}… after ${errCount} failures`,
+              );
+            }
+            // Penalize weight on tool/task error
+            state.weight = Math.max(0, state.weight * WEIGHT_PENALTY_FACTOR);
+            state.logger.logWarn(
+              `${icons.warn} Weight reduced to ${state.weight.toFixed(2)} after task error`,
+            );
           } finally {
             busyAgents.delete(state);
             // Sweep deferred codebase cleanups for this agent on task completion
@@ -2038,6 +2107,8 @@ export async function startBatchAgents(
         cleanupTracker,
         verbose,
         diffFailCounts: new Map(),
+        taskErrorCounts: new Map(),
+        weight: 1.0,
       });
     }
   }

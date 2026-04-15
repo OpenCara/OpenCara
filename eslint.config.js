@@ -8,6 +8,7 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/.next/**',
       '**/.wrangler/**',
+      '**/.astro/**',
       '**/next-env.d.ts',
     ],
   },
