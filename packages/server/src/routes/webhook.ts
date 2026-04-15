@@ -1481,10 +1481,15 @@ async function handleIssueComment(
   const triggerCommand = reviewConfig.trigger.comment!;
   const body = comment.body.trim().toLowerCase();
   const cmd = triggerCommand.toLowerCase();
-  // Only slash-commands get an @-alias (e.g. /opencara review → @opencara review).
-  // Bare-word triggers (e.g. "review") intentionally do not generate an @-variant.
+  // Slash-commands and @-mentions are interchangeable:
+  // /opencara review ↔ @opencara review (both match either config form).
+  // Bare-word triggers (e.g. "review") intentionally do not generate variants.
+  const slashVariant = cmd.startsWith('@') ? '/' + cmd.slice(1) : null;
   const atVariant = cmd.startsWith('/') ? '@' + cmd.slice(1) : null;
-  const triggered = body.startsWith(cmd) || (atVariant !== null && body.startsWith(atVariant));
+  const triggered =
+    body.startsWith(cmd) ||
+    (atVariant !== null && body.startsWith(atVariant)) ||
+    (slashVariant !== null && body.startsWith(slashVariant));
   if (!triggered) {
     logger.info('Comment does not match review trigger command — skipping', {
       owner,
