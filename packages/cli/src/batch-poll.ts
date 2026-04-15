@@ -130,6 +130,15 @@ export function buildBatchPollRequest(agents: AgentDescriptor[]): BatchPollReque
  * Filter tasks for a specific agent using its repo config and diff size limit.
  * Mirrors the per-agent filtering in the existing pollLoop.
  */
+export interface FilterTasksOptions {
+  maxDiffSizeKb?: number;
+  diffFailCounts?: Map<string, number>;
+  maxDiffFetchAttempts?: number;
+  accessibleRepos?: ReadonlySet<string>;
+  /** Optional logger for reporting filtered-out tasks. */
+  log?: (msg: string) => void;
+}
+
 export function filterTasksForAgent(
   tasks: PollTask[],
   agent: AgentDescriptor,
@@ -137,10 +146,13 @@ export function filterTasksForAgent(
   diffFailCounts?: Map<string, number>,
   maxDiffFetchAttempts: number = 3,
   accessibleRepos?: ReadonlySet<string>,
+  log?: (msg: string) => void,
 ): PollTask[] {
   return tasks.filter((t) => {
+    const repo = `${t.owner}/${t.repo}`;
     // Filter by verified repo access
-    if (accessibleRepos && !accessibleRepos.has(`${t.owner}/${t.repo}`)) {
+    if (accessibleRepos && !accessibleRepos.has(repo)) {
+      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not in accessible set`);
       return false;
     }
     // Filter by repo config
@@ -148,6 +160,7 @@ export function filterTasksForAgent(
       agent.repoConfig &&
       !isRepoAllowed(agent.repoConfig, t.owner, t.repo, agent.agentOwner, agent.userOrgs)
     ) {
+      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not allowed by config (mode=${agent.repoConfig.mode})`);
       return false;
     }
     // Filter by synthesize_repos config
@@ -155,19 +168,26 @@ export function filterTasksForAgent(
       agent.synthesizeRepos &&
       !isRepoAllowed(agent.synthesizeRepos, t.owner, t.repo, agent.agentOwner, agent.userOrgs)
     ) {
+      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not allowed by synthesize_repos config`);
       return false;
     }
     // Skip tasks whose diff_size clearly exceeds maxDiffSizeKb
     // 120 bytes/line is the estimated average for unified diff format
+    // Explicitly listed repos bypass this check — if you listed it, you want it reviewed.
+    const isExplicitlyListed = agent.repoConfig?.list?.includes(repo) ?? false;
     if (
+      !isExplicitlyListed &&
       maxDiffSizeKb &&
       t.diff_size != null &&
       (t.diff_size * ESTIMATED_BYTES_PER_DIFF_LINE) / 1024 > maxDiffSizeKb
     ) {
+      const estimatedKb = Math.round((t.diff_size * ESTIMATED_BYTES_PER_DIFF_LINE) / 1024);
+      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — estimated diff ${estimatedKb}KB exceeds max_diff_size_kb (${maxDiffSizeKb}KB)`);
       return false;
     }
     // Skip tasks that have failed diff fetch too many times
     if (diffFailCounts && (diffFailCounts.get(t.task_id) ?? 0) >= maxDiffFetchAttempts) {
+      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — diff fetch failed ${maxDiffFetchAttempts} times`);
       return false;
     }
     return true;

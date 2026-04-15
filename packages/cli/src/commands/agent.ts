@@ -1795,6 +1795,7 @@ export async function batchPollLoop(
           state.diffFailCounts,
           MAX_DIFF_FETCH_ATTEMPTS,
           accessibleRepos,
+          (msg) => state.logger.logWarn(`${icons.warn} ${msg}`),
         );
 
         const task = eligible[0];
