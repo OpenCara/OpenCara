@@ -152,7 +152,9 @@ export function filterTasksForAgent(
     const repo = `${t.owner}/${t.repo}`;
     // Filter by verified repo access
     if (accessibleRepos && !accessibleRepos.has(repo)) {
-      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not in accessible set`);
+      log?.(
+        `Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not in accessible set`,
+      );
       return false;
     }
     // Filter by repo config
@@ -160,7 +162,9 @@ export function filterTasksForAgent(
       agent.repoConfig &&
       !isRepoAllowed(agent.repoConfig, t.owner, t.repo, agent.agentOwner, agent.userOrgs)
     ) {
-      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not allowed by config (mode=${agent.repoConfig.mode})`);
+      log?.(
+        `Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not allowed by config (mode=${agent.repoConfig.mode})`,
+      );
       return false;
     }
     // Filter by synthesize_repos config
@@ -168,7 +172,9 @@ export function filterTasksForAgent(
       agent.synthesizeRepos &&
       !isRepoAllowed(agent.synthesizeRepos, t.owner, t.repo, agent.agentOwner, agent.userOrgs)
     ) {
-      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not allowed by synthesize_repos config`);
+      log?.(
+        `Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — repo not allowed by synthesize_repos config`,
+      );
       return false;
     }
     // Skip tasks whose diff_size clearly exceeds maxDiffSizeKb
@@ -182,12 +188,16 @@ export function filterTasksForAgent(
       (t.diff_size * ESTIMATED_BYTES_PER_DIFF_LINE) / 1024 > maxDiffSizeKb
     ) {
       const estimatedKb = Math.round((t.diff_size * ESTIMATED_BYTES_PER_DIFF_LINE) / 1024);
-      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — estimated diff ${estimatedKb}KB exceeds max_diff_size_kb (${maxDiffSizeKb}KB)`);
+      log?.(
+        `Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — estimated diff ${estimatedKb}KB exceeds max_diff_size_kb (${maxDiffSizeKb}KB)`,
+      );
       return false;
     }
     // Skip tasks that have failed diff fetch too many times
     if (diffFailCounts && (diffFailCounts.get(t.task_id) ?? 0) >= maxDiffFetchAttempts) {
-      log?.(`Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — diff fetch failed ${maxDiffFetchAttempts} times`);
+      log?.(
+        `Skipping task ${t.task_id.slice(0, 8)}… (${repo} PR#${t.pr_number}) — diff fetch failed ${maxDiffFetchAttempts} times`,
+      );
       return false;
     }
     return true;
