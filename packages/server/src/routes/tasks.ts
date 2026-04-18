@@ -15,7 +15,7 @@ import type {
   BatchPollResponse,
   RepoConfig,
 } from '@opencara/shared';
-import { isRepoAllowed, isEntityMatch, isDedupRole } from '@opencara/shared';
+import { isRepoAllowed, isEntityMatch, isDedupRole, anyModelMatches } from '@opencara/shared';
 import type { Env, AppVariables } from '../types.js';
 import type { DataStore } from '../store/interface.js';
 import type { GitHubService } from '../github/service.js';
@@ -80,7 +80,7 @@ function isReviewPreferredAgent(
 ): boolean {
   const { preferredModels, preferredTools } = config;
   if (preferredModels.length === 0 && preferredTools.length === 0) return true;
-  if (model && preferredModels.includes(model)) return true;
+  if (anyModelMatches(preferredModels, model)) return true;
   if (tool && preferredTools.includes(tool)) return true;
   return false;
 }
@@ -111,7 +111,7 @@ function isTargetModelVisible(
   effectiveGraceMs?: number,
 ): boolean {
   if (!task.target_model) return true; // no preference — visible to all
-  if (model && model.toLowerCase() === task.target_model.toLowerCase()) return true; // model matches
+  if (anyModelMatches([task.target_model], model)) return true; // model matches (exact or family prefix)
   const graceMs = effectiveGraceMs ?? TARGET_MODEL_GRACE_PERIOD_MS;
   return Date.now() - task.created_at >= graceMs;
 }
@@ -165,7 +165,7 @@ function isSummaryVisibleToAgent(
   if (preferred.length > 0 && preferred.some((p) => isEntityMatch(p, agentId))) return true;
 
   // Check model-based preference
-  if (preferredModels.length > 0 && model && preferredModels.includes(model)) return true;
+  if (preferredModels.length > 0 && anyModelMatches(preferredModels, model)) return true;
 
   // Non-preferred agent: check if grace period has elapsed since summary phase started.
   // Use reviews_completed_at (when all reviews finished and summary became claimable)

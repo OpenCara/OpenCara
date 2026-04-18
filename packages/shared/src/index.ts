@@ -77,6 +77,8 @@ export {
   parseReviewConfig,
   parseEntityList,
   isEntityMatch,
+  modelMatchesPattern,
+  anyModelMatches,
   parseTriggerSection,
   isEventTriggerEnabled,
   isCommentTriggerEnabled,

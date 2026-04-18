@@ -172,6 +172,35 @@ export function isEntityMatch(
   return false;
 }
 
+/**
+ * Check if a model-name pattern matches an actual model identifier.
+ *
+ * Supports exact match and "family" prefixes: a pattern matches the model if
+ * it equals the model, or is a prefix of the model that ends at a version
+ * boundary (`-`, `.`, or `[`). Matching is case-insensitive.
+ *
+ * Examples:
+ *   "claude-opus"      matches "claude-opus-4-6", "claude-opus-4-7[1m]"
+ *   "claude-opus-4-6"  matches "claude-opus-4-6", "claude-opus-4-6[1m]"
+ *                      but NOT "claude-opus-4-7"
+ *   "gpt-5"            matches "gpt-5.4", "gpt-5-codex"
+ */
+export function modelMatchesPattern(pattern: string, model: string): boolean {
+  if (!pattern) return false;
+  const p = pattern.toLowerCase();
+  const m = model.toLowerCase();
+  if (p === m) return true;
+  if (!m.startsWith(p)) return false;
+  const next = m.charAt(p.length);
+  return next === '-' || next === '.' || next === '[';
+}
+
+/** Whether any of the given patterns matches the model (empty list = no match). */
+export function anyModelMatches(patterns: readonly string[], model: string | undefined): boolean {
+  if (!model) return false;
+  return patterns.some((p) => modelMatchesPattern(p, model));
+}
+
 function parseTimeout(value: unknown): string {
   if (typeof value !== 'string') return '10m';
   const match = value.match(/^(\d+)m$/);

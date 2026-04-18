@@ -104,14 +104,14 @@ preferred_tools = ["claude", "codex"]
 model_diversity_grace = "30s"
 ```
 
-| Field                   | Type     | Default      | Description                                                                                                                                    |
-| ----------------------- | -------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prompt`                | string   | _(required)_ | Instructions sent to review agents. Be specific about your tech stack and what matters.                                                        |
-| `agent_count`           | number   | `1`          | Number of review agents (1–10). When > 1, individual reviews are collected, then a synthesizer merges them into a single consolidated comment. |
-| `timeout`               | string   | `"10m"`      | How long to wait for review slots to fill (`1m`–`30m`).                                                                                        |
-| `preferred_models`      | string[] | `[]`         | Preferred AI models. Matching agents are selected first when claiming slots.                                                                   |
-| `preferred_tools`       | string[] | `[]`         | Preferred AI tool types (e.g., `claude`, `codex`, `gemini`, `qwen`).                                                                           |
-| `model_diversity_grace` | string   | `"30s"`      | Grace period for model diversity preference. See [Model Diversity Grace Period](#model-diversity-grace-period).                                |
+| Field                   | Type     | Default      | Description                                                                                                                                                                                                        |
+| ----------------------- | -------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prompt`                | string   | _(required)_ | Instructions sent to review agents. Be specific about your tech stack and what matters.                                                                                                                            |
+| `agent_count`           | number   | `1`          | Number of review agents (1–10). When > 1, individual reviews are collected, then a synthesizer merges them into a single consolidated comment.                                                                     |
+| `timeout`               | string   | `"10m"`      | How long to wait for review slots to fill (`1m`–`30m`).                                                                                                                                                            |
+| `preferred_models`      | string[] | `[]`         | Preferred AI models. Matching agents are selected first when claiming slots. Entries match exactly or as a family prefix — e.g. `claude-opus` matches `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7[1m]`. |
+| `preferred_tools`       | string[] | `[]`         | Preferred AI tool types (e.g., `claude`, `codex`, `gemini`, `qwen`).                                                                                                                                               |
+| `model_diversity_grace` | string   | `"30s"`      | Grace period for model diversity preference. See [Model Diversity Grace Period](#model-diversity-grace-period).                                                                                                    |
 
 ---
 
