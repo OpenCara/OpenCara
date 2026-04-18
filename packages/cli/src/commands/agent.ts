@@ -435,6 +435,8 @@ const WEIGHT_PENALTY_FACTOR = 0.5;
 const MIN_DISPATCH_WEIGHT = 0.1;
 /** Weight recovery on successful task completion (additive, capped at 1.0). */
 const WEIGHT_RECOVERY = 0.25;
+/** Time (ms) for a paused agent's weight to passively recover to 1.0. */
+const WEIGHT_RECOVERY_DURATION_MS = 30 * 60 * 1000;
 
 /**
  * Poll → Claim → Review → Submit loop for a single agent.
@@ -1669,6 +1671,10 @@ interface BatchAgentState {
   taskErrorCounts: Map<string, number>;
   /** Dispatch weight (0.0–1.0). Starts at 1.0, decreases on tool errors, recovers on success. */
   weight: number;
+  /** Timestamp of the last weight update — used for time-based passive recovery. */
+  lastWeightUpdateAt: number;
+  /** Whether a "paused" warning has already been logged for the current below-threshold period. */
+  pausedLogged: boolean;
 }
 
 /**
@@ -1795,6 +1801,26 @@ export async function batchPollLoop(
       consecutiveAuthErrors = 0;
       consecutiveErrors = 0;
 
+      // Passive weight recovery: each agent's weight drifts back to 1.0 over
+      // WEIGHT_RECOVERY_DURATION_MS of wall-clock time since its last update.
+      const now = Date.now();
+      for (const s of availableStates) {
+        if (s.weight < 1.0) {
+          const elapsed = now - s.lastWeightUpdateAt;
+          const recovered = Math.min(1.0, s.weight + elapsed / WEIGHT_RECOVERY_DURATION_MS);
+          if (recovered > s.weight) {
+            s.weight = recovered;
+            if (s.weight >= MIN_DISPATCH_WEIGHT && s.pausedLogged) {
+              s.logger.log(
+                `${icons.info} Agent resumed (weight ${s.weight.toFixed(2)} ≥ ${MIN_DISPATCH_WEIGHT})`,
+              );
+              s.pausedLogged = false;
+            }
+          }
+        }
+        s.lastWeightUpdateAt = now;
+      }
+
       // Dispatch tasks to per-agent workers using weighted random selection.
       // Agents with higher weight (fewer recent errors) are more likely to be dispatched first.
       // Agents below MIN_DISPATCH_WEIGHT are temporarily excluded.
@@ -1806,12 +1832,13 @@ export async function batchPollLoop(
         .sort((a, b) => b.score - a.score)
         .map((e) => e.state);
 
-      // Log agents excluded due to low weight
+      // Log agents excluded due to low weight — only once per pause period.
       for (const s of availableStates) {
-        if (s.weight < MIN_DISPATCH_WEIGHT) {
+        if (s.weight < MIN_DISPATCH_WEIGHT && !s.pausedLogged) {
           s.logger.logWarn(
-            `${icons.warn} Agent paused (weight ${s.weight.toFixed(2)} < ${MIN_DISPATCH_WEIGHT})`,
+            `${icons.warn} Agent paused (weight ${s.weight.toFixed(2)} < ${MIN_DISPATCH_WEIGHT}), recovering over ${WEIGHT_RECOVERY_DURATION_MS / 60000}m`,
           );
+          s.pausedLogged = true;
         }
       }
 
@@ -1870,6 +1897,7 @@ export async function batchPollLoop(
                 );
               }
               state.weight = Math.max(0, state.weight * WEIGHT_PENALTY_FACTOR);
+              state.lastWeightUpdateAt = Date.now();
               state.logger.logWarn(
                 `${icons.warn} Weight reduced to ${state.weight.toFixed(2)} after diff fetch failure`,
               );
@@ -1883,12 +1911,14 @@ export async function batchPollLoop(
                 );
               }
               state.weight = Math.max(0, state.weight * WEIGHT_PENALTY_FACTOR);
+              state.lastWeightUpdateAt = Date.now();
               state.logger.logWarn(
                 `${icons.warn} Weight reduced to ${state.weight.toFixed(2)} after tool error`,
               );
             } else {
               // Successful task — recover weight
               state.weight = Math.min(1.0, state.weight + WEIGHT_RECOVERY);
+              state.lastWeightUpdateAt = Date.now();
             }
           } catch (err) {
             logError(`${icons.error} Task handler failed: ${(err as Error).message}`);
@@ -1903,6 +1933,7 @@ export async function batchPollLoop(
             }
             // Penalize weight on tool/task error
             state.weight = Math.max(0, state.weight * WEIGHT_PENALTY_FACTOR);
+            state.lastWeightUpdateAt = Date.now();
             state.logger.logWarn(
               `${icons.warn} Weight reduced to ${state.weight.toFixed(2)} after task error`,
             );
@@ -2109,6 +2140,8 @@ export async function startBatchAgents(
         diffFailCounts: new Map(),
         taskErrorCounts: new Map(),
         weight: 1.0,
+        lastWeightUpdateAt: Date.now(),
+        pausedLogged: false,
       });
     }
   }
