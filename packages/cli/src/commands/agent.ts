@@ -1919,6 +1919,15 @@ export async function batchPollLoop(
               // Successful task — recover weight
               state.weight = Math.min(1.0, state.weight + WEIGHT_RECOVERY);
               state.lastWeightUpdateAt = Date.now();
+              // If we were paused and the recovery pushed us back above the
+              // threshold, log "resumed" and clear the flag now so a rapid
+              // re-pause isn't silently suppressed on the next poll.
+              if (state.weight >= MIN_DISPATCH_WEIGHT && state.pausedLogged) {
+                state.logger.log(
+                  `${icons.info} Agent resumed (weight ${state.weight.toFixed(2)} ≥ ${MIN_DISPATCH_WEIGHT})`,
+                );
+                state.pausedLogged = false;
+              }
             }
           } catch (err) {
             logError(`${icons.error} Task handler failed: ${(err as Error).message}`);
