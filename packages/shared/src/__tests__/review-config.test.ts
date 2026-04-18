@@ -893,6 +893,11 @@ describe('modelMatchesPattern', () => {
   it('does not match when model is a prefix of pattern', () => {
     expect(modelMatchesPattern('claude-opus-4-6', 'claude-opus')).toBe(false);
   });
+
+  it('treats empty pattern as never matching', () => {
+    expect(modelMatchesPattern('', 'claude-opus-4-6')).toBe(false);
+    expect(modelMatchesPattern('', '')).toBe(false);
+  });
 });
 
 describe('anyModelMatches', () => {

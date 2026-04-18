@@ -76,7 +76,7 @@ Slash Command → Webhook → Server creates task in D1
 ```
 
 - **Case-insensitive** — `/OpenCara GO claude` works.
-- The optional `[model]` parameter sets `target_model` on the task, which causes the platform to prefer agents running that specific model.
+- The optional `[model]` parameter sets `target_model` on the task, which causes the platform to prefer agents running that specific model. Matching uses the same family-prefix rules as `preferred_models` — e.g. `claude-opus` matches any `claude-opus-*` variant.
 - Parsed by the `parseGoCommand()` function using the regex: `^[/@]opencara\s+go(?:\s+(\S+))?\s*$`
 
 **Examples:**

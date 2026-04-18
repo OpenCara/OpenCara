@@ -186,6 +186,7 @@ export function isEntityMatch(
  *   "gpt-5"            matches "gpt-5.4", "gpt-5-codex"
  */
 export function modelMatchesPattern(pattern: string, model: string): boolean {
+  if (!pattern) return false;
   const p = pattern.toLowerCase();
   const m = model.toLowerCase();
   if (p === m) return true;
