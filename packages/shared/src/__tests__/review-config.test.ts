@@ -4,6 +4,8 @@ import {
   parseReviewConfig,
   parseEntityList,
   isEntityMatch,
+  modelMatchesPattern,
+  anyModelMatches,
   isEventTriggerEnabled,
   isCommentTriggerEnabled,
   isLabelTriggerEnabled,
@@ -850,6 +852,64 @@ describe('isEntityMatch', () => {
 
   it('handles entry with no fields', () => {
     expect(isEntityMatch({}, 'a1', 'alice')).toBe(false);
+  });
+});
+
+describe('modelMatchesPattern', () => {
+  it('matches exact model name', () => {
+    expect(modelMatchesPattern('claude-opus-4-6', 'claude-opus-4-6')).toBe(true);
+  });
+
+  it('matches family prefix at dash boundary', () => {
+    expect(modelMatchesPattern('claude-opus', 'claude-opus-4-6')).toBe(true);
+    expect(modelMatchesPattern('claude-opus', 'claude-opus-4-7')).toBe(true);
+  });
+
+  it('matches family prefix at bracket boundary', () => {
+    expect(modelMatchesPattern('claude-opus-4-6', 'claude-opus-4-6[1m]')).toBe(true);
+    expect(modelMatchesPattern('claude-opus', 'claude-opus-4-7[1m]')).toBe(true);
+  });
+
+  it('matches family prefix at dot boundary', () => {
+    expect(modelMatchesPattern('gpt-5', 'gpt-5.4')).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(modelMatchesPattern('Claude-Opus', 'claude-opus-4-6')).toBe(true);
+    expect(modelMatchesPattern('claude-opus', 'CLAUDE-OPUS-4-6')).toBe(true);
+  });
+
+  it('does not match unrelated families', () => {
+    expect(modelMatchesPattern('claude-opus', 'claude-sonnet-4-6')).toBe(false);
+    expect(modelMatchesPattern('claude-opus-4-6', 'claude-opus-4-7')).toBe(false);
+    expect(modelMatchesPattern('gpt-5', 'gpt-4o')).toBe(false);
+  });
+
+  it('does not match when pattern is not a clean prefix', () => {
+    // "claude-op" is a prefix of "claude-opus" but the next char is "u", not a boundary
+    expect(modelMatchesPattern('claude-op', 'claude-opus-4-6')).toBe(false);
+  });
+
+  it('does not match when model is a prefix of pattern', () => {
+    expect(modelMatchesPattern('claude-opus-4-6', 'claude-opus')).toBe(false);
+  });
+});
+
+describe('anyModelMatches', () => {
+  it('returns false for empty pattern list', () => {
+    expect(anyModelMatches([], 'claude-opus-4-6')).toBe(false);
+  });
+
+  it('returns false when model is undefined', () => {
+    expect(anyModelMatches(['claude-opus'], undefined)).toBe(false);
+  });
+
+  it('returns true when any pattern matches', () => {
+    expect(anyModelMatches(['claude-sonnet', 'claude-opus'], 'claude-opus-4-7')).toBe(true);
+  });
+
+  it('returns false when no pattern matches', () => {
+    expect(anyModelMatches(['claude-sonnet', 'gpt-5'], 'claude-opus-4-7')).toBe(false);
   });
 });
 
