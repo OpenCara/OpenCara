@@ -23,7 +23,7 @@ timeout = "30m"
 
 [review.summarizer]
 only = "quabug"
-preferred_models = ["claude-opus-4-6"]
+preferred_models = ["claude-opus-4-6", "claude-opus-4-7"]
 
 [issue_review]
 prompt = """
