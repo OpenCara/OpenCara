@@ -234,12 +234,14 @@ describe('buildBatchPollRequest', () => {
     expect(request.agents).toHaveLength(2);
     expect(request.agents[0]).toEqual({
       agent_name: 'agent-1',
+      agent_id: 'uuid-1',
       roles: ['review', 'summary'],
       model: 'gpt-4',
       tool: 'claude',
     });
     expect(request.agents[1]).toEqual({
       agent_name: 'agent-2',
+      agent_id: 'uuid-2',
       roles: ['review'],
       model: 'gemini',
       tool: 'gemini',

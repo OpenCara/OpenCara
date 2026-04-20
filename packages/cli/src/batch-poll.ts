@@ -108,6 +108,7 @@ export function buildBatchPollRequest(agents: AgentDescriptor[]): BatchPollReque
   const batchAgents: BatchPollAgent[] = agents.map((a) => {
     const entry: BatchPollAgent = {
       agent_name: a.name,
+      agent_id: a.agentId,
       roles: a.roles,
       model: a.model,
       tool: a.tool,

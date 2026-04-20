@@ -1159,9 +1159,14 @@ export function taskRoutes() {
       // Collect per-agent task lists
       const agentTasks = new Map<string, PollTask[]>();
       for (const agent of body.agents) {
+        // Per-agent-id identity for persistence-keyed lookups (rejection
+        // counters, cooldown, reputation, reliability). Falls back to the
+        // request-local agent_name when agent_id is missing (older CLIs).
+        const identityKey = agent.agent_id ?? agent.agent_name;
+
         // Block check per agent — skip blocked agents
-        if (await isAgentBlocked(store, agent.agent_name, verifiedIdentity?.github_user_id)) {
-          logger.warn('Blocked agent in batch poll', { agentId: agent.agent_name });
+        if (await isAgentBlocked(store, identityKey, verifiedIdentity?.github_user_id)) {
+          logger.warn('Blocked agent in batch poll', { agentId: identityKey });
           agentTasks.set(agent.agent_name, []);
           continue;
         }
@@ -1182,7 +1187,7 @@ export function taskRoutes() {
         const available = await filterTasksForAgent(
           pollCtx,
           {
-            agentId: agent.agent_name,
+            agentId: identityKey,
             acceptedRoles: new Set(agent.roles),
             agentRepos: declaredRepos.size > 0 ? declaredRepos : null,
             model: agent.model,
@@ -1210,36 +1215,53 @@ export function taskRoutes() {
       }
 
       // Weighted-random shuffle: agents with higher (reputation × reliability)
-      // are more likely to land first and claim available tasks. Fetch both
-      // signals for all polling agents in parallel.
-      const agentNames = body.agents.map((a) => a.agent_name);
+      // are more likely to land first and claim available tasks. Reputation
+      // and reliability events are keyed by the persistent `agent_id` (UUID),
+      // not the request-local `agent_name`. Agents that don't supply an
+      // `agent_id` (older CLIs) fall back to neutral weight so they still
+      // receive work.
+      const agentIds: string[] = [];
+      for (const a of body.agents) {
+        if (a.agent_id) agentIds.push(a.agent_id);
+      }
       const now = Date.now();
       const reputationSinceMs = now - REPUTATION_SCORE_WINDOW_MS;
       const reliabilitySinceMs = now - RELIABILITY_WINDOW_MS;
-      const [reputationByAgent, reliabilityByAgent] = await Promise.all([
+      const [reputationByAgentId, reliabilityByAgentId] = await Promise.all([
         Promise.all(
-          agentNames.map((name) => store.getAgentReputationEvents(name, reputationSinceMs)),
+          agentIds.map((id) => store.getAgentReputationEvents(id, reputationSinceMs)),
         ).then((lists) => {
           const m = new Map<string, number>();
-          for (let i = 0; i < agentNames.length; i++) {
+          for (let i = 0; i < agentIds.length; i++) {
             const events = lists[i];
             // Agents with no reputation history get a neutral 0.5 baseline
             // (same default previously used for grace-period computation).
-            m.set(agentNames[i], events.length > 0 ? computeAgentReputation(events) : 0.5);
+            m.set(agentIds[i], events.length > 0 ? computeAgentReputation(events) : 0.5);
           }
           return m;
         }),
-        store.getAgentReliabilityEventsBatch(agentNames, reliabilitySinceMs),
+        store.getAgentReliabilityEventsBatch(agentIds, reliabilitySinceMs),
       ]);
 
-      function agentWeight(agentName: string): number {
-        const rep = reputationByAgent.get(agentName) ?? 0.5;
-        const rel = computeReliability(reliabilityByAgent.get(agentName) ?? []);
+      function agentWeight(agentId: string | undefined): number {
+        // Without an agent_id we can't look up reliability — treat as neutral
+        // so the agent is not arbitrarily penalised.
+        if (!agentId) return 0.5;
+        const rep = reputationByAgentId.get(agentId) ?? 0.5;
+        const rel = computeReliability(reliabilityByAgentId.get(agentId) ?? []);
         return rep * rel;
       }
 
+      // Agents whose weight has collapsed (reliability 0 — every event in the
+      // window was an error) are skipped from dispatch entirely. Their events
+      // will age out of the RELIABILITY_WINDOW_MS window and they'll come back
+      // into rotation automatically. This prevents the retry loop where a
+      // broken agent is the only polling candidate for a task and keeps
+      // re-claiming it after each failure.
       const shuffledAgents = body.agents
-        .map((agent) => ({ agent, score: agentWeight(agent.agent_name) * Math.random() }))
+        .map((agent) => ({ agent, weight: agentWeight(agent.agent_id) }))
+        .filter(({ weight }) => weight > 0)
+        .map(({ agent, weight }) => ({ agent, score: weight * Math.random() }))
         .sort((a, b) => b.score - a.score)
         .map((e) => e.agent);
 
