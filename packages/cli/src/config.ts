@@ -324,6 +324,16 @@ function validateConfigData(
       `\u26a0 Config warning: max_repo_size_mb must be >= 0, got ${data.max_repo_size_mb}, using default (${DEFAULT_MAX_REPO_SIZE_MB})`,
     );
     overrides.maxRepoSizeMb = DEFAULT_MAX_REPO_SIZE_MB;
+  } else if (typeof data.max_repo_size_mb === 'number' && data.max_repo_size_mb > 0) {
+    // Sparse checkout was removed along with the API-first diff fetch
+    // (diffs are now computed locally from the worktree, which doesn't know
+    // file paths ahead of time). `max_repo_size_mb` is preserved on the
+    // schema for backward compatibility but no longer influences checkout.
+    console.warn(
+      `\u26a0 Config notice: max_repo_size_mb is currently a no-op — sparse checkout was removed ` +
+        `when git-diff became the primary diff source. Full clones use --filter=blob:none so disk ` +
+        `usage stays low for most repos.`,
+    );
   }
 
   // Validate usage limit fields

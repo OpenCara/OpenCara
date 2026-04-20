@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeTokens } from './sanitize.js';
 import { validatePathSegment, isGhAvailable, buildCloneUrl } from './codebase.js';
+import { DiffTooLargeError } from './review.js';
 
 /** Git credential helper arg that delegates to gh CLI */
 const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
@@ -398,9 +399,10 @@ export function diffFromWorktree(
   ghAvailable: boolean,
   maxDiffBytes = 128 * 1024 * 1024, // 128 MB
 ): string {
-  // Defensive: reject ref names that look like option flags to avoid argv
-  // injection if `baseRef` somehow leaks from untrusted input.
-  if (baseRef.startsWith('-')) {
+  // Defensive allowlist for ref names. We pass baseRef as a separate argv to
+  // execFileSync so there's no shell expansion, but a ref with whitespace,
+  // newlines, or leading `-` could still confuse `git` itself.
+  if (!/^[A-Za-z0-9_./-]+$/.test(baseRef) || baseRef.startsWith('-')) {
     throw new Error(`Invalid base ref: ${baseRef}`);
   }
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
@@ -409,7 +411,18 @@ export function diffFromWorktree(
     [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
     bareRepoPath,
   );
-  return gitExec('git', ['diff', `origin/${baseRef}...HEAD`], worktreePath, {
-    maxBuffer: maxDiffBytes,
-  });
+  try {
+    return gitExec('git', ['diff', `origin/${baseRef}...HEAD`], worktreePath, {
+      maxBuffer: maxDiffBytes,
+    });
+  } catch (err) {
+    // Translate execFileSync's maxBuffer-exceeded error into DiffTooLargeError
+    // so the caller can reject the task cleanly instead of falling through to
+    // the API path (which has its own — different — size and file-count caps).
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/maxBuffer/i.test(msg) || /ERR_CHILD_PROCESS_STDIO_MAXBUFFER/.test(msg)) {
+      throw new DiffTooLargeError(`Diff exceeds limit (${Math.round(maxDiffBytes / 1024)}KB)`);
+    }
+    throw err;
+  }
 }
