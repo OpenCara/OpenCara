@@ -249,32 +249,24 @@ describe('cooldownMultiplier', () => {
 describe('effectiveGracePeriod', () => {
   const BASE = 30_000; // 30s
 
-  it('proven good, idle → 15s', () => {
-    const result = effectiveGracePeriod(BASE, 0.81, Date.now() - 15 * 60_000);
-    expect(result).toBe(15_000); // 30s * 0.5 * 1.0
+  it('idle (fully cooled) → base', () => {
+    const result = effectiveGracePeriod(BASE, Date.now() - 15 * 60_000);
+    expect(result).toBe(30_000); // 30s * 1.0
   });
 
-  it('proven good, just reviewed → 30s', () => {
-    const result = effectiveGracePeriod(BASE, 0.81, Date.now() - 1 * 60_000);
-    expect(result).toBe(30_000); // 30s * 0.5 * 2.0
+  it('just reviewed → doubled', () => {
+    const result = effectiveGracePeriod(BASE, Date.now() - 1 * 60_000);
+    expect(result).toBe(60_000); // 30s * 2.0
   });
 
-  it('neutral, never reviewed → 30s', () => {
-    const result = effectiveGracePeriod(BASE, 0.5, null);
-    expect(result).toBe(30_000); // 30s * 1.0 * 1.0
+  it('never reviewed → base', () => {
+    const result = effectiveGracePeriod(BASE, null);
+    expect(result).toBe(30_000); // 30s * 1.0
   });
 
-  it('bad agent, idle → deprioritized', () => {
-    // 0.20 → multiplier = 3^1 = 3
-    const result = effectiveGracePeriod(BASE, 0.2, Date.now() - 20 * 60_000);
-    expect(result).toBeCloseTo(90_000, -3); // 30s * 3.0 * 1.0
-  });
-
-  it('very bad agent, just reviewed → heavily penalized', () => {
-    // 0.06 → multiplier ≈ 6.47
-    const result = effectiveGracePeriod(BASE, 0.06, Date.now() - 2 * 60_000);
-    // 30s * ~6.47 * 2.0 ≈ ~388s
-    expect(result).toBeGreaterThan(300_000);
+  it('half-cooled (5–10 min) → 1.5×', () => {
+    const result = effectiveGracePeriod(BASE, Date.now() - 7 * 60_000);
+    expect(result).toBe(45_000); // 30s * 1.5
   });
 });
 

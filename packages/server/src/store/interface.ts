@@ -182,6 +182,19 @@ export interface DataStore {
   /** Get the timestamp of an agent's most recent completed claim. Returns null if none. */
   getAgentLastCompletedClaimAt(agentId: string): Promise<number | null>;
 
+  // Agent reliability (recent success/error outcome events for dispatch weighting)
+  /** Append a reliability event when a task completes or errors. */
+  recordAgentReliabilityEvent(
+    agentId: string,
+    outcome: 'success' | 'error',
+    createdAt: string,
+  ): Promise<void>;
+  /** Batch-fetch recent reliability events for multiple agents in one query. */
+  getAgentReliabilityEventsBatch(
+    agentIds: readonly string[],
+    sinceMs: number,
+  ): Promise<Map<string, Array<{ outcome: 'success' | 'error'; created_at: string }>>>;
+
   // OAuth token cache
   /** Look up a cached verified identity by token hash. Returns null if not found or expired. */
   getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null>;

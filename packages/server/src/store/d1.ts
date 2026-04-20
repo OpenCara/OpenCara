@@ -1060,6 +1060,47 @@ export class D1DataStore implements DataStore {
     return row?.latest ?? null;
   }
 
+  // ── Agent reliability (recent success/error outcomes) ────────
+
+  async recordAgentReliabilityEvent(
+    agentId: string,
+    outcome: 'success' | 'error',
+    createdAt: string,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        'INSERT INTO agent_reliability_events (agent_id, outcome, created_at) VALUES (?, ?, ?)',
+      )
+      .bind(agentId, outcome, createdAt)
+      .run();
+  }
+
+  async getAgentReliabilityEventsBatch(
+    agentIds: readonly string[],
+    sinceMs: number,
+  ): Promise<Map<string, Array<{ outcome: 'success' | 'error'; created_at: string }>>> {
+    const result = new Map<string, Array<{ outcome: 'success' | 'error'; created_at: string }>>();
+    if (agentIds.length === 0) return result;
+    const sinceIso = new Date(sinceMs).toISOString();
+    const placeholders = agentIds.map(() => '?').join(',');
+    const rows = await this.db
+      .prepare(
+        `SELECT agent_id, outcome, created_at FROM agent_reliability_events
+         WHERE agent_id IN (${placeholders}) AND created_at >= ?`,
+      )
+      .bind(...agentIds, sinceIso)
+      .all<{ agent_id: string; outcome: 'success' | 'error'; created_at: string }>();
+    for (const row of rows.results ?? []) {
+      let list = result.get(row.agent_id);
+      if (!list) {
+        list = [];
+        result.set(row.agent_id, list);
+      }
+      list.push({ outcome: row.outcome, created_at: row.created_at });
+    }
+    return result;
+  }
+
   // ── OAuth token cache ────────────────────────────────────────
 
   async getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null> {

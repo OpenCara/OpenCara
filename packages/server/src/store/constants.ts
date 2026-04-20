@@ -38,3 +38,13 @@ export const COOLDOWN_FULL_MS = 10 * 60_000;
 
 /** Cooldown: half-cooled threshold at 5 minutes. */
 export const COOLDOWN_HALF_MS = 5 * 60_000;
+
+// ── Reliability system constants ─────────────────────────────────
+
+/**
+ * Rolling window for per-agent success/error events used in dispatch weighting.
+ * 30 minutes: short enough that a recovering agent comes back into rotation
+ * naturally as its old failures age out; long enough to smooth over transient
+ * hiccups.
+ */
+export const RELIABILITY_WINDOW_MS = 30 * 60_000;
