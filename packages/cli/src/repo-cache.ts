@@ -356,16 +356,55 @@ export function configureSparseCheckout(worktreePath: string, filePaths: string[
 /**
  * Run a command synchronously with sanitized error messages.
  */
-function gitExec(command: string, args: string[], cwd?: string): string {
+function gitExec(
+  command: string,
+  args: string[],
+  cwd?: string,
+  opts?: { maxBuffer?: number },
+): string {
   try {
     return execFileSync(command, args, {
       cwd,
       encoding: 'utf-8',
       timeout: GIT_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: opts?.maxBuffer,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(sanitizeTokens(message));
   }
+}
+
+/**
+ * Generate a unified diff for a PR from a local worktree. Fetches the base
+ * branch into the bare clone (idempotent) and runs
+ * `git diff origin/<baseRef>...HEAD` inside the worktree.
+ *
+ * Unlike GitHub's REST diff endpoint (which caps at 300 files), the local
+ * git diff has no such limit, so this is how we handle large PRs.
+ *
+ * The caller is responsible for holding the per-repo lock around this call.
+ */
+export function diffFromWorktree(
+  bareRepoPath: string,
+  worktreePath: string,
+  baseRef: string,
+  ghAvailable: boolean,
+  maxDiffBytes = 128 * 1024 * 1024, // 128 MB
+): string {
+  // Defensive: reject ref names that look like option flags to avoid argv
+  // injection if `baseRef` somehow leaks from untrusted input.
+  if (baseRef.startsWith('-')) {
+    throw new Error(`Invalid base ref: ${baseRef}`);
+  }
+  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
+  gitExec(
+    'git',
+    [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
+    bareRepoPath,
+  );
+  return gitExec('git', ['diff', `origin/${baseRef}...HEAD`], worktreePath, {
+    maxBuffer: maxDiffBytes,
+  });
 }

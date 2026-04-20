@@ -994,6 +994,7 @@ async function filterTasksForAgent(
       pr_review_comments: task.pr_review_comments,
       head_sha: task.head_sha,
       head_ref: task.head_ref || undefined,
+      base_ref: task.base_ref || undefined,
     };
 
     // For summary tasks, include worker results from the group

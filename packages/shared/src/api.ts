@@ -51,6 +51,8 @@ export interface PollTask {
   head_sha?: string;
   /** PR branch name (for fix tasks to checkout and push) */
   head_ref?: string;
+  /** PR base branch (target of the merge) — used by the CLI to compute diffs locally from the worktree. */
+  base_ref?: string;
 
   /** Completed worker reviews — provided to summary tasks so the synthesizer has context. */
   reviews?: ClaimReview[];
