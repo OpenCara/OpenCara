@@ -78,14 +78,16 @@ export function cooldownMultiplier(lastReviewAt: number | null): number {
 }
 
 /**
- * Combined effective grace period applying both reputation and cooldown multipliers.
+ * Effective grace period for preferred-vs-unpreferred time priority.
+ *
+ * Only the cooldown multiplier is applied here — reputation no longer extends
+ * the grace window. Reputation instead contributes to the weighted shuffle in
+ * batch-poll dispatch (see `POST /api/tasks/poll/batch`), so a good-reputation
+ * agent is more likely to be picked when multiple agents race for the same
+ * task rather than seeing it earlier in time.
  */
-export function effectiveGracePeriod(
-  baseMs: number,
-  score: number,
-  lastReviewAt: number | null,
-): number {
-  return baseMs * reputationMultiplier(score) * cooldownMultiplier(lastReviewAt);
+export function effectiveGracePeriod(baseMs: number, lastReviewAt: number | null): number {
+  return baseMs * cooldownMultiplier(lastReviewAt);
 }
 
 /**

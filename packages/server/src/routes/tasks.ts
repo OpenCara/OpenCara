@@ -32,8 +32,10 @@ import {
   AGENT_REJECTION_THRESHOLD,
   AGENT_REJECTION_WINDOW_MS,
   REPUTATION_SCORE_WINDOW_MS,
+  RELIABILITY_WINDOW_MS,
 } from '../store/constants.js';
 import { computeAgentReputation, effectiveGracePeriod } from '../reputation.js';
+import { computeReliability } from '../reliability.js';
 import { evaluateSummaryQuality, MAX_SUMMARY_RETRIES } from '../summary-evaluator.js';
 import { isAgentEligibleForRole } from '../eligibility.js';
 import { rateLimitByAgent, rateLimitByIdentity } from '../middleware/rate-limit.js';
@@ -867,33 +869,22 @@ async function filterTasksForAgent(
 ): Promise<PollTask[]> {
   const { tasks, tasksById, dedupBlockedRepos, oldestDedupPerRepo, groupClaimedModels } = ctx;
 
-  // Fetch agent reputation data for grace period multiplier computation
-  const reputationSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
-  const [reputationEvents, lastCompletedAt] = await Promise.all([
-    store.getAgentReputationEvents(agent.agentId, reputationSinceMs),
-    store.getAgentLastCompletedClaimAt(agent.agentId),
-  ]);
-
-  // Only apply reputation multiplier when there are actual reputation events.
-  // Agents with no history get default grace periods (backward-compatible).
-  // Cooldown multiplier always applies for fair task distribution.
-  const hasReputation = reputationEvents.length > 0;
-  const wilsonScore = hasReputation ? computeAgentReputation(reputationEvents) : 0.5;
+  // Cooldown multiplier (per-agent back-to-back spacing) is still applied
+  // to grace periods; reputation now contributes to the weighted dispatch
+  // shuffle in batch poll instead of extending this time window.
+  const lastCompletedAt = await store.getAgentLastCompletedClaimAt(agent.agentId);
 
   // Pre-compute effective grace periods for each base duration
   const effectiveReviewGraceMs = effectiveGracePeriod(
     PREFERRED_REVIEW_GRACE_PERIOD_MS,
-    wilsonScore,
     lastCompletedAt,
   );
   const effectiveTargetModelGraceMs = effectiveGracePeriod(
     TARGET_MODEL_GRACE_PERIOD_MS,
-    wilsonScore,
     lastCompletedAt,
   );
   const effectiveSummaryGraceMs = effectiveGracePeriod(
     PREFERRED_SYNTH_GRACE_PERIOD_MS,
-    wilsonScore,
     lastCompletedAt,
   );
 
@@ -1218,12 +1209,39 @@ export function taskRoutes() {
         assignments[agent.agent_name] = [];
       }
 
-      // Shuffle agents for fair distribution across poll cycles
-      const shuffledAgents = [...body.agents];
-      for (let i = shuffledAgents.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffledAgents[i], shuffledAgents[j]] = [shuffledAgents[j], shuffledAgents[i]];
+      // Weighted-random shuffle: agents with higher (reputation × reliability)
+      // are more likely to land first and claim available tasks. Fetch both
+      // signals for all polling agents in parallel.
+      const agentNames = body.agents.map((a) => a.agent_name);
+      const now = Date.now();
+      const reputationSinceMs = now - REPUTATION_SCORE_WINDOW_MS;
+      const reliabilitySinceMs = now - RELIABILITY_WINDOW_MS;
+      const [reputationByAgent, reliabilityByAgent] = await Promise.all([
+        Promise.all(
+          agentNames.map((name) => store.getAgentReputationEvents(name, reputationSinceMs)),
+        ).then((lists) => {
+          const m = new Map<string, number>();
+          for (let i = 0; i < agentNames.length; i++) {
+            const events = lists[i];
+            // Agents with no reputation history get a neutral 0.5 baseline
+            // (same default previously used for grace-period computation).
+            m.set(agentNames[i], events.length > 0 ? computeAgentReputation(events) : 0.5);
+          }
+          return m;
+        }),
+        store.getAgentReliabilityEventsBatch(agentNames, reliabilitySinceMs),
+      ]);
+
+      function agentWeight(agentName: string): number {
+        const rep = reputationByAgent.get(agentName) ?? 0.5;
+        const rel = computeReliability(reliabilityByAgent.get(agentName) ?? []);
+        return rep * rel;
       }
+
+      const shuffledAgents = body.agents
+        .map((agent) => ({ agent, score: agentWeight(agent.agent_name) * Math.random() }))
+        .sort((a, b) => b.score - a.score)
+        .map((e) => e.agent);
 
       // First pass: preferred-model round-robin — distribute tasks to agents whose
       // model/tool matches the task's preferred_models/preferred_tools config.
@@ -1337,22 +1355,12 @@ export function taskRoutes() {
       );
     }
 
-    // Grace period checks (adjusted by reputation)
+    // Grace period checks (cooldown-adjusted).
     {
-      const repSinceMs = Date.now() - REPUTATION_SCORE_WINDOW_MS;
-      const [repEvents, lastCompleted] = await Promise.all([
-        store.getAgentReputationEvents(agent_id, repSinceMs),
-        store.getAgentLastCompletedClaimAt(agent_id),
-      ]);
-      // Only apply reputation multiplier when there are actual events
-      const score = repEvents.length > 0 ? computeAgentReputation(repEvents) : 0.5;
+      const lastCompleted = await store.getAgentLastCompletedClaimAt(agent_id);
 
       if (isSummaryTask(task)) {
-        const effGrace = effectiveGracePeriod(
-          PREFERRED_SYNTH_GRACE_PERIOD_MS,
-          score,
-          lastCompleted,
-        );
+        const effGrace = effectiveGracePeriod(PREFERRED_SYNTH_GRACE_PERIOD_MS, lastCompleted);
         if (!isSummaryVisibleToAgent(task, agent_id, model, effGrace)) {
           return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
         }
@@ -1360,7 +1368,6 @@ export function taskRoutes() {
         // Worker task — check model/tool preference grace period
         const effReviewGrace = effectiveGracePeriod(
           PREFERRED_REVIEW_GRACE_PERIOD_MS,
-          score,
           lastCompleted,
         );
         if (!isWorkerVisibleToAgent(task, model, tool, effReviewGrace)) {
@@ -1369,11 +1376,7 @@ export function taskRoutes() {
       }
 
       // Target model grace period check
-      const effTargetGrace = effectiveGracePeriod(
-        TARGET_MODEL_GRACE_PERIOD_MS,
-        score,
-        lastCompleted,
-      );
+      const effTargetGrace = effectiveGracePeriod(TARGET_MODEL_GRACE_PERIOD_MS, lastCompleted);
       if (!isTargetModelVisible(task, model, effTargetGrace)) {
         return apiError(c, 409, 'CLAIM_CONFLICT', 'No slots available');
       }
@@ -1522,6 +1525,18 @@ export function taskRoutes() {
       verdict: verdict as ReviewVerdict | undefined,
       tokens_used,
     });
+
+    // Record a reliability success event. Best-effort — a store failure here
+    // should never block result submission.
+    try {
+      await store.recordAgentReliabilityEvent(agent_id, 'success', new Date().toISOString());
+    } catch (err) {
+      logger.warn('Failed to record reliability success event', {
+        agentId: agent_id,
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Check if the task exists
     const task = await store.getTask(taskId);
@@ -1777,6 +1792,17 @@ export function taskRoutes() {
 
     // Release the task so another agent can claim it
     await store.releaseTask(taskId);
+
+    // Record a reliability failure event. Best-effort.
+    try {
+      await store.recordAgentReliabilityEvent(agent_id, 'error', new Date().toISOString());
+    } catch (err) {
+      logger.warn('Failed to record reliability error event', {
+        agentId: agent_id,
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     logger.error('Agent reported error', {
       agentId: agent_id,

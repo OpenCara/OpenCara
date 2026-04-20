@@ -23,6 +23,11 @@ export class MemoryDataStore implements DataStore {
   private postedReviewNextId = 1;
   private reputationEvents: ReputationEvent[] = [];
   private reputationEventNextId = 1;
+  private reliabilityEvents: Array<{
+    agent_id: string;
+    outcome: 'success' | 'error';
+    created_at: string;
+  }> = [];
   private readonly ttlMs: number;
 
   constructor(ttlDays: number = DEFAULT_TTL_DAYS) {
@@ -619,6 +624,36 @@ export class MemoryDataStore implements DataStore {
     return latest;
   }
 
+  // Agent reliability (recent success/error outcomes)
+
+  async recordAgentReliabilityEvent(
+    agentId: string,
+    outcome: 'success' | 'error',
+    createdAt: string,
+  ): Promise<void> {
+    this.reliabilityEvents.push({ agent_id: agentId, outcome, created_at: createdAt });
+  }
+
+  async getAgentReliabilityEventsBatch(
+    agentIds: readonly string[],
+    sinceMs: number,
+  ): Promise<Map<string, Array<{ outcome: 'success' | 'error'; created_at: string }>>> {
+    const result = new Map<string, Array<{ outcome: 'success' | 'error'; created_at: string }>>();
+    if (agentIds.length === 0) return result;
+    const allowed = new Set(agentIds);
+    const sinceIso = new Date(sinceMs).toISOString();
+    for (const e of this.reliabilityEvents) {
+      if (!allowed.has(e.agent_id) || e.created_at < sinceIso) continue;
+      let list = result.get(e.agent_id);
+      if (!list) {
+        list = [];
+        result.set(e.agent_id, list);
+      }
+      list.push({ outcome: e.outcome, created_at: e.created_at });
+    }
+    return result;
+  }
+
   // OAuth token cache
 
   async getOAuthCache(tokenHash: string): Promise<VerifiedIdentity | null> {
@@ -676,6 +711,7 @@ export class MemoryDataStore implements DataStore {
     this.postedReviewNextId = 1;
     this.reputationEvents = [];
     this.reputationEventNextId = 1;
+    this.reliabilityEvents = [];
     this.timeoutLastCheck = 0;
   }
 }
