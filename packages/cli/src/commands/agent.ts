@@ -263,18 +263,14 @@ export async function fetchDiffViaGh(
     });
     return stdout;
   } catch {
-    // `gh` not installed / not on PATH → return null so the caller can
-    // fall back to HTTP. Any other non-zero exit (e.g. GitHub returned
-    // 406 for a >300-file PR, 404 for a missing PR, auth failure) is
-    // surfaced with its real message so the operator sees the actual
-    // reason rather than the "private repo" red herring the HTTP path
-    // produces for private resources.
-    if (state.err?.code === 'ENOENT') {
-      return null;
-    }
+    // Return null so `fetchDiff` can cascade to the HTTP tier — the API
+    // fallback is the whole point of returning here. We do log whatever
+    // `gh` reported on stderr (sanitized) so that when the HTTP path also
+    // fails, the operator can see both failure modes rather than just the
+    // generic 404 "private repo" red herring.
     const trimmed = state.stderr.trim();
-    if (trimmed.length > 0) {
-      throw new NonRetryableError(`gh api failed: ${trimmed}`);
+    if (trimmed.length > 0 && state.err?.code !== 'ENOENT') {
+      console.warn(`[fetchDiffViaGh] gh api failed: ${sanitizeTokens(trimmed)}`);
     }
     return null;
   }
@@ -754,12 +750,21 @@ async function handleTask(
     // any size and works for private repos without a platform token.
     if (taskCheckoutPath && taskBareRepoPath && base_ref) {
       try {
+        // Hoist `gh auth status` outside the repo lock — it's independent of
+        // the repo and does a synchronous subprocess call (up to 10s timeout).
+        const ghAvailable = isGhAvailable();
+        const maxDiffBytes = reviewDeps.maxDiffSizeKb ? reviewDeps.maxDiffSizeKb * 1024 : undefined;
         const repoKey = `${owner}/${repo}`;
         const gitDiff = await withRepoLock(repoKey, () =>
-          diffFromWorktree(taskBareRepoPath!, taskCheckoutPath!, base_ref, isGhAvailable()),
+          diffFromWorktree(
+            taskBareRepoPath!,
+            taskCheckoutPath!,
+            base_ref,
+            ghAvailable,
+            maxDiffBytes,
+          ),
         );
-        const maxBytes = reviewDeps.maxDiffSizeKb ? reviewDeps.maxDiffSizeKb * 1024 : Infinity;
-        if (gitDiff.length > maxBytes) {
+        if (maxDiffBytes !== undefined && gitDiff.length > maxDiffBytes) {
           throw new DiffTooLargeError(
             `Diff too large (${Math.round(gitDiff.length / 1024)}KB > ${reviewDeps.maxDiffSizeKb}KB)`,
           );

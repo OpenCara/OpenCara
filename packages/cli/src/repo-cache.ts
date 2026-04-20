@@ -243,6 +243,11 @@ export async function checkoutWorktree(
     const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
     const worktreePath = addWorktree(bareRepoPath, wtKey);
+    // addWorktree reuses an existing directory by path without touching its
+    // HEAD, so after a force-push or re-poll the worktree can be stale.
+    // Force-detach to the freshly fetched PR tip so `git diff` sees current
+    // contents.
+    gitExec('git', ['checkout', '--detach', '--force', 'FETCH_HEAD'], worktreePath);
 
     if (useSparse) {
       configureSparseCheckout(worktreePath, sparseOptions.diffPaths);
