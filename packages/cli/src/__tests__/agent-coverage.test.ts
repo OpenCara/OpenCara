@@ -34,6 +34,14 @@ vi.mock('node:child_process', async (importOriginal) => {
       }
       return { pid: 0, kill: () => false };
     }),
+    // Stub sync variant so isGhAvailable() returns false fast (no real
+    // `gh auth status` subprocess blocking the test event loop).
+    execFileSync: vi.fn(() => {
+      const err: NodeJS.ErrnoException = Object.assign(new Error('gh not available in test'), {
+        code: 'ENOENT',
+      });
+      throw err;
+    }),
   };
 });
 

@@ -35,6 +35,15 @@ vi.mock('node:child_process', async (importOriginal) => {
       }
       return { pid: 0, kill: () => false };
     }),
+    // Also stub the sync variant so isGhAvailable() (called per task in
+    // handleTask's git-diff path) returns false fast instead of shelling
+    // out to a real `gh auth status`.
+    execFileSync: vi.fn(() => {
+      const err: NodeJS.ErrnoException = Object.assign(new Error('gh not available in test'), {
+        code: 'ENOENT',
+      });
+      throw err;
+    }),
   };
 });
 

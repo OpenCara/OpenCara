@@ -423,7 +423,8 @@ describe('repo-cache', () => {
       // 2: gh repo clone --bare (ensureBareClone)
       // 3: git fetch (fetchPRRef)
       // 4: git worktree add (addWorktree)
-      expect(calls.length).toBe(4);
+      // 5: git checkout --detach --force FETCH_HEAD (reset reused worktrees to fresh PR tip)
+      expect(calls.length).toBe(5);
 
       // Verify bare clone
       expect(calls[1][1]).toContain('--bare');
@@ -435,6 +436,9 @@ describe('repo-cache', () => {
       expect(calls[3][1]).toContain('worktree');
       expect(calls[3][1]).toContain('FETCH_HEAD');
       expect(calls[3][1]).toContain('/tmp/repos/acme/widgets-worktrees/pr-42');
+
+      // Verify post-add reset to FETCH_HEAD
+      expect(calls[4][1]).toEqual(['checkout', '--detach', '--force', 'FETCH_HEAD']);
     });
 
     it('increments ref count on checkout', async () => {

@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeTokens } from './sanitize.js';
 import { validatePathSegment, isGhAvailable, buildCloneUrl } from './codebase.js';
+import { DiffTooLargeError } from './review.js';
 
 /** Git credential helper arg that delegates to gh CLI */
 const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
@@ -243,6 +244,11 @@ export async function checkoutWorktree(
     const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
     const worktreePath = addWorktree(bareRepoPath, wtKey);
+    // addWorktree reuses an existing directory by path without touching its
+    // HEAD, so after a force-push or re-poll the worktree can be stale.
+    // Force-detach to the freshly fetched PR tip so `git diff` sees current
+    // contents.
+    gitExec('git', ['checkout', '--detach', '--force', 'FETCH_HEAD'], worktreePath);
 
     if (useSparse) {
       configureSparseCheckout(worktreePath, sparseOptions.diffPaths);
@@ -356,16 +362,67 @@ export function configureSparseCheckout(worktreePath: string, filePaths: string[
 /**
  * Run a command synchronously with sanitized error messages.
  */
-function gitExec(command: string, args: string[], cwd?: string): string {
+function gitExec(
+  command: string,
+  args: string[],
+  cwd?: string,
+  opts?: { maxBuffer?: number },
+): string {
   try {
     return execFileSync(command, args, {
       cwd,
       encoding: 'utf-8',
       timeout: GIT_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: opts?.maxBuffer,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(sanitizeTokens(message));
+  }
+}
+
+/**
+ * Generate a unified diff for a PR from a local worktree. Fetches the base
+ * branch into the bare clone (idempotent) and runs
+ * `git diff origin/<baseRef>...HEAD` inside the worktree.
+ *
+ * Unlike GitHub's REST diff endpoint (which caps at 300 files), the local
+ * git diff has no such limit, so this is how we handle large PRs.
+ *
+ * The caller is responsible for holding the per-repo lock around this call.
+ */
+export function diffFromWorktree(
+  bareRepoPath: string,
+  worktreePath: string,
+  baseRef: string,
+  ghAvailable: boolean,
+  maxDiffBytes = 128 * 1024 * 1024, // 128 MB
+): string {
+  // Defensive allowlist for ref names. We pass baseRef as a separate argv to
+  // execFileSync so there's no shell expansion, but a ref with whitespace,
+  // newlines, or leading `-` could still confuse `git` itself.
+  if (!/^[A-Za-z0-9_./-]+$/.test(baseRef) || baseRef.startsWith('-')) {
+    throw new Error(`Invalid base ref: ${baseRef}`);
+  }
+  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
+  gitExec(
+    'git',
+    [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
+    bareRepoPath,
+  );
+  try {
+    return gitExec('git', ['diff', `origin/${baseRef}...HEAD`], worktreePath, {
+      maxBuffer: maxDiffBytes,
+    });
+  } catch (err) {
+    // Translate execFileSync's maxBuffer-exceeded error into DiffTooLargeError
+    // so the caller can reject the task cleanly instead of falling through to
+    // the API path (which has its own — different — size and file-count caps).
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/maxBuffer/i.test(msg) || /ERR_CHILD_PROCESS_STDIO_MAXBUFFER/.test(msg)) {
+      throw new DiffTooLargeError(`Diff exceeds limit (${Math.round(maxDiffBytes / 1024)}KB)`);
+    }
+    throw err;
   }
 }

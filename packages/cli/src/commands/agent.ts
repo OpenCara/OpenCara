@@ -33,10 +33,10 @@ import {
 import {
   checkoutWorktree,
   cleanupWorktree,
-  getRepoSize,
-  parseDiffPaths,
-  type SparseCheckoutOptions,
+  diffFromWorktree,
+  withRepoLock,
 } from '../repo-cache.js';
+import { isGhAvailable } from '../codebase.js';
 import {
   parseTtl,
   CodebaseCleanupTracker,
@@ -224,6 +224,10 @@ export async function fetchDiffViaGh(
   prNumber: number,
   signal?: AbortSignal,
 ): Promise<string | null> {
+  const state: { stderr: string; err: (Error & { code?: string | number | null }) | null } = {
+    stderr: '',
+    err: null,
+  };
   try {
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile(
@@ -235,9 +239,14 @@ export async function fetchDiffViaGh(
           'Accept: application/vnd.github.v3.diff',
         ],
         { maxBuffer: 50 * 1024 * 1024 }, // 50 MB
-        (err, stdout) => {
-          if (err) reject(err);
-          else resolve(stdout);
+        (err, stdoutStr, stderrStr) => {
+          if (err) {
+            state.err = err;
+            state.stderr = stderrStr ?? '';
+            reject(err);
+          } else {
+            resolve(stdoutStr);
+          }
         },
       );
       if (signal) {
@@ -254,6 +263,15 @@ export async function fetchDiffViaGh(
     });
     return stdout;
   } catch {
+    // Return null so `fetchDiff` can cascade to the HTTP tier — the API
+    // fallback is the whole point of returning here. We do log whatever
+    // `gh` reported on stderr (sanitized) so that when the HTTP path also
+    // fails, the operator can see both failure modes rather than just the
+    // generic 404 "private repo" red herring.
+    const trimmed = state.stderr.trim();
+    if (trimmed.length > 0 && state.err?.code !== 'ENOENT') {
+      console.warn(`[fetchDiffViaGh] gh api failed: ${sanitizeTokens(trimmed)}`);
+    }
     return null;
   }
 }
@@ -656,7 +674,8 @@ async function handleTask(
   cleanupTracker?: CodebaseCleanupTracker,
   verbose?: boolean,
 ): Promise<HandleTaskResult> {
-  const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role } = task;
+  const { task_id, owner, repo, pr_number, diff_url, timeout_seconds, prompt, role, base_ref } =
+    task;
   const { log, logError, logWarn } = logger;
 
   const isIssueTask = pr_number === 0;
@@ -706,77 +725,90 @@ async function handleTask(
   if (isIssueTask) {
     log('  Issue-based task — skipping diff fetch');
   } else {
-    // Fetch diff — gh CLI first, fall back to HTTP
+    // Checkout codebase first — a local worktree lets us compute the diff
+    // via `git diff` instead of GitHub's REST diff endpoint, which caps at
+    // 300 files. Sparse checkout is only applied when both a diff is
+    // available up-front (via the API) AND the repo exceeds the configured
+    // size cap; in the git-diff path we always do a full checkout since we
+    // don't know the diff paths ahead of time.
+    const codebaseDir = reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos');
     try {
-      const result = await fetchDiff(diff_url, owner, repo, pr_number, {
-        githubToken: client.currentToken,
-        signal,
-        maxDiffSizeKb: reviewDeps.maxDiffSizeKb,
-      });
-      diffContent = result.diff;
-      log(`  Diff fetched via ${result.method} (${Math.round(diffContent.length / 1024)}KB)`);
+      const result = await checkoutWorktree(owner, repo, pr_number, codebaseDir, task_id);
+      const mode = result.cloned ? 'cloned' : 'cached';
+      log(`  Codebase ${mode} → worktree: ${result.worktreePath}`);
+      taskCheckoutPath = result.worktreePath;
+      taskBareRepoPath = result.bareRepoPath;
+      taskReviewDeps = { ...reviewDeps, codebaseDir: result.worktreePath };
     } catch (err) {
-      logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
-      await safeReject(
-        client,
-        task_id,
-        agentId,
-        `Cannot access diff: ${(err as Error).message}`,
-        logger,
+      logWarn(
+        `  Warning: worktree checkout failed: ${(err as Error).message}. Will try API diff only.`,
       );
-      return { diffFetchFailed: true };
+      taskReviewDeps = { ...reviewDeps, codebaseDir: null };
     }
 
-    // Checkout codebase using persistent bare clone + git worktree
-    // For large repos, use sparse checkout with only diff-affected files
-    {
-      const codebaseDir = reviewDeps.codebaseDir || path.join(CONFIG_DIR, 'repos');
-      let sparseOptions: SparseCheckoutOptions | undefined;
-
-      // Check repo size and decide on sparse checkout
-      const maxRepoSizeMb = reviewDeps.maxRepoSizeMb ?? 0;
-      if (maxRepoSizeMb > 0) {
-        const repoSizeKb = getRepoSize(owner, repo);
-        if (repoSizeKb === null) {
-          // gh unavailable or API failed — default to sparse checkout (safer fallback)
-          const diffPaths = parseDiffPaths(diffContent);
-          if (diffPaths.length > 0) {
-            log('  Repo size unknown (gh unavailable) — using sparse checkout as safe default');
-            sparseOptions = { diffPaths };
-          }
-        } else {
-          const repoSizeMb = repoSizeKb / 1024;
-          if (repoSizeMb > maxRepoSizeMb) {
-            const diffPaths = parseDiffPaths(diffContent);
-            if (diffPaths.length > 0) {
-              log(
-                `  Large repo detected (${Math.round(repoSizeMb)}MB > ${maxRepoSizeMb}MB) — using sparse checkout (${diffPaths.length} files)`,
-              );
-              sparseOptions = { diffPaths };
-            }
-          }
-        }
-      }
-
+    // Prefer local git diff when a worktree is available — handles PRs of
+    // any size and works for private repos without a platform token.
+    if (taskCheckoutPath && taskBareRepoPath && base_ref) {
       try {
-        const result = await checkoutWorktree(
-          owner,
-          repo,
-          pr_number,
-          codebaseDir,
-          task_id,
-          sparseOptions,
+        // Hoist `gh auth status` outside the repo lock — it's independent of
+        // the repo and does a synchronous subprocess call (up to 10s timeout).
+        const ghAvailable = isGhAvailable();
+        const maxDiffBytes = reviewDeps.maxDiffSizeKb ? reviewDeps.maxDiffSizeKb * 1024 : undefined;
+        const repoKey = `${owner}/${repo}`;
+        const gitDiff = await withRepoLock(repoKey, () =>
+          diffFromWorktree(
+            taskBareRepoPath!,
+            taskCheckoutPath!,
+            base_ref,
+            ghAvailable,
+            maxDiffBytes,
+          ),
         );
-        const mode = result.sparse ? 'sparse' : result.cloned ? 'cloned' : 'cached';
-        log(`  Codebase ${mode} → worktree: ${result.worktreePath}`);
-        taskCheckoutPath = result.worktreePath;
-        taskBareRepoPath = result.bareRepoPath;
-        taskReviewDeps = { ...reviewDeps, codebaseDir: result.worktreePath };
+        if (maxDiffBytes !== undefined && gitDiff.length > maxDiffBytes) {
+          throw new DiffTooLargeError(
+            `Diff too large (${Math.round(gitDiff.length / 1024)}KB > ${reviewDeps.maxDiffSizeKb}KB)`,
+          );
+        }
+        diffContent = gitDiff;
+        log(`  Diff generated via git (${Math.round(diffContent.length / 1024)}KB)`);
       } catch (err) {
+        if (err instanceof DiffTooLargeError) {
+          logError(`  ${(err as Error).message}`);
+          await safeReject(
+            client,
+            task_id,
+            agentId,
+            `Cannot access diff: ${(err as Error).message}`,
+            logger,
+          );
+          return { diffFetchFailed: true };
+        }
         logWarn(
-          `  Warning: worktree checkout failed: ${(err as Error).message}. Continuing with diff-only review.`,
+          `  Warning: git diff failed (${(err as Error).message}) — falling back to API fetch`,
         );
-        taskReviewDeps = { ...reviewDeps, codebaseDir: null };
+      }
+    }
+
+    // Fallback: fetch via gh CLI / HTTP API.
+    if (!diffContent) {
+      try {
+        const result = await fetchDiff(diff_url, owner, repo, pr_number, {
+          githubToken: client.currentToken,
+          signal,
+          maxDiffSizeKb: reviewDeps.maxDiffSizeKb,
+        });
+        diffContent = result.diff;
+        log(`  Diff fetched via ${result.method} (${Math.round(diffContent.length / 1024)}KB)`);
+      } catch (err) {
+        logError(`  Failed to fetch diff for task ${task_id}: ${(err as Error).message}`);
+        await safeReject(
+          client,
+          task_id,
+          agentId,
+          `Cannot access diff: ${(err as Error).message}`,
+          logger,
+        );
+        return { diffFetchFailed: true };
       }
     }
 
