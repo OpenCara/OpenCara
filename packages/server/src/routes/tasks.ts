@@ -1159,9 +1159,14 @@ export function taskRoutes() {
       // Collect per-agent task lists
       const agentTasks = new Map<string, PollTask[]>();
       for (const agent of body.agents) {
+        // Per-agent-id identity for persistence-keyed lookups (rejection
+        // counters, cooldown, reputation, reliability). Falls back to the
+        // request-local agent_name when agent_id is missing (older CLIs).
+        const identityKey = agent.agent_id ?? agent.agent_name;
+
         // Block check per agent — skip blocked agents
-        if (await isAgentBlocked(store, agent.agent_name, verifiedIdentity?.github_user_id)) {
-          logger.warn('Blocked agent in batch poll', { agentId: agent.agent_name });
+        if (await isAgentBlocked(store, identityKey, verifiedIdentity?.github_user_id)) {
+          logger.warn('Blocked agent in batch poll', { agentId: identityKey });
           agentTasks.set(agent.agent_name, []);
           continue;
         }
@@ -1182,7 +1187,7 @@ export function taskRoutes() {
         const available = await filterTasksForAgent(
           pollCtx,
           {
-            agentId: agent.agent_name,
+            agentId: identityKey,
             acceptedRoles: new Set(agent.roles),
             agentRepos: declaredRepos.size > 0 ? declaredRepos : null,
             model: agent.model,
@@ -1253,9 +1258,10 @@ export function taskRoutes() {
       // into rotation automatically. This prevents the retry loop where a
       // broken agent is the only polling candidate for a task and keeps
       // re-claiming it after each failure.
-      const shuffleCandidates = body.agents.filter((a) => agentWeight(a.agent_id) > 0);
-      const shuffledAgents = shuffleCandidates
-        .map((agent) => ({ agent, score: agentWeight(agent.agent_id) * Math.random() }))
+      const shuffledAgents = body.agents
+        .map((agent) => ({ agent, weight: agentWeight(agent.agent_id) }))
+        .filter(({ weight }) => weight > 0)
+        .map(({ agent, weight }) => ({ agent, score: weight * Math.random() }))
         .sort((a, b) => b.score - a.score)
         .map((e) => e.agent);
 

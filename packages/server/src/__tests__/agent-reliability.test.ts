@@ -255,6 +255,37 @@ describe('Agent reliability — weighted dispatch', () => {
     expect(body.assignments['agent-broken'].tasks).toHaveLength(0);
   });
 
+  it('legacy CLI without agent_id still receives assignments at neutral weight', async () => {
+    // Even if another agent_id has a recorded error, a request that omits
+    // agent_id (older CLI) can't be penalised — treat it as neutral so it
+    // keeps getting work until it upgrades.
+    const now = new Date().toISOString();
+    for (let i = 0; i < 3; i++) {
+      await store.recordAgentReliabilityEvent('id-bad', 'error', now);
+    }
+
+    await store.createTask(
+      makeTask({
+        id: 'only-task',
+        status: 'pending',
+        queue: 'review',
+        task_type: 'review',
+      }),
+    );
+
+    const res = await batchPoll({
+      agents: [
+        // No agent_id — legacy shape
+        { agent_name: 'legacy', roles: ['review'], model: 'm', tool: 't' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      assignments: Record<string, { tasks: Array<{ task_id: string }> }>;
+    };
+    expect(body.assignments['legacy'].tasks).toHaveLength(1);
+  });
+
   it('an agent with no history still gets a neutral weight (not zero)', async () => {
     // agent-fresh has no events → reliability defaults to 1.0.
     await store.createTask(
