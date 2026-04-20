@@ -65,11 +65,17 @@ export interface PollResponse {
 
 /**
  * A single agent descriptor inside a batch poll request.
- * `agent_name` is a request-local key used to match assignments in the response —
- * it is NOT the persistent `agent_id` used in PollRequest/ClaimRequest.
+ * `agent_name` is a request-local key used to match assignments in the response.
+ * `agent_id` is the persistent UUID used by PollRequest/ClaimRequest/ResultRequest —
+ * the server uses it to look up per-agent reputation and reliability for
+ * weighted dispatch. Optional for backward compatibility with older CLIs;
+ * when absent, reputation/reliability are not consulted and the agent is
+ * treated as a neutral-weight participant.
  */
 export interface BatchPollAgent {
   agent_name: string;
+  /** Persistent UUID for reputation/reliability lookup. */
+  agent_id?: string;
   /** Required — each agent must declare which roles it accepts (unlike PollRequest where roles is optional). */
   roles: TaskRole[];
   model?: string;

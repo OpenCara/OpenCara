@@ -51,6 +51,7 @@ export const PollRequestSchema = z.object({
 
 const batchPollAgentSchema = z.object({
   agent_name: z.string().min(1, 'agent_name must be a non-empty string'),
+  agent_id: agentIdSchema.optional(),
   roles: z.array(taskRoleSchema).min(1, 'roles must contain at least one role'),
   model: z.string().optional(),
   tool: z.string().optional(),

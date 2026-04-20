@@ -170,13 +170,13 @@ describe('Agent reliability — weighted dispatch', () => {
   }
 
   it('prefers a high-reliability agent over a zero-reliability agent', async () => {
-    // agent-bad has only errors in the window → reliability = 0 → shuffle score = 0.
+    // id-bad has only errors in the window → reliability = 0 → shuffle score = 0.
     const now = new Date().toISOString();
     for (let i = 0; i < 5; i++) {
-      await store.recordAgentReliabilityEvent('agent-bad', 'error', now);
+      await store.recordAgentReliabilityEvent('id-bad', 'error', now);
     }
-    // agent-good has only successes → reliability = 1.
-    await store.recordAgentReliabilityEvent('agent-good', 'success', now);
+    // id-good has only successes → reliability = 1.
+    await store.recordAgentReliabilityEvent('id-good', 'success', now);
 
     // One pending task, both agents accept role 'review' on a public repo.
     await store.createTask(
@@ -193,8 +193,20 @@ describe('Agent reliability — weighted dispatch', () => {
     try {
       const res = await batchPoll({
         agents: [
-          { agent_name: 'agent-bad', roles: ['review'], model: 'm1', tool: 't1' },
-          { agent_name: 'agent-good', roles: ['review'], model: 'm2', tool: 't2' },
+          {
+            agent_name: 'agent-bad',
+            agent_id: 'id-bad',
+            roles: ['review'],
+            model: 'm1',
+            tool: 't1',
+          },
+          {
+            agent_name: 'agent-good',
+            agent_id: 'id-good',
+            roles: ['review'],
+            model: 'm2',
+            tool: 't2',
+          },
         ],
       });
       expect(res.status).toBe(200);
@@ -206,6 +218,41 @@ describe('Agent reliability — weighted dispatch', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('a zero-weight agent is skipped even when it is the only polling candidate', async () => {
+    // Only Codex is polling for this task; every recent event was an error.
+    const now = new Date().toISOString();
+    for (let i = 0; i < 5; i++) {
+      await store.recordAgentReliabilityEvent('id-broken', 'error', now);
+    }
+
+    await store.createTask(
+      makeTask({
+        id: 'only-task',
+        status: 'pending',
+        queue: 'review',
+        task_type: 'review',
+      }),
+    );
+
+    const res = await batchPoll({
+      agents: [
+        {
+          agent_name: 'agent-broken',
+          agent_id: 'id-broken',
+          roles: ['review'],
+          model: 'm',
+          tool: 't',
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      assignments: Record<string, { tasks: Array<{ task_id: string }> }>;
+    };
+    // Broken agent gets no assignment — task stays pending for someone else.
+    expect(body.assignments['agent-broken'].tasks).toHaveLength(0);
   });
 
   it('an agent with no history still gets a neutral weight (not zero)', async () => {
@@ -222,7 +269,15 @@ describe('Agent reliability — weighted dispatch', () => {
     const spy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     try {
       const res = await batchPoll({
-        agents: [{ agent_name: 'agent-fresh', roles: ['review'], model: 'm', tool: 't' }],
+        agents: [
+          {
+            agent_name: 'agent-fresh',
+            agent_id: 'id-fresh',
+            roles: ['review'],
+            model: 'm',
+            tool: 't',
+          },
+        ],
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
