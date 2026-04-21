@@ -690,7 +690,52 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ### Epic: opencara-relay (2026-04-20)
 
-- #727 [breakdown, priority:medium] Epic: opencara-relay streaming broker — **DESIGN APPROVED WITH ADJUSTMENTS (v2)** (design doc `.claude/designs/opencara-relay.md` revised 2026-04-20 per team-lead A-G adjustments: R24 split into 7 sub-issues, R15a integration-test suite added, §6.4 reconnection simplified to drop-on-reconnect, §5.4 proactive token-refresh policy, §3.2.6 error semantics clarified, R6 reordered as R3/R4 prerequisite, §9 MV3 content-script note added). Backlog until team-lead final go-ahead on v2. Proposed ~38 sub-issues not yet created.
+- #727 [breakdown, epic:relay] Epic: opencara-relay streaming broker — **[NEXT]** v2 design approved; all 38 sub-issues created in Backlog with Agent field set (except R30/R31 docs = pm label only). Awaiting team-lead to move foundation issues (#728 R1, #729 R2) to Ready. Design doc `.claude/designs/opencara-relay.md` (last revised 2026-04-20, commit 63300eb).
+
+Sub-issue mapping (R-id → GH-number):
+
+| Tier       | R-id | GH # | Agent      | Title (short)                  |
+| ---------- | ---- | ---- | ---------- | ------------------------------ |
+| Foundation | R1   | #728 | architect  | Relay event schema types       |
+| Foundation | R2   | #729 | architect  | Token + topic-lookup API types |
+| Server     | R6   | #730 | server-dev | Env vars wiring                |
+| Server     | R3   | #731 | server-dev | /api/relay/publish-token       |
+| Server     | R4   | #732 | server-dev | /api/relay/subscribe-token     |
+| Server     | R5   | #733 | server-dev | /api/relay/topics              |
+| Relay      | R7   | #734 | architect  | Scaffold packages/relay        |
+| Relay      | R8   | #735 | architect  | JWT verification middleware    |
+| Relay      | R9   | #736 | architect  | Topic registry + ring buffer   |
+| Relay      | R10  | #737 | architect  | WS publisher endpoint          |
+| Relay      | R11  | #738 | architect  | WS subscriber endpoint         |
+| Relay      | R12  | #739 | architect  | SSE subscriber endpoint        |
+| Relay      | R13  | #740 | architect  | Rate limits + max subs         |
+| Relay      | R14  | #741 | architect  | /metrics endpoint              |
+| Relay      | R15  | #742 | architect  | Fly.io deploy                  |
+| Client     | R16  | #743 | architect  | relay-client scaffold          |
+| Client     | R17  | #744 | architect  | relay-adapters scaffold        |
+| Relay      | R15a | #745 | architect  | Integration test suite         |
+| Adapters   | R18  | #746 | cli-dev    | Claude adapter                 |
+| Adapters   | R19  | #747 | cli-dev    | Codex adapter                  |
+| Adapters   | R20  | #748 | cli-dev    | Gemini adapter                 |
+| Adapters   | R21  | #749 | cli-dev    | Qwen adapter                   |
+| CLI        | R22  | #750 | cli-dev    | Config [relay] section         |
+| CLI        | R23  | #751 | cli-dev    | tool-executor refactor         |
+| CLI        | R24a | #752 | cli-dev    | Wire into review.ts            |
+| CLI        | R24b | #753 | cli-dev    | Wire into implement.ts         |
+| CLI        | R24c | #754 | cli-dev    | Wire into fix.ts               |
+| CLI        | R24d | #755 | cli-dev    | Wire into summary.ts           |
+| CLI        | R24e | #756 | cli-dev    | Wire into issue-review.ts      |
+| CLI        | R24f | #757 | cli-dev    | Wire into dedup.ts             |
+| CLI        | R24g | #758 | cli-dev    | Wire into triage.ts            |
+| CLI        | R25  | #759 | cli-dev    | Default redactor               |
+| Extension  | R26  | #760 | cli-dev    | Scaffold MV3 extension         |
+| Extension  | R27  | #761 | cli-dev    | Device Flow OAuth              |
+| Extension  | R28  | #762 | cli-dev    | Subscriber panel               |
+| Extension  | R29  | #763 | cli-dev    | Reconnection UX                |
+| Docs       | R30  | #764 | pm         | docs/relay.md                  |
+| Docs       | R31  | #765 | pm         | docs/extension.md              |
+
+Critical path: R1 → R2 → R6 → R7 → R9 → R10/R11 → R16 → R23 → R24a..g (parallel).
 
 ## Open PRs
 
