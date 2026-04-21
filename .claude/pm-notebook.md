@@ -688,6 +688,10 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 - #692 [server-dev, HIGH] Assign per-task preferred model instead of shared preference list — **DONE** (PR #694 merged 2026-04-07)
 
+### Epic: opencara-relay (2026-04-20)
+
+- #727 [breakdown, priority:medium] Epic: opencara-relay streaming broker — **DESIGN IN REVIEW** (design doc `.claude/designs/opencara-relay.md`, committed b4cc6a3). Backlog until team-lead approves breakdown. Proposed ~31 sub-issues not yet created.
+
 ## Open PRs
 
 (none)

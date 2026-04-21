@@ -35,12 +35,12 @@ Let contributors watch the AI tool (claude, codex, gemini, qwen, pi) think and a
 
 ```ts
 interface RelayEnvelope {
-  v: 1;                      // schema version, integer, bumped on breaking change
-  topic: string;             // e.g. "opencara/opencrust#726" or "task:abc123"
-  seq: number;               // monotonic per-topic sequence, assigned by relay on publish
-  ts: number;                // relay ingest timestamp (ms epoch)
-  producer: string;          // agent instance id, e.g. "agent:uuid/claude"
-  event: RelayEvent;         // see 3.2
+  v: 1; // schema version, integer, bumped on breaking change
+  topic: string; // e.g. "opencara/opencrust#726" or "task:abc123"
+  seq: number; // monotonic per-topic sequence, assigned by relay on publish
+  ts: number; // relay ingest timestamp (ms epoch)
+  producer: string; // agent instance id, e.g. "agent:uuid/claude"
+  event: RelayEvent; // see 3.2
 }
 ```
 
@@ -128,11 +128,11 @@ Response:
 
 ```ts
 {
-  relay_url: string;         // e.g. "wss://relay.opencara.dev/ws"
-  sse_url: string;           // "https://relay.opencara.dev/sse"
-  publish_token: string;     // JWT
-  topic: string;             // "task:<uuid>"
-  ttl_seconds: number;       // match task timeout + small grace
+  relay_url: string; // e.g. "wss://relay.opencara.dev/ws"
+  sse_url: string; // "https://relay.opencara.dev/sse"
+  publish_token: string; // JWT
+  topic: string; // "task:<uuid>"
+  ttl_seconds: number; // match task timeout + small grace
 }
 ```
 
@@ -195,7 +195,7 @@ Relay verifies: signature, `aud === "opencara-relay"`, `exp > now`, `scope` matc
 ### 6.4 Reconnection semantics
 
 - Subscriber holds the last `seq` it saw. Reconnects with `?since=<seq>`.
-- Publisher holds the last `seq` *it published*. On reconnect, retransmits events with local `seq > last_acked`. Relay dedupes by `jti` inside `run_start` / `run_end` and by `(producer, local_seq)` for streaming events. (Agent assigns local_seq independent of relay-global seq; relay still stamps its own `seq`.)
+- Publisher holds the last `seq` _it published_. On reconnect, retransmits events with local `seq > last_acked`. Relay dedupes by `jti` inside `run_start` / `run_end` and by `(producer, local_seq)` for streaming events. (Agent assigns local_seq independent of relay-global seq; relay still stamps its own `seq`.)
 
 ---
 
@@ -278,7 +278,7 @@ Absent `[relay]` → relay is off, zero change from today.
 
 Why inline:
 
-- Agent-runs-on-different-machine is the whole point; a localhost dashboard breaks that. User wants to watch *from any browser they're using*.
+- Agent-runs-on-different-machine is the whole point; a localhost dashboard breaks that. User wants to watch _from any browser they're using_.
 - PR page is where the user is already. Zero context switch.
 - SSE from content script is well-understood; `fetch` works, no WS quirks.
 
@@ -330,17 +330,17 @@ Why not localhost dashboard (rejected):
 
 ## 11. Failure modes
 
-| Failure | Behavior |
-| --- | --- |
-| Relay down | Agent's publisher queues events (bounded queue, e.g. 1000) and keeps trying. If queue overflows → log warning, drop oldest, continue. Review itself is unaffected — relay is a tap. |
-| Agent crashes mid-run | Publisher closes; subscribers see heartbeats stop. After 30s of no heartbeat, relay synthesizes `run_end { status: "aborted", reason: "publisher disconnect" }`. Ring buffer keeps content for late joiners. |
-| Browser closes tab | Subscriber disconnects; relay decrements refcount. Run continues on agent side. If it reopens within ring-buffer lifetime, replays. |
-| Token expires mid-run | Publisher refreshes via `POST /api/relay/publish-token` (server re-verifies task still owned by this agent). Subscriber refreshes via `/subscribe-token`. On refresh failure → close connection with `4003 auth_expired`. |
-| Relay node restart | Ring buffers lost. All connections drop. Clients reconnect with `since=` but buffer is empty → they get `buffer_truncated` + live from there. |
-| Clock skew | `exp` has 60s leeway. |
-| Malicious publisher | JWT topic claim must match connect topic; otherwise close. One publish token → one topic. Agent can't publish to another task. |
-| Extension replay attack | Subscribe tokens are short-TTL. Topic access is gated by GitHub repo access at mint time; if user loses access mid-run, their existing token still works until expiry (documented limitation — not worth re-checking on every event). |
-| Ring buffer overflow (burst) | Fixed size, lossy. Subscribers see `buffer_truncated` if they fall behind. Agent doesn't back off — it's the observer's problem. |
+| Failure                      | Behavior                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Relay down                   | Agent's publisher queues events (bounded queue, e.g. 1000) and keeps trying. If queue overflows → log warning, drop oldest, continue. Review itself is unaffected — relay is a tap.                                                   |
+| Agent crashes mid-run        | Publisher closes; subscribers see heartbeats stop. After 30s of no heartbeat, relay synthesizes `run_end { status: "aborted", reason: "publisher disconnect" }`. Ring buffer keeps content for late joiners.                          |
+| Browser closes tab           | Subscriber disconnects; relay decrements refcount. Run continues on agent side. If it reopens within ring-buffer lifetime, replays.                                                                                                   |
+| Token expires mid-run        | Publisher refreshes via `POST /api/relay/publish-token` (server re-verifies task still owned by this agent). Subscriber refreshes via `/subscribe-token`. On refresh failure → close connection with `4003 auth_expired`.             |
+| Relay node restart           | Ring buffers lost. All connections drop. Clients reconnect with `since=` but buffer is empty → they get `buffer_truncated` + live from there.                                                                                         |
+| Clock skew                   | `exp` has 60s leeway.                                                                                                                                                                                                                 |
+| Malicious publisher          | JWT topic claim must match connect topic; otherwise close. One publish token → one topic. Agent can't publish to another task.                                                                                                        |
+| Extension replay attack      | Subscribe tokens are short-TTL. Topic access is gated by GitHub repo access at mint time; if user loses access mid-run, their existing token still works until expiry (documented limitation — not worth re-checking on every event). |
+| Ring buffer overflow (burst) | Fixed size, lossy. Subscribers see `buffer_truncated` if they fall behind. Agent doesn't back off — it's the observer's problem.                                                                                                      |
 
 ---
 
@@ -353,7 +353,7 @@ Why not localhost dashboard (rejected):
 - Tool call inputs/outputs (can contain file contents, bash output, git history).
 - Stderr.
 
-This is the same content the AI tool sees — nothing *new* is exposed, but it's exposed to a different party (the relay operator), whereas today it only touches the contributor's machine and the AI provider.
+This is the same content the AI tool sees — nothing _new_ is exposed, but it's exposed to a different party (the relay operator), whereas today it only touches the contributor's machine and the AI provider.
 
 **Mitigations**:
 
@@ -387,69 +387,69 @@ All sub-issues gated on your approval of this doc. Default agent assignments in 
 
 ### Foundation (blocks everything else)
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R1 | Add relay event schema types to `packages/shared` (RelayEnvelope, RelayEvent variants, v1) | architect | — |
-| R2 | Define `/api/relay/publish-token`, `/api/relay/subscribe-token`, `/api/relay/topics` request/response types in `packages/shared` | architect | R1 |
+| #   | Title                                                                                                                            | Agent     | Deps |
+| --- | -------------------------------------------------------------------------------------------------------------------------------- | --------- | ---- |
+| R1  | Add relay event schema types to `packages/shared` (RelayEnvelope, RelayEvent variants, v1)                                       | architect | —    |
+| R2  | Define `/api/relay/publish-token`, `/api/relay/subscribe-token`, `/api/relay/topics` request/response types in `packages/shared` | architect | R1   |
 
 ### opencara-server side
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R3 | Implement `/api/relay/publish-token` endpoint — mint HS256 JWT, verify task ownership via OAuth | server-dev | R2 |
-| R4 | Implement `/api/relay/subscribe-token` endpoint — verify repo access, mint subscribe JWT | server-dev | R2 |
-| R5 | Implement `/api/relay/topics` endpoint — list active tasks for owner/repo/pr or issue | server-dev | R2 |
-| R6 | Wire RELAY_JWT_SECRET and RELAY_URL env vars into wrangler config + docs | server-dev | R3, R4 |
+| #   | Title                                                                                           | Agent      | Deps   |
+| --- | ----------------------------------------------------------------------------------------------- | ---------- | ------ |
+| R3  | Implement `/api/relay/publish-token` endpoint — mint HS256 JWT, verify task ownership via OAuth | server-dev | R2     |
+| R4  | Implement `/api/relay/subscribe-token` endpoint — verify repo access, mint subscribe JWT        | server-dev | R2     |
+| R5  | Implement `/api/relay/topics` endpoint — list active tasks for owner/repo/pr or issue           | server-dev | R2     |
+| R6  | Wire RELAY_JWT_SECRET and RELAY_URL env vars into wrangler config + docs                        | server-dev | R3, R4 |
 
 ### packages/relay (the broker)
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R7 | Scaffold `packages/relay` Node server, Hono + ws, Dockerfile, basic health check | architect | R1 |
-| R8 | JWT verification middleware — HS256, scope/topic/exp checks | architect | R7, R6 |
-| R9 | Topic registry + ring buffer (per-topic, size 200, GC on idle) | architect | R7 |
-| R10 | WS publisher endpoint — first-message auth, seq assignment, fan-out | architect | R7, R8, R9 |
-| R11 | WS subscriber endpoint — `?since=` replay + live | architect | R7, R8, R9 |
-| R12 | SSE subscriber endpoint — `Last-Event-ID` resume + heartbeats | architect | R7, R8, R9 |
-| R13 | Rate limits + max subscribers per topic | architect | R10, R11, R12 |
-| R14 | `/metrics` Prometheus endpoint | architect | R7 |
-| R15 | Fly.io deployment config + dev-deploy CI workflow (mirrors deploy-dev.yml) | architect | R7 |
+| #   | Title                                                                            | Agent     | Deps          |
+| --- | -------------------------------------------------------------------------------- | --------- | ------------- |
+| R7  | Scaffold `packages/relay` Node server, Hono + ws, Dockerfile, basic health check | architect | R1            |
+| R8  | JWT verification middleware — HS256, scope/topic/exp checks                      | architect | R7, R6        |
+| R9  | Topic registry + ring buffer (per-topic, size 200, GC on idle)                   | architect | R7            |
+| R10 | WS publisher endpoint — first-message auth, seq assignment, fan-out              | architect | R7, R8, R9    |
+| R11 | WS subscriber endpoint — `?since=` replay + live                                 | architect | R7, R8, R9    |
+| R12 | SSE subscriber endpoint — `Last-Event-ID` resume + heartbeats                    | architect | R7, R8, R9    |
+| R13 | Rate limits + max subscribers per topic                                          | architect | R10, R11, R12 |
+| R14 | `/metrics` Prometheus endpoint                                                   | architect | R7            |
+| R15 | Fly.io deployment config + dev-deploy CI workflow (mirrors deploy-dev.yml)       | architect | R7            |
 
 ### packages/relay-client + adapters
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R16 | Scaffold `packages/relay-client` — `RelayPublisher` (WS, queue, reconnect) and `RelaySubscriber` (WS + SSE, `since=` resume) | architect | R1 |
-| R17 | Scaffold `packages/relay-adapters` — StreamAdapter interface + generic fallback adapter | architect | R1 |
-| R18 | Claude adapter — parse `--output-format stream-json`, map to thinking/text/tool_call events | cli-dev | R17 |
-| R19 | Codex adapter — text stream + token-footer detection | cli-dev | R17 |
-| R20 | Gemini adapter — simple text stream | cli-dev | R17 |
-| R21 | Qwen adapter — text stream + qwen JSON stats footer | cli-dev | R17 |
+| #   | Title                                                                                                                        | Agent     | Deps |
+| --- | ---------------------------------------------------------------------------------------------------------------------------- | --------- | ---- |
+| R16 | Scaffold `packages/relay-client` — `RelayPublisher` (WS, queue, reconnect) and `RelaySubscriber` (WS + SSE, `since=` resume) | architect | R1   |
+| R17 | Scaffold `packages/relay-adapters` — StreamAdapter interface + generic fallback adapter                                      | architect | R1   |
+| R18 | Claude adapter — parse `--output-format stream-json`, map to thinking/text/tool_call events                                  | cli-dev   | R17  |
+| R19 | Codex adapter — text stream + token-footer detection                                                                         | cli-dev   | R17  |
+| R20 | Gemini adapter — simple text stream                                                                                          | cli-dev   | R17  |
+| R21 | Qwen adapter — text stream + qwen JSON stats footer                                                                          | cli-dev   | R17  |
 
 ### CLI integration
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R22 | Add `[relay]` section to CLI config.toml parsing | cli-dev | R1 |
-| R23 | Refactor `tool-executor.ts` to accept optional stream handler for stdout/stderr | cli-dev | R16, R17 |
+| #   | Title                                                                                                                                  | Agent   | Deps         |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------- | ------- | ------------ |
+| R22 | Add `[relay]` section to CLI config.toml parsing                                                                                       | cli-dev | R1           |
+| R23 | Refactor `tool-executor.ts` to accept optional stream handler for stdout/stderr                                                        | cli-dev | R16, R17     |
 | R24 | Wire relay publish into review.ts + implement.ts + fix.ts + summary.ts + issue-review.ts + dedup.ts + triage.ts — behind config toggle | cli-dev | R22, R23, R3 |
-| R25 | Add default redactor using existing `sanitize.ts` patterns | cli-dev | R17 |
+| R25 | Add default redactor using existing `sanitize.ts` patterns                                                                             | cli-dev | R17          |
 
 ### Extension MVP
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R26 | Scaffold `packages/extension` — Manifest V3, content script injector for `github.com/*/pull/*` and `/issues/*` | cli-dev | R16 |
-| R27 | Extension GitHub Device Flow OAuth (reuse CLI app) | cli-dev | R26 |
-| R28 | Topic lookup + subscriber UI panel (live event list, per-type styling) | cli-dev | R26, R5, R16 |
-| R29 | Reconnection/cursor UX + disconnect button | cli-dev | R28 |
+| #   | Title                                                                                                          | Agent   | Deps         |
+| --- | -------------------------------------------------------------------------------------------------------------- | ------- | ------------ |
+| R26 | Scaffold `packages/extension` — Manifest V3, content script injector for `github.com/*/pull/*` and `/issues/*` | cli-dev | R16          |
+| R27 | Extension GitHub Device Flow OAuth (reuse CLI app)                                                             | cli-dev | R26          |
+| R28 | Topic lookup + subscriber UI panel (live event list, per-type styling)                                         | cli-dev | R26, R5, R16 |
+| R29 | Reconnection/cursor UX + disconnect button                                                                     | cli-dev | R28          |
 
 ### Docs + ops
 
-| # | Title | Agent | Deps |
-| --- | --- | --- | --- |
-| R30 | `docs/relay.md` — architecture, security, self-hosting guide | pm | all above |
-| R31 | `docs/extension.md` — install + use | pm | R29 |
+| #   | Title                                                        | Agent | Deps      |
+| --- | ------------------------------------------------------------ | ----- | --------- |
+| R30 | `docs/relay.md` — architecture, security, self-hosting guide | pm    | all above |
+| R31 | `docs/extension.md` — install + use                          | pm    | R29       |
 
 **Total**: ~31 sub-issues. Critical path (R1 → R2 → R7 → R9 → R10/R11 → R16 → R23 → R24) is ~8 issues. Extension MVP is a parallel track after R16.
 
