@@ -688,6 +688,11 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 - #692 [server-dev, HIGH] Assign per-task preferred model instead of shared preference list — **DONE** (PR #694 merged 2026-04-07)
 
+### Critical bug — worktree FETCH_HEAD (2026-04-20, team-lead direct)
+
+- #766 [cli-dev, priority:high, bug] Fix worktree reuse: FETCH_HEAD not resolvable in worktree context, second+ PR polls fail — **IN PROGRESS** (team-lead authorized direct-to-Ready, dispatched 2026-04-20). Observed on ParadiseEngine/ParadiseEngine#35, two agents hit it at 22:31:27-28. Root cause: `repo-cache.ts` fetches `pull/<N>/head` without a refspec mapping, so FETCH_HEAD only exists in the bare repo; on worktree reuse, `git checkout --detach --force FETCH_HEAD` runs with worktree cwd and fails. Fix: add refspec `refs/remotes/origin/pr/<N>` and reference the stable ref from both `addWorktree` and `ensurePRWorktree`.
+- #767 [cli-dev, priority:low] Improve 404 diff-fetch hint — don't blame auth when user is authenticated — **BACKLOG** (follow-up to #766, diagnostics quality-of-life).
+
 ### Epic: opencara-relay (2026-04-20)
 
 - #727 [breakdown, epic:relay] Epic: opencara-relay streaming broker — **[NEXT]** v2 design approved; all 38 sub-issues created in Backlog with Agent field set (except R30/R31 docs = pm label only). Awaiting team-lead to move foundation issues (#728 R1, #729 R2) to Ready. Design doc `.claude/designs/opencara-relay.md` (last revised 2026-04-20, commit 63300eb).
