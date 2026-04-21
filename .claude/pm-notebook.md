@@ -690,7 +690,7 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ### Epic: opencara-relay (2026-04-20)
 
-- #727 [breakdown, priority:medium] Epic: opencara-relay streaming broker — **DESIGN IN REVIEW** (design doc `.claude/designs/opencara-relay.md`, committed b4cc6a3). Backlog until team-lead approves breakdown. Proposed ~31 sub-issues not yet created.
+- #727 [breakdown, priority:medium] Epic: opencara-relay streaming broker — **DESIGN APPROVED WITH ADJUSTMENTS (v2)** (design doc `.claude/designs/opencara-relay.md` revised 2026-04-20 per team-lead A-G adjustments: R24 split into 7 sub-issues, R15a integration-test suite added, §6.4 reconnection simplified to drop-on-reconnect, §5.4 proactive token-refresh policy, §3.2.6 error semantics clarified, R6 reordered as R3/R4 prerequisite, §9 MV3 content-script note added). Backlog until team-lead final go-ahead on v2. Proposed ~38 sub-issues not yet created.
 
 ## Open PRs
 
