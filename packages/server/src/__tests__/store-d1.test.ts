@@ -644,38 +644,95 @@ describe('D1DataStore', () => {
       expect(await store.getTask('task-1')).toBeNull();
     });
 
-    // base_ref invariant (see #776)
-    it('createTask rejects a PR-scoped task with empty base_ref', async () => {
-      const bad = makeTask({ id: 'bad', pr_number: 99, base_ref: '' });
-      await expect(store.createTask(bad)).rejects.toThrow('base_ref');
-      expect(await store.getTask('bad')).toBeNull();
-    });
+    // base_ref invariant — D1 logs-and-proceeds (prod telemetry, not a user-
+    // visible rejection). See #776 + #775.
+    describe('base_ref invariant (log-and-allow)', () => {
+      let logs: Array<{ level: string; msg: string; data: Record<string, unknown> }>;
+      let loggedStore: D1DataStore;
 
-    it('createTask accepts an issue-scoped task with empty base_ref', async () => {
-      const issue = makeTask({
-        id: 'issue-ok',
-        pr_number: 0,
-        base_ref: '',
-        issue_number: 5,
-        feature: 'triage',
-        task_type: 'issue_triage',
+      beforeEach(() => {
+        logs = [];
+        const fakeLogger = {
+          info: (msg: string, data: Record<string, unknown> = {}) =>
+            logs.push({ level: 'info', msg, data }),
+          warn: (msg: string, data: Record<string, unknown> = {}) =>
+            logs.push({ level: 'warn', msg, data }),
+          error: (msg: string, data: Record<string, unknown> = {}) =>
+            logs.push({ level: 'error', msg, data }),
+        };
+        loggedStore = new D1DataStore(db, undefined, fakeLogger as never);
       });
-      await expect(store.createTask(issue)).resolves.toBeUndefined();
-    });
 
-    it('createTaskBatch rejects when any task violates the base_ref invariant', async () => {
-      const good = makeTask({ id: 'batch-good' });
-      const bad = makeTask({ id: 'batch-bad', pr_number: 88, base_ref: '' });
-      await expect(store.createTaskBatch([good, bad])).rejects.toThrow('base_ref');
-      // No partial inserts — the batch throws before any DB writes.
-      expect(await store.getTask('batch-good')).toBeNull();
-      expect(await store.getTask('batch-bad')).toBeNull();
-    });
+      it('createTask logs an error AND inserts the row for a PR-scoped empty base_ref', async () => {
+        const bad = makeTask({ id: 'bad', pr_number: 99, base_ref: '' });
+        await loggedStore.createTask(bad);
 
-    it('createTaskIfNotExists rejects a PR-scoped task with empty base_ref', async () => {
-      const bad = makeTask({ id: 'bad', pr_number: 77, base_ref: '' });
-      await expect(store.createTaskIfNotExists(bad)).rejects.toThrow('base_ref');
-      expect(await store.getTask('bad')).toBeNull();
+        const inserted = await loggedStore.getTask('bad');
+        expect(inserted).not.toBeNull();
+        expect(inserted?.base_ref).toBe('');
+
+        const violations = logs.filter(
+          (l) => l.level === 'error' && l.data.event === 'base_ref_invariant_violation',
+        );
+        expect(violations).toHaveLength(1);
+        expect(violations[0].data).toMatchObject({
+          task_id: 'bad',
+          owner: 'test-org',
+          repo: 'test-repo',
+          pr_number: 99,
+          feature: 'review',
+        });
+      });
+
+      it('createTask does NOT log for an issue-scoped task with empty base_ref', async () => {
+        const issue = makeTask({
+          id: 'issue-ok',
+          pr_number: 0,
+          base_ref: '',
+          issue_number: 5,
+          feature: 'triage',
+          task_type: 'issue_triage',
+        });
+        await loggedStore.createTask(issue);
+        expect(logs.filter((l) => l.data.event === 'base_ref_invariant_violation')).toHaveLength(0);
+      });
+
+      it('createTask does NOT log for a PR-scoped task with a populated base_ref', async () => {
+        await loggedStore.createTask(makeTask({ id: 'good', base_ref: 'main' }));
+        expect(logs.filter((l) => l.data.event === 'base_ref_invariant_violation')).toHaveLength(0);
+      });
+
+      it('createTaskBatch logs once per violating task and inserts all rows', async () => {
+        const good = makeTask({ id: 'batch-good' });
+        const bad1 = makeTask({ id: 'batch-bad-1', pr_number: 88, base_ref: '' });
+        const bad2 = makeTask({
+          id: 'batch-bad-2',
+          group_id: 'group-2',
+          pr_number: 89,
+          base_ref: '',
+        });
+        await loggedStore.createTaskBatch([good, bad1, bad2]);
+
+        expect(await loggedStore.getTask('batch-good')).not.toBeNull();
+        expect(await loggedStore.getTask('batch-bad-1')).not.toBeNull();
+        expect(await loggedStore.getTask('batch-bad-2')).not.toBeNull();
+
+        const violations = logs.filter(
+          (l) => l.level === 'error' && l.data.event === 'base_ref_invariant_violation',
+        );
+        expect(violations.map((v) => v.data.task_id).sort()).toEqual([
+          'batch-bad-1',
+          'batch-bad-2',
+        ]);
+      });
+
+      it('createTaskIfNotExists logs and inserts for a PR-scoped empty base_ref', async () => {
+        const bad = makeTask({ id: 'bad-if-not-exists', pr_number: 77, base_ref: '' });
+        const created = await loggedStore.createTaskIfNotExists(bad);
+        expect(created).toBe(true);
+        expect(await loggedStore.getTask('bad-if-not-exists')).not.toBeNull();
+        expect(logs.filter((l) => l.data.event === 'base_ref_invariant_violation')).toHaveLength(1);
+      });
     });
   });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
-import { apiError, MissingBaseRefError, assertTaskInvariants } from '../errors.js';
+import { apiError, MissingBaseRefError, violatesBaseRefInvariant } from '../errors.js';
 
 describe('apiError', () => {
   it('returns structured error with correct status and body', async () => {
@@ -50,52 +50,42 @@ describe('apiError', () => {
   });
 });
 
-describe('assertTaskInvariants', () => {
-  const prTask = {
-    id: 'task-1',
-    owner: 'acme',
-    repo: 'widgets',
-    pr_number: 42,
-    base_ref: 'main',
-    feature: 'review',
-  };
-  const issueTask = {
-    id: 'task-2',
-    owner: 'acme',
-    repo: 'widgets',
-    pr_number: 0,
-    base_ref: '',
-    feature: 'triage',
-  };
-
-  it('accepts a PR task with a non-empty base_ref', () => {
-    expect(() => assertTaskInvariants(prTask)).not.toThrow();
+describe('violatesBaseRefInvariant', () => {
+  it('returns false for PR task with non-empty base_ref', () => {
+    expect(violatesBaseRefInvariant({ pr_number: 42, base_ref: 'main' })).toBe(false);
   });
 
-  it('accepts an issue task (pr_number = 0) with an empty base_ref', () => {
-    expect(() => assertTaskInvariants(issueTask)).not.toThrow();
+  it('returns false for issue task (pr_number = 0) with empty base_ref', () => {
+    expect(violatesBaseRefInvariant({ pr_number: 0, base_ref: '' })).toBe(false);
   });
 
-  it('throws MissingBaseRefError for a PR task with empty base_ref', () => {
-    expect(() => assertTaskInvariants({ ...prTask, base_ref: '' })).toThrow(MissingBaseRefError);
+  it('returns true for PR task with empty base_ref', () => {
+    expect(violatesBaseRefInvariant({ pr_number: 42, base_ref: '' })).toBe(true);
   });
 
-  it('attaches full context to the error', () => {
-    try {
-      assertTaskInvariants({ ...prTask, base_ref: '' });
-      throw new Error('expected throw');
-    } catch (err) {
-      expect(err).toBeInstanceOf(MissingBaseRefError);
-      const e = err as MissingBaseRefError;
-      expect(e.task_id).toBe('task-1');
-      expect(e.owner).toBe('acme');
-      expect(e.repo).toBe('widgets');
-      expect(e.pr_number).toBe(42);
-      expect(e.feature).toBe('review');
-      expect(e.name).toBe('MissingBaseRefError');
-      expect(e.message).toContain('acme/widgets#42');
-      expect(e.message).toContain('review');
-      expect(e.message).toContain('task-1');
-    }
+  it('returns false for negative pr_number (defensive — treated as non-PR)', () => {
+    expect(violatesBaseRefInvariant({ pr_number: -1, base_ref: '' })).toBe(false);
+  });
+});
+
+describe('MissingBaseRefError', () => {
+  it('attaches full context and a readable message', () => {
+    const err = new MissingBaseRefError({
+      id: 'task-1',
+      owner: 'acme',
+      repo: 'widgets',
+      pr_number: 42,
+      feature: 'review',
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('MissingBaseRefError');
+    expect(err.task_id).toBe('task-1');
+    expect(err.owner).toBe('acme');
+    expect(err.repo).toBe('widgets');
+    expect(err.pr_number).toBe(42);
+    expect(err.feature).toBe('review');
+    expect(err.message).toContain('acme/widgets#42');
+    expect(err.message).toContain('review');
+    expect(err.message).toContain('task-1');
   });
 });

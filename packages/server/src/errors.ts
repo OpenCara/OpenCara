@@ -19,10 +19,11 @@ export function apiError(
 }
 
 /**
- * Thrown when a task invariant is violated at insert time. The guard exists to
- * catch regressions where a PR-scoped task (pr_number > 0) is created without a
- * base_ref, which silently forces agents onto the slow `gh pr diff` fallback
- * because the CLI coerces empty base_ref to undefined. See #776.
+ * Thrown by MemoryDataStore when a PR-scoped task (pr_number > 0) is inserted
+ * without a base_ref. Memory throws so CI regressions fail loud; D1DataStore
+ * instead logs-and-proceeds (see #776) because #775 lets the CLI derive
+ * base_ref locally — a prod regression should be reported via telemetry, not
+ * turned into a user-visible skipped review.
  */
 export class MissingBaseRefError extends Error {
   readonly task_id: string;
@@ -39,7 +40,7 @@ export class MissingBaseRefError extends Error {
     feature: string;
   }) {
     super(
-      `Refusing to insert PR-scoped task without base_ref: ${task.owner}/${task.repo}#${task.pr_number} (feature=${task.feature}, task_id=${task.id})`,
+      `PR-scoped task missing base_ref: ${task.owner}/${task.repo}#${task.pr_number} (feature=${task.feature}, task_id=${task.id})`,
     );
     this.name = 'MissingBaseRefError';
     this.task_id = task.id;
@@ -51,20 +52,11 @@ export class MissingBaseRefError extends Error {
 }
 
 /**
- * Validate that a ReviewTask satisfies the base_ref invariant before insert:
- * PR-scoped tasks (pr_number > 0) must carry a non-empty base_ref so the CLI
- * can take the local `git diff` fast path. Issue-scoped tasks (pr_number = 0)
- * have no diff and are exempt.
+ * True if a ReviewTask violates the base_ref invariant: PR-scoped tasks
+ * (pr_number > 0) must carry a non-empty base_ref so the CLI can take the
+ * local `git diff` fast path. Issue-scoped tasks (pr_number = 0) have no
+ * diff and are exempt.
  */
-export function assertTaskInvariants(task: {
-  id: string;
-  owner: string;
-  repo: string;
-  pr_number: number;
-  base_ref: string;
-  feature: string;
-}): void {
-  if (task.pr_number > 0 && !task.base_ref) {
-    throw new MissingBaseRefError(task);
-  }
+export function violatesBaseRefInvariant(task: { pr_number: number; base_ref: string }): boolean {
+  return task.pr_number > 0 && !task.base_ref;
 }

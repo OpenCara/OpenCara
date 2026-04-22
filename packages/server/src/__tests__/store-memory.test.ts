@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MemoryDataStore } from '../store/memory.js';
+import { MissingBaseRefError } from '../errors.js';
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 
@@ -257,10 +258,12 @@ describe('MemoryDataStore', () => {
       expect(await store.getTask('solo')).not.toBeNull();
     });
 
-    // base_ref invariant (see #776)
-    it('createTask rejects a PR-scoped task with empty base_ref', async () => {
+    // base_ref invariant — Memory throws for CI safety. Prod D1 instead
+    // logs-and-proceeds so a regression reports via telemetry without
+    // breaking user-facing review flow (see #776 + #775).
+    it('createTask throws MissingBaseRefError for a PR-scoped task with empty base_ref', async () => {
       const bad = makeTask({ id: 'bad', pr_number: 99, base_ref: '' });
-      await expect(store.createTask(bad)).rejects.toThrow('base_ref');
+      await expect(store.createTask(bad)).rejects.toBeInstanceOf(MissingBaseRefError);
       expect(await store.getTask('bad')).toBeNull();
     });
 
