@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MemoryDataStore } from '../store/memory.js';
+import { MissingBaseRefError } from '../errors.js';
 import type { ReviewTask, TaskClaim } from '@opencara/shared';
 import { DEFAULT_REVIEW_CONFIG } from '@opencara/shared';
 
@@ -255,6 +256,79 @@ describe('MemoryDataStore', () => {
     it('createTaskBatch with single task works', async () => {
       await store.createTaskBatch([makeTask({ id: 'solo' })]);
       expect(await store.getTask('solo')).not.toBeNull();
+    });
+
+    // base_ref invariant — Memory throws for CI safety. Prod D1 instead
+    // logs-and-proceeds so a regression reports via telemetry without
+    // breaking user-facing review flow (see #776 + #775).
+    it('createTask throws MissingBaseRefError for a PR-scoped task with empty base_ref', async () => {
+      const bad = makeTask({ id: 'bad', pr_number: 99, base_ref: '' });
+      await expect(store.createTask(bad)).rejects.toBeInstanceOf(MissingBaseRefError);
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('createTask accepts an issue-scoped task with empty base_ref', async () => {
+      const issue = makeTask({
+        id: 'issue-ok',
+        pr_number: 0,
+        base_ref: '',
+        issue_number: 5,
+        feature: 'triage',
+        task_type: 'issue_triage',
+      });
+      await expect(store.createTask(issue)).resolves.toBeUndefined();
+      expect(await store.getTask('issue-ok')).not.toBeNull();
+    });
+
+    it('createTaskBatch rejects when any task violates the base_ref invariant', async () => {
+      const good = makeTask({ id: 'good' });
+      const bad = makeTask({ id: 'bad', pr_number: 88, base_ref: '' });
+      await expect(store.createTaskBatch([good, bad])).rejects.toThrow('base_ref');
+      // No partial inserts — the batch throws before mutating state.
+      expect(await store.getTask('good')).toBeNull();
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('createTaskIfNotExists rejects a PR-scoped task with empty base_ref', async () => {
+      const bad = makeTask({ id: 'bad', pr_number: 77, base_ref: '' });
+      await expect(store.createTaskIfNotExists(bad)).rejects.toThrow('base_ref');
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('completeWorkerAndMaybeCreateSummary rejects a PR-scoped summary with empty base_ref', async () => {
+      const worker = makeTask({ id: 'worker', group_id: 'g1' });
+      await store.createTask(worker);
+      const summary = makeTask({
+        id: 'summary',
+        group_id: 'g1',
+        task_type: 'summary',
+        pr_number: 42,
+        base_ref: '',
+      });
+      await expect(store.completeWorkerAndMaybeCreateSummary('worker', summary)).rejects.toThrow(
+        'base_ref',
+      );
+    });
+
+    it('completeWorkerAndMaybeCreateSummary validates BEFORE mutating worker state', async () => {
+      // Regression test — prior ordering marked the worker completed, then
+      // threw when the summary failed the invariant, leaving the group stuck.
+      const worker = makeTask({ id: 'worker', group_id: 'g1', status: 'reviewing' });
+      await store.createTask(worker);
+      const badSummary = makeTask({
+        id: 'summary',
+        group_id: 'g1',
+        task_type: 'summary',
+        pr_number: 42,
+        base_ref: '',
+      });
+      await expect(
+        store.completeWorkerAndMaybeCreateSummary('worker', badSummary),
+      ).rejects.toBeInstanceOf(MissingBaseRefError);
+      // Worker status must NOT have been mutated.
+      const afterThrow = await store.getTask('worker');
+      expect(afterThrow?.status).toBe('reviewing');
+      expect(await store.getTask('summary')).toBeNull();
     });
   });
 

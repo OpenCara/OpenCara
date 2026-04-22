@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
-import { apiError } from '../errors.js';
+import { apiError, MissingBaseRefError, violatesBaseRefInvariant } from '../errors.js';
 
 describe('apiError', () => {
   it('returns structured error with correct status and body', async () => {
@@ -47,5 +47,45 @@ describe('apiError', () => {
     const body = await res.json();
     expect(body.error.code).toBe('INTERNAL_ERROR');
     expect(body.error.message).toBe('Something went wrong');
+  });
+});
+
+describe('violatesBaseRefInvariant', () => {
+  it('returns false for PR task with non-empty base_ref', () => {
+    expect(violatesBaseRefInvariant({ pr_number: 42, base_ref: 'main' })).toBe(false);
+  });
+
+  it('returns false for issue task (pr_number = 0) with empty base_ref', () => {
+    expect(violatesBaseRefInvariant({ pr_number: 0, base_ref: '' })).toBe(false);
+  });
+
+  it('returns true for PR task with empty base_ref', () => {
+    expect(violatesBaseRefInvariant({ pr_number: 42, base_ref: '' })).toBe(true);
+  });
+
+  it('returns false for negative pr_number (defensive — treated as non-PR)', () => {
+    expect(violatesBaseRefInvariant({ pr_number: -1, base_ref: '' })).toBe(false);
+  });
+});
+
+describe('MissingBaseRefError', () => {
+  it('attaches full context and a readable message', () => {
+    const err = new MissingBaseRefError({
+      id: 'task-1',
+      owner: 'acme',
+      repo: 'widgets',
+      pr_number: 42,
+      feature: 'review',
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('MissingBaseRefError');
+    expect(err.task_id).toBe('task-1');
+    expect(err.owner).toBe('acme');
+    expect(err.repo).toBe('widgets');
+    expect(err.pr_number).toBe(42);
+    expect(err.feature).toBe('review');
+    expect(err.message).toContain('acme/widgets#42');
+    expect(err.message).toContain('review');
+    expect(err.message).toContain('task-1');
   });
 });

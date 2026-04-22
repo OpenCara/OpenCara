@@ -2,6 +2,8 @@ import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore, PostedReview, ReputationEvent } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
+import { violatesBaseRefInvariant } from '../errors.js';
+import { createLogger, type Logger } from '../logger.js';
 
 /** Terminal task statuses eligible for cleanup. */
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
@@ -178,12 +180,35 @@ export function rowToClaim(row: ClaimRow): TaskClaim {
  */
 export class D1DataStore implements DataStore {
   private readonly ttlMs: number;
+  private readonly logger: Logger;
 
   constructor(
     private readonly db: D1Database,
     ttlDays: number = DEFAULT_TTL_DAYS,
+    logger?: Logger,
   ) {
     this.ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+    this.logger = logger ?? createLogger();
+  }
+
+  /**
+   * Log a structured error when a task violates the base_ref invariant, then
+   * allow the insert to proceed. See #776 and the MissingBaseRefError doc in
+   * errors.ts — prod prefers telemetry over rejection because #775 makes the
+   * CLI resilient to missing base_ref.
+   */
+  private logBaseRefViolation(task: ReviewTask): void {
+    if (!violatesBaseRefInvariant(task)) return;
+    this.logger.error('PR-scoped task missing base_ref — inserting anyway', {
+      event: 'base_ref_invariant_violation',
+      task_id: task.id,
+      owner: task.owner,
+      repo: task.repo,
+      pr_number: task.pr_number,
+      feature: task.feature,
+      task_type: task.task_type,
+      group_id: task.group_id,
+    });
   }
 
   // ── Tasks ──────────────────────────────────────────────────────
@@ -235,6 +260,7 @@ export class D1DataStore implements DataStore {
   }
 
   async createTask(task: ReviewTask): Promise<void> {
+    this.logBaseRefViolation(task);
     await this.db
       .prepare(D1DataStore.INSERT_TASK_SQL)
       .bind(...this.bindTaskParams(task))
@@ -244,9 +270,11 @@ export class D1DataStore implements DataStore {
   async createTaskBatch(tasks: ReviewTask[]): Promise<void> {
     if (tasks.length === 0) return;
     if (tasks.length === 1) {
+      // createTask handles its own invariant log.
       await this.createTask(tasks[0]);
       return;
     }
+    for (const task of tasks) this.logBaseRefViolation(task);
     const statements = tasks.map((task) =>
       this.db.prepare(D1DataStore.INSERT_TASK_SQL).bind(...this.bindTaskParams(task)),
     );
@@ -254,6 +282,8 @@ export class D1DataStore implements DataStore {
   }
 
   async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
+    // Invariant logging happens inside createTask — no need to also call it
+    // here, otherwise we'd double-log when a violating row lands.
     // Use separate SELECT + INSERT instead of INSERT...SELECT...WHERE NOT EXISTS.
     // D1's meta.changes can return 0 for INSERT...SELECT even when a row is
     // inserted, causing the caller to incorrectly think a duplicate exists.
