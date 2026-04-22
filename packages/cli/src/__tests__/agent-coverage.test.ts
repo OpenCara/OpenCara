@@ -636,16 +636,16 @@ describe('Agent Coverage Tests', () => {
 
   describe('Codebase clone paths', () => {
     it('warns and routes an empty base_ref through the local git-diff path', async () => {
-      // Task has no base_ref. The warn confirms agent.ts took the new
-      // derive-base branch rather than bailing to gh; diffFromWorktree is
-      // actually called (not just defined), confirming the worktree-implies-
-      // git-diff invariant holds even with an empty base_ref. The derive
-      // logic itself is unit-tested against `deriveDefaultBranch` —
-      // diffFromWorktree here is stubbed to return a canned diff.
+      // Server-write invariant (PR #781): MemoryDataStore throws
+      // MissingBaseRefError on a PR-scoped insert with empty base_ref, so we
+      // cannot inject that state directly. Instead we inject with a valid
+      // base_ref and rewrite the PollResponse here to simulate the read-path
+      // edge case (a legitimate production possibility if the server's
+      // log-and-allow path ever emits `''` via D1).
       const mockedDiff = vi.mocked(diffFromWorktree);
       mockedDiff.mockClear();
 
-      const taskId = await server.injectTask({ reviewCount: 2, baseRef: '' });
+      const taskId = await server.injectTask({ reviewCount: 2, baseRef: 'main' });
 
       const deps = makeDeps('missing-base-ref-agent');
       const reviewDeps: ReviewExecutorDeps = {
@@ -675,7 +675,26 @@ describe('Agent Coverage Tests', () => {
         if (url.includes(`/api/tasks/${taskId}/result`)) {
           return new Response(JSON.stringify({ success: true }), { status: 200 });
         }
-        return originalFetch(input, init);
+
+        const response = await originalFetch(input, init);
+
+        // Rewrite the poll response to strip base_ref on our target task,
+        // simulating the server emitting an empty base_ref on the read path.
+        if (url.includes('/api/tasks/poll') && response.ok) {
+          const body = (await response.clone().json()) as {
+            tasks?: Array<Record<string, unknown>>;
+          };
+          if (Array.isArray(body.tasks)) {
+            body.tasks = body.tasks.map((t) => (t.task_id === taskId ? { ...t, base_ref: '' } : t));
+          }
+          return new Response(JSON.stringify(body), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
+          });
+        }
+
+        return response;
       }) as typeof fetch;
 
       try {
