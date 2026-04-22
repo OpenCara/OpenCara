@@ -198,6 +198,25 @@ export function registerShutdownHandlers(
 const NON_RETRYABLE_STATUSES = new Set([401, 403, 404]);
 
 /**
+ * Build the operator hint shown when the HTTP diff fetch returns 404.
+ *
+ * When `gh` is already installed and authenticated, "install/login to gh"
+ * is a red herring — 404 is most likely PR-not-found, missing-install, or a
+ * transient GitHub outage. When `gh` is absent or unauthenticated, the
+ * original install/login guidance is still useful.
+ */
+export function build404Hint(isGhAuthenticated: boolean): string {
+  if (isGhAuthenticated) {
+    return (
+      '. Diff fetch returned 404. Possible causes: (a) PR not found, ' +
+      "(b) the installation can't access this repo, or (c) a transient GitHub outage. " +
+      'See any `[fetchDiffViaGh]` warning above for the underlying `gh api` error.'
+    );
+  }
+  return '. If this is a private repo, ensure gh CLI is installed and authenticated: gh auth login';
+}
+
+/**
  * Convert a GitHub web diff URL to the API equivalent.
  * e.g. https://github.com/owner/repo/pull/123.diff
  *   → https://api.github.com/repos/owner/repo/pulls/123
@@ -295,12 +314,17 @@ const DIFF_FETCH_TIMEOUT_MS = 60_000;
 
 /**
  * Fetch diff via HTTP with streaming size guard.
+ *
+ * `isGhAuthenticatedFn` is consulted lazily on 404 to decide which hint text
+ * to show — injectable so tests can exercise both branches without spawning
+ * the real `gh` CLI. Defaults to `isGhAvailable()` which runs `gh auth status`.
  */
 async function fetchDiffHttp(
   url: string,
   headers: Record<string, string>,
   signal?: AbortSignal,
   maxDiffSizeKb?: number,
+  isGhAuthenticatedFn: () => boolean = isGhAvailable,
 ): Promise<string> {
   const maxBytes = maxDiffSizeKb ? maxDiffSizeKb * 1024 : Infinity;
 
@@ -325,10 +349,7 @@ async function fetchDiffHttp(
   clearTimeout(timer);
   signal?.removeEventListener('abort', onParentAbort);
   if (!response.ok) {
-    const hint =
-      response.status === 404
-        ? '. If this is a private repo, ensure gh CLI is installed and authenticated: gh auth login'
-        : '';
+    const hint = response.status === 404 ? build404Hint(isGhAuthenticatedFn()) : '';
     const msg = `Failed to fetch diff: ${response.status} ${response.statusText}${hint}`;
     if (NON_RETRYABLE_STATUSES.has(response.status)) {
       throw new NonRetryableError(msg);
