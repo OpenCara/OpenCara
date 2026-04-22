@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseTtlDays, createStore } from '../index.js';
 import { D1DataStore } from '../store/d1.js';
 import { MemoryDataStore } from '../store/memory.js';
@@ -45,14 +45,34 @@ describe('parseTtlDays', () => {
 });
 
 describe('scheduled handler', () => {
-  it('calls cleanupTerminalTasks during scheduled event', async () => {
-    // Import the default export which has the scheduled handler
+  it('exposes a scheduled function', async () => {
     const mod = await import('../index.js');
-    const handler = mod.default;
+    expect(typeof mod.default.scheduled).toBe('function');
+  });
 
-    // We can't easily test the full scheduled handler without mocking D1,
-    // but we verify the export exists and is a function
-    expect(typeof handler.scheduled).toBe('function');
+  it('delegates event-table pruning to runScheduledEventPrunes', async () => {
+    // Spy on the Memory store methods invoked by the shared helper so we can
+    // confirm the scheduled handler wires them in without re-asserting the
+    // helper's own logic (which cleanup-scheduled.test.ts covers).
+    const mod = await import('../index.js');
+    const reliabilitySpy = vi
+      .spyOn(MemoryDataStore.prototype, 'cleanupStaleReliabilityEvents')
+      .mockResolvedValue(0);
+    const reputationSpy = vi
+      .spyOn(MemoryDataStore.prototype, 'cleanupStaleReputationEvents')
+      .mockResolvedValue(0);
+    try {
+      // minute === 0 UTC → both prunes should fire.
+      await mod.default.scheduled(
+        { scheduledTime: new Date('2026-04-01T02:00:00Z').getTime(), cron: '* * * * *' },
+        makeEnv(),
+      );
+      expect(reliabilitySpy).toHaveBeenCalledTimes(1);
+      expect(reputationSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      reliabilitySpy.mockRestore();
+      reputationSpy.mockRestore();
+    }
   });
 });
 

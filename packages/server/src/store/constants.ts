@@ -48,3 +48,13 @@ export const COOLDOWN_HALF_MS = 5 * 60_000;
  * hiccups.
  */
 export const RELIABILITY_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Age at which `reputation_events` rows may be pruned: 180 days.
+ *
+ * Reputation uses exponential decay with `REPUTATION_DECAY_HALF_LIFE_MS` (14 days),
+ * so at 180 days a single event's weight is 2^-(180/14) ≈ 2^-12.86 ≈ 0.00014 —
+ * well below any threshold that could move a score. Deletion at this horizon is
+ * effectively lossless while bounding unbounded append-only growth.
+ */
+export const REPUTATION_PRUNE_AFTER_MS = 180 * 24 * 60 * 60 * 1000;

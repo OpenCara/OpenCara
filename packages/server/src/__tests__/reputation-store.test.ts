@@ -539,4 +539,104 @@ describe('Reputation DataStore methods', () => {
       expect(id).toBe(1);
     });
   });
+
+  // ── cleanupStaleReputationEvents ──────────────────────────
+
+  describe('cleanupStaleReputationEvents', () => {
+    it('prunes events older than the cutoff and keeps recent ones', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-04-01T00:00:00Z',
+      });
+      const cutoffMs = new Date('2026-04-01T00:00:00Z').getTime();
+      const oldIso = new Date(cutoffMs - 60_000).toISOString();
+      const recentIso = new Date(cutoffMs + 60_000).toISOString();
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: oldIso,
+      });
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1001,
+        github_user_id: 2001,
+        delta: 1,
+        created_at: recentIso,
+      });
+
+      const deleted = await store.cleanupStaleReputationEvents(cutoffMs);
+      expect(deleted).toBe(1);
+
+      const remaining = await store.getAgentReputationEvents('agent-A', 0);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].created_at).toBe(recentIso);
+    });
+
+    it('returns 0 when there are no events', async () => {
+      expect(await store.cleanupStaleReputationEvents(Date.now())).toBe(0);
+    });
+
+    it('returns 0 when no events are older than the cutoff', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-04-01T00:00:00Z',
+      });
+      const createdAt = '2026-04-01T01:00:00Z';
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: createdAt,
+      });
+
+      const cutoff = new Date('2026-03-01T00:00:00Z').getTime();
+      const deleted = await store.cleanupStaleReputationEvents(cutoff);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReputationEvents('agent-A', 0);
+      expect(events).toHaveLength(1);
+    });
+
+    it('does not prune events exactly at the cutoff boundary', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-04-01T00:00:00Z',
+      });
+      const boundaryMs = new Date('2026-04-01T00:00:00.000Z').getTime();
+      const boundaryIso = new Date(boundaryMs).toISOString();
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: boundaryIso,
+      });
+      // Cutoff equal to the event's timestamp — event survives (>= cutoff kept).
+      const deleted = await store.cleanupStaleReputationEvents(boundaryMs);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReputationEvents('agent-A', 0);
+      expect(events).toHaveLength(1);
+    });
+  });
 });

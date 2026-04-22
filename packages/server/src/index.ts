@@ -18,6 +18,7 @@ import { authRoutes } from './routes/auth.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import { versionCheck } from './middleware/version-check.js';
 import { createLogger } from './logger.js';
+import { runScheduledEventPrunes } from './store/cleanup.js';
 
 export type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
@@ -128,7 +129,7 @@ const workerApp = buildApp(createStore, createGitHubService);
 export default {
   fetch: workerApp.fetch,
   /** Cloudflare Cron Trigger handler — checks for timed-out tasks and cleans up stale entries. */
-  async scheduled(_event: { scheduledTime: number; cron: string }, env: Env): Promise<void> {
+  async scheduled(event: { scheduledTime: number; cron: string }, env: Env): Promise<void> {
     const store = createStore(env);
     const github = createGitHubService(env);
     const logger = createLogger();
@@ -169,5 +170,7 @@ export default {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+
+    await runScheduledEventPrunes(store, event.scheduledTime, logger);
   },
 };

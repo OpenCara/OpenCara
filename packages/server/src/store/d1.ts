@@ -1192,4 +1192,22 @@ export class D1DataStore implements DataStore {
 
     return result.meta?.changes ?? 0;
   }
+
+  async cleanupStaleReliabilityEvents(olderThanMs: number): Promise<number> {
+    const cutoffIso = new Date(olderThanMs).toISOString();
+    const result = await this.db
+      .prepare('DELETE FROM agent_reliability_events WHERE created_at < ?')
+      .bind(cutoffIso)
+      .run();
+    return result.meta?.changes ?? 0;
+  }
+
+  async cleanupStaleReputationEvents(olderThanMs: number): Promise<number> {
+    const cutoffIso = new Date(olderThanMs).toISOString();
+    const result = await this.db
+      .prepare('DELETE FROM reputation_events WHERE created_at < ?')
+      .bind(cutoffIso)
+      .run();
+    return result.meta?.changes ?? 0;
+  }
 }

@@ -206,4 +206,18 @@ export interface DataStore {
   // Cleanup
   /** Delete terminal tasks (completed/timeout/failed) older than the configured TTL. */
   cleanupTerminalTasks(): Promise<number>;
+  /**
+   * Delete `agent_reliability_events` rows whose `created_at` is older than the
+   * given cutoff timestamp (ms since epoch). Returns the number of rows deleted.
+   * Safe because reliability queries use a fixed rolling window and never read
+   * events older than `RELIABILITY_WINDOW_MS`.
+   */
+  cleanupStaleReliabilityEvents(olderThanMs: number): Promise<number>;
+  /**
+   * Delete `reputation_events` rows whose `created_at` is older than the given
+   * cutoff timestamp (ms since epoch). Returns the number of rows deleted.
+   * Intended to be called with a very conservative cutoff (e.g. 180 days) where
+   * per-event decay weight is effectively zero.
+   */
+  cleanupStaleReputationEvents(olderThanMs: number): Promise<number>;
 }
