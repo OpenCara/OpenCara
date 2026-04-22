@@ -157,7 +157,7 @@ describe('repo-cache', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(execFileSync).mockReturnValue('');
 
-      const result = addWorktree('/tmp/repos/acme/widgets.git', 'pr-42');
+      const result = addWorktree('/tmp/repos/acme/widgets.git', 'pr-42', 'abc123');
 
       expect(result).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
       expect(fs.mkdirSync).toHaveBeenCalledWith('/tmp/repos/acme/widgets-worktrees', {
@@ -171,7 +171,7 @@ describe('repo-cache', () => {
         'add',
         '--detach',
         '/tmp/repos/acme/widgets-worktrees/pr-42',
-        'FETCH_HEAD',
+        'abc123',
       ]);
       expect(call[2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets.git' });
     });
@@ -180,7 +180,7 @@ describe('repo-cache', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(execFileSync).mockReturnValue('');
 
-      const result = addWorktree('/tmp/repos/acme/widgets.git', 'pr-42');
+      const result = addWorktree('/tmp/repos/acme/widgets.git', 'pr-42', 'abc123');
 
       expect(result).toBe('/tmp/repos/acme/widgets-worktrees/pr-42');
       // Should NOT call git worktree add
@@ -190,13 +190,13 @@ describe('repo-cache', () => {
     });
 
     it('rejects invalid worktreeKey', () => {
-      expect(() => addWorktree('/tmp/repos/acme/widgets.git', '../../etc')).toThrow(
+      expect(() => addWorktree('/tmp/repos/acme/widgets.git', '../../etc', 'abc123')).toThrow(
         'disallowed characters',
       );
     });
 
     it('rejects worktreeKey with slashes', () => {
-      expect(() => addWorktree('/tmp/repos/acme/widgets.git', 'a/b')).toThrow(
+      expect(() => addWorktree('/tmp/repos/acme/widgets.git', 'a/b', 'abc123')).toThrow(
         'disallowed characters',
       );
     });
@@ -409,7 +409,13 @@ describe('repo-cache', () => {
   describe('checkoutWorktree', () => {
     it('uses pr-keyed worktree path instead of taskId', async () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(execFileSync).mockReturnValue('');
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('') // gh auth status
+        .mockReturnValueOnce('') // gh repo clone
+        .mockReturnValueOnce('') // git fetch
+        .mockReturnValueOnce('abc123\n') // rev-parse FETCH_HEAD
+        .mockReturnValueOnce('') // git worktree add
+        .mockReturnValueOnce(''); // git checkout
 
       const result = await checkoutWorktree('acme', 'widgets', 42, '/tmp/repos', 'task-abc');
 
@@ -422,9 +428,10 @@ describe('repo-cache', () => {
       // 1: gh auth status (isGhAvailable — hoisted)
       // 2: gh repo clone --bare (ensureBareClone)
       // 3: git fetch (fetchPRRef)
-      // 4: git worktree add (addWorktree)
-      // 5: git checkout --detach --force FETCH_HEAD (reset reused worktrees to fresh PR tip)
-      expect(calls.length).toBe(5);
+      // 4: git rev-parse --verify FETCH_HEAD (resolve stable commit ID)
+      // 5: git worktree add (addWorktree)
+      // 6: git checkout --detach --force <sha> (reset reused worktrees to fresh PR tip)
+      expect(calls.length).toBe(6);
 
       // Verify bare clone
       expect(calls[1][1]).toContain('--bare');
@@ -432,13 +439,21 @@ describe('repo-cache', () => {
       // Verify fetch
       expect(calls[2][1]).toContain('pull/42/head');
 
-      // Verify worktree add uses pr-42
-      expect(calls[3][1]).toContain('worktree');
-      expect(calls[3][1]).toContain('FETCH_HEAD');
-      expect(calls[3][1]).toContain('/tmp/repos/acme/widgets-worktrees/pr-42');
+      // Verify FETCH_HEAD is resolved in the bare repo, not the linked worktree
+      expect(calls[3][1]).toEqual(['rev-parse', '--verify', 'FETCH_HEAD']);
+      expect(calls[3][2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets.git' });
 
-      // Verify post-add reset to FETCH_HEAD
-      expect(calls[4][1]).toEqual(['checkout', '--detach', '--force', 'FETCH_HEAD']);
+      // Verify worktree add uses pr-42 and the resolved commit SHA
+      expect(calls[4][1]).toEqual([
+        'worktree',
+        'add',
+        '--detach',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        'abc123',
+      ]);
+
+      // Verify post-add reset uses the resolved commit SHA, not FETCH_HEAD
+      expect(calls[5][1]).toEqual(['checkout', '--detach', '--force', 'abc123']);
     });
 
     it('increments ref count on checkout', async () => {
