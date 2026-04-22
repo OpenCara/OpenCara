@@ -380,6 +380,20 @@ Epic: #653
 | #662  | server-dev | #663 | Batch poll rate limit blocks multiple CLI instances from same IP [DONE]  |
 | #664  | cli-dev    | #665 | CLI agent process doesn't terminate on SIGTERM — zombie processes [DONE] |
 
+## Post-M22: Dispatch Reliability & Diff Path (2026-04-15 — 2026-04-20)
+
+Team-lead direct commits stabilizing agent dispatch and local diff generation.
+
+| Issue | Agent         | PR   | Description                                                                                                                    |
+| ----- | ------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------ |
+| --    | direct/quabug | #720 | Log filtered tasks + bypass diff size limit for explicit repos [DONE]                                                          |
+| --    | direct/quabug | #721 | Passive weight recovery (30 min) + deduped paused agent logs [DONE]                                                            |
+| --    | direct/quabug | #722 | Include claude-opus-4-7 in summarizer preferred_models (config patch) [DONE]                                                   |
+| --    | direct/quabug | #723 | Model-family matching (`modelMatchesPattern`) in preferred_models / target_model [DONE]                                        |
+| --    | direct/quabug | #724 | Per-agent reliability events + weighted-random dispatch (migration 0018, `agent_reliability_events` table) [DONE]              |
+| --    | direct/quabug | #725 | Key batch-poll weight by `agent_id` (not `agent_name`); skip zero-weight agents [DONE]                                         |
+| --    | direct/quabug | #726 | CLI: prefer local `git diff` when PR worktree is available — bypasses GitHub 300-file REST cap, reorders fallback chain [DONE] |
+
 ## M23: opencara-relay streaming broker [NEXT — 2026-04-20]
 
 **Parent**: #727 (Epic).

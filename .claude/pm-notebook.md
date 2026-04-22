@@ -151,7 +151,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #68, #74, #75, #76, #77, #78, #79, #89, #91, #92, #93, #94, #97,
 #103, #104, #105, #106, #107, #108, #109, #110, #116, #117, #118,
 #119, #122, #127, #128, #134, #137, #138, #139, #140, #141, #142, #143,
-#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552, #558, #559, #562, #563, #571, #572, #573, #575, #579, #582, #583, #584, #585, #586, #587, #588, #589, #590, #591, #592, #595, #598, #599, #604, #605, #606, #607, #625, #626, #629, #630, #632, #633, #634, #635, #638, #639, #642, #647, #648, #649, #650, #651, #658, #659, #660, #661, #663, #665, #668, #671, #683, #685, #690, #691, #693, #694, #695, #697, #700, #702, #706, #712, #714, #715, #716, #717, #719
+#149, #150, #151, #152, #153, #158, #161, #163, #168, #169, #171, #172, #186, #187, #188, #189, #190, #191, #192, #193, #194, #195, #197, #198, #196, #199, #200, #202, #203, #204, #205, #206, #207, #208, #209, #214, #215, #218, #219, #220, #222, #223, #224, #226, #227, #243, #244, #246, #247, #248, #249, #250, #251, #252, #253, #255, #258, #260, #261, #263, #264, #266, #267, #268, #270, #274, #275, #279, #281, #292, #293, #294, #295, #296, #297, #298, #299, #300, #306, #310, #311, #312, #314, #317, #319, #320, #322, #324, #329, #334, #335, #337, #338, #339, #340, #342, #358, #359, #360, #361, #362, #363, #364, #365, #366, #369, #371, #374, #375, #376, #379, #382, #383, #387, #389, #390, #398, #399, #400, #402, #416, #417, #418, #419, #420, #421, #422, #425, #426, #429, #528, #529, #532, #533, #538, #539, #540, #542, #543, #547, #548, #549, #550, #552, #558, #559, #562, #563, #571, #572, #573, #575, #579, #582, #583, #584, #585, #586, #587, #588, #589, #590, #591, #592, #595, #598, #599, #604, #605, #606, #607, #625, #626, #629, #630, #632, #633, #634, #635, #638, #639, #642, #647, #648, #649, #650, #651, #658, #659, #660, #661, #663, #665, #668, #671, #683, #685, #690, #691, #693, #694, #695, #697, #700, #702, #706, #712, #714, #715, #716, #717, #719, #720, #721, #722, #723, #724, #725, #726
 
 ### Milestone QA (2026-03-22)
 
@@ -690,8 +690,8 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 ### Critical bug — worktree FETCH_HEAD (2026-04-20, team-lead direct)
 
-- #766 [cli-dev, priority:high, bug] Fix worktree reuse: FETCH_HEAD not resolvable in worktree context, second+ PR polls fail — **IN PROGRESS** (team-lead authorized direct-to-Ready, dispatched 2026-04-20). Observed on ParadiseEngine/ParadiseEngine#35, two agents hit it at 22:31:27-28. Root cause: `repo-cache.ts` fetches `pull/<N>/head` without a refspec mapping, so FETCH_HEAD only exists in the bare repo; on worktree reuse, `git checkout --detach --force FETCH_HEAD` runs with worktree cwd and fails. Fix: add refspec `refs/remotes/origin/pr/<N>` and reference the stable ref from both `addWorktree` and `ensurePRWorktree`.
-- #767 [cli-dev, priority:low] Improve 404 diff-fetch hint — don't blame auth when user is authenticated — **BACKLOG** (follow-up to #766, diagnostics quality-of-life).
+- #766 [cli-dev, priority:high, bug] Fix worktree reuse: FETCH_HEAD not resolvable in worktree context, second+ PR polls fail — **STALE IN PROGRESS** (dispatched 2026-04-20, still no PR after 48h as of 2026-04-22. Issue still In-progress on board, zero comments, no branch. Likely implement task failed/timed out silently. NEEDS TEAM-LEAD REVIEW — may need re-dispatch or to be taken over as team-lead direct fix, especially since PR #726 already addresses a related diff-fetch path with `diffFromWorktree`.) Observed on ParadiseEngine/ParadiseEngine#35, two agents hit it at 22:31:27-28. Root cause: `repo-cache.ts` fetches `pull/<N>/head` without a refspec mapping, so FETCH_HEAD only exists in the bare repo; on worktree reuse, `git checkout --detach --force FETCH_HEAD` runs with worktree cwd and fails. Fix: add refspec `refs/remotes/origin/pr/<N>` and reference the stable ref from both `addWorktree` and `ensurePRWorktree`.
+- #767 [cli-dev, priority:low] Improve 404 diff-fetch hint — don't blame auth when user is authenticated — **BACKLOG** (follow-up to #766, diagnostics quality-of-life). Note: PR #726 already surfaces gh-api stderr on non-ENOENT failures, which partially overlaps — may want to re-scope or close.
 
 ### Epic: opencara-relay (2026-04-20)
 
@@ -748,10 +748,18 @@ Critical path: R1 → R2 → R6 → R7 → R9 → R10/R11 → R16 → R23 → R2
 
 ## Merged PRs (pending processing)
 
-- PR #712 [server-dev] merged 2026-04-07 — Fix spurious implement task creation (#705)
+(none — all caught up through #726 as of 2026-04-22)
 
 ## Recently processed
 
+- PR #726 [direct/quabug] merged 2026-04-20 — feat(cli): prefer local git diff when PR worktree available (fixes 404 cascade on 300+-file PRs, ties into #766 follow-up)
+- PR #725 [direct/quabug] merged 2026-04-20 — fix(server): key batch-poll weight by agent_id, skip zero-weight agents (completes #724 reliability system)
+- PR #724 [direct/quabug] merged 2026-04-20 — feat(server): per-agent reliability + weighted-random dispatch (migration 0018, agent_reliability_events table, fixes stuck-Codex loop on ParadiseEngine#29)
+- PR #723 [direct/quabug] merged 2026-04-18 — feat: model-family matching for preferred_models and target_model (modelMatchesPattern helper, decouples config from version bumps)
+- PR #722 [direct/quabug] merged 2026-04-18 — fix: include claude-opus-4-7 in summarizer preferred_models (interim config patch, long-term replaced by #723)
+- PR #721 [direct/quabug] merged 2026-04-18 — fix(cli): passive weight recovery and dedupe paused agent logs (30-min recovery for weight<0.1, one-log-per-pause)
+- PR #720 [direct/quabug] merged 2026-04-15 — fix: log filtered tasks and bypass diff limit for explicit repos (diagnostics + bidirectional @/slash trigger matching)
+- PR #712 [server-dev] merged 2026-04-07 — Fix spurious implement task creation (#705)
 - PR #706 [cli-dev] merged 2026-04-07 — Fix implement executor prompt delivery via -p (#704)
 - PR #702 [cli-dev] merged 2026-04-07 — Fix bare clone default branch detection (#701)
 - PR #700 [server-dev] merged 2026-04-07 — Fix status trigger string-to-object comparison (#699)
