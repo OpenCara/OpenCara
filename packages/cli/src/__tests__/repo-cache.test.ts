@@ -724,23 +724,52 @@ describe('repo-cache', () => {
   });
 
   describe('deriveDefaultBranch', () => {
-    it('returns the branch parsed from symbolic-ref origin/HEAD', () => {
-      vi.mocked(execFileSync).mockReturnValueOnce('refs/remotes/origin/main\n');
+    it('returns the branch parsed from symbolic-ref AND refreshes it via fetch', () => {
+      // symbolic-ref gives us the branch name, but the bare clone is cached
+      // across runs so we MUST fetch to refresh `refs/remotes/origin/<branch>`
+      // before the caller diffs against it.
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/remotes/origin/main\n') // symbolic-ref
+        .mockReturnValueOnce(''); // fetch main
 
       const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
 
       expect(branch).toBe('main');
       const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(2);
       expect(calls[0][1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      const fetchArgs = calls[1][1] as string[];
+      expect(fetchArgs).toContain('fetch');
+      expect(fetchArgs).toContain('main:refs/remotes/origin/main');
+      expect(fetchArgs).toContain('credential.helper=!gh auth git-credential');
     });
 
-    it('handles branches with slashes in their names', () => {
-      vi.mocked(execFileSync).mockReturnValueOnce('refs/remotes/origin/release/2026.04\n');
+    it('handles branches with slashes in their names and fetches them', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/remotes/origin/release/2026.04\n')
+        .mockReturnValueOnce(''); // fetch release/2026.04
 
       const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
 
       expect(branch).toBe('release/2026.04');
+      const fetchArgs = vi.mocked(execFileSync).mock.calls[1][1] as string[];
+      expect(fetchArgs).toContain('release/2026.04:refs/remotes/origin/release/2026.04');
+    });
+
+    it('falls through to candidate probes when the symbolic-ref fetch fails', () => {
+      // If the symbolic-ref refresh fetch fails (e.g., branch deleted since
+      // HEAD was set at clone time), we continue to the candidate list so a
+      // working base is still resolved.
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/remotes/origin/gone\n') // symbolic-ref
+        .mockImplementationOnce(() => {
+          throw new Error("fatal: couldn't find remote ref gone");
+        }) // fetch gone — fails
+        .mockReturnValueOnce(''); // fetch main succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('main');
     });
 
     it('falls back to main when symbolic-ref fails', () => {
@@ -758,7 +787,6 @@ describe('repo-cache', () => {
       const fetchArgs = calls[1][1] as string[];
       expect(fetchArgs).toContain('fetch');
       expect(fetchArgs).toContain('main:refs/remotes/origin/main');
-      // Credential helper is included when gh is available
       expect(fetchArgs).toContain('credential.helper=!gh auth git-credential');
     });
 
@@ -779,11 +807,47 @@ describe('repo-cache', () => {
       expect(calls).toHaveLength(3);
       const masterFetchArgs = calls[2][1] as string[];
       expect(masterFetchArgs).toContain('master:refs/remotes/origin/master');
-      // No credential helper when gh is not available
       expect(masterFetchArgs).not.toContain('-c');
     });
 
-    it('throws when symbolic-ref, main, and master all fail', () => {
+    it('falls back to develop when main and master both fail', () => {
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('symbolic-ref failed');
+        })
+        .mockImplementationOnce(() => {
+          throw new Error('main not found');
+        })
+        .mockImplementationOnce(() => {
+          throw new Error('master not found');
+        })
+        .mockReturnValueOnce(''); // develop fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', false);
+
+      expect(branch).toBe('develop');
+      const developFetchArgs = vi.mocked(execFileSync).mock.calls.at(-1)?.[1] as string[];
+      expect(developFetchArgs).toContain('develop:refs/remotes/origin/develop');
+    });
+
+    it('falls back to trunk when main, master, and develop all fail', () => {
+      const failingBranches = 3; // main, master, develop
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error('symbolic-ref failed');
+      });
+      for (let i = 0; i < failingBranches; i++) {
+        vi.mocked(execFileSync).mockImplementationOnce(() => {
+          throw new Error('branch not found');
+        });
+      }
+      vi.mocked(execFileSync).mockReturnValueOnce(''); // trunk fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', false);
+
+      expect(branch).toBe('trunk');
+    });
+
+    it('throws when symbolic-ref and all fallbacks fail', () => {
       vi.mocked(execFileSync).mockImplementation(() => {
         throw new Error('failed');
       });
@@ -805,7 +869,17 @@ describe('repo-cache', () => {
 
     it('rejects a branch name that fails the allowlist and falls back', () => {
       vi.mocked(execFileSync)
-        .mockReturnValueOnce('refs/remotes/origin/-malicious\n') // rejected by allowlist
+        .mockReturnValueOnce('refs/remotes/origin/-malicious\n') // rejected: leading dash
+        .mockReturnValueOnce(''); // main fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('main');
+    });
+
+    it('rejects a branch name containing `..` and falls back', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/remotes/origin/re..lease\n') // rejected: contains ..
         .mockReturnValueOnce(''); // main fetch succeeds
 
       const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
@@ -857,6 +931,7 @@ describe('repo-cache', () => {
     it('derives the default branch when base_ref is undefined', () => {
       vi.mocked(execFileSync)
         .mockReturnValueOnce('refs/remotes/origin/main\n') // symbolic-ref
+        .mockReturnValueOnce('') // fetch main (refresh stale cache)
         .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff
 
       const diff = diffFromWorktree(
@@ -868,9 +943,11 @@ describe('repo-cache', () => {
 
       expect(diff).toContain('diff --git');
       const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(3);
       expect(calls[0][1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-      expect(calls[1][1]).toEqual(['diff', 'origin/main...HEAD']);
+      const fetchArgs = calls[1][1] as string[];
+      expect(fetchArgs).toContain('main:refs/remotes/origin/main');
+      expect(calls[2][1]).toEqual(['diff', 'origin/main...HEAD']);
     });
 
     it('derives via main fallback when base_ref is empty string', () => {
@@ -982,15 +1059,19 @@ describe('repo-cache', () => {
       expect(fetchArgs).not.toContain('-c');
     });
 
-    it('falls back to derive-base when the provided base_ref cannot be fetched', () => {
+    it('falls back to derive-base when the provided base_ref no longer exists on origin', () => {
       // Simulates a stale base_ref after a force-push or branch rename: the
-      // targeted fetch fails, so the function derives the default branch and
-      // diffs against that instead of propagating the fetch error.
+      // targeted fetch surfaces "couldn't find remote ref", which is the
+      // signal that the branch is genuinely gone. In that (and only that)
+      // case we derive the default branch and diff against it.
       vi.mocked(execFileSync)
         .mockImplementationOnce(() => {
-          throw new Error("fatal: couldn't find remote ref stale-branch");
-        }) // fetch base_ref=stale-branch — fails
-        .mockReturnValueOnce('refs/remotes/origin/main\n') // symbolic-ref succeeds
+          throw new Error(
+            "fatal: couldn't find remote ref stale-branch\nerror: some refs could not be fetched",
+          );
+        }) // fetch base_ref=stale-branch — missing on origin
+        .mockReturnValueOnce('refs/remotes/origin/main\n') // symbolic-ref
+        .mockReturnValueOnce('') // refresh fetch of main
         .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff against main
 
       const diff = diffFromWorktree(
@@ -1002,20 +1083,62 @@ describe('repo-cache', () => {
 
       expect(diff).toContain('diff --git');
       const calls = vi.mocked(execFileSync).mock.calls;
-      expect(calls).toHaveLength(3);
-      // Fetch attempted against the stale ref
-      const staleFetchArgs = calls[0][1] as string[];
-      expect(staleFetchArgs).toContain('stale-branch:refs/remotes/origin/stale-branch');
-      // Then derive-base via symbolic-ref
+      expect(calls).toHaveLength(4);
+      expect(calls[0][1] as string[]).toContain('stale-branch:refs/remotes/origin/stale-branch');
       expect(calls[1][1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-      // Diff runs against the derived branch, not the stale one
-      expect(calls[2][1]).toEqual(['diff', 'origin/main...HEAD']);
+      expect(calls[2][1] as string[]).toContain('main:refs/remotes/origin/main');
+      expect(calls[3][1]).toEqual(['diff', 'origin/main...HEAD']);
+    });
+
+    it('rethrows transient fetch errors instead of silently diffing against the default branch', () => {
+      // Network/auth/timeout errors MUST NOT be treated as "branch missing".
+      // If we silently derived the default branch here, a PR against
+      // `develop` would get reviewed as if it were against `main` — the
+      // review would be about a completely different patch.
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error('fatal: unable to access https://github.com/: Could not resolve host');
+      });
+
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          'develop',
+          true,
+        ),
+      ).toThrow(/Could not resolve host/);
+
+      // Only the initial fetch call ran — no derive-base probes.
+      expect(vi.mocked(execFileSync).mock.calls).toHaveLength(1);
+    });
+
+    it('also recognizes alternative remote-ref-missing error phrasings', () => {
+      // Git wording varies; `no such ref` is another common form.
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('fatal: no such ref: refs/heads/gone');
+        })
+        .mockReturnValueOnce('refs/remotes/origin/main\n')
+        .mockReturnValueOnce('') // refresh fetch
+        .mockReturnValueOnce('diff --git a/a b/a\n');
+
+      const diff = diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        'gone',
+        true,
+      );
+
+      expect(diff).toContain('diff --git');
     });
 
     it('propagates derive-base failure when both the stale base_ref and derivation fail', () => {
-      // If the targeted fetch fails AND derive-base also fails, the caller
-      // sees the derive-base error so the gh-fetch fallback in agent.ts can
-      // take over as the last resort.
+      // If the targeted fetch fails with "remote ref missing" AND derive-base
+      // also fails, the caller sees the derive-base error so agent.ts rejects
+      // the task loudly.
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error("fatal: couldn't find remote ref stale-branch");
+      });
       vi.mocked(execFileSync).mockImplementation(() => {
         throw new Error('every git call fails');
       });
@@ -1028,6 +1151,18 @@ describe('repo-cache', () => {
           true,
         ),
       ).toThrow(/Cannot derive default branch/);
+    });
+
+    it('rejects a base_ref containing `..` without shelling out', () => {
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          're..lease',
+          true,
+        ),
+      ).toThrow(/Invalid base ref/);
+      expect(vi.mocked(execFileSync)).not.toHaveBeenCalled();
     });
   });
 });

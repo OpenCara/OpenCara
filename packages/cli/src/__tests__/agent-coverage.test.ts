@@ -635,10 +635,16 @@ describe('Agent Coverage Tests', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('Codebase clone paths', () => {
-    it('warns and derives base locally when base_ref is empty', async () => {
-      // Task has no base_ref — the checkout succeeds (mocked) but the git-diff
-      // path still runs via the derive-base fallback. The gh-fetch mock below
-      // returns a canned diff so the agent can submit a review.
+    it('warns and routes an empty base_ref through the local git-diff path', async () => {
+      // Task has no base_ref. The warn confirms agent.ts took the new
+      // derive-base branch rather than bailing to gh; diffFromWorktree is
+      // actually called (not just defined), confirming the worktree-implies-
+      // git-diff invariant holds even with an empty base_ref. The derive
+      // logic itself is unit-tested against `deriveDefaultBranch` —
+      // diffFromWorktree here is stubbed to return a canned diff.
+      const mockedDiff = vi.mocked(diffFromWorktree);
+      mockedDiff.mockClear();
+
       const taskId = await server.injectTask({ reviewCount: 2, baseRef: '' });
 
       const deps = makeDeps('missing-base-ref-agent');
@@ -647,10 +653,25 @@ describe('Agent Coverage Tests', () => {
         codebaseDir: '/tmp/test-codebases',
       };
 
+      // Spy only on diff-content endpoints — PR-context fetches (comments,
+      // reviews) are unrelated to the diff path and still run normally.
+      // A worktree is available, so the diff URL and the .diff Accept header
+      // MUST NOT be touched while the empty-base_ref path runs.
+      const ghFetchSpy = vi.fn();
       const originalFetch = globalThis.fetch;
       globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url =
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const headers = init?.headers as Record<string, string> | undefined;
+        const accept = headers?.['Accept'] ?? '';
+        const isDiffUrl = url.endsWith('.diff');
+        const isApiDiffFetch =
+          url.includes('api.github.com/repos') &&
+          url.includes('/pulls/') &&
+          accept.includes('diff');
+        if (isDiffUrl || isApiDiffFetch) {
+          ghFetchSpy(url);
+        }
         if (url.includes(`/api/tasks/${taskId}/result`)) {
           return new Response(JSON.stringify({ success: true }), { status: 200 });
         }
@@ -672,6 +693,12 @@ describe('Agent Coverage Tests', () => {
         expect(console.warn).toHaveBeenCalledWith(
           expect.stringMatching(/no base_ref.*deriving default branch/i),
         );
+        // Agent actually called diffFromWorktree (not silently fell through
+        // to gh). baseRef argument is the 3rd positional arg.
+        expect(mockedDiff).toHaveBeenCalled();
+        const baseRefArg = mockedDiff.mock.calls[0][2];
+        expect(baseRefArg === '' || baseRefArg === undefined || baseRefArg === null).toBe(true);
+        expect(ghFetchSpy).not.toHaveBeenCalled();
 
         await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(promise, server);
