@@ -394,6 +394,20 @@ Team-lead direct commits stabilizing agent dispatch and local diff generation.
 | --    | direct/quabug | #725 | Key batch-poll weight by `agent_id` (not `agent_name`); skip zero-weight agents [DONE]                                         |
 | --    | direct/quabug | #726 | CLI: prefer local `git diff` when PR worktree is available — bypasses GitHub 300-file REST cap, reorders fallback chain [DONE] |
 
+## Post-M22: Polish & Hardening Batch (2026-04-22)
+
+5 PM-triaged issues (1 follow-up, 2 proactive findings, 2 team-lead-reported bugs) dispatched in a single batch after team-lead promoted Backlog→Ready. All spawned as manual worktree dev agents (no server-dispatched implement claimed), all landed and merged same day.
+
+| Issue | Agent      | PR   | Description                                                                                                         |
+| ----- | ---------- | ---- | ------------------------------------------------------------------------------------------------------------------- |
+| #767  | cli-dev    | #778 | Branch 404 diff-fetch hint on `gh auth status` state (post-PR #726 polish) [DONE]                                   |
+| #774  | cli-dev    | #777 | Raise flaky cli-server-integration timeout 15s → 30s [DONE]                                                         |
+| #773  | server-dev | #779 | Prune unbounded `agent_reliability_events` + `reputation_events` in scheduled cleanup hook [DONE]                   |
+| #776  | server-dev | #781 | Phase 1 audit + Phase 2 boundary hardening: hybrid log-and-allow guard on PR-scoped task inserts (D1/Memory) [DONE] |
+| #775  | cli-dev    | #780 | Derive merge-base locally when `task.base_ref` missing; worktree-present → git-diff ONLY (no gh fallback) [DONE]    |
+
+Related CLI release: `opencara@0.24.3` published 2026-04-22 (CLI hotfix for #766 FETCH_HEAD, commit b88ee82, PR #768).
+
 ## Shelved
 
 - **M23 opencara-relay** — shelved 2026-04-22. Epic #727 and all 38 sub-issues (#728–#765) plus E2E smoke test #772 closed as `not planned`. Design preserved at [.claude/designs/opencara-relay.md](../.claude/designs/opencara-relay.md) for future reference. `epic:relay` label retained for archival.
