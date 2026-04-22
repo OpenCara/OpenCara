@@ -394,7 +394,7 @@ function gitExec(
 }
 
 /** Fallback default-branch names, tried in order when symbolic-ref fails. */
-const DEFAULT_BRANCH_FALLBACKS = ['main', 'master', 'develop', 'trunk'];
+const DEFAULT_BRANCH_FALLBACKS = ['main', 'master'];
 
 /**
  * Validate a git branch name against a defensive allowlist.
@@ -445,8 +445,6 @@ function isRemoteRefMissingError(err: unknown): boolean {
  *      then fetch that branch to refresh `refs/remotes/origin/<branch>`.
  *   2. Fetch `main` from origin (if it exists).
  *   3. Fetch `master` from origin (if it exists).
- *   4. Fetch `develop` from origin (if it exists).
- *   5. Fetch `trunk` from origin (if it exists).
  *
  * The returned branch is guaranteed to be fetched into `refs/remotes/origin/<branch>`
  * during this call so the caller can immediately `git diff origin/<branch>...HEAD`
@@ -488,9 +486,7 @@ export function deriveDefaultBranch(bareRepoPath: string, ghAvailable: boolean):
     }
   }
 
-  throw new Error(
-    `Cannot derive default branch: origin/HEAD and fallbacks (${DEFAULT_BRANCH_FALLBACKS.join(', ')}) all failed`,
-  );
+  throw new Error('Cannot derive default branch: origin/HEAD, main, and master all failed');
 }
 
 /**

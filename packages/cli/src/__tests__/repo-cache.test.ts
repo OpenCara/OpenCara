@@ -810,43 +810,6 @@ describe('repo-cache', () => {
       expect(masterFetchArgs).not.toContain('-c');
     });
 
-    it('falls back to develop when main and master both fail', () => {
-      vi.mocked(execFileSync)
-        .mockImplementationOnce(() => {
-          throw new Error('symbolic-ref failed');
-        })
-        .mockImplementationOnce(() => {
-          throw new Error('main not found');
-        })
-        .mockImplementationOnce(() => {
-          throw new Error('master not found');
-        })
-        .mockReturnValueOnce(''); // develop fetch succeeds
-
-      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', false);
-
-      expect(branch).toBe('develop');
-      const developFetchArgs = vi.mocked(execFileSync).mock.calls.at(-1)?.[1] as string[];
-      expect(developFetchArgs).toContain('develop:refs/remotes/origin/develop');
-    });
-
-    it('falls back to trunk when main, master, and develop all fail', () => {
-      const failingBranches = 3; // main, master, develop
-      vi.mocked(execFileSync).mockImplementationOnce(() => {
-        throw new Error('symbolic-ref failed');
-      });
-      for (let i = 0; i < failingBranches; i++) {
-        vi.mocked(execFileSync).mockImplementationOnce(() => {
-          throw new Error('branch not found');
-        });
-      }
-      vi.mocked(execFileSync).mockReturnValueOnce(''); // trunk fetch succeeds
-
-      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', false);
-
-      expect(branch).toBe('trunk');
-    });
-
     it('throws when symbolic-ref and all fallbacks fail', () => {
       vi.mocked(execFileSync).mockImplementation(() => {
         throw new Error('failed');

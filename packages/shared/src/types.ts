@@ -87,6 +87,11 @@ export interface ReviewTask {
   pr_number: number;
   pr_url: string;
   diff_url: string;
+  /**
+   * PR base branch. The server may emit an empty string when it could not
+   * determine a base ref; the CLI interprets `''` as "derive the default
+   * branch locally" rather than treating it as a hard failure. See PR #780.
+   */
   base_ref: string;
   head_ref: string;
   prompt: string;
