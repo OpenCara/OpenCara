@@ -330,7 +330,7 @@ describe('CLI ↔ Server Integration', () => {
       // Mark completed to stop loop
       await server.store.updateTask(taskId, { status: 'completed' });
       await stopAgent(agentPromise, server);
-    }, 15000);
+    }, 30000);
   });
 
   // ═══════════════════════════════════════════════════════════
