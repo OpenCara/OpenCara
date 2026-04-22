@@ -31,7 +31,10 @@ import {
   parseDiffPaths,
   buildSparsePatterns,
   configureSparseCheckout,
+  deriveDefaultBranch,
+  diffFromWorktree,
 } from '../repo-cache.js';
+import { DiffTooLargeError } from '../review.js';
 
 describe('repo-cache', () => {
   beforeEach(() => {
@@ -717,6 +720,266 @@ describe('repo-cache', () => {
       expect(args).toContain('src/index.ts');
       expect(args).toContain('package.json');
       expect(call[2]).toMatchObject({ cwd: '/tmp/worktrees/pr-42' });
+    });
+  });
+
+  describe('deriveDefaultBranch', () => {
+    it('returns the branch parsed from symbolic-ref origin/HEAD', () => {
+      vi.mocked(execFileSync).mockReturnValueOnce('refs/remotes/origin/main\n');
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('main');
+      const calls = vi.mocked(execFileSync).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    });
+
+    it('handles branches with slashes in their names', () => {
+      vi.mocked(execFileSync).mockReturnValueOnce('refs/remotes/origin/release/2026.04\n');
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('release/2026.04');
+    });
+
+    it('falls back to main when symbolic-ref fails', () => {
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('symbolic-ref: no such ref');
+        })
+        .mockReturnValueOnce(''); // main fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('main');
+      const calls = vi.mocked(execFileSync).mock.calls;
+      expect(calls).toHaveLength(2);
+      const fetchArgs = calls[1][1] as string[];
+      expect(fetchArgs).toContain('fetch');
+      expect(fetchArgs).toContain('main:refs/remotes/origin/main');
+      // Credential helper is included when gh is available
+      expect(fetchArgs).toContain('credential.helper=!gh auth git-credential');
+    });
+
+    it('falls back to master when symbolic-ref and main both fail', () => {
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('symbolic-ref failed');
+        })
+        .mockImplementationOnce(() => {
+          throw new Error('main not found');
+        })
+        .mockReturnValueOnce(''); // master fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', false);
+
+      expect(branch).toBe('master');
+      const calls = vi.mocked(execFileSync).mock.calls;
+      expect(calls).toHaveLength(3);
+      const masterFetchArgs = calls[2][1] as string[];
+      expect(masterFetchArgs).toContain('master:refs/remotes/origin/master');
+      // No credential helper when gh is not available
+      expect(masterFetchArgs).not.toContain('-c');
+    });
+
+    it('throws when symbolic-ref, main, and master all fail', () => {
+      vi.mocked(execFileSync).mockImplementation(() => {
+        throw new Error('failed');
+      });
+
+      expect(() => deriveDefaultBranch('/tmp/repos/acme/widgets.git', true)).toThrow(
+        /Cannot derive default branch/,
+      );
+    });
+
+    it('rejects a symbolic-ref output with an unexpected prefix and falls back', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/heads/main\n') // unexpected prefix — skipped
+        .mockReturnValueOnce(''); // main fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('main');
+    });
+
+    it('rejects a branch name that fails the allowlist and falls back', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/remotes/origin/-malicious\n') // rejected by allowlist
+        .mockReturnValueOnce(''); // main fetch succeeds
+
+      const branch = deriveDefaultBranch('/tmp/repos/acme/widgets.git', true);
+
+      expect(branch).toBe('main');
+    });
+  });
+
+  describe('diffFromWorktree', () => {
+    it('fetches the supplied base_ref and runs git diff ...HEAD', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('') // fetch main
+        .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff
+
+      const diff = diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        'main',
+        true,
+      );
+
+      expect(diff).toContain('diff --git');
+      const calls = vi.mocked(execFileSync).mock.calls;
+      expect(calls).toHaveLength(2);
+
+      // Fetch call runs in the bare repo with credential helper
+      const fetchArgs = calls[0][1] as string[];
+      expect(fetchArgs).toContain('fetch');
+      expect(fetchArgs).toContain('main:refs/remotes/origin/main');
+      expect(calls[0][2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets.git' });
+
+      // Diff call runs in the worktree
+      expect(calls[1][1]).toEqual(['diff', 'origin/main...HEAD']);
+      expect(calls[1][2]).toMatchObject({ cwd: '/tmp/repos/acme/widgets-worktrees/pr-42' });
+    });
+
+    it('rejects an invalid base_ref without shelling out', () => {
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          '-malicious',
+          true,
+        ),
+      ).toThrow(/Invalid base ref/);
+      expect(vi.mocked(execFileSync)).not.toHaveBeenCalled();
+    });
+
+    it('derives the default branch when base_ref is undefined', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('refs/remotes/origin/main\n') // symbolic-ref
+        .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff
+
+      const diff = diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        undefined,
+        true,
+      );
+
+      expect(diff).toContain('diff --git');
+      const calls = vi.mocked(execFileSync).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[0][1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      expect(calls[1][1]).toEqual(['diff', 'origin/main...HEAD']);
+    });
+
+    it('derives via main fallback when base_ref is empty string', () => {
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('symbolic-ref fails');
+        })
+        .mockReturnValueOnce('') // main fetch succeeds
+        .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff against main
+
+      const diff = diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        '',
+        true,
+      );
+
+      expect(diff).toContain('diff --git');
+      const diffCall = vi.mocked(execFileSync).mock.calls.at(-1);
+      expect(diffCall?.[1]).toEqual(['diff', 'origin/main...HEAD']);
+    });
+
+    it('derives via master fallback when symbolic-ref and main both fail', () => {
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error('symbolic-ref fails');
+        })
+        .mockImplementationOnce(() => {
+          throw new Error('main not found');
+        })
+        .mockReturnValueOnce('') // master fetch succeeds
+        .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff against master
+
+      const diff = diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        null,
+        true,
+      );
+
+      expect(diff).toContain('diff --git');
+      const diffCall = vi.mocked(execFileSync).mock.calls.at(-1);
+      expect(diffCall?.[1]).toEqual(['diff', 'origin/master...HEAD']);
+    });
+
+    it('propagates derive-base failure to the caller', () => {
+      vi.mocked(execFileSync).mockImplementation(() => {
+        throw new Error('all refs fail');
+      });
+
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          undefined,
+          true,
+        ),
+      ).toThrow(/Cannot derive default branch/);
+    });
+
+    it('translates maxBuffer errors into DiffTooLargeError', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('') // fetch main
+        .mockImplementationOnce(() => {
+          throw new Error('stdout maxBuffer length exceeded');
+        });
+
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          'main',
+          true,
+          1024,
+        ),
+      ).toThrow(DiffTooLargeError);
+    });
+
+    it('rethrows non-maxBuffer git-diff errors unchanged', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('') // fetch main
+        .mockImplementationOnce(() => {
+          throw new Error('fatal: ambiguous argument');
+        });
+
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          'main',
+          true,
+        ),
+      ).toThrow(/fatal: ambiguous argument/);
+    });
+
+    it('omits credential helper when gh is not available', () => {
+      vi.mocked(execFileSync)
+        .mockReturnValueOnce('') // fetch main
+        .mockReturnValueOnce(''); // git diff
+
+      diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        'main',
+        false,
+      );
+
+      const fetchArgs = vi.mocked(execFileSync).mock.calls[0][1] as string[];
+      expect(fetchArgs).not.toContain('-c');
     });
   });
 });

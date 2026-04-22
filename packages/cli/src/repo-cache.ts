@@ -393,10 +393,66 @@ function gitExec(
   }
 }
 
+/** Fallback default-branch names, tried in order when symbolic-ref fails. */
+const DEFAULT_BRANCH_FALLBACKS = ['main', 'master'];
+
+/**
+ * Derive the repo's default branch name. Tries, in order:
+ *   1. `git symbolic-ref refs/remotes/origin/HEAD` → strip `refs/remotes/origin/` prefix.
+ *   2. Fetch `main` from origin (if it exists).
+ *   3. Fetch `master` from origin (if it exists).
+ *
+ * The returned branch is guaranteed to be fetched into `refs/remotes/origin/<branch>`
+ * so the caller can immediately `git diff origin/<branch>...HEAD`.
+ *
+ * Throws if none of the candidates can be resolved.
+ */
+export function deriveDefaultBranch(bareRepoPath: string, ghAvailable: boolean): string {
+  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
+
+  try {
+    const out = gitExec('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], bareRepoPath).trim();
+    const prefix = 'refs/remotes/origin/';
+    if (out.startsWith(prefix)) {
+      const branch = out.slice(prefix.length);
+      if (branch && /^[A-Za-z0-9_./-]+$/.test(branch) && !branch.startsWith('-')) {
+        return branch;
+      }
+    }
+  } catch {
+    // Fall through to candidate-branch probing.
+  }
+
+  for (const candidate of DEFAULT_BRANCH_FALLBACKS) {
+    try {
+      gitExec(
+        'git',
+        [
+          ...credArgs,
+          'fetch',
+          '--force',
+          'origin',
+          `${candidate}:refs/remotes/origin/${candidate}`,
+        ],
+        bareRepoPath,
+      );
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error('Cannot derive default branch: origin/HEAD, main, and master all failed');
+}
+
 /**
  * Generate a unified diff for a PR from a local worktree. Fetches the base
  * branch into the bare clone (idempotent) and runs
  * `git diff origin/<baseRef>...HEAD` inside the worktree.
+ *
+ * When `baseRef` is omitted or empty, the repo's default branch is derived
+ * via `deriveDefaultBranch` (origin/HEAD → main → master) so the caller does
+ * not need to know the target branch up-front.
  *
  * Unlike GitHub's REST diff endpoint (which caps at 300 files), the local
  * git diff has no such limit, so this is how we handle large PRs.
@@ -406,24 +462,34 @@ function gitExec(
 export function diffFromWorktree(
   bareRepoPath: string,
   worktreePath: string,
-  baseRef: string,
+  baseRef: string | null | undefined,
   ghAvailable: boolean,
   maxDiffBytes = 128 * 1024 * 1024, // 128 MB
 ): string {
-  // Defensive allowlist for ref names. We pass baseRef as a separate argv to
-  // execFileSync so there's no shell expansion, but a ref with whitespace,
-  // newlines, or leading `-` could still confuse `git` itself.
-  if (!/^[A-Za-z0-9_./-]+$/.test(baseRef) || baseRef.startsWith('-')) {
-    throw new Error(`Invalid base ref: ${baseRef}`);
-  }
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
-  gitExec(
-    'git',
-    [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
-    bareRepoPath,
-  );
+
+  let resolvedBaseRef: string;
+  if (baseRef) {
+    // Defensive allowlist for ref names. We pass baseRef as a separate argv to
+    // execFileSync so there's no shell expansion, but a ref with whitespace,
+    // newlines, or leading `-` could still confuse `git` itself.
+    if (!/^[A-Za-z0-9_./-]+$/.test(baseRef) || baseRef.startsWith('-')) {
+      throw new Error(`Invalid base ref: ${baseRef}`);
+    }
+    gitExec(
+      'git',
+      [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
+      bareRepoPath,
+    );
+    resolvedBaseRef = baseRef;
+  } else {
+    // No caller-provided base ref — derive locally. deriveDefaultBranch also
+    // ensures the resolved ref is fetched into refs/remotes/origin/<branch>.
+    resolvedBaseRef = deriveDefaultBranch(bareRepoPath, ghAvailable);
+  }
+
   try {
-    return gitExec('git', ['diff', `origin/${baseRef}...HEAD`], worktreePath, {
+    return gitExec('git', ['diff', `origin/${resolvedBaseRef}...HEAD`], worktreePath, {
       maxBuffer: maxDiffBytes,
     });
   } catch (err) {

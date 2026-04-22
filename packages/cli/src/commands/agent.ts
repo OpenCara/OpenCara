@@ -768,8 +768,16 @@ async function handleTask(
     }
 
     // Prefer local git diff when a worktree is available — handles PRs of
-    // any size and works for private repos without a platform token.
-    if (taskCheckoutPath && taskBareRepoPath && base_ref) {
+    // any size and works for private repos without a platform token. When
+    // `base_ref` is missing we let `diffFromWorktree` derive the default
+    // branch locally (origin/HEAD → main → master) rather than silently
+    // bailing out to the size-capped gh-fetch path.
+    if (taskCheckoutPath && taskBareRepoPath) {
+      if (!base_ref) {
+        logWarn(
+          `  Warning: task ${task_id} has no base_ref — deriving default branch from worktree`,
+        );
+      }
       try {
         // Hoist `gh auth status` outside the repo lock — it's independent of
         // the repo and does a synchronous subprocess call (up to 10s timeout).

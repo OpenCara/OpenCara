@@ -620,6 +620,51 @@ describe('Agent Coverage Tests', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('Codebase clone paths', () => {
+    it('warns and derives base locally when base_ref is empty', async () => {
+      // Task has no base_ref — the checkout succeeds (mocked) but the git-diff
+      // path still runs via the derive-base fallback. The gh-fetch mock below
+      // returns a canned diff so the agent can submit a review.
+      const taskId = await server.injectTask({ reviewCount: 2, baseRef: '' });
+
+      const deps = makeDeps('missing-base-ref-agent');
+      const reviewDeps: ReviewExecutorDeps = {
+        ...deps.reviewDeps,
+        codebaseDir: '/tmp/test-codebases',
+      };
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const promise = startAgent(
+          'missing-base-ref-agent',
+          FAKE_SERVER_URL,
+          { model: 'test', tool: 'test' },
+          reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        expect(console.warn).toHaveBeenCalledWith(
+          expect.stringMatching(/no base_ref.*deriving default branch/i),
+        );
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(promise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     it('continues with diff-only when worktree checkout fails', async () => {
       // Override checkoutWorktree to throw for this test
       const mockedCheckout = vi.mocked(checkoutWorktree);
