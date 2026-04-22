@@ -693,6 +693,10 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 - #766 [cli-dev, priority:high, bug] Fix worktree reuse: FETCH_HEAD not resolvable in worktree context, second+ PR polls fail — **IN REVIEW** (PR #768 opened 2026-04-22 by team-lead after the dispatched implement task stalled. All local checks pass: build ✓, 2927 tests ✓, lint ✓, typecheck ✓. Board moved In-progress→In-review by PM 2026-04-22. Close on merge.) Implementation: `resolveFetchedPrCommit` helper does `git rev-parse --verify FETCH_HEAD` in bare repo for a stable SHA; threads into `addWorktree(bareRepoPath, wtKey, targetRef)` and replaces `git checkout --detach --force FETCH_HEAD` with `... <sha>`. Functionally equivalent to the refspec approach originally proposed in the issue.
 - #767 [cli-dev, priority:low] Improve 404 diff-fetch hint — don't blame auth when user is authenticated — **BACKLOG** (scope refreshed 2026-04-22 — post-#726 the HTTP 404 path is a fallback-of-a-fallback; auth-branching fix is still valid but narrower than the original spec. See issue comments 4294957609 + 4295071228 for updated acceptance criteria).
 
+### Proactive finding (2026-04-22, PM idle review)
+
+- #773 [server-dev, priority:low, enhancement] Prune unbounded `agent_reliability_events` (and optionally `reputation_events`) rows in scheduled cleanup — **BACKLOG**. Rooted in PR #724's new table that's append-only with a 30-min query window: rows older than `RELIABILITY_WINDOW_MS` are never read, never deleted. Same latent issue on `reputation_events` (14-day half-life decay → weight at 180d is ~0.00014). Fix: add `cleanupStaleReliabilityEvents` to the scheduled hook next to existing `cleanupTerminalTasks` / `cleanupExpiredOAuthCache`. Reputation prune is optional follow-up; issue body specifies both as one bundle since the pattern is identical.
+
 ### Epic: opencara-relay-cli (#640 breakdown, 2026-04-22)
 
 - #640 [breakdown, epic:review-cli, enhancement] `opencara review <pr-link>` CLI command — **BREAKDOWN** (parent stays Backlog; 3 sub-issues created, all start in Backlog per team-lead; will promote when ready)
