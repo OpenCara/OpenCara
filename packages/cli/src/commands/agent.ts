@@ -767,9 +767,21 @@ async function handleTask(
       taskReviewDeps = { ...reviewDeps, codebaseDir: null };
     }
 
-    // Prefer local git diff when a worktree is available — handles PRs of
-    // any size and works for private repos without a platform token.
-    if (taskCheckoutPath && taskBareRepoPath && base_ref) {
+    // With a worktree available, `git diff` is the ONLY diff path — no
+    // silent fallback to gh/HTTP. The worktree already cost us a clone and
+    // a fetch; letting a git failure degrade to the 300-file gh diff just
+    // hides problems (and has: see #775 / ParadiseEngine#38). If git diff
+    // fails here, the task errors out loudly so the server can re-dispatch.
+    //
+    // The gh-fetch fallback below is reached only when worktree checkout
+    // itself failed earlier (the catch at line 742 leaves both task paths
+    // null), i.e. agents that couldn't set up a worktree at all.
+    if (taskCheckoutPath && taskBareRepoPath) {
+      if (!base_ref) {
+        logWarn(
+          `  Warning: task ${task_id} has no base_ref — deriving default branch from worktree`,
+        );
+      }
       try {
         // Hoist `gh auth status` outside the repo lock — it's independent of
         // the repo and does a synchronous subprocess call (up to 10s timeout).
@@ -793,25 +805,20 @@ async function handleTask(
         diffContent = gitDiff;
         log(`  Diff generated via git (${Math.round(diffContent.length / 1024)}KB)`);
       } catch (err) {
+        const message = (err as Error).message;
         if (err instanceof DiffTooLargeError) {
-          logError(`  ${(err as Error).message}`);
-          await safeReject(
-            client,
-            task_id,
-            agentId,
-            `Cannot access diff: ${(err as Error).message}`,
-            logger,
-          );
-          return { diffFetchFailed: true };
+          logError(`  ${message}`);
+        } else {
+          logError(`  git diff failed for task ${task_id}: ${message}`);
         }
-        logWarn(
-          `  Warning: git diff failed (${(err as Error).message}) — falling back to API fetch`,
-        );
+        await safeReject(client, task_id, agentId, `Cannot access diff: ${message}`, logger);
+        return { diffFetchFailed: true };
       }
-    }
-
-    // Fallback: fetch via gh CLI / HTTP API.
-    if (!diffContent) {
+    } else {
+      // Worktree unavailable — fall back to gh CLI / HTTP API. This is the
+      // ONLY reachable gh-fetch path now; it is entered solely when the
+      // earlier `checkoutWorktree` attempt threw (taskCheckoutPath and
+      // taskBareRepoPath both null).
       try {
         const result = await fetchDiff(diff_url, owner, repo, pr_number, {
           githubToken: client.currentToken,

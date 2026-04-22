@@ -17,7 +17,7 @@ import type { ReviewExecutorDeps } from '../review.js';
 import { createSessionTracker } from '../consumption.js';
 import { FakeServer, FAKE_SERVER_URL } from './helpers/fake-server.js';
 import { executeTool } from '../tool-executor.js';
-import { checkoutWorktree } from '../repo-cache.js';
+import { checkoutWorktree, diffFromWorktree } from '../repo-cache.js';
 
 // ── Mock child_process so fetchDiffViaGh falls back to HTTP ──
 
@@ -65,6 +65,13 @@ vi.mock('../repo-cache.js', async () => {
         // ignore
       }
     }),
+    // With a worktree present, agent.ts requires a working git-diff path —
+    // no silent fallback to gh. Mock a canned diff so task execution proceeds.
+    diffFromWorktree: vi.fn(
+      () =>
+        'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n',
+    ),
+    withRepoLock: vi.fn(async (_repoKey: string, fn: () => unknown) => fn()),
   };
 });
 
@@ -291,6 +298,10 @@ describe('Agent Coverage Tests', () => {
 
   describe('fetchDiff with token', () => {
     it('uses API URL and Bearer token when githubToken is provided', async () => {
+      // Force the gh/HTTP diff path by failing worktree checkout — with a
+      // worktree the agent always uses local git-diff and never hits gh.
+      vi.mocked(checkoutWorktree).mockRejectedValueOnce(new Error('no worktree in test'));
+
       let diffFetchUrl: string | undefined;
       let diffFetchHeaders: Record<string, string> | undefined;
 
@@ -387,6 +398,10 @@ describe('Agent Coverage Tests', () => {
 
   describe('safeReject and safeError failure paths', () => {
     it('logs locally when reject endpoint fails', async () => {
+      // Force the gh/HTTP diff path by failing worktree checkout — with a
+      // worktree the agent always uses local git-diff and never hits gh.
+      vi.mocked(checkoutWorktree).mockRejectedValueOnce(new Error('no worktree in test'));
+
       const originalFetch = globalThis.fetch;
       server.uninstallFetch();
 
@@ -620,6 +635,164 @@ describe('Agent Coverage Tests', () => {
   // ═══════════════════════════════════════════════════════════
 
   describe('Codebase clone paths', () => {
+    it('warns and routes an empty base_ref through the local git-diff path', async () => {
+      // Server-write invariant (PR #781): MemoryDataStore throws
+      // MissingBaseRefError on a PR-scoped insert with empty base_ref, so we
+      // cannot inject that state directly. Instead we inject with a valid
+      // base_ref and rewrite the PollResponse here to simulate the read-path
+      // edge case (a legitimate production possibility if the server's
+      // log-and-allow path ever emits `''` via D1).
+      const mockedDiff = vi.mocked(diffFromWorktree);
+      mockedDiff.mockClear();
+
+      const taskId = await server.injectTask({ reviewCount: 2, baseRef: 'main' });
+
+      const deps = makeDeps('missing-base-ref-agent');
+      const reviewDeps: ReviewExecutorDeps = {
+        ...deps.reviewDeps,
+        codebaseDir: '/tmp/test-codebases',
+      };
+
+      // Spy only on diff-content endpoints — PR-context fetches (comments,
+      // reviews) are unrelated to the diff path and still run normally.
+      // A worktree is available, so the diff URL and the .diff Accept header
+      // MUST NOT be touched while the empty-base_ref path runs.
+      const ghFetchSpy = vi.fn();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const headers = init?.headers as Record<string, string> | undefined;
+        const accept = headers?.['Accept'] ?? '';
+        const isDiffUrl = url.endsWith('.diff');
+        const isApiDiffFetch =
+          url.includes('api.github.com/repos') &&
+          url.includes('/pulls/') &&
+          accept.includes('diff');
+        if (isDiffUrl || isApiDiffFetch) {
+          ghFetchSpy(url);
+        }
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+
+        const response = await originalFetch(input, init);
+
+        // Rewrite the poll response to strip base_ref on our target task,
+        // simulating the server emitting an empty base_ref on the read path.
+        if (url.includes('/api/tasks/poll') && response.ok) {
+          const body = (await response.clone().json()) as {
+            tasks?: Array<Record<string, unknown>>;
+          };
+          if (Array.isArray(body.tasks)) {
+            body.tasks = body.tasks.map((t) => (t.task_id === taskId ? { ...t, base_ref: '' } : t));
+          }
+          return new Response(JSON.stringify(body), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
+          });
+        }
+
+        return response;
+      }) as typeof fetch;
+
+      try {
+        const promise = startAgent(
+          'missing-base-ref-agent',
+          FAKE_SERVER_URL,
+          { model: 'test', tool: 'test' },
+          reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        expect(console.warn).toHaveBeenCalledWith(
+          expect.stringMatching(/no base_ref.*deriving default branch/i),
+        );
+        // Agent actually called diffFromWorktree (not silently fell through
+        // to gh). baseRef argument is the 3rd positional arg.
+        expect(mockedDiff).toHaveBeenCalled();
+        const baseRefArg = mockedDiff.mock.calls[0][2];
+        expect(baseRefArg === '' || baseRefArg === undefined || baseRefArg === null).toBe(true);
+        expect(ghFetchSpy).not.toHaveBeenCalled();
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(promise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('rejects the task when worktree exists but git diff fails — never falls back to gh', async () => {
+      // With a worktree present, git-diff is the ONLY diff path. If it
+      // throws, the task should be rejected with the propagated error and
+      // the gh/HTTP diff endpoint MUST NOT be touched. This protects against
+      // the silent degradation #775 was filed for.
+      const mockedDiff = vi.mocked(diffFromWorktree);
+      mockedDiff.mockImplementationOnce(() => {
+        throw new Error('fatal: bad revision HEAD');
+      });
+
+      const taskId = await server.injectTask({ reviewCount: 2 });
+
+      // Spy every outbound fetch — we must never see a call to the diff URL
+      // or GitHub's REST diff endpoint while the worktree is available.
+      const ghFetchSpy = vi.fn();
+
+      let rejectBody: Record<string, unknown> | null = null;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        // Any diff-url or GitHub PR diff fetch is a contract violation here.
+        if (url.includes('.diff') || url.includes('/pulls/') || url.includes('api.github.com')) {
+          ghFetchSpy(url);
+        }
+        if (url.includes(`/api/tasks/${taskId}/reject`)) {
+          if (typeof init?.body === 'string') rejectBody = JSON.parse(init.body);
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('git-diff-fail-agent');
+        const reviewDeps: ReviewExecutorDeps = {
+          ...deps.reviewDeps,
+          codebaseDir: '/tmp/test-codebases',
+        };
+
+        const promise = startAgent(
+          'git-diff-fail-agent',
+          FAKE_SERVER_URL,
+          { model: 'test', tool: 'test' },
+          reviewDeps,
+          deps.consumptionDeps,
+          { pollIntervalMs: 100 },
+        );
+
+        await advanceTime(2000);
+
+        // Loud error logged, task rejected, and no gh/HTTP diff fetch
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringContaining('git diff failed for task'),
+        );
+        expect(ghFetchSpy).not.toHaveBeenCalled();
+        expect(rejectBody).not.toBeNull();
+        expect(rejectBody).toMatchObject({
+          reason: expect.stringMatching(/Cannot access diff.*bad revision/),
+        });
+
+        await server.store.updateTask(taskId, { status: 'completed' });
+        await stopAgent(promise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     it('continues with diff-only when worktree checkout fails', async () => {
       // Override checkoutWorktree to throw for this test
       const mockedCheckout = vi.mocked(checkoutWorktree);
@@ -732,6 +905,10 @@ describe('Agent Coverage Tests', () => {
 
   describe('Diff fetch repeated failures', () => {
     it('skips task after MAX_DIFF_FETCH_ATTEMPTS failures', async () => {
+      // Force the gh/HTTP diff path: with a worktree, the agent uses local
+      // git-diff and this retry counter never fires.
+      vi.mocked(checkoutWorktree).mockRejectedValue(new Error('no worktree in test'));
+
       await server.injectTask({ reviewCount: 2 });
       server.diffFetchError = true;
 
@@ -954,6 +1131,10 @@ describe('Agent Coverage Tests', () => {
 
   describe('fetchDiff with non-API URL and token', () => {
     it('adds Bearer token to non-API diff URL', async () => {
+      // Force the gh/HTTP diff path by failing worktree checkout — with a
+      // worktree the agent always uses local git-diff and never hits gh.
+      vi.mocked(checkoutWorktree).mockRejectedValueOnce(new Error('no worktree in test'));
+
       let diffFetchUrl: string | undefined;
       let diffFetchHeaders: Record<string, string> | undefined;
 
@@ -1235,6 +1416,10 @@ describe('Agent Coverage Tests', () => {
 
   describe('fetchDiff streaming size guard', () => {
     it('aborts early when Content-Length exceeds maxDiffSizeKb', async () => {
+      // Force the gh/HTTP diff path by failing worktree checkout — with a
+      // worktree the agent always uses local git-diff and never hits gh.
+      vi.mocked(checkoutWorktree).mockRejectedValueOnce(new Error('no worktree in test'));
+
       const originalFetch = globalThis.fetch;
       server.uninstallFetch();
 
@@ -1324,6 +1509,10 @@ describe('Agent Coverage Tests', () => {
     });
 
     it('aborts mid-stream when accumulated bytes exceed maxDiffSizeKb', async () => {
+      // Force the gh/HTTP diff path by failing worktree checkout — with a
+      // worktree the agent always uses local git-diff and never hits gh.
+      vi.mocked(checkoutWorktree).mockRejectedValueOnce(new Error('no worktree in test'));
+
       const originalFetch = globalThis.fetch;
       server.uninstallFetch();
 

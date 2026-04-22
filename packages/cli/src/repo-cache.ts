@@ -393,10 +393,113 @@ function gitExec(
   }
 }
 
+/** Fallback default-branch names, tried in order when symbolic-ref fails. */
+const DEFAULT_BRANCH_FALLBACKS = ['main', 'master'];
+
+/**
+ * Validate a git branch name against a defensive allowlist.
+ * Git itself rejects refs containing `..`, whitespace, control chars, and
+ * leading `-`, but our argv-based invocation doesn't re-check; a narrow
+ * allowlist keeps unusual inputs from reaching `git diff`.
+ */
+function isValidBranchName(name: string): boolean {
+  if (!name) return false;
+  if (name.startsWith('-')) return false;
+  if (name.includes('..')) return false;
+  return /^[A-Za-z0-9_./-]+$/.test(name);
+}
+
+/**
+ * Fetch a branch into `refs/remotes/origin/<branch>`. Silently succeeds if the
+ * branch already exists locally and the network is down — any fetch error is
+ * swallowed by the caller if that's the right policy for its path.
+ */
+function fetchBranch(bareRepoPath: string, branch: string, ghAvailable: boolean): void {
+  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
+  gitExec(
+    'git',
+    [...credArgs, 'fetch', '--force', 'origin', `${branch}:refs/remotes/origin/${branch}`],
+    bareRepoPath,
+  );
+}
+
+/**
+ * Recognize error messages that indicate the remote ref doesn't exist on
+ * origin (as opposed to transient network/auth/timeout failures). Git's
+ * wording differs slightly by version, so we match the stable substrings.
+ */
+function isRemoteRefMissingError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /couldn't find remote ref/i.test(msg) ||
+    /couldnt find remote ref/i.test(msg) ||
+    /no such ref/i.test(msg) ||
+    /remote ref.*not found/i.test(msg) ||
+    /unknown revision or path not in the working tree/i.test(msg)
+  );
+}
+
+/**
+ * Derive the repo's default branch name. Tries, in order:
+ *   1. `git symbolic-ref refs/remotes/origin/HEAD` → strip `refs/remotes/origin/` prefix,
+ *      then fetch that branch to refresh `refs/remotes/origin/<branch>`.
+ *   2. Fetch `main` from origin (if it exists).
+ *   3. Fetch `master` from origin (if it exists).
+ *
+ * The returned branch is guaranteed to be fetched into `refs/remotes/origin/<branch>`
+ * during this call so the caller can immediately `git diff origin/<branch>...HEAD`
+ * against fresh tip contents. The bare clone is persistent across runs, so
+ * skipping the fetch (as an earlier version did) produced diffs against stale
+ * base branches.
+ *
+ * Throws if none of the candidates can be resolved.
+ */
+export function deriveDefaultBranch(bareRepoPath: string, ghAvailable: boolean): string {
+  try {
+    const out = gitExec('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], bareRepoPath).trim();
+    const prefix = 'refs/remotes/origin/';
+    if (out.startsWith(prefix)) {
+      const branch = out.slice(prefix.length);
+      if (isValidBranchName(branch)) {
+        // Refresh the cached ref so the diff runs against the current tip,
+        // not whatever was there at clone time. If the fetch fails (network
+        // blip, repo went private), fall through to the candidate probes —
+        // they will surface the underlying problem.
+        try {
+          fetchBranch(bareRepoPath, branch, ghAvailable);
+          return branch;
+        } catch {
+          // Fall through.
+        }
+      }
+    }
+  } catch {
+    // symbolic-ref not set, or other git error — fall through to probes.
+  }
+
+  for (const candidate of DEFAULT_BRANCH_FALLBACKS) {
+    try {
+      fetchBranch(bareRepoPath, candidate, ghAvailable);
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error('Cannot derive default branch: origin/HEAD, main, and master all failed');
+}
+
 /**
  * Generate a unified diff for a PR from a local worktree. Fetches the base
  * branch into the bare clone (idempotent) and runs
  * `git diff origin/<baseRef>...HEAD` inside the worktree.
+ *
+ * When `baseRef` is omitted or empty, the repo's default branch is derived
+ * via `deriveDefaultBranch` (origin/HEAD → main → master) so the caller does
+ * not need to know the target branch up-front. If a non-empty `baseRef` is
+ * provided but cannot be fetched (stale after a force-push, renamed branch,
+ * etc.), derivation is also used as a fallback so we don't throw over a
+ * server-side ref that happens to no longer exist on origin.
  *
  * Unlike GitHub's REST diff endpoint (which caps at 300 files), the local
  * git diff has no such limit, so this is how we handle large PRs.
@@ -406,24 +509,44 @@ function gitExec(
 export function diffFromWorktree(
   bareRepoPath: string,
   worktreePath: string,
-  baseRef: string,
+  baseRef: string | null | undefined,
   ghAvailable: boolean,
   maxDiffBytes = 128 * 1024 * 1024, // 128 MB
 ): string {
-  // Defensive allowlist for ref names. We pass baseRef as a separate argv to
-  // execFileSync so there's no shell expansion, but a ref with whitespace,
-  // newlines, or leading `-` could still confuse `git` itself.
-  if (!/^[A-Za-z0-9_./-]+$/.test(baseRef) || baseRef.startsWith('-')) {
-    throw new Error(`Invalid base ref: ${baseRef}`);
+  let resolvedBaseRef: string | undefined;
+  if (baseRef) {
+    // Defensive allowlist for ref names. We pass baseRef as a separate argv to
+    // execFileSync so there's no shell expansion, but a ref with whitespace,
+    // newlines, leading `-`, or `..` could still confuse `git` itself.
+    if (!isValidBranchName(baseRef)) {
+      throw new Error(`Invalid base ref: ${baseRef}`);
+    }
+    try {
+      fetchBranch(bareRepoPath, baseRef, ghAvailable);
+      resolvedBaseRef = baseRef;
+    } catch (err) {
+      // Only fall through when the error proves the remote ref no longer
+      // exists (force-push, branch rename). Transient failures — network
+      // blip, auth, timeout, rate limit — MUST surface as errors, because
+      // silently diffing against the default branch would produce a review
+      // of the wrong patch (e.g., a PR targeting `develop` reviewed against
+      // `main`). See PR #780 review.
+      if (!isRemoteRefMissingError(err)) {
+        throw err;
+      }
+      resolvedBaseRef = undefined;
+    }
   }
-  const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
-  gitExec(
-    'git',
-    [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
-    bareRepoPath,
-  );
+
+  if (!resolvedBaseRef) {
+    // No usable caller-provided base ref — derive locally.
+    // deriveDefaultBranch also ensures the resolved ref is fetched into
+    // refs/remotes/origin/<branch>.
+    resolvedBaseRef = deriveDefaultBranch(bareRepoPath, ghAvailable);
+  }
+
   try {
-    return gitExec('git', ['diff', `origin/${baseRef}...HEAD`], worktreePath, {
+    return gitExec('git', ['diff', `origin/${resolvedBaseRef}...HEAD`], worktreePath, {
       maxBuffer: maxDiffBytes,
     });
   } catch (err) {

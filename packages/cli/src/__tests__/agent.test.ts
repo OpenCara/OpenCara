@@ -42,6 +42,13 @@ vi.mock('../repo-cache.js', async () => {
         // ignore
       }
     }),
+    // With a worktree present, agent.ts requires a working git-diff path —
+    // no silent fallback to gh. Mock a canned diff so task execution proceeds.
+    diffFromWorktree: vi.fn(
+      () =>
+        'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n',
+    ),
+    withRepoLock: vi.fn(async (_repoKey: string, fn: () => unknown) => fn()),
   };
 });
 
@@ -62,6 +69,7 @@ vi.mock('../tool-executor.js', async (importOriginal) => {
 });
 
 import { testCommand } from '../tool-executor.js';
+import { checkoutWorktree } from '../repo-cache.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -671,6 +679,10 @@ describe('agent poll loop', () => {
   });
 
   it('passes AbortSignal to fetch when fetching diff', async () => {
+    // Force the gh/HTTP diff path: with a worktree, the agent uses local
+    // git-diff and the AbortSignal never touches the diff URL fetch.
+    vi.mocked(checkoutWorktree).mockRejectedValueOnce(new Error('no worktree in test'));
+
     let diffFetchInit: RequestInit | undefined;
 
     globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {

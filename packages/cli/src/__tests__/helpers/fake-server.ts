@@ -230,6 +230,7 @@ export class FakeServer {
     reviewCount?: number;
     timeout?: string;
     private?: boolean;
+    baseRef?: string;
   }): Promise<string> {
     const config: ReviewConfig = {
       ...DEFAULT_REVIEW_CONFIG,
@@ -247,6 +248,7 @@ export class FakeServer {
           repo: opts?.repo ?? 'test-repo',
           pr_number: opts?.prNumber ?? 1,
           ...(opts?.private !== undefined ? { private: opts.private } : {}),
+          ...(opts?.baseRef !== undefined ? { base_ref: opts.baseRef } : {}),
           config,
         }),
       },
