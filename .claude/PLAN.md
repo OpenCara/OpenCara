@@ -394,89 +394,9 @@ Team-lead direct commits stabilizing agent dispatch and local diff generation.
 | --    | direct/quabug | #725 | Key batch-poll weight by `agent_id` (not `agent_name`); skip zero-weight agents [DONE]                                         |
 | --    | direct/quabug | #726 | CLI: prefer local `git diff` when PR worktree is available — bypasses GitHub 300-file REST cap, reorders fallback chain [DONE] |
 
-## M23: opencara-relay streaming broker [NEXT — 2026-04-20]
+## Shelved
 
-**Parent**: #727 (Epic).
-**Design**: [.claude/designs/opencara-relay.md](../.claude/designs/opencara-relay.md) (v2 approved 2026-04-20).
-
-Separate streaming relay exposing agent tool processing (thinking, tool calls, text deltas) from the contributor's machine to a browser extension on the GitHub PR/issue page. New deployables: `packages/relay` (Fly.io), `packages/relay-client`, `packages/relay-adapters`, `packages/extension`.
-
-**Status**: All 38 sub-issues created in Backlog (2026-04-20). Awaiting team-lead to move foundation (#728 R1, #729 R2) to Ready.
-
-**Critical path**: R1 → R2 → R6 → R7 → R9 → R10/R11 → R16 → R23 → R24a..g (parallel).
-
-### Foundation
-
-| R   | #    | Agent     | Title                                             |
-| --- | ---- | --------- | ------------------------------------------------- |
-| R1  | #728 | architect | Relay event schema types in packages/shared       |
-| R2  | #729 | architect | Token + topic-lookup API types in packages/shared |
-
-### Server
-
-| R   | #    | Agent      | Title                                      |
-| --- | ---- | ---------- | ------------------------------------------ |
-| R6  | #730 | server-dev | Wire RELAY_JWT_SECRET + RELAY_URL env vars |
-| R3  | #731 | server-dev | POST /api/relay/publish-token              |
-| R4  | #732 | server-dev | POST /api/relay/subscribe-token            |
-| R5  | #733 | server-dev | GET /api/relay/topics                      |
-
-### Relay broker (packages/relay)
-
-| R    | #    | Agent     | Title                                            |
-| ---- | ---- | --------- | ------------------------------------------------ |
-| R7   | #734 | architect | Scaffold Node server + Dockerfile + health check |
-| R8   | #735 | architect | HS256 JWT verification middleware                |
-| R9   | #736 | architect | Topic registry + ring buffer                     |
-| R10  | #737 | architect | WS publisher endpoint                            |
-| R11  | #738 | architect | WS subscriber endpoint                           |
-| R12  | #739 | architect | SSE subscriber endpoint                          |
-| R13  | #740 | architect | Rate limiting + max subscribers                  |
-| R14  | #741 | architect | /metrics Prometheus endpoint                     |
-| R15  | #742 | architect | Fly.io deployment config + CI                    |
-| R15a | #745 | architect | In-process integration test suite                |
-
-### Client + adapters
-
-| R   | #    | Agent     | Title                                          |
-| --- | ---- | --------- | ---------------------------------------------- |
-| R16 | #743 | architect | packages/relay-client (publisher + subscriber) |
-| R17 | #744 | architect | packages/relay-adapters (interface + generic)  |
-| R18 | #746 | cli-dev   | Claude adapter (stream-json)                   |
-| R19 | #747 | cli-dev   | Codex adapter                                  |
-| R20 | #748 | cli-dev   | Gemini adapter                                 |
-| R21 | #749 | cli-dev   | Qwen adapter                                   |
-
-### CLI integration
-
-| R    | #    | Agent   | Title                                           |
-| ---- | ---- | ------- | ----------------------------------------------- |
-| R22  | #750 | cli-dev | Add [relay] section to config.toml              |
-| R23  | #751 | cli-dev | Refactor tool-executor to accept stream handler |
-| R24a | #752 | cli-dev | Wire relay into review.ts                       |
-| R24b | #753 | cli-dev | Wire relay into implement.ts                    |
-| R24c | #754 | cli-dev | Wire relay into fix.ts                          |
-| R24d | #755 | cli-dev | Wire relay into summary.ts                      |
-| R24e | #756 | cli-dev | Wire relay into issue-review.ts                 |
-| R24f | #757 | cli-dev | Wire relay into dedup.ts                        |
-| R24g | #758 | cli-dev | Wire relay into triage.ts                       |
-| R25  | #759 | cli-dev | Default redactor using sanitize.ts              |
-
-### Extension MVP (packages/extension)
-
-| R   | #    | Agent   | Title                                            |
-| --- | ---- | ------- | ------------------------------------------------ |
-| R26 | #760 | cli-dev | Scaffold MV3 extension + content-script injector |
-| R27 | #761 | cli-dev | GitHub Device Flow OAuth (reuse CLI app)         |
-| R28 | #762 | cli-dev | Topic lookup + live subscriber panel             |
-| R29 | #763 | cli-dev | Reconnection UX + disconnect button              |
-
-### Docs
-
-| R   | #    | Agent | Title                                             |
-| --- | ---- | ----- | ------------------------------------------------- |
-| R30 | #764 | pm    | docs/relay.md architecture + security + self-host |
-| R31 | #765 | pm    | docs/extension.md install + use                   |
+- **M23 opencara-relay** — shelved 2026-04-22. Epic #727 and all 38 sub-issues (#728–#765) plus E2E smoke test #772 closed as `not planned`. Design preserved at [.claude/designs/opencara-relay.md](../.claude/designs/opencara-relay.md) for future reference. `epic:relay` label retained for archival.
 
 ## Open Issues
 

@@ -142,7 +142,7 @@ Flow: GitHub webhook → server creates task in D1 → agent polls → claims �
 #101, #102, #111, #112, #113, #114, #115, #120, #121, #123, #124, #125,
 #126, #129, #130, #131, #132, #133, #135, #136,
 #145, #146, #147, #148, #154, #155, #157, #159, #160, #166, #167, #170,
-#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #423, #428, #430, #431, #473, #544, #545, #546, #551, #555, #557, #560, #594, #596, #597, #624, #627, #628, #631, #636, #637, #641, #643, #644, #645, #646, #652, #653, #654, #655, #656, #657, #662, #664, #666, #667, #669, #670, #672, #673, #676, #677, #680, #681, #684, #686, #687, #688, #689, #692, #696, #698, #699, #701, #704, #705, #708, #710, #718, #766
+#173, #174, #175, #176, #177, #178, #179, #180, #181 (dup of #182), #182, #183 (dup of #184), #184, #185, #164, #165, #201, #156, #210, #211, #212, #213, #216, #217, #221, #144, #225, #228, #229, #230, #231, #232, #233, #234, #235, #236, #237, #238, #239, #240, #241, #242, #245, #254, #256, #257, #265, #269, #271, #272, #273, #276, #277, #278, #280, #282, #283, #284, #285, #286, #287, #288, #289, #290, #291, #301, #303, #304, #305, #307, #308, #309, #313, #318, #315, #316, #325, #326, #327, #328, #330, #331, #332, #333, #336, #341, #343, #344, #345, #346, #347, #349, #350, #352, #351, #353, #354, #355, #356, #357, #367, #368, #370, #372, #373, #378, #380, #381, #384, #385, #386, #388, #391, #392, #393, #394, #395, #396, #401, #405, #406, #407, #408, #411, #412, #414, #415, #423, #428, #430, #431, #473, #544, #545, #546, #551, #555, #557, #560, #594, #596, #597, #624, #627, #628, #631, #636, #637, #641, #643, #644, #645, #646, #652, #653, #654, #655, #656, #657, #662, #664, #666, #667, #669, #670, #672, #673, #676, #677, #680, #681, #684, #686, #687, #688, #689, #692, #696, #698, #699, #701, #704, #705, #708, #710, #718, #766, #727, #728, #729, #730, #731, #732, #733, #734, #735, #736, #737, #738, #739, #740, #741, #742, #743, #744, #745, #746, #747, #748, #749, #750, #751, #752, #753, #754, #755, #756, #757, #758, #759, #760, #761, #762, #763, #764, #765, #772
 
 ## Merged PRs (processed)
 
@@ -704,58 +704,9 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
   - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **blocked by #769**
   - #771 [cli-dev, P2, M] `opencara review <pr-link>` command implementation — **blocked by #769** (can scaffold in parallel with #770)
 
-### Epic: opencara-relay (2026-04-20)
+### Shelved: opencara-relay epic (2026-04-22, team-lead decision)
 
-- #727 [breakdown, epic:relay] Epic: opencara-relay streaming broker — **[NEXT]** v2 design approved; all 38 sub-issues created in Backlog with Agent field set (except R30/R31 docs = pm label only). Awaiting team-lead to move foundation issues (#728 R1, #729 R2) to Ready. Design doc `.claude/designs/opencara-relay.md` (last revised 2026-04-20, commit 63300eb).
-- **Amendments (2026-04-22, team-lead)**:
-  - #743 (R16, relay-client scaffold) body amended to add explicit test acceptance criteria for proactive token refresh (exp-60s timing + 2s/8s/30s retry schedule), reconnect queue-drop + synthesized log event, and bounded queue behavior. No new issue.
-  - #772 [cli-dev, epic:relay, P2] **NEW** — Relay E2E smoke test (CLI → real relay → extension subscriber). Post-merge verification, NOT a blocker for R24a–R24g. Blocked by R15a (#745), R16 (#743), R17 (#744), at least one R24a–R24g, and R30/R31 (#764/#765) for the walkthrough doc home.
-  - Mint kill-switch proposal — SKIPPED for v1 (YAGNI per team-lead).
-
-Sub-issue mapping (R-id → GH-number):
-
-| Tier       | R-id | GH # | Agent      | Title (short)                  |
-| ---------- | ---- | ---- | ---------- | ------------------------------ |
-| Foundation | R1   | #728 | architect  | Relay event schema types       |
-| Foundation | R2   | #729 | architect  | Token + topic-lookup API types |
-| Server     | R6   | #730 | server-dev | Env vars wiring                |
-| Server     | R3   | #731 | server-dev | /api/relay/publish-token       |
-| Server     | R4   | #732 | server-dev | /api/relay/subscribe-token     |
-| Server     | R5   | #733 | server-dev | /api/relay/topics              |
-| Relay      | R7   | #734 | architect  | Scaffold packages/relay        |
-| Relay      | R8   | #735 | architect  | JWT verification middleware    |
-| Relay      | R9   | #736 | architect  | Topic registry + ring buffer   |
-| Relay      | R10  | #737 | architect  | WS publisher endpoint          |
-| Relay      | R11  | #738 | architect  | WS subscriber endpoint         |
-| Relay      | R12  | #739 | architect  | SSE subscriber endpoint        |
-| Relay      | R13  | #740 | architect  | Rate limits + max subs         |
-| Relay      | R14  | #741 | architect  | /metrics endpoint              |
-| Relay      | R15  | #742 | architect  | Fly.io deploy                  |
-| Client     | R16  | #743 | architect  | relay-client scaffold          |
-| Client     | R17  | #744 | architect  | relay-adapters scaffold        |
-| Relay      | R15a | #745 | architect  | Integration test suite         |
-| Adapters   | R18  | #746 | cli-dev    | Claude adapter                 |
-| Adapters   | R19  | #747 | cli-dev    | Codex adapter                  |
-| Adapters   | R20  | #748 | cli-dev    | Gemini adapter                 |
-| Adapters   | R21  | #749 | cli-dev    | Qwen adapter                   |
-| CLI        | R22  | #750 | cli-dev    | Config [relay] section         |
-| CLI        | R23  | #751 | cli-dev    | tool-executor refactor         |
-| CLI        | R24a | #752 | cli-dev    | Wire into review.ts            |
-| CLI        | R24b | #753 | cli-dev    | Wire into implement.ts         |
-| CLI        | R24c | #754 | cli-dev    | Wire into fix.ts               |
-| CLI        | R24d | #755 | cli-dev    | Wire into summary.ts           |
-| CLI        | R24e | #756 | cli-dev    | Wire into issue-review.ts      |
-| CLI        | R24f | #757 | cli-dev    | Wire into dedup.ts             |
-| CLI        | R24g | #758 | cli-dev    | Wire into triage.ts            |
-| CLI        | R25  | #759 | cli-dev    | Default redactor               |
-| Extension  | R26  | #760 | cli-dev    | Scaffold MV3 extension         |
-| Extension  | R27  | #761 | cli-dev    | Device Flow OAuth              |
-| Extension  | R28  | #762 | cli-dev    | Subscriber panel               |
-| Extension  | R29  | #763 | cli-dev    | Reconnection UX                |
-| Docs       | R30  | #764 | pm         | docs/relay.md                  |
-| Docs       | R31  | #765 | pm         | docs/extension.md              |
-
-Critical path: R1 → R2 → R6 → R7 → R9 → R10/R11 → R16 → R23 → R24a..g (parallel).
+- **M23 SHELVED.** Epic #727 + all 38 sub-issues (#728–#765) + E2E smoke test #772 closed as `not planned`. All 40 items moved to Done on the project board. Design doc retained at `.claude/designs/opencara-relay.md`; `epic:relay` label kept for archival. Decision final — no clarifier needed. Closed items (in order R1..R31 + R15a + E2E): #727 (epic), #728, #729, #730, #731, #732, #733, #734, #735, #736, #737, #738, #739, #740, #741, #742, #743, #744, #745, #746, #747, #748, #749, #750, #751, #752, #753, #754, #755, #756, #757, #758, #759, #760, #761, #762, #763, #764, #765, #772 — all `[closed: shelved M23]`.
 
 ## Open PRs
 
@@ -767,6 +718,7 @@ Critical path: R1 → R2 → R6 → R7 → R9 → R10/R11 → R16 → R23 → R2
 
 ## Recently processed
 
+- npm publish: **opencara@0.24.3** published 2026-04-22 via publish-cli.yml workflow run 24779594261 (conclusion=success). CLI patch release for the #766 FETCH_HEAD fix. Tag `v0.24.3`, commit `c08a9b3`.
 - PR #768 [direct/quabug, b88ee82] merged 2026-04-22T10:24:42Z — fix(cli): resolve FETCH_HEAD in bare repo for worktree reuse (#766 DONE, bot review skipped due to live-agent breakage)
 - PR #726 [direct/quabug] merged 2026-04-20 — feat(cli): prefer local git diff when PR worktree available (fixes 404 cascade on 300+-file PRs, ties into #766 follow-up)
 - PR #725 [direct/quabug] merged 2026-04-20 — fix(server): key batch-poll weight by agent_id, skip zero-weight agents (completes #724 reliability system)
