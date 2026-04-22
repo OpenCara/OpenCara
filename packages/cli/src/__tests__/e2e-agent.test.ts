@@ -18,6 +18,7 @@ import type { ReviewExecutorDeps } from '../review.js';
 import { createSessionTracker } from '../consumption.js';
 import { FakeServer, FAKE_SERVER_URL } from './helpers/fake-server.js';
 import { executeTool } from '../tool-executor.js';
+import { checkoutWorktree } from '../repo-cache.js';
 
 // ── Mock child_process so fetchDiffViaGh falls back to HTTP ──
 
@@ -87,6 +88,13 @@ vi.mock('../repo-cache.js', async () => {
         // ignore
       }
     }),
+    // With a worktree present, agent.ts requires a working git-diff path —
+    // no silent fallback to gh. Mock a canned diff so task execution proceeds.
+    diffFromWorktree: vi.fn(
+      () =>
+        'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n',
+    ),
+    withRepoLock: vi.fn(async (_repoKey: string, fn: () => unknown) => fn()),
   };
 });
 
@@ -252,6 +260,11 @@ describe('E2E Agent Scenarios', () => {
 
   describe('C. Diff fetch failure → rejection', () => {
     it('diff URL returns 500 → agent rejects task on server', async () => {
+      // Force the gh/HTTP diff path: with a worktree, the agent uses local
+      // git-diff and never touches the diff URL. Use mockRejectedValue (not
+      // Once) so retries also hit the no-worktree branch.
+      vi.mocked(checkoutWorktree).mockRejectedValue(new Error('no worktree in test'));
+
       await server.injectTask();
       server.diffFetchError = true;
 
@@ -343,6 +356,12 @@ describe('E2E Agent Scenarios', () => {
 
   describe('G. Diff too large → rejection', () => {
     it('diff exceeds maxDiffSizeKb → agent rejects task', async () => {
+      // Force the gh/HTTP diff path: agent.ts enforces the size cap on
+      // whichever source produced the diff (git or gh), but streaming size
+      // detection lives in the gh fetcher. Use mockRejectedValue so retries
+      // also hit the no-worktree branch.
+      vi.mocked(checkoutWorktree).mockRejectedValue(new Error('no worktree in test'));
+
       const taskId = await server.injectTask({ reviewCount: 2 }); // review role
       server.diffContent = 'x'.repeat(2 * 1024); // 2KB
 

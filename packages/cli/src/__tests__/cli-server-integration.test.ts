@@ -52,6 +52,13 @@ vi.mock('../repo-cache.js', async () => {
         // ignore
       }
     }),
+    // With a worktree present, agent.ts requires a working git-diff path —
+    // no silent fallback to gh. Mock a canned diff so task execution proceeds.
+    diffFromWorktree: vi.fn(
+      () =>
+        'diff --git a/src/index.ts b/src/index.ts\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n',
+    ),
+    withRepoLock: vi.fn(async (_repoKey: string, fn: () => unknown) => fn()),
   };
 });
 
