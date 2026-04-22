@@ -611,5 +611,32 @@ describe('Reputation DataStore methods', () => {
       const events = await store.getAgentReputationEvents('agent-A', 0);
       expect(events).toHaveLength(1);
     });
+
+    it('does not prune events exactly at the cutoff boundary', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-04-01T00:00:00Z',
+      });
+      const boundaryMs = new Date('2026-04-01T00:00:00.000Z').getTime();
+      const boundaryIso = new Date(boundaryMs).toISOString();
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: boundaryIso,
+      });
+      // Cutoff equal to the event's timestamp — event survives (>= cutoff kept).
+      const deleted = await store.cleanupStaleReputationEvents(boundaryMs);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReputationEvents('agent-A', 0);
+      expect(events).toHaveLength(1);
+    });
   });
 });

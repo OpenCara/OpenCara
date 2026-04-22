@@ -767,6 +767,17 @@ describe('SqliteD1Adapter', () => {
       const events = await store.getAgentReliabilityEventsBatch(['agent-A'], 0);
       expect(events.get('agent-A')).toHaveLength(1);
     });
+
+    it('does not prune rows exactly at the cutoff boundary', async () => {
+      const now = Date.now();
+      const boundaryIso = new Date(now).toISOString();
+      await store.recordAgentReliabilityEvent('agent-A', 'success', boundaryIso);
+      // SQL uses `created_at < ?` so a row at the cutoff survives.
+      const deleted = await store.cleanupStaleReliabilityEvents(now);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReliabilityEventsBatch(['agent-A'], 0);
+      expect(events.get('agent-A')).toHaveLength(1);
+    });
   });
 
   // ── cleanupStaleReputationEvents (D1) ───────────────────────
@@ -839,6 +850,33 @@ describe('SqliteD1Adapter', () => {
       });
       const cutoff = new Date('2026-01-01T00:00:00Z').getTime();
       const deleted = await store.cleanupStaleReputationEvents(cutoff);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReputationEvents('agent-A', 0);
+      expect(events).toHaveLength(1);
+    });
+
+    it('does not prune rows exactly at the cutoff boundary', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-04-01T00:00:00Z',
+      });
+      const boundaryMs = new Date('2026-04-01T00:00:00.000Z').getTime();
+      const boundaryIso = new Date(boundaryMs).toISOString();
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: boundaryIso,
+      });
+      // SQL uses `created_at < ?` so a row at the cutoff survives.
+      const deleted = await store.cleanupStaleReputationEvents(boundaryMs);
       expect(deleted).toBe(0);
       const events = await store.getAgentReputationEvents('agent-A', 0);
       expect(events).toHaveLength(1);

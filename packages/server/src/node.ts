@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SqliteD1Adapter } from './adapters/sqlite.js';
 import { D1DataStore } from './store/d1.js';
+import { runScheduledEventPrunes } from './store/cleanup.js';
 import { buildApp, parseTtlDays } from './index.js';
 import { checkTimeouts } from './routes/tasks.js';
 import { testRoutes } from './routes/test.js';
@@ -180,8 +181,9 @@ let cronRunning = false;
 cron.schedule('* * * * *', async () => {
   if (cronRunning) return;
   cronRunning = true;
+  const scheduledTime = Date.now();
   try {
-    await store.setTimeoutLastCheck(Date.now());
+    await store.setTimeoutLastCheck(scheduledTime);
     await checkTimeouts(store, githubService, logger);
   } catch (err) {
     logger.error('Scheduled timeout check failed', {
@@ -200,9 +202,11 @@ cron.schedule('* * * * *', async () => {
       action: 'cleanup_terminal',
       error: err instanceof Error ? err.message : String(err),
     });
-  } finally {
-    cronRunning = false;
   }
+
+  // runScheduledEventPrunes swallows its own errors internally.
+  await runScheduledEventPrunes(store, scheduledTime, logger);
+  cronRunning = false;
 });
 
 // ── Graceful shutdown ───────────────────────────────────────────────
