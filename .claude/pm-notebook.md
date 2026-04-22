@@ -693,9 +693,20 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 - #766 [cli-dev, priority:high, bug] Fix worktree reuse: FETCH_HEAD not resolvable in worktree context, second+ PR polls fail — **IN REVIEW** (PR #768 opened 2026-04-22 by team-lead after the dispatched implement task stalled. All local checks pass: build ✓, 2927 tests ✓, lint ✓, typecheck ✓. Board moved In-progress→In-review by PM 2026-04-22. Close on merge.) Implementation: `resolveFetchedPrCommit` helper does `git rev-parse --verify FETCH_HEAD` in bare repo for a stable SHA; threads into `addWorktree(bareRepoPath, wtKey, targetRef)` and replaces `git checkout --detach --force FETCH_HEAD` with `... <sha>`. Functionally equivalent to the refspec approach originally proposed in the issue.
 - #767 [cli-dev, priority:low] Improve 404 diff-fetch hint — don't blame auth when user is authenticated — **BACKLOG** (scope refreshed 2026-04-22 — post-#726 the HTTP 404 path is a fallback-of-a-fallback; auth-branching fix is still valid but narrower than the original spec. See issue comments 4294957609 + 4295071228 for updated acceptance criteria).
 
+### Epic: opencara-relay-cli (#640 breakdown, 2026-04-22)
+
+- #640 [breakdown, epic:review-cli, enhancement] `opencara review <pr-link>` CLI command — **BREAKDOWN** (parent stays Backlog; 3 sub-issues created, all start in Backlog per team-lead; will promote when ready)
+  - #769 [architect, P2, S] Shared types (`cli_triggered`, `TriggerReviewRequest/Response`, `ReviewGroupStatus`) + D1 migration — blocks #770, #771
+  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **blocked by #769**
+  - #771 [cli-dev, P2, M] `opencara review <pr-link>` command implementation — **blocked by #769** (can scaffold in parallel with #770)
+
 ### Epic: opencara-relay (2026-04-20)
 
 - #727 [breakdown, epic:relay] Epic: opencara-relay streaming broker — **[NEXT]** v2 design approved; all 38 sub-issues created in Backlog with Agent field set (except R30/R31 docs = pm label only). Awaiting team-lead to move foundation issues (#728 R1, #729 R2) to Ready. Design doc `.claude/designs/opencara-relay.md` (last revised 2026-04-20, commit 63300eb).
+- **Amendments (2026-04-22, team-lead)**:
+  - #743 (R16, relay-client scaffold) body amended to add explicit test acceptance criteria for proactive token refresh (exp-60s timing + 2s/8s/30s retry schedule), reconnect queue-drop + synthesized log event, and bounded queue behavior. No new issue.
+  - #772 [cli-dev, epic:relay, P2] **NEW** — Relay E2E smoke test (CLI → real relay → extension subscriber). Post-merge verification, NOT a blocker for R24a–R24g. Blocked by R15a (#745), R16 (#743), R17 (#744), at least one R24a–R24g, and R30/R31 (#764/#765) for the walkthrough doc home.
+  - Mint kill-switch proposal — SKIPPED for v1 (YAGNI per team-lead).
 
 Sub-issue mapping (R-id → GH-number):
 
