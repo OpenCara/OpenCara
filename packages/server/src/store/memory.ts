@@ -2,6 +2,7 @@ import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore, PostedReview, ReputationEvent } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
+import { assertTaskInvariants } from '../errors.js';
 
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
 
@@ -37,16 +38,19 @@ export class MemoryDataStore implements DataStore {
   // Tasks
 
   async createTask(task: ReviewTask): Promise<void> {
+    assertTaskInvariants(task);
     this.tasks.set(task.id, { ...task });
   }
 
   async createTaskBatch(tasks: ReviewTask[]): Promise<void> {
+    for (const task of tasks) assertTaskInvariants(task);
     for (const task of tasks) {
       this.tasks.set(task.id, { ...task });
     }
   }
 
   async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
+    assertTaskInvariants(task);
     // Check-and-insert in a single synchronous block (atomic in single-threaded JS).
     // For issue tasks (pr_number=0 + issue_number set), dedup by issue_number
     // instead of pr_number so different issues don't collide.
@@ -303,6 +307,7 @@ export class MemoryDataStore implements DataStore {
     if (activeSummary) return false;
 
     // Step 4: Create the summary task
+    assertTaskInvariants(summaryTask);
     this.tasks.set(summaryTask.id, { ...summaryTask });
     return true;
   }

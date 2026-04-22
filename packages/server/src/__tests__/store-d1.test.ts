@@ -643,6 +643,40 @@ describe('D1DataStore', () => {
       await store.deleteTask('task-1');
       expect(await store.getTask('task-1')).toBeNull();
     });
+
+    // base_ref invariant (see #776)
+    it('createTask rejects a PR-scoped task with empty base_ref', async () => {
+      const bad = makeTask({ id: 'bad', pr_number: 99, base_ref: '' });
+      await expect(store.createTask(bad)).rejects.toThrow('base_ref');
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('createTask accepts an issue-scoped task with empty base_ref', async () => {
+      const issue = makeTask({
+        id: 'issue-ok',
+        pr_number: 0,
+        base_ref: '',
+        issue_number: 5,
+        feature: 'triage',
+        task_type: 'issue_triage',
+      });
+      await expect(store.createTask(issue)).resolves.toBeUndefined();
+    });
+
+    it('createTaskBatch rejects when any task violates the base_ref invariant', async () => {
+      const good = makeTask({ id: 'batch-good' });
+      const bad = makeTask({ id: 'batch-bad', pr_number: 88, base_ref: '' });
+      await expect(store.createTaskBatch([good, bad])).rejects.toThrow('base_ref');
+      // No partial inserts — the batch throws before any DB writes.
+      expect(await store.getTask('batch-good')).toBeNull();
+      expect(await store.getTask('batch-bad')).toBeNull();
+    });
+
+    it('createTaskIfNotExists rejects a PR-scoped task with empty base_ref', async () => {
+      const bad = makeTask({ id: 'bad', pr_number: 77, base_ref: '' });
+      await expect(store.createTaskIfNotExists(bad)).rejects.toThrow('base_ref');
+      expect(await store.getTask('bad')).toBeNull();
+    });
   });
 
   // ── Claims ─────────────────────────────────────────────────

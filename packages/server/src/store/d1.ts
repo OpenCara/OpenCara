@@ -2,6 +2,7 @@ import type { ReviewTask, TaskClaim, VerifiedIdentity } from '@opencara/shared';
 import type { TaskFilter } from '../types.js';
 import type { DataStore, PostedReview, ReputationEvent } from './interface.js';
 import { DEFAULT_TTL_DAYS } from './constants.js';
+import { assertTaskInvariants } from '../errors.js';
 
 /** Terminal task statuses eligible for cleanup. */
 const TERMINAL_STATUSES = ['completed', 'timeout', 'failed'];
@@ -235,6 +236,7 @@ export class D1DataStore implements DataStore {
   }
 
   async createTask(task: ReviewTask): Promise<void> {
+    assertTaskInvariants(task);
     await this.db
       .prepare(D1DataStore.INSERT_TASK_SQL)
       .bind(...this.bindTaskParams(task))
@@ -243,6 +245,7 @@ export class D1DataStore implements DataStore {
 
   async createTaskBatch(tasks: ReviewTask[]): Promise<void> {
     if (tasks.length === 0) return;
+    for (const task of tasks) assertTaskInvariants(task);
     if (tasks.length === 1) {
       await this.createTask(tasks[0]);
       return;
@@ -254,6 +257,7 @@ export class D1DataStore implements DataStore {
   }
 
   async createTaskIfNotExists(task: ReviewTask): Promise<boolean> {
+    assertTaskInvariants(task);
     // Use separate SELECT + INSERT instead of INSERT...SELECT...WHERE NOT EXISTS.
     // D1's meta.changes can return 0 for INSERT...SELECT even when a row is
     // inserted, causing the caller to incorrectly think a duplicate exists.

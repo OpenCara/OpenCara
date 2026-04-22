@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
-import { apiError } from '../errors.js';
+import { apiError, MissingBaseRefError, assertTaskInvariants } from '../errors.js';
 
 describe('apiError', () => {
   it('returns structured error with correct status and body', async () => {
@@ -47,5 +47,55 @@ describe('apiError', () => {
     const body = await res.json();
     expect(body.error.code).toBe('INTERNAL_ERROR');
     expect(body.error.message).toBe('Something went wrong');
+  });
+});
+
+describe('assertTaskInvariants', () => {
+  const prTask = {
+    id: 'task-1',
+    owner: 'acme',
+    repo: 'widgets',
+    pr_number: 42,
+    base_ref: 'main',
+    feature: 'review',
+  };
+  const issueTask = {
+    id: 'task-2',
+    owner: 'acme',
+    repo: 'widgets',
+    pr_number: 0,
+    base_ref: '',
+    feature: 'triage',
+  };
+
+  it('accepts a PR task with a non-empty base_ref', () => {
+    expect(() => assertTaskInvariants(prTask)).not.toThrow();
+  });
+
+  it('accepts an issue task (pr_number = 0) with an empty base_ref', () => {
+    expect(() => assertTaskInvariants(issueTask)).not.toThrow();
+  });
+
+  it('throws MissingBaseRefError for a PR task with empty base_ref', () => {
+    expect(() => assertTaskInvariants({ ...prTask, base_ref: '' })).toThrow(MissingBaseRefError);
+  });
+
+  it('attaches full context to the error', () => {
+    try {
+      assertTaskInvariants({ ...prTask, base_ref: '' });
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MissingBaseRefError);
+      const e = err as MissingBaseRefError;
+      expect(e.task_id).toBe('task-1');
+      expect(e.owner).toBe('acme');
+      expect(e.repo).toBe('widgets');
+      expect(e.pr_number).toBe(42);
+      expect(e.feature).toBe('review');
+      expect(e.name).toBe('MissingBaseRefError');
+      expect(e.message).toContain('acme/widgets#42');
+      expect(e.message).toContain('review');
+      expect(e.message).toContain('task-1');
+    }
   });
 });

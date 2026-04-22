@@ -256,6 +256,56 @@ describe('MemoryDataStore', () => {
       await store.createTaskBatch([makeTask({ id: 'solo' })]);
       expect(await store.getTask('solo')).not.toBeNull();
     });
+
+    // base_ref invariant (see #776)
+    it('createTask rejects a PR-scoped task with empty base_ref', async () => {
+      const bad = makeTask({ id: 'bad', pr_number: 99, base_ref: '' });
+      await expect(store.createTask(bad)).rejects.toThrow('base_ref');
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('createTask accepts an issue-scoped task with empty base_ref', async () => {
+      const issue = makeTask({
+        id: 'issue-ok',
+        pr_number: 0,
+        base_ref: '',
+        issue_number: 5,
+        feature: 'triage',
+        task_type: 'issue_triage',
+      });
+      await expect(store.createTask(issue)).resolves.toBeUndefined();
+      expect(await store.getTask('issue-ok')).not.toBeNull();
+    });
+
+    it('createTaskBatch rejects when any task violates the base_ref invariant', async () => {
+      const good = makeTask({ id: 'good' });
+      const bad = makeTask({ id: 'bad', pr_number: 88, base_ref: '' });
+      await expect(store.createTaskBatch([good, bad])).rejects.toThrow('base_ref');
+      // No partial inserts — the batch throws before mutating state.
+      expect(await store.getTask('good')).toBeNull();
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('createTaskIfNotExists rejects a PR-scoped task with empty base_ref', async () => {
+      const bad = makeTask({ id: 'bad', pr_number: 77, base_ref: '' });
+      await expect(store.createTaskIfNotExists(bad)).rejects.toThrow('base_ref');
+      expect(await store.getTask('bad')).toBeNull();
+    });
+
+    it('completeWorkerAndMaybeCreateSummary rejects a PR-scoped summary with empty base_ref', async () => {
+      const worker = makeTask({ id: 'worker', group_id: 'g1' });
+      await store.createTask(worker);
+      const summary = makeTask({
+        id: 'summary',
+        group_id: 'g1',
+        task_type: 'summary',
+        pr_number: 42,
+        base_ref: '',
+      });
+      await expect(store.completeWorkerAndMaybeCreateSummary('worker', summary)).rejects.toThrow(
+        'base_ref',
+      );
+    });
   });
 
   // ── Claims ─────────────────────────────────────────────────

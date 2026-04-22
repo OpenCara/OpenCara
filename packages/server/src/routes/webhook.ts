@@ -22,7 +22,7 @@ import type { GitHubService } from '../github/service.js';
 import type { Logger } from '../logger.js';
 import { shouldSkipReview, parseTimeoutMs } from '../eligibility.js';
 import { rateLimitByIP } from '../middleware/rate-limit.js';
-import { apiError } from '../errors.js';
+import { apiError, MissingBaseRefError } from '../errors.js';
 import { moveToRecentlyClosed, ageOutToArchived, updateOpenEntry } from '../dedup-index.js';
 import { collectReputationReactions } from '../reputation.js';
 
@@ -572,40 +572,66 @@ export function webhookRoutes() {
 
     const action = typeof payload.action === 'string' ? payload.action : '';
 
-    switch (event) {
-      case 'pull_request':
-        return handlePullRequest(
-          github,
-          store,
-          payload as unknown as PullRequestPayload,
+    try {
+      switch (event) {
+        case 'pull_request':
+          return await handlePullRequest(
+            github,
+            store,
+            payload as unknown as PullRequestPayload,
+            action,
+            logger,
+          );
+        case 'issues':
+          return await handleIssueEvent(
+            github,
+            store,
+            payload as unknown as IssuePayload,
+            action,
+            logger,
+          );
+        case 'issue_comment':
+          if (action === 'created') {
+            return await handleIssueComment(
+              github,
+              store,
+              payload as unknown as IssueCommentPayload,
+              logger,
+            );
+          }
+          break;
+        case 'projects_v2_item':
+          if (action === 'edited') {
+            return await handleProjectsV2Item(
+              github,
+              store,
+              payload as unknown as ProjectsV2ItemPayload,
+              logger,
+            );
+          }
+          break;
+        case 'installation':
+          logger.info('Installation event', { action });
+          break;
+      }
+    } catch (err) {
+      // Surface task-invariant violations as 400 so GitHub does not retry a
+      // structurally broken payload. See #776.
+      if (err instanceof MissingBaseRefError) {
+        logger.error('Task invariant violation — refusing insert', {
+          event,
           action,
-          logger,
-        );
-      case 'issues':
-        return handleIssueEvent(github, store, payload as unknown as IssuePayload, action, logger);
-      case 'issue_comment':
-        if (action === 'created') {
-          return handleIssueComment(
-            github,
-            store,
-            payload as unknown as IssueCommentPayload,
-            logger,
-          );
-        }
-        break;
-      case 'projects_v2_item':
-        if (action === 'edited') {
-          return handleProjectsV2Item(
-            github,
-            store,
-            payload as unknown as ProjectsV2ItemPayload,
-            logger,
-          );
-        }
-        break;
-      case 'installation':
-        logger.info('Installation event', { action });
-        break;
+          error: err.message,
+          task_id: err.task_id,
+          owner: err.owner,
+          repo: err.repo,
+          pr_number: err.pr_number,
+          feature: err.feature,
+          payload_keys: Object.keys(payload),
+        });
+        return apiError(c, 400, 'INVALID_REQUEST', err.message);
+      }
+      throw err;
     }
 
     return c.text('OK', 200);
@@ -804,6 +830,9 @@ async function handlePullRequest(
       diffSize,
     );
   } catch (err) {
+    // Re-throw invariant violations so the route-level handler can map them
+    // to 400 (GitHub should not retry a structurally broken payload).
+    if (err instanceof MissingBaseRefError) throw err;
     logger.error('Failed to create task groups for PR', {
       error: err instanceof Error ? err.message : String(err),
       owner,
@@ -1543,6 +1572,7 @@ async function handleIssueComment(
       commentDiffSize,
     );
   } catch (err) {
+    if (err instanceof MissingBaseRefError) throw err;
     logger.error('Failed to create task for PR', {
       error: err instanceof Error ? err.message : String(err),
       owner,
@@ -1739,6 +1769,7 @@ async function handleFixCommand(
       ...(targetModel ? { target_model: targetModel } : {}),
     });
   } catch (err) {
+    if (err instanceof MissingBaseRefError) throw err;
     logger.error('Failed to create fix task group', {
       error: err instanceof Error ? err.message : String(err),
       owner,
