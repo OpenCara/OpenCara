@@ -707,7 +707,7 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 
 - #640 [breakdown, epic:review-cli, enhancement] `opencara review <pr-link>` CLI command — **BREAKDOWN** (parent stays Backlog; 3 sub-issues created, all start in Backlog per team-lead; will promote when ready)
   - #769 [architect, P2, S] Shared types (`cli_triggered`, `TriggerReviewRequest/Response`, `ReviewGroupStatus`) + D1 migration — blocks #770, #771
-  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **blocked by #769**
+  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **BACKLOG** (blocked by #769). Note: erroneously closed 2026-04-22T15:19:21Z as COMPLETED by `quabug` account (no PR referenced it); reopened and restored to Backlog by PM same day. Best guess: stray `gh issue close 770` from a worktree dev agent during the base_ref batch, misinterpreting the shared `epic:review-cli` label. Nothing implemented — endpoint still pending.
   - #771 [cli-dev, P2, M] `opencara review <pr-link>` command implementation — **blocked by #769** (can scaffold in parallel with #770)
 
 ### Shelved: opencara-relay epic (2026-04-22, team-lead decision)
