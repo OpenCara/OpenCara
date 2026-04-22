@@ -981,5 +981,53 @@ describe('repo-cache', () => {
       const fetchArgs = vi.mocked(execFileSync).mock.calls[0][1] as string[];
       expect(fetchArgs).not.toContain('-c');
     });
+
+    it('falls back to derive-base when the provided base_ref cannot be fetched', () => {
+      // Simulates a stale base_ref after a force-push or branch rename: the
+      // targeted fetch fails, so the function derives the default branch and
+      // diffs against that instead of propagating the fetch error.
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => {
+          throw new Error("fatal: couldn't find remote ref stale-branch");
+        }) // fetch base_ref=stale-branch — fails
+        .mockReturnValueOnce('refs/remotes/origin/main\n') // symbolic-ref succeeds
+        .mockReturnValueOnce('diff --git a/a b/a\n'); // git diff against main
+
+      const diff = diffFromWorktree(
+        '/tmp/repos/acme/widgets.git',
+        '/tmp/repos/acme/widgets-worktrees/pr-42',
+        'stale-branch',
+        true,
+      );
+
+      expect(diff).toContain('diff --git');
+      const calls = vi.mocked(execFileSync).mock.calls;
+      expect(calls).toHaveLength(3);
+      // Fetch attempted against the stale ref
+      const staleFetchArgs = calls[0][1] as string[];
+      expect(staleFetchArgs).toContain('stale-branch:refs/remotes/origin/stale-branch');
+      // Then derive-base via symbolic-ref
+      expect(calls[1][1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      // Diff runs against the derived branch, not the stale one
+      expect(calls[2][1]).toEqual(['diff', 'origin/main...HEAD']);
+    });
+
+    it('propagates derive-base failure when both the stale base_ref and derivation fail', () => {
+      // If the targeted fetch fails AND derive-base also fails, the caller
+      // sees the derive-base error so the gh-fetch fallback in agent.ts can
+      // take over as the last resort.
+      vi.mocked(execFileSync).mockImplementation(() => {
+        throw new Error('every git call fails');
+      });
+
+      expect(() =>
+        diffFromWorktree(
+          '/tmp/repos/acme/widgets.git',
+          '/tmp/repos/acme/widgets-worktrees/pr-42',
+          'stale-branch',
+          true,
+        ),
+      ).toThrow(/Cannot derive default branch/);
+    });
   });
 });

@@ -452,7 +452,10 @@ export function deriveDefaultBranch(bareRepoPath: string, ghAvailable: boolean):
  *
  * When `baseRef` is omitted or empty, the repo's default branch is derived
  * via `deriveDefaultBranch` (origin/HEAD → main → master) so the caller does
- * not need to know the target branch up-front.
+ * not need to know the target branch up-front. If a non-empty `baseRef` is
+ * provided but cannot be fetched (stale after a force-push, renamed branch,
+ * etc.), derivation is also used as a fallback so we don't throw over a
+ * server-side ref that happens to no longer exist on origin.
  *
  * Unlike GitHub's REST diff endpoint (which caps at 300 files), the local
  * git diff has no such limit, so this is how we handle large PRs.
@@ -468,7 +471,7 @@ export function diffFromWorktree(
 ): string {
   const credArgs = ghAvailable ? ['-c', `credential.helper=${GH_CREDENTIAL_HELPER}`] : [];
 
-  let resolvedBaseRef: string;
+  let resolvedBaseRef: string | undefined;
   if (baseRef) {
     // Defensive allowlist for ref names. We pass baseRef as a separate argv to
     // execFileSync so there's no shell expansion, but a ref with whitespace,
@@ -476,15 +479,25 @@ export function diffFromWorktree(
     if (!/^[A-Za-z0-9_./-]+$/.test(baseRef) || baseRef.startsWith('-')) {
       throw new Error(`Invalid base ref: ${baseRef}`);
     }
-    gitExec(
-      'git',
-      [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
-      bareRepoPath,
-    );
-    resolvedBaseRef = baseRef;
-  } else {
-    // No caller-provided base ref — derive locally. deriveDefaultBranch also
-    // ensures the resolved ref is fetched into refs/remotes/origin/<branch>.
+    try {
+      gitExec(
+        'git',
+        [...credArgs, 'fetch', '--force', 'origin', `${baseRef}:refs/remotes/origin/${baseRef}`],
+        bareRepoPath,
+      );
+      resolvedBaseRef = baseRef;
+    } catch {
+      // Fetch failed (e.g., stale ref after a force-push or branch rename).
+      // Fall through to deriveDefaultBranch below so we still get a local
+      // diff instead of throwing to the gh-fetch fallback.
+      resolvedBaseRef = undefined;
+    }
+  }
+
+  if (!resolvedBaseRef) {
+    // No usable caller-provided base ref — derive locally.
+    // deriveDefaultBranch also ensures the resolved ref is fetched into
+    // refs/remotes/origin/<branch>.
     resolvedBaseRef = deriveDefaultBranch(bareRepoPath, ghAvailable);
   }
 
