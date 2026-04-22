@@ -301,6 +301,13 @@ export class MemoryDataStore implements DataStore {
     workerTaskId: string,
     summaryTask: ReviewTask,
   ): Promise<boolean> {
+    // Validate the summary BEFORE mutating worker state — otherwise a throw
+    // here leaves the worker marked completed with no summary created, which
+    // would permanently stick the group. Fail fast, no side effects.
+    // (Bot review on #781 flagged this ordering in the pre-flip hard-reject
+    // design; the fix is still correct under Memory's throw behavior.)
+    this.assertBaseRef(summaryTask);
+
     // In single-threaded JS, this is inherently atomic.
     // Step 1: Mark worker as completed
     const worker = this.tasks.get(workerTaskId);
@@ -323,8 +330,7 @@ export class MemoryDataStore implements DataStore {
     );
     if (activeSummary) return false;
 
-    // Step 4: Create the summary task
-    this.assertBaseRef(summaryTask);
+    // Step 4: Create the summary task (no need to re-assert — checked above).
     this.tasks.set(summaryTask.id, { ...summaryTask });
     return true;
   }

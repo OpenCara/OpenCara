@@ -309,6 +309,27 @@ describe('MemoryDataStore', () => {
         'base_ref',
       );
     });
+
+    it('completeWorkerAndMaybeCreateSummary validates BEFORE mutating worker state', async () => {
+      // Regression test — prior ordering marked the worker completed, then
+      // threw when the summary failed the invariant, leaving the group stuck.
+      const worker = makeTask({ id: 'worker', group_id: 'g1', status: 'reviewing' });
+      await store.createTask(worker);
+      const badSummary = makeTask({
+        id: 'summary',
+        group_id: 'g1',
+        task_type: 'summary',
+        pr_number: 42,
+        base_ref: '',
+      });
+      await expect(
+        store.completeWorkerAndMaybeCreateSummary('worker', badSummary),
+      ).rejects.toBeInstanceOf(MissingBaseRefError);
+      // Worker status must NOT have been mutated.
+      const afterThrow = await store.getTask('worker');
+      expect(afterThrow?.status).toBe('reviewing');
+      expect(await store.getTask('summary')).toBeNull();
+    });
   });
 
   // ── Claims ─────────────────────────────────────────────────
