@@ -700,6 +700,20 @@ export class MemoryDataStore implements DataStore {
     return deleted;
   }
 
+  async cleanupStaleReliabilityEvents(olderThanMs: number): Promise<number> {
+    const cutoffIso = new Date(olderThanMs).toISOString();
+    const before = this.reliabilityEvents.length;
+    this.reliabilityEvents = this.reliabilityEvents.filter((e) => e.created_at >= cutoffIso);
+    return before - this.reliabilityEvents.length;
+  }
+
+  async cleanupStaleReputationEvents(olderThanMs: number): Promise<number> {
+    const cutoffIso = new Date(olderThanMs).toISOString();
+    const before = this.reputationEvents.length;
+    this.reputationEvents = this.reputationEvents.filter((e) => e.created_at >= cutoffIso);
+    return before - this.reputationEvents.length;
+  }
+
   /** Clear all data. Test-only — not on the DataStore interface. */
   reset(): void {
     this.tasks.clear();

@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseTtlDays, createStore } from '../index.js';
 import { D1DataStore } from '../store/d1.js';
 import { MemoryDataStore } from '../store/memory.js';
+import { RELIABILITY_WINDOW_MS, REPUTATION_PRUNE_AFTER_MS } from '../store/constants.js';
 import type { Env } from '../types.js';
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
@@ -53,6 +54,140 @@ describe('scheduled handler', () => {
     // We can't easily test the full scheduled handler without mocking D1,
     // but we verify the export exists and is a function
     expect(typeof handler.scheduled).toBe('function');
+  });
+
+  it('prunes stale reliability events every tick, logs only when deleted > 0', async () => {
+    const mod = await import('../index.js');
+    const handler = mod.default;
+
+    // Scheduled tick NOT on minute 0 (so reputation prune is skipped).
+    const scheduledTime = new Date('2026-04-01T00:05:00Z').getTime();
+    const env = makeEnv();
+
+    // Prepare shared store with events to prune.
+    const spy = vi.spyOn(MemoryDataStore.prototype, 'cleanupStaleReliabilityEvents');
+    const reputationSpy = vi.spyOn(MemoryDataStore.prototype, 'cleanupStaleReputationEvents');
+    try {
+      await handler.scheduled({ scheduledTime, cron: '* * * * *' }, env);
+      expect(spy).toHaveBeenCalledTimes(1);
+      // Cutoff passed should be ~ now - 2*RELIABILITY_WINDOW_MS.
+      const [cutoff] = spy.mock.calls[0];
+      expect(typeof cutoff).toBe('number');
+      expect(Date.now() - cutoff).toBeGreaterThanOrEqual(2 * RELIABILITY_WINDOW_MS - 5_000);
+      // Reputation cleanup skipped off the hour.
+      expect(reputationSpy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      reputationSpy.mockRestore();
+    }
+  });
+
+  it('runs reputation event prune only when scheduled tick lands on minute 0', async () => {
+    const mod = await import('../index.js');
+    const handler = mod.default;
+
+    const scheduledTime = new Date('2026-04-01T02:00:00Z').getTime();
+    const env = makeEnv();
+    const spy = vi.spyOn(MemoryDataStore.prototype, 'cleanupStaleReputationEvents');
+    try {
+      await handler.scheduled({ scheduledTime, cron: '0 * * * *' }, env);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [cutoff] = spy.mock.calls[0];
+      expect(typeof cutoff).toBe('number');
+      expect(Date.now() - cutoff).toBeGreaterThanOrEqual(REPUTATION_PRUNE_AFTER_MS - 5_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('logs a cleanup_reliability info message when rows are deleted', async () => {
+    const mod = await import('../index.js');
+    const handler = mod.default;
+
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const prune = vi
+      .spyOn(MemoryDataStore.prototype, 'cleanupStaleReliabilityEvents')
+      .mockResolvedValue(3);
+    try {
+      await handler.scheduled(
+        { scheduledTime: new Date('2026-04-01T00:05:00Z').getTime(), cron: '* * * * *' },
+        makeEnv(),
+      );
+      const messages = infoSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('cleanup_reliability');
+      expect(messages).toContain('deleted');
+    } finally {
+      prune.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
+  it('swallows reliability cleanup errors and logs them', async () => {
+    const mod = await import('../index.js');
+    const handler = mod.default;
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const prune = vi
+      .spyOn(MemoryDataStore.prototype, 'cleanupStaleReliabilityEvents')
+      .mockRejectedValue(new Error('boom'));
+    try {
+      await expect(
+        handler.scheduled(
+          { scheduledTime: new Date('2026-04-01T00:05:00Z').getTime(), cron: '* * * * *' },
+          makeEnv(),
+        ),
+      ).resolves.toBeUndefined();
+      const messages = errorSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('cleanup_reliability');
+    } finally {
+      prune.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('logs a cleanup_reputation info message when rows are deleted', async () => {
+    const mod = await import('../index.js');
+    const handler = mod.default;
+
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const prune = vi
+      .spyOn(MemoryDataStore.prototype, 'cleanupStaleReputationEvents')
+      .mockResolvedValue(2);
+    try {
+      await handler.scheduled(
+        { scheduledTime: new Date('2026-04-01T03:00:00Z').getTime(), cron: '0 * * * *' },
+        makeEnv(),
+      );
+      const messages = infoSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('cleanup_reputation');
+      expect(messages).toContain('deleted');
+    } finally {
+      prune.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
+  it('swallows reputation cleanup errors and logs them', async () => {
+    const mod = await import('../index.js');
+    const handler = mod.default;
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const prune = vi
+      .spyOn(MemoryDataStore.prototype, 'cleanupStaleReputationEvents')
+      .mockRejectedValue(new Error('boom'));
+    try {
+      await expect(
+        handler.scheduled(
+          { scheduledTime: new Date('2026-04-01T02:00:00Z').getTime(), cron: '0 * * * *' },
+          makeEnv(),
+        ),
+      ).resolves.toBeUndefined();
+      const messages = errorSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('cleanup_reputation');
+    } finally {
+      prune.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });
 

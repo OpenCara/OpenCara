@@ -722,4 +722,126 @@ describe('SqliteD1Adapter', () => {
       expect(created).toBe(true);
     });
   });
+
+  // ── cleanupStaleReliabilityEvents (D1) ──────────────────────
+
+  describe('cleanupStaleReliabilityEvents (D1)', () => {
+    let store: D1DataStore;
+
+    beforeEach(() => {
+      store = new D1DataStore(adapter);
+    });
+
+    it('prunes rows older than the cutoff and keeps recent ones', async () => {
+      const now = Date.now();
+      const oldIso = new Date(now - 4 * 60 * 60 * 1000).toISOString();
+      const recentIso = new Date(now - 10 * 60 * 1000).toISOString();
+      await store.recordAgentReliabilityEvent('agent-A', 'error', oldIso);
+      await store.recordAgentReliabilityEvent('agent-A', 'success', recentIso);
+      await store.recordAgentReliabilityEvent('agent-B', 'error', oldIso);
+
+      const cutoff = now - 60 * 60 * 1000; // 1h ago
+      const deleted = await store.cleanupStaleReliabilityEvents(cutoff);
+      expect(deleted).toBe(2);
+
+      const events = await store.getAgentReliabilityEventsBatch(['agent-A', 'agent-B'], 0);
+      expect(events.get('agent-A')).toHaveLength(1);
+      expect(events.get('agent-A')![0].outcome).toBe('success');
+      expect(events.get('agent-B')).toBeUndefined();
+    });
+
+    it('returns 0 when the table is empty', async () => {
+      const deleted = await store.cleanupStaleReliabilityEvents(Date.now());
+      expect(deleted).toBe(0);
+    });
+
+    it('returns 0 when no rows are older than the cutoff', async () => {
+      const now = Date.now();
+      await store.recordAgentReliabilityEvent(
+        'agent-A',
+        'success',
+        new Date(now - 60_000).toISOString(),
+      );
+      const deleted = await store.cleanupStaleReliabilityEvents(now - 60 * 60 * 1000);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReliabilityEventsBatch(['agent-A'], 0);
+      expect(events.get('agent-A')).toHaveLength(1);
+    });
+  });
+
+  // ── cleanupStaleReputationEvents (D1) ───────────────────────
+
+  describe('cleanupStaleReputationEvents (D1)', () => {
+    let store: D1DataStore;
+
+    beforeEach(() => {
+      store = new D1DataStore(adapter);
+    });
+
+    it('prunes rows older than the cutoff and keeps recent ones', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-01-01T00:00:00Z',
+      });
+      const cutoffMs = new Date('2026-02-01T00:00:00Z').getTime();
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: new Date(cutoffMs - 24 * 60 * 60 * 1000).toISOString(),
+      });
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1001,
+        github_user_id: 2001,
+        delta: 1,
+        created_at: new Date(cutoffMs + 24 * 60 * 60 * 1000).toISOString(),
+      });
+
+      const deleted = await store.cleanupStaleReputationEvents(cutoffMs);
+      expect(deleted).toBe(1);
+
+      const events = await store.getAgentReputationEvents('agent-A', 0);
+      expect(events).toHaveLength(1);
+      expect(events[0].github_user_id).toBe(2001);
+    });
+
+    it('returns 0 when the table is empty', async () => {
+      const deleted = await store.cleanupStaleReputationEvents(Date.now());
+      expect(deleted).toBe(0);
+    });
+
+    it('returns 0 when no rows are older than the cutoff', async () => {
+      const reviewId = await store.recordPostedReview({
+        owner: 'org',
+        repo: 'repo',
+        pr_number: 1,
+        group_id: 'g1',
+        github_comment_id: 100,
+        feature: 'review',
+        posted_at: '2026-04-01T00:00:00Z',
+      });
+      await store.recordReputationEvent({
+        posted_review_id: reviewId,
+        agent_id: 'agent-A',
+        operator_github_user_id: 1000,
+        github_user_id: 2000,
+        delta: 1,
+        created_at: '2026-04-01T01:00:00Z',
+      });
+      const cutoff = new Date('2026-01-01T00:00:00Z').getTime();
+      const deleted = await store.cleanupStaleReputationEvents(cutoff);
+      expect(deleted).toBe(0);
+      const events = await store.getAgentReputationEvents('agent-A', 0);
+      expect(events).toHaveLength(1);
+    });
+  });
 });

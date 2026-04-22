@@ -18,6 +18,7 @@ import { authRoutes } from './routes/auth.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import { versionCheck } from './middleware/version-check.js';
 import { createLogger } from './logger.js';
+import { RELIABILITY_WINDOW_MS, REPUTATION_PRUNE_AFTER_MS } from './store/constants.js';
 
 export type HonoApp = Hono<{ Bindings: Env; Variables: AppVariables }>;
 
@@ -168,6 +169,44 @@ export default {
         action: 'cleanup_oauth_cache',
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    try {
+      // 2x the reliability window as a safety margin: the dispatch query reads
+      // events within RELIABILITY_WINDOW_MS, so anything older is guaranteed unread.
+      const cutoff = Date.now() - RELIABILITY_WINDOW_MS * 2;
+      const deleted = await store.cleanupStaleReliabilityEvents(cutoff);
+      if (deleted > 0) {
+        logger.info('Cleaned up stale reliability events', {
+          action: 'cleanup_reliability',
+          deleted,
+        });
+      }
+    } catch (err) {
+      logger.error('Scheduled reliability event cleanup failed', {
+        action: 'cleanup_reliability',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Reputation events decay exponentially; pruning at 180 days is effectively
+    // lossless. Run at most once per hour (when cron tick lands on minute 0).
+    if (new Date(_event.scheduledTime).getMinutes() === 0) {
+      try {
+        const cutoff = Date.now() - REPUTATION_PRUNE_AFTER_MS;
+        const deleted = await store.cleanupStaleReputationEvents(cutoff);
+        if (deleted > 0) {
+          logger.info('Cleaned up stale reputation events', {
+            action: 'cleanup_reputation',
+            deleted,
+          });
+        }
+      } catch (err) {
+        logger.error('Scheduled reputation event cleanup failed', {
+          action: 'cleanup_reputation',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   },
 };

@@ -141,6 +141,56 @@ describe('Agent reliability — outcome recording', () => {
   });
 });
 
+describe('cleanupStaleReliabilityEvents (memory)', () => {
+  let store: MemoryDataStore;
+
+  beforeEach(() => {
+    store = new MemoryDataStore();
+  });
+
+  it('prunes events older than the cutoff and keeps recent ones', async () => {
+    const now = Date.now();
+    const oldIso = new Date(now - 3 * RELIABILITY_WINDOW_MS).toISOString();
+    const recentIso = new Date(now - RELIABILITY_WINDOW_MS / 2).toISOString();
+    await store.recordAgentReliabilityEvent('agent-A', 'error', oldIso);
+    await store.recordAgentReliabilityEvent('agent-A', 'success', recentIso);
+    await store.recordAgentReliabilityEvent('agent-B', 'error', oldIso);
+
+    const cutoff = now - 2 * RELIABILITY_WINDOW_MS;
+    const deleted = await store.cleanupStaleReliabilityEvents(cutoff);
+    expect(deleted).toBe(2);
+
+    const events = await store.getAgentReliabilityEventsBatch(['agent-A', 'agent-B'], 0);
+    expect(events.get('agent-A')).toHaveLength(1);
+    expect(events.get('agent-A')![0].outcome).toBe('success');
+    expect(events.get('agent-B')).toBeUndefined();
+  });
+
+  it('returns 0 when there are no events', async () => {
+    expect(await store.cleanupStaleReliabilityEvents(Date.now())).toBe(0);
+  });
+
+  it('returns 0 when no events are older than the cutoff', async () => {
+    const now = Date.now();
+    await store.recordAgentReliabilityEvent('agent-A', 'success', new Date(now).toISOString());
+    const deleted = await store.cleanupStaleReliabilityEvents(now - RELIABILITY_WINDOW_MS);
+    expect(deleted).toBe(0);
+    const events = await store.getAgentReliabilityEventsBatch(['agent-A'], 0);
+    expect(events.get('agent-A')).toHaveLength(1);
+  });
+
+  it('does not prune events exactly at the cutoff boundary', async () => {
+    const now = Date.now();
+    const boundaryIso = new Date(now).toISOString();
+    await store.recordAgentReliabilityEvent('agent-A', 'success', boundaryIso);
+    // Cutoff equal to the event's timestamp — event should survive (>= cutoff kept).
+    const deleted = await store.cleanupStaleReliabilityEvents(now);
+    expect(deleted).toBe(0);
+    const events = await store.getAgentReliabilityEventsBatch(['agent-A'], 0);
+    expect(events.get('agent-A')).toHaveLength(1);
+  });
+});
+
 describe('Agent reliability — weighted dispatch', () => {
   let store: MemoryDataStore;
   let app: ReturnType<typeof createApp>;
