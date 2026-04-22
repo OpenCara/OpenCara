@@ -205,8 +205,8 @@ export interface ImplementCheckoutResult {
 
 /**
  * Checkout a repo for implement task: bare clone + worktree on a new branch.
- * Unlike review worktrees (which checkout FETCH_HEAD), this creates a branch
- * from the default branch for pushing changes.
+ * Unlike review worktrees (which detach at the fetched PR tip), this creates a
+ * branch from the default branch for pushing changes.
  */
 export function checkoutForImplement(
   owner: string,

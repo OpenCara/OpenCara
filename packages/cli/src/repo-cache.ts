@@ -148,14 +148,14 @@ export function fetchPRRef(bareRepoPath: string, prNumber: number, ghAvailable: 
 
 /**
  * Create a git worktree from the bare repo.
- * The worktree is checked out at FETCH_HEAD (the PR ref just fetched).
+ * The worktree is checked out at the fetched PR tip commit.
  *
  * Path: `<bareRepoPath>/../<repo>-worktrees/<worktreeKey>/`
  *
  * If the worktree already exists (shared PR worktree), returns the existing path
  * without creating a new one.
  */
-export function addWorktree(bareRepoPath: string, worktreeKey: string): string {
+export function addWorktree(bareRepoPath: string, worktreeKey: string, targetRef: string): string {
   validatePathSegment(worktreeKey, 'worktreeKey');
 
   // Place worktrees alongside the bare repo for clean organization
@@ -171,7 +171,7 @@ export function addWorktree(bareRepoPath: string, worktreeKey: string): string {
 
   fs.mkdirSync(worktreeBase, { recursive: true });
 
-  gitExec('git', ['worktree', 'add', '--detach', worktreePath, 'FETCH_HEAD'], bareRepoPath);
+  gitExec('git', ['worktree', 'add', '--detach', worktreePath, targetRef], bareRepoPath);
 
   return worktreePath;
 }
@@ -205,6 +205,14 @@ function repoKeyFromBarePath(bareRepoPath: string): string {
   const repoName = path.basename(bareRepoPath, '.git');
   const owner = path.basename(path.dirname(bareRepoPath));
   return `${owner}/${repoName}`;
+}
+
+/**
+ * Resolve the just-fetched PR tip to a stable commit ID.
+ * Linked worktrees cannot reliably reuse the bare repo's FETCH_HEAD pseudoref.
+ */
+function resolveFetchedPrCommit(bareRepoPath: string): string {
+  return gitExec('git', ['rev-parse', '--verify', 'FETCH_HEAD'], bareRepoPath).trim();
 }
 
 /**
@@ -243,12 +251,15 @@ export async function checkoutWorktree(
     // Sparse checkout is a worktree concept — configured after worktree creation.
     const { bareRepoPath, cloned } = ensureBareClone(owner, repo, baseDir, ghAvailable);
     fetchPRRef(bareRepoPath, prNumber, ghAvailable);
-    const worktreePath = addWorktree(bareRepoPath, wtKey);
+    const prHeadCommit = resolveFetchedPrCommit(bareRepoPath);
+    const worktreePath = addWorktree(bareRepoPath, wtKey, prHeadCommit);
     // addWorktree reuses an existing directory by path without touching its
     // HEAD, so after a force-push or re-poll the worktree can be stale.
-    // Force-detach to the freshly fetched PR tip so `git diff` sees current
-    // contents.
-    gitExec('git', ['checkout', '--detach', '--force', 'FETCH_HEAD'], worktreePath);
+    // Reset to the freshly fetched commit so `git diff` sees current contents.
+    // Use the resolved OID, not FETCH_HEAD, because FETCH_HEAD is a pseudoref
+    // in the bare repo and is not available as a normal ref inside the linked
+    // worktree.
+    gitExec('git', ['checkout', '--detach', '--force', prHeadCommit], worktreePath);
 
     if (useSparse) {
       configureSparseCheckout(worktreePath, sparseOptions.diffPaths);
