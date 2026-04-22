@@ -696,6 +696,7 @@ Note: Smoke test now PASS — bot posted 2 timeout comments on opencara-dev-test
 ### Proactive finding (2026-04-22, PM idle review)
 
 - #773 [server-dev, priority:low, enhancement] Prune unbounded `agent_reliability_events` (and optionally `reputation_events`) rows in scheduled cleanup — **BACKLOG**. Rooted in PR #724's new table that's append-only with a 30-min query window: rows older than `RELIABILITY_WINDOW_MS` are never read, never deleted. Same latent issue on `reputation_events` (14-day half-life decay → weight at 180d is ~0.00014). Fix: add `cleanupStaleReliabilityEvents` to the scheduled hook next to existing `cleanupTerminalTasks` / `cleanupExpiredOAuthCache`. Reputation prune is optional follow-up; issue body specifies both as one bundle since the pattern is identical.
+- #774 [cli-dev, priority:low, enhancement] Flaky test: `cli-server-integration 'tool crash reports error to server, slot is freed'` hits 15s timeout under load — **BACKLOG**. Observed 2026-04-22 during M23-shelve docs gate (1 failure first run, passed in isolation at 13.6s and full-suite retry 2927/2927). Typical ~13–14s vs 15s deadline leaves ~1s headroom. Recommended fix: add `{ timeout: 30000 }` to the `it(...)` (2-char change, zero risk). Fallback: slim test body. Not a functional bug.
 
 ### Epic: opencara-relay-cli (#640 breakdown, 2026-04-22)
 
