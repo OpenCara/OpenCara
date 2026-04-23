@@ -721,7 +721,7 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 
 - #640 [breakdown, epic:review-cli, enhancement] `opencara review <pr-link>` CLI command — **BREAKDOWN** (parent stays Backlog; 3 sub-issues created, all start in Backlog per team-lead; will promote when ready)
   - #769 [architect, P2, S] Shared types (`cli_triggered`, `TriggerReviewRequest/Response`, `ReviewGroupStatus`) + D1 migration — blocks #770, #771
-  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **BACKLOG** (blocked by #769). Note: erroneously closed 2026-04-22T15:19:21Z as COMPLETED by `quabug` account (no PR referenced it); reopened and restored to Backlog by PM same day. Best guess: stray `gh issue close 770` from a worktree dev agent during the base_ref batch, misinterpreting the shared `epic:review-cli` label. Nothing implemented — endpoint still pending.
+  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **CLOSED 2026-04-23T09:32:43Z** as COMPLETED by team-lead (no PR referenced, moved to Done board). Treating as deliberate this time — sibling #769 and #771 were also closed by team-lead 2026-04-22. Prior erroneous close (2026-04-22T15:19:21Z by a misbehaving agent) was separately reopened+restored by PM. PM pinged team-lead to confirm whether endpoint was implemented via another PR or whole triad was superseded.
   - #771 [cli-dev, P2, M] `opencara review <pr-link>` command implementation — **blocked by #769** (can scaffold in parallel with #770)
 
 ### Shelved: opencara-relay epic (2026-04-22, team-lead decision)
