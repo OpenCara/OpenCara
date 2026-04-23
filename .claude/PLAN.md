@@ -415,9 +415,12 @@ Related CLI releases:
 
 - **M23 opencara-relay** — shelved 2026-04-22. Epic #727 and all 38 sub-issues (#728–#765) plus E2E smoke test #772 closed as `not planned`. Design preserved at [.claude/designs/opencara-relay.md](../.claude/designs/opencara-relay.md) for future reference. `epic:relay` label retained for archival.
 
+## Abandoned
+
+- **opencara-review-cli triad** — abandoned 2026-04-23. Parent epic #640 closed `not planned`; sub-issues #769 (shared types / D1), #770 (`/api/reviews/trigger` + `/status` endpoints), #771 (CLI command) all closed. `epic:review-cli` label retained for archival.
+
 ## Open Issues
 
-- #640 [enhancement, Backlog] Add `opencara review <pr-link>` CLI command with user-posted results
 - #409 [server-dev, low, Backlog] Add prompt_hash to task creation and claim response
 - #410 [cli-dev, low, Backlog] Include prompt_hash in result submission
 - #404 [architect, medium, Backlog] Design security sandbox container

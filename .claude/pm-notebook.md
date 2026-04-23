@@ -717,12 +717,13 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 - #775 [cli-dev, priority:medium, bug] CLI silently falls back to `gh pr diff` when `task.base_ref` is missing, even with worktree available — **DONE** (PR #780 merged 2026-04-22 commit f363eb6, final design includes the scope-expansion: with worktree present, git-diff is the ONLY diff source; failure → safeReject, never → gh fetch. Fix commit b14561c addressed all proven defects + both minor risks. Board → Done, issue closed by PM.) Fix: (A) emit `logWarn` on the falsy-guard skip, (B) derive merge-base locally via `git symbolic-ref refs/remotes/origin/HEAD` + `git merge-base`, (C) worktree-present → git-diff only.
 - #776 [server-dev, priority:medium, bug] Audit: why are some review tasks created without `base_ref`? — **DONE** (PR #781 merged 2026-04-22T16:37:44Z commit a910a50, hybrid-c guard per team-lead decision; server-dev-776's rebuttal that bot review was against the pre-flip commit `54261d4` rather than the flipped `3ffd01a` accepted; board → Done, issue closed by PM.) Phase 1 audit conclusion: all 5 PR-scoped paths correctly populate base_ref; CLI symptom mechanism was `tasks.ts:997` empty→undefined coercion; ParadiseEngine/#38 NOT reproducible from main. Phase 2 = boundary hardening: D1 log-and-allow, Memory throw.
 
-### Epic: opencara-relay-cli (#640 breakdown, 2026-04-22)
+### Abandoned: opencara-review-cli triad (#640, 2026-04-23)
 
-- #640 [breakdown, epic:review-cli, enhancement] `opencara review <pr-link>` CLI command — **BREAKDOWN** (parent stays Backlog; 3 sub-issues created, all start in Backlog per team-lead; will promote when ready)
-  - #769 [architect, P2, S] Shared types (`cli_triggered`, `TriggerReviewRequest/Response`, `ReviewGroupStatus`) + D1 migration — blocks #770, #771
-  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints + suppress bot posting — **CLOSED 2026-04-23T09:32:43Z** as COMPLETED by team-lead (no PR referenced, moved to Done board). Treating as deliberate this time — sibling #769 and #771 were also closed by team-lead 2026-04-22. Prior erroneous close (2026-04-22T15:19:21Z by a misbehaving agent) was separately reopened+restored by PM. PM pinged team-lead to confirm whether endpoint was implemented via another PR or whole triad was superseded.
-  - #771 [cli-dev, P2, M] `opencara review <pr-link>` command implementation — **blocked by #769** (can scaffold in parallel with #770)
+- **#640 epic ABANDONED by team-lead 2026-04-23.** Closed `not planned`, moved to Done. All three sub-issues already closed; parent now closed to match. `epic:review-cli` label retained for archival. `[abandoned: #640 opencara-review-cli triad]`
+  - #640 [breakdown, epic:review-cli, enhancement] `opencara review <pr-link>` CLI command — **CLOSED 2026-04-23 as `not planned`** (team-lead decision)
+  - #769 [architect, P2, S] Shared types + D1 migration — **CLOSED 2026-04-22 (team-lead, no PR)**
+  - #770 [server-dev, P2, M] `/api/reviews/trigger` + `/status` endpoints — **CLOSED 2026-04-23T09:32:43Z (team-lead, no PR)**. Prior erroneous close 2026-04-22T15:19 by a misbehaving worktree agent was separately reopened+restored by PM; the 2026-04-23 close is deliberate.
+  - #771 [cli-dev, P2, M] `opencara review <pr-link>` command implementation — **CLOSED 2026-04-22 (team-lead, no PR)**
 
 ### Shelved: opencara-relay epic (2026-04-22, team-lead decision)
 
