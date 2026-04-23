@@ -728,6 +728,12 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 
 - **M23 SHELVED.** Epic #727 + all 38 sub-issues (#728–#765) + E2E smoke test #772 closed as `not planned`. All 40 items moved to Done on the project board. Design doc retained at `.claude/designs/opencara-relay.md`; `epic:relay` label kept for archival. Decision final — no clarifier needed. Closed items (in order R1..R31 + R15a + E2E): #727 (epic), #728, #729, #730, #731, #732, #733, #734, #735, #736, #737, #738, #739, #740, #741, #742, #743, #744, #745, #746, #747, #748, #749, #750, #751, #752, #753, #754, #755, #756, #757, #758, #759, #760, #761, #762, #763, #764, #765, #772 — all `[closed: shelved M23]`.
 
+### Mid-review claim reclaim bug (team-lead reported, 2026-04-23)
+
+- #782 [cli-dev, P2, bug, M] Periodic heartbeat during tool execution to prevent mid-run claim reclaim — **BACKLOG**. Live-agent evidence: 13-min Codex review on ParadiseEngine#52 (task 4c05ea84) submitted 409 "Claim already error" because `reclaimAbandonedClaims(10min)` flipped the active claim to error mid-run. CLI only heartbeats on claim-create + result-submit; nothing during `toolExecutor.run`. Paired with #783.
+- #783 [server-dev, P2, bug, M] `POST /api/tasks/:id/heartbeat` endpoint + per-claim `last_heartbeat_at` column — **BACKLOG**. Adds D1 migration, updates `reclaimAbandonedClaims` to use claim-level heartbeat when present, agent-level fallback keeps back-compat for old CLIs/pre-migration rows. Paired with #782.
+- Root cause: `CLAIM_STALE_THRESHOLD_MS = 10 min`, `liveness_timeout: 1800` (30 min) — mismatch causes any review/summary/implement > 10 min wall-time to be reclaimed while the tool is still running. Not reproducible through tests today; requires real >10-min tool run. Ship paired.
+
 ## Open PRs
 
 (none)
