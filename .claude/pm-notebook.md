@@ -743,6 +743,7 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 - PR #781 [server-dev-776] merged 2026-04-22T16:37:44Z commit a910a50 — [server-dev] hybrid base_ref guard: D1 log-and-allow, Memory throw (#776 DONE, hybrid-c guard; bot-review rebuttal accepted — review had been against pre-flip 54261d4, flipped to 3ffd01a landed clean)
 - PR #778 [cli-dev-767] merged 2026-04-22 commit 00140c7 — [cli-dev] Branch 404 diff-fetch hint on gh auth state (#767 DONE, bot approved first pass)
 - PR #777 [cli-dev-774] merged 2026-04-22 commit e2f98eb — test(cli): raise flaky integration test timeout to 30s (#774 DONE, bot approved first pass)
+- npm publish: **opencara@0.25.0** published 2026-04-22 via publish-cli.yml workflow run 24811595416 (conclusion=success). Pre-1.0 "major" bumping 0.24.3→0.25.0 per team-lead, covering the 5-PR polish-and-hardening batch (#777/#778/#779/#780/#781). Tag `v0.25.0`, commit `a984ae2`.
 - npm publish: **opencara@0.24.3** published 2026-04-22 via publish-cli.yml workflow run 24779594261 (conclusion=success). CLI patch release for the #766 FETCH_HEAD fix. Tag `v0.24.3`, commit `c08a9b3`.
 - PR #768 [direct/quabug, b88ee82] merged 2026-04-22T10:24:42Z — fix(cli): resolve FETCH_HEAD in bare repo for worktree reuse (#766 DONE, bot review skipped due to live-agent breakage)
 - PR #726 [direct/quabug] merged 2026-04-20 — feat(cli): prefer local git diff when PR worktree available (fixes 404 cascade on 300+-file PRs, ties into #766 follow-up)

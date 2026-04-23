@@ -406,7 +406,10 @@ Team-lead direct commits stabilizing agent dispatch and local diff generation.
 | #776  | server-dev | #781 | Phase 1 audit + Phase 2 boundary hardening: hybrid log-and-allow guard on PR-scoped task inserts (D1/Memory) [DONE] |
 | #775  | cli-dev    | #780 | Derive merge-base locally when `task.base_ref` missing; worktree-present → git-diff ONLY (no gh fallback) [DONE]    |
 
-Related CLI release: `opencara@0.24.3` published 2026-04-22 (CLI hotfix for #766 FETCH_HEAD, commit b88ee82, PR #768).
+Related CLI releases:
+
+- `opencara@0.24.3` published 2026-04-22 — CLI hotfix for #766 FETCH_HEAD (commit b88ee82, PR #768).
+- `opencara@0.25.0` published 2026-04-22 — Pre-1.0 minor bundling the 5-PR batch (#777/#778/#779/#780/#781). Commit a984ae2.
 
 ## Shelved
 
