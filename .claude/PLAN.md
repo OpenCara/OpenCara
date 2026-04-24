@@ -411,6 +411,7 @@ Related CLI releases:
 - `opencara@0.24.3` published 2026-04-22 — CLI hotfix for #766 FETCH_HEAD (commit b88ee82, PR #768).
 - `opencara@0.25.0` published 2026-04-22 — Pre-1.0 minor bundling the 5-PR batch (#777/#778/#779/#780/#781). Commit a984ae2.
 - `opencara@0.25.1` published 2026-04-24 — Configurable `max_summary_input_kb` (default 200 KB → 500 KB) via PR #784 (team-lead direct fix for live 208 KB summary rejections). Commits 3240ed1 + 085f9a8. publish-cli.yml run 24875982168 success.
+- `opencara@0.25.2` published 2026-04-24 — CLI periodic heartbeat during tool execution (#782 via PR #788). Commit c374877. publish-cli.yml run 24884969212. Server-side #783 + #785 deploy via deploy-dev workflow.
 
 ## Post-v0.25.1: Heartbeat + Strict Diversity Batch (2026-04-24)
 

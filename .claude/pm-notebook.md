@@ -733,6 +733,12 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 
 - #785 [server-dev, priority:high, bug] "Strictly forbid duplicate-model reviews within a task group" — **DONE 2026-04-24T10:21:37Z** (PR #786 merged commit 9bdbe2c by worktree agent server-dev-785; team-lead direct-merged after agent iter 1 — final design uses atomic INSERT `createWorkerClaimIfNoModelConflict` which covers the TOCTOU gap the agent self-caught. Board → Done, issue closed by PM.) Root cause: `isModelDiversityVisible` (`packages/server/src/routes/tasks.ts:130-146`) returned true once `Date.now() - claimedAt >= modelDiversityGraceMs` — grace-period escape let the second instance in. Fix: strict worker-level diversity (409 CLAIM_CONFLICT when the model already has a non-terminal claim in the group), atomic D1 INSERT with conditional WHERE NOT EXISTS to close TOCTOU, terminal claims do not lock out retries, summary claims remain independent. Live evidence: ParadiseEngine/ParadiseEngine#55 bot-review listed `claude-opus-4-7/claude` twice (two Opus instances each claimed a worker slot on same group).
 
+### v0.25.2 CLI release — periodic heartbeat (team-lead, 2026-04-24)
+
+- **Version bump** commit `c374877` — `chore: bump CLI version to 0.25.2`. Tag `v0.25.2` pushed. Scope: the PR #788 cli-dev heartbeat fix (#782). Server-side #783 + #785 aren't CLI-scoped and deploy via the `deploy-dev` workflow, not the npm release.
+- **Format fix ahead of bump**: team-lead landed `54762ba docs(pm): prettier-format PLAN.md` because my prior PLAN.md commit had drift. Logged as feedback memory — prettier-check PLAN.md before any direct-commit to main going forward.
+- **npm publish**: publish-cli.yml workflow run 24884969212 triggered — monitoring for completion; will update with conclusion.
+
 ### v0.25.1 CLI release — configurable summary input cap (team-lead direct, 2026-04-24)
 
 - **PR #784 merged** commit `3240ed1` — `feat(cli): make summary input cap configurable via max_summary_input_kb`. Adds top-level config field; default cap raised 200 KB → 500 KB. Direct team-lead fix for live summary tasks rejecting at 208 KB. Not tied to a numbered issue.
