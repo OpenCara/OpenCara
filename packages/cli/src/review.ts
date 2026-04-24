@@ -123,6 +123,8 @@ export function extractVerdict(text: string): { verdict: ReviewVerdict; review: 
 export interface ReviewExecutorDeps {
   commandTemplate: string;
   maxDiffSizeKb: number;
+  /** Summary input cap in KB — applied by executeSummary. Falls back to DEFAULT_MAX_INPUT_SIZE_BYTES when undefined. */
+  maxSummaryInputKb?: number;
   maxRepoSizeMb?: number;
   codebaseDir?: string | null;
   livenessTimeoutMs?: number;

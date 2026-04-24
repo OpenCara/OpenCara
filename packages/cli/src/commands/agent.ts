@@ -2362,6 +2362,7 @@ export async function startAgentRouter(): Promise<void> {
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate: commandTemplate ?? '',
     maxDiffSizeKb: config.maxDiffSizeKb,
+    maxSummaryInputKb: config.maxSummaryInputKb,
     maxRepoSizeMb: config.maxRepoSizeMb,
     codebaseDir,
     livenessTimeoutMs:
@@ -2463,6 +2464,7 @@ function startAgentByIndex(
   const reviewDeps: ReviewExecutorDeps = {
     commandTemplate,
     maxDiffSizeKb: config.maxDiffSizeKb,
+    maxSummaryInputKb: config.maxSummaryInputKb,
     maxRepoSizeMb: config.maxRepoSizeMb,
     codebaseDir,
     livenessTimeoutMs:

@@ -51,7 +51,11 @@ export interface SummaryResponse {
 }
 
 export const TIMEOUT_SAFETY_MARGIN_MS = 30_000;
-export const MAX_INPUT_SIZE_BYTES = 200 * 1024;
+/**
+ * Default max combined summary input (prompt + diff + reviews + context) in bytes.
+ * Overridable per agent via `deps.maxSummaryInputKb` (from `max_summary_input_kb` in config.toml).
+ */
+export const MAX_INPUT_SIZE_BYTES = 500 * 1024;
 
 export class InputTooLargeError extends Error {
   constructor(message: string) {
@@ -134,9 +138,11 @@ export async function executeSummary(
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
   const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent, req.contextBlock);
-  if (inputSize > MAX_INPUT_SIZE_BYTES) {
+  const maxInputBytes =
+    deps.maxSummaryInputKb !== undefined ? deps.maxSummaryInputKb * 1024 : MAX_INPUT_SIZE_BYTES;
+  if (inputSize > maxInputBytes) {
     throw new InputTooLargeError(
-      `Summary input too large (${Math.round(inputSize / 1024)}KB > ${Math.round(MAX_INPUT_SIZE_BYTES / 1024)}KB limit)`,
+      `Summary input too large (${Math.round(inputSize / 1024)}KB > ${Math.round(maxInputBytes / 1024)}KB limit)`,
     );
   }
 
