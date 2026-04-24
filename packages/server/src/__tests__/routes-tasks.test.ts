@@ -1624,6 +1624,155 @@ describe('Task Routes', () => {
     });
   });
 
+  // ── Heartbeat (#783) ────────────────────────────────────
+
+  describe('POST /api/tasks/:taskId/heartbeat', () => {
+    async function seedActiveClaim() {
+      await store.createTask(
+        makeTask({
+          review_count: 1,
+          queue: 'review',
+          task_type: 'review',
+          status: 'reviewing',
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1:review',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+    }
+
+    it('updates the claim-level heartbeat and agent last-seen', async () => {
+      await seedActiveClaim();
+      const before = Date.now() - 1;
+
+      const res = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ success: true });
+
+      const claim = await store.getClaim('task-1:agent-1:review');
+      expect(claim?.last_heartbeat_at).toBeDefined();
+      expect(claim!.last_heartbeat_at!).toBeGreaterThanOrEqual(before);
+
+      const lastSeen = await store.getAgentLastSeen('agent-1');
+      expect(lastSeen).toBeGreaterThanOrEqual(before);
+    });
+
+    it('returns 404 when no claim exists for task + agent + role', async () => {
+      await store.createTask(
+        makeTask({
+          review_count: 1,
+          queue: 'review',
+          task_type: 'review',
+          status: 'pending',
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'ghost',
+        role: 'review',
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for a terminal claim (completed/error/rejected)', async () => {
+      await store.createTask(makeTask({ task_type: 'review', status: 'completed' }));
+      await store.createClaim({
+        id: 'task-1:agent-1:review',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'completed',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 400 for invalid body (missing agent_id)', async () => {
+      const res = await request('POST', '/api/tasks/task-1/heartbeat', {
+        role: 'review',
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 for invalid body (missing role)', async () => {
+      const res = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'agent-1',
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('is idempotent — repeated heartbeats keep refreshing the timestamp', async () => {
+      await seedActiveClaim();
+
+      const res1 = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res1.status).toBe(200);
+      const claim1 = await store.getClaim('task-1:agent-1:review');
+      const firstTs = claim1!.last_heartbeat_at!;
+
+      // Busy-wait a tiny moment so Date.now() advances past the first call.
+      await new Promise((r) => setTimeout(r, 2));
+
+      const res2 = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res2.status).toBe(200);
+      const claim2 = await store.getClaim('task-1:agent-1:review');
+      expect(claim2!.last_heartbeat_at!).toBeGreaterThan(firstTs);
+    });
+
+    it('only heartbeats the matching role (does not touch a different-role claim)', async () => {
+      // Two claims on the same task — one review, one summary. The endpoint
+      // must only refresh the claim matching the request role.
+      await store.createTask(
+        makeTask({ review_count: 1, task_type: 'review', status: 'reviewing' }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-1:review',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'review',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+      await store.createClaim({
+        id: 'task-1:agent-1:summary',
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        role: 'summary',
+        status: 'pending',
+        created_at: Date.now(),
+      });
+
+      const res = await request('POST', '/api/tasks/task-1/heartbeat', {
+        agent_id: 'agent-1',
+        role: 'review',
+      });
+      expect(res.status).toBe(200);
+
+      const review = await store.getClaim('task-1:agent-1:review');
+      const summary = await store.getClaim('task-1:agent-1:summary');
+      expect(review?.last_heartbeat_at).toBeDefined();
+      expect(summary?.last_heartbeat_at).toBeUndefined();
+    });
+  });
+
   // ── Timeout throttle ────────────────────────────────────
 
   describe('checkTimeouts throttle', () => {

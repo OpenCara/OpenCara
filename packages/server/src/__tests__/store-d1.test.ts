@@ -1185,6 +1185,38 @@ describe('D1DataStore', () => {
     });
   });
 
+  // ── updateClaimHeartbeat (#783) ─────────────────────────────
+
+  describe('updateClaimHeartbeat', () => {
+    it('updates last_heartbeat_at on a pending claim and returns true', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(makeClaim());
+
+      const ts = Date.now();
+      const ok = await store.updateClaimHeartbeat('task-1:agent-1:review', ts);
+      expect(ok).toBe(true);
+
+      const claim = await store.getClaim('task-1:agent-1:review');
+      expect(claim?.last_heartbeat_at).toBe(ts);
+    });
+
+    it('returns false for a missing claim', async () => {
+      const ok = await store.updateClaimHeartbeat('missing', Date.now());
+      expect(ok).toBe(false);
+    });
+
+    it('returns false for a terminal claim and does not touch last_heartbeat_at', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(makeClaim({ status: 'completed' }));
+
+      const ok = await store.updateClaimHeartbeat('task-1:agent-1:review', 123456);
+      expect(ok).toBe(false);
+
+      const claim = await store.getClaim('task-1:agent-1:review');
+      expect(claim?.last_heartbeat_at).toBeUndefined();
+    });
+  });
+
   // ── reclaimAbandonedSummarySlots ────────────────────────────
 
   describe('reclaimAbandonedSummarySlots', () => {

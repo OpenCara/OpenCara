@@ -47,6 +47,8 @@ export type {
   ResultResponse,
   RejectRequest,
   ErrorRequest,
+  HeartbeatRequest,
+  HeartbeatResponse,
   ToolRegistryEntry,
   ModelRegistryEntry,
   RegistryResponse,

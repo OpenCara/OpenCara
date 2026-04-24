@@ -58,6 +58,7 @@ import {
   ResultRequestSchema,
   RejectRequestSchema,
   ErrorRequestSchema,
+  HeartbeatRequestSchema,
   REVIEW_TEXT_MIN_LENGTH,
   REVIEW_TEXT_MAX_LENGTH,
 } from '../schemas.js';
@@ -1834,6 +1835,41 @@ export function taskRoutes() {
       role: claim.role,
       error,
     });
+    return c.json({ success: true });
+  });
+
+  // ── Heartbeat ──────────────────────────────────────────────────
+  //
+  // Keeps both agent-level and per-claim liveness fresh while a long-running
+  // tool is executing. Without this, a claim that runs >CLAIM_STALE_THRESHOLD_MS
+  // gets reclaimed as 'error' by reclaimAbandonedClaims even though the agent
+  // is still working — see #783.
+
+  app.post('/api/tasks/:taskId/heartbeat', rateLimitByAgent(MUTATION_RATE_LIMIT), async (c) => {
+    const store = c.get('store');
+    const taskId = c.req.param('taskId');
+    const body = await parseBody(c, HeartbeatRequestSchema);
+    if (body instanceof Response) return body;
+    const { agent_id, role } = body;
+
+    // Use the role-aware claim ID directly so we only heartbeat the specific
+    // claim the caller identified (vs. findClaimForAgent, which searches all
+    // roles — overkill here and would mask callers pointing at the wrong
+    // claim).
+    const claimId = `${taskId}:${agent_id}:${role}`;
+    const now = Date.now();
+    const updated = await store.updateClaimHeartbeat(claimId, now);
+    if (!updated) {
+      // Either no claim, or claim already terminal (completed/rejected/error).
+      // Safe for stale/racing heartbeats from a CLI that hasn't yet noticed
+      // the server-side transition.
+      return apiError(c, 404, 'CLAIM_NOT_FOUND', 'No active claim for this task + agent + role');
+    }
+
+    // Also refresh the agent-level heartbeat so the existing fallback path
+    // (claims with NULL last_heartbeat_at) benefits from the same ping.
+    await store.setAgentLastSeen(agent_id, now);
+
     return c.json({ success: true });
   });
 

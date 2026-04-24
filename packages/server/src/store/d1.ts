@@ -92,6 +92,7 @@ interface ClaimRow {
   github_user_id: number | null;
   github_username: string | null;
   created_at: number;
+  last_heartbeat_at: number | null;
 }
 
 /** Convert a D1 row to a ReviewTask object. */
@@ -164,6 +165,9 @@ export function rowToClaim(row: ClaimRow): TaskClaim {
   if (row.tokens_used !== null) claim.tokens_used = row.tokens_used;
   if (row.github_user_id !== null) claim.github_user_id = row.github_user_id;
   if (row.github_username !== null) claim.github_username = row.github_username;
+  if (row.last_heartbeat_at !== null && row.last_heartbeat_at !== undefined) {
+    claim.last_heartbeat_at = row.last_heartbeat_at;
+  }
 
   return claim;
 }
@@ -572,6 +576,17 @@ export class D1DataStore implements DataStore {
       .run();
   }
 
+  async updateClaimHeartbeat(claimId: string, timestamp: number): Promise<boolean> {
+    // Guard on `status = ?` (not inlined 'pending') so the WHERE matches
+    // terminal claims atomically — a race could flip the claim to
+    // completed/rejected/error between the route's lookup and this UPDATE.
+    const result = await this.db
+      .prepare(`UPDATE claims SET last_heartbeat_at = ? WHERE id = ? AND status = ?`)
+      .bind(timestamp, claimId, 'pending')
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   // ── Generic task claiming (new separate task model) ─────────
 
   async claimTask(taskId: string): Promise<boolean> {
@@ -849,8 +864,13 @@ export class D1DataStore implements DataStore {
   async reclaimAbandonedClaims(staleThresholdMs: number): Promise<number> {
     const cutoff = Date.now() - staleThresholdMs;
 
-    // Find pending claims where the agent's heartbeat is stale, OR where the agent
-    // has no heartbeat and the claim itself is older than the threshold.
+    // Reclaim order of precedence (per #783):
+    //  1. `c.last_heartbeat_at` — per-claim liveness beat while a tool runs.
+    //     If present and >= cutoff, the claim is active; never reclaim.
+    //     If present and < cutoff, reclaim.
+    //  2. `h.last_seen` (agent-level) — fallback when claim-hb is NULL (old
+    //     CLIs that don't call /heartbeat). Preserves prior behavior.
+    //  3. `c.created_at` — last-resort when agent has never been seen.
     const staleResult = await this.db
       .prepare(
         `SELECT c.id, c.task_id, c.role, c.agent_id
@@ -858,11 +878,17 @@ export class D1DataStore implements DataStore {
          LEFT JOIN agent_heartbeats h ON c.agent_id = h.agent_id
          WHERE c.status = 'pending'
            AND (
-             (h.last_seen IS NOT NULL AND h.last_seen < ?)
-             OR (h.last_seen IS NULL AND c.created_at < ?)
+             (c.last_heartbeat_at IS NOT NULL AND c.last_heartbeat_at < ?)
+             OR (
+               c.last_heartbeat_at IS NULL
+               AND (
+                 (h.last_seen IS NOT NULL AND h.last_seen < ?)
+                 OR (h.last_seen IS NULL AND c.created_at < ?)
+               )
+             )
            )`,
       )
-      .bind(cutoff, cutoff)
+      .bind(cutoff, cutoff, cutoff)
       .all<{ id: string; task_id: string; role: string; agent_id: string }>();
 
     const staleClaims = staleResult.results ?? [];

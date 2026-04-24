@@ -843,6 +843,133 @@ describe('MemoryDataStore', () => {
       expect(task?.queue).toBe('finished');
       expect(task?.summary_agent_id).toBe('new-agent');
     });
+
+    // #783 — per-claim heartbeat precedence over agent-level.
+
+    it('does not reclaim when claim-level heartbeat is fresh (#783)', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:busy:review',
+          agent_id: 'busy',
+          role: 'review',
+          created_at: now - 600_000, // claim is old...
+          last_heartbeat_at: now - 60_000, // ...but tool is still beating
+        }),
+      );
+      // Agent-level heartbeat is stale — only claim-hb keeps it alive
+      await store.setAgentLastSeen('busy', now - 600_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+
+      const claim = await store.getClaim('task-1:busy:review');
+      expect(claim?.status).toBe('pending');
+    });
+
+    it('reclaims when claim-level heartbeat is stale (#783)', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:dead:review',
+          agent_id: 'dead',
+          role: 'review',
+          last_heartbeat_at: now - 600_000, // stale claim hb
+        }),
+      );
+      // Agent-level heartbeat is FRESH — proves claim-hb is authoritative
+      await store.setAgentLastSeen('dead', now);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      const claim = await store.getClaim('task-1:dead:review');
+      expect(claim?.status).toBe('error');
+    });
+
+    it('falls back to agent-level heartbeat when claim-hb is absent (#783 back-compat)', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      // Old claim created before the heartbeat feature — no last_heartbeat_at
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:old:review',
+          agent_id: 'old',
+          role: 'review',
+          created_at: now - 600_000,
+        }),
+      );
+      // Fresh agent-level heartbeat keeps it alive
+      await store.setAgentLastSeen('old', now - 60_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(0);
+
+      const claim = await store.getClaim('task-1:old:review');
+      expect(claim?.status).toBe('pending');
+    });
+
+    it('reclaims when claim-hb absent and agent-hb stale (#783 back-compat)', async () => {
+      const now = Date.now();
+      await store.createTask(makeTask({ review_claims: 1, queue: 'review' }));
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:old-stale:review',
+          agent_id: 'old-stale',
+          role: 'review',
+          created_at: now - 600_000,
+        }),
+      );
+      await store.setAgentLastSeen('old-stale', now - 600_000);
+
+      const freed = await store.reclaimAbandonedClaims(STALE_THRESHOLD);
+      expect(freed).toBe(1);
+
+      const claim = await store.getClaim('task-1:old-stale:review');
+      expect(claim?.status).toBe('error');
+    });
+  });
+
+  // ── updateClaimHeartbeat ────────────────────────────────────
+
+  describe('updateClaimHeartbeat', () => {
+    it('updates last_heartbeat_at on a pending claim', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(makeClaim({ id: 'task-1:a:review', agent_id: 'a', role: 'review' }));
+
+      const ts = Date.now();
+      const ok = await store.updateClaimHeartbeat('task-1:a:review', ts);
+      expect(ok).toBe(true);
+
+      const claim = await store.getClaim('task-1:a:review');
+      expect(claim?.last_heartbeat_at).toBe(ts);
+    });
+
+    it('returns false for a non-existent claim', async () => {
+      const ok = await store.updateClaimHeartbeat('missing', Date.now());
+      expect(ok).toBe(false);
+    });
+
+    it('returns false for a terminal claim (does not touch the timestamp)', async () => {
+      await store.createTask(makeTask());
+      await store.createClaim(
+        makeClaim({
+          id: 'task-1:a:review',
+          agent_id: 'a',
+          role: 'review',
+          status: 'completed',
+          last_heartbeat_at: 1,
+        }),
+      );
+
+      const ok = await store.updateClaimHeartbeat('task-1:a:review', 9999);
+      expect(ok).toBe(false);
+
+      const claim = await store.getClaim('task-1:a:review');
+      expect(claim?.last_heartbeat_at).toBe(1); // unchanged
+    });
   });
 
   // ── reclaimAbandonedSummarySlots ────────────────────────────
