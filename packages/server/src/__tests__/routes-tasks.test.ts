@@ -3239,7 +3239,7 @@ describe('Task Routes', () => {
       expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
     });
 
-    it('still hides task after grace period expires (strict — grace no longer opens gate)', async () => {
+    it('grace period config is now no-op for workers — same model stays hidden past the old window', async () => {
       const config = makeDiversityConfig(30_000);
       // Task 1: claimed with gpt-5.4 well past the grace window
       await store.createTask(
@@ -3285,7 +3285,7 @@ describe('Task Routes', () => {
       expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(0);
     });
 
-    it('strict diversity applies even when modelDiversityGraceMs is 0 (field no longer disables)', async () => {
+    it('modelDiversityGraceMs=0 is now a no-op — strict diversity still hides duplicate model', async () => {
       const config = makeDiversityConfig(0);
       // Task 1: claimed with gpt-5.4
       await store.createTask(
@@ -3732,7 +3732,7 @@ describe('Task Routes', () => {
       expect(body.claimed).toBe(true);
     });
 
-    it('claim: same-model rejected even past legacy modelDiversityGraceMs window', async () => {
+    it('claim: grace period config is a no-op — same-model rejected past legacy window', async () => {
       const config = makeDiversityConfig(50); // tiny grace — must not open the gate
       await store.createTask(
         makeTask({
