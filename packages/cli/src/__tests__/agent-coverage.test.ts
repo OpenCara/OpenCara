@@ -858,8 +858,8 @@ describe('Agent Coverage Tests', () => {
       const groupTasks = await server.store.getTasksByGroup(groupId);
       const workerTasks = groupTasks.filter((t) => t.task_type !== 'summary');
 
-      // Create review claims with huge text to exceed MAX_INPUT_SIZE_BYTES (200KB)
-      const hugeReview = 'x'.repeat(150 * 1024);
+      // Create review claims with huge text to exceed MAX_INPUT_SIZE_BYTES default (500KB)
+      const hugeReview = 'x'.repeat(300 * 1024);
       for (let i = 0; i < workerTasks.length; i++) {
         const wt = workerTasks[i];
         await server.store.updateTask(wt.id, { status: 'completed' });

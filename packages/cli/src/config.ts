@@ -33,6 +33,7 @@ export interface CliConfig {
   platformUrl: string;
   authFile: string | null;
   maxDiffSizeKb: number;
+  maxSummaryInputKb: number;
   maxConsecutiveErrors: number;
   maxRepoSizeMb: number;
   codebaseDir: string | null;
@@ -56,6 +57,7 @@ export function ensureConfigDir(): void {
 }
 
 export const DEFAULT_MAX_DIFF_SIZE_KB = 100;
+export const DEFAULT_MAX_SUMMARY_INPUT_KB = 500;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
 export const DEFAULT_MAX_REPO_SIZE_MB = 100;
 export const DEFAULT_COMMAND_TEST_TIMEOUT_MS = 10_000;
@@ -279,6 +281,7 @@ function isValidHttpUrl(value: string): boolean {
 
 interface ValidatedOverrides {
   maxDiffSizeKb?: number;
+  maxSummaryInputKb?: number;
   maxConsecutiveErrors?: number;
   maxRepoSizeMb?: number;
 }
@@ -310,6 +313,13 @@ function validateConfigData(
       `\u26a0 Config warning: max_diff_size_kb must be > 0, got ${data.max_diff_size_kb}, using default (${DEFAULT_MAX_DIFF_SIZE_KB})`,
     );
     overrides.maxDiffSizeKb = DEFAULT_MAX_DIFF_SIZE_KB;
+  }
+
+  if (typeof data.max_summary_input_kb === 'number' && data.max_summary_input_kb <= 0) {
+    console.warn(
+      `⚠ Config warning: max_summary_input_kb must be > 0, got ${data.max_summary_input_kb}, using default (${DEFAULT_MAX_SUMMARY_INPUT_KB})`,
+    );
+    overrides.maxSummaryInputKb = DEFAULT_MAX_SUMMARY_INPUT_KB;
   }
 
   if (typeof data.max_consecutive_errors === 'number' && data.max_consecutive_errors <= 0) {
@@ -365,6 +375,7 @@ export function loadConfig(): CliConfig {
     platformUrl: envPlatformUrl || DEFAULT_PLATFORM_URL,
     authFile: null,
     maxDiffSizeKb: DEFAULT_MAX_DIFF_SIZE_KB,
+    maxSummaryInputKb: DEFAULT_MAX_SUMMARY_INPUT_KB,
     maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
     maxRepoSizeMb: DEFAULT_MAX_REPO_SIZE_MB,
     codebaseDir: null,
@@ -450,6 +461,11 @@ export function loadConfig(): CliConfig {
       (typeof data.max_diff_size_kb === 'number'
         ? data.max_diff_size_kb
         : DEFAULT_MAX_DIFF_SIZE_KB),
+    maxSummaryInputKb:
+      overrides.maxSummaryInputKb ??
+      (typeof data.max_summary_input_kb === 'number'
+        ? data.max_summary_input_kb
+        : DEFAULT_MAX_SUMMARY_INPUT_KB),
     maxConsecutiveErrors:
       overrides.maxConsecutiveErrors ??
       (typeof data.max_consecutive_errors === 'number'
@@ -509,6 +525,9 @@ export function saveConfig(config: CliConfig): void {
   }
   if (config.maxDiffSizeKb !== DEFAULT_MAX_DIFF_SIZE_KB) {
     data.max_diff_size_kb = config.maxDiffSizeKb;
+  }
+  if (config.maxSummaryInputKb !== DEFAULT_MAX_SUMMARY_INPUT_KB) {
+    data.max_summary_input_kb = config.maxSummaryInputKb;
   }
   if (config.maxConsecutiveErrors !== DEFAULT_MAX_CONSECUTIVE_ERRORS) {
     data.max_consecutive_errors = config.maxConsecutiveErrors;

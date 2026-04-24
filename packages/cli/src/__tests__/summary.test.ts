@@ -434,6 +434,37 @@ describe('executeSummary', () => {
     await expect(executeSummary(request, defaultDeps, vi.fn())).rejects.toThrow(InputTooLargeError);
   });
 
+  it('honors deps.maxSummaryInputKb override below the default', async () => {
+    // Payload ~100KB — fits under the 500KB default but exceeds the 50KB override.
+    const review = 'x'.repeat(100 * 1024);
+    const request: SummaryRequest = {
+      ...defaultRequest,
+      reviews: [{ agentId: 'a1', model: 'm', tool: 't', review, verdict: 'approve' }],
+    };
+    const tightDeps: ReviewExecutorDeps = { ...defaultDeps, maxSummaryInputKb: 50 };
+
+    await expect(executeSummary(request, tightDeps, vi.fn())).rejects.toThrow(InputTooLargeError);
+    // Same payload with the default deps should not hit the size gate — proves
+    // the override is what trips it, not the default.
+    const mockRunTool = createMockRunTool('Summary', 200, true);
+    await expect(executeSummary(request, defaultDeps, mockRunTool)).resolves.toBeDefined();
+  });
+
+  it('honors deps.maxSummaryInputKb override above the default', async () => {
+    // Payload ~600KB — exceeds the 500KB default but fits under the 1024KB override.
+    const review = 'x'.repeat(600 * 1024);
+    const request: SummaryRequest = {
+      ...defaultRequest,
+      reviews: [{ agentId: 'a1', model: 'm', tool: 't', review, verdict: 'approve' }],
+    };
+    const roomyDeps: ReviewExecutorDeps = { ...defaultDeps, maxSummaryInputKb: 1024 };
+    const mockRunTool = createMockRunTool('Summary', 200, true);
+
+    await expect(executeSummary(request, roomyDeps, mockRunTool)).resolves.toBeDefined();
+    // Same payload with the default deps should still hit the size gate.
+    await expect(executeSummary(request, defaultDeps, vi.fn())).rejects.toThrow(InputTooLargeError);
+  });
+
   it('rejects when not enough time remaining', async () => {
     const request: SummaryRequest = { ...defaultRequest, timeout: 0 };
 
