@@ -3777,6 +3777,91 @@ describe('Task Routes', () => {
       const body = await res.json();
       expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
+
+    it('claim: concurrent same-model claims on sibling tasks — exactly one survives (TOCTOU)', async () => {
+      const config = makeDiversityConfig();
+      // Two pending review tasks in the same group.
+      await store.createTask(
+        makeTask({
+          id: 'task-A',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-race',
+          status: 'pending',
+          config,
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'task-B',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-race',
+          status: 'pending',
+          config,
+        }),
+      );
+
+      // Fire both claims concurrently with the same model on different sibling
+      // tasks — this is the race that the pre-check alone cannot close.
+      const [resA, resB] = await Promise.all([
+        request('POST', '/api/tasks/task-A/claim', {
+          agent_id: 'agent-A',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+        request('POST', '/api/tasks/task-B/claim', {
+          agent_id: 'agent-B',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+      ]);
+
+      // Exactly one winner, one loser. The tiebreaker is deterministic
+      // (smallest claim id wins), so the outcome is stable regardless of
+      // scheduling.
+      const statuses = [resA.status, resB.status].sort();
+      expect(statuses).toEqual([200, 409]);
+
+      const loser = resA.status === 409 ? resA : resB;
+      const loserBody = await loser.json();
+      expect(loserBody.error.code).toBe('CLAIM_CONFLICT');
+      expect(loserBody.error.message).toMatch(/claude-opus-4-7/);
+
+      // Exactly one non-terminal worker claim for this model in the group.
+      const allClaims = [
+        ...(await store.getClaims('task-A')),
+        ...(await store.getClaims('task-B')),
+      ];
+      const nonTerminalOpusClaims = allClaims.filter(
+        (c) =>
+          c.model === 'claude-opus-4-7' &&
+          c.role === 'review' &&
+          c.status !== 'rejected' &&
+          c.status !== 'error',
+      );
+      expect(nonTerminalOpusClaims).toHaveLength(1);
+
+      // The winning claim is the one with the smaller id (deterministic).
+      const winningId = nonTerminalOpusClaims[0].id;
+      const expectedWinner = ['task-A:agent-A:review', 'task-B:agent-B:review'].sort()[0];
+      expect(winningId).toBe(expectedWinner);
+
+      // The losing claim exists as a terminal 'error' (rolled back), not
+      // deleted — so the operator can see why the request failed.
+      const loserClaims = allClaims.filter(
+        (c) => c.model === 'claude-opus-4-7' && c.status === 'error',
+      );
+      expect(loserClaims).toHaveLength(1);
+
+      // And the loser's task is back to pending so another (different-model)
+      // agent can still claim it.
+      const losingTaskId = loser === resA ? 'task-A' : 'task-B';
+      const losingTask = await store.getTask(losingTaskId);
+      expect(losingTask?.status).toBe('pending');
+    });
   });
 
   // ── Summary claim timeout recovery (#462) ──────────────────
