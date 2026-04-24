@@ -737,7 +737,7 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 
 - **Version bump** commit `c374877` — `chore: bump CLI version to 0.25.2`. Tag `v0.25.2` pushed. Scope: the PR #788 cli-dev heartbeat fix (#782). Server-side #783 + #785 aren't CLI-scoped and deploy via the `deploy-dev` workflow, not the npm release.
 - **Format fix ahead of bump**: team-lead landed `54762ba docs(pm): prettier-format PLAN.md` because my prior PLAN.md commit had drift. Logged as feedback memory — prettier-check PLAN.md before any direct-commit to main going forward.
-- **npm publish**: publish-cli.yml workflow run 24884969212 triggered — monitoring for completion; will update with conclusion.
+- **npm publish**: publish-cli.yml workflow run 24884969212 completed `success`. opencara@0.25.2 live on npm.
 
 ### v0.25.1 CLI release — configurable summary input cap (team-lead direct, 2026-04-24)
 
