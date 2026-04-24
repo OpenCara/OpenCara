@@ -412,6 +412,16 @@ Related CLI releases:
 - `opencara@0.25.0` published 2026-04-22 — Pre-1.0 minor bundling the 5-PR batch (#777/#778/#779/#780/#781). Commit a984ae2.
 - `opencara@0.25.1` published 2026-04-24 — Configurable `max_summary_input_kb` (default 200 KB → 500 KB) via PR #784 (team-lead direct fix for live 208 KB summary rejections). Commits 3240ed1 + 085f9a8. publish-cli.yml run 24875982168 success.
 
+## Post-v0.25.1: Heartbeat + Strict Diversity Batch (2026-04-24)
+
+3 team-lead-reported bugs. Originally dispatched to server-side implement agents but no claims surfaced; team-lead spawned 3 Claude Code worktree dev agents which all landed PRs within ~60 min. Bot reviewed each; two (#786/#788) were team-lead direct-merged after agent self-driven fix iterations; #787 merged bot-approved first pass.
+
+| Issue | Agent      | PR   | Description                                                                                                     |
+| ----- | ---------- | ---- | --------------------------------------------------------------------------------------------------------------- |
+| #783  | server-dev | #787 | `POST /api/tasks/:id/heartbeat` endpoint + per-claim `last_heartbeat_at` column + reclaim integration [DONE]    |
+| #782  | cli-dev    | #788 | Periodic heartbeat during `toolExecutor.run` (shared executor + router-mode), 60s interval [DONE]               |
+| #785  | server-dev | #786 | Strict worker-level model diversity via atomic `createWorkerClaimIfNoModelConflict` (D1 conditional INSERT) [DONE] |
+
 ## Shelved
 
 - **M23 opencara-relay** — shelved 2026-04-22. Epic #727 and all 38 sub-issues (#728–#765) plus E2E smoke test #772 closed as `not planned`. Design preserved at [.claude/designs/opencara-relay.md](../.claude/designs/opencara-relay.md) for future reference. `epic:relay` label retained for archival.
