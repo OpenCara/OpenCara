@@ -4,6 +4,7 @@ import {
   computeRoles,
   createHeartbeatControl,
   isLongRunningRole,
+  runWithHeartbeat,
   type ConsumptionDeps,
 } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
@@ -1256,5 +1257,69 @@ describe('createHeartbeatControl', () => {
 
     const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'review', logger);
     expect(hb.intervalMs).toBe(DEFAULT_HEARTBEAT_INTERVAL_MS);
+  });
+});
+
+describe('runWithHeartbeat', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('fires heartbeat ticks for the duration of the wrapped work', async () => {
+    const cb = vi.fn();
+    let resolveWork: (v: string) => void = () => {};
+    const work = new Promise<string>((resolve) => {
+      resolveWork = resolve;
+    });
+
+    const promise = runWithHeartbeat({ callback: cb, intervalMs: 50 }, () => work);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(3);
+
+    resolveWork('done');
+    const result = await promise;
+    expect(result).toBe('done');
+
+    // After work resolves, the interval is cleared — no more ticks
+    vi.advanceTimersByTime(500);
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears the interval when work rejects', async () => {
+    const cb = vi.fn();
+    let rejectWork: (e: Error) => void = () => {};
+    const work = new Promise<string>((_, reject) => {
+      rejectWork = reject;
+    });
+
+    const promise = runWithHeartbeat({ callback: cb, intervalMs: 50 }, () => work);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    rejectWork(new Error('work failed'));
+    await expect(promise).rejects.toThrow('work failed');
+
+    vi.advanceTimersByTime(500);
+    expect(cb).toHaveBeenCalledTimes(2);
+  });
+
+  it('is a no-op when heartbeat is undefined', async () => {
+    const result = await runWithHeartbeat(undefined, async () => 42);
+    expect(result).toBe(42);
+  });
+
+  it('passes through the return value of work', async () => {
+    const cb = vi.fn();
+    const result = await runWithHeartbeat({ callback: cb, intervalMs: 50 }, async () => ({
+      x: 1,
+    }));
+    expect(result).toEqual({ x: 1 });
   });
 });

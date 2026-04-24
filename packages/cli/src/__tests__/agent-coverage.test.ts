@@ -16,7 +16,7 @@ import { startAgent, type ConsumptionDeps } from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import { createSessionTracker } from '../consumption.js';
 import { FakeServer, FAKE_SERVER_URL } from './helpers/fake-server.js';
-import { executeTool } from '../tool-executor.js';
+import { executeTool, startHeartbeatTimer } from '../tool-executor.js';
 import { checkoutWorktree, diffFromWorktree } from '../repo-cache.js';
 
 // ── Mock child_process so fetchDiffViaGh falls back to HTTP ──
@@ -92,6 +92,7 @@ vi.mock('../tool-executor.js', () => ({
   parseCommandTemplate: (cmd: string) => cmd.split(' '),
   testCommand: vi.fn(async () => ({ ok: true, elapsedMs: 100 })),
   DEFAULT_HEARTBEAT_INTERVAL_MS: 60_000,
+  startHeartbeatTimer: vi.fn(() => () => {}),
 }));
 
 const mockedExecuteTool = vi.mocked(executeTool);
@@ -1119,6 +1120,61 @@ describe('Agent Coverage Tests', () => {
         expect(resultBody!.type).toBe('summary');
 
         await server.store.updateTask(summaryTaskId, { status: 'completed' });
+        await stopAgent(promise, server);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('arms a heartbeat around router-mode sendPrompt (regression for #782)', async () => {
+      // Router mode skips executeReview → executeTool, so the heartbeat must
+      // be armed explicitly around routerRelay.sendPrompt via runWithHeartbeat
+      // (which delegates to startHeartbeatTimer). The mocked startHeartbeatTimer
+      // spy records each call.
+      const taskId = await server.injectTask({ reviewCount: 2 });
+      const mockRelay = createMockRouterRelay();
+
+      const mockedStartHeartbeat = vi.mocked(startHeartbeatTimer);
+      mockedStartHeartbeat.mockClear();
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes(`/api/tasks/${taskId}/result`)) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      try {
+        const deps = makeDeps('router-heartbeat-agent');
+        const promise = startAgent(
+          'router-heartbeat-agent',
+          FAKE_SERVER_URL,
+          { model: 'test', tool: 'test' },
+          deps.reviewDeps,
+          deps.consumptionDeps,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          { pollIntervalMs: 100, routerRelay: mockRelay as any },
+        );
+
+        await advanceTime(2000);
+
+        expect(mockRelay.sendPrompt).toHaveBeenCalled();
+        // `runWithHeartbeat` → `startHeartbeatTimer` must have been called
+        // with a defined HeartbeatControl (wiring confirmed).
+        const heartbeatCalls = mockedStartHeartbeat.mock.calls.filter((c) => c[0] !== undefined);
+        expect(heartbeatCalls.length).toBeGreaterThan(0);
+        // Each call's first arg should be a HeartbeatControl (callback + intervalMs).
+        for (const call of heartbeatCalls) {
+          expect(call[0]).toMatchObject({
+            callback: expect.any(Function),
+            intervalMs: expect.any(Number),
+          });
+        }
+
+        await server.store.updateTask(taskId, { status: 'completed' });
         await stopAgent(promise, server);
       } finally {
         globalThis.fetch = originalFetch;

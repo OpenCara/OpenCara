@@ -8,7 +8,7 @@ import {
   estimateTokens,
   parseCommandTemplate,
   ToolTimeoutError,
-  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  startHeartbeatTimer,
 } from './tool-executor.js';
 import { sanitizeTokens } from './sanitize.js';
 import { validatePathSegment, isGhAvailable, buildCloneUrl } from './codebase.js';
@@ -452,27 +452,8 @@ function executeAgentic(
       }
     }, timeoutMs);
 
-    // Heartbeat timer: fires callback every intervalMs while the tool is running.
-    // Transient failures are swallowed — a broken heartbeat must NEVER kill the tool.
-    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-    if (heartbeat) {
-      const intervalMs = heartbeat.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-      if (intervalMs > 0) {
-        heartbeatTimer = setInterval(() => {
-          if (settled) return;
-          try {
-            const r = heartbeat.callback();
-            if (r && typeof (r as Promise<void>).catch === 'function') {
-              (r as Promise<void>).catch(() => {
-                /* swallowed — heartbeat must not kill the tool */
-              });
-            }
-          } catch {
-            /* swallowed */
-          }
-        }, intervalMs);
-      }
-    }
+    // Heartbeat: shared with executeTool via startHeartbeatTimer.
+    const stopHeartbeat = startHeartbeatTimer(heartbeat, () => settled);
 
     let onAbort: (() => void) | undefined;
     if (signal) {
@@ -484,7 +465,7 @@ function executeAgentic(
 
     function agenticCleanup(): void {
       clearTimeout(timer);
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      stopHeartbeat();
       if (onAbort && signal) signal.removeEventListener('abort', onAbort);
     }
 

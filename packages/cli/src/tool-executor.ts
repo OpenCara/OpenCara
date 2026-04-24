@@ -55,6 +55,46 @@ export interface HeartbeatControl {
 }
 
 /**
+ * Start a heartbeat `setInterval` that fires `heartbeat.callback` every
+ * `intervalMs` (default {@link DEFAULT_HEARTBEAT_INTERVAL_MS}). Returns a
+ * stop function that clears the interval — callers MUST invoke it on every
+ * exit path (close, error, timeout, kill, abort) to prevent leaks.
+ *
+ * `isSettled` is an optional predicate consulted on each tick: when it
+ * returns true, the callback is skipped. This lets the caller guard against
+ * one last tick firing between SIGTERM and the close event.
+ *
+ * Callback errors (sync throws and async rejections) are swallowed — a
+ * broken heartbeat must NEVER kill the in-flight tool.
+ *
+ * Returns a no-op stopper when `heartbeat` is undefined or `intervalMs` is 0.
+ */
+export function startHeartbeatTimer(
+  heartbeat: HeartbeatControl | undefined,
+  isSettled: () => boolean = () => false,
+): () => void {
+  if (!heartbeat) return () => {};
+  const intervalMs = heartbeat.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  if (intervalMs <= 0) return () => {};
+
+  const timer = setInterval(() => {
+    if (isSettled()) return;
+    try {
+      const r = heartbeat.callback();
+      if (r && typeof (r as Promise<void>).catch === 'function') {
+        (r as Promise<void>).catch(() => {
+          /* swallowed — heartbeat must not kill the tool */
+        });
+      }
+    } catch {
+      /* swallowed — heartbeat must not kill the tool */
+    }
+  }, intervalMs);
+
+  return () => clearInterval(timer);
+}
+
+/**
  * Validate that the binary referenced by a command template exists and is executable.
  * Cross-platform: uses `where` on Windows, `command -v` via shell on Unix.
  */
@@ -287,28 +327,10 @@ export function executeTool(
       }, effectiveLivenessMs);
     }
 
-    // Heartbeat timer: fire callback every heartbeatIntervalMs while tool is running.
-    // Transient failures (network, 4xx/5xx, 404 old-server) are swallowed — a
-    // broken heartbeat must NEVER kill the in-flight tool.
-    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-    if (heartbeat) {
-      const intervalMs = heartbeat.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-      if (intervalMs > 0) {
-        heartbeatTimer = setInterval(() => {
-          if (settled) return;
-          try {
-            const r = heartbeat.callback();
-            if (r && typeof (r as Promise<void>).catch === 'function') {
-              (r as Promise<void>).catch(() => {
-                /* swallowed — heartbeat must not kill the tool */
-              });
-            }
-          } catch {
-            /* swallowed — heartbeat must not kill the tool */
-          }
-        }, intervalMs);
-      }
-    }
+    // Heartbeat: fires callback every intervalMs while the tool is running.
+    // The `isSettled` predicate suppresses the one last tick that may fire
+    // between SIGTERM and the close event. See startHeartbeatTimer.
+    const stopHeartbeat = startHeartbeatTimer(heartbeat, () => settled);
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -345,7 +367,7 @@ export function executeTool(
       clearTimeout(timer);
       if (livenessTimer) clearTimeout(livenessTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      stopHeartbeat();
       if (onAbort && signal) {
         signal.removeEventListener('abort', onAbort);
       }

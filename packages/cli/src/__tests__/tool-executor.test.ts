@@ -9,6 +9,7 @@ import {
   SIGKILL_GRACE_MS,
   STDOUT_LIVENESS_TIMEOUT_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
+  startHeartbeatTimer,
 } from '../tool-executor.js';
 
 import EventEmitter from 'node:events';
@@ -1161,5 +1162,96 @@ describe('parseTokenUsage', () => {
       input: 0,
       output: 0,
     });
+  });
+});
+
+describe('startHeartbeatTimer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('fires callback on the configured interval', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it('uses DEFAULT_HEARTBEAT_INTERVAL_MS when intervalMs is omitted', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb });
+    vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS - 1);
+    expect(cb).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('returns a no-op stopper when heartbeat is undefined', () => {
+    const stop = startHeartbeatTimer(undefined);
+    expect(() => stop()).not.toThrow();
+    // No timers were scheduled, so nothing to assert beyond "did not crash"
+    vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS * 5);
+  });
+
+  it('returns a no-op stopper when intervalMs is 0', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 0 });
+    vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS * 5);
+    expect(cb).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('stop() clears the interval and halts further firings', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+    vi.advanceTimersByTime(500);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips ticks when isSettled() returns true', () => {
+    const cb = vi.fn();
+    let settled = false;
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 }, () => settled);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(1);
+    settled = true;
+    vi.advanceTimersByTime(150); // 3 ticks, but all suppressed
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('swallows synchronous throws from the callback', () => {
+    const cb = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('swallows rejected promises from the callback', async () => {
+    const cb = vi.fn(async () => {
+      throw new Error('async boom');
+    });
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cb).toHaveBeenCalledTimes(2);
+    stop();
   });
 });

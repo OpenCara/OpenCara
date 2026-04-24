@@ -65,6 +65,7 @@ import {
   validateCommandBinary,
   estimateTokens,
   testCommand,
+  startHeartbeatTimer,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   type HeartbeatControl,
 } from '../tool-executor.js';
@@ -702,6 +703,28 @@ export function isLongRunningRole(role: TaskRole): boolean {
  * tool. Old servers that don't implement this endpoint return 404, which is
  * treated as a silent no-op for the transition period.
  */
+/**
+ * Run `work()` with a heartbeat interval armed for its entire duration.
+ *
+ * Used to wrap async awaits that `executeTool` / `executeAgentic` can't cover
+ * — e.g. `routerRelay.sendPrompt(...)` in router mode, which bypasses the
+ * deps-wired heartbeat path. The interval is cleared whether `work` resolves
+ * or throws. A no-op when `heartbeat` is undefined.
+ */
+export async function runWithHeartbeat<T>(
+  heartbeat: HeartbeatControl | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  let done = false;
+  const stop = startHeartbeatTimer(heartbeat, () => done);
+  try {
+    return await work();
+  } finally {
+    done = true;
+    stop();
+  }
+}
+
 export function createHeartbeatControl(
   client: ApiClient,
   taskId: string,
@@ -1281,7 +1304,10 @@ async function executeReviewTask(
   let usageOpts: RecordUsageOptions | undefined;
 
   if (routerRelay) {
-    // Router mode: relay to external agent
+    // Router mode: relay to external agent. `executeReview` → `executeTool`
+    // is skipped here, so the deps-wired heartbeat must be armed explicitly
+    // around the sendPrompt await (see issue #782 — router reviews on large
+    // PRs also exceed the 10-min CLAIM_STALE_THRESHOLD_MS).
     logger.log(`  ${icons.running} Executing review: [router mode]`);
     const fullPrompt = routerRelay.buildReviewPrompt({
       owner,
@@ -1291,11 +1317,8 @@ async function executeReviewTask(
       diffContent,
       contextBlock,
     });
-    const response = await routerRelay.sendPrompt(
-      'review_request',
-      taskId,
-      fullPrompt,
-      timeoutSeconds,
+    const response = await runWithHeartbeat(reviewDeps.heartbeat, () =>
+      routerRelay.sendPrompt('review_request', taskId, fullPrompt, timeoutSeconds),
     );
     const parsed = routerRelay.parseReviewResponse(response);
     reviewText = parsed.review;
@@ -1415,6 +1438,8 @@ async function executeSummaryTask(
     let usageOpts: RecordUsageOptions;
 
     if (routerRelay) {
+      // Router mode (single-agent summary): see executeReviewTask for the
+      // rationale — heartbeat must be armed around sendPrompt.
       logger.log(`  ${icons.running} Executing summary: [router mode]`);
       const fullPrompt = routerRelay.buildReviewPrompt({
         owner,
@@ -1424,11 +1449,8 @@ async function executeSummaryTask(
         diffContent,
         contextBlock,
       });
-      const response = await routerRelay.sendPrompt(
-        'review_request',
-        taskId,
-        fullPrompt,
-        timeoutSeconds,
+      const response = await runWithHeartbeat(reviewDeps.heartbeat, () =>
+        routerRelay.sendPrompt('review_request', taskId, fullPrompt, timeoutSeconds),
       );
       const parsed = routerRelay.parseReviewResponse(response);
       reviewText = parsed.review;
@@ -1526,6 +1548,8 @@ async function executeSummaryTask(
   let flaggedReviews: FlaggedReview[] = [];
 
   if (routerRelay) {
+    // Router mode (multi-agent summary): see executeReviewTask for the
+    // rationale — heartbeat must be armed around sendPrompt.
     logger.log(`  ${icons.running} Executing summary: [router mode]`);
     const fullPrompt = routerRelay.buildSummaryPrompt({
       owner,
@@ -1535,11 +1559,8 @@ async function executeSummaryTask(
       diffContent,
       contextBlock,
     });
-    const response = await routerRelay.sendPrompt(
-      'summary_request',
-      taskId,
-      fullPrompt,
-      timeoutSeconds,
+    const response = await runWithHeartbeat(reviewDeps.heartbeat, () =>
+      routerRelay.sendPrompt('summary_request', taskId, fullPrompt, timeoutSeconds),
     );
     const parsed = extractVerdict(response);
     summaryText = parsed.review;
