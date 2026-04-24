@@ -8,6 +8,8 @@ import {
   ToolTimeoutError,
   SIGKILL_GRACE_MS,
   STDOUT_LIVENESS_TIMEOUT_MS,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  startHeartbeatTimer,
 } from '../tool-executor.js';
 
 import EventEmitter from 'node:events';
@@ -753,6 +755,320 @@ describe('executeTool', () => {
       await expect(promise).rejects.toThrow(/timed out after 60s/);
     });
   });
+
+  describe('heartbeat', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fires callback on the configured interval while the tool is running', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const intervalMs = 60_000;
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0, // disable liveness to isolate heartbeat behavior
+        { callback: heartbeat, intervalMs },
+      );
+
+      // No ticks have fired yet
+      expect(heartbeat).not.toHaveBeenCalled();
+
+      // Tick 1
+      vi.advanceTimersByTime(intervalMs);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+
+      // Tick 2
+      vi.advanceTimersByTime(intervalMs);
+      expect(heartbeat).toHaveBeenCalledTimes(2);
+
+      // Tick 3
+      vi.advanceTimersByTime(intervalMs);
+      expect(heartbeat).toHaveBeenCalledTimes(3);
+
+      // Finish the tool — interval must stop firing
+      emitOutput(child, { stdout: 'done', code: 0 });
+      await promise;
+
+      // Advance further — NO more heartbeats after tool exit
+      vi.advanceTimersByTime(intervalMs * 5);
+      expect(heartbeat).toHaveBeenCalledTimes(3);
+    });
+
+    it('uses DEFAULT_HEARTBEAT_INTERVAL_MS when intervalMs is omitted', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat },
+      );
+
+      vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS - 1);
+      expect(heartbeat).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+
+      emitOutput(child, { stdout: 'done', code: 0 });
+      await promise;
+    });
+
+    it('is a no-op when no heartbeat is supplied', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const promise = executeTool(
+        'quiet-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+      );
+
+      // No heartbeat config — just advance time and confirm nothing throws
+      vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS * 3);
+
+      emitOutput(child, { stdout: 'done', code: 0 });
+      const result = await promise;
+      expect(result.stdout).toBe('done');
+    });
+
+    it('is disabled when intervalMs is 0', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat, intervalMs: 0 },
+      );
+
+      vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS * 5);
+      expect(heartbeat).not.toHaveBeenCalled();
+
+      emitOutput(child, { stdout: 'done', code: 0 });
+      await promise;
+    });
+
+    it('stops firing after the tool exits with an error', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const intervalMs = 60_000;
+      const promise = executeTool(
+        'broken-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat, intervalMs },
+      );
+
+      vi.advanceTimersByTime(intervalMs);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+
+      // Simulate tool crash
+      child.emit('error', new Error('ENOENT: tool missing'));
+      await expect(promise).rejects.toThrow('ENOENT');
+
+      // Advance further — interval must be cleared
+      vi.advanceTimersByTime(intervalMs * 3);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops firing after the tool is killed by timeout', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const intervalMs = 60_000;
+      const timeoutMs = 30_000;
+      const promise = executeTool(
+        'stuck-tool',
+        'test',
+        timeoutMs,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat, intervalMs },
+      );
+
+      // Timeout fires before first heartbeat (interval > timeout)
+      vi.advanceTimersByTime(timeoutMs);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(heartbeat).not.toHaveBeenCalled();
+
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+
+      // Advance past interval — interval must be cleared
+      vi.advanceTimersByTime(intervalMs * 3);
+      expect(heartbeat).not.toHaveBeenCalled();
+    });
+
+    it('stops firing after the abort signal is triggered', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const intervalMs = 60_000;
+      const controller = new AbortController();
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        controller.signal,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat, intervalMs },
+      );
+
+      vi.advanceTimersByTime(intervalMs);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      emitOutput(child, { code: null, signal: 'SIGTERM' });
+      await expect(promise).rejects.toThrow(ToolTimeoutError);
+
+      // Advance further — interval must be cleared
+      vi.advanceTimersByTime(intervalMs * 3);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+    });
+
+    it('swallows synchronous errors thrown from the callback without killing the tool', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn(() => {
+        throw new Error('boom');
+      });
+      const intervalMs = 60_000;
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat, intervalMs },
+      );
+
+      // Multiple ticks — each throws, but the tool keeps running and the
+      // interval keeps firing.
+      vi.advanceTimersByTime(intervalMs);
+      vi.advanceTimersByTime(intervalMs);
+      vi.advanceTimersByTime(intervalMs);
+      expect(heartbeat).toHaveBeenCalledTimes(3);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      emitOutput(child, { stdout: 'still works', code: 0 });
+      const result = await promise;
+      expect(result.stdout).toBe('still works');
+    });
+
+    it('swallows rejected promises from the callback without killing the tool', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn(async () => {
+        throw new Error('network blip');
+      });
+      const intervalMs = 60_000;
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        { callback: heartbeat, intervalMs },
+      );
+
+      // Fire two ticks — each returns a rejected promise. The executor must
+      // attach a .catch so the unhandled rejection does not propagate.
+      vi.advanceTimersByTime(intervalMs);
+      vi.advanceTimersByTime(intervalMs);
+      // Let the pending microtasks (the .catch handlers) settle.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(heartbeat).toHaveBeenCalledTimes(2);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      emitOutput(child, { stdout: 'ok', code: 0 });
+      const result = await promise;
+      expect(result.stdout).toBe('ok');
+    });
+
+    it('coexists with the liveness timer', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+      const heartbeat = vi.fn();
+      const intervalMs = 30_000;
+      const livenessMs = 60_000;
+      const promise = executeTool(
+        'long-tool',
+        'test',
+        600_000,
+        undefined,
+        undefined,
+        undefined,
+        livenessMs,
+        { callback: heartbeat, intervalMs },
+      );
+
+      vi.advanceTimersByTime(intervalMs);
+      child.stdout.emit('data', Buffer.from('progress'));
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(intervalMs);
+      child.stdout.emit('data', Buffer.from('more progress'));
+      expect(heartbeat).toHaveBeenCalledTimes(2);
+
+      // Tool exits cleanly — both timers must be cleared
+      emitOutput(child, { stdout: 'done', code: 0 });
+      await promise;
+
+      vi.advanceTimersByTime(intervalMs * 5 + livenessMs);
+      expect(heartbeat).toHaveBeenCalledTimes(2);
+      expect(child.kill).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('estimateTokens', () => {
@@ -846,5 +1162,96 @@ describe('parseTokenUsage', () => {
       input: 0,
       output: 0,
     });
+  });
+});
+
+describe('startHeartbeatTimer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('fires callback on the configured interval', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it('uses DEFAULT_HEARTBEAT_INTERVAL_MS when intervalMs is omitted', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb });
+    vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS - 1);
+    expect(cb).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('returns a no-op stopper when heartbeat is undefined', () => {
+    const stop = startHeartbeatTimer(undefined);
+    expect(() => stop()).not.toThrow();
+    // No timers were scheduled, so nothing to assert beyond "did not crash"
+    vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS * 5);
+  });
+
+  it('returns a no-op stopper when intervalMs is 0', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 0 });
+    vi.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL_MS * 5);
+    expect(cb).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('stop() clears the interval and halts further firings', () => {
+    const cb = vi.fn();
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+    vi.advanceTimersByTime(500);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips ticks when isSettled() returns true', () => {
+    const cb = vi.fn();
+    let settled = false;
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 }, () => settled);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(1);
+    settled = true;
+    vi.advanceTimersByTime(150); // 3 ticks, but all suppressed
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('swallows synchronous throws from the callback', () => {
+    const cb = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('swallows rejected promises from the callback', async () => {
+    const cb = vi.fn(async () => {
+      throw new Error('async boom');
+    });
+    const stop = startHeartbeatTimer({ callback: cb, intervalMs: 50 });
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cb).toHaveBeenCalledTimes(2);
+    stop();
   });
 });

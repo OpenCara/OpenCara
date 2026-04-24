@@ -78,6 +78,8 @@ vi.mock('../tool-executor.js', () => ({
   validateCommandBinary: () => true,
   parseCommandTemplate: (cmd: string) => cmd.split(' '),
   testCommand: vi.fn(async () => ({ ok: true, elapsedMs: 100 })),
+  DEFAULT_HEARTBEAT_INTERVAL_MS: 60_000,
+  startHeartbeatTimer: vi.fn(() => () => {}),
 }));
 
 const mockedExecuteTool = vi.mocked(executeTool);

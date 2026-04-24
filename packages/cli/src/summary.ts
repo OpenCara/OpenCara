@@ -8,6 +8,7 @@ import {
   estimateTokens,
   type ToolExecutorResult,
   type TokenUsageDetail,
+  type HeartbeatControl,
 } from './tool-executor.js';
 
 export interface SummaryReviewInput {
@@ -135,6 +136,7 @@ export async function executeSummary(
     vars?: Record<string, string>,
     cwd?: string,
     livenessTimeoutMs?: number,
+    heartbeat?: HeartbeatControl,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<SummaryResponse> {
   const inputSize = calculateInputSize(req.prompt, req.reviews, req.diffContent, req.contextBlock);
@@ -175,6 +177,7 @@ export async function executeSummary(
       undefined,
       deps.codebaseDir ?? undefined,
       deps.livenessTimeoutMs,
+      deps.heartbeat,
     );
 
     const { verdict, review } = extractVerdict(result.stdout);

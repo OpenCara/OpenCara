@@ -376,6 +376,7 @@ describe('executeReview', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
     // Prompt should contain both system and user content
     const prompt = mockRunTool.mock.calls[0][1];

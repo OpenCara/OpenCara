@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { startAgent, computeRoles, type ConsumptionDeps } from '../commands/agent.js';
+import {
+  startAgent,
+  computeRoles,
+  createHeartbeatControl,
+  isLongRunningRole,
+  runWithHeartbeat,
+  type ConsumptionDeps,
+} from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import type { RouterRelay } from '../router.js';
 import { createSessionTracker } from '../consumption.js';
 import type { LocalAgentConfig } from '../config.js';
+import { HttpError, type ApiClient } from '../http.js';
+import { DEFAULT_HEARTBEAT_INTERVAL_MS } from '../tool-executor.js';
+import type { Logger } from '../logger.js';
 
 // Mock child_process so fetchDiffViaGh falls back to HTTP
 vi.mock('node:child_process', async (importOriginal) => {
@@ -1091,5 +1101,225 @@ describe('computeRoles', () => {
       roles: undefined,
     };
     expect(computeRoles(agent)).toEqual(['review', 'summary', 'implement', 'fix']);
+  });
+});
+
+describe('isLongRunningRole', () => {
+  it('returns true for review, summary, implement, fix', () => {
+    expect(isLongRunningRole('review')).toBe(true);
+    expect(isLongRunningRole('summary')).toBe(true);
+    expect(isLongRunningRole('implement')).toBe(true);
+    expect(isLongRunningRole('fix')).toBe(true);
+  });
+
+  it('returns false for short-running roles', () => {
+    expect(isLongRunningRole('pr_triage')).toBe(false);
+    expect(isLongRunningRole('issue_triage')).toBe(false);
+    expect(isLongRunningRole('pr_dedup')).toBe(false);
+    expect(isLongRunningRole('issue_dedup')).toBe(false);
+    expect(isLongRunningRole('issue_review')).toBe(false);
+  });
+});
+
+describe('createHeartbeatControl', () => {
+  function makeLogger(): Logger {
+    return {
+      log: vi.fn(),
+      logWarn: vi.fn(),
+      logError: vi.fn(),
+    } as unknown as Logger;
+  }
+
+  function makeClient(post: ReturnType<typeof vi.fn>): ApiClient {
+    return { post } as unknown as ApiClient;
+  }
+
+  it('posts to /api/tasks/:id/heartbeat with agent_id and role', async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(
+      makeClient(post),
+      'task-abc',
+      'agent-42',
+      'review',
+      logger,
+      1000,
+    );
+
+    expect(hb.intervalMs).toBe(1000);
+    await hb.callback();
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/api/tasks/task-abc/heartbeat', {
+      agent_id: 'agent-42',
+      role: 'review',
+    });
+    expect(logger.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('silently swallows 404 (old server) and logs the no-op once', async () => {
+    const post = vi.fn().mockRejectedValue(new HttpError(404, 'not found'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'summary', logger);
+
+    await expect(hb.callback()).resolves.toBeUndefined();
+    await expect(hb.callback()).resolves.toBeUndefined();
+    await expect(hb.callback()).resolves.toBeUndefined();
+
+    // Post is still attempted each tick (server may be upgraded mid-run)
+    expect(post).toHaveBeenCalledTimes(3);
+    // ...but the operator-visible log only fires once
+    expect(logger.log).toHaveBeenCalledTimes(1);
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.stringContaining('heartbeat endpoint not available'),
+    );
+    expect(logger.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('logs a warning but does not throw on transient 5xx errors', async () => {
+    const post = vi.fn().mockRejectedValue(new HttpError(503, 'service unavailable'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(
+      makeClient(post),
+      'task-abc',
+      'agent-42',
+      'implement',
+      logger,
+    );
+
+    await expect(hb.callback()).resolves.toBeUndefined();
+    expect(logger.logWarn).toHaveBeenCalledTimes(1);
+    expect(logger.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining('Heartbeat failed for task task-abc'),
+    );
+  });
+
+  it('logs a warning but does not throw on network errors', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'fix', logger);
+
+    await expect(hb.callback()).resolves.toBeUndefined();
+    expect(logger.logWarn).toHaveBeenCalledTimes(1);
+    expect(logger.logWarn).toHaveBeenCalledWith(expect.stringContaining('ECONNREFUSED'));
+  });
+
+  it('suppresses repeated warnings during a failure streak (keeps POSTing)', async () => {
+    const post = vi.fn().mockRejectedValue(new HttpError(503, 'service unavailable'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'review', logger);
+
+    await hb.callback();
+    await hb.callback();
+    await hb.callback();
+    await hb.callback();
+
+    // POST still attempted every tick — the server may recover mid-run.
+    expect(post).toHaveBeenCalledTimes(4);
+    // But the warn fires only once per streak.
+    expect(logger.logWarn).toHaveBeenCalledTimes(1);
+    expect(logger.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining('further failures suppressed'),
+    );
+  });
+
+  it('re-enables the warning after a successful heartbeat resets the streak', async () => {
+    // Fail → fail → succeed → fail → fail → succeed → fail
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce(new HttpError(503, 'boom')) // warn #1
+      .mockRejectedValueOnce(new HttpError(503, 'boom')) // suppressed
+      .mockResolvedValueOnce({}) // resets gate
+      .mockRejectedValueOnce(new Error('ECONNRESET')) // warn #2
+      .mockRejectedValueOnce(new Error('ECONNRESET')) // suppressed
+      .mockResolvedValueOnce({}) // resets gate
+      .mockRejectedValueOnce(new HttpError(502, 'bad gateway')); // warn #3
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'summary', logger);
+
+    for (let i = 0; i < 7; i++) {
+      await hb.callback();
+    }
+
+    expect(post).toHaveBeenCalledTimes(7);
+    expect(logger.logWarn).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses DEFAULT_HEARTBEAT_INTERVAL_MS when intervalMs is omitted', () => {
+    const post = vi.fn();
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'review', logger);
+    expect(hb.intervalMs).toBe(DEFAULT_HEARTBEAT_INTERVAL_MS);
+  });
+});
+
+describe('runWithHeartbeat', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('fires heartbeat ticks for the duration of the wrapped work', async () => {
+    const cb = vi.fn();
+    let resolveWork: (v: string) => void = () => {};
+    const work = new Promise<string>((resolve) => {
+      resolveWork = resolve;
+    });
+
+    const promise = runWithHeartbeat({ callback: cb, intervalMs: 50 }, () => work);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(3);
+
+    resolveWork('done');
+    const result = await promise;
+    expect(result).toBe('done');
+
+    // After work resolves, the interval is cleared — no more ticks
+    vi.advanceTimersByTime(500);
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears the interval when work rejects', async () => {
+    const cb = vi.fn();
+    let rejectWork: (e: Error) => void = () => {};
+    const work = new Promise<string>((_, reject) => {
+      rejectWork = reject;
+    });
+
+    const promise = runWithHeartbeat({ callback: cb, intervalMs: 50 }, () => work);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(50);
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    rejectWork(new Error('work failed'));
+    await expect(promise).rejects.toThrow('work failed');
+
+    vi.advanceTimersByTime(500);
+    expect(cb).toHaveBeenCalledTimes(2);
+  });
+
+  it('is a no-op when heartbeat is undefined', async () => {
+    const result = await runWithHeartbeat(undefined, async () => 42);
+    expect(result).toBe(42);
+  });
+
+  it('passes through the return value of work', async () => {
+    const cb = vi.fn();
+    const result = await runWithHeartbeat({ callback: cb, intervalMs: 50 }, async () => ({
+      x: 1,
+    }));
+    expect(result).toEqual({ x: 1 });
   });
 });

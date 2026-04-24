@@ -271,6 +271,8 @@ describe('executeImplement', () => {
       undefined,
       undefined,
       '/tmp/worktree',
+      undefined,
+      undefined,
     );
     expect(result.output.summary).toBe('Added feature');
     expect(result.output.filesChanged).toEqual(['src/app.ts']);
@@ -397,6 +399,8 @@ describe('executeImplementTask', () => {
       undefined,
       undefined,
       '/tmp/repos/acme/widgets-worktrees/implement-42',
+      undefined,
+      undefined,
     );
 
     // Verify commit and push

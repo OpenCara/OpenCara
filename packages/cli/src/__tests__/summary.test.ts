@@ -388,6 +388,7 @@ describe('executeSummary', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
   });
 

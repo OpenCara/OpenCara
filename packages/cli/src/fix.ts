@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import type { PollTask, FixReport } from '@opencara/shared';
 import type { ToolExecutorResult, TokenUsageDetail } from './tool-executor.js';
-import { executeTool, estimateTokens } from './tool-executor.js';
+import { executeTool, estimateTokens, type HeartbeatControl } from './tool-executor.js';
 import { sanitizeTokens } from './sanitize.js';
 import type { Logger } from './logger.js';
 import { buildFixPrompt } from './prompts.js';
@@ -106,6 +106,8 @@ export interface FixResponse {
 
 export interface FixExecutorDeps {
   commandTemplate: string;
+  /** Optional heartbeat — fires periodically during tool execution to keep the server-side claim fresh. */
+  heartbeat?: HeartbeatControl;
 }
 
 /**
@@ -125,6 +127,8 @@ export async function executeFix(
     signal?: AbortSignal,
     vars?: Record<string, string>,
     cwd?: string,
+    livenessTimeoutMs?: number,
+    heartbeat?: HeartbeatControl,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<{ tokensUsed: number; tokensEstimated: boolean; tokenDetail: TokenUsageDetail }> {
   const timeoutMs = timeoutSeconds * 1000;
@@ -149,6 +153,8 @@ export async function executeFix(
     signal,
     undefined,
     worktreePath,
+    undefined,
+    deps.heartbeat,
   );
 
   // Compute token usage
@@ -194,6 +200,8 @@ export async function executeFixTask(
     signal?: AbortSignal,
     vars?: Record<string, string>,
     cwd?: string,
+    livenessTimeoutMs?: number,
+    heartbeat?: HeartbeatControl,
   ) => Promise<ToolExecutorResult>,
 ): Promise<{ tokensUsed: number; tokensEstimated: boolean; tokenDetail: TokenUsageDetail }> {
   const { log } = logger;

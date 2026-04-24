@@ -36,8 +36,63 @@ const MIN_PARTIAL_RESULT_LENGTH = 50;
 /** Default stdout liveness timeout (ms). Kill process if no stdout for this long. */
 export const STDOUT_LIVENESS_TIMEOUT_MS = 300_000;
 
+/** Default heartbeat interval (ms) when a heartbeat callback is supplied. */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+
 /** Maximum stderr length included in error/warning messages */
 const MAX_STDERR_LENGTH = 1000;
+
+/**
+ * Heartbeat control — fires `callback` every `intervalMs` while the tool is
+ * running. The callback MUST not throw; any error it produces is caught by
+ * the caller and swallowed. The interval is cleared when the tool exits
+ * (success, error, timeout, kill, abort).
+ */
+export interface HeartbeatControl {
+  callback: () => void | Promise<void>;
+  /** Defaults to {@link DEFAULT_HEARTBEAT_INTERVAL_MS} when omitted. */
+  intervalMs?: number;
+}
+
+/**
+ * Start a heartbeat `setInterval` that fires `heartbeat.callback` every
+ * `intervalMs` (default {@link DEFAULT_HEARTBEAT_INTERVAL_MS}). Returns a
+ * stop function that clears the interval — callers MUST invoke it on every
+ * exit path (close, error, timeout, kill, abort) to prevent leaks.
+ *
+ * `isSettled` is an optional predicate consulted on each tick: when it
+ * returns true, the callback is skipped. This lets the caller guard against
+ * one last tick firing between SIGTERM and the close event.
+ *
+ * Callback errors (sync throws and async rejections) are swallowed — a
+ * broken heartbeat must NEVER kill the in-flight tool.
+ *
+ * Returns a no-op stopper when `heartbeat` is undefined or `intervalMs` is 0.
+ */
+export function startHeartbeatTimer(
+  heartbeat: HeartbeatControl | undefined,
+  isSettled: () => boolean = () => false,
+): () => void {
+  if (!heartbeat) return () => {};
+  const intervalMs = heartbeat.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  if (intervalMs <= 0) return () => {};
+
+  const timer = setInterval(() => {
+    if (isSettled()) return;
+    try {
+      const r = heartbeat.callback();
+      if (r && typeof (r as Promise<void>).catch === 'function') {
+        (r as Promise<void>).catch(() => {
+          /* swallowed — heartbeat must not kill the tool */
+        });
+      }
+    } catch {
+      /* swallowed — heartbeat must not kill the tool */
+    }
+  }, intervalMs);
+
+  return () => clearInterval(timer);
+}
 
 /**
  * Validate that the binary referenced by a command template exists and is executable.
@@ -210,6 +265,7 @@ export function executeTool(
   vars?: Record<string, string>,
   cwd?: string,
   livenessTimeoutMs?: number,
+  heartbeat?: HeartbeatControl,
 ): Promise<ToolExecutorResult> {
   const promptViaArg = commandTemplate.includes('${PROMPT}');
   const allVars: Record<string, string> = { ...vars, PROMPT: prompt };
@@ -271,6 +327,11 @@ export function executeTool(
       }, effectiveLivenessMs);
     }
 
+    // Heartbeat: fires callback every intervalMs while the tool is running.
+    // The `isSettled` predicate suppresses the one last tick that may fire
+    // between SIGTERM and the close event. See startHeartbeatTimer.
+    const stopHeartbeat = startHeartbeatTimer(heartbeat, () => settled);
+
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
       // Reset liveness timer on stdout activity
@@ -306,6 +367,7 @@ export function executeTool(
       clearTimeout(timer);
       if (livenessTimer) clearTimeout(livenessTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
+      stopHeartbeat();
       if (onAbort && signal) {
         signal.removeEventListener('abort', onAbort);
       }
