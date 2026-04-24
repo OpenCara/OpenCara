@@ -729,6 +729,10 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 
 - **M23 SHELVED.** Epic #727 + all 38 sub-issues (#728–#765) + E2E smoke test #772 closed as `not planned`. All 40 items moved to Done on the project board. Design doc retained at `.claude/designs/opencara-relay.md`; `epic:relay` label kept for archival. Decision final — no clarifier needed. Closed items (in order R1..R31 + R15a + E2E): #727 (epic), #728, #729, #730, #731, #732, #733, #734, #735, #736, #737, #738, #739, #740, #741, #742, #743, #744, #745, #746, #747, #748, #749, #750, #751, #752, #753, #754, #755, #756, #757, #758, #759, #760, #761, #762, #763, #764, #765, #772 — all `[closed: shelved M23]`.
 
+### Duplicate-model reviews bug (team-lead reported, 2026-04-24)
+
+- #785 [server-dev, priority:high, bug, Backlog] "Strictly forbid duplicate-model reviews within a task group" — **FILED 2026-04-24**, on project board in Backlog awaiting Ready. Live evidence: ParadiseEngine/ParadiseEngine#55 bot-review listed `claude-opus-4-7/claude` twice (two Opus instances each claimed a worker slot on same group). Root cause: `isModelDiversityVisible` (`packages/server/src/routes/tasks.ts:130-146`) returns true once `Date.now() - claimedAt >= modelDiversityGraceMs` — grace-period escape lets the second instance in. Required fix: strict worker-level diversity (409 CLAIM_CONFLICT when the model already has a non-terminal claim in the group), terminal claims do not lock out retries, summary claims remain independent. No dispatch — Backlog until team-lead promotes.
+
 ### v0.25.1 CLI release — configurable summary input cap (team-lead direct, 2026-04-24)
 
 - **PR #784 merged** commit `3240ed1` — `feat(cli): make summary input cap configurable via max_summary_input_kb`. Adds top-level config field; default cap raised 200 KB → 500 KB. Direct team-lead fix for live summary tasks rejecting at 208 KB. Not tied to a numbered issue.
