@@ -63,6 +63,13 @@ export interface DataStore {
   getClaimsBatch(claimIds: string[]): Promise<Map<string, TaskClaim>>;
   getClaims(taskId: string): Promise<TaskClaim[]>;
   updateClaim(claimId: string, updates: Partial<TaskClaim>): Promise<void>;
+  /**
+   * Refresh per-claim liveness timestamp. Only succeeds on claims that are
+   * still `pending` — returns false if the claim doesn't exist or has
+   * already transitioned to a terminal state, so the route can map the
+   * result to a 404 for stale/racing callers.
+   */
+  updateClaimHeartbeat(claimId: string, timestamp: number): Promise<boolean>;
 
   // ── Generic task claiming (new separate task model) ────────
   /** Atomically transition a task from pending → reviewing. Returns true if claimed. */

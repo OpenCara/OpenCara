@@ -162,6 +162,13 @@ export interface TaskClaim {
   github_user_id?: number; // verified GitHub user ID from OAuth (optional for backward compat)
   github_username?: string; // verified GitHub username from OAuth (optional for backward compat)
   created_at: number;
+  /**
+   * Per-claim liveness signal updated by POST /api/tasks/:taskId/heartbeat
+   * while the agent is executing a tool. Absent (NULL in D1) for claims
+   * created before the heartbeat feature landed — reclaim falls back to
+   * the agent-level heartbeat in that case.
+   */
+  last_heartbeat_at?: number;
 }
 
 // ── Dedup Report Types ──────────────────────────────────────────

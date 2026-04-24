@@ -164,6 +164,25 @@ export interface ErrorRequest {
   error: string;
 }
 
+// ── Heartbeat ──────────────────────────────────────────────────
+
+/**
+ * POST /api/tasks/{taskId}/heartbeat — request
+ *
+ * Keeps both the agent-level heartbeat and the active claim's per-claim
+ * `last_heartbeat_at` fresh while a long-running tool is executing, so
+ * `reclaimAbandonedClaims` does not mark the claim as `error` mid-run.
+ */
+export interface HeartbeatRequest {
+  agent_id: string;
+  role: TaskRole;
+}
+
+/** POST /api/tasks/{taskId}/heartbeat — success response */
+export interface HeartbeatResponse {
+  success: true;
+}
+
 // ── Registry ───────────────────────────────────────────────────
 
 /** Tool entry in the platform registry */

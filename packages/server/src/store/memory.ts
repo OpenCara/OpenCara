@@ -249,6 +249,13 @@ export class MemoryDataStore implements DataStore {
     }
   }
 
+  async updateClaimHeartbeat(claimId: string, timestamp: number): Promise<boolean> {
+    const claim = this.claims.get(claimId);
+    if (!claim || claim.status !== 'pending') return false;
+    claim.last_heartbeat_at = timestamp;
+    return true;
+  }
+
   // ── Generic task claiming (new separate task model) ─────────
 
   async claimTask(taskId: string): Promise<boolean> {
@@ -471,14 +478,21 @@ export class MemoryDataStore implements DataStore {
 
     for (const claim of this.claims.values()) {
       if (claim.status !== 'pending') continue;
-      const lastSeen = this.agentLastSeen.get(claim.agent_id);
-      // Reclaim if agent has a stale heartbeat, OR if no heartbeat exists
-      // and the claim itself is older than the threshold.
-      if (lastSeen !== undefined) {
-        if (lastSeen >= cutoff) continue; // Agent is active
+      // Reclaim precedence (per #783):
+      //  1. Per-claim last_heartbeat_at — authoritative when present.
+      //  2. Agent-level last_seen — fallback for old CLIs that don't send
+      //     /heartbeat (claim-hb is undefined).
+      //  3. claim.created_at — last resort when agent has never checked in.
+      if (claim.last_heartbeat_at !== undefined) {
+        if (claim.last_heartbeat_at >= cutoff) continue; // Active per-claim
       } else {
-        // No heartbeat — only reclaim if the claim itself is old
-        if (claim.created_at >= cutoff) continue;
+        const lastSeen = this.agentLastSeen.get(claim.agent_id);
+        if (lastSeen !== undefined) {
+          if (lastSeen >= cutoff) continue; // Agent is active
+        } else {
+          // No heartbeat — only reclaim if the claim itself is old
+          if (claim.created_at >= cutoff) continue;
+        }
       }
       claim.status = 'error';
       const task = this.tasks.get(claim.task_id);

@@ -160,6 +160,11 @@ export const ErrorRequestSchema = z.object({
   error: z.string().min(1, 'error must be a non-empty string'),
 });
 
+export const HeartbeatRequestSchema = z.object({
+  agent_id: agentIdSchema,
+  role: taskRoleSchema,
+});
+
 // ── Auth schemas ────────────────────────────────────────────────
 
 export const DeviceFlowTokenRequestSchema = z.object({
