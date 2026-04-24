@@ -7,6 +7,7 @@ import type {
   ResultResponse,
   ReviewVerdict,
   ReviewTask,
+  TaskClaim,
   TaskRole,
   DedupReport,
   TriageReport,
@@ -1053,63 +1054,6 @@ async function filterTasksForAgent(
 }
 
 /**
- * Collect models held by non-terminal worker claims in a group (#785).
- * Used at claim time as a fast-path pre-check to reject most duplicate-model
- * worker claims before touching task state. Terminal (rejected/error) claims
- * are excluded so failed attempts don't permanently lock out retries.
- *
- * Note: this is NOT the final authority on duplicate-model rejection — because
- * the pre-check is not atomic with the subsequent `claimTask` + `createClaim`
- * writes, concurrent same-model claimers on sibling tasks in the same group
- * can both pass. `hasConflictingWorkerModelClaim` runs AFTER the insert and
- * resolves the race with a deterministic tiebreaker.
- */
-async function getWorkerModelsInGroup(store: DataStore, groupId: string): Promise<Set<string>> {
-  const models = new Set<string>();
-  const groupTasks = await store.getTasksByGroup(groupId);
-  for (const gt of groupTasks) {
-    if (!isWorkerTask(gt)) continue;
-    const claims = await store.getClaims(gt.id);
-    for (const claim of claims) {
-      if (!claim.model) continue;
-      if (isClaimFailed(claim)) continue;
-      models.add(claim.model);
-    }
-  }
-  return models;
-}
-
-/**
- * Post-insert tiebreaker for the claim-time diversity race (#785).
- *
- * After `createClaim` succeeds, this scans the group for another non-terminal
- * worker claim with the same model. If one exists AND its claim id is
- * lexicographically smaller than `ownClaimId`, the caller lost the race and
- * must roll back. Claim ids are deterministic (`${taskId}:${agent_id}:${role}`),
- * so two racing sides evaluate the same comparator and exactly one loses —
- * giving atomic-equivalent correctness without a migration or new store method.
- */
-async function hasConflictingWorkerModelClaim(
-  store: DataStore,
-  groupId: string,
-  model: string,
-  ownClaimId: string,
-): Promise<boolean> {
-  const groupTasks = await store.getTasksByGroup(groupId);
-  for (const gt of groupTasks) {
-    if (!isWorkerTask(gt)) continue;
-    const claims = await store.getClaims(gt.id);
-    for (const claim of claims) {
-      if (claim.id === ownClaimId) continue;
-      if (claim.model !== model) continue;
-      if (isClaimFailed(claim)) continue;
-      if (claim.id < ownClaimId) return true; // the other claim wins the tiebreak
-    }
-  }
-  return false;
-}
-
-/**
  * Get completed worker reviews for a group (used for summary poll/claim responses).
  */
 async function getWorkerReviews(store: DataStore, groupId: string): Promise<ClaimReview[]> {
@@ -1467,13 +1411,40 @@ export function taskRoutes() {
       }
     }
 
-    // Strict model diversity (#785): for worker tasks, reject if the agent's
-    // model is already held by any non-terminal worker claim in the same group.
-    // Terminal (rejected/error) claims do not block retries. Summary claims are
-    // exempt — the synthesizer model is free to overlap with any worker model.
-    if (isWorkerTask(task) && model && task.group_id) {
-      const usedModels = await getWorkerModelsInGroup(store, task.group_id);
-      if (usedModels.has(model)) {
+    // Atomic CAS: pending → reviewing
+    const claimed = await store.claimTask(taskId);
+    if (!claimed) {
+      return apiError(c, 409, 'CLAIM_CONFLICT', 'Task already claimed');
+    }
+
+    // Role-aware claim ID
+    const claimId = `${taskId}:${agent_id}:${role}`;
+    const claimPayload: TaskClaim = {
+      id: claimId,
+      task_id: taskId,
+      agent_id,
+      role,
+      status: 'pending',
+      model,
+      tool,
+      thinking,
+      github_user_id: verifiedIdentity?.github_user_id,
+      github_username: verifiedIdentity?.github_username,
+      created_at: Date.now(),
+    };
+
+    // Strict model diversity (#785): for worker tasks with a declared model,
+    // use the atomic store method so the duplicate-model check and the
+    // claim insert happen in a single SQLite statement. This closes the
+    // TOCTOU race that a check-then-insert pattern would leave open —
+    // including the case where one claim fully finishes before the other
+    // starts. Summary and no-model claims take the plain createClaim path,
+    // since worker-level diversity doesn't apply to them.
+    const useAtomicDiversity = isWorkerTask(task) && !!model && !!task.group_id;
+    if (useAtomicDiversity) {
+      const outcome = await store.createWorkerClaimIfNoModelConflict(claimPayload, task.group_id);
+      if (outcome === 'model_conflict') {
+        await store.releaseTask(taskId);
         logger.warn('Claim rejected — duplicate model in group', {
           agentId: agent_id,
           taskId,
@@ -1487,60 +1458,15 @@ export function taskRoutes() {
           `Model '${model}' is already in use by another agent in this review group`,
         );
       }
-    }
-
-    // Atomic CAS: pending → reviewing
-    const claimed = await store.claimTask(taskId);
-    if (!claimed) {
-      return apiError(c, 409, 'CLAIM_CONFLICT', 'Task already claimed');
-    }
-
-    // Role-aware claim ID
-    const claimId = `${taskId}:${agent_id}:${role}`;
-    const claimCreated = await store.createClaim({
-      id: claimId,
-      task_id: taskId,
-      agent_id,
-      role,
-      status: 'pending',
-      model,
-      tool,
-      thinking,
-      github_user_id: verifiedIdentity?.github_user_id,
-      github_username: verifiedIdentity?.github_username,
-      created_at: Date.now(),
-    });
-    if (!claimCreated) {
-      // Release the task so another agent can claim it
-      await store.releaseTask(taskId);
-      return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
-    }
-
-    // Post-insert tiebreaker for strict model diversity (#785).
-    // The pre-check above is not atomic with createClaim, so two same-model
-    // agents racing on different sibling tasks in the same group can both
-    // pass. Re-scan now and, if another non-terminal worker claim with the
-    // same model and a lexicographically smaller id exists, the race is lost.
-    // Roll back deterministically so exactly one same-model worker survives
-    // in the group.
-    if (isWorkerTask(task) && model && task.group_id) {
-      const lostRace = await hasConflictingWorkerModelClaim(store, task.group_id, model, claimId);
-      if (lostRace) {
-        await store.updateClaim(claimId, { status: 'error' });
+      if (outcome === 'agent_conflict') {
         await store.releaseTask(taskId);
-        logger.warn('Claim rolled back — lost model diversity race in group', {
-          agentId: agent_id,
-          taskId,
-          groupId: task.group_id,
-          model,
-          claimId,
-        });
-        return apiError(
-          c,
-          409,
-          'CLAIM_CONFLICT',
-          `Model '${model}' is already in use by another agent in this review group`,
-        );
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
+      }
+    } else {
+      const claimCreated = await store.createClaim(claimPayload);
+      if (!claimCreated) {
+        await store.releaseTask(taskId);
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
       }
     }
 

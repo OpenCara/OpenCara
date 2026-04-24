@@ -502,6 +502,68 @@ export class D1DataStore implements DataStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  async createWorkerClaimIfNoModelConflict(
+    claim: TaskClaim,
+    groupId: string,
+  ): Promise<'ok' | 'model_conflict' | 'agent_conflict'> {
+    // Step 1: handle any prior claim by the same agent on this task+role. An
+    // active (pending/completed) claim means the agent can't re-claim; a
+    // terminal (rejected/error) claim is removed so the retry can proceed.
+    // This is scoped to the agent's own claim tuple, so it cannot race with
+    // another agent's insert.
+    const existing = await this.db
+      .prepare('SELECT id, status FROM claims WHERE task_id = ? AND agent_id = ? AND role = ?')
+      .bind(claim.task_id, claim.agent_id, claim.role)
+      .first<{ id: string; status: string }>();
+
+    if (existing) {
+      if (existing.status === 'pending' || existing.status === 'completed') {
+        return 'agent_conflict';
+      }
+      await this.db.prepare('DELETE FROM claims WHERE id = ?').bind(existing.id).run();
+    }
+
+    // Step 2: atomic INSERT guarded by a NOT EXISTS subquery for model
+    // conflict. SQLite evaluates the subquery and performs the INSERT as a
+    // single statement, so no two same-model worker claims in the same group
+    // can both pass this gate concurrently (#785).
+    const result = await this.db
+      .prepare(
+        `INSERT INTO claims (id, task_id, agent_id, role, status, model, tool, thinking,
+          review_text, verdict, tokens_used, github_user_id, github_username, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM claims c
+           JOIN tasks t ON c.task_id = t.id
+           WHERE t.group_id = ?
+             AND c.role IN ('review', 'issue_review')
+             AND c.status IN ('pending', 'completed')
+             AND c.model = ?
+         )`,
+      )
+      .bind(
+        claim.id,
+        claim.task_id,
+        claim.agent_id,
+        claim.role,
+        claim.status,
+        claim.model ?? null,
+        claim.tool ?? null,
+        claim.thinking ?? null,
+        claim.review_text ?? null,
+        claim.verdict ?? null,
+        claim.tokens_used ?? null,
+        claim.github_user_id ?? null,
+        claim.github_username ?? null,
+        claim.created_at,
+        groupId,
+        claim.model ?? null,
+      )
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0 ? 'ok' : 'model_conflict';
+  }
+
   async getClaim(claimId: string): Promise<TaskClaim | null> {
     const row = await this.db
       .prepare('SELECT * FROM claims WHERE id = ?')

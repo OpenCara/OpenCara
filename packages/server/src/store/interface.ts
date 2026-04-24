@@ -58,6 +58,27 @@ export interface DataStore {
 
   // Claims — createClaim returns false if (task_id, agent_id) already exists
   createClaim(claim: TaskClaim): Promise<boolean>;
+  /**
+   * Atomically create a worker claim only if no other non-terminal worker
+   * claim (`review` or `issue_review`, `pending`/`completed`) in the given
+   * group already uses the claim's model. Strict model diversity (#785).
+   *
+   * Returns:
+   *   - `'ok'` — claim inserted.
+   *   - `'model_conflict'` — another agent already holds a non-terminal worker
+   *     claim with the same model in this group; nothing was inserted.
+   *   - `'agent_conflict'` — an active claim already exists for this
+   *     (task_id, agent_id, role); nothing was inserted.
+   *
+   * Must be implemented so that the model-conflict check and the insert are a
+   * single atomic operation (e.g. a SQLite `INSERT ... WHERE NOT EXISTS`
+   * statement). This is the sole authority on duplicate-model rejection — the
+   * poll-side visibility check is a fast-path hint, not a correctness gate.
+   */
+  createWorkerClaimIfNoModelConflict(
+    claim: TaskClaim,
+    groupId: string,
+  ): Promise<'ok' | 'model_conflict' | 'agent_conflict'>;
   getClaim(claimId: string): Promise<TaskClaim | null>;
   /** Batch fetch multiple claims by ID. Returns a Map of claimId → TaskClaim for found claims. */
   getClaimsBatch(claimIds: string[]): Promise<Map<string, TaskClaim>>;

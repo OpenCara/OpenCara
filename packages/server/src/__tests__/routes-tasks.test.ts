@@ -3778,9 +3778,16 @@ describe('Task Routes', () => {
       expect(body.error.code).toBe('CLAIM_CONFLICT');
     });
 
-    it('claim: concurrent same-model claims on sibling tasks — exactly one survives (TOCTOU)', async () => {
+    // The store-level atomic INSERT (`createWorkerClaimIfNoModelConflict`) is
+    // the sole authority for duplicate-model rejection. These tests exercise
+    // the three scenarios a check-then-insert pattern can get wrong:
+    //   - fully concurrent with firing order A→B (first fired wins)
+    //   - fully concurrent with firing order B→A (first fired still wins)
+    //   - fully sequential where B completes before A starts (A still loses)
+    // All three must produce exactly one 200 and one 409, with exactly one
+    // non-terminal worker claim for that model in the group.
+    async function setupRaceGroup() {
       const config = makeDiversityConfig();
-      // Two pending review tasks in the same group.
       await store.createTask(
         makeTask({
           id: 'task-A',
@@ -3801,9 +3808,29 @@ describe('Task Routes', () => {
           config,
         }),
       );
+    }
 
-      // Fire both claims concurrently with the same model on different sibling
-      // tasks — this is the race that the pre-check alone cannot close.
+    function assertExactlyOneWinner(statuses: number[]) {
+      expect([...statuses].sort()).toEqual([200, 409]);
+    }
+
+    async function assertGroupHasOneOpusClaim() {
+      const allClaims = [
+        ...(await store.getClaims('task-A')),
+        ...(await store.getClaims('task-B')),
+      ];
+      const nonTerminal = allClaims.filter(
+        (c) =>
+          c.model === 'claude-opus-4-7' &&
+          c.role === 'review' &&
+          c.status !== 'rejected' &&
+          c.status !== 'error',
+      );
+      expect(nonTerminal).toHaveLength(1);
+    }
+
+    it('claim: concurrent same-model sibling-task race — A fired first', async () => {
+      await setupRaceGroup();
       const [resA, resB] = await Promise.all([
         request('POST', '/api/tasks/task-A/claim', {
           agent_id: 'agent-A',
@@ -3818,49 +3845,63 @@ describe('Task Routes', () => {
           tool: 'claude',
         }),
       ]);
+      assertExactlyOneWinner([resA.status, resB.status]);
+      await assertGroupHasOneOpusClaim();
+    });
 
-      // Exactly one winner, one loser. The tiebreaker is deterministic
-      // (smallest claim id wins), so the outcome is stable regardless of
-      // scheduling.
-      const statuses = [resA.status, resB.status].sort();
-      expect(statuses).toEqual([200, 409]);
+    it('claim: concurrent same-model sibling-task race — B fired first (inverted order)', async () => {
+      await setupRaceGroup();
+      // Inverted firing order: B's request enters the Promise.all first.
+      // Correctness must not depend on which side Promise.all scheduled first.
+      const [resB, resA] = await Promise.all([
+        request('POST', '/api/tasks/task-B/claim', {
+          agent_id: 'agent-B',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+        request('POST', '/api/tasks/task-A/claim', {
+          agent_id: 'agent-A',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+      ]);
+      assertExactlyOneWinner([resA.status, resB.status]);
+      await assertGroupHasOneOpusClaim();
+    });
 
-      const loser = resA.status === 409 ? resA : resB;
-      const loserBody = await loser.json();
-      expect(loserBody.error.code).toBe('CLAIM_CONFLICT');
-      expect(loserBody.error.message).toMatch(/claude-opus-4-7/);
+    it('claim: sequential same-model claim across sibling tasks still rejected', async () => {
+      // This is the scenario a pure post-insert tiebreaker would miss: B
+      // completes its entire flow (insert + response) before A starts, so
+      // B's post-check saw an empty group. The atomic INSERT closes this
+      // case because A's subquery sees B's committed claim.
+      await setupRaceGroup();
+      const resB = await request('POST', '/api/tasks/task-B/claim', {
+        agent_id: 'agent-B',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(resB.status).toBe(200);
 
-      // Exactly one non-terminal worker claim for this model in the group.
-      const allClaims = [
-        ...(await store.getClaims('task-A')),
-        ...(await store.getClaims('task-B')),
-      ];
-      const nonTerminalOpusClaims = allClaims.filter(
-        (c) =>
-          c.model === 'claude-opus-4-7' &&
-          c.role === 'review' &&
-          c.status !== 'rejected' &&
-          c.status !== 'error',
-      );
-      expect(nonTerminalOpusClaims).toHaveLength(1);
+      const resA = await request('POST', '/api/tasks/task-A/claim', {
+        agent_id: 'agent-A',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(resA.status).toBe(409);
+      const body = await resA.json();
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toMatch(/claude-opus-4-7/);
 
-      // The winning claim is the one with the smaller id (deterministic).
-      const winningId = nonTerminalOpusClaims[0].id;
-      const expectedWinner = ['task-A:agent-A:review', 'task-B:agent-B:review'].sort()[0];
-      expect(winningId).toBe(expectedWinner);
-
-      // The losing claim exists as a terminal 'error' (rolled back), not
-      // deleted — so the operator can see why the request failed.
-      const loserClaims = allClaims.filter(
-        (c) => c.model === 'claude-opus-4-7' && c.status === 'error',
-      );
-      expect(loserClaims).toHaveLength(1);
-
-      // And the loser's task is back to pending so another (different-model)
-      // agent can still claim it.
-      const losingTaskId = loser === resA ? 'task-A' : 'task-B';
-      const losingTask = await store.getTask(losingTaskId);
+      // Losing task released back to pending so a different-model agent
+      // can still claim it.
+      const losingTask = await store.getTask('task-A');
       expect(losingTask?.status).toBe('pending');
+
+      await assertGroupHasOneOpusClaim();
     });
   });
 
