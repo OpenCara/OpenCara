@@ -416,10 +416,10 @@ Related CLI releases:
 
 3 team-lead-reported bugs. Originally dispatched to server-side implement agents but no claims surfaced; team-lead spawned 3 Claude Code worktree dev agents which all landed PRs within ~60 min. Bot reviewed each; two (#786/#788) were team-lead direct-merged after agent self-driven fix iterations; #787 merged bot-approved first pass.
 
-| Issue | Agent      | PR   | Description                                                                                                     |
-| ----- | ---------- | ---- | --------------------------------------------------------------------------------------------------------------- |
-| #783  | server-dev | #787 | `POST /api/tasks/:id/heartbeat` endpoint + per-claim `last_heartbeat_at` column + reclaim integration [DONE]    |
-| #782  | cli-dev    | #788 | Periodic heartbeat during `toolExecutor.run` (shared executor + router-mode), 60s interval [DONE]               |
+| Issue | Agent      | PR   | Description                                                                                                        |
+| ----- | ---------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
+| #783  | server-dev | #787 | `POST /api/tasks/:id/heartbeat` endpoint + per-claim `last_heartbeat_at` column + reclaim integration [DONE]       |
+| #782  | cli-dev    | #788 | Periodic heartbeat during `toolExecutor.run` (shared executor + router-mode), 60s interval [DONE]                  |
 | #785  | server-dev | #786 | Strict worker-level model diversity via atomic `createWorkerClaimIfNoModelConflict` (D1 conditional INSERT) [DONE] |
 
 ## Shelved
