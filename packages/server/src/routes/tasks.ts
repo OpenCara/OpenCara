@@ -7,6 +7,7 @@ import type {
   ResultResponse,
   ReviewVerdict,
   ReviewTask,
+  TaskClaim,
   TaskRole,
   DedupReport,
   TriageReport,
@@ -120,30 +121,32 @@ function isTargetModelVisible(
 }
 
 /**
- * Check if a task is visible to the given agent considering model diversity.
- * During the grace window, hides tasks from agents whose model is already
- * used by another claim in the same group. After the grace window, visible to all.
+ * Check if a worker task is visible to the given agent considering model
+ * diversity. Strict rule (#785): if the agent's model is already used by ANY
+ * non-terminal (pending or completed) worker claim in the same task group,
+ * hide the task. Terminal claims (rejected/error) do NOT lock out retries.
  *
- * Grace period starts from when the model was first claimed in the group,
- * not from task creation time. This ensures the diversity window covers
- * the actual review period.
+ * Diversity applies only to worker tasks — summary tasks are exempt (the
+ * synthesizer model is free to overlap with a worker's model). Callers must
+ * only invoke this for worker tasks.
+ *
+ * The legacy `modelDiversityGraceMs` config is no longer consulted; the check
+ * is always strict. The field is still parsed for back-compat with existing
+ * configs (silently ignored).
  */
 function isModelDiversityVisible(
   task: ReviewTask,
   model: string | undefined,
-  groupClaimedModels: Map<string, Map<string, number>>,
+  groupClaimedModels: Map<string, Set<string>>,
 ): boolean {
-  const graceMs = task.config.modelDiversityGraceMs;
-  if (graceMs <= 0) return true; // diversity disabled
   if (!model) return true; // agent didn't declare a model, can't check
   if (!task.group_id) return true; // no group, no diversity to enforce
 
   const claimedModels = groupClaimedModels.get(task.group_id);
   if (!claimedModels || !claimedModels.has(model)) return true; // model not yet used
 
-  // Model already used — check if grace period has elapsed since the model was claimed
-  const claimedAt = claimedModels.get(model)!;
-  return Date.now() - claimedAt >= graceMs;
+  // Model already used by a non-terminal worker claim — strictly hide.
+  return false;
 }
 
 /**
@@ -776,7 +779,12 @@ interface PollContext {
   tasksById: Map<string, ReviewTask>;
   dedupBlockedRepos: Set<string>;
   oldestDedupPerRepo: Map<string, ReviewTask>;
-  groupClaimedModels: Map<string, Map<string, number>>;
+  /**
+   * Per-group set of models held by non-terminal worker claims (pending or
+   * completed). Used for strict model diversity enforcement — an agent with
+   * a model present here cannot claim any worker slot in that group (#785).
+   */
+  groupClaimedModels: Map<string, Set<string>>;
 }
 
 /**
@@ -806,34 +814,33 @@ async function buildPollContext(store: DataStore): Promise<PollContext> {
     }
   }
 
-  // Model diversity: build claimed-models-per-group map (model → earliest claim timestamp)
+  // Model diversity (#785): build per-group set of models held by non-terminal
+  // worker claims (pending or completed). Strictly blocks same-model claims in
+  // the group. Summary claims are exempt — synthesizer model can overlap with
+  // any worker's model.
   const pendingGroupIds = new Set<string>();
   for (const t of tasks) {
-    if (t.group_id && t.config.modelDiversityGraceMs > 0) {
-      pendingGroupIds.add(t.group_id);
-    }
+    if (t.group_id) pendingGroupIds.add(t.group_id);
   }
-  const groupClaimedModels = new Map<string, Map<string, number>>();
-  if (pendingGroupIds.size > 0) {
-    for (const groupId of pendingGroupIds) {
-      const groupTasks = await store.getTasksByGroup(groupId);
-      for (const gt of groupTasks) {
-        if (gt.status !== 'reviewing' && gt.status !== 'completed') continue;
-        const claims = await store.getClaims(gt.id);
-        for (const claim of claims) {
-          if (claim.model) {
-            let models = groupClaimedModels.get(groupId);
-            if (!models) {
-              models = new Map();
-              groupClaimedModels.set(groupId, models);
-            }
-            const existing = models.get(claim.model);
-            const claimTime = claim.created_at;
-            if (existing === undefined || claimTime < existing) {
-              models.set(claim.model, claimTime);
-            }
-          }
+  const groupClaimedModels = new Map<string, Set<string>>();
+  for (const groupId of pendingGroupIds) {
+    const groupTasks = await store.getTasksByGroup(groupId);
+    for (const gt of groupTasks) {
+      if (!isWorkerTask(gt)) continue;
+      // Pending tasks can only carry terminal claims (released after a
+      // prior error/reject). Skip them to avoid an unnecessary getClaims
+      // round-trip — terminal claims would be filtered out below anyway.
+      if (gt.status !== 'reviewing' && gt.status !== 'completed') continue;
+      const claims = await store.getClaims(gt.id);
+      for (const claim of claims) {
+        if (!claim.model) continue;
+        if (isClaimFailed(claim)) continue; // terminal failures don't lock out retries
+        let models = groupClaimedModels.get(groupId);
+        if (!models) {
+          models = new Set();
+          groupClaimedModels.set(groupId, models);
         }
+        models.add(claim.model);
       }
     }
   }
@@ -941,13 +948,12 @@ async function filterTasksForAgent(
     } else {
       // Worker task — check model/tool preference grace period
       if (!isWorkerVisibleToAgent(task, agent.model, agent.tool, effectiveReviewGraceMs)) continue;
+      // Strict model diversity (#785): worker-level only — summary tasks exempt.
+      if (!isModelDiversityVisible(task, agent.model, groupClaimedModels)) continue;
     }
 
     // Target model preference: during grace period, only matching agents see the task
     if (!isTargetModelVisible(task, agent.model, effectiveTargetModelGraceMs)) continue;
-
-    // Model diversity: prefer agents with different models across the group
-    if (!isModelDiversityVisible(task, agent.model, groupClaimedModels)) continue;
 
     candidates.push({
       task,
@@ -1414,7 +1420,7 @@ export function taskRoutes() {
 
     // Role-aware claim ID
     const claimId = `${taskId}:${agent_id}:${role}`;
-    const claimCreated = await store.createClaim({
+    const claimPayload: TaskClaim = {
       id: claimId,
       task_id: taskId,
       agent_id,
@@ -1426,11 +1432,43 @@ export function taskRoutes() {
       github_user_id: verifiedIdentity?.github_user_id,
       github_username: verifiedIdentity?.github_username,
       created_at: Date.now(),
-    });
-    if (!claimCreated) {
-      // Release the task so another agent can claim it
-      await store.releaseTask(taskId);
-      return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
+    };
+
+    // Strict model diversity (#785): for worker tasks with a declared model,
+    // use the atomic store method so the duplicate-model check and the
+    // claim insert happen in a single SQLite statement. This closes the
+    // TOCTOU race that a check-then-insert pattern would leave open —
+    // including the case where one claim fully finishes before the other
+    // starts. Summary and no-model claims take the plain createClaim path,
+    // since worker-level diversity doesn't apply to them.
+    const useAtomicDiversity = isWorkerTask(task) && !!model && !!task.group_id;
+    if (useAtomicDiversity) {
+      const outcome = await store.createWorkerClaimIfNoModelConflict(claimPayload, task.group_id);
+      if (outcome === 'model_conflict') {
+        await store.releaseTask(taskId);
+        logger.warn('Claim rejected — duplicate model in group', {
+          agentId: agent_id,
+          taskId,
+          groupId: task.group_id,
+          model,
+        });
+        return apiError(
+          c,
+          409,
+          'CLAIM_CONFLICT',
+          `Model '${model}' is already in use by another agent in this review group`,
+        );
+      }
+      if (outcome === 'agent_conflict') {
+        await store.releaseTask(taskId);
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
+      }
+    } else {
+      const claimCreated = await store.createClaim(claimPayload);
+      if (!claimCreated) {
+        await store.releaseTask(taskId);
+        return apiError(c, 409, 'CLAIM_CONFLICT', 'Agent already has a claim on this task');
+      }
     }
 
     // Update heartbeat — keep agent alive after successful claim

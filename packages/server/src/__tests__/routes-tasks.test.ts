@@ -3285,9 +3285,10 @@ describe('Task Routes', () => {
     });
   });
 
-  // ── Model diversity grace period (#554) ─────────────────────
+  // ── Strict model diversity (#785) ────────────────────────────
+  // Also retains coverage for the related #554 visibility behavior.
 
-  describe('model diversity grace period (#554)', () => {
+  describe('strict model diversity (#785)', () => {
     function makeDiversityConfig(graceMs: number = 30_000) {
       return {
         ...DEFAULT_REVIEW_CONFIG,
@@ -3387,9 +3388,9 @@ describe('Task Routes', () => {
       expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
     });
 
-    it('shows task after grace period expires even if same model', async () => {
+    it('grace period config is now no-op for workers — same model stays hidden past the old window', async () => {
       const config = makeDiversityConfig(30_000);
-      // Task 1: claimed with gpt-5.4
+      // Task 1: claimed with gpt-5.4 well past the grace window
       await store.createTask(
         makeTask({
           id: 'task-1',
@@ -3411,7 +3412,7 @@ describe('Task Routes', () => {
         created_at: Date.now() - 60_000,
       });
 
-      // Task 2: pending, same group, created 60s ago (> 30s grace)
+      // Task 2: pending, same group, created 60s ago (past legacy 30s grace)
       await store.createTask(
         makeTask({
           id: 'task-2',
@@ -3424,16 +3425,16 @@ describe('Task Routes', () => {
         }),
       );
 
-      // Agent with gpt-5.4 should see task-2 after grace period
+      // #785: grace no longer opens the gate — same model still hidden.
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-B',
         model: 'gpt-5.4',
       });
       const body = await res.json();
-      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(0);
     });
 
-    it('diversity grace disabled (0) allows same model immediately', async () => {
+    it('modelDiversityGraceMs=0 is now a no-op — strict diversity still hides duplicate model', async () => {
       const config = makeDiversityConfig(0);
       // Task 1: claimed with gpt-5.4
       await store.createTask(
@@ -3470,13 +3471,14 @@ describe('Task Routes', () => {
         }),
       );
 
-      // Same model but diversity disabled — should see task
+      // #785: back-compat field is parsed but no longer consulted — strict
+      // diversity still hides the task from duplicate-model agents.
       const res = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-B',
         model: 'gpt-5.4',
       });
       const body = await res.json();
-      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
+      expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(0);
     });
 
     it('agent without model is visible even if models are claimed in group', async () => {
@@ -3524,7 +3526,7 @@ describe('Task Routes', () => {
       expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(1);
     });
 
-    it('applies diversity check to summary tasks too', async () => {
+    it('summary tasks are exempt from diversity — synthesizer may reuse any worker model', async () => {
       const config = makeDiversityConfig();
       // Review tasks: completed with various models
       await store.createTask(
@@ -3583,7 +3585,8 @@ describe('Task Routes', () => {
         }),
       );
 
-      // Agent with gpt-5.4 — model already used in group — should be hidden during grace
+      // #785: summary is worker-diversity-exempt — agent with gpt-5.4 (already
+      // used by a worker) can still see and claim the summary.
       const res1 = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-C',
         model: 'gpt-5.4',
@@ -3592,9 +3595,9 @@ describe('Task Routes', () => {
       const summaryTasks1 = body1.tasks.filter(
         (t: { task_id: string }) => t.task_id === 'task-summary',
       );
-      expect(summaryTasks1).toHaveLength(0);
+      expect(summaryTasks1).toHaveLength(1);
 
-      // Agent with claude-sonnet-4-6 — different model — should see it
+      // Agent with a different model still sees it too
       const res2 = await request('POST', '/api/tasks/poll', {
         agent_id: 'agent-D',
         model: 'claude-sonnet-4-6',
@@ -3651,6 +3654,403 @@ describe('Task Routes', () => {
       });
       const body = await res.json();
       expect(body.tasks.filter((t: { task_id: string }) => t.task_id === 'task-2')).toHaveLength(0);
+    });
+
+    // ── Claim-time strict enforcement (#785) ────────────────
+
+    it('claim: same-model second claim in group is rejected with 409 CLAIM_CONFLICT', async () => {
+      const config = makeDiversityConfig();
+      // Two review tasks in one group
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-dup',
+          status: 'reviewing',
+          config,
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+        created_at: Date.now(),
+      });
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-dup',
+          status: 'pending',
+          config,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-2/claim', {
+        agent_id: 'agent-B',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toMatch(/claude-opus-4-7/);
+      expect(body.error.message).toMatch(/already in use/i);
+    });
+
+    it('claim: same-model third agent allowed after first claim errors', async () => {
+      const config = makeDiversityConfig();
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-retry',
+          status: 'reviewing',
+          config,
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'error',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+        created_at: Date.now(),
+      });
+      // Release so task-1 itself can be re-claimed. Also create a sibling pending task.
+      await store.releaseTask('task-1');
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-retry',
+          status: 'pending',
+          config,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-2/claim', {
+        agent_id: 'agent-C',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
+
+    it('claim: same-model allowed after prior claim is rejected', async () => {
+      const config = makeDiversityConfig();
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-rej',
+          status: 'reviewing',
+          config,
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'rejected',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+        created_at: Date.now(),
+      });
+      await store.releaseTask('task-1');
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-rej',
+          status: 'pending',
+          config,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-2/claim', {
+        agent_id: 'agent-C',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('claim: different models in same group are both allowed', async () => {
+      const config = makeDiversityConfig();
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-mix',
+          status: 'pending',
+          config,
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-mix',
+          status: 'pending',
+          config,
+        }),
+      );
+
+      const res1 = await request('POST', '/api/tasks/task-1/claim', {
+        agent_id: 'agent-A',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(res1.status).toBe(200);
+
+      const res2 = await request('POST', '/api/tasks/task-2/claim', {
+        agent_id: 'agent-B',
+        role: 'review',
+        model: 'gemini-2.5-pro',
+        tool: 'gemini',
+      });
+      expect(res2.status).toBe(200);
+    });
+
+    it('claim: summary may reuse a worker model (diversity is worker-only)', async () => {
+      const config = makeDiversityConfig();
+      // Completed worker with claude-opus-4-7
+      await store.createTask(
+        makeTask({
+          id: 'task-w1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-sum',
+          status: 'completed',
+          config,
+        }),
+      );
+      await store.createClaim({
+        id: 'task-w1:agent-A:review',
+        task_id: 'task-w1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'completed',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+        review_text: 'LGTM',
+        created_at: Date.now(),
+      });
+      // Summary ready to claim
+      await store.createTask(
+        makeTask({
+          id: 'task-sum',
+          task_type: 'summary',
+          queue: 'summary',
+          group_id: 'group-sum',
+          status: 'pending',
+          config,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-sum/claim', {
+        agent_id: 'agent-B',
+        role: 'summary',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.claimed).toBe(true);
+    });
+
+    it('claim: grace period config is a no-op — same-model rejected past legacy window', async () => {
+      const config = makeDiversityConfig(50); // tiny grace — must not open the gate
+      await store.createTask(
+        makeTask({
+          id: 'task-1',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-grace',
+          status: 'reviewing',
+          config,
+          created_at: Date.now() - 10_000,
+        }),
+      );
+      await store.createClaim({
+        id: 'task-1:agent-A:review',
+        task_id: 'task-1',
+        agent_id: 'agent-A',
+        role: 'review',
+        status: 'pending',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+        created_at: Date.now() - 10_000,
+      });
+      await store.createTask(
+        makeTask({
+          id: 'task-2',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-grace',
+          status: 'pending',
+          config,
+          created_at: Date.now() - 10_000,
+        }),
+      );
+
+      const res = await request('POST', '/api/tasks/task-2/claim', {
+        agent_id: 'agent-B',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+    });
+
+    // The store-level atomic INSERT (`createWorkerClaimIfNoModelConflict`) is
+    // the sole authority for duplicate-model rejection. These tests exercise
+    // the three scenarios a check-then-insert pattern can get wrong:
+    //   - fully concurrent with firing order A→B (first fired wins)
+    //   - fully concurrent with firing order B→A (first fired still wins)
+    //   - fully sequential where B completes before A starts (A still loses)
+    // All three must produce exactly one 200 and one 409, with exactly one
+    // non-terminal worker claim for that model in the group.
+    async function setupRaceGroup() {
+      const config = makeDiversityConfig();
+      await store.createTask(
+        makeTask({
+          id: 'task-A',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-race',
+          status: 'pending',
+          config,
+        }),
+      );
+      await store.createTask(
+        makeTask({
+          id: 'task-B',
+          task_type: 'review',
+          queue: 'review',
+          group_id: 'group-race',
+          status: 'pending',
+          config,
+        }),
+      );
+    }
+
+    function assertExactlyOneWinner(statuses: number[]) {
+      expect([...statuses].sort()).toEqual([200, 409]);
+    }
+
+    async function assertGroupHasOneOpusClaim() {
+      const allClaims = [
+        ...(await store.getClaims('task-A')),
+        ...(await store.getClaims('task-B')),
+      ];
+      const nonTerminal = allClaims.filter(
+        (c) =>
+          c.model === 'claude-opus-4-7' &&
+          c.role === 'review' &&
+          c.status !== 'rejected' &&
+          c.status !== 'error',
+      );
+      expect(nonTerminal).toHaveLength(1);
+    }
+
+    it('claim: concurrent same-model sibling-task race — A fired first', async () => {
+      await setupRaceGroup();
+      const [resA, resB] = await Promise.all([
+        request('POST', '/api/tasks/task-A/claim', {
+          agent_id: 'agent-A',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+        request('POST', '/api/tasks/task-B/claim', {
+          agent_id: 'agent-B',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+      ]);
+      assertExactlyOneWinner([resA.status, resB.status]);
+      await assertGroupHasOneOpusClaim();
+    });
+
+    it('claim: concurrent same-model sibling-task race — B fired first (inverted order)', async () => {
+      await setupRaceGroup();
+      // Inverted firing order: B's request enters the Promise.all first.
+      // Correctness must not depend on which side Promise.all scheduled first.
+      const [resB, resA] = await Promise.all([
+        request('POST', '/api/tasks/task-B/claim', {
+          agent_id: 'agent-B',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+        request('POST', '/api/tasks/task-A/claim', {
+          agent_id: 'agent-A',
+          role: 'review',
+          model: 'claude-opus-4-7',
+          tool: 'claude',
+        }),
+      ]);
+      assertExactlyOneWinner([resA.status, resB.status]);
+      await assertGroupHasOneOpusClaim();
+    });
+
+    it('claim: sequential same-model claim across sibling tasks still rejected', async () => {
+      // This is the scenario a pure post-insert tiebreaker would miss: B
+      // completes its entire flow (insert + response) before A starts, so
+      // B's post-check saw an empty group. The atomic INSERT closes this
+      // case because A's subquery sees B's committed claim.
+      await setupRaceGroup();
+      const resB = await request('POST', '/api/tasks/task-B/claim', {
+        agent_id: 'agent-B',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(resB.status).toBe(200);
+
+      const resA = await request('POST', '/api/tasks/task-A/claim', {
+        agent_id: 'agent-A',
+        role: 'review',
+        model: 'claude-opus-4-7',
+        tool: 'claude',
+      });
+      expect(resA.status).toBe(409);
+      const body = await resA.json();
+      expect(body.error.code).toBe('CLAIM_CONFLICT');
+      expect(body.error.message).toMatch(/claude-opus-4-7/);
+
+      // Losing task released back to pending so a different-model agent
+      // can still claim it.
+      const losingTask = await store.getTask('task-A');
+      expect(losingTask?.status).toBe('pending');
+
+      await assertGroupHasOneOpusClaim();
     });
   });
 

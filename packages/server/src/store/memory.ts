@@ -222,6 +222,44 @@ export class MemoryDataStore implements DataStore {
     return true;
   }
 
+  async createWorkerClaimIfNoModelConflict(
+    claim: TaskClaim,
+    groupId: string,
+  ): Promise<'ok' | 'model_conflict' | 'agent_conflict'> {
+    // The body is fully synchronous once entered — no `await` between the
+    // checks and the set — so no other async invocation can interleave.
+    // That gives the same atomicity guarantee as the D1 `INSERT ... WHERE
+    // NOT EXISTS` statement.
+    for (const [id, existing] of this.claims) {
+      if (
+        existing.task_id === claim.task_id &&
+        existing.agent_id === claim.agent_id &&
+        existing.role === claim.role
+      ) {
+        if (existing.status === 'pending' || existing.status === 'completed') {
+          return 'agent_conflict';
+        }
+        this.claims.delete(id);
+      }
+    }
+
+    if (claim.model) {
+      const groupTaskIds = new Set<string>();
+      for (const t of this.tasks.values()) {
+        if (t.group_id === groupId) groupTaskIds.add(t.id);
+      }
+      for (const other of this.claims.values()) {
+        if (!groupTaskIds.has(other.task_id)) continue;
+        if (other.role !== 'review' && other.role !== 'issue_review') continue;
+        if (other.status !== 'pending' && other.status !== 'completed') continue;
+        if (other.model === claim.model) return 'model_conflict';
+      }
+    }
+
+    this.claims.set(claim.id, { ...claim });
+    return 'ok';
+  }
+
   async getClaim(claimId: string): Promise<TaskClaim | null> {
     const claim = this.claims.get(claimId);
     return claim ? { ...claim } : null;
