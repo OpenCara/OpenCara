@@ -729,6 +729,13 @@ All 5 issues closed + board → Done. 5 worktrees pending team-lead cleanup.
 
 - **M23 SHELVED.** Epic #727 + all 38 sub-issues (#728–#765) + E2E smoke test #772 closed as `not planned`. All 40 items moved to Done on the project board. Design doc retained at `.claude/designs/opencara-relay.md`; `epic:relay` label kept for archival. Decision final — no clarifier needed. Closed items (in order R1..R31 + R15a + E2E): #727 (epic), #728, #729, #730, #731, #732, #733, #734, #735, #736, #737, #738, #739, #740, #741, #742, #743, #744, #745, #746, #747, #748, #749, #750, #751, #752, #753, #754, #755, #756, #757, #758, #759, #760, #761, #762, #763, #764, #765, #772 — all `[closed: shelved M23]`.
 
+### v0.25.1 CLI release — configurable summary input cap (team-lead direct, 2026-04-24)
+
+- **PR #784 merged** commit `3240ed1` — `feat(cli): make summary input cap configurable via max_summary_input_kb`. Adds top-level config field; default cap raised 200 KB → 500 KB. Direct team-lead fix for live summary tasks rejecting at 208 KB. Not tied to a numbered issue.
+- **Version bump** commit `085f9a8` — `chore: bump CLI version to 0.25.1`. Tag `v0.25.1` pushed.
+- **npm publish**: publish-cli.yml workflow run 24875982168 (triggered 2026-04-24T06:37:11Z) completed `success`. opencara@0.25.1 live on npm.
+- docs/PLAN.md CLI release list updated (added 0.25.1 line alongside 0.24.3 and 0.25.0).
+
 ### Mid-review claim reclaim bug (team-lead reported, 2026-04-23)
 
 - #782 [cli-dev, P2, bug, M] Periodic heartbeat during tool execution to prevent mid-run claim reclaim — **DISPATCHED 2026-04-23** (Agent=cli-dev backfilled, moved to In progress). Live-agent evidence: 13-min Codex review on ParadiseEngine#52 (task 4c05ea84) submitted 409 "Claim already error" because `reclaimAbandonedClaims(10min)` flipped the active claim to error mid-run. CLI only heartbeats on claim-create + result-submit; nothing during `toolExecutor.run`. Paired with #783.
