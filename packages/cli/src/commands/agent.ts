@@ -61,7 +61,13 @@ import {
   InputTooLargeError,
   type FlaggedReview,
 } from '../summary.js';
-import { validateCommandBinary, estimateTokens, testCommand } from '../tool-executor.js';
+import {
+  validateCommandBinary,
+  estimateTokens,
+  testCommand,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  type HeartbeatControl,
+} from '../tool-executor.js';
 import { RouterRelay } from '../router.js';
 import {
   createSessionTracker,
@@ -679,6 +685,62 @@ interface HandleTaskResult {
 }
 
 /**
+ * Roles whose tool execution can exceed `CLAIM_STALE_THRESHOLD_MS` (10 min)
+ * and therefore require periodic heartbeats to stop the server from
+ * reclaiming their claim as `'error'`. Short-running roles (triage, dedup,
+ * issue_review) complete well under the threshold and do not need this.
+ */
+export function isLongRunningRole(role: TaskRole): boolean {
+  return isFixRole(role) || isImplementRole(role) || role === 'review' || role === 'summary';
+}
+
+/**
+ * Build a HeartbeatControl for a given task+agent.
+ *
+ * The callback POSTs `{ agent_id, role }` to `/api/tasks/:id/heartbeat`.
+ * Failures are swallowed — a broken heartbeat must never kill the in-flight
+ * tool. Old servers that don't implement this endpoint return 404, which is
+ * treated as a silent no-op for the transition period.
+ */
+export function createHeartbeatControl(
+  client: ApiClient,
+  taskId: string,
+  agentId: string,
+  role: TaskRole,
+  logger: Logger,
+  intervalMs: number = DEFAULT_HEARTBEAT_INTERVAL_MS,
+): HeartbeatControl {
+  let sawNotFound = false;
+  return {
+    intervalMs,
+    callback: async () => {
+      // Old server returned 404 last time — stop logging to avoid spam; the
+      // interval still fires cheaply but the POST is still attempted each tick
+      // in case the server is upgraded mid-run.
+      try {
+        await client.post(`/api/tasks/${taskId}/heartbeat`, {
+          agent_id: agentId,
+          role,
+        });
+      } catch (err) {
+        if (err instanceof HttpError && err.status === 404) {
+          // Old server: silent no-op. Log once for operator visibility.
+          if (!sawNotFound) {
+            sawNotFound = true;
+            logger.log(`  (heartbeat endpoint not available — old server, continuing)`);
+          }
+          return;
+        }
+        // Transient 4xx/5xx/network — log-and-continue. Never throw.
+        logger.logWarn(
+          `  ${icons.warn} Heartbeat failed for task ${taskId}: ${(err as Error).message}`,
+        );
+      }
+    },
+  };
+}
+
+/**
  * Handle a single task: claim → fetch diff → review → submit
  */
 async function handleTask(
@@ -876,6 +938,16 @@ async function handleTask(
     }
   }
 
+  // Build a heartbeat control for long-running roles only. The heartbeat
+  // POSTs to `/api/tasks/:id/heartbeat` every DEFAULT_HEARTBEAT_INTERVAL_MS
+  // while the tool is running, preventing the server from reclaiming an
+  // active claim as `'error'` (see issue #782). Short-running roles (triage,
+  // dedup, issue_review) complete well under CLAIM_STALE_THRESHOLD_MS and
+  // don't get one.
+  const heartbeat: HeartbeatControl | undefined = isLongRunningRole(role)
+    ? createHeartbeatControl(client, task_id, agentId, role, logger)
+    : undefined;
+
   // Execute review, summary, dedup, triage, fix, or implement
   try {
     if (isImplementRole(role)) {
@@ -883,6 +955,7 @@ async function handleTask(
       const implementDeps: ImplementExecutorDeps = {
         commandTemplate: reviewDeps.commandTemplate,
         codebaseDir,
+        heartbeat,
       };
       const implementResult = await executeImplementTask(
         client,
@@ -917,6 +990,7 @@ async function handleTask(
       }
       const fixDeps: FixExecutorDeps = {
         commandTemplate: reviewDeps.commandTemplate,
+        heartbeat,
       };
       const fixResult = await executeFixTask(
         client,
@@ -1030,6 +1104,7 @@ async function handleTask(
         { execGh: defaultExecGh },
       );
     } else if (role === 'summary' && 'reviews' in claimResponse && claimResponse.reviews) {
+      const summaryDeps: ReviewExecutorDeps = { ...taskReviewDeps, heartbeat };
       await executeSummaryTask(
         client,
         agentId,
@@ -1041,7 +1116,7 @@ async function handleTask(
         prompt,
         timeout_seconds,
         claimResponse.reviews,
-        taskReviewDeps,
+        summaryDeps,
         consumptionDeps,
         logger,
         agentInfo,
@@ -1051,6 +1126,7 @@ async function handleTask(
         verbose,
       );
     } else {
+      const reviewDepsWithHeartbeat: ReviewExecutorDeps = { ...taskReviewDeps, heartbeat };
       await executeReviewTask(
         client,
         agentId,
@@ -1061,7 +1137,7 @@ async function handleTask(
         diffContent,
         prompt,
         timeout_seconds,
-        taskReviewDeps,
+        reviewDepsWithHeartbeat,
         consumptionDeps,
         logger,
         agentInfo,

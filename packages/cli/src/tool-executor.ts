@@ -36,8 +36,23 @@ const MIN_PARTIAL_RESULT_LENGTH = 50;
 /** Default stdout liveness timeout (ms). Kill process if no stdout for this long. */
 export const STDOUT_LIVENESS_TIMEOUT_MS = 300_000;
 
+/** Default heartbeat interval (ms) when a heartbeat callback is supplied. */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+
 /** Maximum stderr length included in error/warning messages */
 const MAX_STDERR_LENGTH = 1000;
+
+/**
+ * Heartbeat control — fires `callback` every `intervalMs` while the tool is
+ * running. The callback MUST not throw; any error it produces is caught by
+ * the caller and swallowed. The interval is cleared when the tool exits
+ * (success, error, timeout, kill, abort).
+ */
+export interface HeartbeatControl {
+  callback: () => void | Promise<void>;
+  /** Defaults to {@link DEFAULT_HEARTBEAT_INTERVAL_MS} when omitted. */
+  intervalMs?: number;
+}
 
 /**
  * Validate that the binary referenced by a command template exists and is executable.
@@ -210,6 +225,7 @@ export function executeTool(
   vars?: Record<string, string>,
   cwd?: string,
   livenessTimeoutMs?: number,
+  heartbeat?: HeartbeatControl,
 ): Promise<ToolExecutorResult> {
   const promptViaArg = commandTemplate.includes('${PROMPT}');
   const allVars: Record<string, string> = { ...vars, PROMPT: prompt };
@@ -271,6 +287,29 @@ export function executeTool(
       }, effectiveLivenessMs);
     }
 
+    // Heartbeat timer: fire callback every heartbeatIntervalMs while tool is running.
+    // Transient failures (network, 4xx/5xx, 404 old-server) are swallowed — a
+    // broken heartbeat must NEVER kill the in-flight tool.
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    if (heartbeat) {
+      const intervalMs = heartbeat.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+      if (intervalMs > 0) {
+        heartbeatTimer = setInterval(() => {
+          if (settled) return;
+          try {
+            const r = heartbeat.callback();
+            if (r && typeof (r as Promise<void>).catch === 'function') {
+              (r as Promise<void>).catch(() => {
+                /* swallowed — heartbeat must not kill the tool */
+              });
+            }
+          } catch {
+            /* swallowed — heartbeat must not kill the tool */
+          }
+        }, intervalMs);
+      }
+    }
+
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
       // Reset liveness timer on stdout activity
@@ -306,6 +345,7 @@ export function executeTool(
       clearTimeout(timer);
       if (livenessTimer) clearTimeout(livenessTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (onAbort && signal) {
         signal.removeEventListener('abort', onAbort);
       }

@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { startAgent, computeRoles, type ConsumptionDeps } from '../commands/agent.js';
+import {
+  startAgent,
+  computeRoles,
+  createHeartbeatControl,
+  isLongRunningRole,
+  type ConsumptionDeps,
+} from '../commands/agent.js';
 import type { ReviewExecutorDeps } from '../review.js';
 import type { RouterRelay } from '../router.js';
 import { createSessionTracker } from '../consumption.js';
 import type { LocalAgentConfig } from '../config.js';
+import { HttpError, type ApiClient } from '../http.js';
+import { DEFAULT_HEARTBEAT_INTERVAL_MS } from '../tool-executor.js';
+import type { Logger } from '../logger.js';
 
 // Mock child_process so fetchDiffViaGh falls back to HTTP
 vi.mock('node:child_process', async (importOriginal) => {
@@ -1091,5 +1100,118 @@ describe('computeRoles', () => {
       roles: undefined,
     };
     expect(computeRoles(agent)).toEqual(['review', 'summary', 'implement', 'fix']);
+  });
+});
+
+describe('isLongRunningRole', () => {
+  it('returns true for review, summary, implement, fix', () => {
+    expect(isLongRunningRole('review')).toBe(true);
+    expect(isLongRunningRole('summary')).toBe(true);
+    expect(isLongRunningRole('implement')).toBe(true);
+    expect(isLongRunningRole('fix')).toBe(true);
+  });
+
+  it('returns false for short-running roles', () => {
+    expect(isLongRunningRole('pr_triage')).toBe(false);
+    expect(isLongRunningRole('issue_triage')).toBe(false);
+    expect(isLongRunningRole('pr_dedup')).toBe(false);
+    expect(isLongRunningRole('issue_dedup')).toBe(false);
+    expect(isLongRunningRole('issue_review')).toBe(false);
+  });
+});
+
+describe('createHeartbeatControl', () => {
+  function makeLogger(): Logger {
+    return {
+      log: vi.fn(),
+      logWarn: vi.fn(),
+      logError: vi.fn(),
+    } as unknown as Logger;
+  }
+
+  function makeClient(post: ReturnType<typeof vi.fn>): ApiClient {
+    return { post } as unknown as ApiClient;
+  }
+
+  it('posts to /api/tasks/:id/heartbeat with agent_id and role', async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(
+      makeClient(post),
+      'task-abc',
+      'agent-42',
+      'review',
+      logger,
+      1000,
+    );
+
+    expect(hb.intervalMs).toBe(1000);
+    await hb.callback();
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/api/tasks/task-abc/heartbeat', {
+      agent_id: 'agent-42',
+      role: 'review',
+    });
+    expect(logger.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('silently swallows 404 (old server) and logs the no-op once', async () => {
+    const post = vi.fn().mockRejectedValue(new HttpError(404, 'not found'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'summary', logger);
+
+    await expect(hb.callback()).resolves.toBeUndefined();
+    await expect(hb.callback()).resolves.toBeUndefined();
+    await expect(hb.callback()).resolves.toBeUndefined();
+
+    // Post is still attempted each tick (server may be upgraded mid-run)
+    expect(post).toHaveBeenCalledTimes(3);
+    // ...but the operator-visible log only fires once
+    expect(logger.log).toHaveBeenCalledTimes(1);
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.stringContaining('heartbeat endpoint not available'),
+    );
+    expect(logger.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('logs a warning but does not throw on transient 5xx errors', async () => {
+    const post = vi.fn().mockRejectedValue(new HttpError(503, 'service unavailable'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(
+      makeClient(post),
+      'task-abc',
+      'agent-42',
+      'implement',
+      logger,
+    );
+
+    await expect(hb.callback()).resolves.toBeUndefined();
+    expect(logger.logWarn).toHaveBeenCalledTimes(1);
+    expect(logger.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining('Heartbeat failed for task task-abc'),
+    );
+  });
+
+  it('logs a warning but does not throw on network errors', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'fix', logger);
+
+    await expect(hb.callback()).resolves.toBeUndefined();
+    expect(logger.logWarn).toHaveBeenCalledTimes(1);
+    expect(logger.logWarn).toHaveBeenCalledWith(expect.stringContaining('ECONNREFUSED'));
+  });
+
+  it('uses DEFAULT_HEARTBEAT_INTERVAL_MS when intervalMs is omitted', () => {
+    const post = vi.fn();
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'review', logger);
+    expect(hb.intervalMs).toBe(DEFAULT_HEARTBEAT_INTERVAL_MS);
   });
 });

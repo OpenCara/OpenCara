@@ -4,6 +4,7 @@ import {
   estimateTokens,
   type ToolExecutorResult,
   type TokenUsageDetail,
+  type HeartbeatControl,
 } from './tool-executor.js';
 import {
   type ReviewMode,
@@ -128,6 +129,8 @@ export interface ReviewExecutorDeps {
   maxRepoSizeMb?: number;
   codebaseDir?: string | null;
   livenessTimeoutMs?: number;
+  /** Optional heartbeat — fires periodically during tool execution to keep the server-side claim fresh. */
+  heartbeat?: HeartbeatControl;
 }
 
 export async function executeReview(
@@ -141,6 +144,7 @@ export async function executeReview(
     vars?: Record<string, string>,
     cwd?: string,
     livenessTimeoutMs?: number,
+    heartbeat?: HeartbeatControl,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<ReviewResponse> {
   const diffSizeKb = Buffer.byteLength(req.diffContent, 'utf-8') / 1024;
@@ -174,6 +178,7 @@ export async function executeReview(
       undefined,
       deps.codebaseDir ?? undefined,
       deps.livenessTimeoutMs,
+      deps.heartbeat,
     );
 
     const { verdict, review } = extractVerdict(result.stdout);

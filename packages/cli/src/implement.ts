@@ -2,12 +2,13 @@ import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PollTask, ImplementReport, TaskRole } from '@opencara/shared';
-import type { ToolExecutorResult, TokenUsageDetail } from './tool-executor.js';
+import type { ToolExecutorResult, TokenUsageDetail, HeartbeatControl } from './tool-executor.js';
 import {
   executeTool,
   estimateTokens,
   parseCommandTemplate,
   ToolTimeoutError,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
 } from './tool-executor.js';
 import { sanitizeTokens } from './sanitize.js';
 import { validatePathSegment, isGhAvailable, buildCloneUrl } from './codebase.js';
@@ -401,6 +402,8 @@ export interface ImplementResponse {
 export interface ImplementExecutorDeps {
   commandTemplate: string;
   codebaseDir: string;
+  /** Optional heartbeat — fires periodically during tool execution to keep the server-side claim fresh. */
+  heartbeat?: HeartbeatControl;
 }
 
 /**
@@ -422,6 +425,7 @@ function executeAgentic(
   timeoutMs: number,
   cwd: string,
   signal?: AbortSignal,
+  heartbeat?: HeartbeatControl,
 ): Promise<{ exitCode: number }> {
   const allVars: Record<string, string> = { PROMPT: prompt, CODEBASE_DIR: cwd };
   const { command, args } = parseCommandTemplate(commandTemplate, allVars);
@@ -448,6 +452,28 @@ function executeAgentic(
       }
     }, timeoutMs);
 
+    // Heartbeat timer: fires callback every intervalMs while the tool is running.
+    // Transient failures are swallowed — a broken heartbeat must NEVER kill the tool.
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    if (heartbeat) {
+      const intervalMs = heartbeat.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+      if (intervalMs > 0) {
+        heartbeatTimer = setInterval(() => {
+          if (settled) return;
+          try {
+            const r = heartbeat.callback();
+            if (r && typeof (r as Promise<void>).catch === 'function') {
+              (r as Promise<void>).catch(() => {
+                /* swallowed — heartbeat must not kill the tool */
+              });
+            }
+          } catch {
+            /* swallowed */
+          }
+        }, intervalMs);
+      }
+    }
+
     let onAbort: (() => void) | undefined;
     if (signal) {
       onAbort = () => {
@@ -456,17 +482,21 @@ function executeAgentic(
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
-    child.on('error', (err) => {
+    function agenticCleanup(): void {
       clearTimeout(timer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+    }
+
+    child.on('error', (err) => {
+      agenticCleanup();
       if (settled) return;
       settled = true;
       reject(err);
     });
 
     child.on('close', (code, sig) => {
-      clearTimeout(timer);
-      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+      agenticCleanup();
       if (settled) return;
       settled = true;
       if (sig === 'SIGTERM' || sig === 'SIGKILL') {
@@ -495,6 +525,8 @@ export async function executeImplement(
     signal?: AbortSignal,
     vars?: Record<string, string>,
     cwd?: string,
+    livenessTimeoutMs?: number,
+    heartbeat?: HeartbeatControl,
   ) => Promise<ToolExecutorResult> = executeTool,
 ): Promise<{
   output: ImplementOutput;
@@ -519,6 +551,7 @@ export async function executeImplement(
       effectiveTimeout,
       worktreePath,
       signal,
+      deps.heartbeat,
     );
     return {
       output: {
@@ -540,6 +573,8 @@ export async function executeImplement(
     signal,
     undefined,
     worktreePath,
+    undefined,
+    deps.heartbeat,
   );
 
   const output = parseImplementOutput(result.stdout);
@@ -583,6 +618,8 @@ export async function executeImplementTask(
     signal?: AbortSignal,
     vars?: Record<string, string>,
     cwd?: string,
+    livenessTimeoutMs?: number,
+    heartbeat?: HeartbeatControl,
   ) => Promise<ToolExecutorResult>,
   role: TaskRole = 'implement',
   // Dependency injection for git/gh operations (testing)
