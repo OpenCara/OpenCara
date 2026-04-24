@@ -711,20 +711,26 @@ export function createHeartbeatControl(
   intervalMs: number = DEFAULT_HEARTBEAT_INTERVAL_MS,
 ): HeartbeatControl {
   let sawNotFound = false;
+  // Rate-limit the transient-failure warn: log on the first failure of a
+  // failing run, then stay silent until a success resets the counter. This
+  // avoids spamming operator logs every 60s when the endpoint is persistently
+  // misbehaving, while still surfacing the problem.
+  let failureStreakLogged = false;
   return {
     intervalMs,
     callback: async () => {
-      // Old server returned 404 last time — stop logging to avoid spam; the
-      // interval still fires cheaply but the POST is still attempted each tick
-      // in case the server is upgraded mid-run.
       try {
         await client.post(`/api/tasks/${taskId}/heartbeat`, {
           agent_id: agentId,
           role,
         });
+        // Success — reset the failure-streak gate so the next bad run logs again.
+        failureStreakLogged = false;
       } catch (err) {
         if (err instanceof HttpError && err.status === 404) {
-          // Old server: silent no-op. Log once for operator visibility.
+          // Old server: silent no-op. Log once for operator visibility;
+          // subsequent ticks still attempt the POST in case the server
+          // is upgraded mid-run, but stay quiet.
           if (!sawNotFound) {
             sawNotFound = true;
             logger.log(`  (heartbeat endpoint not available — old server, continuing)`);
@@ -732,9 +738,13 @@ export function createHeartbeatControl(
           return;
         }
         // Transient 4xx/5xx/network — log-and-continue. Never throw.
-        logger.logWarn(
-          `  ${icons.warn} Heartbeat failed for task ${taskId}: ${(err as Error).message}`,
-        );
+        // Only warn once per failure streak to avoid log spam.
+        if (!failureStreakLogged) {
+          failureStreakLogged = true;
+          logger.logWarn(
+            `  ${icons.warn} Heartbeat failed for task ${taskId}: ${(err as Error).message} (further failures suppressed until next success)`,
+          );
+        }
       }
     },
   };

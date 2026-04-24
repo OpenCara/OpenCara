@@ -1207,6 +1207,49 @@ describe('createHeartbeatControl', () => {
     expect(logger.logWarn).toHaveBeenCalledWith(expect.stringContaining('ECONNREFUSED'));
   });
 
+  it('suppresses repeated warnings during a failure streak (keeps POSTing)', async () => {
+    const post = vi.fn().mockRejectedValue(new HttpError(503, 'service unavailable'));
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'review', logger);
+
+    await hb.callback();
+    await hb.callback();
+    await hb.callback();
+    await hb.callback();
+
+    // POST still attempted every tick — the server may recover mid-run.
+    expect(post).toHaveBeenCalledTimes(4);
+    // But the warn fires only once per streak.
+    expect(logger.logWarn).toHaveBeenCalledTimes(1);
+    expect(logger.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining('further failures suppressed'),
+    );
+  });
+
+  it('re-enables the warning after a successful heartbeat resets the streak', async () => {
+    // Fail → fail → succeed → fail → fail → succeed → fail
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce(new HttpError(503, 'boom')) // warn #1
+      .mockRejectedValueOnce(new HttpError(503, 'boom')) // suppressed
+      .mockResolvedValueOnce({}) // resets gate
+      .mockRejectedValueOnce(new Error('ECONNRESET')) // warn #2
+      .mockRejectedValueOnce(new Error('ECONNRESET')) // suppressed
+      .mockResolvedValueOnce({}) // resets gate
+      .mockRejectedValueOnce(new HttpError(502, 'bad gateway')); // warn #3
+    const logger = makeLogger();
+
+    const hb = createHeartbeatControl(makeClient(post), 'task-abc', 'agent-42', 'summary', logger);
+
+    for (let i = 0; i < 7; i++) {
+      await hb.callback();
+    }
+
+    expect(post).toHaveBeenCalledTimes(7);
+    expect(logger.logWarn).toHaveBeenCalledTimes(3);
+  });
+
   it('uses DEFAULT_HEARTBEAT_INTERVAL_MS when intervalMs is omitted', () => {
     const post = vi.fn();
     const logger = makeLogger();
