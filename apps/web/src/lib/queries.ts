@@ -70,6 +70,61 @@ export interface ActivityItem {
   payload: unknown;
 }
 
+export interface FlowGraph {
+  nodes: Array<{
+    id: string;
+    kind: string;
+    position: { x: number; y: number };
+    config?: Record<string, unknown>;
+  }>;
+  edges: Array<{ id: string; source: string; target: string }>;
+  description?: string;
+}
+export interface FlowSummary {
+  id: string;
+  projectId: string;
+  slug: string;
+  name: string;
+  graphJson: FlowGraph;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface FlowRunSummary {
+  id: string;
+  flowId: string;
+  projectId: string;
+  triggerEventId: string | null;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  error: string | null;
+}
+export interface FlowRunStep {
+  id: string;
+  flowRunId: string;
+  nodeId: string;
+  nodeKind: string;
+  idx: number;
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  inputJson: unknown;
+  outputJson: unknown;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+export interface AgentRunRow {
+  id: string;
+  status: "queued" | "assigned" | "running" | "succeeded" | "failed" | "cancelled";
+  hostId: string | null;
+  flowRunStepId: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  exitCode: number | null;
+}
+
 export const meQuery = () => ({
   queryKey: ["me"] as const,
   queryFn: () => api.get<{ user: User }>("/api/me"),
@@ -115,6 +170,28 @@ export const availableReposQuery = (installationId: string) => ({
 export const activityQuery = () => ({
   queryKey: ["activity"] as const,
   queryFn: () => api.get<{ activity: ActivityItem[] }>("/api/activity"),
+});
+
+export const projectFlowsQuery = (projectId: string) => ({
+  queryKey: ["projects", projectId, "flows"] as const,
+  queryFn: () =>
+    api.get<{ flows: FlowSummary[] }>(`/api/projects/${projectId}/flows`),
+});
+
+export const flowDetailQuery = (projectId: string, slug: string) => ({
+  queryKey: ["projects", projectId, "flows", slug] as const,
+  queryFn: () =>
+    api.get<{ flow: FlowSummary; runs: FlowRunSummary[] }>(
+      `/api/projects/${projectId}/flows/${slug}`,
+    ),
+});
+
+export const flowRunDetailQuery = (runId: string) => ({
+  queryKey: ["flow-runs", runId] as const,
+  queryFn: () =>
+    api.get<{ run: FlowRunSummary; steps: FlowRunStep[]; agentRuns: AgentRunRow[] }>(
+      `/api/flow-runs/${runId}`,
+    ),
 });
 
 export function useAddProject() {

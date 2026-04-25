@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import {
   Card,
@@ -55,14 +55,22 @@ export function ProjectDetailPage() {
             via installation @{inst.accountLogin}
           </p>
         </div>
-        <a
-          href={ghUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          GitHub <ExternalLink className="size-3.5" />
-        </a>
+        <div className="flex items-center gap-4 text-sm">
+          <Link
+            to={`/projects/${id}/flows`}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Flows →
+          </Link>
+          <a
+            href={ghUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+          >
+            GitHub <ExternalLink className="size-3.5" />
+          </a>
+        </div>
       </div>
 
       <Tabs

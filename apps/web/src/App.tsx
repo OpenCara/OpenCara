@@ -6,6 +6,9 @@ import { ActivityPage } from "@/pages/ActivityPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { AddProjectPage } from "@/pages/AddProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
+import { ProjectFlowsPage } from "@/pages/ProjectFlowsPage";
+import { ProjectFlowDetailPage } from "@/pages/ProjectFlowDetailPage";
+import { FlowRunDetailPage } from "@/pages/FlowRunDetailPage";
 
 export function App() {
   return (
@@ -23,6 +26,9 @@ export function App() {
         <Route path="projects/new" element={<AddProjectPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
+        <Route path="projects/:id/flows" element={<ProjectFlowsPage />} />
+        <Route path="projects/:id/flows/:slug" element={<ProjectFlowDetailPage />} />
+        <Route path="projects/:id/flow-runs/:runId" element={<FlowRunDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
