@@ -1,21 +1,27 @@
 {
-  "name": "@openkira/agent-host",
+  "name": "@openkira/cli",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
+  "bin": {
+    "openkira": "./dist/bin.js"
+  },
+  "main": "./dist/bin.js",
+  "files": ["dist"],
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsx watch src/bin.ts",
+    "start": "node dist/bin.js",
     "typecheck": "tsc -b",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@openkira/shared": "workspace:*",
+    "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/ws": "^8.5.13",
     "tsx": "^4.19.2"
   }
 }
