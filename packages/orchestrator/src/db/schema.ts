@@ -27,6 +27,22 @@ export const githubAccountTypeEnum = pgEnum("github_account_type", [
   "Organization",
 ]);
 
+export const flowRunStatusEnum = pgEnum("flow_run_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
+export const flowStepStatusEnum = pgEnum("flow_step_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "skipped",
+]);
+
 export const users = pgTable(
   "users",
   {
@@ -142,6 +158,72 @@ export const agentHosts = pgTable("agent_hosts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const flows = pgTable(
+  "flows",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    graphJson: jsonb("graph_json").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    projectSlugUq: uniqueIndex("flows_project_slug_uq").on(t.projectId, t.slug),
+  }),
+);
+
+export const flowRuns = pgTable(
+  "flow_runs",
+  {
+    id: text("id").primaryKey(),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => flows.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    triggerEventId: text("trigger_event_id").references(() => platformEvents.id),
+    status: flowRunStatusEnum("status").notNull().default("pending"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    error: text("error"),
+  },
+  (t) => ({
+    projectCreatedAtIdx: index("flow_runs_project_created_at_idx").on(
+      t.projectId,
+      t.createdAt.desc(),
+    ),
+  }),
+);
+
+export const flowRunSteps = pgTable(
+  "flow_run_steps",
+  {
+    id: text("id").primaryKey(),
+    flowRunId: text("flow_run_id")
+      .notNull()
+      .references(() => flowRuns.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    nodeKind: text("node_kind").notNull(),
+    idx: integer("idx").notNull(),
+    status: flowStepStatusEnum("status").notNull().default("pending"),
+    inputJson: jsonb("input_json"),
+    outputJson: jsonb("output_json"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    error: text("error"),
+  },
+  (t) => ({
+    runIdxIdx: index("flow_run_steps_run_idx").on(t.flowRunId, t.idx),
+  }),
+);
+
 export const agentRuns = pgTable(
   "agent_runs",
   {
@@ -151,6 +233,9 @@ export const agentRuns = pgTable(
     status: agentRunStatusEnum("status").notNull().default("queued"),
     hostId: text("host_id").references(() => agentHosts.id),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    flowRunStepId: text("flow_run_step_id").references(() => flowRunSteps.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -161,5 +246,23 @@ export const agentRuns = pgTable(
       t.projectId,
       t.createdAt.desc(),
     ),
+    flowRunStepIdx: index("agent_runs_flow_run_step_id_idx").on(t.flowRunStepId),
+  }),
+);
+
+export const agentRunLogs = pgTable(
+  "agent_run_logs",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    agentRunId: text("agent_run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    stream: text("stream").notNull(),
+    chunk: text("chunk").notNull(),
+    ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    runSeqUq: uniqueIndex("agent_run_logs_run_seq_uq").on(t.agentRunId, t.seq),
   }),
 );

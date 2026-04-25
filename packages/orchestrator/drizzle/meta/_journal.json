@@ -15,6 +15,13 @@
       "when": 1777108058988,
       "tag": "0001_public_ravenous",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777133951786,
+      "tag": "0002_fast_orphan",
+      "breakpoints": true
     }
   ]
 }
