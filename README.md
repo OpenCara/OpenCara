@@ -31,7 +31,19 @@ Example flows:
 
 ```bash
 pnpm install
-pnpm dev          # run all packages in parallel
+
+# 1. Start postgres (port 5433, named volume)
+podman-compose up -d        # or: docker compose up -d
+
+# 2. Run migrations
+pnpm --filter @openkira/orchestrator db:migrate
+
+# 3. Run all packages in watch mode
+pnpm dev
+
+# Other tasks
 pnpm typecheck
 pnpm build
 ```
+
+Default local postgres: `postgres://openkira:openkira@localhost:5433/openkira`. Copy `.env.example` to `packages/orchestrator/.env` and fill in `GITHUB_WEBHOOK_SECRET`.
