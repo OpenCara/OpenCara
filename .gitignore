@@ -1,0 +1,30 @@
+# deps
+node_modules/
+
+# build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# test coverage
+coverage/
+
+# drizzle
+drizzle/migrations/meta/_journal.json.bak
