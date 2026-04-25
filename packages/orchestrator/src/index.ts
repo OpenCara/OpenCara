@@ -15,9 +15,10 @@ import { activityRoutes } from "./routes/api/activity.js";
 import { mountStatic } from "./static.js";
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const { db, pg } = createDb(config.DATABASE_URL);
 const dispatcher = new LocalSubprocessDispatcher();
 void dispatcher;
+void pg;
 
 const app = new Hono<AuthEnv>();
 

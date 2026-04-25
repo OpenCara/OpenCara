@@ -2,12 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
-    "types": ["node"]
+    "rootDir": "./src"
   },
   "include": ["src/**/*"],
-  "references": [
-    { "path": "../shared" },
-    { "path": "../flows" }
-  ]
+  "references": [{ "path": "../shared" }]
 }

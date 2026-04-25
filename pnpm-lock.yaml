@@ -86,6 +86,15 @@ importers:
         specifier: ^4.19.2
         version: 4.21.0
 
+  packages/flows:
+    dependencies:
+      '@openkira/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   packages/orchestrator:
     dependencies:
       '@hono/node-server':
@@ -100,6 +109,9 @@ importers:
       '@octokit/webhooks':
         specifier: ^14.2.0
         version: 14.2.0
+      '@openkira/flows':
+        specifier: workspace:*
+        version: link:../flows
       '@openkira/shared':
         specifier: workspace:*
         version: link:../shared

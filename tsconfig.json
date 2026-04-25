@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/shared" },
+    { "path": "./packages/flows" },
     { "path": "./packages/orchestrator" },
     { "path": "./packages/agent-host" },
     { "path": "./apps/web" }
