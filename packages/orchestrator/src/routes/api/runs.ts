@@ -15,10 +15,10 @@ const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 
 export function runRoutes(deps: RunRoutesDeps) {
   const r = new Hono<AuthEnv>();
-  r.use("*", requireUser());
+  const auth = requireUser();
 
   // One-shot snapshot of logs.
-  r.get("/runs/:id/logs", async (c) => {
+  r.get("/runs/:id/logs", auth, async (c) => {
     const runId = c.req.param("id");
     const since = Number.parseInt(c.req.query("since") ?? "-1", 10);
     const rows = await deps.db
@@ -34,7 +34,7 @@ export function runRoutes(deps: RunRoutesDeps) {
   });
 
   // SSE stream: replays existing logs then tails via pg LISTEN/NOTIFY.
-  r.get("/runs/:id/logs/stream", (c) => {
+  r.get("/runs/:id/logs/stream", auth, (c) => {
     const runId = c.req.param("id");
     return streamSSE(c, async (sse) => {
       let lastSeq = -1;

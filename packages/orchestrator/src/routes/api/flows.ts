@@ -10,10 +10,10 @@ interface FlowRoutesDeps {
 
 export function flowRoutes(deps: FlowRoutesDeps) {
   const r = new Hono<AuthEnv>();
-  r.use("*", requireUser());
+  const auth = requireUser();
 
   // List flows for a project
-  r.get("/projects/:id/flows", async (c) => {
+  r.get("/projects/:id/flows", auth, async (c) => {
     const projectId = c.req.param("id");
     const rows = await deps.db.query.flows.findMany({
       where: eq(flows.projectId, projectId),
@@ -22,7 +22,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Single flow detail with recent runs
-  r.get("/projects/:id/flows/:slug", async (c) => {
+  r.get("/projects/:id/flows/:slug", auth, async (c) => {
     const projectId = c.req.param("id");
     const slug = c.req.param("slug");
     const flow = await deps.db.query.flows.findFirst({
@@ -38,7 +38,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Recent flow runs across the project
-  r.get("/projects/:id/flow-runs", async (c) => {
+  r.get("/projects/:id/flow-runs", auth, async (c) => {
     const projectId = c.req.param("id");
     const limit = clampLimit(c.req.query("limit"));
     const rows = await deps.db.query.flowRuns.findMany({
@@ -50,7 +50,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Single flow_run + its steps + linked agent_runs
-  r.get("/flow-runs/:id", async (c) => {
+  r.get("/flow-runs/:id", auth, async (c) => {
     const id = c.req.param("id");
     const run = await deps.db.query.flowRuns.findFirst({
       where: eq(flowRuns.id, id),

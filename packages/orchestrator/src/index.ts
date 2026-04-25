@@ -14,6 +14,7 @@ import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
 import { flowRoutes } from "./routes/api/flows.js";
 import { runRoutes } from "./routes/api/runs.js";
+import { deviceRoutes } from "./routes/api/devices.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
@@ -81,6 +82,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   app.route("/api/activity", activityRoutes({ db }));
   app.route("/api", flowRoutes({ db }));
   app.route("/api", runRoutes({ db, pg }));
+  app.route("/api/devices", deviceRoutes({ db, cipher }));
   console.log("[orchestrator] auth + API routes mounted");
 } else {
   console.log(
