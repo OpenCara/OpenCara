@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router";
-import { Activity, FolderGit2, Plus, LogOut } from "lucide-react";
+import { Activity, FolderGit2, Plus, LogOut, Cpu } from "lucide-react";
 import { useUser } from "@/auth/AuthContext";
 import { useLogout } from "@/lib/queries";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -16,6 +16,7 @@ const navItems = [
   { to: "/", label: "Activity", icon: Activity, end: true },
   { to: "/projects", label: "Projects", icon: FolderGit2 },
   { to: "/projects/new", label: "Add project", icon: Plus },
+  { to: "/devices", label: "Devices", icon: Cpu },
 ];
 
 export function AppShell() {

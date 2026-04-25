@@ -10,10 +10,12 @@ import type { Db } from "../../db/client.js";
 import { agentHosts, devicePairings } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { TokenCipher } from "../../auth/session.js";
+import type { DevicePool } from "../../dispatch/devices.js";
 
 interface DeviceRoutesDeps {
   db: Db;
   cipher: TokenCipher;
+  pool: DevicePool;
 }
 
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -146,7 +148,8 @@ export function deviceRoutes(deps: DeviceRoutesDeps) {
       .from(agentHosts)
       .where(eq(agentHosts.userId, user.id))
       .orderBy(desc(agentHosts.createdAt));
-    return c.json({ devices: rows });
+    const devices = rows.map((row) => ({ ...row, online: deps.pool.isConnected(row.id) }));
+    return c.json({ devices });
   });
 
   r.post("/:id/revoke", requireUser(), async (c) => {

@@ -10,6 +10,7 @@ import { ProjectFlowsPage } from "@/pages/ProjectFlowsPage";
 import { ProjectFlowDetailPage } from "@/pages/ProjectFlowDetailPage";
 import { FlowRunDetailPage } from "@/pages/FlowRunDetailPage";
 import { DevicePairPage } from "@/pages/DevicePairPage";
+import { DevicesPage } from "@/pages/DevicesPage";
 
 export function App() {
   return (
@@ -30,6 +31,7 @@ export function App() {
         <Route path="projects/:id/flows" element={<ProjectFlowsPage />} />
         <Route path="projects/:id/flows/:slug" element={<ProjectFlowDetailPage />} />
         <Route path="projects/:id/flow-runs/:runId" element={<FlowRunDetailPage />} />
+        <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/pair" element={<DevicePairPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

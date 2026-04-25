@@ -65,6 +65,10 @@ export class DevicePool {
     return this.devices.size > 0;
   }
 
+  isConnected(agentHostId: string): boolean {
+    return this.devices.has(agentHostId);
+  }
+
   handleMessage(agentHostId: string, msg: DeviceToServerMessage): void {
     if (msg.type === "log") {
       const p = this.pending.get(msg.runId);

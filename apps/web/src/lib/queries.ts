@@ -194,6 +194,30 @@ export const flowRunDetailQuery = (runId: string) => ({
     ),
 });
 
+export interface DeviceRow {
+  id: string;
+  name: string;
+  platform: string | null;
+  version: string | null;
+  online: boolean;
+  lastConnectedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export const devicesQuery = () => ({
+  queryKey: ["devices"] as const,
+  queryFn: () => api.get<{ devices: DeviceRow[] }>("/api/devices"),
+});
+
+export function useRevokeDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/api/devices/${id}/revoke`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["devices"] }),
+  });
+}
+
 export function useAddProject() {
   const qc = useQueryClient();
   return useMutation({

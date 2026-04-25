@@ -94,7 +94,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   // deviceRoutes mount at the same path prefix to avoid a 404 from the
   // sub-router's miss-handling.
   app.get("/api/devices/ws", upgradeWebSocket(deviceWsHandler({ db, pool: devicePool })));
-  app.route("/api/devices", deviceRoutes({ db, cipher }));
+  app.route("/api/devices", deviceRoutes({ db, cipher, pool: devicePool }));
   console.log("[orchestrator] auth + API routes mounted (WS at /api/devices/ws)");
 } else {
   console.log(
