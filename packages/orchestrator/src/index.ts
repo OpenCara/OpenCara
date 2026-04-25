@@ -12,6 +12,8 @@ import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/api/projects.js";
 import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
+import { flowRoutes } from "./routes/api/flows.js";
+import { runRoutes } from "./routes/api/runs.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
@@ -77,6 +79,8 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   app.route("/api/projects", projectRoutes({ db }));
   app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api/activity", activityRoutes({ db }));
+  app.route("/api", flowRoutes({ db }));
+  app.route("/api", runRoutes({ db, pg }));
   console.log("[orchestrator] auth + API routes mounted");
 } else {
   console.log(
