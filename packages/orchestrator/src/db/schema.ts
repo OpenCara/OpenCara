@@ -150,13 +150,44 @@ export const platformEvents = pgTable(
   }),
 );
 
-export const agentHosts = pgTable("agent_hosts", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  capabilities: jsonb("capabilities").$type<string[]>().notNull().default([]),
-  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const agentHosts = pgTable(
+  "agent_hosts",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    capabilities: jsonb("capabilities").$type<string[]>().notNull().default([]),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash"),
+    lastConnectedAt: timestamp("last_connected_at", { withTimezone: true }),
+    platform: text("platform"),
+    version: text("version"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tokenHashUq: uniqueIndex("agent_hosts_token_hash_uq").on(t.tokenHash),
+    userIdIdx: index("agent_hosts_user_id_idx").on(t.userId),
+  }),
+);
+
+export const devicePairings = pgTable(
+  "device_pairings",
+  {
+    code: text("code").primaryKey(),
+    deviceSecretHash: text("device_secret_hash").notNull(),
+    status: text("status").notNull(),
+    confirmedByUserId: text("confirmed_by_user_id").references(() => users.id),
+    deviceName: text("device_name"),
+    agentHostId: text("agent_host_id").references(() => agentHosts.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    deviceTokenEnc: text("device_token_enc"),
+  },
+  (t) => ({
+    statusExpiresIdx: index("device_pairings_status_idx").on(t.status, t.expiresAt),
+  }),
+);
 
 export const flows = pgTable(
   "flows",
