@@ -1,31 +1,30 @@
-import { useState } from "react";
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  type Node,
-  type Edge,
-} from "@xyflow/react";
-
-const initialNodes: Node[] = [
-  { id: "trigger", position: { x: 0, y: 0 }, data: { label: "GitHub: issue.labeled(ready)" } },
-  { id: "agent", position: { x: 280, y: 0 }, data: { label: "Dev agent" } },
-];
-
-const initialEdges: Edge[] = [
-  { id: "trigger-agent", source: "trigger", target: "agent" },
-];
+import { Routes, Route, Navigate } from "react-router";
+import { LoginPage } from "@/pages/LoginPage";
+import { AppShell } from "@/layouts/AppShell";
+import { AuthGate } from "@/auth/AuthGate";
+import { ActivityPage } from "@/pages/ActivityPage";
+import { ProjectsPage } from "@/pages/ProjectsPage";
+import { AddProjectPage } from "@/pages/AddProjectPage";
+import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 
 export function App() {
-  const [nodes] = useState<Node[]>(initialNodes);
-  const [edges] = useState<Edge[]>(initialEdges);
-
   return (
-    <div style={{ width: "100vw", height: "100vh" }}>
-      <ReactFlow nodes={nodes} edges={edges} fitView>
-        <Background />
-        <Controls />
-      </ReactFlow>
-    </div>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        element={
+          <AuthGate>
+            <AppShell />
+          </AuthGate>
+        }
+      >
+        <Route index element={<ActivityPage />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/new" element={<AddProjectPage />} />
+        <Route path="projects/:id" element={<ProjectDetailPage />} />
+        <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

@@ -11,6 +11,10 @@ build/
 .env.local
 .env.*.local
 
+# secrets
+*.pem
+*.key
+
 # logs
 *.log
 npm-debug.log*

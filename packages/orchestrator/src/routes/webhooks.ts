@@ -1,0 +1,151 @@
+import { Hono } from "hono";
+import { eq } from "drizzle-orm";
+import type { Db } from "../db/client.js";
+import { githubInstallations, platformEvents, projects } from "../db/schema.js";
+import type { GithubAppClient } from "../github/app.js";
+import { upsertInstallation, softRemoveProjectsForRepos } from "../github/installations.js";
+
+interface WebhookDeps {
+  db: Db;
+  app: GithubAppClient;
+}
+
+interface WebhookPayload {
+  action?: string;
+  installation?: { id: number; account?: { id: number; login: string; type?: string } };
+  repository?: { id: number; full_name: string };
+  repositories?: Array<{ id: number; full_name: string }>;
+  repositories_added?: Array<{ id: number; full_name: string }>;
+  repositories_removed?: Array<{ id: number; full_name: string }>;
+}
+
+export function appWebhookRoutes(deps: WebhookDeps) {
+  const app = new Hono();
+
+  app.post("/", async (c) => {
+    const signature = c.req.header("x-hub-signature-256");
+    const eventType = c.req.header("x-github-event") ?? "unknown";
+    const deliveryId = c.req.header("x-github-delivery") ?? cryptoRandom();
+    const raw = await c.req.text();
+
+    if (!signature || !(await deps.app.webhooks.verify(raw, signature))) {
+      return c.json({ error: "invalid signature" }, 401);
+    }
+
+    let payload: WebhookPayload;
+    try {
+      payload = JSON.parse(raw) as WebhookPayload;
+    } catch {
+      return c.json({ error: "invalid json" }, 400);
+    }
+
+    try {
+      const installationRowId = await resolveInstallationId(deps.db, payload, eventType);
+      const projectRowId = await resolveProjectId(deps.db, payload);
+
+      await deps.db
+        .insert(platformEvents)
+        .values({
+          id: deliveryId,
+          platform: "github",
+          type: eventType,
+          payload: payload as object,
+          installationId: installationRowId,
+          projectId: projectRowId,
+          githubRepoId: payload.repository?.id,
+          deliveryId,
+        })
+        .onConflictDoNothing();
+
+      await handleMetaEvent(deps.db, eventType, payload);
+    } catch (err) {
+      console.error("[webhooks] handler error", { eventType, deliveryId, err });
+    }
+
+    return c.json({ ok: true });
+  });
+
+  return app;
+}
+
+function cryptoRandom(): string {
+  return crypto.randomUUID();
+}
+
+async function resolveInstallationId(
+  db: Db,
+  payload: WebhookPayload,
+  eventType: string,
+): Promise<string | null> {
+  const installation = payload.installation;
+  if (!installation) return null;
+
+  if (eventType === "installation" && payload.action === "created") {
+    const upserted = await upsertInstallation(db, installation);
+    return upserted.id;
+  }
+
+  const row = await db.query.githubInstallations.findFirst({
+    where: (gi, { eq }) => eq(gi.githubInstallationId, installation.id),
+  });
+  if (row) return row.id;
+
+  const upserted = await upsertInstallation(db, installation);
+  return upserted.id;
+}
+
+async function resolveProjectId(db: Db, payload: WebhookPayload): Promise<string | null> {
+  const repoId = payload.repository?.id;
+  if (!repoId) return null;
+  const row = await db.query.projects.findFirst({
+    where: (p, { eq, and, isNull }) =>
+      and(eq(p.githubRepoId, repoId), isNull(p.removedAt)),
+  });
+  return row?.id ?? null;
+}
+
+async function handleMetaEvent(
+  db: Db,
+  eventType: string,
+  payload: WebhookPayload,
+): Promise<void> {
+  if (!payload.installation) return;
+
+  if (eventType === "installation") {
+    const row = await db.query.githubInstallations.findFirst({
+      where: (gi, { eq }) => eq(gi.githubInstallationId, payload.installation!.id),
+    });
+    if (!row) return;
+
+    if (payload.action === "deleted") {
+      await db
+        .update(projects)
+        .set({ removedAt: new Date() })
+        .where(eq(projects.installationId, row.id));
+    } else if (payload.action === "suspend") {
+      await db
+        .update(githubInstallations)
+        .set({ suspendedAt: new Date(), updatedAt: new Date() })
+        .where(eq(githubInstallations.id, row.id));
+    } else if (payload.action === "unsuspend") {
+      await db
+        .update(githubInstallations)
+        .set({ suspendedAt: null, updatedAt: new Date() })
+        .where(eq(githubInstallations.id, row.id));
+    }
+  }
+
+  if (eventType === "installation_repositories" && payload.action === "removed") {
+    const removed = payload.repositories_removed ?? [];
+    const row = await db.query.githubInstallations.findFirst({
+      where: (gi, { eq }) => eq(gi.githubInstallationId, payload.installation!.id),
+    });
+    if (row) {
+      await softRemoveProjectsForRepos(
+        db,
+        row.id,
+        removed.map((r) => r.id),
+      );
+    }
+  }
+}

@@ -14,11 +14,15 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@openkira/shared": "workspace:*",
     "@hono/node-server": "^1.13.7",
-    "hono": "^4.6.16",
+    "@octokit/auth-app": "^8.2.0",
+    "@octokit/rest": "^22.0.1",
+    "@octokit/webhooks": "^14.2.0",
+    "@openkira/shared": "workspace:*",
     "drizzle-orm": "^0.38.3",
+    "hono": "^4.6.16",
     "postgres": "^3.4.5",
+    "ulid": "^3.0.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {

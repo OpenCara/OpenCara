@@ -1,21 +1,98 @@
 import { z } from "zod";
+import { readFileSync } from "node:fs";
 
-const ConfigSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(3000),
+const BaseSchema = z.object({
+  PORT: z.coerce.number().int().positive().default(3030),
   DATABASE_URL: z
     .string()
     .refine((s) => s.startsWith("postgres://") || s.startsWith("postgresql://"), {
       message: "DATABASE_URL must start with postgres:// or postgresql://",
     }),
   GITHUB_WEBHOOK_SECRET: z.string().min(1),
+  PUBLIC_BASE_URL: z.string().url().default("http://localhost:3030"),
+  SESSION_COOKIE_NAME: z.string().min(1).default("okira_sid"),
+  SESSION_TTL_DAYS: z.coerce.number().int().positive().default(14),
+  SESSION_ENCRYPTION_KEY: z
+    .string()
+    .optional()
+    .refine((s) => !s || /^[0-9a-fA-F]{64}$/.test(s), {
+      message: "SESSION_ENCRYPTION_KEY must be 32 bytes (64 hex chars) — use `openssl rand -hex 32`",
+    }),
 });
 
-export type AppConfig = z.infer<typeof ConfigSchema>;
+const AppGithubSchema = z
+  .object({
+    GITHUB_APP_ID: z.coerce.number().int().positive(),
+    GITHUB_APP_CLIENT_ID: z.string().min(1),
+    GITHUB_APP_CLIENT_SECRET: z.string().min(1),
+    GITHUB_APP_PRIVATE_KEY: z.string().optional(),
+    GITHUB_APP_PRIVATE_KEY_PATH: z.string().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.GITHUB_APP_PRIVATE_KEY && !v.GITHUB_APP_PRIVATE_KEY_PATH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Set GITHUB_APP_PRIVATE_KEY (PEM string) or GITHUB_APP_PRIVATE_KEY_PATH (file path)",
+      });
+    }
+  });
+
+export interface AppConfig {
+  PORT: number;
+  DATABASE_URL: string;
+  GITHUB_WEBHOOK_SECRET: string;
+  PUBLIC_BASE_URL: string;
+  SESSION_COOKIE_NAME: string;
+  SESSION_TTL_DAYS: number;
+  SESSION_ENCRYPTION_KEY?: string | undefined;
+  github:
+    | {
+        appId: number;
+        clientId: string;
+        clientSecret: string;
+        privateKeyPem: string;
+      }
+    | null;
+}
 
 export function loadConfig(): AppConfig {
-  return ConfigSchema.parse({
+  const base = BaseSchema.parse({
     PORT: process.env["PORT"],
-    DATABASE_URL: process.env["DATABASE_URL"] ?? "postgres://openkira:openkira@localhost:5433/openkira",
+    DATABASE_URL:
+      process.env["DATABASE_URL"] ?? "postgres://openkira:openkira@localhost:5433/openkira",
     GITHUB_WEBHOOK_SECRET: process.env["GITHUB_WEBHOOK_SECRET"] ?? "changeme",
+    PUBLIC_BASE_URL: process.env["PUBLIC_BASE_URL"],
+    SESSION_COOKIE_NAME: process.env["SESSION_COOKIE_NAME"],
+    SESSION_TTL_DAYS: process.env["SESSION_TTL_DAYS"],
+    SESSION_ENCRYPTION_KEY: process.env["SESSION_ENCRYPTION_KEY"],
   });
+
+  const hasAnyApp =
+    !!process.env["GITHUB_APP_ID"] ||
+    !!process.env["GITHUB_APP_CLIENT_ID"] ||
+    !!process.env["GITHUB_APP_CLIENT_SECRET"] ||
+    !!process.env["GITHUB_APP_PRIVATE_KEY"] ||
+    !!process.env["GITHUB_APP_PRIVATE_KEY_PATH"];
+
+  let github: AppConfig["github"] = null;
+  if (hasAnyApp) {
+    const appCfg = AppGithubSchema.parse({
+      GITHUB_APP_ID: process.env["GITHUB_APP_ID"],
+      GITHUB_APP_CLIENT_ID: process.env["GITHUB_APP_CLIENT_ID"],
+      GITHUB_APP_CLIENT_SECRET: process.env["GITHUB_APP_CLIENT_SECRET"],
+      GITHUB_APP_PRIVATE_KEY: process.env["GITHUB_APP_PRIVATE_KEY"],
+      GITHUB_APP_PRIVATE_KEY_PATH: process.env["GITHUB_APP_PRIVATE_KEY_PATH"],
+    });
+    const privateKeyPem = appCfg.GITHUB_APP_PRIVATE_KEY
+      ? appCfg.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, "\n")
+      : readFileSync(appCfg.GITHUB_APP_PRIVATE_KEY_PATH!, "utf8");
+    github = {
+      appId: appCfg.GITHUB_APP_ID,
+      clientId: appCfg.GITHUB_APP_CLIENT_ID,
+      clientSecret: appCfg.GITHUB_APP_CLIENT_SECRET,
+      privateKeyPem,
+    };
+  }
+
+  return { ...base, github };
 }

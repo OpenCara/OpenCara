@@ -1,0 +1,156 @@
+import { Hono } from "hono";
+import { ulid } from "ulid";
+import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import type { Db } from "../../db/client.js";
+import {
+  agentRuns,
+  githubInstallations,
+  platformEvents,
+  projects,
+} from "../../db/schema.js";
+import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+
+interface ProjectRoutesDeps {
+  db: Db;
+}
+
+export function projectRoutes(deps: ProjectRoutesDeps) {
+  const r = new Hono<AuthEnv>();
+  r.use("*", requireUser());
+
+  r.get("/", async (c) => {
+    const rows = await deps.db
+      .select({
+        id: projects.id,
+        owner: projects.owner,
+        name: projects.name,
+        defaultBranch: projects.defaultBranch,
+        private: projects.private,
+        addedAt: projects.addedAt,
+        removedAt: projects.removedAt,
+        installationId: projects.installationId,
+        installationAccountLogin: githubInstallations.accountLogin,
+        installationAccountType: githubInstallations.accountType,
+        installationSuspendedAt: githubInstallations.suspendedAt,
+        lastEventAt: sql<Date | null>`(
+          SELECT MAX(${platformEvents.receivedAt})
+          FROM ${platformEvents}
+          WHERE ${platformEvents.projectId} = ${projects.id}
+        )`,
+        recentRunsCount: sql<number>`(
+          SELECT COUNT(*)::int FROM ${agentRuns}
+          WHERE ${agentRuns.projectId} = ${projects.id}
+            AND ${agentRuns.createdAt} > NOW() - INTERVAL '7 days'
+        )`,
+      })
+      .from(projects)
+      .innerJoin(
+        githubInstallations,
+        eq(projects.installationId, githubInstallations.id),
+      )
+      .orderBy(desc(projects.addedAt));
+    return c.json({ projects: rows });
+  });
+
+  r.post("/", async (c) => {
+    const body = (await c.req.json()) as { githubRepoId?: number };
+    const repoId = body.githubRepoId;
+    if (!repoId || typeof repoId !== "number") {
+      return c.json({ error: "githubRepoId required" }, 400);
+    }
+    const existing = await deps.db.query.projects.findFirst({
+      where: eq(projects.githubRepoId, repoId),
+    });
+    if (existing && !existing.removedAt) {
+      return c.json({ project: existing });
+    }
+    if (existing && existing.removedAt) {
+      await deps.db
+        .update(projects)
+        .set({ removedAt: null })
+        .where(eq(projects.id, existing.id));
+      return c.json({ project: { ...existing, removedAt: null } });
+    }
+    return c.json(
+      { error: "repository not found in any installation; install the App on its owner first" },
+      404,
+    );
+  });
+
+  r.get("/:id", async (c) => {
+    const id = c.req.param("id");
+    const row = await deps.db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, id))
+      .innerJoin(
+        githubInstallations,
+        eq(projects.installationId, githubInstallations.id),
+      )
+      .limit(1);
+    if (row.length === 0) return c.json({ error: "not found" }, 404);
+    return c.json({ project: row[0]!.projects, installation: row[0]!.github_installations });
+  });
+
+  r.delete("/:id", async (c) => {
+    const id = c.req.param("id");
+    await deps.db.update(projects).set({ removedAt: new Date() }).where(eq(projects.id, id));
+    return c.body(null, 204);
+  });
+
+  r.get("/:id/events", async (c) => {
+    const id = c.req.param("id");
+    const limit = clampLimit(c.req.query("limit"));
+    const before = c.req.query("before");
+    const where = before
+      ? and(eq(platformEvents.projectId, id), lt(platformEvents.id, before))
+      : eq(platformEvents.projectId, id);
+    const rows = await deps.db
+      .select({
+        id: platformEvents.id,
+        type: platformEvents.type,
+        receivedAt: platformEvents.receivedAt,
+        deliveryId: platformEvents.deliveryId,
+        payload: platformEvents.payload,
+      })
+      .from(platformEvents)
+      .where(where)
+      .orderBy(desc(platformEvents.receivedAt))
+      .limit(limit);
+    return c.json({ events: rows });
+  });
+
+  r.get("/:id/runs", async (c) => {
+    const id = c.req.param("id");
+    const limit = clampLimit(c.req.query("limit"));
+    const before = c.req.query("before");
+    const where = before
+      ? and(eq(agentRuns.projectId, id), lt(agentRuns.id, before))
+      : eq(agentRuns.projectId, id);
+    const rows = await deps.db
+      .select({
+        id: agentRuns.id,
+        status: agentRuns.status,
+        hostId: agentRuns.hostId,
+        createdAt: agentRuns.createdAt,
+        startedAt: agentRuns.startedAt,
+        finishedAt: agentRuns.finishedAt,
+        exitCode: agentRuns.exitCode,
+      })
+      .from(agentRuns)
+      .where(where)
+      .orderBy(desc(agentRuns.createdAt))
+      .limit(limit);
+    return c.json({ runs: rows });
+  });
+
+  void ulid;
+  void isNull;
+  return r;
+}
+
+function clampLimit(v: string | undefined): number {
+  const n = Number.parseInt(v ?? "50", 10);
+  if (!Number.isFinite(n)) return 50;
+  return Math.min(Math.max(n, 1), 200);
+}

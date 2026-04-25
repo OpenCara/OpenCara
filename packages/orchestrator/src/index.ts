@@ -2,34 +2,74 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
-import { platformEvents } from "./db/schema.js";
-import { githubRoutes } from "./routes/github.js";
 import { LocalSubprocessDispatcher } from "./dispatch/local.js";
+import { createGithubAppClient } from "./github/app.js";
+import { GithubOAuth } from "./github/oauth.js";
+import { TokenCipher } from "./auth/session.js";
+import { currentUser, type AuthEnv } from "./auth/middleware.js";
+import { appWebhookRoutes } from "./routes/webhooks.js";
+import { authRoutes } from "./routes/auth.js";
+import { projectRoutes } from "./routes/api/projects.js";
+import { installationRoutes } from "./routes/api/installations.js";
+import { activityRoutes } from "./routes/api/activity.js";
+import { mountStatic } from "./static.js";
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
 const dispatcher = new LocalSubprocessDispatcher();
+void dispatcher;
 
-const app = new Hono();
+const app = new Hono<AuthEnv>();
+
+app.use("*", currentUser(db, config.SESSION_COOKIE_NAME));
 
 app.get("/health", (c) => c.json({ ok: true }));
 
-app.route(
-  "/",
-  githubRoutes({
-    webhookSecret: config.GITHUB_WEBHOOK_SECRET,
-    onEvent: async (event) => {
-      await db.insert(platformEvents).values({
-        id: event.id,
-        platform: "github",
-        type: event.type,
-        payload: event.payload as object,
-      });
-      // TODO: route event through rules → dispatcher
-      void dispatcher;
-    },
-  }),
-);
+const githubApp = config.github
+  ? createGithubAppClient(config.github, config.GITHUB_WEBHOOK_SECRET)
+  : null;
+
+if (githubApp) {
+  app.route("/webhooks/github", appWebhookRoutes({ db, app: githubApp }));
+  console.log("[orchestrator] GitHub App webhook handler mounted at /webhooks/github");
+} else {
+  console.log(
+    "[orchestrator] GitHub App not configured; webhook handler disabled. Set GITHUB_APP_* and SESSION_ENCRYPTION_KEY to enable.",
+  );
+}
+
+if (config.github && config.SESSION_ENCRYPTION_KEY) {
+  const oauth = new GithubOAuth({
+    clientId: config.github.clientId,
+    clientSecret: config.github.clientSecret,
+    publicBaseUrl: config.PUBLIC_BASE_URL,
+  });
+  const cipher = new TokenCipher(config.SESSION_ENCRYPTION_KEY);
+
+  app.route(
+    "/",
+    authRoutes({
+      db,
+      oauth,
+      cipher,
+      cookieName: config.SESSION_COOKIE_NAME,
+      ttlDays: config.SESSION_TTL_DAYS,
+      publicBaseUrl: config.PUBLIC_BASE_URL,
+      app: githubApp ?? undefined,
+    }),
+  );
+  app.route("/api/projects", projectRoutes({ db }));
+  app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  app.route("/api/activity", activityRoutes({ db }));
+  console.log("[orchestrator] auth + API routes mounted");
+} else {
+  console.log(
+    "[orchestrator] auth/API not mounted (need GitHub App config + SESSION_ENCRYPTION_KEY)",
+  );
+}
+
+// Static SPA serving — must be mounted last so /api, /auth, /webhooks win.
+mountStatic(app);
 
 serve({ fetch: app.fetch, port: config.PORT }, ({ port }) => {
   console.log(`[orchestrator] listening on :${port}`);
