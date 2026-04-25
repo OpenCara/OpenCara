@@ -78,7 +78,9 @@ function openBrowser(url: string): void {
         ? "start"
         : "xdg-open";
   try {
-    spawn(cmd, [url], { detached: true, stdio: "ignore" }).unref();
+    const child = spawn(cmd, [url], { detached: true, stdio: "ignore" });
+    child.on("error", () => undefined); // headless / browser not installed
+    child.unref();
   } catch {
     // best effort
   }

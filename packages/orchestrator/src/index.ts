@@ -1,8 +1,11 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { createNodeWebSocket } from "@hono/node-ws";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { LocalSubprocessDispatcher } from "./dispatch/local.js";
+import { DevicePool, WebSocketDispatcher } from "./dispatch/devices.js";
+import { DispatcherRouter } from "./dispatch/router.js";
 import { createGithubAppClient } from "./github/app.js";
 import { GithubOAuth } from "./github/oauth.js";
 import { TokenCipher } from "./auth/session.js";
@@ -15,17 +18,21 @@ import { activityRoutes } from "./routes/api/activity.js";
 import { flowRoutes } from "./routes/api/flows.js";
 import { runRoutes } from "./routes/api/runs.js";
 import { deviceRoutes } from "./routes/api/devices.js";
+import { deviceWsHandler } from "./routes/api/devices/ws.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
-const dispatcher = new LocalSubprocessDispatcher({
-  defaultCwd: process.cwd(),
-});
+
+const localDispatcher = new LocalSubprocessDispatcher({ defaultCwd: process.cwd() });
+const devicePool = new DevicePool(db);
+const wsDispatcher = new WebSocketDispatcher(devicePool);
+const dispatcher = new DispatcherRouter(localDispatcher, wsDispatcher, devicePool);
 
 const app = new Hono<AuthEnv>();
+const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
 
 app.use("*", currentUser(db, config.SESSION_COOKIE_NAME));
 
@@ -82,8 +89,13 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   app.route("/api/activity", activityRoutes({ db }));
   app.route("/api", flowRoutes({ db }));
   app.route("/api", runRoutes({ db, pg }));
+  // WS endpoint registered on the root app so @hono/node-ws can attach the
+  // upgrade handler to the same Node HTTP server. Must be BEFORE the
+  // deviceRoutes mount at the same path prefix to avoid a 404 from the
+  // sub-router's miss-handling.
+  app.get("/api/devices/ws", upgradeWebSocket(deviceWsHandler({ db, pool: devicePool })));
   app.route("/api/devices", deviceRoutes({ db, cipher }));
-  console.log("[orchestrator] auth + API routes mounted");
+  console.log("[orchestrator] auth + API routes mounted (WS at /api/devices/ws)");
 } else {
   console.log(
     "[orchestrator] auth/API not mounted (need GitHub App config + SESSION_ENCRYPTION_KEY)",
@@ -93,6 +105,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
 // Static SPA serving — must be mounted last so /api, /auth, /webhooks win.
 mountStatic(app);
 
-serve({ fetch: app.fetch, port: config.PORT }, ({ port }) => {
+const server = serve({ fetch: app.fetch, port: config.PORT }, ({ port }) => {
   console.log(`[orchestrator] listening on :${port}`);
 });
+injectWebSocket(server);
