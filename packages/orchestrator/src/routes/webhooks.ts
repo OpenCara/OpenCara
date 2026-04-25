@@ -4,10 +4,12 @@ import type { Db } from "../db/client.js";
 import { githubInstallations, platformEvents, projects } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
 import { upsertInstallation, softRemoveProjectsForRepos } from "../github/installations.js";
+import type { FlowEngine } from "../flows/engine.js";
 
 interface WebhookDeps {
   db: Db;
   app: GithubAppClient;
+  flowEngine?: FlowEngine;
 }
 
 interface WebhookPayload {
@@ -58,6 +60,15 @@ export function appWebhookRoutes(deps: WebhookDeps) {
         .onConflictDoNothing();
 
       await handleMetaEvent(deps.db, eventType, payload);
+
+      if (deps.flowEngine) {
+        deps.flowEngine.onPlatformEvent({
+          id: deliveryId,
+          type: eventType,
+          projectId: projectRowId,
+          payload,
+        });
+      }
     } catch (err) {
       console.error("[webhooks] handler error", { eventType, deliveryId, err });
     }

@@ -1,4 +1,10 @@
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import type { FlowDefinition } from "../types.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+// dist/builtin/pr-review.js → ../../examples/echo-reviewer.mjs
+const echoReviewerPath = resolve(here, "../../examples/echo-reviewer.mjs");
 
 export const prReviewFlow: FlowDefinition = {
   slug: "pr-review",
@@ -24,7 +30,7 @@ export const prReviewFlow: FlowDefinition = {
           // pipeline can be exercised without an LLM call. Swap to `claude`
           // (or any other command) by editing this node config.
           command: "node",
-          args: ["packages/flows/examples/echo-reviewer.mjs"],
+          args: [echoReviewerPath],
           env: {},
         },
         contextInjection: {

@@ -6,6 +6,7 @@ import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { GithubAppClient } from "../../github/app.js";
 import { syncInstallationRepos, upsertInstallation } from "../../github/installations.js";
 import { ulid } from "ulid";
+import { ensureBuiltinFlowsForProject } from "../../flows/builtin.js";
 
 interface InstallationRoutesDeps {
   db: Db;
@@ -81,6 +82,7 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
       private: repo.private,
       addedByUserId: user.id,
     });
+    await ensureBuiltinFlowsForProject(deps.db, newId);
     return c.json(
       { project: { id: newId, owner: repo.owner, name: repo.name, githubRepoId: repo.id } },
       201,

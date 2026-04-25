@@ -13,12 +13,14 @@ import { projectRoutes } from "./routes/api/projects.js";
 import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
 import { mountStatic } from "./static.js";
+import { FlowEngine } from "./flows/engine.js";
+import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
-const dispatcher = new LocalSubprocessDispatcher();
-void dispatcher;
-void pg;
+const dispatcher = new LocalSubprocessDispatcher({
+  defaultCwd: process.cwd(),
+});
 
 const app = new Hono<AuthEnv>();
 
@@ -30,13 +32,26 @@ const githubApp = config.github
   ? createGithubAppClient(config.github, config.GITHUB_WEBHOOK_SECRET)
   : null;
 
+const flowEngine = githubApp
+  ? new FlowEngine({ db, pg, app: githubApp, dispatcher })
+  : null;
+
 if (githubApp) {
-  app.route("/webhooks/github", appWebhookRoutes({ db, app: githubApp }));
+  app.route(
+    "/webhooks/github",
+    appWebhookRoutes({ db, app: githubApp, flowEngine: flowEngine ?? undefined }),
+  );
   console.log("[orchestrator] GitHub App webhook handler mounted at /webhooks/github");
 } else {
   console.log(
     "[orchestrator] GitHub App not configured; webhook handler disabled. Set GITHUB_APP_* and SESSION_ENCRYPTION_KEY to enable.",
   );
+}
+
+if (flowEngine) {
+  seedBuiltinFlowsForAllProjects(db)
+    .then(() => console.log("[orchestrator] flow engine ready (built-in flows seeded)"))
+    .catch((err: unknown) => console.error("[orchestrator] flow seeding failed", err));
 }
 
 if (config.github && config.SESSION_ENCRYPTION_KEY) {
