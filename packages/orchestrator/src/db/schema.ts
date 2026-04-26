@@ -233,6 +233,43 @@ export const flowRuns = pgTable(
   }),
 );
 
+export const prompts = pgTable(
+  "prompts",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    projectNameUq: uniqueIndex("prompts_project_name_uq").on(t.projectId, t.name),
+    projectIdx: index("prompts_project_id_idx").on(t.projectId),
+  }),
+);
+
+export const flowNodeSettings = pgTable(
+  "flow_node_settings",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => flows.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    flowNodeUq: uniqueIndex("flow_node_settings_flow_node_uq").on(t.flowId, t.nodeId),
+  }),
+);
+
 export const flowRunSteps = pgTable(
   "flow_run_steps",
   {

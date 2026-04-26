@@ -145,6 +145,7 @@ export class FlowEngine {
         pg: this.deps.pg,
         app: this.deps.app,
         dispatcher: this.deps.dispatcher,
+        flowId,
         flowRunId,
         flowRunStepId: stepId,
         projectId: project.id,

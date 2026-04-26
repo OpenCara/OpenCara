@@ -7,8 +7,9 @@ import type {
   FlowNode,
   TriggerNode,
 } from "@openkira/flows";
+import { and } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { agentRunLogs, agentRuns } from "../db/schema.js";
+import { agentRunLogs, agentRuns, flowNodeSettings, prompts } from "../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import type { PullRequestContext } from "./context.js";
@@ -24,6 +25,7 @@ export interface NodeRunCtx {
   pg: Sql;
   app: GithubAppClient;
   dispatcher: AgentDispatcher;
+  flowId: string;
   flowRunId: string;
   flowRunStepId: string;
   projectId: string;
@@ -69,8 +71,18 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     }
   }
 
+  // Look up linked prompt for this flow node, if any.
+  const linkedPromptBody = await loadLinkedPrompt(ctx.db, ctx.flowId, node.id);
+  if (linkedPromptBody !== null) {
+    env["OPENKIRA_PROMPT"] = linkedPromptBody;
+  }
+
   const stdinJson = node.config.contextInjection.stdinJson
-    ? { ...(ctx.prContext?.stdin ?? {}), previousOutput: ctx.previousOutput }
+    ? {
+        ...(ctx.prContext?.stdin ?? {}),
+        previousOutput: ctx.previousOutput,
+        prompt: linkedPromptBody ?? undefined,
+      }
     : undefined;
 
   const agentRunId = ulid();
@@ -168,3 +180,18 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
     }
   }
 };
+
+async function loadLinkedPrompt(
+  db: Db,
+  flowId: string,
+  nodeId: string,
+): Promise<string | null> {
+  const setting = await db.query.flowNodeSettings.findFirst({
+    where: and(eq(flowNodeSettings.flowId, flowId), eq(flowNodeSettings.nodeId, nodeId)),
+  });
+  if (!setting?.promptId) return null;
+  const prompt = await db.query.prompts.findFirst({
+    where: eq(prompts.id, setting.promptId),
+  });
+  return prompt?.body ?? null;
+}
