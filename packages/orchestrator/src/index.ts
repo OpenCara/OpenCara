@@ -18,6 +18,7 @@ import { activityRoutes } from "./routes/api/activity.js";
 import { flowRoutes } from "./routes/api/flows.js";
 import { runRoutes } from "./routes/api/runs.js";
 import { deviceRoutes } from "./routes/api/devices.js";
+import { promptRoutes } from "./routes/api/prompts.js";
 import { deviceWsHandler } from "./routes/api/devices/ws.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
@@ -87,8 +88,14 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   app.route("/api/projects", projectRoutes({ db }));
   app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api/activity", activityRoutes({ db }));
-  app.route("/api", flowRoutes({ db }));
-  app.route("/api", runRoutes({ db, pg }));
+  // Hono's app.route(prefix, subapp) only honours the FIRST mount at a given
+  // prefix — subsequent app.route("/api", ...) calls are silently dropped.
+  // Combine the /api sub-routers into one before mounting once.
+  const apiHono = new Hono<AuthEnv>();
+  apiHono.route("/", flowRoutes({ db }));
+  apiHono.route("/", runRoutes({ db, pg }));
+  apiHono.route("/", promptRoutes({ db }));
+  app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the
   // deviceRoutes mount at the same path prefix to avoid a 404 from the

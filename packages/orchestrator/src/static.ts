@@ -28,7 +28,14 @@ export function mountStatic(app: Hono<AuthEnv>): boolean {
   );
 
   const indexPath = resolve(root, "index.html");
+  // Server-rendered paths must NOT be swallowed by the SPA fallback —
+  // otherwise /api/* misses look like 200 HTML to the browser, which then
+  // tries to JSON.parse the SPA shell and explodes.
   app.get("/*", (c) => {
+    const p = c.req.path;
+    if (p.startsWith("/api/") || p.startsWith("/auth/") || p.startsWith("/webhooks/")) {
+      return c.json({ error: "not found" }, 404);
+    }
     c.header("Content-Type", "text/html; charset=utf-8");
     c.header("Cache-Control", "no-store");
     return c.body(readFileSync(indexPath, "utf8"));
