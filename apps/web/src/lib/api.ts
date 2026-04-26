@@ -37,5 +37,7 @@ function safeJson(s: string): unknown {
 export const api = {
   get: <T>(p: string): Promise<T> => request<T>("GET", p),
   post: <T>(p: string, body?: unknown): Promise<T> => request<T>("POST", p, body),
+  put: <T>(p: string, body?: unknown): Promise<T> => request<T>("PUT", p, body),
+  patch: <T>(p: string, body?: unknown): Promise<T> => request<T>("PATCH", p, body),
   delete: <T>(p: string): Promise<T> => request<T>("DELETE", p),
 };

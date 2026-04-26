@@ -194,6 +194,84 @@ export const flowRunDetailQuery = (runId: string) => ({
     ),
 });
 
+export interface PromptRow {
+  id: string;
+  projectId: string;
+  name: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FlowNodeSetting {
+  id: string;
+  flowId: string;
+  nodeId: string;
+  promptId: string | null;
+  updatedAt: string;
+}
+
+export const promptsQuery = (projectId: string) => ({
+  queryKey: ["projects", projectId, "prompts"] as const,
+  queryFn: () =>
+    api.get<{ prompts: PromptRow[] }>(`/api/projects/${projectId}/prompts`),
+});
+
+export const flowNodeSettingsQuery = (projectId: string, flowId: string) => ({
+  queryKey: ["projects", projectId, "flows", flowId, "node-settings"] as const,
+  queryFn: () =>
+    api.get<{ settings: FlowNodeSetting[] }>(
+      `/api/projects/${projectId}/flows/${flowId}/node-settings`,
+    ),
+});
+
+export function useCreatePrompt(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { name: string; body: string }) =>
+      api.post<{ prompt: PromptRow }>(`/api/projects/${projectId}/prompts`, vars),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "prompts"] }),
+  });
+}
+
+export function useUpdatePrompt(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; name?: string; body?: string }) =>
+      api.patch<{ prompt: PromptRow }>(`/api/prompts/${vars.id}`, {
+        name: vars.name,
+        body: vars.body,
+      }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "prompts"] }),
+  });
+}
+
+export function useDeletePrompt(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/api/prompts/${id}`),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "prompts"] }),
+  });
+}
+
+export function useSetFlowNodePrompt(projectId: string, flowId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { nodeId: string; promptId: string | null }) =>
+      api.put<{ setting: FlowNodeSetting }>(
+        `/api/projects/${projectId}/flows/${flowId}/nodes/${vars.nodeId}/settings`,
+        { promptId: vars.promptId },
+      ),
+    onSuccess: () =>
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "flows", flowId, "node-settings"],
+      }),
+  });
+}
+
 export interface DeviceRow {
   id: string;
   name: string;

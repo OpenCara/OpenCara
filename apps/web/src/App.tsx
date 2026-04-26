@@ -11,6 +11,7 @@ import { ProjectFlowDetailPage } from "@/pages/ProjectFlowDetailPage";
 import { FlowRunDetailPage } from "@/pages/FlowRunDetailPage";
 import { DevicePairPage } from "@/pages/DevicePairPage";
 import { DevicesPage } from "@/pages/DevicesPage";
+import { PromptsPage } from "@/pages/PromptsPage";
 
 export function App() {
   return (
@@ -27,10 +28,12 @@ export function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/new" element={<AddProjectPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
-        <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="projects/:id/flows" element={<ProjectFlowsPage />} />
         <Route path="projects/:id/flows/:slug" element={<ProjectFlowDetailPage />} />
         <Route path="projects/:id/flow-runs/:runId" element={<FlowRunDetailPage />} />
+        <Route path="projects/:id/prompts" element={<PromptsPage />} />
+        {/* Less-specific tab routes go LAST so they don't shadow the above. */}
+        <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/pair" element={<DevicePairPage />} />
       </Route>

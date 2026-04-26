@@ -62,6 +62,12 @@ export function ProjectDetailPage() {
           >
             Flows →
           </Link>
+          <Link
+            to={`/projects/${id}/prompts`}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Prompts →
+          </Link>
           <a
             href={ghUrl}
             target="_blank"
