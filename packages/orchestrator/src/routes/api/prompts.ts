@@ -3,6 +3,7 @@ import { ulid } from "ulid";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
+  agents,
   flowNodeSettings,
   flows,
   prompts,
@@ -108,26 +109,42 @@ export function promptRoutes(deps: PromptRoutesDeps) {
     "/projects/:projectId/flows/:flowId/nodes/:nodeId/settings",
     auth,
     async (c) => {
+      const user = c.get("user")!;
       const projectId = c.req.param("projectId");
       const flowId = c.req.param("flowId");
       const nodeId = c.req.param("nodeId");
       const body = await c.req.json().catch(() => ({}));
       const promptIdRaw = body.promptId;
       const promptId =
-        promptIdRaw === null || promptIdRaw === undefined
-          ? null
-          : String(promptIdRaw);
+        promptIdRaw === undefined
+          ? "__keep__"
+          : promptIdRaw === null
+            ? null
+            : String(promptIdRaw);
+      const agentIdRaw = body.agentId;
+      const agentId =
+        agentIdRaw === undefined
+          ? "__keep__"
+          : agentIdRaw === null
+            ? null
+            : String(agentIdRaw);
 
-      // Validate flow belongs to project, and prompt (if any) belongs to project.
+      // Validate flow belongs to project, prompt belongs to project, agent belongs to user.
       const flow = await deps.db.query.flows.findFirst({
         where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
       });
       if (!flow) return c.json({ error: "flow not found in project" }, 404);
-      if (promptId) {
+      if (promptId && promptId !== "__keep__") {
         const p = await deps.db.query.prompts.findFirst({
           where: and(eq(prompts.id, promptId), eq(prompts.projectId, projectId)),
         });
         if (!p) return c.json({ error: "prompt not found in project" }, 404);
+      }
+      if (agentId && agentId !== "__keep__") {
+        const a = await deps.db.query.agents.findFirst({
+          where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
+        });
+        if (!a) return c.json({ error: "agent not found" }, 404);
       }
 
       const existing = await deps.db.query.flowNodeSettings.findFirst({
@@ -137,13 +154,22 @@ export function promptRoutes(deps: PromptRoutesDeps) {
         ),
       });
       if (existing) {
+        const patch: Partial<typeof flowNodeSettings.$inferInsert> = {
+          updatedAt: new Date(),
+        };
+        if (promptId !== "__keep__") patch.promptId = promptId;
+        if (agentId !== "__keep__") patch.agentId = agentId;
         await deps.db
           .update(flowNodeSettings)
-          .set({ promptId, updatedAt: new Date() })
+          .set(patch)
           .where(eq(flowNodeSettings.id, existing.id));
-        return c.json({
-          setting: { ...existing, promptId, updatedAt: new Date().toISOString() },
-        });
+        const merged = {
+          ...existing,
+          ...(promptId !== "__keep__" ? { promptId } : {}),
+          ...(agentId !== "__keep__" ? { agentId } : {}),
+          updatedAt: new Date().toISOString(),
+        };
+        return c.json({ setting: merged });
       }
       const id = ulid();
       await deps.db.insert(flowNodeSettings).values({
@@ -151,10 +177,20 @@ export function promptRoutes(deps: PromptRoutesDeps) {
         projectId,
         flowId,
         nodeId,
-        promptId,
+        promptId: promptId === "__keep__" ? null : promptId,
+        agentId: agentId === "__keep__" ? null : agentId,
       });
       return c.json(
-        { setting: { id, projectId, flowId, nodeId, promptId } },
+        {
+          setting: {
+            id,
+            projectId,
+            flowId,
+            nodeId,
+            promptId: promptId === "__keep__" ? null : promptId,
+            agentId: agentId === "__keep__" ? null : agentId,
+          },
+        },
         201,
       );
     },

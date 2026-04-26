@@ -9,7 +9,7 @@ import type {
 } from "@openkira/flows";
 import { and } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { agentRunLogs, agentRuns, flowNodeSettings, prompts } from "../db/schema.js";
+import { agentRunLogs, agentRuns, agents, flowNodeSettings, prompts } from "../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import type { PullRequestContext } from "./context.js";
@@ -63,7 +63,27 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
 };
 
 export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
-  const env: Record<string, string> = { ...node.config.spec.env };
+  // Resolve the linked agent — required since the flow's in-graph spec is
+  // ignored in favour of the user's per-node agent linkage.
+  const setting = await ctx.db.query.flowNodeSettings.findFirst({
+    where: and(
+      eq(flowNodeSettings.flowId, ctx.flowId),
+      eq(flowNodeSettings.nodeId, node.id),
+    ),
+  });
+  if (!setting?.agentId) {
+    throw new Error(
+      `agent node '${node.id}' has no linked agent — link one from the flow detail page`,
+    );
+  }
+  const agent = await ctx.db.query.agents.findFirst({
+    where: eq(agents.id, setting.agentId),
+  });
+  if (!agent) {
+    throw new Error(`linked agent ${setting.agentId} not found (revoked or deleted)`);
+  }
+
+  const env: Record<string, string> = { ...agent.env };
   if (ctx.prContext) {
     for (const key of node.config.contextInjection.env) {
       const v = ctx.prContext.envExtras[key];
@@ -72,7 +92,10 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   }
 
   // Look up linked prompt for this flow node, if any.
-  const linkedPromptBody = await loadLinkedPrompt(ctx.db, ctx.flowId, node.id);
+  const linkedPromptBody = setting.promptId
+    ? (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, setting.promptId) }))
+        ?.body ?? null
+    : null;
   if (linkedPromptBody !== null) {
     env["OPENKIRA_PROMPT"] = linkedPromptBody;
   }
@@ -85,10 +108,19 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       }
     : undefined;
 
+  const spec = {
+    kind: agent.name,
+    command: agent.command,
+    args: agent.args,
+    env,
+    cwd: agent.cwd ?? undefined,
+  };
+  const runOn = (agent.runOn as "any" | "local" | "device") ?? node.config.runOn;
+
   const agentRunId = ulid();
   await ctx.db.insert(agentRuns).values({
     id: agentRunId,
-    spec: node.config.spec,
+    spec,
     triggerEventId: ctx.event.id,
     status: "running",
     projectId: ctx.projectId,
@@ -109,10 +141,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   };
 
   try {
-    const result = await ctx.dispatcher.run(
-      { ...node.config.spec, env },
-      { stdinJson, onLog, runOn: node.config.runOn },
-    );
+    const result = await ctx.dispatcher.run(spec, { stdinJson, onLog, runOn });
     await ctx.db
       .update(agentRuns)
       .set({
@@ -181,17 +210,5 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
   }
 };
 
-async function loadLinkedPrompt(
-  db: Db,
-  flowId: string,
-  nodeId: string,
-): Promise<string | null> {
-  const setting = await db.query.flowNodeSettings.findFirst({
-    where: and(eq(flowNodeSettings.flowId, flowId), eq(flowNodeSettings.nodeId, nodeId)),
-  });
-  if (!setting?.promptId) return null;
-  const prompt = await db.query.prompts.findFirst({
-    where: eq(prompts.id, setting.promptId),
-  });
-  return prompt?.body ?? null;
-}
+// loadLinkedPrompt was inlined into agentRunner since it now also needs the
+// linked agent and the lookup logic is the same.

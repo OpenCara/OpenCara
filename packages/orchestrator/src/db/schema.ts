@@ -251,6 +251,28 @@ export const prompts = pgTable(
   }),
 );
 
+export const agents = pgTable(
+  "agents",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    command: text("command").notNull(),
+    args: jsonb("args").$type<string[]>().notNull().default([]),
+    env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
+    cwd: text("cwd"),
+    runOn: text("run_on").notNull().default("any"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userNameUq: uniqueIndex("agents_user_name_uq").on(t.userId, t.name),
+    userIdx: index("agents_user_id_idx").on(t.userId),
+  }),
+);
+
 export const flowNodeSettings = pgTable(
   "flow_node_settings",
   {
@@ -263,6 +285,7 @@ export const flowNodeSettings = pgTable(
       .references(() => flows.id, { onDelete: "cascade" }),
     nodeId: text("node_id").notNull(),
     promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
