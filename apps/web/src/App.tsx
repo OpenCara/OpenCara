@@ -12,6 +12,7 @@ import { FlowRunDetailPage } from "@/pages/FlowRunDetailPage";
 import { DevicePairPage } from "@/pages/DevicePairPage";
 import { DevicesPage } from "@/pages/DevicesPage";
 import { PromptsPage } from "@/pages/PromptsPage";
+import { AgentsPage } from "@/pages/AgentsPage";
 
 export function App() {
   return (
@@ -36,6 +37,7 @@ export function App() {
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/pair" element={<DevicePairPage />} />
+        <Route path="agents" element={<AgentsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

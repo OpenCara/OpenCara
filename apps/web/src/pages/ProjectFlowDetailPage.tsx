@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
-import { Bot, ExternalLink, Sparkles } from "lucide-react";
+import { Bot, Cpu, ExternalLink, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,10 +22,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  agentsQuery,
   flowDetailQuery,
   flowNodeSettingsQuery,
   promptsQuery,
-  useSetFlowNodePrompt,
+  useSetFlowNodeSettings,
   type FlowRunSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
@@ -38,6 +39,7 @@ export function ProjectFlowDetailPage() {
   const projectId = id!;
   const q = useQuery(flowDetailQuery(projectId, slug!));
   const promptsQ = useQuery(promptsQuery(projectId));
+  const agentsQ = useQuery(agentsQuery());
   const settingsQ = useQuery({
     ...flowNodeSettingsQuery(projectId, q.data?.flow.id ?? ""),
     enabled: !!q.data,
@@ -50,6 +52,7 @@ export function ProjectFlowDetailPage() {
   const { flow, runs } = q.data;
   const settings = settingsQ.data?.settings ?? [];
   const prompts = promptsQ.data?.prompts ?? [];
+  const agents = agentsQ.data?.agents ?? [];
   const selectedNode = selectedNodeId
     ? flow.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
@@ -82,6 +85,7 @@ export function ProjectFlowDetailPage() {
           node={selectedNode}
           settings={settings}
           prompts={prompts}
+          agents={agents}
           onClose={() => setSelectedNodeId(null)}
         />
       )}
@@ -130,12 +134,21 @@ export function ProjectFlowDetailPage() {
   );
 }
 
+interface AgentSummary {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  runOn: string;
+}
+
 interface AgentNodePanelProps {
   projectId: string;
   flowId: string;
   node: { id: string; config?: Record<string, unknown> };
-  settings: { nodeId: string; promptId: string | null }[];
+  settings: { nodeId: string; promptId: string | null; agentId: string | null }[];
   prompts: { id: string; name: string; body: string }[];
+  agents: AgentSummary[];
   onClose: () => void;
 }
 
@@ -145,16 +158,21 @@ function AgentNodePanel({
   node,
   settings,
   prompts,
+  agents,
   onClose,
 }: AgentNodePanelProps) {
   const setting = settings.find((s) => s.nodeId === node.id);
   const linkedPromptId = setting?.promptId ?? null;
+  const linkedAgentId = setting?.agentId ?? null;
   const linkedPrompt = linkedPromptId
     ? prompts.find((p) => p.id === linkedPromptId) ?? null
     : null;
-  const set = useSetFlowNodePrompt(projectId, flowId);
+  const linkedAgent = linkedAgentId
+    ? agents.find((a) => a.id === linkedAgentId) ?? null
+    : null;
+  const set = useSetFlowNodeSettings(projectId, flowId);
 
-  const cfg = (node.config ?? {}) as { label?: string; spec?: { command?: string } };
+  const cfg = (node.config ?? {}) as { label?: string };
 
   return (
     <Card>
@@ -174,25 +192,60 @@ function AgentNodePanel({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {cfg.spec?.command && (
-          <div className="text-xs text-muted-foreground">
-            Runs: <code className="font-mono">{cfg.spec.command}</code>
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <div className="flex items-center gap-1 text-sm font-medium">
+            <Cpu className="size-3.5" />
+            Linked agent
+            <span className="text-xs font-normal text-muted-foreground">(required)</span>
           </div>
-        )}
+          <Select
+            value={linkedAgentId ?? NONE}
+            onValueChange={(v) => {
+              set.mutate({ nodeId: node.id, agentId: v === NONE ? null : v });
+            }}
+          >
+            <SelectTrigger className="w-full max-w-md">
+              <SelectValue placeholder="(none — runs will fail)" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>(none — runs will fail)</SelectItem>
+              {agents.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {agents.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              No agents yet.{" "}
+              <Link to="/agents" className="text-foreground underline">
+                Create one
+              </Link>{" "}
+              before this flow can run.
+            </p>
+          )}
+          {linkedAgent && (
+            <pre className="mt-2 rounded-md border bg-muted/30 p-3 font-mono text-xs">
+              $ {linkedAgent.command}
+              {linkedAgent.args.length ? " " : ""}
+              {linkedAgent.args.join(" ")}
+              <span className="ml-2 text-muted-foreground">[runs on: {linkedAgent.runOn}]</span>
+            </pre>
+          )}
+        </div>
 
         <div className="space-y-2">
           <div className="flex items-center gap-1 text-sm font-medium">
             <Sparkles className="size-3.5" />
             Linked prompt
+            <span className="text-xs font-normal text-muted-foreground">(optional)</span>
           </div>
           <Select
             value={linkedPromptId ?? NONE}
             onValueChange={(v) => {
-              set.mutate({
-                nodeId: node.id,
-                promptId: v === NONE ? null : v,
-              });
+              set.mutate({ nodeId: node.id, promptId: v === NONE ? null : v });
             }}
           >
             <SelectTrigger className="w-full max-w-md">

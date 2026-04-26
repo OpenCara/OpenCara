@@ -208,7 +208,58 @@ export interface FlowNodeSetting {
   flowId: string;
   nodeId: string;
   promptId: string | null;
+  agentId: string | null;
   updatedAt: string;
+}
+
+export interface AgentRow {
+  id: string;
+  userId: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string | null;
+  runOn: "any" | "local" | "device";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const agentsQuery = () => ({
+  queryKey: ["agents"] as const,
+  queryFn: () => api.get<{ agents: AgentRow[] }>("/api/agents"),
+});
+
+export function useCreateAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      name: string;
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+      cwd?: string | null;
+      runOn?: "any" | "local" | "device";
+    }) => api.post<{ agent: AgentRow }>("/api/agents", vars),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+  });
+}
+
+export function useUpdateAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; patch: Partial<Omit<AgentRow, "id" | "userId" | "createdAt" | "updatedAt">> }) =>
+      api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+  });
+}
+
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/api/agents/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+  });
 }
 
 export const promptsQuery = (projectId: string) => ({
@@ -257,20 +308,31 @@ export function useDeletePrompt(projectId: string) {
   });
 }
 
-export function useSetFlowNodePrompt(projectId: string, flowId: string) {
+export function useSetFlowNodeSettings(projectId: string, flowId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { nodeId: string; promptId: string | null }) =>
-      api.put<{ setting: FlowNodeSetting }>(
+    mutationFn: (vars: {
+      nodeId: string;
+      promptId?: string | null;
+      agentId?: string | null;
+    }) => {
+      const body: Record<string, string | null> = {};
+      if (vars.promptId !== undefined) body.promptId = vars.promptId;
+      if (vars.agentId !== undefined) body.agentId = vars.agentId;
+      return api.put<{ setting: FlowNodeSetting }>(
         `/api/projects/${projectId}/flows/${flowId}/nodes/${vars.nodeId}/settings`,
-        { promptId: vars.promptId },
-      ),
+        body,
+      );
+    },
     onSuccess: () =>
       qc.invalidateQueries({
         queryKey: ["projects", projectId, "flows", flowId, "node-settings"],
       }),
   });
 }
+
+/** @deprecated use useSetFlowNodeSettings */
+export const useSetFlowNodePrompt = useSetFlowNodeSettings;
 
 export interface DeviceRow {
   id: string;
