@@ -8,6 +8,7 @@ import {
   Cpu,
   Bot,
   MessageCircle,
+  Sparkles,
   Workflow,
 } from "lucide-react";
 import { useUser } from "@/auth/AuthContext";
@@ -17,6 +18,7 @@ import {
   flowTemplatesQuery,
   agentsQuery,
   devicesQuery,
+  promptsQuery,
 } from "@/lib/queries";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -43,9 +45,10 @@ const topNav: NavEntry[] = [
   { to: "/projects", label: "Projects", icon: FolderGit2, end: true },
 ];
 const tailNav: NavEntry[] = [
+  { to: "/flows", label: "Flows", icon: Workflow, end: true },
+  { to: "/prompts", label: "Prompts", icon: Sparkles, end: true },
   { to: "/agents", label: "Agents", icon: Bot, end: true },
   { to: "/devices", label: "Devices", icon: Cpu, end: true },
-  { to: "/flows", label: "Flows", icon: Workflow, end: true },
 ];
 
 export function AppShell() {
@@ -55,6 +58,7 @@ export function AppShell() {
   const templatesQ = useQuery(flowTemplatesQuery());
   const agentsQ = useQuery(agentsQuery());
   const devicesQ = useQuery(devicesQuery());
+  const promptsQ = useQuery(promptsQuery());
   const [chatOpen, setChatOpen] = useState(false);
   const projects = projectsQ.data?.projects ?? [];
   const templates = templatesQ.data?.templates ?? [];
@@ -62,6 +66,7 @@ export function AppShell() {
   // Hide revoked devices in the sidebar — the Devices page itself still shows
   // them for audit reasons, but they're noise in nav.
   const devices = (devicesQ.data?.devices ?? []).filter((d) => !d.revokedAt);
+  const allPrompts = promptsQ.data?.prompts ?? [];
 
   return (
     <ChatActionsProvider>
@@ -120,6 +125,22 @@ export function AppShell() {
                       to={`/agents#agent-${a.id}`}
                       title={a.name}
                       label={a.name}
+                    />
+                  ))}
+                </NestedList>
+              )}
+              {item.to === "/prompts" && allPrompts.length > 0 && (
+                <NestedList>
+                  {allPrompts.map((p) => (
+                    <HashItem
+                      key={p.id}
+                      to={`/prompts#prompt-${p.id}`}
+                      title={
+                        p.labels.length > 0
+                          ? `${p.name} · ${p.labels.join(", ")}`
+                          : p.name
+                      }
+                      label={p.name}
                     />
                   ))}
                 </NestedList>

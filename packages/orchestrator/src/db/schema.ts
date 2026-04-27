@@ -242,17 +242,18 @@ export const prompts = pgTable(
   "prompts",
   {
     id: text("id").primaryKey(),
-    projectId: text("project_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => projects.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     body: text("body").notNull(),
+    labels: jsonb("labels").$type<string[]>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    projectNameUq: uniqueIndex("prompts_project_name_uq").on(t.projectId, t.name),
-    projectIdx: index("prompts_project_id_idx").on(t.projectId),
+    userNameUq: uniqueIndex("prompts_user_name_uq").on(t.userId, t.name),
+    userIdx: index("prompts_user_id_idx").on(t.userId),
   }),
 );
 

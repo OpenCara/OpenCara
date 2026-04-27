@@ -225,12 +225,18 @@ export const flowRunDetailQuery = (runId: string) => ({
 
 export interface PromptRow {
   id: string;
-  projectId: string;
+  userId: string;
   name: string;
   body: string;
+  labels: string[];
   createdAt: string;
   updatedAt: string;
 }
+
+export const promptsQuery = () => ({
+  queryKey: ["prompts"] as const,
+  queryFn: () => api.get<{ prompts: PromptRow[] }>("/api/prompts"),
+});
 
 export interface FlowNodeSetting {
   id: string;
@@ -292,12 +298,6 @@ export function useDeleteAgent() {
   });
 }
 
-export const promptsQuery = (projectId: string) => ({
-  queryKey: ["projects", projectId, "prompts"] as const,
-  queryFn: () =>
-    api.get<{ prompts: PromptRow[] }>(`/api/projects/${projectId}/prompts`),
-});
-
 export const flowNodeSettingsQuery = (projectId: string, flowId: string) => ({
   queryKey: ["projects", projectId, "flows", flowId, "node-settings"] as const,
   queryFn: () =>
@@ -306,35 +306,38 @@ export const flowNodeSettingsQuery = (projectId: string, flowId: string) => ({
     ),
 });
 
-export function useCreatePrompt(projectId: string) {
+export function useCreatePrompt() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { name: string; body: string }) =>
-      api.post<{ prompt: PromptRow }>(`/api/projects/${projectId}/prompts`, vars),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "prompts"] }),
+    mutationFn: (vars: { name: string; body: string; labels?: string[] }) =>
+      api.post<{ prompt: PromptRow }>("/api/prompts", vars),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts"] }),
   });
 }
 
-export function useUpdatePrompt(projectId: string) {
+export function useUpdatePrompt() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; name?: string; body?: string }) =>
+    mutationFn: (vars: {
+      id: string;
+      name?: string;
+      body?: string;
+      labels?: string[];
+    }) =>
       api.patch<{ prompt: PromptRow }>(`/api/prompts/${vars.id}`, {
         name: vars.name,
         body: vars.body,
+        labels: vars.labels,
       }),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "prompts"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts"] }),
   });
 }
 
-export function useDeletePrompt(projectId: string) {
+export function useDeletePrompt() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete<void>(`/api/prompts/${id}`),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "prompts"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts"] }),
   });
 }
 

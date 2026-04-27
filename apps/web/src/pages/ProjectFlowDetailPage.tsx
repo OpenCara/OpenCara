@@ -55,7 +55,7 @@ export function ProjectFlowDetailPage() {
   const projectId = id!;
   const navigate = useNavigate();
   const q = useQuery(flowDetailQuery(projectId, slug!));
-  const promptsQ = useQuery(promptsQuery(projectId));
+  const promptsQ = useQuery(promptsQuery());
   const agentsQ = useQuery(agentsQuery());
   const settingsQ = useQuery({
     ...flowNodeSettingsQuery(projectId, q.data?.flow.id ?? ""),
@@ -398,11 +398,8 @@ function AgentNodePanel({
           </Select>
           {prompts.length === 0 && (
             <p className="text-xs text-muted-foreground">
-              No prompts in this project yet.{" "}
-              <Link
-                to={`/projects/${projectId}/prompts`}
-                className="text-foreground underline"
-              >
+              No prompts yet.{" "}
+              <Link to="/prompts" className="text-foreground underline">
                 Create one
               </Link>
               .
@@ -419,7 +416,7 @@ function AgentNodePanel({
             </div>
           )}
           <Link
-            to={`/projects/${projectId}/prompts`}
+            to="/prompts"
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
             Manage prompts <ExternalLink className="size-3" />
