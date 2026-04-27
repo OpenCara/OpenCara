@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "react-router";
-import { Bot, Cpu, ExternalLink, Sparkles } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router";
+import { Bot, Cpu, ExternalLink, Play, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +27,7 @@ import {
   flowNodeSettingsQuery,
   promptsQuery,
   useSetFlowNodeSettings,
+  useTriggerFlow,
   type FlowRunSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
@@ -37,6 +38,7 @@ const NONE = "__none__";
 export function ProjectFlowDetailPage() {
   const { id, slug } = useParams();
   const projectId = id!;
+  const navigate = useNavigate();
   const q = useQuery(flowDetailQuery(projectId, slug!));
   const promptsQ = useQuery(promptsQuery(projectId));
   const agentsQ = useQuery(agentsQuery());
@@ -44,6 +46,7 @@ export function ProjectFlowDetailPage() {
     ...flowNodeSettingsQuery(projectId, q.data?.flow.id ?? ""),
     enabled: !!q.data,
   });
+  const trigger = useTriggerFlow(projectId);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -57,19 +60,40 @@ export function ProjectFlowDetailPage() {
     ? flow.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
+  const onRun = () => {
+    trigger.mutate(flow.slug, {
+      onSuccess: ({ flowRunId }) => {
+        navigate(`/projects/${projectId}/flow-runs/${flowRunId}`);
+      },
+    });
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          to={`/projects/${projectId}/flows`}
-          className="text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← All flows
-        </Link>
-        <h2 className="mt-1 text-xl font-semibold tracking-tight">{flow.name}</h2>
-        <p className="text-sm text-muted-foreground">
-          {flow.graphJson.description ?? "—"}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Link
+            to={`/projects/${projectId}/flows`}
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            ← All flows
+          </Link>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight">{flow.name}</h2>
+          <p className="text-sm text-muted-foreground">
+            {flow.graphJson.description ?? "—"}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <Button size="sm" onClick={onRun} disabled={trigger.isPending}>
+            <Play className="size-3.5" />
+            {trigger.isPending ? "Starting…" : "Run flow"}
+          </Button>
+          {trigger.error && (
+            <span className="text-xs text-destructive">
+              {(trigger.error as Error).message ?? "Trigger failed"}
+            </span>
+          )}
+        </div>
       </div>
 
       <FlowGraph

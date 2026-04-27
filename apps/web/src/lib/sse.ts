@@ -14,13 +14,15 @@ export interface UseEventSourceResult<T> {
 interface Options<T> {
   /** Map raw SSE event → typed item; return null to skip. */
   parse: (ev: SseEvent) => T | null;
+  /** Named SSE events to subscribe to. Default: ["log"]. */
+  events?: string[];
   /** SSE event names that should terminate the stream. Default: ["end"]. */
   endEvents?: string[];
 }
 
 /**
  * Subscribes to an SSE endpoint and accumulates parsed events.
- * Auto-reconnects EventSource (browser-native) until `ended` event arrives.
+ * Auto-reconnects EventSource (browser-native) until an end event arrives.
  */
 export function useEventSource<T>(url: string | null, opts: Options<T>): UseEventSourceResult<T> {
   const [events, setEvents] = useState<T[]>([]);
@@ -36,6 +38,7 @@ export function useEventSource<T>(url: string | null, opts: Options<T>): UseEven
     setError(null);
     const es = new EventSource(url, { withCredentials: true });
     const endNames = optsRef.current.endEvents ?? ["end"];
+    const eventNames = optsRef.current.events ?? ["log"];
 
     const handleNamed = (name: string) => (e: MessageEvent) => {
       if (endNames.includes(name)) {
@@ -47,8 +50,12 @@ export function useEventSource<T>(url: string | null, opts: Options<T>): UseEven
       if (item != null) setEvents((prev) => [...prev, item]);
     };
 
-    es.addEventListener("log", handleNamed("log"));
-    es.addEventListener("end", handleNamed("end"));
+    for (const name of eventNames) {
+      es.addEventListener(name, handleNamed(name));
+    }
+    for (const name of endNames) {
+      es.addEventListener(name, handleNamed(name));
+    }
     es.addEventListener("ping", () => undefined);
     es.onerror = () => {
       setError("connection error");

@@ -51,6 +51,11 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (node.kind !== "github.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${node.kind as string}`);
   }
+  // Manual runs from the UI bypass the action filter so users can inspect any
+  // flow on demand. The trigger node still runs so the graph lights up.
+  if (ctx.event.type === "manual") {
+    return { output: { matched: true, manual: true } };
+  }
   if (ctx.event.type !== "pull_request") {
     throw new SkipFlowError("not a pull_request event");
   }

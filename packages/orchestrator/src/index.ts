@@ -93,7 +93,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   // prefix — subsequent app.route("/api", ...) calls are silently dropped.
   // Combine the /api sub-routers into one before mounting once.
   const apiHono = new Hono<AuthEnv>();
-  apiHono.route("/", flowRoutes({ db }));
+  apiHono.route("/", flowRoutes({ db, pg, flowEngine: flowEngine ?? undefined }));
   apiHono.route("/", runRoutes({ db, pg }));
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db }));

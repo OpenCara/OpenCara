@@ -334,6 +334,19 @@ export function useSetFlowNodeSettings(projectId: string, flowId: string) {
 /** @deprecated use useSetFlowNodeSettings */
 export const useSetFlowNodePrompt = useSetFlowNodeSettings;
 
+export function useTriggerFlow(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) =>
+      api.post<{ flowRunId: string }>(
+        `/api/projects/${projectId}/flows/${slug}/trigger`,
+      ),
+    onSuccess: (_data, slug) => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+    },
+  });
+}
+
 export interface DeviceRow {
   id: string;
   name: string;

@@ -1,11 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { flowRunDetailQuery, projectFlowsQuery, type FlowRunStep } from "@/lib/queries";
+import {
+  flowRunDetailQuery,
+  projectFlowsQuery,
+  type AgentRunRow,
+  type FlowRunStep,
+  type FlowRunSummary,
+} from "@/lib/queries";
 import { formatRelative, formatAbsolute } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
 import type { StepStatus } from "@/components/flow/nodes";
@@ -18,30 +24,41 @@ interface LogLine {
   ts: string;
 }
 
+interface FlowRunSnapshot {
+  run: FlowRunSummary;
+  steps: FlowRunStep[];
+  agentRuns: AgentRunRow[];
+}
+
 export function FlowRunDetailPage() {
   const { id: projectId, runId } = useParams();
-  const runQ = useQuery(flowRunDetailQuery(runId!));
+  const initialQ = useQuery(flowRunDetailQuery(runId!));
   const flowsQ = useQuery(projectFlowsQuery(projectId!));
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  const live = useFlowRunStream(runId!);
+  const data = live ?? initialQ.data ?? null;
+
   const flow = useMemo(() => {
-    if (!runQ.data || !flowsQ.data) return null;
-    return flowsQ.data.flows.find((f) => f.id === runQ.data.run.flowId) ?? null;
-  }, [runQ.data, flowsQ.data]);
+    if (!data || !flowsQ.data) return null;
+    return flowsQ.data.flows.find((f) => f.id === data.run.flowId) ?? null;
+  }, [data, flowsQ.data]);
 
   const stepStatuses = useMemo<Record<string, StepStatus>>(() => {
-    if (!runQ.data) return {};
+    if (!data) return {};
     const m: Record<string, StepStatus> = {};
-    for (const s of runQ.data.steps) m[s.nodeId] = s.status;
+    for (const s of data.steps) m[s.nodeId] = s.status;
     return m;
-  }, [runQ.data]);
+  }, [data]);
 
-  if (runQ.isLoading || flowsQ.isLoading) return <Skeleton className="h-64 w-full" />;
-  if (!runQ.data || !flow) {
+  if ((initialQ.isLoading && !data) || flowsQ.isLoading) {
+    return <Skeleton className="h-64 w-full" />;
+  }
+  if (!data || !flow) {
     return <div className="text-sm text-muted-foreground">Flow run not found.</div>;
   }
 
-  const { run, steps, agentRuns } = runQ.data;
+  const { run, steps, agentRuns } = data;
   const selectedStep = selectedNodeId
     ? steps.find((s) => s.nodeId === selectedNodeId) ?? null
     : null;
@@ -90,6 +107,36 @@ export function FlowRunDetailPage() {
   );
 }
 
+/**
+ * Subscribe to the flow-run SSE and return the latest snapshot. Falls back to
+ * null while the initial connect is in flight (caller mixes in the cached
+ * react-query data).
+ */
+function useFlowRunStream(runId: string): FlowRunSnapshot | null {
+  const [snapshot, setSnapshot] = useState<FlowRunSnapshot | null>(null);
+  const latestRef = useRef<FlowRunSnapshot | null>(null);
+
+  const { events } = useEventSource<FlowRunSnapshot>(
+    `/api/flow-runs/${runId}/events/stream`,
+    {
+      events: ["snapshot", "step"],
+      parse: (e) => {
+        if (e.event !== "snapshot" && e.event !== "step") return null;
+        return JSON.parse(e.data) as FlowRunSnapshot;
+      },
+    },
+  );
+
+  useEffect(() => {
+    const next = events[events.length - 1];
+    if (!next || next === latestRef.current) return;
+    latestRef.current = next;
+    setSnapshot(next);
+  }, [events]);
+
+  return snapshot;
+}
+
 function StepPanel({
   step,
   agentRunId,
@@ -97,6 +144,12 @@ function StepPanel({
   step: FlowRunStep;
   agentRunId: string | null;
 }) {
+  const duration =
+    step.startedAt && step.finishedAt
+      ? `${Math.round(
+          (new Date(step.finishedAt).getTime() - new Date(step.startedAt).getTime()) / 100,
+        ) / 10}s`
+      : null;
   return (
     <Card>
       <CardHeader>
@@ -108,9 +161,37 @@ function StepPanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
+          <div>
+            <div className="uppercase tracking-wide">Started</div>
+            <div className="text-foreground">
+              {step.startedAt ? formatRelative(step.startedAt) : "—"}
+            </div>
+          </div>
+          <div>
+            <div className="uppercase tracking-wide">Finished</div>
+            <div className="text-foreground">
+              {step.finishedAt ? formatRelative(step.finishedAt) : "—"}
+            </div>
+          </div>
+          <div>
+            <div className="uppercase tracking-wide">Duration</div>
+            <div className="text-foreground">{duration ?? "—"}</div>
+          </div>
+        </div>
         {step.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {step.error}
+          </div>
+        )}
+        {step.inputJson != null && (
+          <div>
+            <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+              Input
+            </div>
+            <pre className="max-h-60 overflow-auto rounded-md bg-muted/30 p-3 text-xs">
+              {JSON.stringify(step.inputJson, null, 2)}
+            </pre>
           </div>
         )}
         {step.outputJson != null && (
