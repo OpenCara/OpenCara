@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
+import { RefreshCw, RotateCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
 import {
   flowNodeSettingsQuery,
   flowRunDetailQuery,
   projectFlowsQuery,
+  useRerunFlow,
   type AgentRunRow,
   type FlowRunStep,
   type FlowRunSummary,
@@ -79,25 +82,34 @@ export function FlowRunDetailPage() {
     ? agentRuns.find((a) => a.flowRunStepId === selectedStep.id)?.id ?? null
     : null;
 
+  const failedStep = steps.find((s) => s.status === "failed") ?? null;
+
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          to={`/projects/${projectId}/flows/${flow.slug}`}
-          className="text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← {flow.name}
-        </Link>
-        <h2 className="mt-1 text-xl font-semibold tracking-tight">
-          Run {run.id.slice(-8)}{" "}
-          <Badge variant={statusVariant(run.status)} className="ml-2 align-middle">
-            {run.status}
-          </Badge>
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Created {formatAbsolute(run.createdAt)}
-          {run.error && <span className="ml-2 text-destructive">— {run.error}</span>}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Link
+            to={`/projects/${projectId}/flows/${flow.slug}`}
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            ← {flow.name}
+          </Link>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight">
+            Run {run.id.slice(-8)}{" "}
+            <Badge variant={statusVariant(run.status)} className="ml-2 align-middle">
+              {run.status}
+            </Badge>
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Created {formatAbsolute(run.createdAt)}
+            {run.error && <span className="ml-2 text-destructive">— {run.error}</span>}
+          </p>
+        </div>
+        <RerunControls
+          projectId={projectId!}
+          runId={run.id}
+          failedStep={failedStep}
+        />
       </div>
 
       <FlowGraph
@@ -109,7 +121,11 @@ export function FlowRunDetailPage() {
       />
 
       {selectedStep ? (
-        <StepPanel step={selectedStep} agentRunId={selectedAgentRunId} />
+        <StepPanel
+          step={selectedStep}
+          agentRunId={selectedAgentRunId}
+          projectId={projectId!}
+        />
       ) : (
         <Card>
           <CardContent className="py-6 text-center text-sm text-muted-foreground">
@@ -154,9 +170,11 @@ function useFlowRunStream(runId: string): FlowRunSnapshot | null {
 function StepPanel({
   step,
   agentRunId,
+  projectId,
 }: {
   step: FlowRunStep;
   agentRunId: string | null;
+  projectId: string;
 }) {
   const duration =
     step.startedAt && step.finishedAt
@@ -164,6 +182,10 @@ function StepPanel({
           (new Date(step.finishedAt).getTime() - new Date(step.startedAt).getTime()) / 100,
         ) / 10}s`
       : null;
+  // Engine writes a "reused" marker into inputJson when the step was carried
+  // over from a prior run via Rerun-from-failed. Surface it so the user
+  // knows this row didn't actually re-execute and where the original lives.
+  const reused = parseReused(step.inputJson);
   return (
     <Card>
       <CardHeader>
@@ -171,8 +193,24 @@ function StepPanel({
           <CardTitle className="text-base">
             Step {step.idx + 1} · <span className="text-muted-foreground">{step.nodeKind}</span>
           </CardTitle>
-          <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
+          <div className="flex items-center gap-2">
+            {reused && <Badge variant="outline">reused</Badge>}
+            <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
+          </div>
         </div>
+        {reused && (
+          <p className="text-xs text-muted-foreground">
+            Carried over from{" "}
+            <Link
+              to={`/projects/${projectId}/flow-runs/${reused.runId}`}
+              className="underline hover:text-foreground"
+            >
+              run {reused.runId.slice(-8)}
+            </Link>
+            . Output below is the original captured value; click the original
+            run to inspect its agent logs.
+          </p>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
@@ -257,6 +295,74 @@ function AgentLogPanel({ agentRunId }: { agentRunId: string }) {
       </pre>
     </div>
   );
+}
+
+function RerunControls({
+  projectId,
+  runId,
+  failedStep,
+}: {
+  projectId: string;
+  runId: string;
+  failedStep: FlowRunStep | null;
+}) {
+  const navigate = useNavigate();
+  const rerun = useRerunFlow(projectId);
+
+  const fire = (fromStepId?: string) => {
+    rerun.mutate(
+      { runId, fromStepId },
+      {
+        onSuccess: ({ flowRunId }) => {
+          navigate(`/projects/${projectId}/flow-runs/${flowRunId}`);
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={rerun.isPending}
+          onClick={() => fire()}
+          title="Re-execute every node from the original trigger event"
+        >
+          <RefreshCw className="size-3.5" />
+          {rerun.isPending && !failedStep ? "Starting…" : "Rerun from start"}
+        </Button>
+        {failedStep && (
+          <Button
+            size="sm"
+            disabled={rerun.isPending}
+            onClick={() => fire(failedStep.id)}
+            title={`Resume from "${failedStep.nodeId}" — reuses upstream outputs from this run`}
+          >
+            <RotateCcw className="size-3.5" />
+            {rerun.isPending ? "Starting…" : "Rerun from failed step"}
+          </Button>
+        )}
+      </div>
+      {rerun.error && (
+        <span className="text-xs text-destructive">
+          {(rerun.error as Error).message ?? "Rerun failed"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function parseReused(
+  inputJson: unknown,
+): { runId: string; stepId: string } | null {
+  if (!inputJson || typeof inputJson !== "object") return null;
+  const o = inputJson as { reusedFromRunId?: unknown; reusedFromStepId?: unknown };
+  if (typeof o.reusedFromRunId !== "string" || typeof o.reusedFromStepId !== "string") {
+    return null;
+  }
+  return { runId: o.reusedFromRunId, stepId: o.reusedFromStepId };
 }
 
 function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
