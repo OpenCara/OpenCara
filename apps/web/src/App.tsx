@@ -34,7 +34,6 @@ export function App() {
         <Route path="projects/:id/flows" element={<ProjectFlowsPage />} />
         <Route path="projects/:id/flows/:slug" element={<ProjectFlowDetailPage />} />
         <Route path="projects/:id/flow-runs/:runId" element={<FlowRunDetailPage />} />
-        <Route path="projects/:id/prompts" element={<PromptsPage />} />
         {/* Less-specific tab routes go LAST so they don't shadow the above. */}
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="devices" element={<DevicesPage />} />
@@ -42,6 +41,7 @@ export function App() {
         <Route path="agents" element={<AgentsPage />} />
         <Route path="flows" element={<FlowTemplatesPage />} />
         <Route path="flows/:slug" element={<FlowTemplateDetailPage />} />
+        <Route path="prompts" element={<PromptsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
