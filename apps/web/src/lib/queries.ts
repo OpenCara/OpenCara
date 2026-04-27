@@ -425,6 +425,20 @@ export function useTriggerFlow(projectId: string) {
   });
 }
 
+export function useRerunFlow(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { runId: string; fromStepId?: string }) =>
+      api.post<{ flowRunId: string }>(
+        `/api/flow-runs/${vars.runId}/rerun`,
+        vars.fromStepId ? { fromStepId: vars.fromStepId } : {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flow-runs"] });
+    },
+  });
+}
+
 export interface DeviceSystemInfo {
   os: string;
   release: string;

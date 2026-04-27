@@ -267,6 +267,35 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Single flow_run + its steps + linked agent_runs
+  // Re-run a flow run. body { fromStepId?: string } chooses behaviour:
+  //   - omitted → re-execute every node from the original trigger event
+  //   - present → preload outputs from upstream succeeded steps and re-run
+  //     starting from the supplied (failed) step. Step must belong to the
+  //     run and the user must have access to its project.
+  r.post("/flow-runs/:id/rerun", auth, async (c) => {
+    if (!deps.flowEngine) {
+      return c.json({ error: "flow engine not configured" }, 503);
+    }
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const fromStepIdRaw = body.fromStepId;
+    const fromStepId =
+      typeof fromStepIdRaw === "string" && fromStepIdRaw.trim()
+        ? fromStepIdRaw.trim()
+        : undefined;
+    const original = await deps.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, id),
+    });
+    if (!original) return c.json({ error: "flow run not found" }, 404);
+    try {
+      const { flowRunId } = await deps.flowEngine.rerunFlow(id, { fromStepId });
+      return c.json({ flowRunId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
   r.get("/flow-runs/:id", auth, async (c) => {
     const id = c.req.param("id");
     const snapshot = await loadFlowRunSnapshot(deps.db, id);

@@ -4,13 +4,17 @@ import type { Sql } from "postgres";
 import { FlowDefinitionSchema, type FlowDefinition, type FlowNode } from "@openkira/flows";
 import type { Db } from "../db/client.js";
 import {
+  agentRunLogs,
+  agentRuns,
   flowNodeSettings,
   flowRuns,
   flowRunSteps,
   flows,
   githubInstallations,
+  platformEvents,
   projects,
 } from "../db/schema.js";
+import { and, asc } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import { buildPullRequestContext, type PullRequestContext } from "./context.js";
@@ -78,6 +82,132 @@ export class FlowEngine {
     return { flowRunId: prepared.flowRunId };
   }
 
+  /**
+   * Re-run a previous flow run.
+   * - From start: re-execute every node from scratch using the original
+   *   trigger event (same payload, same prContext source).
+   * - From a specific failed step (`fromStepId`): preload upstream nodes'
+   *   captured stdout from the prior run's agent_run_logs so the failed
+   *   step + downstream see the same `previousOutput` as before. Skips
+   *   re-execution of already-succeeded upstream nodes.
+   */
+  async rerunFlow(
+    originalRunId: string,
+    opts: { fromStepId?: string } = {},
+  ): Promise<{ flowRunId: string }> {
+    const original = await this.deps.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, originalRunId),
+    });
+    if (!original) throw new Error(`flow run ${originalRunId} not found`);
+
+    const flowRow = await this.deps.db.query.flows.findFirst({
+      where: eq(flows.id, original.flowId),
+    });
+    if (!flowRow) throw new Error(`flow ${original.flowId} not found`);
+    if (!flowRow.enabled) throw new Error(`flow ${original.flowId} is disabled`);
+    const def = parseFlowDefinition(flowRow);
+    if (!def) throw new Error(`flow ${original.flowId} has an invalid graph`);
+
+    let event: PlatformEventInput;
+    if (original.triggerEventId) {
+      const ev = await this.deps.db.query.platformEvents.findFirst({
+        where: eq(platformEvents.id, original.triggerEventId),
+      });
+      if (!ev) throw new Error("original trigger event missing");
+      event = {
+        id: ev.id,
+        type: ev.type,
+        projectId: ev.projectId,
+        payload: ev.payload,
+      };
+    } else {
+      throw new Error("original run has no trigger event to replay");
+    }
+
+    let preloaded: PreloadedRun | undefined;
+    if (opts.fromStepId) {
+      preloaded = await this.buildPreloadedOutputs(
+        originalRunId,
+        opts.fromStepId,
+        def,
+      );
+    }
+
+    const prepared = await this.prepareRun(flowRow.id, event);
+    if (!prepared) throw new Error("project/installation missing");
+
+    setImmediate(() => {
+      this.executeFlow(prepared, def, event, preloaded).catch((err) => {
+        console.error("[flow-engine] rerunFlow failed", {
+          flowId: flowRow.id,
+          err,
+        });
+      });
+    });
+    return { flowRunId: prepared.flowRunId };
+  }
+
+  /**
+   * Build the outputs map used by a "rerun from failed step": every node
+   * that's NOT downstream of (or equal to) the failed node gets its prior
+   * captured stdout slotted in, so the engine's layer loop sees them as
+   * already-finished. Reconstruction sources stdout chunks from
+   * agent_run_logs since flow_run_steps doesn't persist stdoutCaptured.
+   */
+  private async buildPreloadedOutputs(
+    originalRunId: string,
+    fromStepId: string,
+    def: FlowDefinition,
+  ): Promise<PreloadedRun> {
+    const failedStep = await this.deps.db.query.flowRunSteps.findFirst({
+      where: eq(flowRunSteps.id, fromStepId),
+    });
+    if (!failedStep || failedStep.flowRunId !== originalRunId) {
+      throw new Error(`step ${fromStepId} not found in run ${originalRunId}`);
+    }
+    const downstream = computeDownstreamSet(def, failedStep.nodeId);
+
+    const allSteps = await this.deps.db.query.flowRunSteps.findMany({
+      where: eq(flowRunSteps.flowRunId, originalRunId),
+    });
+
+    const outputs = new Map<string, string | undefined>();
+    const reused: ReusedStep[] = [];
+    for (const s of allSteps) {
+      if (s.status !== "succeeded") continue;
+      if (downstream.has(s.nodeId)) continue;
+      // Reconstruct stdoutCaptured by stitching the agent_run's stdout chunks.
+      // Non-agent steps (trigger, action) have no agent_run; their downstream
+      // gets undefined, which matches the original execution's previousOutput.
+      const ar = await this.deps.db.query.agentRuns.findFirst({
+        where: eq(agentRuns.flowRunStepId, s.id),
+      });
+      let stdoutCaptured: string | undefined;
+      if (ar) {
+        const logRows = await this.deps.db
+          .select({ chunk: agentRunLogs.chunk })
+          .from(agentRunLogs)
+          .where(
+            and(eq(agentRunLogs.agentRunId, ar.id), eq(agentRunLogs.stream, "stdout")),
+          )
+          .orderBy(asc(agentRunLogs.seq));
+        stdoutCaptured = logRows.map((r) => r.chunk).join("");
+      }
+      outputs.set(s.nodeId, stdoutCaptured);
+      reused.push({
+        nodeId: s.nodeId,
+        nodeKind: s.nodeKind,
+        outputJson: s.outputJson,
+        startedAt: s.startedAt,
+        finishedAt: s.finishedAt,
+        originalStepId: s.id,
+        originalRunId,
+        originalAgentRunId: ar?.id ?? null,
+      });
+    }
+    return { outputs, reused };
+  }
+
   private async dispatchEvent(event: PlatformEventInput): Promise<void> {
     const projectFlows = await this.deps.db.query.flows.findMany({
       where: eq(flows.projectId, event.projectId!),
@@ -128,6 +258,7 @@ export class FlowEngine {
     prepared: PreparedRun,
     def: FlowDefinition,
     event: PlatformEventInput,
+    preloaded?: PreloadedRun,
   ): Promise<void> {
     const { flowRunId, flowId, project, installation } = prepared;
 
@@ -158,8 +289,41 @@ export class FlowEngine {
       if (r.label) labels.set(r.nodeId, r.label);
     }
 
-    const outputs = new Map<string, string | undefined>();
+    // For rerun-from-failed: preload the upstream nodes' captured stdout.
+    // The layer loop below skips any node whose id is already in `outputs`,
+    // so those upstream nodes don't re-execute and their previousOutput
+    // values still flow into the failed/downstream nodes correctly.
+    const outputs = new Map<string, string | undefined>(preloaded?.outputs);
     let nodeIdx = 0;
+
+    // Materialise a flow_run_steps row for each reused upstream node so the
+    // new run's graph shows them as already-succeeded (otherwise they'd be
+    // rendered idle, even though their output is being threaded through to
+    // the re-executed downstream). The original step + agent_run stay
+    // untouched on the source run; we just stamp a "reused" marker into
+    // inputJson with the originals' ids for traceability.
+    if (preloaded) {
+      for (const r of preloaded.reused) {
+        const stepId = ulid();
+        await this.deps.db.insert(flowRunSteps).values({
+          id: stepId,
+          flowRunId,
+          nodeId: r.nodeId,
+          nodeKind: r.nodeKind,
+          idx: nodeIdx++,
+          status: "succeeded",
+          startedAt: r.startedAt ?? new Date(),
+          finishedAt: r.finishedAt ?? new Date(),
+          outputJson: (r.outputJson ?? null) as object | null,
+          inputJson: {
+            reusedFromRunId: r.originalRunId,
+            reusedFromStepId: r.originalStepId,
+            reusedAgentRunId: r.originalAgentRunId,
+          },
+        });
+        await this.deps.pg.notify("flow_run_steps", flowRunId);
+      }
+    }
     let failed = false;
     let errorMsg: string | undefined;
     let skipped = false;
@@ -179,12 +343,17 @@ export class FlowEngine {
 
     outer: for (const layer of layers) {
       // Snapshot idx per node before launching the layer so step rows have
-      // stable, sequential idx even when siblings run concurrently.
-      const layerJobs = layer.map((node) => ({
-        node,
-        idx: nodeIdx++,
-        previousOutput: buildFanInInput(node, def.edges, outputs, labels),
-      }));
+      // stable, sequential idx even when siblings run concurrently. Skip
+      // nodes whose output is already in the map (rerun-from-failed
+      // preload) — they don't get a fresh step row.
+      const layerJobs = layer
+        .filter((node) => !outputs.has(node.id))
+        .map((node) => ({
+          node,
+          idx: nodeIdx++,
+          previousOutput: buildFanInInput(node, def.edges, outputs, labels),
+        }));
+      if (layerJobs.length === 0) continue;
 
       const results = await Promise.allSettled(
         layerJobs.map((job) => this.runNodeStep(prepared, def, job, event, prContext)),
@@ -323,6 +492,22 @@ interface PreparedRun {
   installation: InferSelectModel<typeof githubInstallations>;
 }
 
+interface ReusedStep {
+  nodeId: string;
+  nodeKind: string;
+  outputJson: unknown;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  originalStepId: string;
+  originalRunId: string;
+  originalAgentRunId: string | null;
+}
+
+interface PreloadedRun {
+  outputs: Map<string, string | undefined>;
+  reused: ReusedStep[];
+}
+
 function parseFlowDefinition(row: {
   slug: string;
   name: string;
@@ -349,6 +534,29 @@ function parseFlowDefinition(row: {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n)}…[truncated ${s.length - n} chars]`;
+}
+
+/**
+ * BFS the edge graph from `startNodeId` and return the set of node ids it
+ * can reach (inclusive of `startNodeId`). Used by rerun-from-failed to
+ * decide which nodes' prior outputs are still valid (= NOT in the set).
+ */
+function computeDownstreamSet(
+  def: FlowDefinition,
+  startNodeId: string,
+): Set<string> {
+  const out = new Set<string>([startNodeId]);
+  const queue = [startNodeId];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const e of def.edges) {
+      if (e.source !== cur) continue;
+      if (out.has(e.target)) continue;
+      out.add(e.target);
+      queue.push(e.target);
+    }
+  }
+  return out;
 }
 
 /**
