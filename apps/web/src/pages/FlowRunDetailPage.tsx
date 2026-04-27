@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
+  flowNodeSettingsQuery,
   flowRunDetailQuery,
   projectFlowsQuery,
   type AgentRunRow,
@@ -43,6 +44,18 @@ export function FlowRunDetailPage() {
     if (!data || !flowsQ.data) return null;
     return flowsQ.data.flows.find((f) => f.id === data.run.flowId) ?? null;
   }, [data, flowsQ.data]);
+
+  const settingsQ = useQuery({
+    ...flowNodeSettingsQuery(projectId!, flow?.id ?? ""),
+    enabled: !!flow,
+  });
+  const labelOverrides = useMemo<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    for (const s of settingsQ.data?.settings ?? []) {
+      if (s.label) m[s.nodeId] = s.label;
+    }
+    return m;
+  }, [settingsQ.data]);
 
   const stepStatuses = useMemo<Record<string, StepStatus>>(() => {
     if (!data) return {};
@@ -91,6 +104,7 @@ export function FlowRunDetailPage() {
         nodes={flow.graphJson.nodes}
         edges={flow.graphJson.edges}
         stepStatuses={stepStatuses}
+        labelOverrides={labelOverrides}
         onNodeClick={(id) => setSelectedNodeId(id)}
       />
 

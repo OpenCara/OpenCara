@@ -21,8 +21,16 @@ export function mountStatic(app: Hono<AuthEnv>): boolean {
     "/*",
     serveStatic({
       root: relativeToCwd(root),
-      onFound: (_path, c) => {
-        c.header("Cache-Control", "public, max-age=31536000, immutable");
+      onFound: (path, c) => {
+        // Only fingerprinted bundles in /assets/* are safe to cache long-term;
+        // everything else (notably index.html served for `/` or `/index.html`)
+        // must NOT be cached, otherwise users get pinned to old asset hashes
+        // across rebuilds and the SPA fails to load on next deploy.
+        if (path.includes("/assets/")) {
+          c.header("Cache-Control", "public, max-age=31536000, immutable");
+        } else {
+          c.header("Cache-Control", "no-store");
+        }
       },
     }),
   );

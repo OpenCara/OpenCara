@@ -6,6 +6,7 @@ import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
+  flowNodeSettings,
   flowRuns,
   flowRunSteps,
   flows,
@@ -50,6 +51,171 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     });
     return c.json({ flow, runs });
   });
+
+  // Toggle a flow's enabled state. Disabled flows are skipped by the webhook
+  // dispatcher AND refused by triggerFlow, so this is the kill-switch users
+  // reach for when a built-in flow is misbehaving.
+  r.patch("/projects/:id/flows/:slug", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const slug = c.req.param("slug");
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.enabled !== "boolean") {
+      return c.json({ error: "enabled (boolean) required" }, 400);
+    }
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
+    });
+    if (!flow) return c.json({ error: "not found" }, 404);
+    await deps.db
+      .update(flows)
+      .set({ enabled: body.enabled, updatedAt: new Date() })
+      .where(eq(flows.id, flow.id));
+    const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
+    return c.json({ flow: updated });
+  });
+
+  // Add a reviewer node to a multi-agent review flow. Clones the first
+  // existing reviewer (any node with edges trigger→X→synthesizer) so
+  // the new node inherits a sane shape, then wires trigger → new and
+  // new → synthesizer. Sets customizedAt to lock the seeder out.
+  r.post("/projects/:projectId/flows/:flowId/reviewers", auth, async (c) => {
+    const projectId = c.req.param("projectId");
+    const flowId = c.req.param("flowId");
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+    });
+    if (!flow) return c.json({ error: "flow not found in project" }, 404);
+
+    const graph = parseGraph(flow.graphJson);
+    if (!graph) return c.json({ error: "flow graph invalid" }, 400);
+
+    const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
+    const synth = graph.nodes.find(
+      (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
+    );
+    if (!trigger || !synth) {
+      return c.json(
+        { error: "flow shape not supported (need a trigger and a synthesizer node)" },
+        400,
+      );
+    }
+
+    const reviewerNodes = graph.nodes.filter(
+      (n) =>
+        n.kind === "agent" &&
+        graph.edges.some((e) => e.source === trigger.id && e.target === n.id) &&
+        graph.edges.some((e) => e.source === n.id && e.target === synth.id),
+    );
+    const template = reviewerNodes[0];
+    if (!template) {
+      return c.json(
+        { error: "no reviewer node to clone — add the first one in code" },
+        400,
+      );
+    }
+
+    const newId = `reviewer_${ulid().slice(-8).toLowerCase()}`;
+    const newNode = {
+      ...JSON.parse(JSON.stringify(template)),
+      id: newId,
+      position: {
+        x: template.position.x,
+        y: Math.max(...reviewerNodes.map((r) => r.position.y)) + 160,
+      },
+    };
+    if (newNode.config && typeof newNode.config === "object") {
+      newNode.config.label = `Reviewer ${reviewerNodes.length + 1}`;
+    }
+
+    graph.nodes.push(newNode);
+    graph.edges.push(
+      { id: `e_t_${newId}`, source: trigger.id, target: newId },
+      { id: `e_${newId}_s`, source: newId, target: synth.id },
+    );
+
+    await deps.db
+      .update(flows)
+      .set({
+        graphJson: graph,
+        customizedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(flows.id, flow.id));
+
+    const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
+    return c.json({ flow: updated, addedNodeId: newId });
+  });
+
+  // Remove a reviewer node. Refuses if it's the last reviewer between trigger
+  // and synthesizer. Removes incident edges and clears any flow_node_settings
+  // for the orphaned node so a future node with the same id starts clean.
+  r.delete(
+    "/projects/:projectId/flows/:flowId/reviewers/:nodeId",
+    auth,
+    async (c) => {
+      const projectId = c.req.param("projectId");
+      const flowId = c.req.param("flowId");
+      const nodeId = c.req.param("nodeId");
+      const flow = await deps.db.query.flows.findFirst({
+        where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+      });
+      if (!flow) return c.json({ error: "flow not found in project" }, 404);
+      const graph = parseGraph(flow.graphJson);
+      if (!graph) return c.json({ error: "flow graph invalid" }, 400);
+
+      const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
+      const synth = graph.nodes.find(
+        (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
+      );
+      if (!trigger || !synth) return c.json({ error: "flow shape not supported" }, 400);
+
+      const reviewerIds = new Set(
+        graph.nodes
+          .filter(
+            (n) =>
+              n.kind === "agent" &&
+              graph.edges.some((e) => e.source === trigger.id && e.target === n.id) &&
+              graph.edges.some((e) => e.source === n.id && e.target === synth.id),
+          )
+          .map((n) => n.id),
+      );
+      if (!reviewerIds.has(nodeId)) {
+        return c.json({ error: "node is not a reviewer in this flow" }, 400);
+      }
+      if (reviewerIds.size <= 1) {
+        return c.json(
+          { error: "cannot remove the last reviewer — synthesizer would have no input" },
+          400,
+        );
+      }
+
+      graph.nodes = graph.nodes.filter((n) => n.id !== nodeId);
+      graph.edges = graph.edges.filter((e) => e.source !== nodeId && e.target !== nodeId);
+
+      await deps.db
+        .update(flows)
+        .set({
+          graphJson: graph,
+          customizedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(flows.id, flow.id));
+
+      // Cleanup any per-node settings (label / agent / prompt link) for the
+      // removed node so a re-added node with the same id starts clean.
+      await deps.db
+        .delete(flowNodeSettings)
+        .where(
+          and(
+            eq(flowNodeSettings.flowId, flow.id),
+            eq(flowNodeSettings.nodeId, nodeId),
+          ),
+        );
+
+      const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
+      return c.json({ flow: updated });
+    },
+  );
 
   // Manually trigger a flow run from the UI. Synthesises a platform_event of
   // type "manual" so triggerRunner can recognise it and bypass the PR filter.
@@ -195,6 +361,27 @@ async function loadFlowRunSnapshot(db: Db, id: string) {
       })
     : [];
   return { run, steps, agentRuns: agentRunsList };
+}
+
+interface MutableGraph {
+  nodes: Array<{
+    id: string;
+    kind: string;
+    position: { x: number; y: number };
+    config?: { label?: string };
+    [key: string]: unknown;
+  }>;
+  edges: Array<{ id: string; source: string; target: string }>;
+  description?: string;
+}
+
+function parseGraph(raw: unknown): MutableGraph | null {
+  if (!raw || typeof raw !== "object") return null;
+  const g = raw as MutableGraph;
+  if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return null;
+  // Defensive deep clone so callers mutate a fresh object — avoids accidentally
+  // mutating drizzle's cached row reference.
+  return JSON.parse(JSON.stringify(g)) as MutableGraph;
 }
 
 function clampLimit(v: string | undefined): number {

@@ -11,7 +11,10 @@ export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): P
       where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
     });
     if (existing) {
-      // Overwrite graph from code so edits to the built-in are reflected.
+      // Don't clobber a graph the user has edited (rename / add / remove
+      // reviewer). The customizedAt sentinel is set by the graph-mutation
+      // routes; until then, keep the seed in sync with code.
+      if (existing.customizedAt) continue;
       await db
         .update(flows)
         .set({

@@ -22,7 +22,11 @@ import {
 import {
   projectQuery,
   projectEventsQuery,
+  projectFlowRunsQuery,
+  projectFlowsQuery,
   projectRunsQuery,
+  type FlowRunSummary,
+  type FlowSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { summarizeEvent } from "@/lib/eventSummary";
@@ -88,7 +92,8 @@ export function ProjectDetailPage() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
-          <TabsTrigger value="runs">Runs</TabsTrigger>
+          <TabsTrigger value="flow-runs">Flow runs</TabsTrigger>
+          <TabsTrigger value="runs">Agent runs</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -120,6 +125,10 @@ export function ProjectDetailPage() {
 
         <TabsContent value="events">
           <EventsTab id={id!} />
+        </TabsContent>
+
+        <TabsContent value="flow-runs">
+          <FlowRunsTab id={id!} />
         </TabsContent>
 
         <TabsContent value="runs">
@@ -270,6 +279,99 @@ function RunsTab({ id }: { id: string }) {
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+function FlowRunsTab({ id }: { id: string }) {
+  const runsQ = useQuery(projectFlowRunsQuery(id));
+  const flowsQ = useQuery(projectFlowsQuery(id));
+  if (runsQ.isLoading || flowsQ.isLoading) {
+    return <Skeleton className="h-32 w-full" />;
+  }
+  const runs = runsQ.data?.runs ?? [];
+  const flowsById = new Map<string, FlowSummary>(
+    (flowsQ.data?.flows ?? []).map((f) => [f.id, f]),
+  );
+  if (runs.length === 0) {
+    return (
+      <div className="py-12 text-center text-sm text-muted-foreground">
+        No flow runs yet. Open the{" "}
+        <Link to={`/projects/${id}/flows`} className="underline">
+          Flows page
+        </Link>{" "}
+        and click <span className="font-medium">Run flow</span> to start one.
+      </div>
+    );
+  }
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Created</TableHead>
+              <TableHead>Flow</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Error</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {runs.map((r) => (
+              <FlowRunRow key={r.id} projectId={id} run={r} flow={flowsById.get(r.flowId)} />
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FlowRunRow({
+  projectId,
+  run,
+  flow,
+}: {
+  projectId: string;
+  run: FlowRunSummary;
+  flow: FlowSummary | undefined;
+}) {
+  const duration =
+    run.startedAt && run.finishedAt
+      ? `${Math.round(
+          (new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 100,
+        ) / 10}s`
+      : "—";
+  return (
+    <TableRow>
+      <TableCell className="text-sm text-muted-foreground">
+        <Link
+          to={`/projects/${projectId}/flow-runs/${run.id}`}
+          className="hover:underline"
+        >
+          {formatRelative(run.createdAt)}
+        </Link>
+      </TableCell>
+      <TableCell className="text-sm">
+        {flow ? (
+          <Link
+            to={`/projects/${projectId}/flows/${flow.slug}`}
+            className="hover:underline"
+          >
+            {flow.name}
+          </Link>
+        ) : (
+          <span className="text-muted-foreground">{run.flowId}</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+      </TableCell>
+      <TableCell className="text-sm">{duration}</TableCell>
+      <TableCell className="max-w-md truncate text-xs text-muted-foreground">
+        {run.error ?? ""}
+      </TableCell>
+    </TableRow>
   );
 }
 

@@ -1,11 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import { Bot, Cpu, ExternalLink, Play, Sparkles } from "lucide-react";
+import {
+  Bot,
+  Cpu,
+  ExternalLink,
+  Pause,
+  Play,
+  Plus,
+  PowerOff,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -26,8 +37,12 @@ import {
   flowDetailQuery,
   flowNodeSettingsQuery,
   promptsQuery,
+  useAddReviewer,
+  useRemoveReviewer,
+  useSetFlowEnabled,
   useSetFlowNodeSettings,
   useTriggerFlow,
+  type FlowNodeSetting,
   type FlowRunSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
@@ -47,6 +62,7 @@ export function ProjectFlowDetailPage() {
     enabled: !!q.data,
   });
   const trigger = useTriggerFlow(projectId);
+  const setEnabled = useSetFlowEnabled(projectId, slug!);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -59,6 +75,15 @@ export function ProjectFlowDetailPage() {
   const selectedNode = selectedNodeId
     ? flow.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
+
+  const labelOverrides = Object.fromEntries(
+    settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
+  );
+
+  const isMultiReview = flow.slug === "pr-review-multi";
+  const reviewerNodeIds = isMultiReview ? deriveReviewerIds(flow.graphJson) : new Set<string>();
+  const reviewerCount = reviewerNodeIds.size;
+  const selectedIsReviewer = selectedNode ? reviewerNodeIds.has(selectedNode.id) : false;
 
   const onRun = () => {
     trigger.mutate(flow.slug, {
@@ -78,19 +103,56 @@ export function ProjectFlowDetailPage() {
           >
             ← All flows
           </Link>
-          <h2 className="mt-1 text-xl font-semibold tracking-tight">{flow.name}</h2>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight">
+            {flow.name}
+            {!flow.enabled && (
+              <Badge variant="outline" className="ml-2 align-middle">
+                disabled
+              </Badge>
+            )}
+          </h2>
           <p className="text-sm text-muted-foreground">
             {flow.graphJson.description ?? "—"}
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <Button size="sm" onClick={onRun} disabled={trigger.isPending}>
-            <Play className="size-3.5" />
-            {trigger.isPending ? "Starting…" : "Run flow"}
-          </Button>
-          {trigger.error && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEnabled.mutate(!flow.enabled)}
+              disabled={setEnabled.isPending}
+              title={
+                flow.enabled
+                  ? "Disable: webhook events are ignored and Run flow is blocked"
+                  : "Enable: flow responds to webhook events again"
+              }
+            >
+              {flow.enabled ? (
+                <>
+                  <Pause className="size-3.5" />
+                  Disable
+                </>
+              ) : (
+                <>
+                  <PowerOff className="size-3.5" />
+                  Enable
+                </>
+              )}
+            </Button>
+            <Button
+              size="sm"
+              onClick={onRun}
+              disabled={trigger.isPending || !flow.enabled}
+              title={!flow.enabled ? "Enable the flow first" : undefined}
+            >
+              <Play className="size-3.5" />
+              {trigger.isPending ? "Starting…" : "Run flow"}
+            </Button>
+          </div>
+          {(trigger.error || setEnabled.error) && (
             <span className="text-xs text-destructive">
-              {(trigger.error as Error).message ?? "Trigger failed"}
+              {((trigger.error ?? setEnabled.error) as Error).message ?? "Action failed"}
             </span>
           )}
         </div>
@@ -99,8 +161,19 @@ export function ProjectFlowDetailPage() {
       <FlowGraph
         nodes={flow.graphJson.nodes}
         edges={flow.graphJson.edges}
+        labelOverrides={labelOverrides}
         onNodeClick={(nid) => setSelectedNodeId(nid)}
       />
+
+      {isMultiReview && (
+        <ReviewerControls
+          projectId={projectId}
+          flow={flow}
+          reviewerCount={reviewerCount}
+          selectedReviewerId={selectedIsReviewer ? selectedNode!.id : null}
+          onRemoved={() => setSelectedNodeId(null)}
+        />
+      )}
 
       {selectedNode && selectedNode.kind === "agent" && (
         <AgentNodePanel
@@ -170,7 +243,7 @@ interface AgentNodePanelProps {
   projectId: string;
   flowId: string;
   node: { id: string; config?: Record<string, unknown> };
-  settings: { nodeId: string; promptId: string | null; agentId: string | null }[];
+  settings: FlowNodeSetting[];
   prompts: { id: string; name: string; body: string }[];
   agents: AgentSummary[];
   onClose: () => void;
@@ -197,6 +270,24 @@ function AgentNodePanel({
   const set = useSetFlowNodeSettings(projectId, flowId);
 
   const cfg = (node.config ?? {}) as { label?: string };
+  const defaultLabel = cfg.label ?? "Agent";
+  const customLabel = setting?.label ?? null;
+
+  // Local input state, seeded by the persisted custom label (or empty so the
+  // default label shows through as placeholder).
+  const [labelDraft, setLabelDraft] = useState(customLabel ?? "");
+  // Re-seed when switching to a different node — otherwise the input would
+  // keep the previous node's draft.
+  useEffect(() => {
+    setLabelDraft(customLabel ?? "");
+  }, [node.id, customLabel]);
+
+  const commitLabel = () => {
+    const trimmed = labelDraft.trim();
+    const next = trimmed === "" ? null : trimmed;
+    if (next === customLabel) return;
+    set.mutate({ nodeId: node.id, label: next });
+  };
 
   return (
     <Card>
@@ -205,7 +296,7 @@ function AgentNodePanel({
           <div className="flex items-center gap-2">
             <Bot className="size-4 text-muted-foreground" />
             <CardTitle className="text-base">
-              {cfg.label ?? "Agent"}
+              {customLabel ?? defaultLabel}
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 #{node.id}
               </span>
@@ -217,6 +308,27 @@ function AgentNodePanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Display name</div>
+          <Input
+            value={labelDraft}
+            placeholder={defaultLabel}
+            onChange={(e) => setLabelDraft(e.target.value)}
+            onBlur={commitLabel}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            className="max-w-md"
+          />
+          <p className="text-xs text-muted-foreground">
+            Shown on the graph + used as a section heading when feeding a synthesizer.
+            Empty resets to "{defaultLabel}".
+          </p>
+        </div>
+
         <div className="space-y-2">
           <div className="flex items-center gap-1 text-sm font-medium">
             <Cpu className="size-3.5" />
@@ -316,6 +428,95 @@ function AgentNodePanel({
       </CardContent>
     </Card>
   );
+}
+
+interface ReviewerControlsProps {
+  projectId: string;
+  flow: { id: string; slug: string };
+  reviewerCount: number;
+  selectedReviewerId: string | null;
+  onRemoved: () => void;
+}
+
+function ReviewerControls({
+  projectId,
+  flow,
+  reviewerCount,
+  selectedReviewerId,
+  onRemoved,
+}: ReviewerControlsProps) {
+  const add = useAddReviewer(projectId, flow.slug);
+  const remove = useRemoveReviewer(projectId, flow.slug);
+  const error = add.error ?? remove.error;
+  return (
+    <div className="flex items-center gap-3">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => add.mutate(flow.id)}
+        disabled={add.isPending}
+      >
+        <Plus className="size-3.5" />
+        {add.isPending ? "Adding…" : "Add reviewer"}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => {
+          if (!selectedReviewerId) return;
+          remove.mutate(
+            { flowId: flow.id, nodeId: selectedReviewerId },
+            { onSuccess: onRemoved },
+          );
+        }}
+        disabled={
+          remove.isPending || !selectedReviewerId || reviewerCount <= 1
+        }
+        title={
+          !selectedReviewerId
+            ? "Click a reviewer node first"
+            : reviewerCount <= 1
+              ? "Cannot remove the last reviewer"
+              : "Remove the selected reviewer"
+        }
+      >
+        <Trash2 className="size-3.5" />
+        {remove.isPending ? "Removing…" : "Remove selected reviewer"}
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        {reviewerCount} reviewer{reviewerCount === 1 ? "" : "s"}
+      </span>
+      {error && (
+        <span className="text-xs text-destructive">{(error as Error).message}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A "reviewer" node, in the multi-agent review flow, is any agent node that
+ * sits between the trigger and the synthesizer (i.e. has trigger as an upstream
+ * AND synthesizer as a downstream). This is purely structural so it survives
+ * graph customisation (added reviewers retain the role).
+ */
+function deriveReviewerIds(graph: {
+  nodes: Array<{ id: string; kind: string }>;
+  edges: Array<{ source: string; target: string }>;
+}): Set<string> {
+  const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
+  const synth = graph.nodes.find(
+    (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
+  );
+  if (!trigger || !synth) return new Set();
+  const ids = new Set<string>();
+  for (const n of graph.nodes) {
+    if (n.kind !== "agent") continue;
+    if (n.id === synth.id) continue;
+    const fromTrigger = graph.edges.some((e) => e.source === trigger.id && e.target === n.id);
+    const toSynth = graph.edges.some((e) => e.source === n.id && e.target === synth.id);
+    if (fromTrigger && toSynth) ids.add(n.id);
+  }
+  return ids;
 }
 
 function FlowRunRow({ run, projectId }: { run: FlowRunSummary; projectId: string }) {

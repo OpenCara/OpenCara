@@ -33,12 +33,44 @@ export type PairingConfirmRequest = z.infer<typeof PairingConfirmRequestSchema>;
 
 // ─── Device WebSocket transport ──────────────────────────────────────
 
+/**
+ * Best-effort device system metrics, collected once at connect. Never used
+ * for routing decisions — purely for the operator's "what hardware do I
+ * have paired" view in the dashboard.
+ */
+export const SystemInfoSchema = z.object({
+  os: z.string(),                                // os.platform()
+  release: z.string(),                           // os.release()
+  arch: z.string(),                              // os.arch()
+  hostname: z.string(),
+  cpu: z.object({
+    model: z.string(),
+    cores: z.number().int().nonnegative(),
+    speedMhz: z.number().int().nonnegative(),
+  }),
+  memory: z.object({
+    totalBytes: z.number().nonnegative(),
+    freeBytes: z.number().nonnegative(),
+  }),
+  disk: z
+    .object({
+      path: z.string(),
+      totalBytes: z.number().nonnegative(),
+      freeBytes: z.number().nonnegative(),
+    })
+    .optional(),
+  ipAddrs: z.array(z.string()).default([]),
+  uptimeSec: z.number().nonnegative(),
+});
+export type SystemInfo = z.infer<typeof SystemInfoSchema>;
+
 /** Device → server when the WS opens. */
 export const HelloMessageSchema = z.object({
   type: z.literal("hello"),
   platform: z.string(),
   version: z.string(),
   capabilities: z.array(z.string()).default([]),
+  systemInfo: SystemInfoSchema.optional(),
 });
 export type HelloMessage = z.infer<typeof HelloMessageSchema>;
 

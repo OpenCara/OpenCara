@@ -159,10 +159,15 @@ export function deviceRoutes(deps: DeviceRoutesDeps) {
       where: and(eq(agentHosts.id, id), eq(agentHosts.userId, user.id)),
     });
     if (!row) return c.json({ error: "not found" }, 404);
+    // Kick any live WS first so the remote `openkira run` notices the
+    // revocation immediately instead of waiting for its next ping/reconnect
+    // attempt to fail auth.
+    deps.pool.disconnect(id);
+    // Hard delete. agent_runs.host_id and device_pairings.agent_host_id are
+    // ON DELETE SET NULL so historical rows survive without the FK target.
     await deps.db
-      .update(agentHosts)
-      .set({ revokedAt: new Date(), tokenHash: null })
-      .where(eq(agentHosts.id, id));
+      .delete(agentHosts)
+      .where(and(eq(agentHosts.id, id), eq(agentHosts.userId, user.id)));
     return c.body(null, 204);
   });
 

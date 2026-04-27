@@ -43,6 +43,27 @@
       "when": 1777213858324,
       "tag": "0005_peaceful_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777276016786,
+      "tag": "0006_perfect_scorpion",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777295260372,
+      "tag": "0007_brief_killer_shrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777295711106,
+      "tag": "0008_warm_blackheart",
+      "breakpoints": true
     }
   ]
 }

@@ -163,6 +163,8 @@ export const agentHosts = pgTable(
     lastConnectedAt: timestamp("last_connected_at", { withTimezone: true }),
     platform: text("platform"),
     version: text("version"),
+    systemInfo: jsonb("system_info"),
+    systemInfoUpdatedAt: timestamp("system_info_updated_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
   (t) => ({
@@ -179,7 +181,9 @@ export const devicePairings = pgTable(
     status: text("status").notNull(),
     confirmedByUserId: text("confirmed_by_user_id").references(() => users.id),
     deviceName: text("device_name"),
-    agentHostId: text("agent_host_id").references(() => agentHosts.id),
+    agentHostId: text("agent_host_id").references(() => agentHosts.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     deviceTokenEnc: text("device_token_enc"),
@@ -200,6 +204,7 @@ export const flows = pgTable(
     name: text("name").notNull(),
     graphJson: jsonb("graph_json").notNull(),
     enabled: boolean("enabled").notNull().default(true),
+    customizedAt: timestamp("customized_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -286,6 +291,7 @@ export const flowNodeSettings = pgTable(
     nodeId: text("node_id").notNull(),
     promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -322,7 +328,7 @@ export const agentRuns = pgTable(
     spec: jsonb("spec").notNull(),
     triggerEventId: text("trigger_event_id").references(() => platformEvents.id),
     status: agentRunStatusEnum("status").notNull().default("queued"),
-    hostId: text("host_id").references(() => agentHosts.id),
+    hostId: text("host_id").references(() => agentHosts.id, { onDelete: "set null" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     flowRunStepId: text("flow_run_step_id").references(() => flowRunSteps.id, {
       onDelete: "set null",

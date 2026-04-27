@@ -54,6 +54,24 @@ export class DevicePool {
     }
   }
 
+  /**
+   * Forcibly close any open WS for this device + unregister from the pool.
+   * Used when the device is being deleted server-side (revoke) so the remote
+   * `openkira run` process notices the kick instead of hanging onto a now-
+   * orphaned auth token.
+   */
+  disconnect(agentHostId: string, code = 4001, reason = "revoked"): void {
+    const dev = this.devices.get(agentHostId);
+    if (dev) {
+      try {
+        dev.ws.close(code, reason);
+      } catch {
+        // best-effort; the WS may already be in a closing state
+      }
+    }
+    this.unregister(agentHostId);
+  }
+
   pickIdle(): ConnectedDevice | null {
     for (const d of this.devices.values()) {
       if (!d.busy) return d;

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,18 +25,45 @@ import {
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { formatRelative } from "@/lib/format";
+import { useRegisterChatAction } from "@/lib/chatActions";
 
 type RunOn = "any" | "local" | "device";
 
 export function AgentsPage() {
   const q = useQuery(agentsQuery());
+  const location = useLocation();
+
+  // When the page is opened with a hash like #agent-<id> (typically via the
+  // sidebar's nested agent links), scroll the matching card into view once
+  // the agent list has actually loaded. Re-runs whenever the hash changes so
+  // re-clicking the same sidebar entry while already on /agents still scrolls.
+  useEffect(() => {
+    if (!q.data?.agents.length) return;
+    const hash = location.hash;
+    if (!hash.startsWith("#agent-")) return;
+    const el = document.getElementById(hash.slice(1));
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.classList.add("ring-2", "ring-primary/60");
+    const t = setTimeout(() => {
+      el.classList.remove("ring-2", "ring-primary/60");
+    }, 1500);
+    // Clean up BOTH the timer and the highlight class. Without removing the
+    // class here, switching agents before the timeout fires would cancel the
+    // pending removal and leave the previous card stuck in the highlighted
+    // state.
+    return () => {
+      clearTimeout(t);
+      el.classList.remove("ring-2", "ring-primary/60");
+    };
+  }, [location.hash, q.data?.agents]);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Agents</h1>
         <p className="text-sm text-muted-foreground">
-          Reusable agent definitions (command + args + env). Linked to a flow's
+          Reusable agent definitions (command + env). Linked to a flow's
           agent node from the flow detail page; the linked agent's spec is what
           actually runs.
         </p>
@@ -63,13 +91,19 @@ export function AgentsPage() {
 function NewAgentCard() {
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
-  const [argsText, setArgsText] = useState("");
   const [envText, setEnvText] = useState("");
   const [runOn, setRunOn] = useState<RunOn>("any");
   const create = useCreateAgent();
   const error = create.error instanceof ApiError ? create.error.body : null;
 
-  const args = parseArgs(argsText);
+  // Let the chat panel's "Apply as command" button drop suggestions straight
+  // into this draft form (multi-line replies are flattened so the input keeps
+  // working as a single line).
+  useRegisterChatAction("command", (text) =>
+    setCommand(text.trim().split(/\r?\n/).join(" ")),
+  );
+  useRegisterChatAction("agent-env", (text) => setEnvText(text.trim()));
+
   const env = parseEnv(envText);
 
   return (
@@ -108,21 +142,14 @@ function NewAgentCard() {
           <Label htmlFor="new-agent-command">Command</Label>
           <Input
             id="new-agent-command"
-            placeholder="e.g. claude  /  node  /  /usr/local/bin/my-reviewer"
+            placeholder='e.g. node /usr/local/bin/reviewer.mjs --model claude-sonnet-4-6'
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             className="font-mono text-xs"
           />
-        </div>
-        <div>
-          <Label htmlFor="new-agent-args">Arguments (one per line)</Label>
-          <Textarea
-            id="new-agent-args"
-            placeholder={"--print\n--model\nclaude-sonnet-4-6"}
-            value={argsText}
-            onChange={(e) => setArgsText(e.target.value)}
-            className="min-h-20 font-mono text-xs"
-          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Full invocation. Use double or single quotes for arguments containing spaces.
+          </p>
         </div>
         <div>
           <Label htmlFor="new-agent-env">Env vars (KEY=value, one per line)</Label>
@@ -144,12 +171,11 @@ function NewAgentCard() {
             disabled={!name.trim() || !command.trim() || create.isPending}
             onClick={() =>
               create.mutate(
-                { name: name.trim(), command: command.trim(), args, env, runOn },
+                { name: name.trim(), command: command.trim(), env, runOn },
                 {
                   onSuccess: () => {
                     setName("");
                     setCommand("");
-                    setArgsText("");
                     setEnvText("");
                     setRunOn("any");
                   },
@@ -168,8 +194,7 @@ function NewAgentCard() {
 function AgentCard({ agent }: { agent: AgentRow }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
-  const [command, setCommand] = useState(agent.command);
-  const [argsText, setArgsText] = useState(agent.args.join("\n"));
+  const [command, setCommand] = useState(joinCommand(agent));
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
@@ -179,14 +204,13 @@ function AgentCard({ agent }: { agent: AgentRow }) {
 
   const reset = () => {
     setName(agent.name);
-    setCommand(agent.command);
-    setArgsText(agent.args.join("\n"));
+    setCommand(joinCommand(agent));
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setRunOn(agent.runOn);
   };
 
   return (
-    <Card>
+    <Card id={`agent-${agent.id}`} className="scroll-mt-4 transition-shadow">
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -224,7 +248,6 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                         patch: {
                           name: name.trim(),
                           command: command.trim(),
-                          args: parseArgs(argsText),
                           env: parseEnv(envText),
                           runOn,
                         },
@@ -282,14 +305,9 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 onChange={(e) => setCommand(e.target.value)}
                 className="font-mono text-xs"
               />
-            </div>
-            <div>
-              <Label>Args (one per line)</Label>
-              <Textarea
-                value={argsText}
-                onChange={(e) => setArgsText(e.target.value)}
-                className="min-h-20 font-mono text-xs"
-              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Full invocation. Quote arguments with spaces.
+              </p>
             </div>
             <div>
               <Label>Env (KEY=value)</Label>
@@ -318,11 +336,22 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   );
 }
 
-function parseArgs(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+/**
+ * Stitch a stored agent's command + args back into a single shell-style
+ * string for the editor input. Args containing whitespace are double-quoted
+ * so a round-trip through the server's tokenizer recovers them exactly.
+ */
+function joinCommand(agent: { command: string; args: string[] }): string {
+  // The server tokenizer honours " and ' but not backslash escapes. Pick the
+  // quote style that doesn't conflict with the arg's contents so a round-trip
+  // through edit → save survives intact for the common cases.
+  const quote = (s: string) => {
+    if (!/\s|"|'/.test(s)) return s;
+    if (!s.includes('"')) return `"${s}"`;
+    if (!s.includes("'")) return `'${s}'`;
+    return `"${s}"`; // mixed quotes — user will need to fix manually
+  };
+  return [agent.command, ...agent.args].map(quote).join(" ");
 }
 
 function parseEnv(text: string): Record<string, string> {

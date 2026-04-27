@@ -26,11 +26,22 @@ interface FlowGraphProps {
   edges: FlowGraphEdge[];
   /** Map node id → step status (for run-coloured graph). Optional. */
   stepStatuses?: Record<string, StepStatus>;
+  /** Map node id → custom display label (rename). Optional. */
+  labelOverrides?: Record<string, string>;
   onNodeClick?: (nodeId: string) => void;
 }
 
-export function FlowGraph({ nodes, edges, stepStatuses, onNodeClick }: FlowGraphProps) {
-  const rfNodes = useMemo<Node[]>(() => nodes.map((n) => mapNode(n, stepStatuses)), [nodes, stepStatuses]);
+export function FlowGraph({
+  nodes,
+  edges,
+  stepStatuses,
+  labelOverrides,
+  onNodeClick,
+}: FlowGraphProps) {
+  const rfNodes = useMemo<Node[]>(
+    () => nodes.map((n) => mapNode(n, stepStatuses, labelOverrides)),
+    [nodes, stepStatuses, labelOverrides],
+  );
   const rfEdges = useMemo<Edge[]>(
     () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false })),
     [edges],
@@ -58,9 +69,13 @@ export function FlowGraph({ nodes, edges, stepStatuses, onNodeClick }: FlowGraph
   );
 }
 
-function mapNode(n: FlowGraphNode, statuses?: Record<string, StepStatus>): Node {
+function mapNode(
+  n: FlowGraphNode,
+  statuses?: Record<string, StepStatus>,
+  overrides?: Record<string, string>,
+): Node {
   const type = nodeTypeFor(n.kind);
-  const label = pickLabel(n);
+  const label = overrides?.[n.id] ?? pickLabel(n);
   const subtitle = pickSubtitle(n);
   const status = statuses?.[n.id] ?? "idle";
   return {

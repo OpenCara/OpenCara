@@ -154,6 +154,35 @@ export const projectRunsQuery = (id: string) => ({
   queryFn: () => api.get<{ runs: ProjectRun[] }>(`/api/projects/${id}/runs`),
 });
 
+export const projectFlowRunsQuery = (id: string) => ({
+  queryKey: ["projects", id, "flow-runs"] as const,
+  queryFn: () =>
+    api.get<{ runs: FlowRunSummary[] }>(`/api/projects/${id}/flow-runs`),
+});
+
+export interface FlowTemplateSummary {
+  slug: string;
+  name: string;
+  description: string;
+  nodeCount: number;
+  edgeCount: number;
+}
+export interface FlowTemplateDetail extends FlowTemplateSummary {
+  graphJson: FlowGraph;
+}
+
+export const flowTemplatesQuery = () => ({
+  queryKey: ["flow-templates"] as const,
+  queryFn: () =>
+    api.get<{ templates: FlowTemplateSummary[] }>("/api/flow-templates"),
+});
+
+export const flowTemplateDetailQuery = (slug: string) => ({
+  queryKey: ["flow-templates", slug] as const,
+  queryFn: () =>
+    api.get<{ template: FlowTemplateDetail }>(`/api/flow-templates/${slug}`),
+});
+
 export const installationsQuery = () => ({
   queryKey: ["installations"] as const,
   queryFn: () => api.get<{ installations: InstallationSummary[] }>("/api/installations"),
@@ -209,6 +238,7 @@ export interface FlowNodeSetting {
   nodeId: string;
   promptId: string | null;
   agentId: string | null;
+  label: string | null;
   updatedAt: string;
 }
 
@@ -235,8 +265,8 @@ export function useCreateAgent() {
   return useMutation({
     mutationFn: (vars: {
       name: string;
+      /** Full shell-style command incl. args (e.g. `node script.mjs --foo`). Server tokenizes. */
       command: string;
-      args?: string[];
       env?: Record<string, string>;
       cwd?: string | null;
       runOn?: "any" | "local" | "device";
@@ -315,10 +345,12 @@ export function useSetFlowNodeSettings(projectId: string, flowId: string) {
       nodeId: string;
       promptId?: string | null;
       agentId?: string | null;
+      label?: string | null;
     }) => {
       const body: Record<string, string | null> = {};
       if (vars.promptId !== undefined) body.promptId = vars.promptId;
       if (vars.agentId !== undefined) body.agentId = vars.agentId;
+      if (vars.label !== undefined) body.label = vars.label;
       return api.put<{ setting: FlowNodeSetting }>(
         `/api/projects/${projectId}/flows/${flowId}/nodes/${vars.nodeId}/settings`,
         body,
@@ -331,8 +363,51 @@ export function useSetFlowNodeSettings(projectId: string, flowId: string) {
   });
 }
 
+export function useAddReviewer(projectId: string, slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string) =>
+      api.post<{ flow: FlowSummary; addedNodeId: string }>(
+        `/api/projects/${projectId}/flows/${flowId}/reviewers`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
+export function useRemoveReviewer(projectId: string, slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { flowId: string; nodeId: string }) =>
+      api.delete<{ flow: FlowSummary }>(
+        `/api/projects/${projectId}/flows/${vars.flowId}/reviewers/${vars.nodeId}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
 /** @deprecated use useSetFlowNodeSettings */
 export const useSetFlowNodePrompt = useSetFlowNodeSettings;
+
+export function useSetFlowEnabled(projectId: string, slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.patch<{ flow: FlowSummary }>(
+        `/api/projects/${projectId}/flows/${slug}`,
+        { enabled },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
 
 export function useTriggerFlow(projectId: string) {
   const qc = useQueryClient();
@@ -347,6 +422,18 @@ export function useTriggerFlow(projectId: string) {
   });
 }
 
+export interface DeviceSystemInfo {
+  os: string;
+  release: string;
+  arch: string;
+  hostname: string;
+  cpu: { model: string; cores: number; speedMhz: number };
+  memory: { totalBytes: number; freeBytes: number };
+  disk?: { path: string; totalBytes: number; freeBytes: number };
+  ipAddrs: string[];
+  uptimeSec: number;
+}
+
 export interface DeviceRow {
   id: string;
   name: string;
@@ -356,6 +443,8 @@ export interface DeviceRow {
   lastConnectedAt: string | null;
   createdAt: string;
   revokedAt: string | null;
+  systemInfo: DeviceSystemInfo | null;
+  systemInfoUpdatedAt: string | null;
 }
 
 export const devicesQuery = () => ({

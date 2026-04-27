@@ -1,0 +1,134 @@
+import { Hono } from "hono";
+import { ulid } from "ulid";
+import { and, eq } from "drizzle-orm";
+import type { Sql } from "postgres";
+import type { Db } from "../../db/client.js";
+import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
+import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
+import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+
+interface ChatRoutesDeps {
+  db: Db;
+  pg: Sql;
+  dispatcher: AgentDispatcher;
+}
+
+interface PageContext {
+  pathname?: string;
+  projectId?: string;
+  flowSlug?: string;
+  flowRunId?: string;
+  selectedNodeId?: string;
+  /** Free-form payload pages can attach. Forwarded verbatim to the agent. */
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
+ * the existing dispatcher; stdin carries `{ message, pageContext, history? }`,
+ * env carries OPENKIRA_CHAT_* so the agent can use its own --resume / --continue
+ * flag once turnIndex > 1.
+ *
+ * Returns immediately with the agentRunId; the panel SSE-tails
+ * /api/runs/:agentRunId/logs/stream for the streamed reply.
+ */
+export function chatRoutes(deps: ChatRoutesDeps) {
+  const r = new Hono<AuthEnv>();
+  const auth = requireUser();
+
+  r.post("/chat/messages", auth, async (c) => {
+    const user = c.get("user")!;
+    const body = await c.req.json().catch(() => ({}));
+    const agentId = String(body.agentId ?? "");
+    const sessionId = String(body.sessionId ?? "").trim();
+    const turnIndex = Number.parseInt(String(body.turnIndex ?? "1"), 10);
+    const message = typeof body.message === "string" ? body.message : "";
+    const pageContext: PageContext =
+      body.pageContext && typeof body.pageContext === "object"
+        ? (body.pageContext as PageContext)
+        : {};
+    const history = Array.isArray(body.history) ? body.history : [];
+
+    if (!agentId || !sessionId || !message.trim() || !Number.isFinite(turnIndex)) {
+      return c.json(
+        { error: "agentId, sessionId, turnIndex, and message are required" },
+        400,
+      );
+    }
+
+    const agent = await deps.db.query.agents.findFirst({
+      where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
+    });
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+
+    const env: Record<string, string> = {
+      ...agent.env,
+      OPENKIRA_CHAT_SESSION_ID: sessionId,
+      OPENKIRA_CHAT_TURN_INDEX: String(turnIndex),
+      OPENKIRA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
+    };
+
+    const spec = {
+      kind: agent.name,
+      command: agent.command,
+      args: agent.args,
+      env,
+      cwd: agent.cwd ?? undefined,
+    };
+    const runOn = (agent.runOn as "any" | "local" | "device") ?? "any";
+
+    const agentRunId = ulid();
+    const projectId = pageContext.projectId ?? null;
+    await deps.db.insert(agentRuns).values({
+      id: agentRunId,
+      spec,
+      status: "running",
+      projectId,
+      flowRunStepId: null,
+      startedAt: new Date(),
+    });
+
+    let seq = 0;
+    const onLog = (stream: LogStream, chunk: string) => {
+      const mySeq = seq++;
+      void deps.db
+        .insert(agentRunLogs)
+        .values({ agentRunId, seq: mySeq, stream, chunk })
+        .then(() => deps.pg.notify("agent_run_logs", agentRunId))
+        .catch((err: unknown) => {
+          console.error("[chat] log persist failed", err);
+        });
+    };
+
+    // Fire-and-forget the dispatcher; the SSE stream is the client's only view.
+    void (async () => {
+      try {
+        const result = await deps.dispatcher.run(spec, {
+          stdinJson: { message, pageContext, history },
+          onLog,
+          runOn,
+        });
+        await deps.db
+          .update(agentRuns)
+          .set({
+            status: result.exitCode === 0 ? "succeeded" : "failed",
+            exitCode: result.exitCode,
+            finishedAt: new Date(),
+          })
+          .where(eq(agentRuns.id, agentRunId));
+      } catch (err) {
+        console.error("[chat] dispatcher run failed", err);
+        await deps.db
+          .update(agentRuns)
+          .set({ status: "failed", finishedAt: new Date() })
+          .where(eq(agentRuns.id, agentRunId));
+      }
+      // Trigger one final SSE flush so the panel sees terminal state.
+      void deps.pg.notify("agent_run_logs", agentRunId);
+    })();
+
+    return c.json({ agentRunId, sessionId, turnIndex });
+  });
+
+  return r;
+}

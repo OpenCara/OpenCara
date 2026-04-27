@@ -1,11 +1,26 @@
-import { hostname, platform } from "node:os";
-import { readFileSync } from "node:fs";
+import {
+  arch,
+  cpus,
+  freemem,
+  hostname,
+  networkInterfaces,
+  platform,
+  release,
+  totalmem,
+  uptime,
+} from "node:os";
+import { readFileSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readConfig } from "../config/store.js";
 import { WsClient } from "../transport/ws-client.js";
 import { runJob } from "../runner/spawn.js";
-import type { AgentSpec, JobAssignment, ServerToDeviceMessage } from "@openkira/shared";
+import type {
+  AgentSpec,
+  JobAssignment,
+  ServerToDeviceMessage,
+  SystemInfo,
+} from "@openkira/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_VERSION = readPkgVersion();
@@ -35,6 +50,7 @@ export async function run(): Promise<void> {
         platform: platform(),
         version: PKG_VERSION,
         capabilities: [],
+        systemInfo: collectSystemInfo(),
       });
     },
     onMessage: (msg: ServerToDeviceMessage) => handleServerMessage(msg, client, cfg),
@@ -117,5 +133,56 @@ function readPkgVersion(): string {
     return JSON.parse(raw).version ?? "0.0.0";
   } catch {
     return "0.0.0";
+  }
+}
+
+/**
+ * Best-effort system snapshot for the dashboard. Any field can fail
+ * (e.g. statfs on weird filesystems) — fall back rather than refuse to
+ * connect, the data is informational not load-bearing.
+ */
+function collectSystemInfo(): SystemInfo | undefined {
+  try {
+    const cpuList = cpus();
+    const head = cpuList[0];
+    const ipAddrs: string[] = [];
+    const ifaces = networkInterfaces();
+    for (const list of Object.values(ifaces)) {
+      if (!list) continue;
+      for (const iface of list) {
+        if (!iface.internal && iface.family === "IPv4") ipAddrs.push(iface.address);
+      }
+    }
+
+    let disk: SystemInfo["disk"];
+    try {
+      const stats = statfsSync("/");
+      disk = {
+        path: "/",
+        totalBytes: Number(stats.blocks) * Number(stats.bsize),
+        freeBytes: Number(stats.bavail) * Number(stats.bsize),
+      };
+    } catch {
+      disk = undefined;
+    }
+
+    return {
+      os: platform(),
+      release: release(),
+      arch: arch(),
+      hostname: hostname(),
+      cpu: {
+        model: head?.model.trim() ?? "unknown",
+        cores: cpuList.length,
+        speedMhz: head?.speed ?? 0,
+      },
+      memory: { totalBytes: totalmem(), freeBytes: freemem() },
+      disk,
+      ipAddrs,
+      uptimeSec: Math.floor(uptime()),
+    };
+  } catch (err) {
+    console.warn("[openkira] system info collection failed", err);
+    return undefined;
   }
 }

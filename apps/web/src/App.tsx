@@ -13,6 +13,8 @@ import { DevicePairPage } from "@/pages/DevicePairPage";
 import { DevicesPage } from "@/pages/DevicesPage";
 import { PromptsPage } from "@/pages/PromptsPage";
 import { AgentsPage } from "@/pages/AgentsPage";
+import { FlowTemplatesPage } from "@/pages/FlowTemplatesPage";
+import { FlowTemplateDetailPage } from "@/pages/FlowTemplateDetailPage";
 
 export function App() {
   return (
@@ -38,6 +40,8 @@ export function App() {
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/pair" element={<DevicePairPage />} />
         <Route path="agents" element={<AgentsPage />} />
+        <Route path="flows" element={<FlowTemplatesPage />} />
+        <Route path="flows/:slug" element={<FlowTemplateDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

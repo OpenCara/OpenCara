@@ -62,19 +62,45 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
         console.log(`[device-ws] ${host.name} (${host.id}) connected`);
       },
       onMessage(evt: { data: string | { toString(): string } }) {
+        const raw = typeof evt.data === "string" ? evt.data : evt.data.toString();
         let parsed: DeviceToServerMessage;
         try {
-          const raw = typeof evt.data === "string" ? evt.data : evt.data.toString();
           parsed = DeviceToServerMessageSchema.parse(JSON.parse(raw));
         } catch (err) {
-          console.error("[device-ws] invalid frame", err);
+          console.error(
+            "[device-ws] invalid frame from",
+            host.name,
+            "preview:",
+            raw.slice(0, 200),
+            "err:",
+            err instanceof Error ? err.message : err,
+          );
           return;
         }
         if (parsed.type === "hello") {
+          console.log(
+            `[device-ws] hello from ${host.name}: platform=${parsed.platform} version=${parsed.version} systemInfo=${parsed.systemInfo ? "yes" : "no"}`,
+          );
+          const updates: Partial<typeof agentHosts.$inferInsert> = {
+            platform: parsed.platform,
+            version: parsed.version,
+          };
+          if (parsed.systemInfo) {
+            updates.systemInfo = parsed.systemInfo;
+            updates.systemInfoUpdatedAt = new Date();
+          }
+          // Await + catch so a DB error surfaces rather than getting swallowed
+          // by the prior fire-and-forget pattern.
           void deps.db
             .update(agentHosts)
-            .set({ platform: parsed.platform, version: parsed.version })
-            .where(eq(agentHosts.id, host.id));
+            .set(updates)
+            .where(eq(agentHosts.id, host.id))
+            .then(() => {
+              console.log(`[device-ws] persisted hello for ${host.name}`);
+            })
+            .catch((err: unknown) => {
+              console.error(`[device-ws] hello persist failed for ${host.name}`, err);
+            });
           return;
         }
         deps.pool.handleMessage(host.id, parsed);

@@ -128,6 +128,13 @@ export function promptRoutes(deps: PromptRoutesDeps) {
           : agentIdRaw === null
             ? null
             : String(agentIdRaw);
+      const labelRaw = body.label;
+      const label: string | null | "__keep__" =
+        labelRaw === undefined
+          ? "__keep__"
+          : labelRaw === null
+            ? null
+            : String(labelRaw).trim() || null;
 
       // Validate flow belongs to project, prompt belongs to project, agent belongs to user.
       const flow = await deps.db.query.flows.findFirst({
@@ -159,6 +166,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
         };
         if (promptId !== "__keep__") patch.promptId = promptId;
         if (agentId !== "__keep__") patch.agentId = agentId;
+        if (label !== "__keep__") patch.label = label;
         await deps.db
           .update(flowNodeSettings)
           .set(patch)
@@ -167,6 +175,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
           ...existing,
           ...(promptId !== "__keep__" ? { promptId } : {}),
           ...(agentId !== "__keep__" ? { agentId } : {}),
+          ...(label !== "__keep__" ? { label } : {}),
           updatedAt: new Date().toISOString(),
         };
         return c.json({ setting: merged });
@@ -179,6 +188,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
         nodeId,
         promptId: promptId === "__keep__" ? null : promptId,
         agentId: agentId === "__keep__" ? null : agentId,
+        label: label === "__keep__" ? null : label,
       });
       return c.json(
         {
@@ -189,6 +199,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
             nodeId,
             promptId: promptId === "__keep__" ? null : promptId,
             agentId: agentId === "__keep__" ? null : agentId,
+            label: label === "__keep__" ? null : label,
           },
         },
         201,
