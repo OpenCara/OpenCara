@@ -12,6 +12,7 @@ import {
   flows,
   platformEvents,
 } from "../../db/schema.js";
+import { FlowDefinitionSchema } from "@openkira/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { FlowEngine } from "../../flows/engine.js";
 
@@ -73,6 +74,73 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
     return c.json({ flow: updated });
   });
+
+  // Sets customizedAt so the seeder doesn't clobber the edit on next start.
+  // No project-ownership gate — `projects` has no userId column today, so
+  // flow routes share the same trust boundary (any authenticated user can
+  // edit any flow they know the ids of). When a real per-user model lands,
+  // every route in this file needs the same gate.
+  r.patch(
+    "/projects/:projectId/flows/:flowId/nodes/:nodeId/config",
+    auth,
+    async (c) => {
+      const projectId = c.req.param("projectId");
+      const flowId = c.req.param("flowId");
+      const nodeId = c.req.param("nodeId");
+      const body = await c.req.json().catch(() => ({}));
+      if (!body.config || typeof body.config !== "object") {
+        return c.json({ error: "config (object) required" }, 400);
+      }
+
+      const flow = await deps.db.query.flows.findFirst({
+        where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+      });
+      if (!flow) return c.json({ error: "flow not found in project" }, 404);
+
+      const graph = parseGraph(flow.graphJson);
+      if (!graph) return c.json({ error: "flow graph invalid" }, 400);
+
+      const target = graph.nodes.find((n) => n.id === nodeId);
+      if (!target) return c.json({ error: "node not found" }, 404);
+
+      target.config = body.config as typeof target.config;
+
+      // Validate the candidate graph before persisting — without this, an
+      // invalid config (missing required field, wrong shape) writes through
+      // and breaks FlowDefinitionSchema.parse on the next load.
+      const validation = FlowDefinitionSchema.safeParse({
+        slug: flow.slug,
+        name: flow.name,
+        description:
+          (flow.graphJson as { description?: string })?.description ?? "",
+        nodes: graph.nodes,
+        edges: graph.edges,
+      });
+      if (!validation.success) {
+        const issue = validation.error.issues[0];
+        return c.json(
+          {
+            error: `invalid config: ${issue?.path.join(".") ?? ""} ${issue?.message ?? "validation failed"}`,
+          },
+          400,
+        );
+      }
+
+      await deps.db
+        .update(flows)
+        .set({
+          graphJson: graph,
+          customizedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(flows.id, flow.id));
+
+      const updated = await deps.db.query.flows.findFirst({
+        where: eq(flows.id, flow.id),
+      });
+      return c.json({ flow: updated });
+    },
+  );
 
   // Add a reviewer node to a multi-agent review flow. Clones the first
   // existing reviewer (any node with edges trigger→X→synthesizer) so

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Pencil, Trash2, X } from "lucide-react";
+import { Pencil, Play, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,9 +17,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   agentsQuery,
   useCreateAgent,
   useDeleteAgent,
+  useTestAgent,
   useUpdateAgent,
   type AgentRow,
 } from "@/lib/queries";
@@ -193,6 +202,7 @@ function NewAgentCard() {
 
 function AgentCard({ agent }: { agent: AgentRow }) {
   const [editing, setEditing] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
   const [name, setName] = useState(agent.name);
   const [command, setCommand] = useState(joinCommand(agent));
   const [envText, setEnvText] = useState(
@@ -261,6 +271,10 @@ function AgentCard({ agent }: { agent: AgentRow }) {
               </>
             ) : (
               <>
+                <Button size="sm" variant="outline" onClick={() => setTestOpen(true)}>
+                  <Play className="size-4" />
+                  Test
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                   <Pencil className="size-4" />
                   Edit
@@ -277,6 +291,11 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 >
                   <Trash2 className="size-4" />
                 </Button>
+                <TestAgentDialog
+                  agent={agent}
+                  open={testOpen}
+                  onOpenChange={setTestOpen}
+                />
               </>
             )}
           </div>
@@ -372,4 +391,169 @@ function extractErr(err: unknown): string {
     return typeof v === "string" ? v : JSON.stringify(v);
   }
   return "Save failed";
+}
+
+interface TestAgentDialogProps {
+  agent: AgentRow;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
+  const [prompt, setPrompt] = useState("Hello! Please respond briefly.");
+  const [target, setTarget] = useState<"default" | RunOn>("default");
+  const [agentRunId, setAgentRunId] = useState<string | null>(null);
+  const test = useTestAgent();
+  const errorBody = test.error instanceof ApiError ? test.error.body : null;
+
+  // Depend on the stable `reset` reference, not the whole mutation object.
+  const reset = test.reset;
+  useEffect(() => {
+    if (!open) {
+      setAgentRunId(null);
+      reset();
+    }
+  }, [open, reset]);
+
+  const handleRun = () => {
+    test.mutate(
+      {
+        id: agent.id,
+        prompt,
+        runOn: target === "default" ? undefined : target,
+      },
+      {
+        onSuccess: ({ agentRunId: id }) => setAgentRunId(id),
+      },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Test agent: {agent.name}</DialogTitle>
+          <DialogDescription>
+            Spawns a one-off run with the prompt as stdin (
+            <code className="font-mono text-xs">{`{ "message": "..." }`}</code>) and
+            <code className="ml-1 font-mono text-xs">OPENKIRA_TEST=1</code> in
+            the env.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="test-prompt">Prompt</Label>
+            <Textarea
+              id="test-prompt"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              className="min-h-24 font-mono text-xs"
+              disabled={!!agentRunId}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="test-target">Run target</Label>
+            <Select
+              value={target}
+              onValueChange={(v) => setTarget(v as "default" | RunOn)}
+              disabled={!!agentRunId}
+            >
+              <SelectTrigger id="test-target" className="w-full max-w-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">
+                  agent default ({agent.runOn})
+                </SelectItem>
+                <SelectItem value="any">any (prefer device, fallback local)</SelectItem>
+                <SelectItem value="local">local subprocess only</SelectItem>
+                <SelectItem value="device">device only (any online)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Picking a specific device by name isn't supported yet — the
+              dispatcher routes to any idle one.
+            </p>
+          </div>
+
+          {errorBody !== null && errorBody !== undefined && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {extractErr(errorBody)}
+            </div>
+          )}
+
+          {agentRunId && <TestRunLog agentRunId={agentRunId} />}
+        </div>
+
+        <DialogFooter>
+          {agentRunId ? (
+            <>
+              <Button variant="outline" onClick={() => setAgentRunId(null)}>
+                Run again
+              </Button>
+              <Button onClick={() => onOpenChange(false)}>Close</Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!prompt.trim() || test.isPending}
+                onClick={handleRun}
+              >
+                <Play className="size-3.5" />
+                {test.isPending ? "Starting…" : "Run test"}
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TestRunLog({ agentRunId }: { agentRunId: string }) {
+  const [chunks, setChunks] = useState("");
+  const [status, setStatus] = useState<"live" | "ended" | "error">("live");
+
+  useEffect(() => {
+    setChunks("");
+    setStatus("live");
+    const es = new EventSource(`/api/runs/${agentRunId}/logs/stream`, {
+      withCredentials: true,
+    });
+    es.addEventListener("log", (e: MessageEvent) => {
+      try {
+        const row = JSON.parse(e.data) as { stream: string; chunk: string };
+        setChunks((prev) => prev + row.chunk);
+      } catch {
+        // ignore malformed frame
+      }
+    });
+    es.addEventListener("end", () => {
+      setStatus("ended");
+      es.close();
+    });
+    es.onerror = () => {
+      setStatus("error");
+    };
+    return () => {
+      es.close();
+    };
+  }, [agentRunId]);
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
+        <span>Output</span>
+        <span>{status}</span>
+      </div>
+      <pre className="max-h-72 overflow-auto rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
+        {chunks || "(waiting…)"}
+      </pre>
+    </div>
+  );
 }

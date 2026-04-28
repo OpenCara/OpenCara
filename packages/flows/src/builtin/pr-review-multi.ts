@@ -32,7 +32,16 @@ export const prReviewMultiFlow: FlowDefinition = {
       id: "trigger",
       kind: "github.pull_request",
       position: { x: 0, y: 160 },
-      config: { actions: ["opened", "synchronize", "reopened"] },
+      config: {
+        actions: ["opened", "synchronize", "reopened"],
+        branches: [],
+        branchesIgnore: [],
+        paths: [],
+        pathsIgnore: [],
+        labels: [],
+        labelsIgnore: [],
+        ignoreDrafts: false,
+      },
     },
     {
       id: "reviewer_correctness",

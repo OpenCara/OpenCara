@@ -1,12 +1,16 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { and, desc, eq } from "drizzle-orm";
+import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
-import { agents } from "../../db/schema.js";
+import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 
 interface AgentRoutesDeps {
   db: Db;
+  pg: Sql;
+  dispatcher: AgentDispatcher;
 }
 
 const RUN_ON = new Set(["any", "local", "device"]);
@@ -126,6 +130,95 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     });
     if (!row) return c.json({ error: "not found" }, 404);
     return c.json({ agent: row });
+  });
+
+  // Smoke-test an agent with a prompt; returns agentRunId for SSE tail.
+  r.post("/agents/:id/test", auth, async (c) => {
+    const user = c.get("user")!;
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const prompt = typeof body.prompt === "string" ? body.prompt : "";
+    if (!prompt.trim()) return c.json({ error: "prompt required" }, 400);
+    const runOnRaw = String(body.runOn ?? "");
+    const runOnOverride = RUN_ON.has(runOnRaw)
+      ? (runOnRaw as "any" | "local" | "device")
+      : null;
+
+    const agent = await deps.db.query.agents.findFirst({
+      where: and(eq(agents.id, id), eq(agents.userId, user.id)),
+    });
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+
+    const env: Record<string, string> = {
+      ...agent.env,
+      OPENKIRA_TEST: "1",
+    };
+    const spec = {
+      kind: agent.name,
+      command: agent.command,
+      args: agent.args,
+      env,
+      cwd: agent.cwd ?? undefined,
+    };
+    const runOn =
+      runOnOverride ?? (agent.runOn as "any" | "local" | "device") ?? "any";
+
+    const agentRunId = ulid();
+    await deps.db.insert(agentRuns).values({
+      id: agentRunId,
+      spec,
+      status: "running",
+      flowRunStepId: null,
+      startedAt: new Date(),
+    });
+
+    let seq = 0;
+    // Drained via Promise.allSettled before flipping terminal status. We
+    // assume the dispatcher fires every onLog before its run() promise
+    // resolves — true for both LocalSubprocessDispatcher (waits for stdio
+    // 'close') and WebSocketDispatcher (resolves on the device's `done`
+    // frame, which comes after every `log` frame).
+    const logWrites: Promise<unknown>[] = [];
+    const onLog = (stream: LogStream, chunk: string) => {
+      const p = deps.db
+        .insert(agentRunLogs)
+        .values({ agentRunId, seq: seq++, stream, chunk })
+        .then(() => deps.pg.notify("agent_run_logs", agentRunId))
+        .catch((err: unknown) => {
+          console.error("[agent-test] log persist failed", err);
+        });
+      logWrites.push(p);
+    };
+
+    void (async () => {
+      try {
+        const result = await deps.dispatcher.run(spec, {
+          stdinJson: { message: prompt },
+          onLog,
+          runOn,
+        });
+        await Promise.allSettled(logWrites);
+        await deps.db
+          .update(agentRuns)
+          .set({
+            status: result.exitCode === 0 ? "succeeded" : "failed",
+            exitCode: result.exitCode,
+            finishedAt: new Date(),
+          })
+          .where(eq(agentRuns.id, agentRunId));
+      } catch (err) {
+        console.error("[agent-test] dispatcher run failed", err);
+        await Promise.allSettled(logWrites);
+        await deps.db
+          .update(agentRuns)
+          .set({ status: "failed", finishedAt: new Date() })
+          .where(eq(agentRuns.id, agentRunId));
+      }
+      // Final notify so the SSE stream sees the terminal state.
+      void deps.pg.notify("agent_run_logs", agentRunId);
+    })();
+
+    return c.json({ agentRunId });
   });
 
   r.delete("/agents/:id", auth, async (c) => {

@@ -98,7 +98,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", flowRoutes({ db, pg, flowEngine: flowEngine ?? undefined }));
   apiHono.route("/", runRoutes({ db, pg }));
   apiHono.route("/", promptRoutes({ db }));
-  apiHono.route("/", agentRoutes({ db }));
+  apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
   apiHono.route("/", chatRoutes({ db, pg, dispatcher }));
   apiHono.route("/", flowTemplateRoutes());
   app.route("/api", apiHono);

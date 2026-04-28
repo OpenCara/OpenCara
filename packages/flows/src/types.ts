@@ -3,6 +3,7 @@ import { AgentSpecSchema } from "@openkira/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
+// Mirrors GitHub Actions' on.pull_request filter set.
 export const TriggerNodeSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),
@@ -11,6 +12,13 @@ export const TriggerNodeSchema = z.object({
     actions: z
       .array(z.enum(["opened", "synchronize", "reopened", "ready_for_review"]))
       .min(1),
+    branches: z.array(z.string()).default([]),
+    branchesIgnore: z.array(z.string()).default([]),
+    paths: z.array(z.string()).default([]),
+    pathsIgnore: z.array(z.string()).default([]),
+    labels: z.array(z.string()).default([]),
+    labelsIgnore: z.array(z.string()).default([]),
+    ignoreDrafts: z.boolean().default(false),
   }),
 });
 export type TriggerNode = z.infer<typeof TriggerNodeSchema>;
