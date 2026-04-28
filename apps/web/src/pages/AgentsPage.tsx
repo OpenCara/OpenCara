@@ -415,7 +415,7 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
     }
   }, [open, reset]);
 
-  const onRun = () => {
+  const handleRun = () => {
     test.mutate(
       {
         id: agent.id,
@@ -502,7 +502,7 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
               </Button>
               <Button
                 disabled={!prompt.trim() || test.isPending}
-                onClick={onRun}
+                onClick={handleRun}
               >
                 <Play className="size-3.5" />
                 {test.isPending ? "Starting…" : "Run test"}

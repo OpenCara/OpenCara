@@ -161,7 +161,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       cwd: agent.cwd ?? undefined,
     };
     const runOn =
-      runOnOverride ?? ((agent.runOn as "any" | "local" | "device") ?? "any");
+      runOnOverride ?? (agent.runOn as "any" | "local" | "device") ?? "any";
 
     const agentRunId = ulid();
     await deps.db.insert(agentRuns).values({
@@ -173,16 +173,16 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     });
 
     let seq = 0;
-    // Track each log insert so we can drain them before flipping the run
-    // to terminal state. Without this, the SSE endpoint can close on
-    // terminal-status detection while the last few inserts are still in
-    // flight, truncating tail output for clients that reconnect.
+    // Drained via Promise.allSettled before flipping terminal status. We
+    // assume the dispatcher fires every onLog before its run() promise
+    // resolves — true for both LocalSubprocessDispatcher (waits for stdio
+    // 'close') and WebSocketDispatcher (resolves on the device's `done`
+    // frame, which comes after every `log` frame).
     const logWrites: Promise<unknown>[] = [];
     const onLog = (stream: LogStream, chunk: string) => {
-      const mySeq = seq++;
       const p = deps.db
         .insert(agentRunLogs)
-        .values({ agentRunId, seq: mySeq, stream, chunk })
+        .values({ agentRunId, seq: seq++, stream, chunk })
         .then(() => deps.pg.notify("agent_run_logs", agentRunId))
         .catch((err: unknown) => {
           console.error("[agent-test] log persist failed", err);

@@ -76,6 +76,10 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Sets customizedAt so the seeder doesn't clobber the edit on next start.
+  // No project-ownership gate — `projects` has no userId column today, so
+  // flow routes share the same trust boundary (any authenticated user can
+  // edit any flow they know the ids of). When a real per-user model lands,
+  // every route in this file needs the same gate.
   r.patch(
     "/projects/:projectId/flows/:flowId/nodes/:nodeId/config",
     auth,

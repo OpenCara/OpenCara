@@ -48,6 +48,7 @@ import {
   type FlowSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { FlowGraph } from "@/components/flow/FlowGraph";
 
 const NONE = "__none__";
@@ -473,11 +474,11 @@ interface TriggerCfg {
   ignoreDrafts: boolean;
 }
 
-const isString = (v: unknown): v is string => typeof v === "string";
-
 function readStringArray(o: Record<string, unknown>, key: string): string[] {
   const v = o[key];
-  return Array.isArray(v) ? v.filter(isString) : [];
+  return Array.isArray(v)
+    ? v.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 function readTriggerConfig(raw: unknown): TriggerCfg {
@@ -522,11 +523,13 @@ function TriggerNodePanel({ projectId, flow, node, onClose }: TriggerNodePanelPr
     setIgnoreDrafts(initial.ignoreDrafts);
   }, [initial]);
 
-  const toggleAction = (a: TriggerAction) => {
-    setActions((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
+  const toggleAction = (action: TriggerAction) => {
+    setActions((prev) =>
+      prev.includes(action) ? prev.filter((x) => x !== action) : [...prev, action],
+    );
   };
 
-  const onSave = () => {
+  const handleSave = () => {
     if (actions.length === 0) return;
     set.mutate({
       flowId: flow.id,
@@ -563,20 +566,21 @@ function TriggerNodePanel({ projectId, flow, node, onClose }: TriggerNodePanelPr
         <div className="space-y-2">
           <div className="text-sm font-medium">Action types</div>
           <div className="flex flex-wrap gap-2">
-            {TRIGGER_ACTIONS.map((a) => {
-              const isActive = actions.includes(a);
+            {TRIGGER_ACTIONS.map((action) => {
+              const isActive = actions.includes(action);
               return (
                 <button
-                  key={a}
+                  key={action}
                   type="button"
-                  onClick={() => toggleAction(a)}
-                  className={`rounded-full border px-2 py-0.5 text-xs ${
+                  onClick={() => toggleAction(action)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-xs",
                     isActive
                       ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40"
-                  }`}
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40",
+                  )}
                 >
-                  {a}
+                  {action}
                 </button>
               );
             })}
@@ -654,7 +658,7 @@ function TriggerNodePanel({ projectId, flow, node, onClose }: TriggerNodePanelPr
           <Button
             size="sm"
             disabled={actions.length === 0 || set.isPending}
-            onClick={onSave}
+            onClick={handleSave}
           >
             {set.isPending ? "Saving…" : "Save filters"}
           </Button>
