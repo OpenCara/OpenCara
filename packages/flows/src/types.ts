@@ -3,25 +3,8 @@ import { AgentSpecSchema } from "@openkira/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
-/**
- * Filters borrowed from GitHub Actions' `on.pull_request` block. All fields
- * default to empty arrays meaning "don't narrow further" — only `actions` is
- * required (existing behaviour preserved for older flows).
- *
- * - `branches` / `branchesIgnore`: glob match against pull_request.base.ref
- *   (e.g. `main`, `release/*`).
- * - `paths` / `pathsIgnore`: glob match against changed files from the diff
- *   (e.g. `src/**`, `*.md`).
- * - `labels`: PR must carry at least one of the named labels to trigger.
- *
- * Supported glob syntax:
- *   `**` — any path including `/`
- *   `*`  — any chars within one path segment
- *   `?`  — single char
- *
- * "include" lists are OR-matched (any match passes); "ignore" lists short-
- * circuit on the first match (any match rejects).
- */
+// Mirrors GitHub Actions' on.pull_request filter set; all fields default
+// to empty/false so older flows are unchanged.
 export const TriggerNodeSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),

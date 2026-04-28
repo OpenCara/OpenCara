@@ -399,16 +399,6 @@ interface TestAgentDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/**
- * Smoke-test an agent with an arbitrary prompt. Spawns a fresh agent_run via
- * POST /api/agents/:id/test, then SSE-tails /api/runs/:id/logs/stream so the
- * user can watch stdout/stderr live until the run terminates.
- *
- * runOn pickers: "agent default" (uses agent.runOn), "any", "local", or
- * "device". Picking a *specific* device requires the dispatcher to support
- * targeted routing — currently it only knows "any idle", so this dialog
- * limits itself to runOn-class targeting until that lands.
- */
 function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
   const [prompt, setPrompt] = useState("Hello! Please respond briefly.");
   const [target, setTarget] = useState<"default" | RunOn>("default");
@@ -541,8 +531,7 @@ function TestRunLog({ agentRunId }: { agentRunId: string }) {
     es.addEventListener("log", (e: MessageEvent) => {
       try {
         const row = JSON.parse(e.data) as { stream: string; chunk: string };
-        const prefix = row.stream === "stderr" ? "" : "";
-        setChunks((prev) => prev + prefix + row.chunk);
+        setChunks((prev) => prev + row.chunk);
       } catch {
         // ignore malformed frame
       }

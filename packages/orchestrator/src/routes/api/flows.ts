@@ -12,6 +12,7 @@ import {
   flows,
   platformEvents,
 } from "../../db/schema.js";
+import { FlowDefinitionSchema } from "@openkira/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { FlowEngine } from "../../flows/engine.js";
 
@@ -74,9 +75,6 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     return c.json({ flow: updated });
   });
 
-  // Update an arbitrary node's config inside the flow's graphJson. Used by
-  // the trigger-node panel today (action types + branches/paths/labels
-  // filters); generic enough to extend to action node configs later.
   // Sets customizedAt so the seeder doesn't clobber the edit on next start.
   r.patch(
     "/projects/:projectId/flows/:flowId/nodes/:nodeId/config",
@@ -102,6 +100,27 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       if (!target) return c.json({ error: "node not found" }, 404);
 
       target.config = body.config as typeof target.config;
+
+      // Validate the candidate graph before persisting — without this, an
+      // invalid config (missing required field, wrong shape) writes through
+      // and breaks FlowDefinitionSchema.parse on the next load.
+      const validation = FlowDefinitionSchema.safeParse({
+        slug: flow.slug,
+        name: flow.name,
+        description:
+          (flow.graphJson as { description?: string })?.description ?? "",
+        nodes: graph.nodes,
+        edges: graph.edges,
+      });
+      if (!validation.success) {
+        const issue = validation.error.issues[0];
+        return c.json(
+          {
+            error: `invalid config: ${issue?.path.join(".") ?? ""} ${issue?.message ?? "validation failed"}`,
+          },
+          400,
+        );
+      }
 
       await deps.db
         .update(flows)

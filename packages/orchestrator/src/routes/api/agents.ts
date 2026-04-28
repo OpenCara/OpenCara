@@ -132,18 +132,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     return c.json({ agent: row });
   });
 
-  /**
-   * Smoke-test an agent with a simple prompt. Spawns the agent's spec via
-   * the existing dispatcher with `{ message: prompt }` on stdin and an
-   * OPENKIRA_TEST=1 env tag. Returns the agentRunId so the client can
-   * SSE-tail /api/runs/:id/logs/stream for streamed output. No
-   * agent_run is linked to a flow_run_step (this is a bare test invocation).
-   *
-   * Body: { prompt: string, runOn?: "any" | "local" | "device" }
-   * The runOn override only narrows where the dispatcher routes the job —
-   * picking a *specific* device by id is a follow-up since the DevicePool
-   * currently only exposes "any idle".
-   */
+  // Smoke-test an agent with a prompt; returns agentRunId for SSE tail.
   r.post("/agents/:id/test", auth, async (c) => {
     const user = c.get("user")!;
     const id = c.req.param("id");
@@ -184,15 +173,21 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     });
 
     let seq = 0;
+    // Track each log insert so we can drain them before flipping the run
+    // to terminal state. Without this, the SSE endpoint can close on
+    // terminal-status detection while the last few inserts are still in
+    // flight, truncating tail output for clients that reconnect.
+    const logWrites: Promise<unknown>[] = [];
     const onLog = (stream: LogStream, chunk: string) => {
       const mySeq = seq++;
-      void deps.db
+      const p = deps.db
         .insert(agentRunLogs)
         .values({ agentRunId, seq: mySeq, stream, chunk })
         .then(() => deps.pg.notify("agent_run_logs", agentRunId))
         .catch((err: unknown) => {
           console.error("[agent-test] log persist failed", err);
         });
+      logWrites.push(p);
     };
 
     void (async () => {
@@ -202,6 +197,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           onLog,
           runOn,
         });
+        await Promise.allSettled(logWrites);
         await deps.db
           .update(agentRuns)
           .set({
@@ -212,6 +208,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           .where(eq(agentRuns.id, agentRunId));
       } catch (err) {
         console.error("[agent-test] dispatcher run failed", err);
+        await Promise.allSettled(logWrites);
         await deps.db
           .update(agentRuns)
           .set({ status: "failed", finishedAt: new Date() })
