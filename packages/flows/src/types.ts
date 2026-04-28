@@ -3,8 +3,7 @@ import { AgentSpecSchema } from "@openkira/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
-// Mirrors GitHub Actions' on.pull_request filter set; all fields default
-// to empty/false so older flows are unchanged.
+// Mirrors GitHub Actions' on.pull_request filter set.
 export const TriggerNodeSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),

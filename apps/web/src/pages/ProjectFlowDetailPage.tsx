@@ -473,22 +473,26 @@ interface TriggerCfg {
   ignoreDrafts: boolean;
 }
 
+const isString = (v: unknown): v is string => typeof v === "string";
+
+function readStringArray(o: Record<string, unknown>, key: string): string[] {
+  const v = o[key];
+  return Array.isArray(v) ? v.filter(isString) : [];
+}
+
 function readTriggerConfig(raw: unknown): TriggerCfg {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const arr = (k: string): string[] =>
-    Array.isArray(o[k]) ? (o[k] as unknown[]).filter((v) => typeof v === "string") as string[] : [];
-  const actions = (Array.isArray(o.actions) ? o.actions : [])
-    .filter((v): v is TriggerAction =>
-      TRIGGER_ACTIONS.includes(v as TriggerAction),
-    );
+  const actions = (Array.isArray(o.actions) ? o.actions : []).filter(
+    (v): v is TriggerAction => TRIGGER_ACTIONS.includes(v as TriggerAction),
+  );
   return {
     actions: actions.length ? actions : ["opened", "synchronize", "reopened"],
-    branches: arr("branches"),
-    branchesIgnore: arr("branchesIgnore"),
-    paths: arr("paths"),
-    pathsIgnore: arr("pathsIgnore"),
-    labels: arr("labels"),
-    labelsIgnore: arr("labelsIgnore"),
+    branches: readStringArray(o, "branches"),
+    branchesIgnore: readStringArray(o, "branchesIgnore"),
+    paths: readStringArray(o, "paths"),
+    pathsIgnore: readStringArray(o, "pathsIgnore"),
+    labels: readStringArray(o, "labels"),
+    labelsIgnore: readStringArray(o, "labelsIgnore"),
     ignoreDrafts: o.ignoreDrafts === true,
   };
 }
@@ -560,14 +564,14 @@ function TriggerNodePanel({ projectId, flow, node, onClose }: TriggerNodePanelPr
           <div className="text-sm font-medium">Action types</div>
           <div className="flex flex-wrap gap-2">
             {TRIGGER_ACTIONS.map((a) => {
-              const on = actions.includes(a);
+              const isActive = actions.includes(a);
               return (
                 <button
                   key={a}
                   type="button"
                   onClick={() => toggleAction(a)}
                   className={`rounded-full border px-2 py-0.5 text-xs ${
-                    on
+                    isActive
                       ? "border-primary bg-primary/10 text-primary"
                       : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40"
                   }`}
@@ -660,23 +664,17 @@ function TriggerNodePanel({ projectId, flow, node, onClose }: TriggerNodePanelPr
   );
 }
 
-function ChipField({
-  label,
-  value,
-  onChange,
-  placeholder,
-  help,
-  className,
-}: {
+interface ChipFieldProps {
   label: string;
   value: string;
-  onChange: (v: string) => void;
+  onChange: (value: string) => void;
   placeholder?: string;
   help?: string;
-  className?: string;
-}) {
+}
+
+function ChipField({ label, value, onChange, placeholder, help }: ChipFieldProps) {
   return (
-    <div className={className}>
+    <div>
       <label className="text-sm font-medium">{label}</label>
       <Input
         value={value}

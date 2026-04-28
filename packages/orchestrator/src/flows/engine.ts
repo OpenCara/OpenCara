@@ -365,6 +365,10 @@ export class FlowEngine {
         if (r.status === "fulfilled") {
           if (r.value.skipped) {
             skipped = true;
+            // Carry the SkipFlowError message up to flow_runs.error so
+            // operators can see why a webhook didn't trigger from the run
+            // header (not just by drilling into the trigger step).
+            errorMsg ??= r.value.skipReason;
             continue;
           }
           outputs.set(node.id, r.value.stdoutCaptured);
@@ -402,7 +406,7 @@ export class FlowEngine {
     job: { node: FlowNode; idx: number; previousOutput: string | undefined },
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
-  ): Promise<{ stdoutCaptured?: string; skipped: boolean }> {
+  ): Promise<{ stdoutCaptured?: string; skipped: boolean; skipReason?: string }> {
     void def;
     const { flowRunId, flowId, project, installation } = prepared;
     const { node, idx, previousOutput } = job;
@@ -472,7 +476,7 @@ export class FlowEngine {
           .set({ status: "skipped", finishedAt: new Date(), error: err.message })
           .where(eq(flowRunSteps.id, stepId));
         await this.deps.pg.notify("flow_run_steps", flowRunId);
-        return { skipped: true };
+        return { skipped: true, skipReason: err.message };
       }
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.db

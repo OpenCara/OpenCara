@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, Play, Trash2, X } from "lucide-react";
@@ -406,14 +406,14 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
   const test = useTestAgent();
   const errorBody = test.error instanceof ApiError ? test.error.body : null;
 
-  // Reset between opens so a fresh dialog isn't pre-populated with last
-  // session's output / pending state.
+  // Depend on the stable `reset` reference, not the whole mutation object.
+  const reset = test.reset;
   useEffect(() => {
     if (!open) {
       setAgentRunId(null);
-      test.reset();
+      reset();
     }
-  }, [open, test]);
+  }, [open, reset]);
 
   const onRun = () => {
     test.mutate(
@@ -518,13 +518,10 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
 function TestRunLog({ agentRunId }: { agentRunId: string }) {
   const [chunks, setChunks] = useState("");
   const [status, setStatus] = useState<"live" | "ended" | "error">("live");
-  const lastRunRef = useRef<string | null>(null);
 
   useEffect(() => {
     setChunks("");
     setStatus("live");
-    if (lastRunRef.current === agentRunId) return;
-    lastRunRef.current = agentRunId;
     const es = new EventSource(`/api/runs/${agentRunId}/logs/stream`, {
       withCredentials: true,
     });
