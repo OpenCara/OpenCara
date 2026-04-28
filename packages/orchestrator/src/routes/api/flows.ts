@@ -74,6 +74,51 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     return c.json({ flow: updated });
   });
 
+  // Update an arbitrary node's config inside the flow's graphJson. Used by
+  // the trigger-node panel today (action types + branches/paths/labels
+  // filters); generic enough to extend to action node configs later.
+  // Sets customizedAt so the seeder doesn't clobber the edit on next start.
+  r.patch(
+    "/projects/:projectId/flows/:flowId/nodes/:nodeId/config",
+    auth,
+    async (c) => {
+      const projectId = c.req.param("projectId");
+      const flowId = c.req.param("flowId");
+      const nodeId = c.req.param("nodeId");
+      const body = await c.req.json().catch(() => ({}));
+      if (!body.config || typeof body.config !== "object") {
+        return c.json({ error: "config (object) required" }, 400);
+      }
+
+      const flow = await deps.db.query.flows.findFirst({
+        where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+      });
+      if (!flow) return c.json({ error: "flow not found in project" }, 404);
+
+      const graph = parseGraph(flow.graphJson);
+      if (!graph) return c.json({ error: "flow graph invalid" }, 400);
+
+      const target = graph.nodes.find((n) => n.id === nodeId);
+      if (!target) return c.json({ error: "node not found" }, 404);
+
+      target.config = body.config as typeof target.config;
+
+      await deps.db
+        .update(flows)
+        .set({
+          graphJson: graph,
+          customizedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(flows.id, flow.id));
+
+      const updated = await deps.db.query.flows.findFirst({
+        where: eq(flows.id, flow.id),
+      });
+      return c.json({ flow: updated });
+    },
+  );
+
   // Add a reviewer node to a multi-agent review flow. Clones the first
   // existing reviewer (any node with edges trigger→X→synthesizer) so
   // the new node inherits a sane shape, then wires trigger → new and

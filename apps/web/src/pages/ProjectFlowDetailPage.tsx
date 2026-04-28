@@ -41,9 +41,11 @@ import {
   useRemoveReviewer,
   useSetFlowEnabled,
   useSetFlowNodeSettings,
+  useSetNodeConfig,
   useTriggerFlow,
   type FlowNodeSetting,
   type FlowRunSummary,
+  type FlowSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
@@ -186,16 +188,26 @@ export function ProjectFlowDetailPage() {
           onClose={() => setSelectedNodeId(null)}
         />
       )}
-      {selectedNode && selectedNode.kind !== "agent" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            This node has no configurable settings yet.
-          </CardContent>
-        </Card>
+      {selectedNode && selectedNode.kind === "github.pull_request" && (
+        <TriggerNodePanel
+          projectId={projectId}
+          flow={flow}
+          node={selectedNode}
+          onClose={() => setSelectedNodeId(null)}
+        />
       )}
+      {selectedNode &&
+        selectedNode.kind !== "agent" &&
+        selectedNode.kind !== "github.pull_request" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              This node has no configurable settings yet.
+            </CardContent>
+          </Card>
+        )}
 
       <Card>
         <CardHeader>
@@ -433,6 +445,255 @@ interface ReviewerControlsProps {
   reviewerCount: number;
   selectedReviewerId: string | null;
   onRemoved: () => void;
+}
+
+interface TriggerNodePanelProps {
+  projectId: string;
+  flow: FlowSummary;
+  node: { id: string; kind: string; config?: Record<string, unknown> };
+  onClose: () => void;
+}
+
+const TRIGGER_ACTIONS = [
+  "opened",
+  "synchronize",
+  "reopened",
+  "ready_for_review",
+] as const;
+type TriggerAction = (typeof TRIGGER_ACTIONS)[number];
+
+interface TriggerCfg {
+  actions: TriggerAction[];
+  branches: string[];
+  branchesIgnore: string[];
+  paths: string[];
+  pathsIgnore: string[];
+  labels: string[];
+  labelsIgnore: string[];
+  ignoreDrafts: boolean;
+}
+
+function readTriggerConfig(raw: unknown): TriggerCfg {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const arr = (k: string): string[] =>
+    Array.isArray(o[k]) ? (o[k] as unknown[]).filter((v) => typeof v === "string") as string[] : [];
+  const actions = (Array.isArray(o.actions) ? o.actions : [])
+    .filter((v): v is TriggerAction =>
+      TRIGGER_ACTIONS.includes(v as TriggerAction),
+    );
+  return {
+    actions: actions.length ? actions : ["opened", "synchronize", "reopened"],
+    branches: arr("branches"),
+    branchesIgnore: arr("branchesIgnore"),
+    paths: arr("paths"),
+    pathsIgnore: arr("pathsIgnore"),
+    labels: arr("labels"),
+    labelsIgnore: arr("labelsIgnore"),
+    ignoreDrafts: o.ignoreDrafts === true,
+  };
+}
+
+function TriggerNodePanel({ projectId, flow, node, onClose }: TriggerNodePanelProps) {
+  const initial = useMemo(() => readTriggerConfig(node.config), [node.config]);
+  const [actions, setActions] = useState<TriggerAction[]>(initial.actions);
+  const [branches, setBranches] = useState(initial.branches.join(", "));
+  const [branchesIgnore, setBranchesIgnore] = useState(initial.branchesIgnore.join(", "));
+  const [paths, setPaths] = useState(initial.paths.join(", "));
+  const [pathsIgnore, setPathsIgnore] = useState(initial.pathsIgnore.join(", "));
+  const [labels, setLabels] = useState(initial.labels.join(", "));
+  const [labelsIgnore, setLabelsIgnore] = useState(initial.labelsIgnore.join(", "));
+  const [ignoreDrafts, setIgnoreDrafts] = useState(initial.ignoreDrafts);
+  const set = useSetNodeConfig(projectId, flow.slug);
+
+  // Reset local state when the user clicks a different trigger node (or the
+  // graph rehydrates with new config from a successful save).
+  useEffect(() => {
+    setActions(initial.actions);
+    setBranches(initial.branches.join(", "));
+    setBranchesIgnore(initial.branchesIgnore.join(", "));
+    setPaths(initial.paths.join(", "));
+    setPathsIgnore(initial.pathsIgnore.join(", "));
+    setLabels(initial.labels.join(", "));
+    setLabelsIgnore(initial.labelsIgnore.join(", "));
+    setIgnoreDrafts(initial.ignoreDrafts);
+  }, [initial]);
+
+  const toggleAction = (a: TriggerAction) => {
+    setActions((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
+  };
+
+  const onSave = () => {
+    if (actions.length === 0) return;
+    set.mutate({
+      flowId: flow.id,
+      nodeId: node.id,
+      config: {
+        actions,
+        branches: parseList(branches),
+        branchesIgnore: parseList(branchesIgnore),
+        paths: parseList(paths),
+        pathsIgnore: parseList(pathsIgnore),
+        labels: parseList(labels),
+        labelsIgnore: parseList(labelsIgnore),
+        ignoreDrafts,
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Pull request trigger</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Filters borrowed from GitHub Actions' <code className="font-mono">on.pull_request</code>.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Action types</div>
+          <div className="flex flex-wrap gap-2">
+            {TRIGGER_ACTIONS.map((a) => {
+              const on = actions.includes(a);
+              return (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => toggleAction(a)}
+                  className={`rounded-full border px-2 py-0.5 text-xs ${
+                    on
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40"
+                  }`}
+                >
+                  {a}
+                </button>
+              );
+            })}
+          </div>
+          {actions.length === 0 && (
+            <p className="text-xs text-destructive">Pick at least one action type.</p>
+          )}
+        </div>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={ignoreDrafts}
+            onChange={(e) => setIgnoreDrafts(e.target.checked)}
+            className="size-4 rounded border-input"
+          />
+          <span className="font-medium">Ignore draft PRs</span>
+          <span className="text-xs text-muted-foreground">
+            Skips when <code className="font-mono">pull_request.draft === true</code>.
+          </span>
+        </label>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <ChipField
+            label="Branches"
+            placeholder="main, release/*"
+            help="PR base ref must match one of these (glob)."
+            value={branches}
+            onChange={setBranches}
+          />
+          <ChipField
+            label="Branches ignore"
+            placeholder="dependabot/**"
+            help="PR is skipped when base ref matches any of these."
+            value={branchesIgnore}
+            onChange={setBranchesIgnore}
+          />
+          <ChipField
+            label="Paths"
+            placeholder="src/**, *.md"
+            help="At least one changed file must match (glob, ** crosses /)."
+            value={paths}
+            onChange={setPaths}
+          />
+          <ChipField
+            label="Paths ignore"
+            placeholder="docs/**, *.lock"
+            help="PR is skipped when every changed file matches."
+            value={pathsIgnore}
+            onChange={setPathsIgnore}
+          />
+          <ChipField
+            label="Labels"
+            placeholder="needs-review, security"
+            help="PR must carry at least one of these labels."
+            value={labels}
+            onChange={setLabels}
+          />
+          <ChipField
+            label="Labels ignore"
+            placeholder="wip, do-not-review"
+            help="PR is skipped when it carries any of these labels."
+            value={labelsIgnore}
+            onChange={setLabelsIgnore}
+          />
+        </div>
+
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            disabled={actions.length === 0 || set.isPending}
+            onClick={onSave}
+          >
+            {set.isPending ? "Saving…" : "Save filters"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ChipField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  help,
+  className,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  help?: string;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <label className="text-sm font-medium">{label}</label>
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="mt-1 font-mono text-xs"
+      />
+      {help && <p className="mt-1 text-xs text-muted-foreground">{help}</p>}
+    </div>
+  );
+}
+
+function parseList(text: string): string[] {
+  return text
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function ReviewerControls({

@@ -51,21 +51,142 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (node.kind !== "github.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${node.kind as string}`);
   }
-  // Manual runs from the UI bypass the action filter so users can inspect any
-  // flow on demand. The trigger node still runs so the graph lights up.
+  // Manual runs from the UI bypass all filters so users can inspect any flow
+  // on demand. The trigger node still "matches" so the graph lights up.
   if (ctx.event.type === "manual") {
     return { output: { matched: true, manual: true } };
   }
   if (ctx.event.type !== "pull_request") {
     throw new SkipFlowError("not a pull_request event");
   }
-  const payload = ctx.event.payload as { action?: string };
+  const payload = ctx.event.payload as {
+    action?: string;
+    pull_request?: {
+      base?: { ref?: string };
+      labels?: Array<{ name?: string }>;
+      draft?: boolean;
+    };
+  };
+
+  // 1. Action types — opened / synchronize / reopened / ready_for_review.
   const action = payload.action ?? "";
   if (!node.config.actions.includes(action as never)) {
     throw new SkipFlowError(`pull_request action '${action}' not in trigger filter`);
   }
+
+  const cfg = node.config;
+
+  // 2a. Drafts — opt-in skip when the PR is marked as draft.
+  if (cfg.ignoreDrafts && payload.pull_request?.draft === true) {
+    throw new SkipFlowError("PR is a draft");
+  }
+
+  // 2. Base branch include/ignore (e.g. only PRs targeting `main` or
+  //    `release/*`). Empty include list means "any branch".
+  const baseRef = payload.pull_request?.base?.ref ?? "";
+  if (cfg.branchesIgnore.length > 0 && matchesAnyGlob(baseRef, cfg.branchesIgnore)) {
+    throw new SkipFlowError(`base branch '${baseRef}' is in branches-ignore`);
+  }
+  if (cfg.branches.length > 0 && !matchesAnyGlob(baseRef, cfg.branches)) {
+    throw new SkipFlowError(`base branch '${baseRef}' not in branches filter`);
+  }
+
+  // 3. PR labels — labelsIgnore short-circuits if PR has any of them; labels
+  //    requires at least one match. Both are independent so users can do
+  //    "exclude wip but include security".
+  if (cfg.labels.length > 0 || cfg.labelsIgnore.length > 0) {
+    const have = new Set(
+      (payload.pull_request?.labels ?? [])
+        .map((l) => l.name)
+        .filter((n): n is string => typeof n === "string"),
+    );
+    if (cfg.labelsIgnore.length > 0) {
+      const hit = cfg.labelsIgnore.find((l) => have.has(l));
+      if (hit) throw new SkipFlowError(`PR has labels-ignore '${hit}'`);
+    }
+    if (cfg.labels.length > 0) {
+      if (!cfg.labels.some((l) => have.has(l))) {
+        throw new SkipFlowError(`PR labels missing one of ${cfg.labels.join(",")}`);
+      }
+    }
+  }
+
+  // 4. Paths — at least one changed file must match `paths` and none may
+  //    match `pathsIgnore`. Skip the whole check if both lists are empty,
+  //    so we don't pay the diff-parse cost for unfiltered triggers.
+  if (cfg.paths.length > 0 || cfg.pathsIgnore.length > 0) {
+    const diff = ctx.prContext?.stdin.diff ?? "";
+    const changed = parseChangedFiles(diff);
+    if (cfg.pathsIgnore.length > 0) {
+      const allIgnored = changed.every((f) => matchesAnyGlob(f, cfg.pathsIgnore));
+      if (changed.length > 0 && allIgnored) {
+        throw new SkipFlowError("all changed files match paths-ignore");
+      }
+    }
+    if (cfg.paths.length > 0) {
+      const anyMatched = changed.some((f) => matchesAnyGlob(f, cfg.paths));
+      if (!anyMatched) {
+        throw new SkipFlowError("no changed file matches paths filter");
+      }
+    }
+  }
+
   return { output: { matched: true } };
 };
+
+/**
+ * Extract changed file paths from a unified-diff blob by reading the
+ * `diff --git a/X b/Y` headers GitHub returns. Both sides are added to the
+ * set so renames still match either name. Empty diff (event arrived before
+ * we could fetch context) yields an empty list — paths filter then can't
+ * narrow further and the flow proceeds.
+ */
+function parseChangedFiles(diff: string): string[] {
+  if (!diff) return [];
+  const out = new Set<string>();
+  const re = /^diff --git a\/(\S+) b\/(\S+)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(diff)) !== null) {
+    out.add(m[1]!);
+    out.add(m[2]!);
+  }
+  return [...out];
+}
+
+function matchesAnyGlob(value: string, patterns: string[]): boolean {
+  for (const p of patterns) {
+    if (globToRegex(p).test(value)) return true;
+  }
+  return false;
+}
+
+/**
+ * Minimal glob → RegExp.
+ *   `**`  → any chars including `/`
+ *   `*`   → any chars within one path segment (no `/`)
+ *   `?`   → single non-slash char
+ *   `\`-prefixed regex metachars are escaped literally.
+ * Anchored, so the whole string must match (not just a substring).
+ */
+function globToRegex(glob: string): RegExp {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*" && glob[i + 1] === "*") {
+      out += ".*";
+      i++;
+    } else if (c === "*") {
+      out += "[^/]*";
+    } else if (c === "?") {
+      out += "[^/]";
+    } else if (".+^$()|[]{}\\".includes(c)) {
+      out += "\\" + c;
+    } else {
+      out += c;
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
 
 export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // Resolve the linked agent — required since the flow's in-graph spec is

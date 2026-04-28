@@ -3,6 +3,25 @@ import { AgentSpecSchema } from "@openkira/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
+/**
+ * Filters borrowed from GitHub Actions' `on.pull_request` block. All fields
+ * default to empty arrays meaning "don't narrow further" — only `actions` is
+ * required (existing behaviour preserved for older flows).
+ *
+ * - `branches` / `branchesIgnore`: glob match against pull_request.base.ref
+ *   (e.g. `main`, `release/*`).
+ * - `paths` / `pathsIgnore`: glob match against changed files from the diff
+ *   (e.g. `src/**`, `*.md`).
+ * - `labels`: PR must carry at least one of the named labels to trigger.
+ *
+ * Supported glob syntax:
+ *   `**` — any path including `/`
+ *   `*`  — any chars within one path segment
+ *   `?`  — single char
+ *
+ * "include" lists are OR-matched (any match passes); "ignore" lists short-
+ * circuit on the first match (any match rejects).
+ */
 export const TriggerNodeSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),
@@ -11,6 +30,13 @@ export const TriggerNodeSchema = z.object({
     actions: z
       .array(z.enum(["opened", "synchronize", "reopened", "ready_for_review"]))
       .min(1),
+    branches: z.array(z.string()).default([]),
+    branchesIgnore: z.array(z.string()).default([]),
+    paths: z.array(z.string()).default([]),
+    pathsIgnore: z.array(z.string()).default([]),
+    labels: z.array(z.string()).default([]),
+    labelsIgnore: z.array(z.string()).default([]),
+    ignoreDrafts: z.boolean().default(false),
   }),
 });
 export type TriggerNode = z.infer<typeof TriggerNodeSchema>;

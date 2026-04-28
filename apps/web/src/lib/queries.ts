@@ -298,6 +298,20 @@ export function useDeleteAgent() {
   });
 }
 
+export function useTestAgent() {
+  return useMutation({
+    mutationFn: (vars: {
+      id: string;
+      prompt: string;
+      runOn?: "any" | "local" | "device";
+    }) =>
+      api.post<{ agentRunId: string }>(`/api/agents/${vars.id}/test`, {
+        prompt: vars.prompt,
+        runOn: vars.runOn,
+      }),
+  });
+}
+
 export const flowNodeSettingsQuery = (projectId: string, flowId: string) => ({
   queryKey: ["projects", projectId, "flows", flowId, "node-settings"] as const,
   queryFn: () =>
@@ -363,6 +377,21 @@ export function useSetFlowNodeSettings(projectId: string, flowId: string) {
       qc.invalidateQueries({
         queryKey: ["projects", projectId, "flows", flowId, "node-settings"],
       }),
+  });
+}
+
+export function useSetNodeConfig(projectId: string, slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { flowId: string; nodeId: string; config: unknown }) =>
+      api.patch<{ flow: FlowSummary }>(
+        `/api/projects/${projectId}/flows/${vars.flowId}/nodes/${vars.nodeId}/config`,
+        { config: vars.config },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
   });
 }
 
