@@ -13,9 +13,10 @@ Example flows:
 
 | Package | Purpose |
 | --- | --- |
-| `packages/shared` | Shared TS types and wire-protocol contracts. |
+| `packages/shared` | Shared TS types and wire-protocol contracts. Published to npm as `@opencara/shared`. |
+| `packages/flows` | Built-in flow definitions + Zod schemas for the orchestrator's DAG types. |
 | `packages/orchestrator` | Hono server: webhook ingestion, event-driven agent dispatch, persistent state (Postgres + Drizzle). |
-| `packages/agent-host` | Daemon that registers with the orchestrator and runs agent subprocesses. Other machines can register as hosts (think: GitHub Actions self-hosted runners). |
+| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agent subprocesses. Published as `@opencara/cli` (`npm i -g @opencara/cli` → `opencara` binary). Think: GitHub Actions self-hosted runners. |
 | `apps/web` | React + React Flow UI for visualizing and editing orchestration flows. |
 
 ## Stack
