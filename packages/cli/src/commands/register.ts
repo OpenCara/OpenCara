@@ -64,7 +64,6 @@ export async function register(opts: RegisterOpts = {}): Promise<void> {
       deviceName: result.device_name,
     });
     console.log(`\n\n  ✓ Paired as "${result.device_name}".`);
-    console.log(`  Run 'opencara run' to start accepting jobs.`);
     return;
   }
   throw new Error("pairing timed out");

@@ -47,11 +47,12 @@ export function DevicesPage() {
         <CardContent className="space-y-2 text-sm">
           <p className="text-muted-foreground">Install the CLI:</p>
           <pre className="rounded-md bg-muted/30 p-3 text-xs">
-            npm install -g @opencara/cli
-            {"\n"}opencara register
+            npm install -g opencara
+            {"\n"}opencara
           </pre>
           <p className="text-muted-foreground">
-            The CLI opens a browser tab back here to confirm the pairing.
+            The CLI opens a browser tab back here to confirm the pairing,
+            then starts accepting jobs as soon as you click confirm.
           </p>
         </CardContent>
       </Card>
@@ -60,8 +61,7 @@ export function DevicesPage() {
         <Skeleton className="h-32 w-full" />
       ) : !q.data || q.data.devices.length === 0 ? (
         <div className="py-12 text-center text-sm text-muted-foreground">
-          No devices yet. Run <code>opencara register</code> on a machine to
-          pair it.
+          No devices yet. Run <code>opencara</code> on a machine to pair it.
         </div>
       ) : (
         <div className="space-y-3">

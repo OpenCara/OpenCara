@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { register } from "./commands/register.js";
 import { run } from "./commands/run.js";
 import { status } from "./commands/status.js";
 import { logout } from "./commands/logout.js";
@@ -7,14 +6,16 @@ import { logout } from "./commands/logout.js";
 async function main(): Promise<void> {
   const [, , cmd, ...rest] = process.argv;
   switch (cmd) {
+    case undefined:
+    case "run":
     case "register":
-      await register({
+      // `run` and bare `opencara` and the legacy `register` all share one
+      // path: pair if there's no config (or --force), then start the
+      // job-accepting loop.
+      await run({
         force: rest.includes("--force"),
         url: pickFlag(rest, "--url"),
       });
-      return;
-    case "run":
-      await run();
       return;
     case "status":
       await status();
@@ -24,7 +25,6 @@ async function main(): Promise<void> {
       return;
     case "--help":
     case "-h":
-    case undefined:
       printHelp();
       return;
     default:
@@ -44,10 +44,14 @@ function printHelp(): void {
   console.log(`opencara — agent host CLI
 
 Usage:
-  opencara register [--url URL] [--force]
-  opencara run
-  opencara status
-  opencara logout
+  opencara [--url URL] [--force]   Pair (if needed) and start accepting jobs.
+  opencara status                  Show pairing state.
+  opencara logout                  Forget the saved pairing.
+
+Options:
+  --url URL    Orchestrator URL (default: https://opencara.com,
+               or $OPENCARA_URL).
+  --force      Re-pair even if already paired.
 `);
 }
 

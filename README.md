@@ -16,7 +16,7 @@ Example flows:
 | `packages/shared` | Shared TS types and wire-protocol contracts. Published to npm as `@opencara/shared`. |
 | `packages/flows` | Built-in flow definitions + Zod schemas for the orchestrator's DAG types. |
 | `packages/orchestrator` | Hono server: webhook ingestion, event-driven agent dispatch, persistent state (Postgres + Drizzle). |
-| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agent subprocesses. Published as `@opencara/cli` (`npm i -g @opencara/cli` → `opencara` binary). Think: GitHub Actions self-hosted runners. |
+| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agent subprocesses. Published as [`opencara`](https://www.npmjs.com/package/opencara) (`npm i -g opencara` → `opencara` binary; runs the pair flow on first start, then accepts jobs). Think: GitHub Actions self-hosted runners. |
 | `apps/web` | React + React Flow UI for visualizing and editing orchestration flows. |
 
 ## Stack

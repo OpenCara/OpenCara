@@ -71,7 +71,7 @@ export function DevicePairPage() {
           {info.data && info.data.status !== "pending" && !confirmed && (
             <div className="rounded-md border border-amber-300/40 bg-amber-50/40 px-3 py-2 text-sm">
               Pairing is {info.data.status}. Generate a new code with{" "}
-              <code>opencara register --force</code>.
+              <code>opencara --force</code>.
             </div>
           )}
           {info.data?.status === "pending" && !confirmed && (
@@ -101,8 +101,8 @@ export function DevicePairPage() {
           )}
           {confirmed && (
             <div className="rounded-md border border-emerald-300/40 bg-emerald-50/40 px-3 py-3 text-sm">
-              Paired. Return to your terminal — <code>opencara run</code> will
-              connect.
+              Paired. Return to your terminal — the CLI will connect and
+              start accepting jobs automatically.
             </div>
           )}
         </CardContent>

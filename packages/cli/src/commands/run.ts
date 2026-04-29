@@ -13,6 +13,7 @@ import { readFileSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readConfig } from "../config/store.js";
+import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
 import { runJob } from "../runner/spawn.js";
 import type {
@@ -33,10 +34,20 @@ interface PendingChunks {
   stderr: string;
 }
 
-export async function run(): Promise<void> {
-  const cfg = readConfig();
-  if (!cfg) {
-    throw new Error("Not paired. Run 'opencara register' first.");
+interface RunOpts {
+  url?: string;
+  force?: boolean;
+}
+
+export async function run(opts: RunOpts = {}): Promise<void> {
+  // First-run UX: if not paired yet (or --force), kick off the browser-
+  // based pairing flow inline, then continue straight to the WS loop.
+  // Used to be `opencara register` then `opencara run` as two commands.
+  let cfg = readConfig();
+  if (!cfg || opts.force) {
+    await register({ url: opts.url, force: opts.force });
+    cfg = readConfig();
+    if (!cfg) throw new Error("pairing did not save a config");
   }
   const wsUrl = cfg.orchestratorUrl.replace(/^http/, "ws") + "/api/devices/ws";
 
