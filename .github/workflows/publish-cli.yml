@@ -68,14 +68,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Build (tsc + esbuild bundle)
-        # `tsc -b` typechecks via project refs (builds @opencara/shared
-        # then opencara). `node build.mjs` then bundles src/bin.ts → a
-        # single dist/bin.js with @opencara/shared inlined.
-        run: pnpm --filter opencara build
-
       - name: Set version from tag
         # v1.2.3 → 1.2.3. Pre-release suffixes (v1.2.3-rc.1) are fine.
+        # Must run BEFORE build: esbuild bakes the version from
+        # package.json into dist/bin.js (the CLI sends it in its hello
+        # message; bumping after build would ship the unbumped version).
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
@@ -85,6 +82,12 @@ jobs:
           echo "Publishing opencara@$VERSION"
           (cd packages/cli && npm version "$VERSION" --no-git-tag-version --allow-same-version)
 
+      - name: Build (tsc + esbuild bundle)
+        # `tsc -b` typechecks via project refs (builds @opencara/shared
+        # then opencara). `node build.mjs` then bundles src/bin.ts → a
+        # single dist/bin.js with @opencara/shared inlined.
+        run: pnpm --filter opencara build
+
       - name: Pack (pnpm rewrites workspace:* in the tarball's package.json)
         working-directory: packages/cli
         run: pnpm pack --pack-destination .
@@ -92,12 +95,5 @@ jobs:
       - name: Publish opencara
         working-directory: packages/cli
         # `--provenance` activates npm's trusted-publishing OIDC exchange
-        # (no NODE_AUTH_TOKEN needed). Verbose logging so failures
-        # surface the OIDC handshake details.
-        run: |
-          echo "OIDC env vars present: URL=${ACTIONS_ID_TOKEN_REQUEST_URL:+yes} TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
-          echo "npm version: $(npm --version)"
-          ls -la ~/.npmrc 2>&1 | head
-          cat ~/.npmrc 2>&1 | head
-          ls /home/runner/work/_temp/.npmrc 2>&1 | head
-          npm publish ./opencara-*.tgz --provenance --loglevel=verbose
+        # (no NODE_AUTH_TOKEN needed).
+        run: npm publish ./opencara-*.tgz --provenance

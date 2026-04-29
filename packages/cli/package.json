@@ -14,7 +14,9 @@
     "opencara": "./dist/bin.js"
   },
   "main": "./dist/bin.js",
-  "files": ["dist/bin.js"],
+  "files": [
+    "dist/bin.js"
+  ],
   "scripts": {
     "build": "tsc -b && node build.mjs",
     "dev": "tsx watch src/bin.ts",

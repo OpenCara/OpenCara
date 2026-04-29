@@ -5,9 +5,18 @@
 // install them once via `npm i -g opencara`.
 import { build } from "esbuild";
 import { mkdir, rm, chmod } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 
 await rm("dist", { recursive: true, force: true });
 await mkdir("dist", { recursive: true });
+
+// Read version at build time; esbuild's `define` substitutes the literal
+// string into the bundle. Avoids a runtime FS lookup for package.json
+// (which broke after we collapsed dist/* into a single dist/bin.js — the
+// old `__dirname/../../package.json` was correct for multi-file tsc out,
+// wrong for the bundle, and silently fell back to "0.0.0" for every
+// connected device on the dashboard).
+const pkgVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
 
 // src/bin.ts already starts with `#!/usr/bin/env node`; esbuild preserves
 // the source shebang in bundled output, so don't add a banner (would
@@ -20,6 +29,9 @@ await build({
   format: "esm",
   bundle: true,
   external: ["ws", "zod"],
+  define: {
+    "process.env.OPENCARA_VERSION": JSON.stringify(pkgVersion),
+  },
   legalComments: "none",
   minify: false,
   sourcemap: false,

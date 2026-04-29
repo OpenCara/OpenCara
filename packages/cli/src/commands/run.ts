@@ -9,9 +9,7 @@ import {
   totalmem,
   uptime,
 } from "node:os";
-import { readFileSync, statfsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { statfsSync } from "node:fs";
 import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
@@ -23,8 +21,9 @@ import type {
   SystemInfo,
 } from "@opencara/shared";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_VERSION = readPkgVersion();
+// Baked at bundle time by build.mjs (`define` substitutes the literal).
+// In dev (`tsx watch src/bin.ts`) the env var isn't set, so fall back.
+const PKG_VERSION = process.env["OPENCARA_VERSION"] ?? "0.0.0-dev";
 
 const LOG_FLUSH_MS = 800;
 const MAX_CHUNK_SIZE = 4 * 1024;
@@ -135,15 +134,6 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     client.send({ type: "done", runId, status: "failed", errorMessage: message });
     console.error(`[opencara] job ${runId.slice(-8)} failed`, message);
-  }
-}
-
-function readPkgVersion(): string {
-  try {
-    const raw = readFileSync(join(__dirname, "..", "..", "package.json"), "utf8");
-    return JSON.parse(raw).version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
   }
 }
 
