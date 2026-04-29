@@ -92,9 +92,12 @@ jobs:
       - name: Publish opencara
         working-directory: packages/cli
         # `--provenance` activates npm's trusted-publishing OIDC exchange
-        # (no NODE_AUTH_TOKEN needed). If the registry rejects with
-        # "configured trusted publisher does not match", the (org, repo,
-        # workflow filename) tuple at
-        # https://www.npmjs.com/package/opencara/access disagrees with
-        # this workflow.
-        run: npm publish ./opencara-*.tgz --provenance
+        # (no NODE_AUTH_TOKEN needed). Verbose logging so failures
+        # surface the OIDC handshake details.
+        run: |
+          echo "OIDC env vars present: URL=${ACTIONS_ID_TOKEN_REQUEST_URL:+yes} TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
+          echo "npm version: $(npm --version)"
+          ls -la ~/.npmrc 2>&1 | head
+          cat ~/.npmrc 2>&1 | head
+          ls /home/runner/work/_temp/.npmrc 2>&1 | head
+          npm publish ./opencara-*.tgz --provenance --loglevel=verbose
