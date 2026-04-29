@@ -51,15 +51,20 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Node 24 ships with npm 11.x, which has trusted publishing
-          # built in. Node 22's npm 10.x doesn't, and `npm install -g
-          # npm@latest` to upgrade fails with MODULE_NOT_FOUND
-          # (promise-retry) on the runner's preinstalled npm.
           node-version: 24
           cache: pnpm
         # No `registry-url:` — setup-node would write an .npmrc pinning
         # `_authToken=${NODE_AUTH_TOKEN}`, and the placeholder takes
         # precedence over OIDC. Default registry npmjs.org is fine.
+
+      - name: Ensure npm >= 11.5.1 (trusted publishing)
+        # Trusted publishing requires npm >= 11.5.1; Node 24's bundled
+        # npm may be older. `--force` works around the self-upgrade
+        # MODULE_NOT_FOUND that older npm hits.
+        run: |
+          echo "before: $(npm --version)"
+          npm install -g npm@latest --force
+          echo "after:  $(npm --version)"
 
       - run: pnpm install --frozen-lockfile
 
