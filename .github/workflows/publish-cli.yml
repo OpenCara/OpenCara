@@ -45,8 +45,9 @@ jobs:
           fi
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
+        # Version is read from root package.json's `packageManager` field;
+        # specifying `version:` here too makes pnpm/action-setup error out
+        # to avoid drift.
 
       - uses: actions/setup-node@v4
         with:
