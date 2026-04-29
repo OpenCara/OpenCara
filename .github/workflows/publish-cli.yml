@@ -1,0 +1,94 @@
+name: publish-cli
+
+# Publish @opencara/cli (plus its workspace dep @opencara/shared) to npm
+# whenever a `cli-v<semver>` tag is pushed and the tagged commit is on main.
+#
+# Two packages are published in lockstep with the same version because the
+# CLI imports from @opencara/shared at runtime; pnpm rewrites the
+# `workspace:*` dep into a concrete `^<version>` so a fresh `npm install -g
+# @opencara/cli` resolves shared from the registry, not the workspace.
+#
+# Tag a release:
+#   git tag cli-v0.1.0 && git push origin cli-v0.1.0
+#
+# Required repo secret: NPM_TOKEN — npm automation token with publish
+# access to the @opencara scope. Configure at:
+#   https://github.com/OpenCara/OpenCara/settings/secrets/actions
+
+on:
+  push:
+    tags:
+      - 'cli-v*.*.*'
+
+jobs:
+  publish:
+    name: Publish @opencara/cli
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for npm provenance attestation
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Require NPM_TOKEN
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN repo secret is not set."
+            echo "Create an Automation token at https://www.npmjs.com/settings/<user>/tokens"
+            echo "with publish access to @opencara, then add it at:"
+            echo "  https://github.com/OpenCara/OpenCara/settings/secrets/actions"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history for the ancestry check
+
+      - name: Verify tag is on main
+        # Tags can be pushed to any commit; we only publish when the tagged
+        # commit is reachable from main, so a feature-branch tag never ships.
+        run: |
+          git fetch origin main --depth=200
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag commit ${GITHUB_SHA} is not on main."
+            echo "Tag a commit that exists on main, then push the tag."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build shared + cli
+        run: pnpm --filter "@opencara/cli..." build
+
+      - name: Set version from tag
+        # cli-v1.2.3 → 1.2.3. Pre-release suffixes (e.g. cli-v1.2.3-rc.1)
+        # are accepted; everything else fails fast.
+        run: |
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' must be cli-v<semver>; got '$VERSION'"
+            exit 1
+          fi
+          echo "Publishing version $VERSION"
+          (cd packages/shared && npm version "$VERSION" --no-git-tag-version --allow-same-version)
+          (cd packages/cli    && npm version "$VERSION" --no-git-tag-version --allow-same-version)
+
+      - name: Publish @opencara/shared
+        # Must publish shared first so cli's `workspace:*` rewrites to a
+        # concrete version that already exists on the registry.
+        working-directory: packages/shared
+        run: pnpm publish --access public --no-git-checks --provenance
+
+      - name: Publish @opencara/cli
+        working-directory: packages/cli
+        run: pnpm publish --access public --no-git-checks --provenance

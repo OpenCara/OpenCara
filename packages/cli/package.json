@@ -1,7 +1,16 @@
 {
   "name": "@opencara/cli",
   "version": "0.0.0",
-  "private": true,
+  "description": "OpenCara agent-host CLI: register a machine as an agent host and run dispatched agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenCara/OpenCara.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "opencara": "./dist/bin.js"
