@@ -249,7 +249,7 @@ interface AgentSummary {
   name: string;
   command: string;
   args: string[];
-  runOn: string;
+  hostId: string | null;
 }
 
 interface AgentNodePanelProps {
@@ -380,7 +380,9 @@ function AgentNodePanel({
               $ {linkedAgent.command}
               {linkedAgent.args.length ? " " : ""}
               {linkedAgent.args.join(" ")}
-              <span className="ml-2 text-muted-foreground">[runs on: {linkedAgent.runOn}]</span>
+              <span className="ml-2 text-muted-foreground">
+                [device: {linkedAgent.hostId ? linkedAgent.hostId.slice(-8) : "any"}]
+              </span>
             </pre>
           )}
         </div>

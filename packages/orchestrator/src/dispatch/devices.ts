@@ -79,6 +79,16 @@ export class DevicePool {
     return null;
   }
 
+  /**
+   * Look up a specific device by id. Returns null if not connected; the
+   * caller decides whether to fall back to pickIdle() or fail. The
+   * dispatcher fails fast on a missing pinned host because pinning is an
+   * explicit operator choice, not a hint.
+   */
+  byId(agentHostId: string): ConnectedDevice | null {
+    return this.devices.get(agentHostId) ?? null;
+  }
+
   hasAnyConnected(): boolean {
     return this.devices.size > 0;
   }
@@ -140,8 +150,18 @@ export class WebSocketDispatcher implements AgentDispatcher {
   constructor(private pool: DevicePool) {}
 
   async run(spec: AgentSpec, ctx: RunContext): Promise<RunResult> {
-    const dev = this.pool.pickIdle();
-    if (!dev) throw new Error("no idle device available");
+    let dev: ConnectedDevice | null;
+    if (ctx.hostId) {
+      // Pinned: must be that exact host, must be online & idle. No
+      // fallback — pinning is an explicit choice the operator made,
+      // and silently routing elsewhere would be surprising.
+      dev = this.pool.byId(ctx.hostId);
+      if (!dev) throw new Error(`pinned device ${ctx.hostId} is not connected`);
+      if (dev.busy) throw new Error(`pinned device ${ctx.hostId} is busy`);
+    } else {
+      dev = this.pool.pickIdle();
+      if (!dev) throw new Error("no idle device available");
+    }
     dev.busy = true;
 
     const run: AgentRun = {

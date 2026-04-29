@@ -51,7 +51,7 @@ export const prReviewFlow: FlowDefinition = {
           ],
           stdinJson: true,
         },
-        runOn: "any",
+
       },
     },
     {

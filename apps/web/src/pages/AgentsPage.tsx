@@ -26,17 +26,61 @@ import {
 } from "@/components/ui/dialog";
 import {
   agentsQuery,
+  devicesQuery,
   useCreateAgent,
   useDeleteAgent,
   useTestAgent,
   useUpdateAgent,
   type AgentRow,
+  type DeviceRow,
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { formatRelative } from "@/lib/format";
 import { useRegisterChatAction } from "@/lib/chatActions";
 
-type RunOn = "any" | "local" | "device";
+// "" sentinel = "any idle device" (mapped to null when sent to the API).
+// Real device ids are ULIDs so they can never collide with "".
+const ANY_DEVICE = "" as const;
+
+interface DevicePickerProps {
+  /** "" = any device, otherwise a host id. */
+  value: string;
+  onChange: (next: string) => void;
+  devices: DeviceRow[];
+  /** Show "(use agent's saved pin)" as the first option. Test-dialog only. */
+  defaultLabel?: string;
+  /** Sentinel for the default option. Required if defaultLabel is set. */
+  defaultValue?: string;
+  id?: string;
+}
+
+function DevicePicker(props: DevicePickerProps) {
+  const live = props.devices.filter((d) => !d.revokedAt);
+  return (
+    <Select value={props.value} onValueChange={props.onChange}>
+      <SelectTrigger id={props.id}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {props.defaultLabel && props.defaultValue !== undefined && (
+          <SelectItem value={props.defaultValue}>{props.defaultLabel}</SelectItem>
+        )}
+        <SelectItem value={ANY_DEVICE}>Any idle device</SelectItem>
+        {live.map((d) => (
+          <SelectItem key={d.id} value={d.id}>
+            {d.name}
+            {d.online ? "" : " (offline)"}
+          </SelectItem>
+        ))}
+        {live.length === 0 && (
+          <SelectItem value="__no_devices" disabled>
+            (no devices paired — run `opencara` on a machine)
+          </SelectItem>
+        )}
+      </SelectContent>
+    </Select>
+  );
+}
 
 export function AgentsPage() {
   const q = useQuery(agentsQuery());
@@ -103,7 +147,8 @@ function NewAgentCard() {
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [envText, setEnvText] = useState("");
-  const [runOn, setRunOn] = useState<RunOn>("any");
+  const [hostId, setHostId] = useState<string>(ANY_DEVICE);
+  const devicesQ = useQuery(devicesQuery());
   const create = useCreateAgent();
   const error = create.error instanceof ApiError ? create.error.body : null;
 
@@ -136,17 +181,13 @@ function NewAgentCard() {
             />
           </div>
           <div>
-            <Label htmlFor="new-agent-runon">Run on</Label>
-            <Select value={runOn} onValueChange={(v) => setRunOn(v as RunOn)}>
-              <SelectTrigger id="new-agent-runon">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="any">any (prefer device, fall back local)</SelectItem>
-                <SelectItem value="device">device only</SelectItem>
-                <SelectItem value="local">local subprocess only</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label htmlFor="new-agent-device">Device</Label>
+            <DevicePicker
+              id="new-agent-device"
+              value={hostId}
+              onChange={setHostId}
+              devices={devicesQ.data?.devices ?? []}
+            />
           </div>
         </div>
         <div>
@@ -182,13 +223,18 @@ function NewAgentCard() {
             disabled={!name.trim() || !command.trim() || create.isPending}
             onClick={() =>
               create.mutate(
-                { name: name.trim(), command: command.trim(), env, runOn },
+                {
+                  name: name.trim(),
+                  command: command.trim(),
+                  env,
+                  hostId: hostId === ANY_DEVICE ? null : hostId,
+                },
                 {
                   onSuccess: () => {
                     setName("");
                     setCommand("");
                     setEnvText("");
-                    setRunOn("any");
+                    setHostId(ANY_DEVICE);
                   },
                 },
               )
@@ -210,7 +256,8 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
-  const [runOn, setRunOn] = useState<RunOn>(agent.runOn);
+  const [hostId, setHostId] = useState<string>(agent.hostId ?? ANY_DEVICE);
+  const devicesQ = useQuery(devicesQuery());
   const update = useUpdateAgent();
   const remove = useDeleteAgent();
 
@@ -218,7 +265,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
     setName(agent.name);
     setCommand(joinCommand(agent));
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
-    setRunOn(agent.runOn);
+    setHostId(agent.hostId ?? ANY_DEVICE);
   };
 
   return (
@@ -233,7 +280,12 @@ function AgentCard({ agent }: { agent: AgentRow }) {
             )}
             <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <span>Updated {formatRelative(agent.updatedAt)}</span>
-              <Badge variant="outline">{agent.runOn}</Badge>
+              <Badge variant="outline">
+                {agent.hostId
+                  ? devicesQ.data?.devices.find((d) => d.id === agent.hostId)?.name ??
+                    "deleted device"
+                  : "any device"}
+              </Badge>
             </div>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -261,7 +313,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                           name: name.trim(),
                           command: command.trim(),
                           env: parseEnv(envText),
-                          runOn,
+                          hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
                       },
                       { onSuccess: () => setEditing(false) },
@@ -307,17 +359,12 @@ function AgentCard({ agent }: { agent: AgentRow }) {
         {editing ? (
           <>
             <div>
-              <Label>Run on</Label>
-              <Select value={runOn} onValueChange={(v) => setRunOn(v as RunOn)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="any">any</SelectItem>
-                  <SelectItem value="device">device only</SelectItem>
-                  <SelectItem value="local">local subprocess only</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>Device</Label>
+              <DevicePicker
+                value={hostId}
+                onChange={setHostId}
+                devices={devicesQ.data?.devices ?? []}
+              />
             </div>
             <div>
               <Label>Command</Label>
@@ -401,10 +448,15 @@ interface TestAgentDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+// "__default" = use the agent's saved hostId. Mapped to omitting the
+// `hostId` field on the request so the server falls back to agent.hostId.
+const HOST_DEFAULT = "__default" as const;
+
 function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
   const [prompt, setPrompt] = useState("Hello! Please respond briefly.");
-  const [target, setTarget] = useState<"default" | RunOn>("default");
+  const [hostOverride, setHostOverride] = useState<string>(HOST_DEFAULT);
   const [agentRunId, setAgentRunId] = useState<string | null>(null);
+  const devicesQ = useQuery(devicesQuery());
   const test = useTestAgent();
   const errorBody = test.error instanceof ApiError ? test.error.body : null;
 
@@ -418,17 +470,22 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
   }, [open, reset]);
 
   const handleRun = () => {
+    // Two-tier override: HOST_DEFAULT means "use saved pin" (omit field);
+    // ANY_DEVICE means "explicitly any" (send null).
+    const overrideArg =
+      hostOverride === HOST_DEFAULT
+        ? {}
+        : { hostId: hostOverride === ANY_DEVICE ? null : hostOverride };
     test.mutate(
-      {
-        id: agent.id,
-        prompt,
-        runOn: target === "default" ? undefined : target,
-      },
-      {
-        onSuccess: ({ agentRunId: id }) => setAgentRunId(id),
-      },
+      { id: agent.id, prompt, ...overrideArg },
+      { onSuccess: ({ agentRunId: id }) => setAgentRunId(id) },
     );
   };
+
+  const savedDeviceLabel = agent.hostId
+    ? devicesQ.data?.devices.find((d) => d.id === agent.hostId)?.name ??
+      "deleted device"
+    : "any device";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -456,28 +513,15 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="test-target">Run target</Label>
-            <Select
-              value={target}
-              onValueChange={(v) => setTarget(v as "default" | RunOn)}
-              disabled={!!agentRunId}
-            >
-              <SelectTrigger id="test-target" className="w-full max-w-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="default">
-                  agent default ({agent.runOn})
-                </SelectItem>
-                <SelectItem value="any">any (prefer device, fallback local)</SelectItem>
-                <SelectItem value="local">local subprocess only</SelectItem>
-                <SelectItem value="device">device only (any online)</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Picking a specific device by name isn't supported yet — the
-              dispatcher routes to any idle one.
-            </p>
+            <Label htmlFor="test-target">Run on</Label>
+            <DevicePicker
+              id="test-target"
+              value={hostOverride}
+              onChange={(v) => !agentRunId && setHostOverride(v)}
+              devices={devicesQ.data?.devices ?? []}
+              defaultLabel={`agent default (${savedDeviceLabel})`}
+              defaultValue={HOST_DEFAULT}
+            />
           </div>
 
           {errorBody !== null && errorBody !== undefined && (

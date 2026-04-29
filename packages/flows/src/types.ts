@@ -34,7 +34,6 @@ export const AgentNodeSchema = z.object({
       env: z.array(z.string()).default([]),
       stdinJson: z.boolean().default(true),
     }),
-    runOn: z.enum(["any", "local", "device"]).default("any"),
   }),
 });
 export type AgentNode = z.infer<typeof AgentNodeSchema>;

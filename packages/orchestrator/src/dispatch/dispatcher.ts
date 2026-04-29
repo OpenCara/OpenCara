@@ -7,8 +7,13 @@ export interface RunContext {
   stdinJson?: unknown;
   /** Called for every chunk of stdout/stderr the agent emits. */
   onLog: (stream: LogStream, chunk: string) => void;
-  /** Optional hint for routers; default "any" means "best available". */
-  runOn?: "any" | "local" | "device";
+  /**
+   * Pin to a specific agent_host. If set and that host isn't connected
+   * & idle, the dispatcher errors with a clear message — pinning is
+   * an explicit operator choice and silently rerouting would surprise
+   * them. If null, any idle host is picked.
+   */
+  hostId?: string | null;
 }
 
 export interface RunResult {

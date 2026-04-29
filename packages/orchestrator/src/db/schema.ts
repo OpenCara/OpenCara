@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -170,6 +171,12 @@ export const agentHosts = pgTable(
   (t) => ({
     tokenHashUq: uniqueIndex("agent_hosts_token_hash_uq").on(t.tokenHash),
     userIdIdx: index("agent_hosts_user_id_idx").on(t.userId),
+    // Per-user unique device name, but only among LIVE devices: revoking
+    // a device frees the name for re-pairing. Confirm route enforces this
+    // at write time too (with a clearer 409 error).
+    userNameUq: uniqueIndex("agent_hosts_user_name_uq")
+      .on(t.userId, t.name)
+      .where(sql`revoked_at IS NULL`),
   }),
 );
 
@@ -269,7 +276,10 @@ export const agents = pgTable(
     args: jsonb("args").$type<string[]>().notNull().default([]),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
     cwd: text("cwd"),
-    runOn: text("run_on").notNull().default("any"),
+    // Optional pin to a specific agent host. NULL = "any idle device".
+    // ON DELETE SET NULL so revoking a device doesn't break the agent —
+    // it just falls back to "any device" until the user picks a new one.
+    hostId: text("host_id").references(() => agentHosts.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -75,8 +75,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       env,
       cwd: agent.cwd ?? undefined,
     };
-    const runOn = (agent.runOn as "any" | "local" | "device") ?? "any";
-
     const agentRunId = ulid();
     const projectId = pageContext.projectId ?? null;
     await deps.db.insert(agentRuns).values({
@@ -106,7 +104,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         const result = await deps.dispatcher.run(spec, {
           stdinJson: { message, pageContext, history },
           onLog,
-          runOn,
+          hostId: agent.hostId,
         });
         await deps.db
           .update(agentRuns)

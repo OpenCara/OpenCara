@@ -3,9 +3,7 @@ import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
-import { LocalSubprocessDispatcher } from "./dispatch/local.js";
 import { DevicePool, WebSocketDispatcher } from "./dispatch/devices.js";
-import { DispatcherRouter } from "./dispatch/router.js";
 import { createGithubAppClient } from "./github/app.js";
 import { GithubOAuth } from "./github/oauth.js";
 import { TokenCipher } from "./auth/session.js";
@@ -31,10 +29,8 @@ import { reapOrphanedRuns } from "./flows/reaper.js";
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
 
-const localDispatcher = new LocalSubprocessDispatcher({ defaultCwd: process.cwd() });
 const devicePool = new DevicePool(db);
-const wsDispatcher = new WebSocketDispatcher(devicePool);
-const dispatcher = new DispatcherRouter(localDispatcher, wsDispatcher, devicePool);
+const dispatcher = new WebSocketDispatcher(devicePool);
 
 const app = new Hono<AuthEnv>();
 const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });

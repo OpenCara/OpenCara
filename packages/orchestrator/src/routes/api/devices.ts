@@ -118,13 +118,25 @@ export function deviceRoutes(deps: DeviceRoutesDeps) {
     const tokenHash = createHash("sha256").update(tokenPlain).digest("hex");
     const agentHostId = ulid();
 
-    await deps.db.insert(agentHosts).values({
-      id: agentHostId,
-      name: parsed.data.device_name,
-      capabilities: [],
-      userId: user.id,
-      tokenHash,
-    });
+    try {
+      await deps.db.insert(agentHosts).values({
+        id: agentHostId,
+        name: parsed.data.device_name,
+        capabilities: [],
+        userId: user.id,
+        tokenHash,
+      });
+    } catch (err) {
+      // Partial unique index `agent_hosts_user_name_uq` (per-user, only
+      // among non-revoked rows) makes this firable when the user picks a
+      // name they're already using. Surface as 409 so the pair page can
+      // show "name taken — pick another" instead of a generic failure.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("agent_hosts_user_name_uq")) {
+        return c.json({ error: "device name already in use" }, 409);
+      }
+      throw err;
+    }
     await deps.db
       .update(devicePairings)
       .set({

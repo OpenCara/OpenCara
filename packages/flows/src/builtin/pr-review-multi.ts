@@ -51,7 +51,7 @@ export const prReviewMultiFlow: FlowDefinition = {
         label: "Correctness reviewer",
         spec: reviewerSpec("pr-reviewer-correctness"),
         contextInjection: reviewerContext,
-        runOn: "any",
+
       },
     },
     {
@@ -62,7 +62,7 @@ export const prReviewMultiFlow: FlowDefinition = {
         label: "Performance reviewer",
         spec: reviewerSpec("pr-reviewer-performance"),
         contextInjection: reviewerContext,
-        runOn: "any",
+
       },
     },
     {
@@ -73,7 +73,7 @@ export const prReviewMultiFlow: FlowDefinition = {
         label: "Style reviewer",
         spec: reviewerSpec("pr-reviewer-style"),
         contextInjection: reviewerContext,
-        runOn: "any",
+
       },
     },
     {
@@ -89,7 +89,7 @@ export const prReviewMultiFlow: FlowDefinition = {
           env: [],
           stdinJson: true,
         },
-        runOn: "any",
+
       },
     },
     {

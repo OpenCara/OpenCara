@@ -256,7 +256,8 @@ export interface AgentRow {
   args: string[];
   env: Record<string, string>;
   cwd: string | null;
-  runOn: "any" | "local" | "device";
+  /** Pin to a specific agent_host (device). null = "any idle device". */
+  hostId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -275,7 +276,8 @@ export function useCreateAgent() {
       command: string;
       env?: Record<string, string>;
       cwd?: string | null;
-      runOn?: "any" | "local" | "device";
+      /** Specific device id; null/undefined = "any idle device". */
+      hostId?: string | null;
     }) => api.post<{ agent: AgentRow }>("/api/agents", vars),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
@@ -303,12 +305,17 @@ export function useTestAgent() {
     mutationFn: (vars: {
       id: string;
       prompt: string;
-      runOn?: "any" | "local" | "device";
-    }) =>
-      api.post<{ agentRunId: string }>(`/api/agents/${vars.id}/test`, {
-        prompt: vars.prompt,
-        runOn: vars.runOn,
-      }),
+      /**
+       * Pin this test run to a specific device. Pass `null` to explicitly
+       * target "any idle device" (overriding the agent's saved pin).
+       * Omitting `hostId` falls back to the agent's saved pin.
+       */
+      hostId?: string | null;
+    }) => {
+      const body: Record<string, unknown> = { prompt: vars.prompt };
+      if ("hostId" in vars) body.hostId = vars.hostId;
+      return api.post<{ agentRunId: string }>(`/api/agents/${vars.id}/test`, body);
+    },
   });
 }
 

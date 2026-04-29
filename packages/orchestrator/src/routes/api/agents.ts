@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
-import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
+import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 
@@ -12,8 +12,6 @@ interface AgentRoutesDeps {
   pg: Sql;
   dispatcher: AgentDispatcher;
 }
-
-const RUN_ON = new Set(["any", "local", "device"]);
 
 export function agentRoutes(deps: AgentRoutesDeps) {
   const r = new Hono<AuthEnv>();
@@ -48,9 +46,9 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           )
         : {};
     const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : null;
-    const runOn = RUN_ON.has(String(body.runOn))
-      ? String(body.runOn)
-      : "any";
+
+    const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
+    if (!hostIdRes.ok) return c.json({ error: hostIdRes.error }, hostIdRes.status);
 
     const id = ulid();
     try {
@@ -62,7 +60,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         args,
         env,
         cwd,
-        runOn,
+        hostId: hostIdRes.hostId,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -72,7 +70,18 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       throw err;
     }
     return c.json(
-      { agent: { id, userId: user.id, name, command, args, env, cwd, runOn } },
+      {
+        agent: {
+          id,
+          userId: user.id,
+          name,
+          command,
+          args,
+          env,
+          cwd,
+          hostId: hostIdRes.hostId,
+        },
+      },
       201,
     );
   });
@@ -111,7 +120,11 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     } else if (body.cwd === null) {
       updates.cwd = null;
     }
-    if (RUN_ON.has(String(body.runOn))) updates.runOn = String(body.runOn);
+    if (body.hostId !== undefined) {
+      const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
+      if (!hostIdRes.ok) return c.json({ error: hostIdRes.error }, hostIdRes.status);
+      updates.hostId = hostIdRes.hostId;
+    }
 
     try {
       await deps.db
@@ -139,15 +152,22 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const body = await c.req.json().catch(() => ({}));
     const prompt = typeof body.prompt === "string" ? body.prompt : "";
     if (!prompt.trim()) return c.json({ error: "prompt required" }, 400);
-    const runOnRaw = String(body.runOn ?? "");
-    const runOnOverride = RUN_ON.has(runOnRaw)
-      ? (runOnRaw as "any" | "local" | "device")
-      : null;
 
     const agent = await deps.db.query.agents.findFirst({
       where: and(eq(agents.id, id), eq(agents.userId, user.id)),
     });
     if (!agent) return c.json({ error: "agent not found" }, 404);
+
+    // Test override: pin this run to a specific device. `hostId: null` in
+    // the body explicitly means "any idle device" (overriding the saved
+    // pin); `hostId` undefined means "fall back to the saved pin".
+    const hasOverride = "hostId" in body;
+    let hostId: string | null = agent.hostId ?? null;
+    if (hasOverride) {
+      const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
+      if (!hostIdRes.ok) return c.json({ error: hostIdRes.error }, hostIdRes.status);
+      hostId = hostIdRes.hostId;
+    }
 
     const env: Record<string, string> = {
       ...agent.env,
@@ -160,8 +180,6 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       env,
       cwd: agent.cwd ?? undefined,
     };
-    const runOn =
-      runOnOverride ?? (agent.runOn as "any" | "local" | "device") ?? "any";
 
     const agentRunId = ulid();
     await deps.db.insert(agentRuns).values({
@@ -175,9 +193,8 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     let seq = 0;
     // Drained via Promise.allSettled before flipping terminal status. We
     // assume the dispatcher fires every onLog before its run() promise
-    // resolves — true for both LocalSubprocessDispatcher (waits for stdio
-    // 'close') and WebSocketDispatcher (resolves on the device's `done`
-    // frame, which comes after every `log` frame).
+    // resolves — true for WebSocketDispatcher (resolves on the device's
+    // `done` frame, which comes after every `log` frame).
     const logWrites: Promise<unknown>[] = [];
     const onLog = (stream: LogStream, chunk: string) => {
       const p = deps.db
@@ -195,7 +212,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         const result = await deps.dispatcher.run(spec, {
           stdinJson: { message: prompt },
           onLog,
-          runOn,
+          hostId,
         });
         await Promise.allSettled(logWrites);
         await deps.db
@@ -229,6 +246,45 @@ export function agentRoutes(deps: AgentRoutesDeps) {
   });
 
   return r;
+}
+
+interface HostIdResolved {
+  ok: true;
+  hostId: string | null;
+}
+interface HostIdError {
+  ok: false;
+  status: 400 | 404;
+  error: string;
+}
+
+/**
+ * Validate a `hostId` from the request body. Accepts undefined, null, or a
+ * string. Strings must reference a non-revoked agent_host owned by this
+ * user. The "any idle device" sentinel is null.
+ */
+async function resolveHostId(
+  db: Db,
+  userId: string,
+  raw: unknown,
+): Promise<HostIdResolved | HostIdError> {
+  if (raw === undefined || raw === null || raw === "") {
+    return { ok: true, hostId: null };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, status: 400, error: "hostId must be a string or null" };
+  }
+  const row = await db.query.agentHosts.findFirst({
+    where: and(
+      eq(agentHosts.id, raw),
+      eq(agentHosts.userId, userId),
+      isNull(agentHosts.revokedAt),
+    ),
+  });
+  if (!row) {
+    return { ok: false, status: 404, error: "device not found or not yours" };
+  }
+  return { ok: true, hostId: raw };
 }
 
 /**
@@ -286,3 +342,4 @@ export function tokenizeCommand(input: string): {
     args: tokens.slice(1),
   };
 }
+

@@ -86,7 +86,7 @@ export function DevicePairPage() {
               </div>
               {confirm.error && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {confirm.error.message}
+                  {confirmErrorMessage(confirm.error)}
                 </div>
               )}
               <Button
@@ -121,4 +121,23 @@ function guessHostName(githubLogin?: string | null): string {
     else if (p.includes("win")) host = "PC";
   }
   return githubLogin ? `${githubLogin}'s ${host}` : host;
+}
+
+// Surface the orchestrator's structured error body (e.g. 409 "device
+// name already in use") instead of generic "API 409".
+function confirmErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    const body = err.body;
+    if (body && typeof body === "object" && "error" in body) {
+      const v = (body as { error: unknown }).error;
+      if (typeof v === "string") {
+        if (err.status === 409 && /name/i.test(v)) {
+          return `${v} — pick another name.`;
+        }
+        return v;
+      }
+    }
+    return `API ${err.status}`;
+  }
+  return err instanceof Error ? err.message : "Pairing failed.";
 }
