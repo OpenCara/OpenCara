@@ -8,15 +8,15 @@ import { defaultOrchestratorUrl, readConfig, writeConfig } from "../config/store
 
 interface RegisterOpts {
   url?: string;
-  force?: boolean;
+  forcePair?: boolean;
 }
 
 const POLL_INTERVAL_MS = 2000;
 
 export async function register(opts: RegisterOpts = {}): Promise<void> {
   const orchestratorUrl = opts.url ?? defaultOrchestratorUrl();
-  if (!opts.force && readConfig()) {
-    console.log("Already paired. Use --force to re-pair.");
+  if (!opts.forcePair && readConfig()) {
+    console.log("Already paired. Use --force-pair to re-pair.");
     return;
   }
 

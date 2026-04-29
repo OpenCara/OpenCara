@@ -30,9 +30,9 @@ async function main(): Promise<void> {
         process.exit(1);
       }
   }
-  // Default: `opencara [--url URL] [--force]`.
+  // Default: `opencara [--url URL] [--force-pair]`.
   await run({
-    force: argv.includes("--force"),
+    forcePair: argv.includes("--force-pair"),
     url: pickFlag(argv, "--url"),
   });
 }
@@ -47,14 +47,14 @@ function printHelp(): void {
   console.log(`opencara — agent host CLI
 
 Usage:
-  opencara [--url URL] [--force]   Pair (if needed) and start accepting jobs.
-  opencara status                  Show pairing state.
-  opencara logout                  Forget the saved pairing.
+  opencara [--url URL] [--force-pair]   Pair (if needed) and start accepting jobs.
+  opencara status                       Show pairing state.
+  opencara logout                       Forget the saved pairing.
 
 Options:
-  --url URL    Orchestrator URL (default: https://opencara.com,
-               or $OPENCARA_URL).
-  --force      Re-pair even if already paired.
+  --url URL      Orchestrator URL (default: https://opencara.com,
+                 or $OPENCARA_URL).
+  --force-pair   Re-pair even if already paired.
 `);
 }
 

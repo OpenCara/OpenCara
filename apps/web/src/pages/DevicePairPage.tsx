@@ -71,7 +71,7 @@ export function DevicePairPage() {
           {info.data && info.data.status !== "pending" && !confirmed && (
             <div className="rounded-md border border-amber-300/40 bg-amber-50/40 px-3 py-2 text-sm">
               Pairing is {info.data.status}. Generate a new code with{" "}
-              <code>opencara --force</code>.
+              <code>opencara --force-pair</code>.
             </div>
           )}
           {info.data?.status === "pending" && !confirmed && (

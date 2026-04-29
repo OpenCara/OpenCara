@@ -36,16 +36,16 @@ interface PendingChunks {
 
 interface RunOpts {
   url?: string;
-  force?: boolean;
+  forcePair?: boolean;
 }
 
 export async function run(opts: RunOpts = {}): Promise<void> {
-  // First-run UX: if not paired yet (or --force), kick off the browser-
-  // based pairing flow inline, then continue straight to the WS loop.
-  // Used to be `opencara register` then `opencara run` as two commands.
+  // First-run UX: if not paired yet (or --force-pair), kick off the
+  // browser-based pairing flow inline, then continue straight to the WS
+  // loop. (Was two commands previously: `register` then `run`.)
   let cfg = readConfig();
-  if (!cfg || opts.force) {
-    await register({ url: opts.url, force: opts.force });
+  if (!cfg || opts.forcePair) {
+    await register({ url: opts.url, forcePair: opts.forcePair });
     cfg = readConfig();
     if (!cfg) throw new Error("pairing did not save a config");
   }
