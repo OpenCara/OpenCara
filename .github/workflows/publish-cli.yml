@@ -51,17 +51,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Node 24 ships with npm 11.x, which has trusted publishing
+          # built in. Node 22's npm 10.x doesn't, and `npm install -g
+          # npm@latest` to upgrade fails with MODULE_NOT_FOUND
+          # (promise-retry) on the runner's preinstalled npm.
+          node-version: 24
           cache: pnpm
         # No `registry-url:` — setup-node would write an .npmrc pinning
         # `_authToken=${NODE_AUTH_TOKEN}`, and the placeholder takes
         # precedence over OIDC. Default registry npmjs.org is fine.
-
-      - name: Upgrade npm to a trusted-publishing capable version
-        # Trusted publishing landed in npm CLI 11.5.1; Node 22 ships with
-        # npm 10.x. Without this, `npm publish --provenance` ENEEDAUTHs
-        # because OIDC handshake isn't wired up.
-        run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
 
