@@ -11,7 +11,7 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl tracking-tight">OpenKira</CardTitle>
+          <CardTitle className="text-2xl tracking-tight">OpenCara</CardTitle>
           <CardDescription>Sign in to manage your projects</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

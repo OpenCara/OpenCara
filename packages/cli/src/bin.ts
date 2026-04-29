@@ -41,13 +41,13 @@ function pickFlag(argv: string[], name: string): string | undefined {
 }
 
 function printHelp(): void {
-  console.log(`openkira — agent host CLI
+  console.log(`opencara — agent host CLI
 
 Usage:
-  openkira register [--url URL] [--force]
-  openkira run
-  openkira status
-  openkira logout
+  opencara register [--url URL] [--force]
+  opencara run
+  opencara status
+  opencara logout
 `);
 }
 

@@ -1,5 +1,5 @@
 {
-  "name": "@openkira/web",
+  "name": "@opencara/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
-    "@openkira/shared": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "@tanstack/react-query": "^5.100.1",
     "@xyflow/react": "^12.3.6",
     "class-variance-authority": "^0.7.1",

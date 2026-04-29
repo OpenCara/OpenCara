@@ -1,4 +1,4 @@
-import type { AgentSpec } from "@openkira/shared";
+import type { AgentSpec } from "@opencara/shared";
 
 export type LogStream = "stdout" | "stderr";
 

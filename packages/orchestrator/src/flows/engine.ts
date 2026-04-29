@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 import { eq, type InferSelectModel } from "drizzle-orm";
 import type { Sql } from "postgres";
-import { FlowDefinitionSchema, type FlowDefinition, type FlowNode } from "@openkira/flows";
+import { FlowDefinitionSchema, type FlowDefinition, type FlowNode } from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import {
   agentRunLogs,

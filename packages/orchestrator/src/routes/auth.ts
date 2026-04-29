@@ -21,7 +21,7 @@ interface AuthRouteDeps {
   app?: GithubAppClient;
 }
 
-const STATE_COOKIE = "okira_oauth_state";
+const STATE_COOKIE = "ocara_oauth_state";
 const STATE_TTL_SEC = 60 * 5;
 const REDIRECT_AFTER_LOGIN = "/";
 

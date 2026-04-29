@@ -46,10 +46,10 @@ export async function buildPullRequestContext(
 
   return {
     envExtras: {
-      OPENKIRA_REPO: payload.repository.full_name,
-      OPENKIRA_PR_NUMBER: String(prNumber),
-      OPENKIRA_PR_HEAD_SHA: payload.pull_request.head.sha,
-      OPENKIRA_PR_BASE_SHA: payload.pull_request.base.sha,
+      OPENCARA_REPO: payload.repository.full_name,
+      OPENCARA_PR_NUMBER: String(prNumber),
+      OPENCARA_PR_HEAD_SHA: payload.pull_request.head.sha,
+      OPENCARA_PR_BASE_SHA: payload.pull_request.base.sha,
     },
     stdin: { pr: payload.pull_request, diff },
   };

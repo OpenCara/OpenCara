@@ -4,7 +4,7 @@ import {
   ServerToDeviceMessageSchema,
   type DeviceToServerMessage,
   type ServerToDeviceMessage,
-} from "@openkira/shared";
+} from "@opencara/shared";
 
 export interface WsClientOptions {
   url: string;

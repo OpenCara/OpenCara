@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import { eq, and } from "drizzle-orm";
-import { builtinFlows } from "@openkira/flows";
+import { builtinFlows } from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import { flows, projects } from "../db/schema.js";
 

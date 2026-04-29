@@ -10,7 +10,7 @@ const BaseSchema = z.object({
     }),
   GITHUB_WEBHOOK_SECRET: z.string().min(1),
   PUBLIC_BASE_URL: z.string().url().default("http://localhost:3030"),
-  SESSION_COOKIE_NAME: z.string().min(1).default("okira_sid"),
+  SESSION_COOKIE_NAME: z.string().min(1).default("ocara_sid"),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(14),
   SESSION_ENCRYPTION_KEY: z
     .string()
@@ -59,7 +59,7 @@ export function loadConfig(): AppConfig {
   const base = BaseSchema.parse({
     PORT: process.env["PORT"],
     DATABASE_URL:
-      process.env["DATABASE_URL"] ?? "postgres://openkira:openkira@localhost:5433/openkira",
+      process.env["DATABASE_URL"] ?? "postgres://opencara:opencara@localhost:5433/opencara",
     GITHUB_WEBHOOK_SECRET: process.env["GITHUB_WEBHOOK_SECRET"] ?? "changeme",
     PUBLIC_BASE_URL: process.env["PUBLIC_BASE_URL"],
     SESSION_COOKIE_NAME: process.env["SESSION_COOKIE_NAME"],

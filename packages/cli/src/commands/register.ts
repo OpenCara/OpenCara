@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import {
   PairingCreateResponseSchema,
   PairingStatusResponseSchema,
-} from "@openkira/shared";
+} from "@opencara/shared";
 import { defaultOrchestratorUrl, readConfig, writeConfig } from "../config/store.js";
 
 interface RegisterOpts {
@@ -64,7 +64,7 @@ export async function register(opts: RegisterOpts = {}): Promise<void> {
       deviceName: result.device_name,
     });
     console.log(`\n\n  ✓ Paired as "${result.device_name}".`);
-    console.log(`  Run 'openkira run' to start accepting jobs.`);
+    console.log(`  Run 'opencara run' to start accepting jobs.`);
     return;
   }
   throw new Error("pairing timed out");

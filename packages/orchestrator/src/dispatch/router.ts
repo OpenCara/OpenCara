@@ -1,4 +1,4 @@
-import type { AgentSpec } from "@openkira/shared";
+import type { AgentSpec } from "@opencara/shared";
 import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
 import type { LocalSubprocessDispatcher } from "./local.js";
 import type { WebSocketDispatcher, DevicePool } from "./devices.js";

@@ -42,30 +42,32 @@ export function AgentsPage() {
   const q = useQuery(agentsQuery());
   const location = useLocation();
 
-  // When the page is opened with a hash like #agent-<id> (typically via the
-  // sidebar's nested agent links), scroll the matching card into view once
-  // the agent list has actually loaded. Re-runs whenever the hash changes so
-  // re-clicking the same sidebar entry while already on /agents still scrolls.
+  // Scroll + flash the card whose id matches the URL hash (sidebar's nested
+  // agent links land here as /agents#agent-<id>). Depend on the list-loaded
+  // boolean, NOT q.data.agents — that array's identity changes on every
+  // refetch (any field touch on any agent, or the chat panel's broad
+  // qc.invalidateQueries() after a turn) and would re-trigger scrollIntoView
+  // on each refetch. Use behavior:"auto" to avoid wedging the page if the
+  // user navigates away mid-animation: a smooth scroll on an overflow-y-auto
+  // container whose child is being unmounted leaves Chromium in a state
+  // where subsequent sidebar clicks don't switch routes.
+  const agentsLoaded = (q.data?.agents.length ?? 0) > 0;
   useEffect(() => {
-    if (!q.data?.agents.length) return;
+    if (!agentsLoaded) return;
     const hash = location.hash;
     if (!hash.startsWith("#agent-")) return;
     const el = document.getElementById(hash.slice(1));
     if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.scrollIntoView({ behavior: "auto", block: "start" });
     el.classList.add("ring-2", "ring-primary/60");
     const t = setTimeout(() => {
       el.classList.remove("ring-2", "ring-primary/60");
     }, 1500);
-    // Clean up BOTH the timer and the highlight class. Without removing the
-    // class here, switching agents before the timeout fires would cancel the
-    // pending removal and leave the previous card stuck in the highlighted
-    // state.
     return () => {
       clearTimeout(t);
       el.classList.remove("ring-2", "ring-primary/60");
     };
-  }, [location.hash, q.data?.agents]);
+  }, [location.hash, agentsLoaded]);
 
   return (
     <div className="space-y-6">
@@ -436,7 +438,7 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
           <DialogDescription>
             Spawns a one-off run with the prompt as stdin (
             <code className="font-mono text-xs">{`{ "message": "..." }`}</code>) and
-            <code className="ml-1 font-mono text-xs">OPENKIRA_TEST=1</code> in
+            <code className="ml-1 font-mono text-xs">OPENCARA_TEST=1</code> in
             the env.
           </DialogDescription>
         </DialogHeader>

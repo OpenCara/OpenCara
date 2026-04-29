@@ -3,7 +3,7 @@ import { eq, isNull } from "drizzle-orm";
 import {
   DeviceToServerMessageSchema,
   type DeviceToServerMessage,
-} from "@openkira/shared";
+} from "@opencara/shared";
 import type { Db } from "../../../db/client.js";
 import { agentHosts } from "../../../db/schema.js";
 import type { DevicePool } from "../../../dispatch/devices.js";

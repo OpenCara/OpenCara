@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { builtinFlows } from "@openkira/flows";
+import { builtinFlows } from "@opencara/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 
 /**
  * Read-only catalogue of the built-in flow templates registered in
- * @openkira/flows. These are the seeds — every project gets its own editable
+ * @opencara/flows. These are the seeds — every project gets its own editable
  * instance of each template, but the templates themselves live in code and
  * are exposed here so the UI can browse them without going through a project.
  */

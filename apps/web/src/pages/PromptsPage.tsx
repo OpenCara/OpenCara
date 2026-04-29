@@ -30,14 +30,18 @@ export function PromptsPage() {
   const all = q.data?.prompts ?? [];
 
   // Sidebar's prompt list links here as /prompts#prompt-<id>; scroll +
-  // flash. Mirrors AgentsPage; cleanup strips the ring on switch.
+  // flash. Mirrors AgentsPage. Depend on a boolean, not the array, so a
+  // refetch (e.g. chat-panel invalidation) doesn't re-trigger; behavior:auto
+  // so navigating away mid-scroll can't wedge Chromium's smooth-scroll on the
+  // overflow-y-auto <main>.
+  const promptsLoaded = all.length > 0;
   useEffect(() => {
-    if (!all.length) return;
+    if (!promptsLoaded) return;
     const hash = location.hash;
     if (!hash.startsWith("#prompt-")) return;
     const el = document.getElementById(hash.slice(1));
     if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.scrollIntoView({ behavior: "auto", block: "start" });
     el.classList.add("ring-2", "ring-primary/60");
     const t = setTimeout(() => {
       el.classList.remove("ring-2", "ring-primary/60");
@@ -46,7 +50,7 @@ export function PromptsPage() {
       clearTimeout(t);
       el.classList.remove("ring-2", "ring-primary/60");
     };
-  }, [location.hash, all]);
+  }, [location.hash, promptsLoaded]);
 
   // Aggregate label set for the filter chip cloud — sorted by frequency.
   const labelCounts = useMemo(() => {

@@ -29,5 +29,5 @@ export function clearConfig(): void {
 }
 
 export function defaultOrchestratorUrl(): string {
-  return process.env["OPENKIRA_URL"] ?? DEFAULT_ORCHESTRATOR_URL;
+  return process.env["OPENCARA_URL"] ?? DEFAULT_ORCHESTRATOR_URL;
 }

@@ -47,7 +47,7 @@ export function FlowTemplateDetailPage() {
         <CardContent className="space-y-2 text-sm text-muted-foreground">
           <p>
             This is a read-only view of the template registered in{" "}
-            <span className="font-mono">@openkira/flows</span>. To edit the graph
+            <span className="font-mono">@opencara/flows</span>. To edit the graph
             shape (add/remove reviewers, rename a node, link an agent), open the
             project-scoped instance under{" "}
             <span className="font-mono">/projects/&lt;id&gt;/flows/{t.slug}</span>

@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   PairingCreateRequestSchema,
   PairingConfirmRequestSchema,
-} from "@openkira/shared";
+} from "@opencara/shared";
 import type { Db } from "../../db/client.js";
 import { agentHosts, devicePairings } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
@@ -159,7 +159,7 @@ export function deviceRoutes(deps: DeviceRoutesDeps) {
       where: and(eq(agentHosts.id, id), eq(agentHosts.userId, user.id)),
     });
     if (!row) return c.json({ error: "not found" }, 404);
-    // Kick any live WS first so the remote `openkira run` notices the
+    // Kick any live WS first so the remote `opencara run` notices the
     // revocation immediately instead of waiting for its next ping/reconnect
     // attempt to fail auth.
     deps.pool.disconnect(id);

@@ -44,10 +44,10 @@ export const prReviewFlow: FlowDefinition = {
         },
         contextInjection: {
           env: [
-            "OPENKIRA_REPO",
-            "OPENKIRA_PR_NUMBER",
-            "OPENKIRA_PR_HEAD_SHA",
-            "OPENKIRA_PR_BASE_SHA",
+            "OPENCARA_REPO",
+            "OPENCARA_PR_NUMBER",
+            "OPENCARA_PR_HEAD_SHA",
+            "OPENCARA_PR_BASE_SHA",
           ],
           stdinJson: true,
         },

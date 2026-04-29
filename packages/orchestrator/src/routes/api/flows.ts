@@ -12,7 +12,7 @@ import {
   flows,
   platformEvents,
 } from "../../db/schema.js";
-import { FlowDefinitionSchema } from "@openkira/flows";
+import { FlowDefinitionSchema } from "@opencara/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { FlowEngine } from "../../flows/engine.js";
 

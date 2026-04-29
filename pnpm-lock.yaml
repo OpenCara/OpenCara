@@ -17,7 +17,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@openkira/shared':
+      '@opencara/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@tanstack/react-query':
@@ -75,7 +75,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@openkira/shared':
+      '@opencara/shared':
         specifier: workspace:*
         version: link:../shared
       ws:
@@ -94,7 +94,7 @@ importers:
 
   packages/flows:
     dependencies:
-      '@openkira/shared':
+      '@opencara/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -118,15 +118,15 @@ importers:
       '@octokit/webhooks':
         specifier: ^14.2.0
         version: 14.2.0
-      '@openkira/flows':
+      '@opencara/flows':
         specifier: workspace:*
         version: link:../flows
-      '@openkira/shared':
+      '@opencara/shared':
         specifier: workspace:*
         version: link:../shared
       drizzle-orm:
         specifier: ^0.38.3
-        version: 0.38.4(@types/react@19.2.14)(postgres@3.4.9)(react@19.2.5)
+        version: 0.38.4(@cloudflare/workers-types@4.20260426.1)(@types/react@19.2.14)(postgres@3.4.9)(react@19.2.5)
       hono:
         specifier: ^4.6.16
         version: 4.12.15
@@ -243,6 +243,9 @@ packages:
   '@babel/types@7.29.0':
     resolution: {integrity: sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A==}
     engines: {node: '>=6.9.0'}
+
+  '@cloudflare/workers-types@4.20260426.1':
+    resolution: {integrity: sha512-cBYeQaWwv/jFV8ualmwp6wIxmAf0rDe2DPPQwPbslKmPHqgv861YpAvm45r05K40QboZgxNQVIPgNkmtHqZeJQ==}
 
   '@drizzle-team/brocli@0.10.2':
     resolution: {integrity: sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w==}
@@ -2750,6 +2753,9 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
 
+  '@cloudflare/workers-types@4.20260426.1':
+    optional: true
+
   '@drizzle-team/brocli@0.10.2': {}
 
   '@esbuild-kit/core-utils@3.3.2':
@@ -4302,8 +4308,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.38.4(@types/react@19.2.14)(postgres@3.4.9)(react@19.2.5):
+  drizzle-orm@0.38.4(@cloudflare/workers-types@4.20260426.1)(@types/react@19.2.14)(postgres@3.4.9)(react@19.2.5):
     optionalDependencies:
+      '@cloudflare/workers-types': 4.20260426.1
       '@types/react': 19.2.14
       postgres: 3.4.9
       react: 19.2.5

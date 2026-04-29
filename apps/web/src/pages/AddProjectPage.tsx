@@ -28,7 +28,7 @@ import {
   type AvailableRepo,
 } from "@/lib/queries";
 
-const APP_INSTALL_URL = "https://github.com/apps/openkira-agentic/installations/new";
+const APP_INSTALL_URL = "https://github.com/apps/opencara/installations/new";
 
 export function AddProjectPage() {
   const installations = useQuery(installationsQuery());

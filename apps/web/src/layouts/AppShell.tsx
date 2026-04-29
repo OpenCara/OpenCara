@@ -73,7 +73,7 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside className="flex w-60 flex-col border-r bg-card">
         <div className="flex h-14 items-center border-b px-4 font-semibold tracking-tight">
-          OpenKira
+          OpenCara
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-2">
           {topNav.map((item) => (

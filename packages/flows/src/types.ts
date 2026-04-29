@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgentSpecSchema } from "@openkira/shared";
+import { AgentSpecSchema } from "@opencara/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 

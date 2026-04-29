@@ -26,6 +26,7 @@ import { deviceWsHandler } from "./routes/api/devices/ws.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
+import { reapOrphanedRuns } from "./flows/reaper.js";
 
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
@@ -61,6 +62,20 @@ if (githubApp) {
     "[orchestrator] GitHub App not configured; webhook handler disabled. Set GITHUB_APP_* and SESSION_ENCRYPTION_KEY to enable.",
   );
 }
+
+// Any flow_run / flow_run_step / agent_run still in a non-terminal state at
+// boot is orphaned — its owning Promise died with the previous process (tsx
+// watch reload, crash, deploy). Without this sweep they stay "running"
+// forever and the UI never resolves them.
+reapOrphanedRuns(db)
+  .then((n) => {
+    if (n.agentRuns + n.steps + n.flowRuns > 0) {
+      console.log(
+        `[orchestrator] reaped orphaned runs: ${n.flowRuns} flow_run(s), ${n.steps} step(s), ${n.agentRuns} agent_run(s)`,
+      );
+    }
+  })
+  .catch((err: unknown) => console.error("[orchestrator] reap failed", err));
 
 if (flowEngine) {
   seedBuiltinFlowsForAllProjects(db)

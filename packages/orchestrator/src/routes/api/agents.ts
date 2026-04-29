@@ -151,7 +151,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
 
     const env: Record<string, string> = {
       ...agent.env,
-      OPENKIRA_TEST: "1",
+      OPENCARA_TEST: "1",
     };
     const spec = {
       kind: agent.name,

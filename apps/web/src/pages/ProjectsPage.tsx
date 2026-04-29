@@ -24,7 +24,7 @@ export function ProjectsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
           <p className="text-sm text-muted-foreground">
-            Repositories OpenKira is currently watching.
+            Repositories OpenCara is currently watching.
           </p>
         </div>
         <Link to="/projects/new">

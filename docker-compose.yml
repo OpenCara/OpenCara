@@ -1,21 +1,21 @@
 services:
   postgres:
     image: docker.io/library/postgres:16-alpine
-    container_name: openkira_db
+    container_name: opencara_db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: openkira
-      POSTGRES_PASSWORD: openkira
-      POSTGRES_DB: openkira
+      POSTGRES_USER: opencara
+      POSTGRES_PASSWORD: opencara
+      POSTGRES_DB: opencara
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - openkira_db_data:/var/lib/postgresql/data
+      - opencara_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openkira -d openkira"]
+      test: ["CMD-SHELL", "pg_isready -U opencara -d opencara"]
       interval: 5s
       timeout: 5s
       retries: 10
 
 volumes:
-  openkira_db_data:
+  opencara_db_data:

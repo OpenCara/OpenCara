@@ -6,7 +6,7 @@ import {
   type AgentSpec,
   type DeviceToServerMessage,
   type ServerToDeviceMessage,
-} from "@openkira/shared";
+} from "@opencara/shared";
 import type { Db } from "../db/client.js";
 import { agentHosts } from "../db/schema.js";
 import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
@@ -57,7 +57,7 @@ export class DevicePool {
   /**
    * Forcibly close any open WS for this device + unregister from the pool.
    * Used when the device is being deleted server-side (revoke) so the remote
-   * `openkira run` process notices the kick instead of hanging onto a now-
+   * `opencara run` process notices the kick instead of hanging onto a now-
    * orphaned auth token.
    */
   disconnect(agentHostId: string, code = 4001, reason = "revoked"): void {

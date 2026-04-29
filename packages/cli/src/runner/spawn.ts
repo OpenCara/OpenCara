@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { AgentSpec } from "@openkira/shared";
+import type { AgentSpec } from "@opencara/shared";
 
 export interface SpawnHandlers {
   onLog: (stream: "stdout" | "stderr", chunk: string) => void;

@@ -5,6 +5,6 @@ export default {
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env["DATABASE_URL"] ?? "postgres://openkira:openkira@localhost:5433/openkira",
+    url: process.env["DATABASE_URL"] ?? "postgres://opencara:opencara@localhost:5433/opencara",
   },
 } satisfies Config;

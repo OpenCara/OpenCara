@@ -1,5 +1,5 @@
 {
-  "name": "@openkira/flows",
+  "name": "@opencara/flows",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -18,7 +18,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@openkira/shared": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "zod": "^3.24.1"
   }
 }

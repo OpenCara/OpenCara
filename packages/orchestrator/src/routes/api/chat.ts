@@ -26,7 +26,7 @@ interface PageContext {
 /**
  * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
  * the existing dispatcher; stdin carries `{ message, pageContext, history? }`,
- * env carries OPENKIRA_CHAT_* so the agent can use its own --resume / --continue
+ * env carries OPENCARA_CHAT_* so the agent can use its own --resume / --continue
  * flag once turnIndex > 1.
  *
  * Returns immediately with the agentRunId; the panel SSE-tails
@@ -63,9 +63,9 @@ export function chatRoutes(deps: ChatRoutesDeps) {
 
     const env: Record<string, string> = {
       ...agent.env,
-      OPENKIRA_CHAT_SESSION_ID: sessionId,
-      OPENKIRA_CHAT_TURN_INDEX: String(turnIndex),
-      OPENKIRA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
+      OPENCARA_CHAT_SESSION_ID: sessionId,
+      OPENCARA_CHAT_TURN_INDEX: String(turnIndex),
+      OPENCARA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
     };
 
     const spec = {

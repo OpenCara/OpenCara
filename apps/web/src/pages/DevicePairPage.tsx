@@ -71,7 +71,7 @@ export function DevicePairPage() {
           {info.data && info.data.status !== "pending" && !confirmed && (
             <div className="rounded-md border border-amber-300/40 bg-amber-50/40 px-3 py-2 text-sm">
               Pairing is {info.data.status}. Generate a new code with{" "}
-              <code>openkira register --force</code>.
+              <code>opencara register --force</code>.
             </div>
           )}
           {info.data?.status === "pending" && !confirmed && (
@@ -101,7 +101,7 @@ export function DevicePairPage() {
           )}
           {confirmed && (
             <div className="rounded-md border border-emerald-300/40 bg-emerald-50/40 px-3 py-3 text-sm">
-              Paired. Return to your terminal — <code>openkira run</code> will
+              Paired. Return to your terminal — <code>opencara run</code> will
               connect.
             </div>
           )}

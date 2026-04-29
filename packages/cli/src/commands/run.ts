@@ -20,7 +20,7 @@ import type {
   JobAssignment,
   ServerToDeviceMessage,
   SystemInfo,
-} from "@openkira/shared";
+} from "@opencara/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_VERSION = readPkgVersion();
@@ -36,7 +36,7 @@ interface PendingChunks {
 export async function run(): Promise<void> {
   const cfg = readConfig();
   if (!cfg) {
-    throw new Error("Not paired. Run 'openkira register' first.");
+    throw new Error("Not paired. Run 'opencara register' first.");
   }
   const wsUrl = cfg.orchestratorUrl.replace(/^http/, "ws") + "/api/devices/ws";
 
@@ -44,7 +44,7 @@ export async function run(): Promise<void> {
     url: wsUrl,
     token: cfg.token,
     onOpen: () => {
-      console.log(`[openkira] connected to ${cfg.orchestratorUrl}`);
+      console.log(`[opencara] connected to ${cfg.orchestratorUrl}`);
       client.send({
         type: "hello",
         platform: platform(),
@@ -55,10 +55,10 @@ export async function run(): Promise<void> {
     },
     onMessage: (msg: ServerToDeviceMessage) => handleServerMessage(msg, client, cfg),
     onClose: (code, reason) => {
-      console.log(`[openkira] disconnected (code=${code} reason="${reason}")`);
+      console.log(`[opencara] disconnected (code=${code} reason="${reason}")`);
     },
   });
-  console.log(`[openkira] starting as ${cfg.deviceName} (${hostname()})`);
+  console.log(`[opencara] starting as ${cfg.deviceName} (${hostname()})`);
   client.start();
 }
 
@@ -68,7 +68,7 @@ function handleServerMessage(
   _cfg: { agentHostId: string; deviceName: string },
 ): void {
   if (msg.type === "hello-ack") {
-    console.log(`[openkira] acked as ${msg.deviceName} (${msg.agentHostId})`);
+    console.log(`[opencara] acked as ${msg.deviceName} (${msg.agentHostId})`);
     return;
   }
   if (msg.type === "ping") return;
@@ -79,7 +79,7 @@ function handleServerMessage(
 
 async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
   const runId = job.run.id;
-  console.log(`[openkira] job ${runId.slice(-8)}: ${job.spec.command}`);
+  console.log(`[opencara] job ${runId.slice(-8)}: ${job.spec.command}`);
 
   let seq = 0;
   let pending: PendingChunks = { stdout: "", stderr: "" };
@@ -118,12 +118,12 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
       status: result.exitCode === 0 ? "succeeded" : "failed",
       exitCode: result.exitCode,
     });
-    console.log(`[openkira] job ${runId.slice(-8)} → exit ${result.exitCode}`);
+    console.log(`[opencara] job ${runId.slice(-8)} → exit ${result.exitCode}`);
   } catch (err) {
     flush();
     const message = err instanceof Error ? err.message : String(err);
     client.send({ type: "done", runId, status: "failed", errorMessage: message });
-    console.error(`[openkira] job ${runId.slice(-8)} failed`, message);
+    console.error(`[opencara] job ${runId.slice(-8)} failed`, message);
   }
 }
 
@@ -182,7 +182,7 @@ function collectSystemInfo(): SystemInfo | undefined {
       uptimeSec: Math.floor(uptime()),
     };
   } catch (err) {
-    console.warn("[openkira] system info collection failed", err);
+    console.warn("[opencara] system info collection failed", err);
     return undefined;
   }
 }

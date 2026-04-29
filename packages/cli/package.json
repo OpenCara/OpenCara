@@ -1,10 +1,10 @@
 {
-  "name": "@openkira/cli",
+  "name": "@opencara/cli",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "openkira": "./dist/bin.js"
+    "opencara": "./dist/bin.js"
   },
   "main": "./dist/bin.js",
   "files": ["dist"],
@@ -16,7 +16,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@openkira/shared": "workspace:*",
+    "@opencara/shared": "workspace:*",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { AgentSpec } from "@openkira/shared";
+import type { AgentSpec } from "@opencara/shared";
 import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
 
 export class LocalSubprocessDispatcher implements AgentDispatcher {

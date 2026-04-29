@@ -235,11 +235,22 @@ function AssistantBubble({ message }: { message: Message }) {
  * field on the source `message` is only used as a fallback (e.g. error case
  * filled by the caller).
  *
- * On terminal "end", invalidate every React Query key so any list the agent
- * may have mutated server-side (agents, prompts, flows, runs) refetches
- * without the user having to reload the page. Cost is just a background
- * refetch of currently-active queries; idle queries are merely marked stale.
+ * On terminal "end", invalidate the resource keys the agent might have
+ * mutated server-side. Earlier this called qc.invalidateQueries() with no
+ * key — that nuked auth + every unrelated query and cascaded refetches into
+ * any component that subscribed to the agents/prompts/etc lists.
  */
+const CHAT_INVALIDATABLE_ROOTS: ReadonlySet<string> = new Set([
+  "agents",
+  "prompts",
+  "projects",
+  "flow-templates",
+  "flow-runs",
+  "devices",
+  "activity",
+  "runs",
+]);
+
 function useStreamedAssistant(message: Message): { text: string } {
   const [chunks, setChunks] = useState<string>("");
   const lastRunRef = useRef<string | null>(null);
@@ -266,7 +277,11 @@ function useStreamedAssistant(message: Message): { text: string } {
     });
     es.addEventListener("end", () => {
       es.close();
-      void qc.invalidateQueries();
+      void qc.invalidateQueries({
+        predicate: (q) =>
+          typeof q.queryKey[0] === "string" &&
+          CHAT_INVALIDATABLE_ROOTS.has(q.queryKey[0]),
+      });
     });
     es.onerror = () => {
       // Browsers auto-reconnect; do nothing.

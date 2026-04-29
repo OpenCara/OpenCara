@@ -3,7 +3,7 @@ import { readConfig } from "../config/store.js";
 export async function status(): Promise<void> {
   const cfg = readConfig();
   if (!cfg) {
-    console.log("Not paired. Run 'openkira register' to pair.");
+    console.log("Not paired. Run 'opencara register' to pair.");
     return;
   }
   console.log(`Paired:`);

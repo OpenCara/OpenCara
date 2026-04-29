@@ -1,8 +1,8 @@
-# OpenKira
+# OpenCara
 
 Orchestration layer between AI agents and GitHub (extensible to other platforms).
 
-OpenKira receives webhook events from GitHub, coordinates agents driven by those events, and writes results back to the platform.
+OpenCara receives webhook events from GitHub, coordinates agents driven by those events, and writes results back to the platform.
 
 Example flows:
 
@@ -36,7 +36,7 @@ pnpm install
 podman-compose up -d        # or: docker compose up -d
 
 # 2. Run migrations
-pnpm --filter @openkira/orchestrator db:migrate
+pnpm --filter @opencara/orchestrator db:migrate
 
 # 3. Run all packages in watch mode
 pnpm dev
@@ -46,4 +46,4 @@ pnpm typecheck
 pnpm build
 ```
 
-Default local postgres: `postgres://openkira:openkira@localhost:5433/openkira`. Copy `.env.example` to `packages/orchestrator/.env` and fill in `GITHUB_WEBHOOK_SECRET`.
+Default local postgres: `postgres://opencara:opencara@localhost:5433/opencara`. Copy `.env.example` to `packages/orchestrator/.env` and fill in `GITHUB_WEBHOOK_SECRET`.

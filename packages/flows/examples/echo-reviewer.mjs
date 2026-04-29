@@ -18,14 +18,14 @@ try {
   // ignore parse errors — we just emit a generic review
 }
 
-const repo = process.env.OPENKIRA_REPO ?? ctx?.pr?.base?.repo?.full_name ?? "?";
-const num = process.env.OPENKIRA_PR_NUMBER ?? ctx?.pr?.number ?? "?";
-const head = process.env.OPENKIRA_PR_HEAD_SHA ?? ctx?.pr?.head?.sha ?? "";
+const repo = process.env.OPENCARA_REPO ?? ctx?.pr?.base?.repo?.full_name ?? "?";
+const num = process.env.OPENCARA_PR_NUMBER ?? ctx?.pr?.number ?? "?";
+const head = process.env.OPENCARA_PR_HEAD_SHA ?? ctx?.pr?.head?.sha ?? "";
 const diffLines = (ctx?.diff ?? "").split(/\r?\n/).length;
-const prompt = ctx?.prompt ?? process.env.OPENKIRA_PROMPT ?? null;
+const prompt = ctx?.prompt ?? process.env.OPENCARA_PROMPT ?? null;
 
 const lines = [
-  `### OpenKira automated review (stub) :robot:`,
+  `### OpenCara automated review (stub) :robot:`,
   ``,
   `Reviewing **${repo}#${num}** at \`${String(head).slice(0, 7)}\` — diff is ${diffLines} lines.`,
   ``,
