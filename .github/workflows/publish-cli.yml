@@ -53,11 +53,15 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-        # Deliberately no `registry-url:`. setup-node would otherwise write
-        # an .npmrc that pins `_authToken=${NODE_AUTH_TOKEN}`, and a
-        # placeholder NODE_AUTH_TOKEN takes precedence over npm's
-        # trusted-publishing OIDC exchange — registry rejects the bogus
-        # token before OIDC kicks in. Default registry is npmjs.org.
+        # No `registry-url:` — setup-node would write an .npmrc pinning
+        # `_authToken=${NODE_AUTH_TOKEN}`, and the placeholder takes
+        # precedence over OIDC. Default registry npmjs.org is fine.
+
+      - name: Upgrade npm to a trusted-publishing capable version
+        # Trusted publishing landed in npm CLI 11.5.1; Node 22 ships with
+        # npm 10.x. Without this, `npm publish --provenance` ENEEDAUTHs
+        # because OIDC handshake isn't wired up.
+        run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
 
@@ -78,11 +82,16 @@ jobs:
           echo "Publishing opencara@$VERSION"
           (cd packages/cli && npm version "$VERSION" --no-git-tag-version --allow-same-version)
 
+      - name: Pack (pnpm rewrites workspace:* in the tarball's package.json)
+        working-directory: packages/cli
+        run: pnpm pack --pack-destination .
+
       - name: Publish opencara
         working-directory: packages/cli
-        # No NODE_AUTH_TOKEN: `--provenance` triggers npm's trusted-
-        # publishing flow, which uses the workflow's OIDC token. If the
-        # registry rejects with "configured trusted publisher", the
-        # workflow file path or repo doesn't match what's set up at
-        # https://www.npmjs.com/package/opencara/access.
-        run: pnpm publish --provenance --no-git-checks
+        # `--provenance` activates npm's trusted-publishing OIDC exchange
+        # (no NODE_AUTH_TOKEN needed). If the registry rejects with
+        # "configured trusted publisher does not match", the (org, repo,
+        # workflow filename) tuple at
+        # https://www.npmjs.com/package/opencara/access disagrees with
+        # this workflow.
+        run: npm publish ./opencara-*.tgz --provenance
