@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
+import { hostname } from "node:os";
 import {
   PairingCreateResponseSchema,
   PairingStatusResponseSchema,
@@ -33,7 +34,10 @@ export async function register(opts: RegisterOpts = {}): Promise<void> {
   }
   const { code, expires_at } = PairingCreateResponseSchema.parse(await createRes.json());
 
-  const pairUrl = `${orchestratorUrl}/devices/pair?code=${encodeURIComponent(code)}`;
+  // Pass the OS hostname through the URL so the web pair page can pre-fill
+  // the device-name input. It's a hint, not authoritative — the user can
+  // (and often will) replace it before confirming.
+  const pairUrl = `${orchestratorUrl}/devices/pair?code=${encodeURIComponent(code)}&hostname=${encodeURIComponent(hostname())}`;
   console.log(`\n  Pairing code: ${code}`);
   console.log(`  Open ${pairUrl} in your browser to confirm.`);
   console.log(`  Expires at ${expires_at}.\n`);

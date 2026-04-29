@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSearchParams, Navigate } from "react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,15 +20,14 @@ export function DevicePairPage() {
   const [params] = useSearchParams();
   const code = params.get("code") ?? "";
   const user = useUser();
-  const [name, setName] = useState("");
+  // Seed the device-name field ONCE from the hostname the CLI passed in
+  // the URL (or fall back to a guess). Lazy useState init keeps it from
+  // re-firing whenever the input is cleared — clearing the field used to
+  // re-populate it from defaults, which trapped the user.
+  const [name, setName] = useState(
+    () => params.get("hostname") ?? guessHostName(user?.githubLogin),
+  );
   const [confirmed, setConfirmed] = useState(false);
-
-  useEffect(() => {
-    if (user && !name) {
-      const host = guessHostName();
-      setName(`${user.githubLogin}'s ${host}`);
-    }
-  }, [user, name]);
 
   const info = useQuery({
     queryKey: ["pairings", code],
@@ -111,9 +110,15 @@ export function DevicePairPage() {
   );
 }
 
-function guessHostName(): string {
-  if (typeof navigator === "undefined") return "device";
-  if (navigator.platform?.toLowerCase().includes("mac")) return "Mac";
-  if (navigator.platform?.toLowerCase().includes("win")) return "PC";
-  return "device";
+// Fallback when the CLI didn't pass a hostname (older binary, hand-typed
+// URL, etc). Browser doesn't expose the OS hostname; best-effort guess
+// from navigator.platform, optionally prefixed with the GH login.
+function guessHostName(githubLogin?: string | null): string {
+  let host = "device";
+  if (typeof navigator !== "undefined") {
+    const p = navigator.platform?.toLowerCase() ?? "";
+    if (p.includes("mac")) host = "Mac";
+    else if (p.includes("win")) host = "PC";
+  }
+  return githubLogin ? `${githubLogin}'s ${host}` : host;
 }
