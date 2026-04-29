@@ -27,6 +27,7 @@ import {
   type InstallationSummary,
   type AvailableRepo,
 } from "@/lib/queries";
+import { ApiError } from "@/lib/api";
 
 const APP_INSTALL_URL = "https://github.com/apps/opencara/installations/new";
 
@@ -98,6 +99,10 @@ function RepoPicker({ installation }: { installation: InstallationSummary }) {
       <CardContent>
         {repos.isLoading ? (
           <Skeleton className="h-20 w-full" />
+        ) : repos.isError ? (
+          <div className="py-8 text-center text-sm text-destructive">
+            Failed to load repos: {formatReposError(repos.error)}
+          </div>
         ) : !repos.data || repos.data.available.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
             No repos available — they may all be added already, or this installation has no
@@ -128,6 +133,24 @@ function RepoPicker({ installation }: { installation: InstallationSummary }) {
       </CardContent>
     </Card>
   );
+}
+
+// The orchestrator's API surface returns shapes like {error: "..."} and
+// {error: {message: "..."}} depending on the route — flatten to a single
+// human string for the error banner.
+function formatReposError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const body = err.body;
+    if (body && typeof body === "object" && "error" in body) {
+      const v = (body as { error: unknown }).error;
+      if (typeof v === "string") return v;
+      if (v && typeof v === "object" && "message" in v) {
+        return String((v as { message: unknown }).message);
+      }
+    }
+    return `API ${err.status}`;
+  }
+  return err instanceof Error ? err.message : "unknown error";
 }
 
 function RepoRow({
