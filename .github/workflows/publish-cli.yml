@@ -53,7 +53,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
+        # Deliberately no `registry-url:`. setup-node would otherwise write
+        # an .npmrc that pins `_authToken=${NODE_AUTH_TOKEN}`, and a
+        # placeholder NODE_AUTH_TOKEN takes precedence over npm's
+        # trusted-publishing OIDC exchange — registry rejects the bogus
+        # token before OIDC kicks in. Default registry is npmjs.org.
 
       - run: pnpm install --frozen-lockfile
 
