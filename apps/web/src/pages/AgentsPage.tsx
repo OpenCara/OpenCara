@@ -38,9 +38,11 @@ import { ApiError } from "@/lib/api";
 import { formatRelative } from "@/lib/format";
 import { useRegisterChatAction } from "@/lib/chatActions";
 
-// "" sentinel = "any idle device" (mapped to null when sent to the API).
-// Real device ids are ULIDs so they can never collide with "".
-const ANY_DEVICE = "" as const;
+// "__any" sentinel = "any idle device" (mapped to null when sent to the
+// API). Radix's <SelectItem> rejects empty-string values (reserved for
+// the placeholder), so use a clearly-namespaced literal that can't
+// collide with a real ULID device id.
+const ANY_DEVICE = "__any" as const;
 
 interface DevicePickerProps {
   /** "" = any device, otherwise a host id. */
