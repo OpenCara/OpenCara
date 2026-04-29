@@ -4,19 +4,12 @@ import { status } from "./commands/status.js";
 import { logout } from "./commands/logout.js";
 
 async function main(): Promise<void> {
-  const [, , cmd, ...rest] = process.argv;
+  const argv = process.argv.slice(2);
+  const cmd = argv[0];
   switch (cmd) {
     case undefined:
-    case "run":
-    case "register":
-      // `run` and bare `opencara` and the legacy `register` all share one
-      // path: pair if there's no config (or --force), then start the
-      // job-accepting loop.
-      await run({
-        force: rest.includes("--force"),
-        url: pickFlag(rest, "--url"),
-      });
-      return;
+      // bare `opencara` → default flow
+      break;
     case "status":
       await status();
       return;
@@ -28,10 +21,20 @@ async function main(): Promise<void> {
       printHelp();
       return;
     default:
-      console.error(`unknown command: ${cmd}`);
-      printHelp();
-      process.exit(1);
+      // Anything starting with `-` is a flag for the default flow; bare
+      // words are unrecognised subcommands and should error rather than
+      // silently turn into a no-op.
+      if (!cmd.startsWith("-")) {
+        console.error(`unknown command: ${cmd}`);
+        printHelp();
+        process.exit(1);
+      }
   }
+  // Default: `opencara [--url URL] [--force]`.
+  await run({
+    force: argv.includes("--force"),
+    url: pickFlag(argv, "--url"),
+  });
 }
 
 function pickFlag(argv: string[], name: string): string | undefined {
