@@ -1,5 +1,5 @@
 {
-  "name": "@opencara/cli",
+  "name": "opencara",
   "version": "0.0.0",
   "description": "OpenCara agent-host CLI: register a machine as an agent host and run dispatched agents.",
   "license": "MIT",
@@ -8,29 +8,28 @@
     "url": "https://github.com/OpenCara/OpenCara.git",
     "directory": "packages/cli"
   },
-  "publishConfig": {
-    "access": "public"
-  },
+  "homepage": "https://opencara.com",
   "type": "module",
   "bin": {
     "opencara": "./dist/bin.js"
   },
   "main": "./dist/bin.js",
-  "files": ["dist"],
+  "files": ["dist/bin.js"],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node build.mjs",
     "dev": "tsx watch src/bin.ts",
     "start": "node dist/bin.js",
     "typecheck": "tsc -b",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@opencara/shared": "workspace:*",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@opencara/shared": "workspace:*",
     "@types/ws": "^8.5.13",
+    "esbuild": "^0.27.3",
     "tsx": "^4.19.2"
   }
 }

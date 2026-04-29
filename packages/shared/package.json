@@ -1,16 +1,9 @@
 {
   "name": "@opencara/shared",
   "version": "0.0.0",
-  "description": "Shared protocol types and Zod schemas used by @opencara/cli (and the orchestrator).",
+  "private": true,
+  "description": "Shared protocol types and Zod schemas. Internal: bundled into `opencara` at build time, not published standalone.",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/OpenCara/OpenCara.git",
-    "directory": "packages/shared"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -75,9 +75,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@opencara/shared':
-        specifier: workspace:*
-        version: link:../shared
       ws:
         specifier: ^8.18.0
         version: 8.20.0
@@ -85,9 +82,15 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@opencara/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1
+      esbuild:
+        specifier: ^0.27.3
+        version: 0.27.7
       tsx:
         specifier: ^4.19.2
         version: 4.21.0

@@ -1,51 +1,40 @@
 name: publish-cli
 
-# Publish @opencara/cli (plus its workspace dep @opencara/shared) to npm
-# whenever a `cli-v<semver>` tag is pushed and the tagged commit is on main.
+# Publish the `opencara` CLI to npm whenever a `v<semver>` tag lands on
+# main. Authentication is npm trusted publishing (GitHub OIDC) — the
+# workflow's `id-token: write` permission lets pnpm exchange a GitHub
+# OIDC token for an npm publish token at registry.npmjs.org. No
+# NPM_TOKEN secret is needed; rotate the trusted publisher config at
+# https://www.npmjs.com/package/opencara/access if the (org, repo,
+# workflow file, environment) tuple ever changes.
 #
-# Two packages are published in lockstep with the same version because the
-# CLI imports from @opencara/shared at runtime; pnpm rewrites the
-# `workspace:*` dep into a concrete `^<version>` so a fresh `npm install -g
-# @opencara/cli` resolves shared from the registry, not the workspace.
+# `@opencara/shared` is bundled into dist/bin.js by esbuild at build
+# time, so the published package has no workspace deps and `npm i -g
+# opencara` resolves cleanly.
 #
 # Tag a release:
-#   git tag cli-v0.1.0 && git push origin cli-v0.1.0
-#
-# Required repo secret: NPM_TOKEN — npm automation token with publish
-# access to the @opencara scope. Configure at:
-#   https://github.com/OpenCara/OpenCara/settings/secrets/actions
+#   git tag v0.1.0 && git push origin v0.1.0
 
 on:
   push:
     tags:
-      - 'cli-v*.*.*'
+      - 'v*.*.*'
 
 jobs:
   publish:
-    name: Publish @opencara/cli
+    name: Publish opencara
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # required for npm provenance attestation
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - name: Require NPM_TOKEN
-        run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN repo secret is not set."
-            echo "Create an Automation token at https://www.npmjs.com/settings/<user>/tokens"
-            echo "with publish access to @opencara, then add it at:"
-            echo "  https://github.com/OpenCara/OpenCara/settings/secrets/actions"
-            exit 1
-          fi
+      id-token: write   # required for npm trusted publishing + provenance
 
+    steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # need history for the ancestry check
 
       - name: Verify tag is on main
-        # Tags can be pushed to any commit; we only publish when the tagged
+        # Tags can be pushed to any commit; only publish when the tagged
         # commit is reachable from main, so a feature-branch tag never ships.
         run: |
           git fetch origin main --depth=200
@@ -67,28 +56,28 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Build shared + cli
-        run: pnpm --filter "@opencara/cli..." build
+      - name: Build (tsc + esbuild bundle)
+        # `tsc -b` typechecks via project refs (builds @opencara/shared
+        # then opencara). `node build.mjs` then bundles src/bin.ts → a
+        # single dist/bin.js with @opencara/shared inlined.
+        run: pnpm --filter opencara build
 
       - name: Set version from tag
-        # cli-v1.2.3 → 1.2.3. Pre-release suffixes (e.g. cli-v1.2.3-rc.1)
-        # are accepted; everything else fails fast.
+        # v1.2.3 → 1.2.3. Pre-release suffixes (v1.2.3-rc.1) are fine.
         run: |
-          VERSION="${GITHUB_REF_NAME#cli-v}"
+          VERSION="${GITHUB_REF_NAME#v}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
-            echo "::error::Tag '${GITHUB_REF_NAME}' must be cli-v<semver>; got '$VERSION'"
+            echo "::error::Tag '${GITHUB_REF_NAME}' must be v<semver>; got '$VERSION'"
             exit 1
           fi
-          echo "Publishing version $VERSION"
-          (cd packages/shared && npm version "$VERSION" --no-git-tag-version --allow-same-version)
-          (cd packages/cli    && npm version "$VERSION" --no-git-tag-version --allow-same-version)
+          echo "Publishing opencara@$VERSION"
+          (cd packages/cli && npm version "$VERSION" --no-git-tag-version --allow-same-version)
 
-      - name: Publish @opencara/shared
-        # Must publish shared first so cli's `workspace:*` rewrites to a
-        # concrete version that already exists on the registry.
-        working-directory: packages/shared
-        run: pnpm publish --access public --no-git-checks --provenance
-
-      - name: Publish @opencara/cli
+      - name: Publish opencara
         working-directory: packages/cli
-        run: pnpm publish --access public --no-git-checks --provenance
+        # No NODE_AUTH_TOKEN: `--provenance` triggers npm's trusted-
+        # publishing flow, which uses the workflow's OIDC token. If the
+        # registry rejects with "configured trusted publisher", the
+        # workflow file path or repo doesn't match what's set up at
+        # https://www.npmjs.com/package/opencara/access.
+        run: pnpm publish --provenance --no-git-checks
