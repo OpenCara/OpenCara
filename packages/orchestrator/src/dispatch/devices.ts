@@ -170,6 +170,12 @@ export class WebSocketDispatcher implements AgentDispatcher {
       // we don't gate on "already running something" — operators who pin
       // multiple agents to the same device expect them to run in parallel
       // (e.g. a multi-reviewer flow with one device).
+      //
+      // Capacity caveat: there is currently NO per-device concurrency cap.
+      // A burst of N parallel jobs is the operator's responsibility — pick
+      // a host with enough RAM/CPU before pinning many reviewers to it.
+      // If this becomes a footgun in practice, add a `max_concurrent`
+      // column on agent_hosts and gate `inflight.size` against it.
       dev = this.pool.byId(ctx.hostId);
       if (!dev) throw new Error(`pinned device ${ctx.hostId} is not connected`);
     } else {

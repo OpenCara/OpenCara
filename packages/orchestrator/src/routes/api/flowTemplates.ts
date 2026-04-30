@@ -23,6 +23,10 @@ interface FlowTemplateRoutesDeps {
  * the code template's graphJson; subsequent edits write to that row. The
  * project flow seeder reads the project owner's draft (when present) so a
  * newly created project flow picks up whatever the user configured here.
+ *
+ * Mutations always validate the candidate graph BEFORE touching the draft
+ * row, so a failed edit (missing node, schema violation) cannot leave a
+ * stale "customized" draft sitting in the table.
  */
 export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
   const r = new Hono<AuthEnv>();
@@ -39,12 +43,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const def = builtinFlows[slug];
     if (!def) return c.json({ error: "not found" }, 404);
 
-    const draft = await deps.db.query.templateDrafts.findFirst({
-      where: and(
-        eq(templateDrafts.userId, user.id),
-        eq(templateDrafts.templateSlug, slug),
-      ),
-    });
+    const draft = await loadDraft(deps.db, user.id, def.slug);
     const graph = draft ? (draft.graphJson as MutableGraph) : codeGraph(def);
     const settings = await deps.db
       .select()
@@ -94,8 +93,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       return c.json({ error: "config (object) required" }, 400);
     }
 
-    const draft = await loadOrCloneDraft(deps.db, user.id, def);
-    const graph = JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
+    const graph = await currentGraph(deps.db, user.id, def);
     const target = graph.nodes.find((n) => n.id === nodeId);
     if (!target) return c.json({ error: "node not found" }, 404);
     target.config = body.config as typeof target.config;
@@ -103,19 +101,9 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const validation = validateGraph(def, graph);
     if (!validation.ok) return c.json({ error: validation.error }, 400);
 
-    await deps.db
-      .update(templateDrafts)
-      .set({
-        graphJson: graph,
-        customizedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(templateDrafts.id, draft.id));
+    await persistDraft(deps.db, user.id, def.slug, graph);
     return c.json({
-      template: {
-        ...toSummary(def),
-        graphJson: graph,
-      },
+      template: { ...toSummary(def), graphJson: graph },
       hasDraft: true,
     });
   });
@@ -129,21 +117,15 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const body = await c.req.json().catch(() => ({}));
     const promptId = parseKeepable(body.promptId);
     const agentId = parseKeepable(body.agentId);
-    const labelRaw = body.label;
-    const label: string | null | typeof KEEP =
-      labelRaw === undefined
-        ? KEEP
-        : labelRaw === null
-          ? null
-          : String(labelRaw).trim() || null;
+    const label = parseKeepable(body.label);
 
-    if (promptId && promptId !== KEEP) {
+    if (promptId !== KEEP && promptId !== null) {
       const p = await deps.db.query.prompts.findFirst({
         where: and(eq(prompts.id, promptId), eq(prompts.userId, user.id)),
       });
       if (!p) return c.json({ error: "prompt not found" }, 404);
     }
-    if (agentId && agentId !== KEEP) {
+    if (agentId !== KEEP && agentId !== null) {
       const a = await deps.db.query.agents.findFirst({
         where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
       });
@@ -158,8 +140,9 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       ),
     });
     if (existing) {
+      const now = new Date();
       const patch: Partial<typeof templateNodeSettings.$inferInsert> = {
-        updatedAt: new Date(),
+        updatedAt: now,
       };
       if (promptId !== KEEP) patch.promptId = promptId;
       if (agentId !== KEEP) patch.agentId = agentId;
@@ -173,12 +156,13 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         ...(promptId !== KEEP ? { promptId } : {}),
         ...(agentId !== KEEP ? { agentId } : {}),
         ...(label !== KEEP ? { label } : {}),
-        updatedAt: new Date().toISOString(),
+        updatedAt: now.toISOString(),
       };
       return c.json({ setting: merged });
     }
     const id = ulid();
-    const row = {
+    const now = new Date();
+    await deps.db.insert(templateNodeSettings).values({
       id,
       userId: user.id,
       templateSlug: slug,
@@ -186,9 +170,23 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       promptId: promptId === KEEP ? null : promptId,
       agentId: agentId === KEEP ? null : agentId,
       label: label === KEEP ? null : label,
-    };
-    await deps.db.insert(templateNodeSettings).values(row);
-    return c.json({ setting: row }, 201);
+      updatedAt: now,
+    });
+    return c.json(
+      {
+        setting: {
+          id,
+          userId: user.id,
+          templateSlug: slug,
+          nodeId,
+          promptId: promptId === KEEP ? null : promptId,
+          agentId: agentId === KEEP ? null : agentId,
+          label: label === KEEP ? null : label,
+          updatedAt: now.toISOString(),
+        },
+      },
+      201,
+    );
   });
 
   r.post("/flow-templates/:slug/reviewers", auth, async (c) => {
@@ -197,22 +195,14 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const def = builtinFlows[slug];
     if (!def) return c.json({ error: "not found" }, 404);
 
-    const draft = await loadOrCloneDraft(deps.db, user.id, def);
-    const graph = JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
+    const graph = await currentGraph(deps.db, user.id, def);
     const result = addReviewer(graph);
     if (!result.ok) return c.json({ error: result.error }, 400);
 
     const validation = validateGraph(def, graph);
     if (!validation.ok) return c.json({ error: validation.error }, 400);
 
-    await deps.db
-      .update(templateDrafts)
-      .set({
-        graphJson: graph,
-        customizedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(templateDrafts.id, draft.id));
+    await persistDraft(deps.db, user.id, def.slug, graph);
     return c.json({
       template: { ...toSummary(def), graphJson: graph },
       addedNodeId: result.addedNodeId,
@@ -227,22 +217,14 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const def = builtinFlows[slug];
     if (!def) return c.json({ error: "not found" }, 404);
 
-    const draft = await loadOrCloneDraft(deps.db, user.id, def);
-    const graph = JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
+    const graph = await currentGraph(deps.db, user.id, def);
     const result = removeReviewer(graph, nodeId);
     if (!result.ok) return c.json({ error: result.error }, 400);
 
     const validation = validateGraph(def, graph);
     if (!validation.ok) return c.json({ error: validation.error }, 400);
 
-    await deps.db
-      .update(templateDrafts)
-      .set({
-        graphJson: graph,
-        customizedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(templateDrafts.id, draft.id));
+    await persistDraft(deps.db, user.id, def.slug, graph);
 
     // Mirror project route: clear per-node settings for the orphaned node so
     // a re-added node with the same id starts clean.
@@ -283,30 +265,68 @@ function codeGraph(def: FlowDefinition): MutableGraph {
   };
 }
 
-async function loadOrCloneDraft(
+async function loadDraft(
+  db: Db,
+  userId: string,
+  slug: string,
+): Promise<{ id: string; graphJson: unknown; customizedAt: Date | null } | null> {
+  return (
+    (await db.query.templateDrafts.findFirst({
+      where: and(
+        eq(templateDrafts.userId, userId),
+        eq(templateDrafts.templateSlug, slug),
+      ),
+    })) ?? null
+  );
+}
+
+/**
+ * Snapshot the user's current working graph for a template — their draft if
+ * one exists, otherwise a deep clone of the code template. Returned graph is
+ * safe to mutate; nothing is persisted until persistDraft is called.
+ */
+async function currentGraph(
   db: Db,
   userId: string,
   def: FlowDefinition,
-): Promise<{ id: string; graphJson: MutableGraph }> {
-  const existing = await db.query.templateDrafts.findFirst({
-    where: and(
-      eq(templateDrafts.userId, userId),
-      eq(templateDrafts.templateSlug, def.slug),
-    ),
-  });
-  if (existing) {
-    return { id: existing.id, graphJson: existing.graphJson as MutableGraph };
+): Promise<MutableGraph> {
+  const draft = await loadDraft(db, userId, def.slug);
+  if (draft) {
+    return JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
   }
-  const id = ulid();
-  const graphJson = codeGraph(def);
-  await db.insert(templateDrafts).values({
-    id,
-    userId,
-    templateSlug: def.slug,
-    graphJson,
-    customizedAt: new Date(),
-  });
-  return { id, graphJson };
+  return codeGraph(def);
+}
+
+/**
+ * Atomically persist the user's draft. Uses INSERT … ON CONFLICT DO UPDATE
+ * so two simultaneous first-edits don't blow up on the (userId, templateSlug)
+ * unique index — the loser just updates the row the winner inserted.
+ */
+async function persistDraft(
+  db: Db,
+  userId: string,
+  slug: string,
+  graph: MutableGraph,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .insert(templateDrafts)
+    .values({
+      id: ulid(),
+      userId,
+      templateSlug: slug,
+      graphJson: graph,
+      customizedAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [templateDrafts.userId, templateDrafts.templateSlug],
+      set: {
+        graphJson: graph,
+        customizedAt: now,
+        updatedAt: now,
+      },
+    });
 }
 
 function validateGraph(
@@ -430,8 +450,17 @@ interface MutableGraph {
 }
 
 const KEEP = "__keep__" as const;
+
+/**
+ * Three-state input parser for promptId / agentId / label fields:
+ *   undefined → KEEP (don't touch)
+ *   null      → null (clear the link)
+ *   string    → trimmed value, or null if the trim produced "" (so an empty
+ *               input box doesn't write "" into a FK column).
+ */
 function parseKeepable(raw: unknown): string | null | typeof KEEP {
   if (raw === undefined) return KEEP;
   if (raw === null) return null;
-  return String(raw);
+  const trimmed = String(raw).trim();
+  return trimmed === "" ? null : trimmed;
 }
