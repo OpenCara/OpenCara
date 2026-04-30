@@ -599,9 +599,16 @@ function TestRunLog({ agentRunId }: { agentRunId: string }) {
         <span>Output</span>
         <span>{status}</span>
       </div>
-      <pre className="max-h-72 overflow-auto rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
-        {chunks || "(waiting…)"}
-      </pre>
+      {/* whitespace-pre-wrap + break-all so long unbroken lines (JSON, URLs,
+          stack traces) wrap inside the dialog instead of blowing the
+          DialogContent's max-w-2xl out horizontally. min-w-0 on the
+          wrapper lets flex/grid parents shrink the pre below its content
+          width — without it the pre dictates the dialog width. */}
+      <div className="min-w-0">
+        <pre className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
+          {chunks || "(waiting…)"}
+        </pre>
+      </div>
     </div>
   );
 }
