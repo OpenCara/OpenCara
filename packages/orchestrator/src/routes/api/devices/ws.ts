@@ -49,7 +49,7 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
           userId: host.userId,
           // The WS context shape varies; cast for the pool's needs.
           ws: ws as never,
-          busy: false,
+          inflight: new Set<string>(),
         });
         registered = true;
         ws.send(

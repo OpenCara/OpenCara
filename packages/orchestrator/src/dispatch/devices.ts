@@ -15,7 +15,13 @@ export interface ConnectedDevice {
   agentHostId: string;
   userId: string | null;
   ws: WSContext<unknown>;
-  busy: boolean;
+  /**
+   * RunIds currently dispatched to this device but not yet acked with `done`.
+   * The CLI's onMessage hands each job off via `void executeJob(...)` so the
+   * remote can run multiple in parallel — the orchestrator just has to stop
+   * artificially gating on "one job at a time".
+   */
+  inflight: Set<string>;
 }
 
 interface PendingJob {
@@ -72,11 +78,19 @@ export class DevicePool {
     this.unregister(agentHostId);
   }
 
+  /**
+   * Pick a device for an unpinned job. Prefers truly idle devices (no
+   * inflight jobs) for fan-out across the fleet, but falls back to the
+   * least-loaded connected device so a single-device install still gets
+   * concurrent execution instead of "no idle device available".
+   */
   pickIdle(): ConnectedDevice | null {
+    let best: ConnectedDevice | null = null;
     for (const d of this.devices.values()) {
-      if (!d.busy) return d;
+      if (d.inflight.size === 0) return d;
+      if (!best || d.inflight.size < best.inflight.size) best = d;
     }
-    return null;
+    return best;
   }
 
   /**
@@ -109,7 +123,7 @@ export class DevicePool {
       const p = this.pending.get(msg.runId);
       if (!p) return;
       const dev = this.devices.get(p.agentHostId);
-      if (dev) dev.busy = false;
+      if (dev) dev.inflight.delete(msg.runId);
       this.pending.delete(msg.runId);
       const exitCode = msg.exitCode ?? (msg.status === "succeeded" ? 0 : 1);
       p.resolve({
@@ -152,17 +166,16 @@ export class WebSocketDispatcher implements AgentDispatcher {
   async run(spec: AgentSpec, ctx: RunContext): Promise<RunResult> {
     let dev: ConnectedDevice | null;
     if (ctx.hostId) {
-      // Pinned: must be that exact host, must be online & idle. No
-      // fallback — pinning is an explicit choice the operator made,
-      // and silently routing elsewhere would be surprising.
+      // Pinned: must be that exact host. The CLI runs jobs concurrently, so
+      // we don't gate on "already running something" — operators who pin
+      // multiple agents to the same device expect them to run in parallel
+      // (e.g. a multi-reviewer flow with one device).
       dev = this.pool.byId(ctx.hostId);
       if (!dev) throw new Error(`pinned device ${ctx.hostId} is not connected`);
-      if (dev.busy) throw new Error(`pinned device ${ctx.hostId} is busy`);
     } else {
       dev = this.pool.pickIdle();
-      if (!dev) throw new Error("no idle device available");
+      if (!dev) throw new Error("no device connected");
     }
-    dev.busy = true;
 
     const run: AgentRun = {
       id: ulid(),
@@ -174,6 +187,7 @@ export class WebSocketDispatcher implements AgentDispatcher {
       finishedAt: null,
       exitCode: null,
     };
+    dev.inflight.add(run.id);
 
     const promise = this.pool.awaitJob(run.id, dev.agentHostId, ctx.onLog);
     this.pool.send(dev, { type: "job", run, spec, stdinJson: ctx.stdinJson });
