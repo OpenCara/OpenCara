@@ -112,7 +112,40 @@ async function resolveProjectId(db: Db, payload: WebhookPayload): Promise<string
     where: (p, { eq, and, isNull }) =>
       and(eq(p.githubRepoId, repoId), isNull(p.removedAt)),
   });
-  return row?.id ?? null;
+  if (!row) return null;
+
+  // Self-heal display name when GitHub renames the repo. We match by
+  // repo id (stable across renames), so events keep landing on the
+  // right project row, but the row's owner+name lag until the user
+  // notices ("why are events for OpenCara/OpenCara showing up under a
+  // project named OpenKira?"). Cheap to keep in sync — one update per
+  // webhook event, and only when something actually changed.
+  const fullName = payload.repository?.full_name;
+  const slash = fullName ? fullName.indexOf("/") : -1;
+  if (fullName && slash > 0) {
+    const owner = fullName.slice(0, slash);
+    const name = fullName.slice(slash + 1);
+    if (owner && name && (owner !== row.owner || name !== row.name)) {
+      // Best-effort. A unique-on-(owner,name) collision (e.g. another
+      // project already claims the new name in this org) leaves the
+      // stale row alone — surfacing the mismatch via the events page
+      // beats failing the webhook write.
+      try {
+        await db
+          .update(projects)
+          .set({ owner, name })
+          .where(eq(projects.id, row.id));
+      } catch (err) {
+        console.warn("[webhooks] project rename sync failed", {
+          projectId: row.id,
+          old: `${row.owner}/${row.name}`,
+          new: fullName,
+          err,
+        });
+      }
+    }
+  }
+  return row.id;
 }
 
 async function handleMetaEvent(
