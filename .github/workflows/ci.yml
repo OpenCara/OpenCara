@@ -1,0 +1,47 @@
+name: ci
+
+# Required status check for PRs to OpenCara/OpenCara — the repo's
+# branch-protection rule wants a check literally named `ci` to land
+# before main moves. Keep this minimal (typecheck + build) so PRs
+# don't sit in queue for ages; deeper validation (lint, unit tests)
+# can layer on as separate jobs later if needed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Don't pile up CI runs on a busy PR; cancel the older ones.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # Reads pnpm version from root package.json's `packageManager`
+        # field; specifying it here too errors out (pnpm/action-setup
+        # guards against drift).
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        # Builds every workspace (orchestrator, web, cli, shared,
+        # flows). Runs the same `pnpm -r build` the publish workflow
+        # would hit, so a CI green here means a tag-push won't break
+        # at the build step.
+        run: pnpm -r build
