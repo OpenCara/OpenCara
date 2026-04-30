@@ -111,7 +111,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
   apiHono.route("/", chatRoutes({ db, pg, dispatcher }));
-  apiHono.route("/", flowTemplateRoutes());
+  apiHono.route("/", flowTemplateRoutes({ db }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the
