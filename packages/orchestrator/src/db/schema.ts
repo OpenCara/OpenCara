@@ -310,6 +310,54 @@ export const flowNodeSettings = pgTable(
   }),
 );
 
+// Per-user editable overlay over a builtin flow template's graphJson. Created
+// lazily on first edit; absence means "use the code template as-is". Acts as
+// the seed for a new project flow owned by this user.
+export const templateDrafts = pgTable(
+  "template_drafts",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    templateSlug: text("template_slug").notNull(),
+    graphJson: jsonb("graph_json").notNull(),
+    customizedAt: timestamp("customized_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userSlugUq: uniqueIndex("template_drafts_user_slug_uq").on(t.userId, t.templateSlug),
+  }),
+);
+
+// Per-user, per-template-node settings (linked agent / prompt / label
+// override). Parallel to flow_node_settings but keyed by (userId,
+// templateSlug, nodeId). Copied into flow_node_settings when a project flow
+// is seeded for this user.
+export const templateNodeSettings = pgTable(
+  "template_node_settings",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    templateSlug: text("template_slug").notNull(),
+    nodeId: text("node_id").notNull(),
+    promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    label: text("label"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userSlugNodeUq: uniqueIndex("template_node_settings_user_slug_node_uq").on(
+      t.userId,
+      t.templateSlug,
+      t.nodeId,
+    ),
+  }),
+);
+
 export const flowRunSteps = pgTable(
   "flow_run_steps",
   {

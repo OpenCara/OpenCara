@@ -171,6 +171,17 @@ export interface FlowTemplateDetail extends FlowTemplateSummary {
   graphJson: FlowGraph;
 }
 
+export interface TemplateNodeSetting {
+  id: string;
+  userId: string;
+  templateSlug: string;
+  nodeId: string;
+  promptId: string | null;
+  agentId: string | null;
+  label: string | null;
+  updatedAt: string;
+}
+
 export const flowTemplatesQuery = () => ({
   queryKey: ["flow-templates"] as const,
   queryFn: () =>
@@ -180,7 +191,12 @@ export const flowTemplatesQuery = () => ({
 export const flowTemplateDetailQuery = (slug: string) => ({
   queryKey: ["flow-templates", slug] as const,
   queryFn: () =>
-    api.get<{ template: FlowTemplateDetail }>(`/api/flow-templates/${slug}`),
+    api.get<{
+      template: FlowTemplateDetail;
+      hasDraft: boolean;
+      customizedAt: string | null;
+      settings: TemplateNodeSetting[];
+    }>(`/api/flow-templates/${slug}`),
 });
 
 export const installationsQuery = () => ({
@@ -361,77 +377,6 @@ export function useDeletePrompt() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts"] }),
   });
 }
-
-export function useSetFlowNodeSettings(projectId: string, flowId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: {
-      nodeId: string;
-      promptId?: string | null;
-      agentId?: string | null;
-      label?: string | null;
-    }) => {
-      const body: Record<string, string | null> = {};
-      if (vars.promptId !== undefined) body.promptId = vars.promptId;
-      if (vars.agentId !== undefined) body.agentId = vars.agentId;
-      if (vars.label !== undefined) body.label = vars.label;
-      return api.put<{ setting: FlowNodeSetting }>(
-        `/api/projects/${projectId}/flows/${flowId}/nodes/${vars.nodeId}/settings`,
-        body,
-      );
-    },
-    onSuccess: () =>
-      qc.invalidateQueries({
-        queryKey: ["projects", projectId, "flows", flowId, "node-settings"],
-      }),
-  });
-}
-
-export function useSetNodeConfig(projectId: string, slug: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: { flowId: string; nodeId: string; config: unknown }) =>
-      api.patch<{ flow: FlowSummary }>(
-        `/api/projects/${projectId}/flows/${vars.flowId}/nodes/${vars.nodeId}/config`,
-        { config: vars.config },
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
-    },
-  });
-}
-
-export function useAddReviewer(projectId: string, slug: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (flowId: string) =>
-      api.post<{ flow: FlowSummary; addedNodeId: string }>(
-        `/api/projects/${projectId}/flows/${flowId}/reviewers`,
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
-    },
-  });
-}
-
-export function useRemoveReviewer(projectId: string, slug: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: { flowId: string; nodeId: string }) =>
-      api.delete<{ flow: FlowSummary }>(
-        `/api/projects/${projectId}/flows/${vars.flowId}/reviewers/${vars.nodeId}`,
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
-    },
-  });
-}
-
-/** @deprecated use useSetFlowNodeSettings */
-export const useSetFlowNodePrompt = useSetFlowNodeSettings;
 
 export function useSetFlowEnabled(projectId: string, slug: string) {
   const qc = useQueryClient();
