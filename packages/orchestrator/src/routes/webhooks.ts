@@ -117,8 +117,8 @@ async function resolveProjectId(db: Db, payload: WebhookPayload): Promise<string
   // Self-heal display name when GitHub renames the repo. We match by
   // repo id (stable across renames), so events keep landing on the
   // right project row, but the row's owner+name lag until the user
-  // notices ("why are events for OpenCara/OpenCara showing up under a
-  // project named OpenKira?"). Cheap to keep in sync — one update per
+  // notices ("why are events for new-org/new-repo showing up under a
+  // project named OldName?"). Cheap to keep in sync — one update per
   // webhook event, and only when something actually changed.
   const fullName = payload.repository?.full_name;
   const slash = fullName ? fullName.indexOf("/") : -1;
