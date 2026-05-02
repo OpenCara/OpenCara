@@ -17,7 +17,12 @@ import {
 import { and, asc } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
-import { buildPullRequestContext, type PullRequestContext } from "./context.js";
+import {
+  buildIssueStatusContext,
+  buildPullRequestContext,
+  type IssueStatusContext,
+  type PullRequestContext,
+} from "./context.js";
 import {
   actionRunner,
   agentRunner,
@@ -278,6 +283,23 @@ export class FlowEngine {
       }
     }
 
+    // Same pre-build for Projects v2 status changes — the issue row lookup
+    // is local so this is essentially free, but caching once keeps the env
+    // injection consistent across multiple agent nodes if a flow ever fans
+    // out from one trigger.
+    let issueContext: IssueStatusContext | undefined;
+    if (event.type === "projects_v2_item") {
+      try {
+        issueContext = await buildIssueStatusContext(
+          this.deps.db,
+          project,
+          event.payload as never,
+        );
+      } catch (err) {
+        console.error("[flow-engine] issue context fetch failed", err);
+      }
+    }
+
     // Per-node custom labels (rename feature). Used by buildFanInInput so
     // synthesizer prompts read "## From Correctness reviewer" rather than
     // the raw node id.
@@ -356,7 +378,9 @@ export class FlowEngine {
       if (layerJobs.length === 0) continue;
 
       const results = await Promise.allSettled(
-        layerJobs.map((job) => this.runNodeStep(prepared, def, job, event, prContext)),
+        layerJobs.map((job) =>
+          this.runNodeStep(prepared, def, job, event, prContext, issueContext),
+        ),
       );
 
       for (let i = 0; i < layerJobs.length; i++) {
@@ -406,6 +430,7 @@ export class FlowEngine {
     job: { node: FlowNode; idx: number; previousOutput: string | undefined },
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
+    issueContext: IssueStatusContext | undefined,
   ): Promise<{ stdoutCaptured?: string; skipped: boolean; skipReason?: string }> {
     void def;
     const { flowRunId, flowId, project, installation } = prepared;
@@ -445,12 +470,13 @@ export class FlowEngine {
       project: { owner: project.owner, name: project.name },
       event,
       prContext,
+      issueContext,
       previousOutput,
     };
 
     try {
       let result;
-      if (node.kind === "github.pull_request") {
+      if (node.kind === "github.pull_request" || node.kind === "github.projects_v2_item") {
         result = await triggerRunner(baseCtx, node);
       } else if (node.kind === "agent") {
         result = await agentRunner(baseCtx, node);

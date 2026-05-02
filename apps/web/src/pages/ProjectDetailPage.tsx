@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -20,11 +21,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   projectQuery,
   projectEventsQuery,
   projectFlowRunsQuery,
   projectFlowsQuery,
+  projectIssuesQuery,
   projectRunsQuery,
+  useSyncProjectIssues,
   type FlowRunSummary,
   type FlowSummary,
 } from "@/lib/queries";
@@ -85,6 +95,7 @@ export function ProjectDetailPage() {
       >
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="issues">Issues</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
           <TabsTrigger value="flow-runs">Flow runs</TabsTrigger>
           <TabsTrigger value="runs">Agent runs</TabsTrigger>
@@ -115,6 +126,10 @@ export function ProjectDetailPage() {
               />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="issues">
+          <IssuesTab id={id!} />
         </TabsContent>
 
         <TabsContent value="events">
@@ -366,6 +381,127 @@ function FlowRunRow({
         {run.error ?? ""}
       </TableCell>
     </TableRow>
+  );
+}
+
+function IssuesTab({ id }: { id: string }) {
+  const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">("open");
+  const q = useQuery(projectIssuesQuery(id, { state: stateFilter }));
+  const sync = useSyncProjectIssues(id);
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">
+            State
+          </span>
+          <Select
+            value={stateFilter}
+            onValueChange={(v) => setStateFilter(v as "open" | "closed" | "all")}
+          >
+            <SelectTrigger className="h-8 w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="open">Open</SelectItem>
+              <SelectItem value="closed">Closed</SelectItem>
+              <SelectItem value="all">All</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {q.data?.issues.length ?? 0} shown
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={sync.isPending}
+            onClick={() => sync.mutate()}
+            title="Fetch all issues from GitHub. Useful for projects added before the issues feature shipped."
+          >
+            {sync.isPending ? "Syncing…" : "Sync from GitHub"}
+          </Button>
+        </div>
+      </div>
+      {sync.data && (
+        <div className="text-xs text-muted-foreground">
+          Synced: {sync.data.inserted} new, {sync.data.updated} updated,{" "}
+          {sync.data.skipped} PRs skipped.
+        </div>
+      )}
+      {sync.error && (
+        <div className="text-xs text-destructive">
+          Sync failed: {sync.error instanceof Error ? sync.error.message : String(sync.error)}
+        </div>
+      )}
+      {q.isLoading ? (
+        <Skeleton className="h-32 w-full" />
+      ) : !q.data || q.data.issues.length === 0 ? (
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          No issues match this filter. Issues are populated from webhooks and
+          backfilled when the project is added.
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">#</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead className="w-24">State</TableHead>
+                  <TableHead>Labels</TableHead>
+                  <TableHead>Assignees</TableHead>
+                  <TableHead className="w-32">Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {q.data.issues.map((issue) => (
+                  <TableRow key={issue.id}>
+                    <TableCell className="text-sm text-muted-foreground">
+                      #{issue.number}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      <a
+                        href={issue.htmlUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hover:underline"
+                      >
+                        {issue.title}
+                      </a>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={issue.state === "open" ? "default" : "secondary"}
+                      >
+                        {issue.state}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {issue.labels.map((l) => (
+                          <Badge key={l.name} variant="outline" className="text-xs">
+                            {l.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {issue.assignees.map((a) => `@${a.login}`).join(", ") || "—"}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {formatRelative(issue.updatedAt)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 

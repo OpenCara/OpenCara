@@ -4,6 +4,7 @@ import type { Db } from "../db/client.js";
 import { githubInstallations, platformEvents, projects } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
 import { upsertInstallation, softRemoveProjectsForRepos } from "../github/installations.js";
+import { upsertIssueFromWebhook, type IssuePayload } from "../github/issues.js";
 import type { FlowEngine } from "../flows/engine.js";
 
 interface WebhookDeps {
@@ -19,6 +20,7 @@ interface WebhookPayload {
   repositories?: Array<{ id: number; full_name: string }>;
   repositories_added?: Array<{ id: number; full_name: string }>;
   repositories_removed?: Array<{ id: number; full_name: string }>;
+  issue?: IssuePayload;
 }
 
 export function appWebhookRoutes(deps: WebhookDeps) {
@@ -60,6 +62,21 @@ export function appWebhookRoutes(deps: WebhookDeps) {
         .onConflictDoNothing();
 
       await handleMetaEvent(deps.db, eventType, payload);
+
+      if (eventType === "issues" && projectRowId && payload.issue && payload.action) {
+        try {
+          await upsertIssueFromWebhook(deps.db, projectRowId, payload.action, payload.issue);
+        } catch (err) {
+          // Don't let issue normalization failure swallow the rest of the
+          // webhook pipeline — platform_events row is already in, and the
+          // flow engine still needs to fire.
+          console.error("[webhooks] issue upsert failed", {
+            projectId: projectRowId,
+            number: payload.issue.number,
+            err,
+          });
+        }
+      }
 
       if (deps.flowEngine) {
         deps.flowEngine.onPlatformEvent({

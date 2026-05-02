@@ -149,6 +149,59 @@ export const projectEventsQuery = (id: string) => ({
   queryFn: () => api.get<{ events: ProjectEvent[] }>(`/api/projects/${id}/events`),
 });
 
+export interface IssueLabel {
+  name: string;
+  color: string;
+}
+export interface IssueAssignee {
+  login: string;
+  id: number;
+}
+export interface ProjectIssue {
+  id: string;
+  number: number;
+  title: string;
+  state: string;
+  stateReason: string | null;
+  labels: IssueLabel[];
+  assignees: IssueAssignee[];
+  authorLogin: string | null;
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+}
+
+export const projectIssuesQuery = (
+  id: string,
+  filters?: { state?: "open" | "closed" | "all"; label?: string | null },
+) => {
+  const params = new URLSearchParams();
+  if (filters?.state && filters.state !== "all") params.set("state", filters.state);
+  if (filters?.label) params.set("label", filters.label);
+  const qs = params.toString();
+  return {
+    queryKey: ["projects", id, "issues", filters?.state ?? "all", filters?.label ?? ""] as const,
+    queryFn: () =>
+      api.get<{ issues: ProjectIssue[] }>(
+        `/api/projects/${id}/issues${qs ? `?${qs}` : ""}`,
+      ),
+  };
+};
+
+export function useSyncProjectIssues(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; inserted: number; updated: number; skipped: number }>(
+        `/api/projects/${projectId}/issues/sync`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "issues"] });
+    },
+  });
+}
+
 export const projectRunsQuery = (id: string) => ({
   queryKey: ["projects", id, "runs"] as const,
   queryFn: () => api.get<{ runs: ProjectRun[] }>(`/api/projects/${id}/runs`),
