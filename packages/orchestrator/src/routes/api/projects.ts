@@ -156,7 +156,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       })
       .from(issues)
       .where(and(...conds))
-      .orderBy(desc(issues.updatedAt))
+      // Order by id (ULID, monotonic with insert time) so the `before=<id>`
+      // cursor is well-defined. updatedAt would be a nicer sort key but it
+      // changes on every webhook upsert, which would let pages skip or
+      // duplicate rows — composite cursor not worth the complexity for an
+      // Issues tab whose most-common query fits in one page.
+      .orderBy(desc(issues.id))
       .limit(limit);
     return c.json({ issues: rows });
   });

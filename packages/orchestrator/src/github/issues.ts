@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { issues, projects } from "../db/schema.js";
+import { issues } from "../db/schema.js";
 import type { GithubAppClient } from "./app.js";
 
 // Subset of GitHub's REST/webhook issue payload that we persist. Both
@@ -143,8 +143,11 @@ export async function backfillIssues(
     }
     if (incoming.length === 0) continue;
 
-    // Bulk upsert this page. We compute (project, number) tuples to look up
-    // existing rows in one query and decide insert vs update for stats.
+    // Pre-compute existing rows just to keep the inserted/updated counts
+    // honest for the response — the actual write below is an upsert so a
+    // concurrent webhook landing between this read and the upsert can no
+    // longer crash the backfill on a unique-constraint violation. Counts
+    // remain approximate under that race, which is fine for diagnostics.
     const numbers = incoming.map((i) => i.number);
     const existing = await db
       .select({ number: issues.number })
@@ -154,10 +157,12 @@ export async function backfillIssues(
 
     for (const p of incoming) {
       const row = rowFromPayload(project.id, p, false);
-      if (existingNumbers.has(p.number)) {
-        await db
-          .update(issues)
-          .set({
+      await db
+        .insert(issues)
+        .values({ id: ulid(), ...row })
+        .onConflictDoUpdate({
+          target: [issues.projectId, issues.number],
+          set: {
             githubIssueId: row.githubIssueId,
             githubNodeId: row.githubNodeId,
             title: row.title,
@@ -171,16 +176,12 @@ export async function backfillIssues(
             updatedAt: row.updatedAt,
             closedAt: row.closedAt,
             removedAt: row.removedAt,
-          })
-          .where(and(eq(issues.projectId, project.id), eq(issues.number, p.number)));
-        updated += 1;
-      } else {
-        await db.insert(issues).values({ id: ulid(), ...row });
-        inserted += 1;
-      }
+          },
+        });
+      if (existingNumbers.has(p.number)) updated += 1;
+      else inserted += 1;
     }
   }
 
-  void projects;
   return { inserted, updated, skipped };
 }

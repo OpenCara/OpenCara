@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { issues } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
@@ -36,6 +36,7 @@ interface GithubInstallationLike {
 }
 
 interface ProjectLike {
+  id: string;
   owner: string;
   name: string;
 }
@@ -113,8 +114,12 @@ export async function buildIssueStatusContext(
     | (typeof issues.$inferSelect)
     | undefined;
   if (contentNodeId) {
+    // Project-scope the lookup: github_node_id index isn't unique, so the
+    // same issue could in principle be linked to multiple project rows
+    // (today projects.githubRepoId is unique, so this is defensive — but
+    // free correctness for future multi-tenant changes).
     issueRow = await db.query.issues.findFirst({
-      where: eq(issues.githubNodeId, contentNodeId),
+      where: and(eq(issues.githubNodeId, contentNodeId), eq(issues.projectId, project.id)),
     });
   }
 
