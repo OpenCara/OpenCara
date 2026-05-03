@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink } from "lucide-react";
@@ -34,20 +34,40 @@ export function IssueDetailPage() {
 
   const save = useSaveIssueBody(projectId, number);
 
-  const onApplyRewrite = (original: string, replacement: string) => {
-    const current = draftBody ?? serverBody;
-    if (!current.includes(original)) {
-      setWarning(
-        "The original snippet is no longer in the body — likely overwritten by a previous Apply. Copy the rewrite manually if you still want it.",
-      );
-      return;
-    }
-    setWarning(null);
-    setDraftBody(current.replace(original, replacement));
+  const onApplyRewrite = useCallback(
+    (original: string, replacement: string) => {
+      setDraftBody((prev) => {
+        const current = prev ?? serverBody;
+        if (!current.includes(original)) {
+          setWarning(
+            "The original snippet is no longer in the body — likely overwritten by a previous Apply. Copy the rewrite manually if you still want it.",
+          );
+          return prev;
+        }
+        setWarning(null);
+        return current.replace(original, replacement);
+      });
+      setSelection(null);
+      window.getSelection()?.removeAllRanges();
+    },
+    [serverBody],
+  );
+
+  const onClearSelection = useCallback(() => {
     setSelection(null);
-    // Drop browser-native selection so the chip + chat pick up the new state.
     window.getSelection()?.removeAllRanges();
-  };
+  }, []);
+
+  const canvasCtx = useMemo(
+    () => ({
+      projectId,
+      issueNumber: number,
+      selection,
+      onClearSelection,
+      onApplyRewrite,
+    }),
+    [projectId, number, selection, onClearSelection, onApplyRewrite],
+  );
 
   const onSave = () => {
     if (draftBody === null || draftBody === serverBody) return;
@@ -112,20 +132,7 @@ export function IssueDetailPage() {
             // unused in embedded variant
           }}
           variant="embedded"
-          canvas={useMemo(
-            () => ({
-              projectId,
-              issueNumber: number,
-              selection,
-              onClearSelection: () => {
-                setSelection(null);
-                window.getSelection()?.removeAllRanges();
-              },
-              onApplyRewrite,
-            }),
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-            [projectId, number, selection],
-          )}
+          canvas={canvasCtx}
         />
       </div>
     </div>
