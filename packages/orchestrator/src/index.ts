@@ -99,7 +99,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
       app: githubApp ?? undefined,
     }),
   );
-  app.route("/api/projects", projectRoutes({ db }));
+  app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api/activity", activityRoutes({ db }));
   // Hono's app.route(prefix, subapp) only honours the FIRST mount at a given

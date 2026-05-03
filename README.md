@@ -6,8 +6,8 @@ OpenCara receives webhook events from GitHub, coordinates agents driven by those
 
 Example flows:
 
-- Issue moves from `backlog` → `ready` → assign a dev agent to work on it.
-- PR opened → start a reviewer agent → after review posted, ask the dev agent to address feedback.
+- Issue moves from `backlog` → `ready` on a GitHub Projects v2 board → dispatch the implement agent (built-in template `issue-implement`).
+- PR opened → start a reviewer agent → after review posted, ask the dev agent to address feedback (built-in template `pr-review`).
 
 ## Architecture
 
@@ -48,3 +48,13 @@ pnpm build
 ```
 
 Default local postgres: `postgres://opencara:opencara@localhost:5433/opencara`. Copy `.env.example` to `packages/orchestrator/.env` and fill in `GITHUB_WEBHOOK_SECRET`.
+
+## GitHub App permissions and events
+
+For the built-in flows to work end-to-end, the GitHub App needs:
+
+- **Repository permissions:** `Issues: read & write`, `Pull requests: read & write`, `Metadata: read`, `Contents: read`.
+- **Organization permissions:** `Projects: read` (required for the `issue-implement` flow to receive `projects_v2_item` events).
+- **Subscribed events:** `Pull request`, `Issues`, `Projects v2 item`, `Installation`, `Installation repositories`.
+
+The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the project page (issue rows are normalized from the webhook + a one-shot REST backfill on project add) and the `issue-implement` flow template (Projects v2 status changes).

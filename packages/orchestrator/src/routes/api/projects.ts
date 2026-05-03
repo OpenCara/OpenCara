@@ -5,13 +5,17 @@ import type { Db } from "../../db/client.js";
 import {
   agentRuns,
   githubInstallations,
+  issues,
   platformEvents,
   projects,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import type { GithubAppClient } from "../../github/app.js";
+import { backfillIssues } from "../../github/issues.js";
 
 interface ProjectRoutesDeps {
   db: Db;
+  app?: GithubAppClient;
 }
 
 export function projectRoutes(deps: ProjectRoutesDeps) {
@@ -118,6 +122,84 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       .orderBy(desc(platformEvents.receivedAt))
       .limit(limit);
     return c.json({ events: rows });
+  });
+
+  r.get("/:id/issues", async (c) => {
+    const id = c.req.param("id");
+    const limit = clampLimit(c.req.query("limit"));
+    const before = c.req.query("before");
+    const stateFilter = c.req.query("state"); // "open" | "closed" | undefined (all)
+    const labelFilter = c.req.query("label"); // single label name, optional
+    const conds = [eq(issues.projectId, id), isNull(issues.removedAt)];
+    if (stateFilter === "open" || stateFilter === "closed") {
+      conds.push(eq(issues.state, stateFilter));
+    }
+    if (before) conds.push(lt(issues.id, before));
+    if (labelFilter) {
+      // Match against the labels jsonb array using a Postgres jsonb @> containment query.
+      conds.push(sql`${issues.labels} @> ${JSON.stringify([{ name: labelFilter }])}::jsonb`);
+    }
+    const rows = await deps.db
+      .select({
+        id: issues.id,
+        number: issues.number,
+        title: issues.title,
+        state: issues.state,
+        stateReason: issues.stateReason,
+        labels: issues.labels,
+        assignees: issues.assignees,
+        authorLogin: issues.authorLogin,
+        htmlUrl: issues.htmlUrl,
+        createdAt: issues.createdAt,
+        updatedAt: issues.updatedAt,
+        closedAt: issues.closedAt,
+      })
+      .from(issues)
+      .where(and(...conds))
+      // Order by id (ULID, monotonic with insert time) so the `before=<id>`
+      // cursor is well-defined. updatedAt would be a nicer sort key but it
+      // changes on every webhook upsert, which would let pages skip or
+      // duplicate rows — composite cursor not worth the complexity for an
+      // Issues tab whose most-common query fits in one page.
+      .orderBy(desc(issues.id))
+      .limit(limit);
+    return c.json({ issues: rows });
+  });
+
+  // Manual one-shot backfill for a project that pre-dates the issues feature
+  // (auto-backfill only fires on project add). Idempotent — re-running just
+  // updates rows. 503 if the GitHub app isn't configured.
+  r.post("/:id/issues/sync", async (c) => {
+    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
+    const id = c.req.param("id");
+    const project = await deps.db.query.projects.findFirst({
+      where: eq(projects.id, id),
+    });
+    if (!project) return c.json({ error: "project not found" }, 404);
+    try {
+      const stats = await backfillIssues(
+        deps.app,
+        {
+          id: project.id,
+          owner: project.owner,
+          name: project.name,
+          installationId: project.installationId,
+        },
+        deps.db,
+      );
+      return c.json({ ok: true, ...stats });
+    } catch (err) {
+      console.error("[projects] manual issue backfill failed", {
+        projectId: id,
+        owner: project.owner,
+        name: project.name,
+        err,
+      });
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        500,
+      );
+    }
   });
 
   r.get("/:id/runs", async (c) => {

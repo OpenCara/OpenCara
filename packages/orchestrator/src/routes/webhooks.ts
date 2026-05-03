@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { githubInstallations, platformEvents, projects } from "../db/schema.js";
+import { githubInstallations, issues, platformEvents, projects } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
 import { upsertInstallation, softRemoveProjectsForRepos } from "../github/installations.js";
+import { upsertIssueFromWebhook, type IssuePayload } from "../github/issues.js";
 import type { FlowEngine } from "../flows/engine.js";
 
 interface WebhookDeps {
@@ -19,6 +20,14 @@ interface WebhookPayload {
   repositories?: Array<{ id: number; full_name: string }>;
   repositories_added?: Array<{ id: number; full_name: string }>;
   repositories_removed?: Array<{ id: number; full_name: string }>;
+  issue?: IssuePayload;
+  // projects_v2_item events arrive at the org/user level — no `repository`
+  // field — so resolveProjectId has to fall back to the issue node id.
+  projects_v2_item?: {
+    content_node_id?: string;
+    content_type?: string;
+    project_node_id?: string;
+  };
 }
 
 export function appWebhookRoutes(deps: WebhookDeps) {
@@ -43,7 +52,7 @@ export function appWebhookRoutes(deps: WebhookDeps) {
 
     try {
       const installationRowId = await resolveInstallationId(deps.db, payload, eventType);
-      const projectRowId = await resolveProjectId(deps.db, payload);
+      const projectRowId = await resolveProjectId(deps.db, payload, eventType);
 
       await deps.db
         .insert(platformEvents)
@@ -60,6 +69,21 @@ export function appWebhookRoutes(deps: WebhookDeps) {
         .onConflictDoNothing();
 
       await handleMetaEvent(deps.db, eventType, payload);
+
+      if (eventType === "issues" && projectRowId && payload.issue && payload.action) {
+        try {
+          await upsertIssueFromWebhook(deps.db, projectRowId, payload.action, payload.issue);
+        } catch (err) {
+          // Don't let issue normalization failure swallow the rest of the
+          // webhook pipeline — platform_events row is already in, and the
+          // flow engine still needs to fire.
+          console.error("[webhooks] issue upsert failed", {
+            projectId: projectRowId,
+            number: payload.issue.number,
+            err,
+          });
+        }
+      }
 
       if (deps.flowEngine) {
         deps.flowEngine.onPlatformEvent({
@@ -105,9 +129,30 @@ async function resolveInstallationId(
   return upserted.id;
 }
 
-async function resolveProjectId(db: Db, payload: WebhookPayload): Promise<string | null> {
+async function resolveProjectId(
+  db: Db,
+  payload: WebhookPayload,
+  eventType: string,
+): Promise<string | null> {
   const repoId = payload.repository?.id;
-  if (!repoId) return null;
+  if (!repoId) {
+    // projects_v2_item webhooks fire at org/user scope and carry no
+    // `repository` field; fall back to the issue node id we already
+    // normalized into the issues table. If we haven't seen the issue
+    // yet (e.g. the repo wasn't backfilled and no `issues` webhook
+    // fired before this Status change), the event lands as
+    // projectId=null and the flow engine ignores it — same fail-soft
+    // shape the original handler had.
+    if (eventType === "projects_v2_item") {
+      const nodeId = payload.projects_v2_item?.content_node_id;
+      if (!nodeId) return null;
+      const issueRow = await db.query.issues.findFirst({
+        where: eq(issues.githubNodeId, nodeId),
+      });
+      return issueRow?.projectId ?? null;
+    }
+    return null;
+  }
   const row = await db.query.projects.findFirst({
     where: (p, { eq, and, isNull }) =>
       and(eq(p.githubRepoId, repoId), isNull(p.removedAt)),

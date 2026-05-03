@@ -127,6 +127,48 @@ export const projects = pgTable(
   }),
 );
 
+export const issues = pgTable(
+  "issues",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    githubIssueId: bigint("github_issue_id", { mode: "number" }).notNull(),
+    // GraphQL node id. Needed to cross-reference projects_v2_item.content_node_id
+    // when a Projects v2 status change webhook fires — that payload identifies
+    // the issue by node id, not REST id.
+    githubNodeId: text("github_node_id").notNull(),
+    number: integer("number").notNull(),
+    title: text("title").notNull(),
+    bodyMd: text("body_md"),
+    // "open" | "closed". GitHub's REST issue states.
+    state: text("state").notNull(),
+    // "completed" | "not_planned" | "reopened" | null.
+    stateReason: text("state_reason"),
+    labels: jsonb("labels")
+      .$type<{ name: string; color: string }[]>()
+      .notNull()
+      .default([]),
+    assignees: jsonb("assignees")
+      .$type<{ login: string; id: number }[]>()
+      .notNull()
+      .default([]),
+    authorLogin: text("author_login"),
+    htmlUrl: text("html_url").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    // Soft-delete: GitHub `issues.deleted` / `issues.transferred` actions.
+    removedAt: timestamp("removed_at", { withTimezone: true }),
+  },
+  (t) => ({
+    projectNumberUq: uniqueIndex("issues_project_id_number_uq").on(t.projectId, t.number),
+    projectStateIdx: index("issues_project_id_state_idx").on(t.projectId, t.state),
+    nodeIdIdx: index("issues_github_node_id_idx").on(t.githubNodeId),
+  }),
+);
+
 export const platformEvents = pgTable(
   "platform_events",
   {

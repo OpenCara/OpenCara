@@ -4,7 +4,7 @@ import { AgentSpecSchema } from "@opencara/shared";
 const Position = z.object({ x: z.number(), y: z.number() });
 
 // Mirrors GitHub Actions' on.pull_request filter set.
-export const TriggerNodeSchema = z.object({
+export const GithubPullRequestTriggerSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),
   position: Position,
@@ -21,7 +21,45 @@ export const TriggerNodeSchema = z.object({
     ignoreDrafts: z.boolean().default(false),
   }),
 });
+export type GithubPullRequestTrigger = z.infer<typeof GithubPullRequestTriggerSchema>;
+
+// GitHub Projects v2 item status-change trigger. Fires when a project board
+// status (or any single-select field) of a linked Issue/PR/DraftIssue changes
+// to one of the listed option names.
+export const GithubProjectsV2ItemTriggerSchema = z.object({
+  id: z.string(),
+  kind: z.literal("github.projects_v2_item"),
+  position: Position,
+  config: z.object({
+    // Filter to a specific Projects v2 board number on the org/user. null = any.
+    projectNumber: z.number().int().nullable().default(null),
+    // Single-select field whose option-change should fire the trigger.
+    fieldName: z.string().default("Status"),
+    // Option names that satisfy "moved to". Empty = match any.
+    toOptions: z.array(z.string()).default([]),
+    // Option names the item must have moved FROM. Empty = no constraint.
+    fromOptions: z.array(z.string()).default([]),
+    // Restrict to certain content types. Defaults to issues only.
+    contentTypes: z
+      .array(z.enum(["Issue", "PullRequest", "DraftIssue"]))
+      .default(["Issue"]),
+  }),
+});
+export type GithubProjectsV2ItemTrigger = z.infer<typeof GithubProjectsV2ItemTriggerSchema>;
+
+export const TriggerNodeSchema = z.discriminatedUnion("kind", [
+  GithubPullRequestTriggerSchema,
+  GithubProjectsV2ItemTriggerSchema,
+]);
 export type TriggerNode = z.infer<typeof TriggerNodeSchema>;
+
+export const TRIGGER_KINDS = [
+  "github.pull_request",
+  "github.projects_v2_item",
+] as const;
+export function isTriggerKind(kind: string): boolean {
+  return (TRIGGER_KINDS as readonly string[]).includes(kind);
+}
 
 export const AgentNodeSchema = z.object({
   id: z.string(),

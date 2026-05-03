@@ -5,6 +5,7 @@ import { githubInstallations, projects } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { GithubAppClient } from "../../github/app.js";
 import { syncInstallationRepos, upsertInstallation } from "../../github/installations.js";
+import { backfillIssues } from "../../github/issues.js";
 import { ulid } from "ulid";
 import { ensureBuiltinFlowsForProject } from "../../flows/builtin.js";
 
@@ -83,6 +84,23 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
       addedByUserId: user.id,
     });
     await ensureBuiltinFlowsForProject(deps.db, newId);
+    // Fire-and-forget. Backfilling 100s of issues over GitHub's REST API can
+    // take many seconds; we don't want to block the user's "add project"
+    // request on it. Webhooks will keep state fresh from now on; this just
+    // catches up the existing issues.
+    void backfillIssues(deps.app!, {
+      id: newId,
+      owner: repo.owner,
+      name: repo.name,
+      installationId: id,
+    }, deps.db).catch((err) => {
+      console.error("[installations] issue backfill failed", {
+        projectId: newId,
+        owner: repo.owner,
+        name: repo.name,
+        err,
+      });
+    });
     return c.json(
       { project: { id: newId, owner: repo.owner, name: repo.name, githubRepoId: repo.id } },
       201,
