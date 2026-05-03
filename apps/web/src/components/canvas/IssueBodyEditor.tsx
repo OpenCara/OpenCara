@@ -24,32 +24,27 @@ export function IssueBodyEditor({
   const [mode, setMode] = useState<"render" | "edit">("render");
   const renderRef = useRef<HTMLDivElement | null>(null);
 
-  // Capture the selection within the rendered body. We snapshot the text on
-  // mouseup/keyup; the parent decides what to do with it (typically: feed to
-  // ChatPanel as canvas selection context). Clicking outside the body clears.
+  // Capture the selection within the rendered body. We only push *new*
+  // non-empty selections that landed inside our render container. An empty
+  // selection (e.g. the user clicked into the chat input and the browser
+  // collapsed the highlight) does NOT clear our captured state — they
+  // probably just shifted focus to type the instruction. Explicit clear is
+  // the × button on the chip, wired through onClearSelection in the parent.
   useEffect(() => {
     if (mode !== "render") return;
     const onSelectionEvent = () => {
       const sel = window.getSelection();
       const text = sel?.toString() ?? "";
-      if (!text.trim() || !renderRef.current) {
-        onSelectionChange(null);
-        return;
-      }
-      // Make sure the selection is inside our render container — selecting
-      // chat text or header text shouldn't count.
+      if (!text.trim() || !renderRef.current) return;
       const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
-      if (!range) {
-        onSelectionChange(null);
-        return;
-      }
+      if (!range) return;
       const ancestor = range.commonAncestorContainer;
       const inside =
         renderRef.current === ancestor ||
         renderRef.current.contains(
           ancestor.nodeType === 1 ? (ancestor as Element) : ancestor.parentElement,
         );
-      onSelectionChange(inside ? text : null);
+      if (inside) onSelectionChange(text);
     };
     document.addEventListener("selectionchange", onSelectionEvent);
     return () => document.removeEventListener("selectionchange", onSelectionEvent);
