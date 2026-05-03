@@ -463,14 +463,24 @@ function IssuesTab({ id }: { id: string }) {
                       #{issue.number}
                     </TableCell>
                     <TableCell className="text-sm">
-                      <a
-                        href={issue.htmlUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hover:underline"
-                      >
-                        {issue.title}
-                      </a>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          to={`/projects/${id}/issues/${issue.number}`}
+                          className="hover:underline"
+                        >
+                          {issue.title}
+                        </Link>
+                        <a
+                          href={issue.htmlUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-muted-foreground hover:text-foreground"
+                          title="Open on GitHub"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="size-3" />
+                        </a>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge
