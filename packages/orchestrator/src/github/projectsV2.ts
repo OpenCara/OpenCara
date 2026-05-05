@@ -1,0 +1,558 @@
+// GitHub Projects v2 GraphQL helpers — Phase 1 read-side only.
+//
+// Projects v2 lives entirely in GraphQL (the REST `projects` endpoints serve
+// the legacy v1 product). The Octokit returned by GithubAppClient.forInstallation
+// already supports `.graphql(query, vars)` with installation-scoped auth, so
+// no extra deps are needed here.
+//
+// Phase 2 will add `setItemStatus` (the updateProjectV2ItemFieldValue
+// mutation) for bidirectional drag.
+
+import { ulid } from "ulid";
+import { and, eq } from "drizzle-orm";
+import type { Octokit } from "@octokit/rest";
+import type { Db } from "../db/client.js";
+import { projectV2Items, projectV2Links } from "../db/schema.js";
+
+export interface DiscoveredProjectV2 {
+  nodeId: string;
+  number: number;
+  title: string;
+  ownerLogin: string;
+  ownerType: "Organization" | "User";
+}
+
+export interface StatusOption {
+  optionId: string;
+  name: string;
+  color: string;
+  position: number;
+}
+
+export interface ProjectV2Snapshot {
+  nodeId: string;
+  number: number;
+  title: string;
+  ownerLogin: string;
+  statusFieldNodeId: string;
+  statusOptions: StatusOption[];
+  items: ProjectV2ItemSnapshot[];
+}
+
+export interface ProjectV2ItemSnapshot {
+  itemNodeId: string;
+  kind: "issue" | "pull_request" | "draft";
+  contentNodeId: string | null;
+  contentNumber: number | null;
+  contentTitle: string;
+  contentUrl: string | null;
+  contentState: string | null;
+  statusOptionId: string | null;
+  archivedAt: string | null;
+  updatedAt: string | null;
+}
+
+interface RawProjectV2Owner {
+  __typename?: string;
+  login?: string;
+}
+
+interface RawDiscoveredProject {
+  id: string;
+  number: number;
+  title: string;
+  owner?: RawProjectV2Owner | null;
+}
+
+interface ListProjectsResponse {
+  repository: {
+    projectsV2: { nodes: RawDiscoveredProject[] | null };
+    owner: { __typename: string; login: string };
+  } | null;
+  organization: {
+    projectsV2: { nodes: RawDiscoveredProject[] | null };
+  } | null;
+}
+
+/**
+ * Discover Projects v2 the installation can see for a given repo. Merges the
+ * repo's attached projects with the org's projects (a repo can be attached to
+ * org-level boards), de-duplicating by node id. User-level projects are not
+ * enumerable via GraphQL without the `read:project` user scope, so user-owned
+ * repos see only repo-attached boards.
+ */
+export async function listAvailableProjects(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+): Promise<DiscoveredProjectV2[]> {
+  const query = /* GraphQL */ `
+    query ListProjectsV2($owner: String!, $repo: String!) {
+      repository(owner: $owner, name: $repo) {
+        projectsV2(first: 50) {
+          nodes {
+            id
+            number
+            title
+            owner {
+              __typename
+              ... on Organization { login }
+              ... on User { login }
+            }
+          }
+        }
+        owner { __typename login }
+      }
+      organization(login: $owner) {
+        projectsV2(first: 50) {
+          nodes {
+            id
+            number
+            title
+            owner {
+              __typename
+              ... on Organization { login }
+              ... on User { login }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  let res: ListProjectsResponse;
+  try {
+    res = await octokit.graphql<ListProjectsResponse>(query, { owner, repo });
+  } catch (err) {
+    // The `organization(login:...)` selection 404s when the owner is a user
+    // account; Octokit surfaces partial GraphQL data alongside the error.
+    // Use the data we did get.
+    const partial = (err as { data?: ListProjectsResponse }).data;
+    if (!partial) throw err;
+    res = partial;
+  }
+
+  const out = new Map<string, DiscoveredProjectV2>();
+  const push = (raw: RawDiscoveredProject | null | undefined) => {
+    if (!raw) return;
+    const ownerType =
+      raw.owner?.__typename === "Organization" ? "Organization" : "User";
+    out.set(raw.id, {
+      nodeId: raw.id,
+      number: raw.number,
+      title: raw.title,
+      ownerLogin: raw.owner?.login ?? owner,
+      ownerType,
+    });
+  };
+  for (const n of res.repository?.projectsV2.nodes ?? []) push(n);
+  for (const n of res.organization?.projectsV2.nodes ?? []) push(n);
+  return Array.from(out.values()).sort((a, b) => a.number - b.number);
+}
+
+interface FetchProjectMetadataResponse {
+  node: {
+    __typename?: string;
+    id: string;
+    number: number;
+    title: string;
+    owner?: RawProjectV2Owner | null;
+    field?: {
+      __typename?: string;
+      id: string;
+      options?: Array<{ id: string; name: string; color: string }>;
+    } | null;
+  } | null;
+}
+
+interface FetchItemsResponse {
+  node: {
+    items: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: RawItem[];
+    };
+  } | null;
+}
+
+interface RawItem {
+  id: string;
+  type: string; // "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE" | "REDACTED"
+  isArchived: boolean;
+  updatedAt: string | null;
+  fieldValueByName?: {
+    __typename?: string;
+    optionId?: string;
+  } | null;
+  content?:
+    | {
+        __typename: "Issue";
+        id: string;
+        number: number;
+        title: string;
+        url: string;
+        state: string;
+      }
+    | {
+        __typename: "PullRequest";
+        id: string;
+        number: number;
+        title: string;
+        url: string;
+        state: string;
+      }
+    | {
+        __typename: "DraftIssue";
+        id: string;
+        title: string;
+      }
+    | null;
+}
+
+/**
+ * Fetch a Projects v2 board's metadata + all items via GraphQL. Pagination is
+ * unbounded (loops until `hasNextPage` is false); a 500-item board fits in a
+ * handful of requests and the GraphQL points budget is generous. Caller is
+ * responsible for persisting the snapshot.
+ */
+export async function fetchProjectSnapshot(
+  octokit: Octokit,
+  projectNodeId: string,
+): Promise<ProjectV2Snapshot> {
+  const metaQuery = /* GraphQL */ `
+    query ProjectV2Meta($id: ID!) {
+      node(id: $id) {
+        ... on ProjectV2 {
+          id
+          number
+          title
+          owner {
+            __typename
+            ... on Organization { login }
+            ... on User { login }
+          }
+          field(name: "Status") {
+            __typename
+            ... on ProjectV2SingleSelectField {
+              id
+              options {
+                id
+                name
+                color
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const meta = await octokit.graphql<FetchProjectMetadataResponse>(metaQuery, {
+    id: projectNodeId,
+  });
+  const project = meta.node;
+  if (!project) {
+    throw new Error(`Project v2 not found: ${projectNodeId}`);
+  }
+  if (!project.field || project.field.__typename !== "ProjectV2SingleSelectField") {
+    throw new Error(
+      `Project ${project.title} has no Status single-select field; Kanban needs one to render columns.`,
+    );
+  }
+
+  const statusOptions: StatusOption[] = (project.field.options ?? []).map(
+    (o, idx) => ({
+      optionId: o.id,
+      name: o.name,
+      color: o.color,
+      position: idx,
+    }),
+  );
+
+  const itemsQuery = /* GraphQL */ `
+    query ProjectV2Items($id: ID!, $after: String) {
+      node(id: $id) {
+        ... on ProjectV2 {
+          items(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              type
+              isArchived
+              updatedAt
+              fieldValueByName(name: "Status") {
+                __typename
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  optionId
+                }
+              }
+              content {
+                __typename
+                ... on Issue {
+                  id
+                  number
+                  title
+                  url
+                  state
+                }
+                ... on PullRequest {
+                  id
+                  number
+                  title
+                  url
+                  state
+                }
+                ... on DraftIssue {
+                  id
+                  title
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const items: ProjectV2ItemSnapshot[] = [];
+  let cursor: string | null = null;
+  while (true) {
+    const page: FetchItemsResponse = await octokit.graphql<FetchItemsResponse>(
+      itemsQuery,
+      { id: projectNodeId, after: cursor },
+    );
+    const conn = page.node?.items;
+    if (!conn) break;
+    for (const raw of conn.nodes) {
+      items.push(itemSnapshotFromRaw(raw));
+    }
+    if (!conn.pageInfo.hasNextPage || !conn.pageInfo.endCursor) break;
+    cursor = conn.pageInfo.endCursor;
+  }
+
+  return {
+    nodeId: project.id,
+    number: project.number,
+    title: project.title,
+    ownerLogin: project.owner?.login ?? "",
+    statusFieldNodeId: project.field.id,
+    statusOptions,
+    items,
+  };
+}
+
+interface FetchSingleItemResponse {
+  node: (RawItem & { project?: { id: string } | null }) | null;
+}
+
+/**
+ * Fetch one item's current state by node id. Used by the webhook handler so
+ * edits don't require a full board re-pull. Returns null if the item doesn't
+ * exist or isn't a ProjectV2Item.
+ */
+export async function fetchItemSnapshot(
+  octokit: Octokit,
+  itemNodeId: string,
+): Promise<ProjectV2ItemSnapshot | null> {
+  const query = /* GraphQL */ `
+    query ProjectV2Item($id: ID!) {
+      node(id: $id) {
+        ... on ProjectV2Item {
+          id
+          type
+          isArchived
+          updatedAt
+          fieldValueByName(name: "Status") {
+            __typename
+            ... on ProjectV2ItemFieldSingleSelectValue {
+              optionId
+            }
+          }
+          content {
+            __typename
+            ... on Issue { id number title url state }
+            ... on PullRequest { id number title url state }
+            ... on DraftIssue { id title }
+          }
+        }
+      }
+    }
+  `;
+  const res = await octokit.graphql<FetchSingleItemResponse>(query, {
+    id: itemNodeId,
+  });
+  if (!res.node) return null;
+  return itemSnapshotFromRaw(res.node);
+}
+
+/**
+ * Upsert (or delete-on-archive-redacted) a single item snapshot into the
+ * mirror. Mirrors the core of backfillBoard's per-item path so the webhook
+ * stays in sync with on-demand refreshes.
+ */
+export async function upsertItem(
+  db: Db,
+  linkId: string,
+  it: ProjectV2ItemSnapshot,
+): Promise<void> {
+  await db
+    .insert(projectV2Items)
+    .values({
+      id: ulid(),
+      projectV2LinkId: linkId,
+      githubItemNodeId: it.itemNodeId,
+      kind: it.kind,
+      contentNodeId: it.contentNodeId,
+      contentNumber: it.contentNumber,
+      contentTitle: it.contentTitle,
+      contentUrl: it.contentUrl,
+      contentState: it.contentState,
+      statusOptionId: it.statusOptionId,
+      archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
+      updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [projectV2Items.projectV2LinkId, projectV2Items.githubItemNodeId],
+      set: {
+        kind: it.kind,
+        contentNodeId: it.contentNodeId,
+        contentNumber: it.contentNumber,
+        contentTitle: it.contentTitle,
+        contentUrl: it.contentUrl,
+        contentState: it.contentState,
+        statusOptionId: it.statusOptionId,
+        archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
+        updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
+      },
+    });
+}
+
+/** Delete a mirrored item by (link, node id). Idempotent. */
+export async function deleteItem(
+  db: Db,
+  linkId: string,
+  itemNodeId: string,
+): Promise<void> {
+  await db
+    .delete(projectV2Items)
+    .where(
+      and(
+        eq(projectV2Items.projectV2LinkId, linkId),
+        eq(projectV2Items.githubItemNodeId, itemNodeId),
+      ),
+    );
+}
+
+function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
+  const c = raw.content;
+  let kind: "issue" | "pull_request" | "draft" = "draft";
+  if (c?.__typename === "Issue") kind = "issue";
+  else if (c?.__typename === "PullRequest") kind = "pull_request";
+
+  const contentNumber =
+    c && (c.__typename === "Issue" || c.__typename === "PullRequest")
+      ? c.number
+      : null;
+  const contentUrl =
+    c && (c.__typename === "Issue" || c.__typename === "PullRequest") ? c.url : null;
+  const contentState =
+    c && (c.__typename === "Issue" || c.__typename === "PullRequest") ? c.state : null;
+
+  return {
+    itemNodeId: raw.id,
+    kind,
+    contentNodeId: c?.id ?? null,
+    contentNumber,
+    contentTitle: c?.title ?? "(untitled)",
+    contentUrl,
+    contentState,
+    statusOptionId: raw.fieldValueByName?.optionId ?? null,
+    archivedAt: raw.isArchived ? raw.updatedAt : null,
+    updatedAt: raw.updatedAt,
+  };
+}
+
+/**
+ * Replace the local mirror for a link with a fresh snapshot from GitHub.
+ * Strategy: fetch snapshot, upsert every item, then delete any rows whose
+ * `github_item_node_id` no longer appears (covers items removed from the
+ * board between syncs without us seeing the webhook). Runs in two
+ * sequential SQL passes — fine for the v1 board sizes we care about.
+ */
+export async function backfillBoard(
+  db: Db,
+  link: { id: string; githubProjectNodeId: string },
+  octokit: Octokit,
+): Promise<{ snapshot: ProjectV2Snapshot; itemCount: number }> {
+  const snapshot = await fetchProjectSnapshot(octokit, link.githubProjectNodeId);
+
+  await db
+    .update(projectV2Links)
+    .set({
+      githubProjectNumber: snapshot.number,
+      githubProjectTitle: snapshot.title,
+      githubProjectOwner: snapshot.ownerLogin,
+      statusFieldNodeId: snapshot.statusFieldNodeId,
+      statusOptions: snapshot.statusOptions,
+      lastSyncedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(projectV2Links.id, link.id));
+
+  const seen = new Set<string>();
+  for (const it of snapshot.items) {
+    seen.add(it.itemNodeId);
+    await db
+      .insert(projectV2Items)
+      .values({
+        id: ulid(),
+        projectV2LinkId: link.id,
+        githubItemNodeId: it.itemNodeId,
+        kind: it.kind,
+        contentNodeId: it.contentNodeId,
+        contentNumber: it.contentNumber,
+        contentTitle: it.contentTitle,
+        contentUrl: it.contentUrl,
+        contentState: it.contentState,
+        statusOptionId: it.statusOptionId,
+        archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
+        updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [projectV2Items.projectV2LinkId, projectV2Items.githubItemNodeId],
+        set: {
+          kind: it.kind,
+          contentNodeId: it.contentNodeId,
+          contentNumber: it.contentNumber,
+          contentTitle: it.contentTitle,
+          contentUrl: it.contentUrl,
+          contentState: it.contentState,
+          statusOptionId: it.statusOptionId,
+          archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
+          updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
+        },
+      });
+  }
+
+  // Drop rows that no longer appear on the board. Cheap-but-correct:
+  // re-read this link's items and delete by node id any not in `seen`.
+  const existing = await db
+    .select({
+      id: projectV2Items.id,
+      githubItemNodeId: projectV2Items.githubItemNodeId,
+    })
+    .from(projectV2Items)
+    .where(eq(projectV2Items.projectV2LinkId, link.id));
+  for (const row of existing) {
+    if (!seen.has(row.githubItemNodeId)) {
+      await db
+        .delete(projectV2Items)
+        .where(
+          and(
+            eq(projectV2Items.projectV2LinkId, link.id),
+            eq(projectV2Items.githubItemNodeId, row.githubItemNodeId),
+          ),
+        );
+    }
+  }
+
+  return { snapshot, itemCount: snapshot.items.length };
+}

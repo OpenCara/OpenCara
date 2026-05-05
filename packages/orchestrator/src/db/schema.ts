@@ -455,6 +455,73 @@ export const agentRuns = pgTable(
   }),
 );
 
+// One row per (opencara project) ↔ (Projects v2 board) link. v1 is one
+// board per project — `unique(projectId)`. The Status field is a single
+// single-select field on the board; we cache its option list as JSON so
+// the UI can render columns without a second GraphQL hop.
+export const projectV2Links = pgTable(
+  "project_v2_links",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    githubProjectNodeId: text("github_project_node_id").notNull(),
+    githubProjectNumber: integer("github_project_number").notNull(),
+    githubProjectOwner: text("github_project_owner").notNull(),
+    githubProjectTitle: text("github_project_title").notNull(),
+    statusFieldNodeId: text("status_field_node_id").notNull(),
+    statusOptions: jsonb("status_options")
+      .$type<{ optionId: string; name: string; color: string; position: number }[]>()
+      .notNull()
+      .default([]),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    projectIdUq: uniqueIndex("project_v2_links_project_id_uq").on(t.projectId),
+    githubProjectNodeIdIdx: index("project_v2_links_github_project_node_id_idx").on(
+      t.githubProjectNodeId,
+    ),
+  }),
+);
+
+// Mirror of the items on the linked board. The `unique(linkId, githubItemNodeId)`
+// makes webhook upserts idempotent. `statusOptionId` is the value of the Status
+// single-select field — a string id from `project_v2_links.status_options`.
+export const projectV2Items = pgTable(
+  "project_v2_items",
+  {
+    id: text("id").primaryKey(),
+    projectV2LinkId: text("project_v2_link_id")
+      .notNull()
+      .references(() => projectV2Links.id, { onDelete: "cascade" }),
+    githubItemNodeId: text("github_item_node_id").notNull(),
+    // 'issue' | 'pull_request' | 'draft'
+    kind: text("kind").notNull(),
+    contentNodeId: text("content_node_id"),
+    contentNumber: integer("content_number"),
+    contentTitle: text("content_title").notNull(),
+    contentUrl: text("content_url"),
+    // 'OPEN' | 'CLOSED' | 'MERGED' | null (drafts have no state)
+    contentState: text("content_state"),
+    statusOptionId: text("status_option_id"),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    linkItemUq: uniqueIndex("project_v2_items_link_item_uq").on(
+      t.projectV2LinkId,
+      t.githubItemNodeId,
+    ),
+    linkStatusIdx: index("project_v2_items_link_status_idx").on(
+      t.projectV2LinkId,
+      t.statusOptionId,
+    ),
+  }),
+);
+
 export const agentRunLogs = pgTable(
   "agent_run_logs",
   {

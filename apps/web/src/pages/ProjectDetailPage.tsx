@@ -40,6 +40,7 @@ import {
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { summarizeEvent } from "@/lib/eventSummary";
+import { KanbanTab } from "@/components/kanban/KanbanBoard";
 
 export function ProjectDetailPage() {
   const { id, tab } = useParams();
@@ -96,6 +97,7 @@ export function ProjectDetailPage() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="issues">Issues</TabsTrigger>
+          <TabsTrigger value="kanban">Kanban</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
           <TabsTrigger value="flow-runs">Flow runs</TabsTrigger>
           <TabsTrigger value="runs">Agent runs</TabsTrigger>
@@ -130,6 +132,10 @@ export function ProjectDetailPage() {
 
         <TabsContent value="issues">
           <IssuesTab id={id!} />
+        </TabsContent>
+
+        <TabsContent value="kanban">
+          <KanbanTab projectId={id!} />
         </TabsContent>
 
         <TabsContent value="events">

@@ -587,6 +587,110 @@ export function useRemoveProject() {
   });
 }
 
+// ---- Kanban (GitHub Projects v2 mirror) ----
+
+export interface DiscoveredProjectV2 {
+  nodeId: string;
+  number: number;
+  title: string;
+  ownerLogin: string;
+  ownerType: "Organization" | "User";
+}
+
+export interface KanbanStatusOption {
+  optionId: string;
+  name: string;
+  color: string;
+  position: number;
+}
+
+export interface KanbanLink {
+  id: string;
+  projectId: string;
+  githubProjectNodeId: string;
+  githubProjectNumber: number;
+  githubProjectOwner: string;
+  githubProjectTitle: string;
+  statusFieldNodeId: string;
+  statusOptions: KanbanStatusOption[];
+  lastSyncedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KanbanItem {
+  id: string;
+  projectV2LinkId: string;
+  githubItemNodeId: string;
+  kind: "issue" | "pull_request" | "draft";
+  contentNodeId: string | null;
+  contentNumber: number | null;
+  contentTitle: string;
+  contentUrl: string | null;
+  contentState: string | null;
+  statusOptionId: string | null;
+  archivedAt: string | null;
+  updatedAt: string;
+}
+
+export interface KanbanBoardData {
+  link: KanbanLink | null;
+  columns: KanbanStatusOption[];
+  items: KanbanItem[];
+}
+
+export const kanbanQuery = (projectId: string) => ({
+  queryKey: ["projects", projectId, "kanban"] as const,
+  queryFn: () =>
+    api.get<KanbanBoardData>(`/api/projects/${projectId}/kanban`),
+});
+
+export const kanbanProjectsQuery = (projectId: string) => ({
+  queryKey: ["projects", projectId, "kanban", "available"] as const,
+  queryFn: () =>
+    api.get<{ projects: DiscoveredProjectV2[] }>(
+      `/api/projects/${projectId}/kanban/projects`,
+    ),
+});
+
+export function useLinkKanban(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projectNodeId: string) =>
+      api.put<{ link: KanbanLink }>(
+        `/api/projects/${projectId}/kanban/link`,
+        { projectNodeId },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "kanban"] });
+    },
+  });
+}
+
+export function useUnlinkKanban(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.delete<void>(`/api/projects/${projectId}/kanban/link`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "kanban"] });
+    },
+  });
+}
+
+export function useRefreshKanban(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ link: KanbanLink; itemCount: number }>(
+        `/api/projects/${projectId}/kanban/refresh`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "kanban"] });
+    },
+  });
+}
+
 export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
