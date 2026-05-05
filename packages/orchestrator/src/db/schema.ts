@@ -142,6 +142,13 @@ export const issues = pgTable(
     number: integer("number").notNull(),
     title: text("title").notNull(),
     bodyMd: text("body_md"),
+    // In-progress local edit overlay. When non-null this is what the canvas
+    // page renders; bodyMd stays as the last-known-good GitHub-mirrored
+    // content. Cleared on successful PATCH /issues/:n/body (Save to GitHub).
+    // upsertIssueFromWebhook preserves bodyMd untouched while a draft is
+    // set, so an external GitHub edit doesn't clobber unpublished work.
+    draftBodyMd: text("draft_body_md"),
+    draftUpdatedAt: timestamp("draft_updated_at", { withTimezone: true }),
     // "open" | "closed". GitHub's REST issue states.
     state: text("state").notNull(),
     // "completed" | "not_planned" | "reopened" | null.

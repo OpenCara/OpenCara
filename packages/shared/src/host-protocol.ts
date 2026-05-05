@@ -116,6 +116,30 @@ export const PingSchema = z.object({ type: z.literal("ping") });
 /** Device → server: pong. */
 export const PongSchema = z.object({ type: z.literal("pong") });
 
+/**
+ * Device → server: an agent subprocess emitted a fenced ```opencara-call```
+ * block on stdout, and the CLI is proxying the call back over the
+ * already-authed WS. Fire-and-forget — there's no response message, the
+ * mutation is applied transparently.
+ *
+ * The CLI scopes/validates nothing beyond "this looked like a parseable
+ * opencara-call block from the running agent". Authorization (does this
+ * runId match the calling device? does the issue belong to the run's
+ * project?) is enforced server-side.
+ *
+ * `kind` is the allowlist gate. MVP supports only `issue.body.set`; future
+ * kinds will be additions to a discriminated union of payload variants.
+ */
+export const AgentCallSchema = z.object({
+  type: z.literal("agent-call"),
+  runId: z.string(),
+  callId: z.string(),
+  kind: z.literal("issue.body.set"),
+  issueNumber: z.number().int(),
+  bodyMd: z.string(),
+});
+export type AgentCall = z.infer<typeof AgentCallSchema>;
+
 export const ServerToDeviceMessageSchema = z.discriminatedUnion("type", [
   JobAssignmentSchema,
   HelloAckSchema,
@@ -128,6 +152,7 @@ export const DeviceToServerMessageSchema = z.discriminatedUnion("type", [
   LogFrameSchema,
   RunDoneSchema,
   PongSchema,
+  AgentCallSchema,
 ]);
 export type DeviceToServerMessage = z.infer<typeof DeviceToServerMessageSchema>;
 

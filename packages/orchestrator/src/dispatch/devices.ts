@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { WSContext } from "hono/ws";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   type AgentRun,
   type AgentSpec,
@@ -8,7 +8,7 @@ import {
   type ServerToDeviceMessage,
 } from "@opencara/shared";
 import type { Db } from "../db/client.js";
-import { agentHosts } from "../db/schema.js";
+import { agentHosts, issues } from "../db/schema.js";
 import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
 
 export interface ConnectedDevice {
@@ -30,6 +30,14 @@ interface PendingJob {
   onLog: RunContext["onLog"];
   stdoutCaptured: string[];
   agentHostId: string;
+  /**
+   * Project scope for agent-call validation. The CLI proxies callbacks
+   * over WS using its device token; when an `agent-call` arrives, the
+   * orchestrator gates the mutation to resources in this project. Null
+   * means "this run isn't allowed to make agent-calls" (legacy paths
+   * without canvas context).
+   */
+  projectId: string | null;
 }
 
 export class DevicePool {
@@ -132,7 +140,74 @@ export class DevicePool {
       });
       return;
     }
+    if (msg.type === "agent-call") {
+      // Fire-and-forget. The CLI parsed an opencara-call fenced block and
+      // proxied it here using its device-level WS auth. We gate on:
+      //   1. The runId belongs to a pending dispatch we issued.
+      //   2. The dispatch went to THIS device (cross-check agentHostId).
+      //   3. The run has a projectId scope (otherwise the run can't make
+      //      agent-calls — null means a legacy path or a run that wasn't
+      //      configured for canvas use).
+      // Anything else is a silent ignore — same shape as log/done miss.
+      const p = this.pending.get(msg.runId);
+      if (!p) return;
+      if (p.agentHostId !== agentHostId) {
+        console.warn("[device-pool] agent-call hostId mismatch", {
+          runId: msg.runId,
+          expected: p.agentHostId,
+          got: agentHostId,
+        });
+        return;
+      }
+      if (!p.projectId) {
+        console.warn("[device-pool] agent-call on a run without projectId scope", {
+          runId: msg.runId,
+        });
+        return;
+      }
+      void this.applyAgentCall(p.projectId, msg).catch((err) => {
+        console.error("[device-pool] agent-call apply failed", {
+          runId: msg.runId,
+          callId: msg.callId,
+          kind: msg.kind,
+          err,
+        });
+      });
+      return;
+    }
     // hello / pong handled inline by the WS endpoint
+  }
+
+  // Routes an authenticated, scope-validated agent-call to its
+  // implementation. Today the only allowed kind is `issue.body.set` — new
+  // kinds are additions to a switch, not new tables/columns.
+  private async applyAgentCall(
+    projectId: string,
+    msg: Extract<DeviceToServerMessage, { type: "agent-call" }>,
+  ): Promise<void> {
+    if (msg.kind === "issue.body.set") {
+      // Validate the issue belongs to the run's project. If not, ignore +
+      // log — defends against an agent that hallucinated an issueNumber.
+      const existing = await this.db.query.issues.findFirst({
+        where: (i, { and, eq, isNull }) =>
+          and(eq(i.projectId, projectId), eq(i.number, msg.issueNumber), isNull(i.removedAt)),
+      });
+      if (!existing) {
+        console.warn("[device-pool] agent-call issue.body.set: issue not found", {
+          projectId,
+          issueNumber: msg.issueNumber,
+        });
+        return;
+      }
+      await this.db
+        .update(issues)
+        .set({ draftBodyMd: msg.bodyMd, draftUpdatedAt: new Date() })
+        .where(and(eq(issues.projectId, projectId), eq(issues.number, msg.issueNumber)));
+      return;
+    }
+    // Discriminated union: TS ensures exhaustiveness when more kinds arrive.
+    const exhaustive: never = msg.kind;
+    void exhaustive;
   }
 
   send(d: ConnectedDevice, msg: ServerToDeviceMessage): void {
@@ -147,6 +222,7 @@ export class DevicePool {
     runId: string,
     agentHostId: string,
     onLog: RunContext["onLog"],
+    projectId: string | null,
   ): Promise<RunResult> {
     return new Promise<RunResult>((resolve, reject) => {
       this.pending.set(runId, {
@@ -155,6 +231,7 @@ export class DevicePool {
         onLog,
         stdoutCaptured: [],
         agentHostId,
+        projectId,
       });
     });
   }
@@ -195,7 +272,12 @@ export class WebSocketDispatcher implements AgentDispatcher {
     };
     dev.inflight.add(run.id);
 
-    const promise = this.pool.awaitJob(run.id, dev.agentHostId, ctx.onLog);
+    const promise = this.pool.awaitJob(
+      run.id,
+      dev.agentHostId,
+      ctx.onLog,
+      ctx.projectId ?? null,
+    );
     this.pool.send(dev, { type: "job", run, spec, stdinJson: ctx.stdinJson });
     return promise;
   }

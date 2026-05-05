@@ -204,6 +204,8 @@ export function useSyncProjectIssues(projectId: string) {
 
 export interface ProjectIssueDetail extends ProjectIssue {
   bodyMd: string | null;
+  draftBodyMd: string | null;
+  draftUpdatedAt: string | null;
 }
 
 export const projectIssueDetailQuery = (projectId: string, issueNumber: number) => ({
@@ -217,10 +219,13 @@ export const projectIssueDetailQuery = (projectId: string, issueNumber: number) 
 export function useSaveIssueBody(projectId: string, issueNumber: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (bodyMd: string) =>
+    // No body argument — the server reads issues.draftBodyMd. (Pass an
+    // explicit string only if a caller wants to bypass the draft, e.g. for
+    // future revert flows.)
+    mutationFn: (bodyMd?: string) =>
       api.patch<{ issue: ProjectIssueDetail }>(
         `/api/projects/${projectId}/issues/${issueNumber}/body`,
-        { bodyMd },
+        bodyMd === undefined ? {} : { bodyMd },
       ),
     onSuccess: (data) => {
       qc.setQueryData(
@@ -228,6 +233,24 @@ export function useSaveIssueBody(projectId: string, issueNumber: number) {
         data,
       );
       qc.invalidateQueries({ queryKey: ["projects", projectId, "issues"] });
+    },
+  });
+}
+
+export function useSetIssueDraft(projectId: string, issueNumber: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    // Pass null to discard the draft.
+    mutationFn: (bodyMd: string | null) =>
+      api.patch<{ issue: ProjectIssueDetail }>(
+        `/api/projects/${projectId}/issues/${issueNumber}/draft`,
+        { bodyMd },
+      ),
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["projects", projectId, "issues", issueNumber] as const,
+        data,
+      );
     },
   });
 }

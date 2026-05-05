@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink } from "lucide-react";
@@ -10,6 +10,7 @@ import { IssueBodyEditor } from "@/components/canvas/IssueBodyEditor";
 import {
   projectIssueDetailQuery,
   useSaveIssueBody,
+  useSetIssueDraft,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 
@@ -23,34 +24,66 @@ export function IssueDetailPage() {
     enabled: Number.isFinite(number),
   });
 
-  const serverBody = detailQ.data?.issue.bodyMd ?? "";
-  const [draftBody, setDraftBody] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
   const [selection, setSelection] = useState<string | null>(null);
 
-  // Initialize draftBody once the server payload arrives.
-  const effectiveBody = draftBody ?? serverBody;
-  const dirty = draftBody !== null && draftBody !== serverBody;
-
   const save = useSaveIssueBody(projectId, number);
+  const setDraft = useSetIssueDraft(projectId, number);
 
-  const onApplyRewrite = useCallback(
-    (original: string, replacement: string) => {
-      setDraftBody((prev) => {
-        const current = prev ?? serverBody;
-        if (!current.includes(original)) {
-          setWarning(
-            "The original snippet is no longer in the body — likely overwritten by a previous Apply. Copy the rewrite manually if you still want it.",
-          );
-          return prev;
-        }
-        setWarning(null);
-        return current.replace(original, replacement);
-      });
-      setSelection(null);
-      window.getSelection()?.removeAllRanges();
+  // The body the user sees. Three sources, in priority order:
+  //   1. localDraft — what the user is currently typing in the textarea.
+  //      Wins until the debounced PATCH lands and we observe the server
+  //      reflecting it. This guards against out-of-order PATCH responses
+  //      clobbering newer keystrokes (per-keystroke PATCHes raced badly).
+  //   2. issue.draftBodyMd — the unsaved draft on the server (set either
+  //      by us via PATCH /draft or by an agent via agent-call).
+  //   3. issue.bodyMd — the published GitHub-mirrored body.
+  const issue = detailQ.data?.issue;
+  const [localDraft, setLocalDraft] = useState<string | null>(null);
+  // Tracks the latest text we've sent to the server. Used to decide when
+  // localDraft has been confirmed and can be released so external changes
+  // (agent-driven drafts) become visible again.
+  const lastSentRef = useRef<string | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const serverBody = issue?.draftBodyMd ?? issue?.bodyMd ?? "";
+  const effectiveBody = localDraft ?? serverBody;
+  const dirty = !!issue?.draftBodyMd || localDraft !== null;
+
+  // Once the server confirms the latest in-flight value, release the local
+  // buffer so subsequent agent-driven draft updates are visible.
+  useEffect(() => {
+    if (
+      localDraft !== null &&
+      issue?.draftBodyMd !== undefined &&
+      issue.draftBodyMd === lastSentRef.current
+    ) {
+      setLocalDraft(null);
+    }
+  }, [issue?.draftBodyMd, localDraft]);
+
+  // Cancel any pending PATCH on unmount so we don't fire after the page is
+  // gone (the mutation would still succeed server-side, but it'd surface
+  // as an unhandled promise in dev).
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, []);
+
+  const onBodyChange = useCallback(
+    (next: string) => {
+      // Update the visible value synchronously — the user's keystrokes
+      // never wait on a network round-trip.
+      setLocalDraft(next);
+      // Trailing-edge debounce. ~400ms feels indistinguishable from
+      // instant for a typing user, while collapsing bursts into one PATCH.
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = setTimeout(() => {
+        lastSentRef.current = next;
+        setDraft.mutate(next);
+      }, 400);
     },
-    [serverBody],
+    [setDraft],
   );
 
   const onClearSelection = useCallback(() => {
@@ -64,25 +97,46 @@ export function IssueDetailPage() {
       issueNumber: number,
       selection,
       onClearSelection,
-      onApplyRewrite,
+      // No onApplyRewrite — the agent applies itself by PATCHing the draft
+      // via /api/agent/.../body. The chat panel hides its Apply button when
+      // this callback is omitted.
+      onApplyRewrite: undefined,
     }),
-    [projectId, number, selection, onClearSelection, onApplyRewrite],
+    [projectId, number, selection, onClearSelection],
   );
 
   const onSave = () => {
-    if (draftBody === null || draftBody === serverBody) return;
-    save.mutate(draftBody, {
-      onSuccess: () => {
-        // Server returned the refreshed row; the query cache is updated, but
-        // we want our local "draft" to be considered clean now.
-        setDraftBody(null);
-        setWarning(null);
-      },
-    });
+    if (!dirty) return;
+    // If the user has unsent typing in the local buffer, push that exact
+    // value as the body to publish — bypassing the server's "use draft"
+    // path because the draft hasn't caught up yet. This guarantees the
+    // user publishes what they see, not a stale debounce frame.
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (localDraft !== null) {
+      save.mutate(localDraft, {
+        onSuccess: () => setLocalDraft(null),
+      });
+      return;
+    }
+    save.mutate(undefined);
+  };
+
+  const onDiscardDraft = () => {
+    if (!dirty) return;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    setLocalDraft(null);
+    lastSentRef.current = null;
+    setDraft.mutate(null);
   };
 
   if (detailQ.isLoading) return <Skeleton className="h-64 w-full" />;
-  if (detailQ.error || !detailQ.data) {
+  if (detailQ.error || !issue) {
     return (
       <div className="text-sm text-muted-foreground">
         Issue not found.{" "}
@@ -93,10 +147,6 @@ export function IssueDetailPage() {
     );
   }
 
-  const issue = detailQ.data.issue;
-
-  // Two-column layout. The chat panel is rendered embedded (not the floating
-  // sidebar variant) so it sits next to the body and stays open by default.
   return (
     <div className="grid h-[calc(100vh-6rem)] grid-cols-[1fr_28rem] gap-0">
       <div className="flex flex-col overflow-hidden">
@@ -105,13 +155,10 @@ export function IssueDetailPage() {
           issue={issue}
           dirty={dirty}
           saving={save.isPending}
+          discarding={setDraft.isPending}
           onSave={onSave}
+          onDiscardDraft={onDiscardDraft}
         />
-        {warning && (
-          <div className="border-b bg-amber-500/10 px-6 py-2 text-xs text-amber-700 dark:text-amber-300">
-            {warning}
-          </div>
-        )}
         {save.error && (
           <div className="border-b bg-destructive/10 px-6 py-2 text-xs text-destructive">
             Save failed: {save.error instanceof Error ? save.error.message : String(save.error)}
@@ -120,7 +167,7 @@ export function IssueDetailPage() {
         <div className="flex-1 overflow-y-auto p-6">
           <IssueBodyEditor
             bodyMd={effectiveBody}
-            onChange={(next) => setDraftBody(next)}
+            onChange={onBodyChange}
             onSelectionChange={(sel) => setSelection(sel)}
           />
         </div>
@@ -144,13 +191,25 @@ function Header({
   issue,
   dirty,
   saving,
+  discarding,
   onSave,
+  onDiscardDraft,
 }: {
   projectId: string;
-  issue: { number: number; title: string; state: string; htmlUrl: string; updatedAt: string; labels: { name: string; color: string }[]; assignees: { login: string; id: number }[] };
+  issue: {
+    number: number;
+    title: string;
+    state: string;
+    htmlUrl: string;
+    updatedAt: string;
+    labels: { name: string; color: string }[];
+    assignees: { login: string; id: number }[];
+  };
   dirty: boolean;
   saving: boolean;
+  discarding: boolean;
   onSave: () => void;
+  onDiscardDraft: () => void;
 }) {
   return (
     <div className="border-b px-6 py-4">
@@ -164,6 +223,11 @@ function Header({
         </Link>
         <span>·</span>
         <span>updated {formatRelative(issue.updatedAt)}</span>
+        {dirty && (
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+            unsaved draft
+          </span>
+        )}
       </div>
       <div className="mt-2 flex items-start justify-between gap-4">
         <div className="min-w-0">
@@ -196,9 +260,21 @@ function Header({
             </a>
           </div>
         </div>
-        <Button size="sm" disabled={!dirty || saving} onClick={onSave}>
-          {saving ? "Saving…" : dirty ? "Save to GitHub" : "No changes"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {dirty && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={discarding || saving}
+              onClick={onDiscardDraft}
+            >
+              Discard draft
+            </Button>
+          )}
+          <Button size="sm" disabled={!dirty || saving} onClick={onSave}>
+            {saving ? "Saving…" : dirty ? "Save to GitHub" : "No changes"}
+          </Button>
+        </div>
       </div>
     </div>
   );

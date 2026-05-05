@@ -183,8 +183,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     return c.json({ issue: row });
   });
 
-  // Push an edited body back to GitHub. Last-writer-wins; we don't yet check
-  // GitHub's updated_at against ours — see plan's out-of-scope notes.
+  // Push the in-app body to GitHub. The body may come from:
+  //   - explicit request body (frontend may pass a snapshot for safety), or
+  //   - the issue's draftBodyMd column (preferred — what the canvas user
+  //     was looking at when they clicked Save).
+  // Last-writer-wins; we don't yet check GitHub's updated_at against ours —
+  // see plan's out-of-scope notes.
   r.patch("/:id/issues/:number/body", async (c) => {
     if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
@@ -192,14 +196,32 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     if (!Number.isFinite(number)) {
       return c.json({ error: "invalid issue number" }, 400);
     }
-    const body = (await c.req.json().catch(() => null)) as { bodyMd?: unknown } | null;
-    if (!body || typeof body.bodyMd !== "string") {
-      return c.json({ error: "bodyMd (string) required" }, 400);
-    }
+    const reqBody = (await c.req.json().catch(() => null)) as { bodyMd?: unknown } | null;
+
     const project = await deps.db.query.projects.findFirst({
       where: eq(projects.id, id),
     });
     if (!project) return c.json({ error: "project not found" }, 404);
+
+    // Resolve the body to push: explicit request body wins (caller guards
+    // against races), else fall back to the saved draft, else error.
+    let bodyMd: string | null = null;
+    if (reqBody && typeof reqBody.bodyMd === "string") {
+      bodyMd = reqBody.bodyMd;
+    } else {
+      const issueRow = await deps.db.query.issues.findFirst({
+        where: (i, { and, eq, isNull }) =>
+          and(eq(i.projectId, id), eq(i.number, number), isNull(i.removedAt)),
+      });
+      if (issueRow?.draftBodyMd != null) bodyMd = issueRow.draftBodyMd;
+    }
+    if (bodyMd === null) {
+      return c.json(
+        { error: "bodyMd not provided and no draft is set" },
+        400,
+      );
+    }
+
     try {
       const refreshed = await pushIssueBodyToGithub(
         deps.app,
@@ -210,7 +232,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
           installationId: project.installationId,
         },
         number,
-        body.bodyMd,
+        bodyMd,
         deps.db,
       );
       return c.json({ issue: refreshed });
@@ -225,6 +247,43 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         500,
       );
     }
+  });
+
+  // Set / clear the in-app body draft from the user side (textarea edit
+  // mode). Same column as the agent API writes to — the agent uses Bearer
+  // auth at /api/agent/..., the user uses cookie auth here. Pass
+  // bodyMd: null to discard the draft.
+  r.patch("/:id/issues/:number/draft", async (c) => {
+    const id = c.req.param("id");
+    const number = Number.parseInt(c.req.param("number"), 10);
+    if (!Number.isFinite(number)) {
+      return c.json({ error: "invalid issue number" }, 400);
+    }
+    const reqBody = (await c.req.json().catch(() => null)) as { bodyMd?: unknown } | null;
+    if (
+      !reqBody ||
+      (typeof reqBody.bodyMd !== "string" && reqBody.bodyMd !== null)
+    ) {
+      return c.json({ error: "bodyMd (string or null) required" }, 400);
+    }
+    const existing = await deps.db.query.issues.findFirst({
+      where: (i, { and, eq, isNull }) =>
+        and(eq(i.projectId, id), eq(i.number, number), isNull(i.removedAt)),
+    });
+    if (!existing) return c.json({ error: "issue not found" }, 404);
+
+    await deps.db
+      .update(issues)
+      .set({
+        draftBodyMd: reqBody.bodyMd as string | null,
+        draftUpdatedAt: reqBody.bodyMd === null ? null : new Date(),
+      })
+      .where(and(eq(issues.projectId, id), eq(issues.number, number)));
+
+    const refreshed = await deps.db.query.issues.findFirst({
+      where: (i, { and, eq }) => and(eq(i.projectId, id), eq(i.number, number)),
+    });
+    return c.json({ issue: refreshed });
   });
 
   // Manual one-shot backfill for a project that pre-dates the issues feature

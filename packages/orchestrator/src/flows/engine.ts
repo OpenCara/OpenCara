@@ -43,6 +43,9 @@ export interface FlowEngineDeps {
   pg: Sql;
   app: GithubAppClient;
   dispatcher: AgentDispatcher;
+  /** Base URL the agent uses to call back into /api/agent/* — threaded
+   * down to NodeRunCtx so the agent runner can stamp it onto env vars. */
+  publicBaseUrl: string;
 }
 
 export class FlowEngine {
@@ -472,6 +475,7 @@ export class FlowEngine {
       prContext,
       issueContext,
       previousOutput,
+      publicBaseUrl: this.deps.publicBaseUrl,
     };
 
     try {
