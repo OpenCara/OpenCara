@@ -758,7 +758,7 @@ function SkillDialog({
                 </span>
               )}
             </div>
-            <div className="prose prose-sm max-h-[60vh] max-w-none overflow-y-auto rounded-md border bg-background p-3 dark:prose-invert">
+            <div className="prose prose-sm max-h-[60vh] w-full min-w-0 max-w-none overflow-y-auto break-words rounded-md border bg-background p-3 dark:prose-invert [&_code]:break-all [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-words">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {q.data.skill.instructions}
               </ReactMarkdown>
