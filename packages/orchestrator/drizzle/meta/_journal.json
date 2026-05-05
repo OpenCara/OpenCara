@@ -99,6 +99,20 @@
       "when": 1777340000000,
       "tag": "0013_issues",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1777350000000,
+      "tag": "0014_issue_drafts_and_agent_run_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1777360000000,
+      "tag": "0015_drop_agent_run_tokens",
+      "breakpoints": true
     }
   ]
 }

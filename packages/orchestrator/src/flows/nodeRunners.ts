@@ -20,6 +20,7 @@ import {
 import type { AgentDispatcher, LogStream } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
+import { buildIssueCanvasSkill } from "./skills.js";
 
 export class SkipFlowError extends Error {
   constructor(reason: string) {
@@ -42,6 +43,8 @@ export interface NodeRunCtx {
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
   previousOutput?: string;
+  /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
+  publicBaseUrl: string;
 }
 
 export interface NodeRunResult {
@@ -358,15 +361,14 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     env["OPENCARA_PROMPT"] = linkedPromptBody;
   }
 
-  const stdinJson = node.config.contextInjection.stdinJson
-    ? {
-        ...(ctx.prContext?.stdin ?? {}),
-        ...(ctx.issueContext?.stdin ?? {}),
-        previousOutput: ctx.previousOutput,
-        prompt: linkedPromptBody ?? undefined,
-      }
-    : undefined;
+  const agentRunId = ulid();
+  env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
+  // Build the full spec (with env populated) BEFORE inserting agent_runs so
+  // the persisted spec.env includes everything the agent will actually see.
+  // Important for audit/debug/retry — earlier this stored env={} and lost
+  // that signal. (The per-run token that motivated env={} no longer exists
+  // in the Option B design.)
   const spec = {
     kind: agent.name,
     command: agent.command,
@@ -374,7 +376,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     env,
     cwd: agent.cwd ?? undefined,
   };
-  const agentRunId = ulid();
+
   await ctx.db.insert(agentRuns).values({
     id: agentRunId,
     spec,
@@ -384,6 +386,29 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     flowRunStepId: ctx.flowRunStepId,
     startedAt: new Date(),
   });
+
+  // Inject the issue-edit skill if this run has issue context (Projects v2
+  // status-change trigger). Other trigger types don't get the skill — body
+  // editing only makes sense in an issue context.
+  const skill =
+    ctx.issueContext?.stdin.issue && ctx.issueContext.stdin.issue.number
+      ? buildIssueCanvasSkill({
+          baseUrl: ctx.publicBaseUrl,
+          projectId: ctx.projectId,
+          issueNumber: ctx.issueContext.stdin.issue.number,
+          runId: agentRunId,
+        })
+      : null;
+
+  const stdinJson = node.config.contextInjection.stdinJson
+    ? {
+        ...(ctx.prContext?.stdin ?? {}),
+        ...(ctx.issueContext?.stdin ?? {}),
+        previousOutput: ctx.previousOutput,
+        prompt: linkedPromptBody ?? undefined,
+        ...(skill ? { skill } : {}),
+      }
+    : undefined;
 
   let seq = 0;
   const onLog = (stream: LogStream, chunk: string) => {
@@ -398,7 +423,12 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   };
 
   try {
-    const result = await ctx.dispatcher.run(spec, { stdinJson, onLog, hostId: agent.hostId });
+    const result = await ctx.dispatcher.run(spec, {
+      stdinJson,
+      onLog,
+      hostId: agent.hostId,
+      projectId: ctx.projectId,
+    });
     await ctx.db
       .update(agentRuns)
       .set({

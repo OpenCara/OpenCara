@@ -29,11 +29,15 @@ export interface CanvasContext {
   selection: string | null;
   onClearSelection: () => void;
   /**
-   * Called when the user accepts an agent rewrite. Receives the original
-   * snapshotted selection and the assistant's full response. Parent
-   * decides how to apply (typically: substring replace in the body draft).
+   * Optional. Called when the user accepts an agent rewrite. Receives the
+   * original snapshotted selection and the assistant's full response.
+   *
+   * When omitted (the new path), the agent applies its own rewrite by
+   * PATCHing the issue draft via /api/agent/.../body — there's no UI Apply
+   * button, the diff appears in the issue body itself once the run ends
+   * and the page refetches.
    */
-  onApplyRewrite: (original: string, replacement: string) => void;
+  onApplyRewrite?: (original: string, replacement: string) => void;
 }
 
 interface Props {

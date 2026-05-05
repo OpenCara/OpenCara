@@ -14,6 +14,7 @@ import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
 import { runJob } from "../runner/spawn.js";
+import { AgentCallParser } from "../runner/agentCallParser.js";
 import type {
   AgentSpec,
   JobAssignment,
@@ -59,7 +60,12 @@ export async function run(opts: RunOpts = {}): Promise<void> {
         type: "hello",
         platform: platform(),
         version: PKG_VERSION,
-        capabilities: [],
+        // Advertise the new opencara-call stdout protocol so the
+        // server can later gate the skill prompt to capable CLIs.
+        // Older CLIs without this capability would still be sent the
+        // skill markdown today (it doesn't crash; the fenced block
+        // just shows up in stdout unparsed).
+        capabilities: ["agent-call"],
         systemInfo: collectSystemInfo(),
       });
     },
@@ -114,11 +120,30 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
     flushTimer = setTimeout(flush, LOG_FLUSH_MS);
   };
 
+  // Parses ```opencara-call\n…\n``` fenced blocks out of the agent's
+  // stdout and forwards them to the orchestrator over the same WS we got
+  // the job over. Fire-and-forget: there is no response message — the
+  // mutation is applied transparently and the user sees the result on
+  // their canvas page. The fenced block IS still streamed back as a
+  // normal log frame in the same callback, so the user sees what the
+  // agent asked for in the chat reply.
+  const callParser = new AgentCallParser((call) => {
+    client.send({
+      type: "agent-call",
+      runId,
+      callId: call.callId,
+      kind: call.kind,
+      issueNumber: call.issueNumber,
+      bodyMd: call.bodyMd,
+    });
+  });
+
   try {
     const result = await runJob(job.spec as AgentSpec, job.stdinJson, {
       onLog: (stream, chunk) => {
         pending[stream] += chunk;
         scheduleFlush();
+        if (stream === "stdout") callParser.feed(chunk);
       },
     });
     flush();

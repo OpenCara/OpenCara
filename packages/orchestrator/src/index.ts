@@ -44,7 +44,7 @@ const githubApp = config.github
   : null;
 
 const flowEngine = githubApp
-  ? new FlowEngine({ db, pg, app: githubApp, dispatcher })
+  ? new FlowEngine({ db, pg, app: githubApp, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL })
   : null;
 
 if (githubApp) {
@@ -110,7 +110,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", runRoutes({ db, pg }));
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
-  apiHono.route("/", chatRoutes({ db, pg, dispatcher }));
+  apiHono.route("/", chatRoutes({ db, pg, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL }));
   apiHono.route("/", flowTemplateRoutes({ db }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the

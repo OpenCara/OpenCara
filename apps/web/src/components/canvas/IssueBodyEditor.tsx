@@ -8,7 +8,11 @@ import { cn } from "@/lib/utils";
 interface IssueBodyEditorProps {
   bodyMd: string;
   onChange: (next: string) => void;
-  onSelectionChange: (selection: string | null) => void;
+  // Only fired when the user actually selects something inside the rendered
+  // body (non-empty, anchored in our container). Empty / outside selections
+  // are suppressed — the parent's "clear" path is its own onClearSelection
+  // (wired to the chat panel's chip × button), not a callback from here.
+  onSelectionChange: (selection: string) => void;
 }
 
 // Renders the issue body as markdown by default; toggling to Edit swaps in a

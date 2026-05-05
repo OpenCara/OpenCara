@@ -1,16 +1,18 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
-import { agentRunLogs, agentRuns, agents, issues } from "../../db/schema.js";
+import { agentRunLogs, agentRuns, agents, issues, projects } from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { buildIssueCanvasSkill } from "../../flows/skills.js";
 
 interface ChatRoutesDeps {
   db: Db;
   pg: Sql;
   dispatcher: AgentDispatcher;
+  publicBaseUrl: string;
 }
 
 interface PageContext {
@@ -73,13 +75,36 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     });
     if (!agent) return c.json({ error: "agent not found" }, 404);
 
+    // Validate the canvas project scope BEFORE we insert any state — the
+    // dispatcher will use this projectId to gate agent-call mutations, so
+    // accepting an arbitrary client-supplied id would let a logged-in user
+    // mutate any project's drafts. Match the existing GET /projects/:id
+    // posture: project must exist + not be soft-deleted.
+    if (pageContext.canvas?.kind === "issue") {
+      const proj = await deps.db.query.projects.findFirst({
+        where: and(
+          eq(projects.id, pageContext.canvas.projectId),
+          isNull(projects.removedAt),
+        ),
+      });
+      if (!proj) return c.json({ error: "canvas project not accessible" }, 403);
+    }
+
+    const agentRunId = ulid();
+    const projectId = pageContext.projectId ?? null;
+
+    // Build the full env + spec BEFORE the agent_runs insert so the
+    // persisted spec includes everything the agent will actually see.
+    // Earlier this stored env={} to avoid leaking the per-run token; that
+    // token is gone now and the audit/debug/retry workflows want the real
+    // env captured at dispatch time.
     const env: Record<string, string> = {
       ...agent.env,
       OPENCARA_CHAT_SESSION_ID: sessionId,
       OPENCARA_CHAT_TURN_INDEX: String(turnIndex),
       OPENCARA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
+      OPENCARA_AGENT_RUN_ID: agentRunId,
     };
-
     const spec = {
       kind: agent.name,
       command: agent.command,
@@ -87,8 +112,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       env,
       cwd: agent.cwd ?? undefined,
     };
-    const agentRunId = ulid();
-    const projectId = pageContext.projectId ?? null;
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
       spec,
@@ -129,13 +152,18 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         where: and(
           eq(issues.projectId, pageContext.canvas.projectId),
           eq(issues.number, pageContext.canvas.issueNumber),
+          isNull(issues.removedAt),
         ),
       });
       if (row) {
         canvasIssue = {
           number: row.number,
           title: row.title,
-          bodyMd: row.bodyMd,
+          // Hand the agent the CURRENTLY VISIBLE body — i.e. the unsaved
+          // draft if one exists, otherwise the GitHub-mirrored body. If
+          // we sent row.bodyMd unconditionally, the agent would rewrite a
+          // stale base and overwrite the user's in-progress draft on save.
+          bodyMd: row.draftBodyMd ?? row.bodyMd,
           labels: row.labels,
           assignees: row.assignees,
           state: row.state,
@@ -148,6 +176,14 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     if (pageContext.canvas?.selection) {
       stdinJson["selection"] = pageContext.canvas.selection;
     }
+    if (pageContext.canvas?.kind === "issue") {
+      stdinJson["skill"] = buildIssueCanvasSkill({
+        baseUrl: deps.publicBaseUrl,
+        projectId: pageContext.canvas.projectId,
+        issueNumber: pageContext.canvas.issueNumber,
+        runId: agentRunId,
+      });
+    }
 
     // Fire-and-forget the dispatcher; the SSE stream is the client's only view.
     void (async () => {
@@ -156,6 +192,11 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           stdinJson,
           onLog,
           hostId: agent.hostId,
+          // Scopes agent-call mutations to this project. Canvas-mode
+          // chats always set pageContext.canvas.projectId; non-canvas
+          // chats use the page's projectId (read-only flows aren't
+          // gated by this either way).
+          projectId: pageContext.canvas?.projectId ?? projectId,
         });
         await deps.db
           .update(agentRuns)

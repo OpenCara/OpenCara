@@ -1,5 +1,5 @@
 import { ulid } from "ulid";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { issues } from "../db/schema.js";
 import type { GithubAppClient } from "./app.js";
@@ -78,6 +78,16 @@ export async function upsertIssueFromWebhook(
   const removed = action === "deleted" || action === "transferred";
   const row = rowFromPayload(projectId, payload, removed);
 
+  // Atomic draft preservation: write bodyMd from the webhook only when the
+  // row HAS NO draft at the moment Postgres applies the UPDATE. The earlier
+  // implementation read draftBodyMd in a separate SELECT and decided in
+  // application code, leaving a small race where an agent could set a draft
+  // between our read and our write. The CASE expression collapses
+  // read+decide+write into one statement so the draft can't slip past us.
+  //
+  // Other fields (title/labels/state/etc.) still update unconditionally —
+  // those changes always come from GitHub and aren't part of the draft
+  // overlay.
   await db
     .insert(issues)
     .values({ id: ulid(), ...row })
@@ -87,7 +97,7 @@ export async function upsertIssueFromWebhook(
         githubIssueId: row.githubIssueId,
         githubNodeId: row.githubNodeId,
         title: row.title,
-        bodyMd: row.bodyMd,
+        bodyMd: sql`CASE WHEN ${issues.draftBodyMd} IS NULL THEN ${row.bodyMd} ELSE ${issues.bodyMd} END`,
         state: row.state,
         stateReason: row.stateReason,
         labels: row.labels,
@@ -128,6 +138,16 @@ export async function pushIssueBodyToGithub(
       body: bodyMd,
     },
   );
+  // Clear the draft BEFORE re-upserting from GitHub's response — otherwise
+  // upsertIssueFromWebhook's draft-protection clause would skip writing
+  // bodyMd, leaving us with the OLD GitHub-mirrored body even though we
+  // just published the new one. With draftBodyMd cleared, the upsert
+  // correctly mirrors res.data.body into bodyMd.
+  await db
+    .update(issues)
+    .set({ draftBodyMd: null, draftUpdatedAt: null })
+    .where(and(eq(issues.projectId, project.id), eq(issues.number, issueNumber)));
+
   // The PATCH response shape matches the webhook `payload.issue` shape, so
   // the existing normalizer applies cleanly. Action "edited" keeps removedAt
   // null (the issue is alive).
