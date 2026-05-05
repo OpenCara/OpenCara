@@ -20,7 +20,7 @@ import {
 import type { AgentDispatcher, LogStream } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
-import { buildIssueCanvasSkill } from "./skills.js";
+import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
 
 export class SkipFlowError extends Error {
   constructor(reason: string) {
@@ -392,9 +392,8 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // editing only makes sense in an issue context.
   const skill =
     ctx.issueContext?.stdin.issue && ctx.issueContext.stdin.issue.number
-      ? buildIssueCanvasSkill({
+      ? buildIssueCanvasEnvelope({
           baseUrl: ctx.publicBaseUrl,
-          projectId: ctx.projectId,
           issueNumber: ctx.issueContext.stdin.issue.number,
           runId: agentRunId,
         })

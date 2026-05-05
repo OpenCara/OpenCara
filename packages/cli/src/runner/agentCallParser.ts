@@ -1,4 +1,10 @@
-import type { AgentCall } from "@opencara/shared";
+import {
+  FlowNodeConfigSetCallSchema,
+  IssueBodySetCallSchema,
+  TemplateNodeConfigSetCallSchema,
+  type AgentCall,
+} from "@opencara/shared";
+import { z } from "zod";
 
 // Pulled out of the executeJob path so it's testable in isolation. Stateful
 // stream parser: callers feed chunks of stdout, the parser emits agent-call
@@ -8,9 +14,16 @@ import type { AgentCall } from "@opencara/shared";
 // initial JSON is delivered (see runner/spawn.ts), so a request/response
 // protocol over stdin isn't possible. The agent emits its intent on stdout,
 // the CLI proxies, and the user sees the side effect (a draft mutation
-// landing on the issue page) — that's the feedback loop.
+// landing on the issue/flow/template page) — that's the feedback loop.
 
-export type AgentCallEmitter = (call: Omit<AgentCall, "type" | "runId">) => void;
+// Plain `Omit<AgentCall, "type" | "runId">` collapses the discriminated
+// union into one wide object — callers can no longer narrow on `kind`.
+// Distribute Omit over each variant so the switch in run.ts narrows.
+type DistributiveOmit<T, K extends keyof T | (string & {})> = T extends unknown
+  ? Omit<T, K & keyof T>
+  : never;
+export type ParsedAgentCall = DistributiveOmit<AgentCall, "type" | "runId">;
+export type AgentCallEmitter = (call: ParsedAgentCall) => void;
 
 // Bounded buffer to defend against an agent emitting a fence open that
 // never closes. We drop the oldest data on overflow rather than holding
@@ -20,6 +33,30 @@ const MAX_BUFFER_BYTES = 64 * 1024;
 
 // `[\s\S]*?` is non-greedy so two adjacent blocks don't collapse into one.
 const FENCE_RE = /```opencara-call\r?\n([\s\S]*?)\r?\n```/;
+
+// Per-kind variant schemas, each made parseable in isolation by stripping the
+// envelope fields the parser fills in itself (`type`, `runId`). We then use
+// the kind discriminator to route to the right schema. Adding a new kind
+// here + in shared/host-protocol.ts is the whole protocol surface.
+const VARIANT_SCHEMAS = {
+  "issue.body.set": IssueBodySetCallSchema.omit({ type: true, runId: true }),
+  "flow.node.config.set": FlowNodeConfigSetCallSchema.omit({
+    type: true,
+    runId: true,
+  }),
+  "template.node.config.set": TemplateNodeConfigSetCallSchema.omit({
+    type: true,
+    runId: true,
+  }),
+} as const;
+
+type AllowedKind = keyof typeof VARIANT_SCHEMAS;
+
+const KindSchema = z.enum([
+  "issue.body.set",
+  "flow.node.config.set",
+  "template.node.config.set",
+]);
 
 export class AgentCallParser {
   private buffer = "";
@@ -59,22 +96,27 @@ export class AgentCallParser {
       return;
     }
     if (!parsed || typeof parsed !== "object") return;
-    const p = parsed as Record<string, unknown>;
-    if (p.kind !== "issue.body.set") {
-      // Allowlist gate. Future kinds added here as the protocol expands.
-      return;
-    }
-    if (typeof p.issueNumber !== "number" || typeof p.bodyMd !== "string") {
-      return;
-    }
-    const callId = typeof p.callId === "string" && p.callId.length > 0
-      ? p.callId
-      : `call_${Date.now().toString(36)}`;
-    this.emit({
-      callId,
-      kind: "issue.body.set",
-      issueNumber: p.issueNumber,
-      bodyMd: p.bodyMd,
-    });
+    const raw = parsed as Record<string, unknown>;
+
+    // Allowlist gate. Unknown kinds drop silently — same posture as the
+    // earlier hardcoded `kind === "issue.body.set"` check.
+    const kindResult = KindSchema.safeParse(raw.kind);
+    if (!kindResult.success) return;
+
+    // The agent doesn't have to emit a callId; default to a deterministic
+    // local id so logs stay correlatable. Inject before validation so the
+    // schema's `callId: z.string()` requirement is satisfied.
+    const withCallId = {
+      ...raw,
+      callId:
+        typeof raw.callId === "string" && raw.callId.length > 0
+          ? raw.callId
+          : `call_${Date.now().toString(36)}`,
+    };
+
+    const schema = VARIANT_SCHEMAS[kindResult.data as AllowedKind];
+    const result = schema.safeParse(withCallId);
+    if (!result.success) return;
+    this.emit(result.data as ParsedAgentCall);
   }
 }

@@ -21,6 +21,12 @@ export interface RunContext {
    * accepted for legacy paths that don't use agent callbacks.
    */
   projectId?: string | null;
+  /**
+   * Owning user. Per-user resources (e.g. flow-template drafts, prompts)
+   * key on this — agent-calls that mutate them require it. Null is fine
+   * for runs that only mutate project-scoped resources.
+   */
+  userId?: string | null;
 }
 
 export interface RunResult {
