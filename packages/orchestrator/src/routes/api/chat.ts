@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
-import { agentRunLogs, agentRuns, agents, issues, projects } from "../../db/schema.js";
+import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
-import { buildIssueCanvasSkill } from "../../flows/skills.js";
+import { resolvePageSkill, type PageContextLike } from "../../flows/skills.js";
 
 interface ChatRoutesDeps {
   db: Db;
@@ -15,27 +15,7 @@ interface ChatRoutesDeps {
   publicBaseUrl: string;
 }
 
-interface PageContext {
-  pathname?: string;
-  projectId?: string;
-  flowSlug?: string;
-  flowRunId?: string;
-  selectedNodeId?: string;
-  /** Free-form payload pages can attach. Forwarded verbatim to the agent. */
-  data?: Record<string, unknown>;
-  /**
-   * Set by the issue canvas page. When present, the server hydrates the
-   * agent's stdin with the full local issue row (title, body, labels,
-   * assignees) plus the user-selected snippet so the agent has stylistic
-   * context for the rewrite.
-   */
-  canvas?: {
-    kind: "issue";
-    projectId: string;
-    issueNumber: number;
-    selection?: { text: string } | null;
-  };
-}
+type PageContext = PageContextLike;
 
 /**
  * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
@@ -75,23 +55,30 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     });
     if (!agent) return c.json({ error: "agent not found" }, 404);
 
-    // Validate the canvas project scope BEFORE we insert any state — the
-    // dispatcher will use this projectId to gate agent-call mutations, so
-    // accepting an arbitrary client-supplied id would let a logged-in user
-    // mutate any project's drafts. Match the existing GET /projects/:id
-    // posture: project must exist + not be soft-deleted.
-    if (pageContext.canvas?.kind === "issue") {
-      const proj = await deps.db.query.projects.findFirst({
-        where: and(
-          eq(projects.id, pageContext.canvas.projectId),
-          isNull(projects.removedAt),
-        ),
-      });
-      if (!proj) return c.json({ error: "canvas project not accessible" }, 403);
+    const agentRunId = ulid();
+
+    // Resolve the per-page skill. Builders for the active page hydrate
+    // server-side data + emit the skill markdown that tells the agent
+    // what opencara-call kinds are available here. Builders may also
+    // refuse the request (canvas project not accessible, etc.) — we
+    // surface that as 403 BEFORE inserting any state, mirroring the
+    // earlier hand-rolled gate.
+    const skillResult = await resolvePageSkill({
+      pageContext,
+      user: { id: user.id },
+      baseUrl: deps.publicBaseUrl,
+      runId: agentRunId,
+      db: deps.db,
+    });
+    if (skillResult?.authError) {
+      return c.json({ error: skillResult.authError }, 403);
     }
 
-    const agentRunId = ulid();
-    const projectId = pageContext.projectId ?? null;
+    // Project scope for agent-call gating. Builders that support
+    // mutations return projectScope explicitly; other paths fall back
+    // to the page's projectId (or null for legacy pages without one).
+    const projectId =
+      skillResult?.projectScope ?? pageContext.projectId ?? null;
 
     // Build the full env + spec BEFORE the agent_runs insert so the
     // persisted spec includes everything the agent will actually see.
@@ -133,56 +120,16 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         });
     };
 
-    // Hydrate canvas-mode stdin with the full local issue row so the agent
-    // has surrounding context (title, body, labels, assignees) — the
-    // selection alone is too narrow for stylistic rewrites.
-    let canvasIssue:
-      | {
-          number: number;
-          title: string;
-          bodyMd: string | null;
-          labels: { name: string; color: string }[];
-          assignees: { login: string; id: number }[];
-          state: string;
-          htmlUrl: string;
-        }
-      | null = null;
-    if (pageContext.canvas?.kind === "issue") {
-      const row = await deps.db.query.issues.findFirst({
-        where: and(
-          eq(issues.projectId, pageContext.canvas.projectId),
-          eq(issues.number, pageContext.canvas.issueNumber),
-          isNull(issues.removedAt),
-        ),
-      });
-      if (row) {
-        canvasIssue = {
-          number: row.number,
-          title: row.title,
-          // Hand the agent the CURRENTLY VISIBLE body — i.e. the unsaved
-          // draft if one exists, otherwise the GitHub-mirrored body. If
-          // we sent row.bodyMd unconditionally, the agent would rewrite a
-          // stale base and overwrite the user's in-progress draft on save.
-          bodyMd: row.draftBodyMd ?? row.bodyMd,
-          labels: row.labels,
-          assignees: row.assignees,
-          state: row.state,
-          htmlUrl: row.htmlUrl,
-        };
-      }
-    }
+    // Build stdin: base envelope + the active builder's skill envelope and
+    // hydrated keys (issue body for canvas, flow graph for project flow,
+    // etc.). Pages with no registered builder send the bare envelope —
+    // back-compat with today's pathname-only behaviour.
     const stdinJson: Record<string, unknown> = { message, pageContext, history };
-    if (canvasIssue) stdinJson["issue"] = canvasIssue;
-    if (pageContext.canvas?.selection) {
-      stdinJson["selection"] = pageContext.canvas.selection;
-    }
-    if (pageContext.canvas?.kind === "issue") {
-      stdinJson["skill"] = buildIssueCanvasSkill({
-        baseUrl: deps.publicBaseUrl,
-        projectId: pageContext.canvas.projectId,
-        issueNumber: pageContext.canvas.issueNumber,
-        runId: agentRunId,
-      });
+    if (skillResult) {
+      stdinJson["skill"] = skillResult.skill;
+      for (const [key, value] of Object.entries(skillResult.hydrated)) {
+        stdinJson[key] = value;
+      }
     }
 
     // Fire-and-forget the dispatcher; the SSE stream is the client's only view.
@@ -192,11 +139,8 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           stdinJson,
           onLog,
           hostId: agent.hostId,
-          // Scopes agent-call mutations to this project. Canvas-mode
-          // chats always set pageContext.canvas.projectId; non-canvas
-          // chats use the page's projectId (read-only flows aren't
-          // gated by this either way).
-          projectId: pageContext.canvas?.projectId ?? projectId,
+          projectId,
+          userId: user.id,
         });
         await deps.db
           .update(agentRuns)

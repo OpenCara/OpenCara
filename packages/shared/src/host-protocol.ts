@@ -124,20 +124,52 @@ export const PongSchema = z.object({ type: z.literal("pong") });
  *
  * The CLI scopes/validates nothing beyond "this looked like a parseable
  * opencara-call block from the running agent". Authorization (does this
- * runId match the calling device? does the issue belong to the run's
- * project?) is enforced server-side.
+ * runId match the calling device? does the issue/flow/template belong to
+ * the run's project/user?) is enforced server-side.
  *
- * `kind` is the allowlist gate. MVP supports only `issue.body.set`; future
- * kinds will be additions to a discriminated union of payload variants.
+ * `kind` is the allowlist gate. New kinds are additions to the
+ * discriminated union below; the dispatcher's `applyAgentCall` switch is
+ * compile-time-checked exhaustive against this union.
  */
-export const AgentCallSchema = z.object({
+const AgentCallEnvelope = {
   type: z.literal("agent-call"),
   runId: z.string(),
   callId: z.string(),
+};
+
+export const IssueBodySetCallSchema = z.object({
+  ...AgentCallEnvelope,
   kind: z.literal("issue.body.set"),
   issueNumber: z.number().int(),
   bodyMd: z.string(),
 });
+export type IssueBodySetCall = z.infer<typeof IssueBodySetCallSchema>;
+
+/** Replace a flow node's config blob (project-scoped). */
+export const FlowNodeConfigSetCallSchema = z.object({
+  ...AgentCallEnvelope,
+  kind: z.literal("flow.node.config.set"),
+  flowSlug: z.string().min(1),
+  nodeId: z.string().min(1),
+  config: z.record(z.string(), z.unknown()),
+});
+export type FlowNodeConfigSetCall = z.infer<typeof FlowNodeConfigSetCallSchema>;
+
+/** Replace a flow-template node's config blob (per-user draft). */
+export const TemplateNodeConfigSetCallSchema = z.object({
+  ...AgentCallEnvelope,
+  kind: z.literal("template.node.config.set"),
+  templateSlug: z.string().min(1),
+  nodeId: z.string().min(1),
+  config: z.record(z.string(), z.unknown()),
+});
+export type TemplateNodeConfigSetCall = z.infer<typeof TemplateNodeConfigSetCallSchema>;
+
+export const AgentCallSchema = z.discriminatedUnion("kind", [
+  IssueBodySetCallSchema,
+  FlowNodeConfigSetCallSchema,
+  TemplateNodeConfigSetCallSchema,
+]);
 export type AgentCall = z.infer<typeof AgentCallSchema>;
 
 export const ServerToDeviceMessageSchema = z.discriminatedUnion("type", [
@@ -147,7 +179,12 @@ export const ServerToDeviceMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type ServerToDeviceMessage = z.infer<typeof ServerToDeviceMessageSchema>;
 
-export const DeviceToServerMessageSchema = z.discriminatedUnion("type", [
+// Nested discriminated unions can't be inlined into another
+// discriminatedUnion() (zod requires each option to be a ZodObject with a
+// literal discriminator). z.union still discriminates correctly at runtime;
+// the only loss is slightly less precise error messages on a malformed
+// agent-call envelope.
+export const DeviceToServerMessageSchema = z.union([
   HelloMessageSchema,
   LogFrameSchema,
   RunDoneSchema,

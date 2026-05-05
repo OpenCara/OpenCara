@@ -62,6 +62,13 @@ interface Message {
 }
 
 interface PageContext {
+  /**
+   * Stable page id the orchestrator's skill registry keys on (see
+   * packages/orchestrator/src/flows/skills.ts). Derived from the URL +
+   * any canvas prop. Pages without a registered skill leave this null
+   * and the chat falls back to today's pathname-only behaviour.
+   */
+  page: string | null;
   pathname: string;
   projectId?: string;
   flowSlug?: string;
@@ -72,6 +79,34 @@ interface PageContext {
     issueNumber: number;
     selection: { text: string } | null;
   };
+}
+
+/**
+ * URL-pattern → page id table. Each pattern matches exactly one page in
+ * apps/web/src/App.tsx; new pages with skills register a new entry here
+ * + a builder server-side. The canvas prop short-circuits to
+ * "issue-canvas" so IssueDetailPage's embedded panel works the same
+ * way the AppShell's global panel would on that route.
+ */
+const PAGE_PATTERNS: { pattern: RegExp; page: string }[] = [
+  { pattern: /^\/projects\/[^/]+\/issues\/[^/]+$/, page: "issue-canvas" },
+  { pattern: /^\/projects\/[^/]+\/flow-runs\/[^/]+$/, page: "flow-run-detail" },
+  { pattern: /^\/projects\/[^/]+\/flows\/[^/]+$/, page: "project-flow-detail" },
+  { pattern: /^\/flows\/[^/]+$/, page: "flow-template-detail" },
+  // Project-detail covers `/projects/:id` AND `/projects/:id/:tab` — kept
+  // last so the more-specific patterns above win first.
+  { pattern: /^\/projects\/[^/]+(?:\/[^/]+)?$/, page: "project-detail" },
+];
+
+function pageForLocation(
+  pathname: string,
+  hasCanvas: boolean,
+): string | null {
+  if (hasCanvas) return "issue-canvas";
+  for (const { pattern, page } of PAGE_PATTERNS) {
+    if (pattern.test(pathname)) return page;
+  }
+  return null;
 }
 
 export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props) {
@@ -98,12 +133,20 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
 
   const pageContext: PageContext = useMemo(
     () => ({
+      page: pageForLocation(location.pathname, !!canvas),
       pathname: location.pathname,
       projectId: params.id ?? params.projectId,
       flowSlug: params.slug,
       flowRunId: params.runId,
     }),
-    [location.pathname, params.id, params.projectId, params.slug, params.runId],
+    [
+      location.pathname,
+      params.id,
+      params.projectId,
+      params.slug,
+      params.runId,
+      canvas,
+    ],
   );
 
   const send = async () => {

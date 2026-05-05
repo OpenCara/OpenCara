@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { WSContext } from "hono/ws";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   type AgentRun,
   type AgentSpec,
@@ -8,8 +8,13 @@ import {
   type ServerToDeviceMessage,
 } from "@opencara/shared";
 import type { Db } from "../db/client.js";
-import { agentHosts, issues } from "../db/schema.js";
+import { agentHosts } from "../db/schema.js";
 import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
+import {
+  applyFlowNodeConfigSet,
+  applyIssueBodySet,
+  applyTemplateNodeConfigSet,
+} from "../agent-calls/index.js";
 
 export interface ConnectedDevice {
   agentHostId: string;
@@ -38,6 +43,11 @@ interface PendingJob {
    * without canvas context).
    */
   projectId: string | null;
+  /**
+   * Owning user. Per-user resources (template drafts, prompts) key on
+   * this; agent-calls touching those resources require a non-null value.
+   */
+  userId: string | null;
 }
 
 export class DevicePool {
@@ -165,7 +175,7 @@ export class DevicePool {
         });
         return;
       }
-      void this.applyAgentCall(p.projectId, msg).catch((err) => {
+      void this.applyAgentCall(p.projectId, p.userId, msg).catch((err) => {
         console.error("[device-pool] agent-call apply failed", {
           runId: msg.runId,
           callId: msg.callId,
@@ -178,36 +188,47 @@ export class DevicePool {
     // hello / pong handled inline by the WS endpoint
   }
 
-  // Routes an authenticated, scope-validated agent-call to its
-  // implementation. Today the only allowed kind is `issue.body.set` — new
-  // kinds are additions to a switch, not new tables/columns.
+  // Routes an authenticated, scope-validated agent-call to its handler in
+  // ../agent-calls/. New kinds are additions to this switch + a new helper
+  // file; the discriminated union forces exhaustiveness at compile time.
   private async applyAgentCall(
     projectId: string,
+    userId: string | null,
     msg: Extract<DeviceToServerMessage, { type: "agent-call" }>,
   ): Promise<void> {
-    if (msg.kind === "issue.body.set") {
-      // Validate the issue belongs to the run's project. If not, ignore +
-      // log — defends against an agent that hallucinated an issueNumber.
-      const existing = await this.db.query.issues.findFirst({
-        where: (i, { and, eq, isNull }) =>
-          and(eq(i.projectId, projectId), eq(i.number, msg.issueNumber), isNull(i.removedAt)),
-      });
-      if (!existing) {
-        console.warn("[device-pool] agent-call issue.body.set: issue not found", {
-          projectId,
-          issueNumber: msg.issueNumber,
-        });
+    let result;
+    switch (msg.kind) {
+      case "issue.body.set":
+        result = await applyIssueBodySet(this.db, projectId, msg);
+        break;
+      case "flow.node.config.set":
+        result = await applyFlowNodeConfigSet(this.db, projectId, msg);
+        break;
+      case "template.node.config.set":
+        if (!userId) {
+          result = {
+            ok: false as const,
+            reason: "template mutations require a user-scoped run",
+          };
+          break;
+        }
+        result = await applyTemplateNodeConfigSet(this.db, userId, msg);
+        break;
+      default: {
+        // Discriminated union: TS ensures exhaustiveness when more kinds arrive.
+        const exhaustive: never = msg;
+        void exhaustive;
         return;
       }
-      await this.db
-        .update(issues)
-        .set({ draftBodyMd: msg.bodyMd, draftUpdatedAt: new Date() })
-        .where(and(eq(issues.projectId, projectId), eq(issues.number, msg.issueNumber)));
-      return;
     }
-    // Discriminated union: TS ensures exhaustiveness when more kinds arrive.
-    const exhaustive: never = msg.kind;
-    void exhaustive;
+    if (!result.ok) {
+      console.warn("[device-pool] agent-call rejected", {
+        runId: msg.runId,
+        callId: msg.callId,
+        kind: msg.kind,
+        reason: result.reason,
+      });
+    }
   }
 
   send(d: ConnectedDevice, msg: ServerToDeviceMessage): void {
@@ -223,6 +244,7 @@ export class DevicePool {
     agentHostId: string,
     onLog: RunContext["onLog"],
     projectId: string | null,
+    userId: string | null,
   ): Promise<RunResult> {
     return new Promise<RunResult>((resolve, reject) => {
       this.pending.set(runId, {
@@ -232,6 +254,7 @@ export class DevicePool {
         stdoutCaptured: [],
         agentHostId,
         projectId,
+        userId,
       });
     });
   }
@@ -277,6 +300,7 @@ export class WebSocketDispatcher implements AgentDispatcher {
       dev.agentHostId,
       ctx.onLog,
       ctx.projectId ?? null,
+      ctx.userId ?? null,
     );
     this.pool.send(dev, { type: "job", run, spec, stdinJson: ctx.stdinJson });
     return promise;

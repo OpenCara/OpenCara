@@ -128,14 +128,20 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
   // normal log frame in the same callback, so the user sees what the
   // agent asked for in the chat reply.
   const callParser = new AgentCallParser((call) => {
-    client.send({
-      type: "agent-call",
-      runId,
-      callId: call.callId,
-      kind: call.kind,
-      issueNumber: call.issueNumber,
-      bodyMd: call.bodyMd,
-    });
+    // The discriminated union forces a switch — TS won't narrow a spread
+    // alone. Each arm forwards the parsed payload verbatim; validation
+    // already happened in the parser.
+    switch (call.kind) {
+      case "issue.body.set":
+        client.send({ type: "agent-call", runId, ...call });
+        return;
+      case "flow.node.config.set":
+        client.send({ type: "agent-call", runId, ...call });
+        return;
+      case "template.node.config.set":
+        client.send({ type: "agent-call", runId, ...call });
+        return;
+    }
   });
 
   try {
