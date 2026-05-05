@@ -11,7 +11,7 @@ import {
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { GithubAppClient } from "../../github/app.js";
-import { backfillIssues } from "../../github/issues.js";
+import { backfillIssues, pushIssueBodyToGithub } from "../../github/issues.js";
 
 interface ProjectRoutesDeps {
   db: Db;
@@ -164,6 +164,67 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       .orderBy(desc(issues.id))
       .limit(limit);
     return c.json({ issues: rows });
+  });
+
+  // Detail view including bodyMd. The list endpoint omits the body to keep
+  // table payloads lean; the detail endpoint is what the issue canvas page
+  // reads.
+  r.get("/:id/issues/:number", async (c) => {
+    const id = c.req.param("id");
+    const number = Number.parseInt(c.req.param("number"), 10);
+    if (!Number.isFinite(number)) {
+      return c.json({ error: "invalid issue number" }, 400);
+    }
+    const row = await deps.db.query.issues.findFirst({
+      where: (i, { and, eq, isNull }) =>
+        and(eq(i.projectId, id), eq(i.number, number), isNull(i.removedAt)),
+    });
+    if (!row) return c.json({ error: "issue not found" }, 404);
+    return c.json({ issue: row });
+  });
+
+  // Push an edited body back to GitHub. Last-writer-wins; we don't yet check
+  // GitHub's updated_at against ours — see plan's out-of-scope notes.
+  r.patch("/:id/issues/:number/body", async (c) => {
+    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
+    const id = c.req.param("id");
+    const number = Number.parseInt(c.req.param("number"), 10);
+    if (!Number.isFinite(number)) {
+      return c.json({ error: "invalid issue number" }, 400);
+    }
+    const body = (await c.req.json().catch(() => null)) as { bodyMd?: unknown } | null;
+    if (!body || typeof body.bodyMd !== "string") {
+      return c.json({ error: "bodyMd (string) required" }, 400);
+    }
+    const project = await deps.db.query.projects.findFirst({
+      where: eq(projects.id, id),
+    });
+    if (!project) return c.json({ error: "project not found" }, 404);
+    try {
+      const refreshed = await pushIssueBodyToGithub(
+        deps.app,
+        {
+          id: project.id,
+          owner: project.owner,
+          name: project.name,
+          installationId: project.installationId,
+        },
+        number,
+        body.bodyMd,
+        deps.db,
+      );
+      return c.json({ issue: refreshed });
+    } catch (err) {
+      console.error("[projects] push issue body failed", {
+        projectId: id,
+        number,
+        err,
+      });
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        500,
+      );
+    }
   });
 
   // Manual one-shot backfill for a project that pre-dates the issues feature

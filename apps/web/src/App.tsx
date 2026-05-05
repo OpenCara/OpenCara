@@ -15,6 +15,7 @@ import { PromptsPage } from "@/pages/PromptsPage";
 import { AgentsPage } from "@/pages/AgentsPage";
 import { FlowTemplatesPage } from "@/pages/FlowTemplatesPage";
 import { FlowTemplateDetailPage } from "@/pages/FlowTemplateDetailPage";
+import { IssueDetailPage } from "@/pages/IssueDetailPage";
 
 export function App() {
   return (
@@ -34,6 +35,7 @@ export function App() {
         <Route path="projects/:id/flows" element={<ProjectFlowsPage />} />
         <Route path="projects/:id/flows/:slug" element={<ProjectFlowDetailPage />} />
         <Route path="projects/:id/flow-runs/:runId" element={<FlowRunDetailPage />} />
+        <Route path="projects/:id/issues/:number" element={<IssueDetailPage />} />
         {/* Less-specific tab routes go LAST so they don't shadow the above. */}
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="devices" element={<DevicesPage />} />

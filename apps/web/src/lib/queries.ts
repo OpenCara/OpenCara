@@ -202,6 +202,36 @@ export function useSyncProjectIssues(projectId: string) {
   });
 }
 
+export interface ProjectIssueDetail extends ProjectIssue {
+  bodyMd: string | null;
+}
+
+export const projectIssueDetailQuery = (projectId: string, issueNumber: number) => ({
+  queryKey: ["projects", projectId, "issues", issueNumber] as const,
+  queryFn: () =>
+    api.get<{ issue: ProjectIssueDetail }>(
+      `/api/projects/${projectId}/issues/${issueNumber}`,
+    ),
+});
+
+export function useSaveIssueBody(projectId: string, issueNumber: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (bodyMd: string) =>
+      api.patch<{ issue: ProjectIssueDetail }>(
+        `/api/projects/${projectId}/issues/${issueNumber}/body`,
+        { bodyMd },
+      ),
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["projects", projectId, "issues", issueNumber] as const,
+        data,
+      );
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "issues"] });
+    },
+  });
+}
+
 export const projectRunsQuery = (id: string) => ({
   queryKey: ["projects", id, "runs"] as const,
   queryFn: () => api.get<{ runs: ProjectRun[] }>(`/api/projects/${id}/runs`),

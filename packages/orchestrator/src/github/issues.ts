@@ -101,6 +101,50 @@ export async function upsertIssueFromWebhook(
     });
 }
 
+// Push the in-app body draft back to GitHub via PATCH and re-upsert the
+// local row from the response. Returns the refreshed issue row. The
+// follow-up `issues.edited` webhook GitHub fires on its way back will hit
+// upsertIssueFromWebhook and idempotently update the same row again — by
+// design, no special suppression needed.
+export async function pushIssueBodyToGithub(
+  app: GithubAppClient,
+  project: { id: string; owner: string; name: string; installationId: string },
+  issueNumber: number,
+  bodyMd: string,
+  db: Db,
+): Promise<typeof issues.$inferSelect> {
+  const inst = await db.query.githubInstallations.findFirst({
+    where: (gi, { eq }) => eq(gi.id, project.installationId),
+  });
+  if (!inst) throw new Error(`installation row ${project.installationId} not found`);
+  const octokit = await app.forInstallation(inst.githubInstallationId);
+
+  const res = await octokit.request(
+    "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
+    {
+      owner: project.owner,
+      repo: project.name,
+      issue_number: issueNumber,
+      body: bodyMd,
+    },
+  );
+  // The PATCH response shape matches the webhook `payload.issue` shape, so
+  // the existing normalizer applies cleanly. Action "edited" keeps removedAt
+  // null (the issue is alive).
+  await upsertIssueFromWebhook(db, project.id, "edited", res.data as IssuePayload);
+
+  const refreshed = await db.query.issues.findFirst({
+    where: (i, { eq, and }) =>
+      and(eq(i.projectId, project.id), eq(i.number, issueNumber)),
+  });
+  if (!refreshed) {
+    throw new Error(
+      `issue ${project.owner}/${project.name}#${issueNumber} disappeared after PATCH+upsert`,
+    );
+  }
+  return refreshed;
+}
+
 // One-shot REST backfill of every issue in a repo. Called from project add.
 // GitHub's REST `/issues` endpoint also returns PRs — filtered out here. Runs
 // to completion (no early-exit) so a large backlog still lands; caller is

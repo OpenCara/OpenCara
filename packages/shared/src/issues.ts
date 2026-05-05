@@ -29,3 +29,11 @@ export const IssueSummarySchema = z.object({
   closedAt: z.string().datetime().nullable(),
 });
 export type IssueSummary = z.infer<typeof IssueSummarySchema>;
+
+// Detail payload — same fields as the summary plus the full markdown body.
+// The list endpoint deliberately omits bodyMd so the table stays cheap;
+// this is what the issue detail page consumes.
+export const IssueDetailSchema = IssueSummarySchema.extend({
+  bodyMd: z.string().nullable(),
+});
+export type IssueDetail = z.infer<typeof IssueDetailSchema>;

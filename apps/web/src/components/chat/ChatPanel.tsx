@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { diffWordsWithSpace } from "diff";
 import { Bot, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,9 +17,32 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useChatActions } from "@/lib/chatActions";
 
+export interface CanvasContext {
+  /** Project ID, threaded into pageContext.canvas.projectId on every send. */
+  projectId: string;
+  /** Issue number for /api/projects/:id/issues/:n. */
+  issueNumber: number;
+  /**
+   * The text currently selected in the editor. Snapshotted onto each user
+   * message at send-time so a later "Apply" still uses the right original.
+   */
+  selection: string | null;
+  onClearSelection: () => void;
+  /**
+   * Called when the user accepts an agent rewrite. Receives the original
+   * snapshotted selection and the assistant's full response. Parent
+   * decides how to apply (typically: substring replace in the body draft).
+   */
+  onApplyRewrite: (original: string, replacement: string) => void;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** "floating" (default) = fixed-position sidebar with slide-in transition.
+   * "embedded" = sized to parent column, no transition, no close button. */
+  variant?: "floating" | "embedded";
+  canvas?: CanvasContext;
 }
 
 interface Message {
@@ -28,6 +52,9 @@ interface Message {
   agentRunId?: string;
   /** True while the assistant message is still streaming. */
   pending?: boolean;
+  /** Snapshot of the canvas selection at the moment THIS turn was sent.
+   * Used to render an Apply button on the matching assistant reply. */
+  attachedSelection?: string;
 }
 
 interface PageContext {
@@ -35,9 +62,15 @@ interface PageContext {
   projectId?: string;
   flowSlug?: string;
   flowRunId?: string;
+  canvas?: {
+    kind: "issue";
+    projectId: string;
+    issueNumber: number;
+    selection: { text: string } | null;
+  };
 }
 
-export function ChatPanel({ open, onClose }: Props) {
+export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props) {
   const location = useLocation();
   const params = useParams();
   const agentsQ = useQuery(agentsQuery());
@@ -75,19 +108,43 @@ export function ChatPanel({ open, onClose }: Props) {
     setSending(true);
     setInput("");
 
+    // Snapshot the canvas selection NOW (at send-time). The user can change
+    // their selection while the agent is responding; we want Apply to use
+    // the snippet they were looking at when they hit Send.
+    const canvasSelection = canvas?.selection?.trim() || null;
+
     const userMsg: Message = {
       id: `u_${Date.now()}`,
       role: "user",
       text,
+      attachedSelection: canvasSelection ?? undefined,
     };
     const assistantId = `a_${Date.now()}`;
     setMessages((prev) => [
       ...prev,
       userMsg,
-      { id: assistantId, role: "assistant", text: "", pending: true },
+      {
+        id: assistantId,
+        role: "assistant",
+        text: "",
+        pending: true,
+        attachedSelection: canvasSelection ?? undefined,
+      },
     ]);
 
     const turnIndex = messages.filter((m) => m.role === "user").length + 1;
+    const ctxForRequest: PageContext = canvas
+      ? {
+          ...pageContext,
+          canvas: {
+            kind: "issue",
+            projectId: canvas.projectId,
+            issueNumber: canvas.issueNumber,
+            selection: canvasSelection ? { text: canvasSelection } : null,
+          },
+        }
+      : pageContext;
+
     try {
       const { agentRunId } = await api.post<{ agentRunId: string }>(
         "/api/chat/messages",
@@ -96,7 +153,7 @@ export function ChatPanel({ open, onClose }: Props) {
           sessionId: sessionIdRef.current,
           turnIndex,
           message: text,
-          pageContext,
+          pageContext: ctxForRequest,
         },
       );
       setMessages((prev) =>
@@ -116,17 +173,26 @@ export function ChatPanel({ open, onClose }: Props) {
     }
   };
 
+  const wrapperClasses =
+    variant === "floating"
+      ? cn(
+          "fixed right-0 top-0 z-40 flex h-screen w-[28rem] flex-col border-l bg-card shadow-xl transition-transform",
+          open ? "translate-x-0" : "translate-x-full",
+        )
+      : "flex h-full flex-col border-l bg-card";
+
+  const Wrapper = variant === "floating" ? "aside" : "div";
+
   return (
-    <aside
-      className={cn(
-        "fixed right-0 top-0 z-40 flex h-screen w-[28rem] flex-col border-l bg-card shadow-xl transition-transform",
-        open ? "translate-x-0" : "translate-x-full",
-      )}
-      aria-hidden={!open}
+    <Wrapper
+      className={wrapperClasses}
+      aria-hidden={variant === "floating" ? !open : undefined}
     >
       <div className="flex items-center gap-2 border-b px-4 py-3">
         <Bot className="size-4 text-muted-foreground" />
-        <span className="text-sm font-semibold tracking-tight">Chat with agent</span>
+        <span className="text-sm font-semibold tracking-tight">
+          {canvas ? "Edit with agent" : "Chat with agent"}
+        </span>
         <div className="ml-auto flex items-center gap-2">
           <Select
             value={agentId ?? ""}
@@ -144,23 +210,51 @@ export function ChatPanel({ open, onClose }: Props) {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" variant="ghost" onClick={onClose}>
-            <X className="size-4" />
-          </Button>
+          {variant === "floating" && (
+            <Button size="sm" variant="ghost" onClick={onClose}>
+              <X className="size-4" />
+            </Button>
+          )}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 ? (
-          <EmptyState agents={agentsQ.data?.agents ?? []} pageContext={pageContext} />
+          <EmptyState
+            agents={agentsQ.data?.agents ?? []}
+            pageContext={pageContext}
+            canvas={canvas}
+          />
         ) : (
           <div className="space-y-4">
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+              <MessageBubble
+                key={m.id}
+                message={m}
+                onApplyRewrite={canvas?.onApplyRewrite}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {canvas?.selection && (
+        <div className="border-t bg-secondary/40 px-3 py-2">
+          <div className="flex items-start gap-2 text-xs">
+            <span className="mt-0.5 text-muted-foreground">selection:</span>
+            <span className="flex-1 truncate font-mono">{canvas.selection}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={canvas.onClearSelection}
+              className="h-6 px-1"
+              title="Clear selection"
+            >
+              <X className="size-3" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="border-t p-3">
         <Textarea
@@ -174,14 +268,16 @@ export function ChatPanel({ open, onClose }: Props) {
           }}
           placeholder={
             agentId
-              ? "Ask for help with this page… (⌘/Ctrl+Enter to send)"
+              ? canvas?.selection
+                ? "How should this be rewritten? (⌘/Ctrl+Enter)"
+                : "Ask for help with this page… (⌘/Ctrl+Enter to send)"
               : "Pick an agent above to start chatting"
           }
           className="min-h-20 resize-none text-sm"
           disabled={!agentId}
         />
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>page: {shortPath(pageContext.pathname)}</span>
+          <span>{canvas ? "canvas mode" : `page: ${shortPath(pageContext.pathname)}`}</span>
           <Button
             size="sm"
             disabled={!agentId || !input.trim() || sending}
@@ -192,24 +288,56 @@ export function ChatPanel({ open, onClose }: Props) {
           </Button>
         </div>
       </div>
-    </aside>
+    </Wrapper>
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  onApplyRewrite,
+}: {
+  message: Message;
+  onApplyRewrite?: (original: string, replacement: string) => void;
+}) {
   if (message.role === "user") {
     return (
-      <div className="ml-6 rounded-lg bg-secondary px-3 py-2 text-sm">
-        {message.text}
+      <div className="ml-6 space-y-1">
+        {message.attachedSelection && (
+          <div className="rounded-md border bg-secondary/30 px-2 py-1 text-xs text-muted-foreground">
+            <span className="mr-1 font-semibold">on:</span>
+            <span className="font-mono">
+              {previewText(message.attachedSelection, 120)}
+            </span>
+          </div>
+        )}
+        <div className="rounded-lg bg-secondary px-3 py-2 text-sm">{message.text}</div>
       </div>
     );
   }
-  return <AssistantBubble message={message} />;
+  return <AssistantBubble message={message} onApplyRewrite={onApplyRewrite} />;
 }
 
-function AssistantBubble({ message }: { message: Message }) {
+function AssistantBubble({
+  message,
+  onApplyRewrite,
+}: {
+  message: Message;
+  onApplyRewrite?: (original: string, replacement: string) => void;
+}) {
   const { text } = useStreamedAssistant(message);
   const blocks = useMemo(() => parseBlocks(text), [text]);
+  // The "rewrite candidate" is only meaningful when this turn had a selection
+  // attached. We strip fenced blocks from the rewrite text since the user's
+  // selection was almost certainly plain prose; including code fences would
+  // produce a ```-laden replacement.
+  const rewriteCandidate = useMemo(() => {
+    if (!message.attachedSelection) return null;
+    return blocks
+      .map((b) => (b.kind === "text" ? b.text : ""))
+      .join("")
+      .trim();
+  }, [blocks, message.attachedSelection]);
+
   return (
     <div className="mr-6 space-y-2">
       <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm leading-relaxed">
@@ -226,8 +354,66 @@ function AssistantBubble({ message }: { message: Message }) {
           <p className="text-xs text-muted-foreground">…</p>
         )}
       </div>
+      {!message.pending &&
+        message.attachedSelection &&
+        rewriteCandidate &&
+        onApplyRewrite && (
+          <RewritePreview
+            original={message.attachedSelection}
+            rewrite={rewriteCandidate}
+            onApply={() =>
+              onApplyRewrite(message.attachedSelection!, rewriteCandidate)
+            }
+          />
+        )}
     </div>
   );
+}
+
+function RewritePreview({
+  original,
+  rewrite,
+  onApply,
+}: {
+  original: string;
+  rewrite: string;
+  onApply: () => void;
+}) {
+  const [applied, setApplied] = useState(false);
+  const parts = useMemo(() => diffWordsWithSpace(original, rewrite), [
+    original,
+    rewrite,
+  ]);
+  return (
+    <div className="rounded-md border bg-background p-2">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Rewrite preview
+        </span>
+        <Button size="sm" disabled={applied} onClick={() => { onApply(); setApplied(true); }}>
+          {applied ? "Applied" : "Apply"}
+        </Button>
+      </div>
+      <div className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+        {parts.map((part, i) => (
+          <span
+            key={i}
+            className={cn(
+              part.added && "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+              part.removed && "bg-red-500/20 text-red-700 line-through dark:text-red-300",
+            )}
+          >
+            {part.value}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function previewText(s: string, max: number): string {
+  const trimmed = s.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
 /**
@@ -361,21 +547,38 @@ function FencedBlock({ type, content }: { type: string; content: string }) {
 function EmptyState({
   agents,
   pageContext,
+  canvas,
 }: {
   agents: AgentRow[];
   pageContext: PageContext;
+  canvas?: CanvasContext;
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
       <Bot className="size-8 opacity-50" />
-      <p>
-        Chat with one of your agents. The page you're on is sent along so the
-        agent can offer setup suggestions.
-      </p>
-      <p className="text-xs">
-        Page: <span className="font-mono">{shortPath(pageContext.pathname)}</span>
-        {agents.length === 0 && " — define an agent first under /agents."}
-      </p>
+      {canvas ? (
+        <>
+          <p>
+            Select text in the issue body, then ask the agent to rewrite it.
+            The full issue (title, body, labels, assignees) is sent along for
+            stylistic context.
+          </p>
+          <p className="text-xs">
+            {agents.length === 0 && "Define an agent first under /agents."}
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            Chat with one of your agents. The page you're on is sent along so
+            the agent can offer setup suggestions.
+          </p>
+          <p className="text-xs">
+            Page: <span className="font-mono">{shortPath(pageContext.pathname)}</span>
+            {agents.length === 0 && " — define an agent first under /agents."}
+          </p>
+        </>
+      )}
     </div>
   );
 }
