@@ -164,5 +164,45 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     return c.json({ agentRunId, sessionId, turnIndex });
   });
 
+  /**
+   * Inspect-only resolution of the active page skill. The chat panel uses
+   * this to render a "what does the agent know about this page" drawer
+   * without dispatching a run. We send back the markdown + the names of
+   * hydrated stdin keys (NOT the values — those can be large and may
+   * contain user data the panel already has via React Query).
+   *
+   * No agent_runs row, no dispatcher invocation, no DB write — just runs
+   * the same registry resolution chat/messages would.
+   */
+  r.post("/chat/skill", auth, async (c) => {
+    const user = c.get("user")!;
+    const body = await c.req.json().catch(() => ({}));
+    const pageContext: PageContext =
+      body.pageContext && typeof body.pageContext === "object"
+        ? (body.pageContext as PageContext)
+        : {};
+
+    const resolved = await resolvePageSkill({
+      pageContext,
+      user: { id: user.id },
+      baseUrl: deps.publicBaseUrl,
+      // Fixed sentinel — this is an inspect call, not a real run.
+      runId: "inspect",
+      db: deps.db,
+    });
+    if (!resolved) return c.json({ skill: null });
+    if (resolved.authError) {
+      return c.json({ error: resolved.authError }, 403);
+    }
+    return c.json({
+      skill: {
+        name: resolved.skill.name,
+        instructions: resolved.skill.instructions,
+      },
+      hydratedKeys: Object.keys(resolved.hydrated),
+      projectScope: resolved.projectScope ?? null,
+    });
+  });
+
   return r;
 }

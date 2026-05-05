@@ -2,9 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { diffWordsWithSpace } from "diff";
-import { Bot, Send, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Bot, Info, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -117,6 +126,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [skillOpen, setSkillOpen] = useState(false);
 
   // Stable per-panel-open session id so the agent can use --resume / --continue.
   const sessionIdRef = useRef<string>("");
@@ -257,6 +267,14 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
               ))}
             </SelectContent>
           </Select>
+          <Button
+            size="sm"
+            variant="ghost"
+            title="What does the agent know about this page?"
+            onClick={() => setSkillOpen(true)}
+          >
+            <Info className="size-4" />
+          </Button>
           {variant === "floating" && (
             <Button size="sm" variant="ghost" onClick={onClose}>
               <X className="size-4" />
@@ -264,6 +282,24 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
           )}
         </div>
       </div>
+
+      <SkillDialog
+        open={skillOpen}
+        onOpenChange={setSkillOpen}
+        pageContext={
+          canvas
+            ? {
+                ...pageContext,
+                canvas: {
+                  kind: "issue",
+                  projectId: canvas.projectId,
+                  issueNumber: canvas.issueNumber,
+                  selection: null,
+                },
+              }
+            : pageContext
+        }
+      />
 
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 ? (
@@ -632,4 +668,104 @@ function EmptyState({
 
 function shortPath(p: string): string {
   return p.length > 60 ? `${p.slice(0, 57)}…` : p;
+}
+
+interface SkillResponse {
+  skill: { name: string; instructions: string } | null;
+  hydratedKeys?: string[];
+  projectScope?: string | null;
+}
+
+/**
+ * Inspect-only view of the active page skill — what markdown the agent
+ * receives on stdin for this page, plus the names of hydrated stdin
+ * keys. Fetched on open so we always show the current state (the
+ * registry is server-side; the panel doesn't otherwise know what was
+ * sent to the agent).
+ */
+function SkillDialog({
+  open,
+  onOpenChange,
+  pageContext,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  pageContext: PageContext;
+}) {
+  const q = useQuery({
+    queryKey: ["chat-skill", pageContext.page, pageContext.pathname],
+    enabled: open,
+    queryFn: () => api.post<SkillResponse>("/api/chat/skill", { pageContext }),
+    // Keep one minute of cache so reopening the dialog mid-session is
+    // instant; the markdown only changes when the schema/builder ships.
+    staleTime: 60_000,
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            Skill for{" "}
+            <span className="font-mono text-sm">
+              {pageContext.page ?? "(unregistered page)"}
+            </span>
+          </DialogTitle>
+          <DialogDescription>
+            What the agent receives on stdin for this page. Source:{" "}
+            <span className="font-mono">
+              packages/orchestrator/src/flows/skills/
+            </span>
+          </DialogDescription>
+        </DialogHeader>
+        {q.isLoading && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {q.isError && (
+          <p className="text-sm text-destructive">
+            Failed to load skill: {(q.error as Error).message}
+          </p>
+        )}
+        {q.data && !q.data.skill && (
+          <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+            No skill registered for this page. The agent receives only the
+            base envelope (message, pageContext, history) — same as before
+            this feature shipped.
+          </div>
+        )}
+        {q.data?.skill && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-md border px-2 py-1 font-mono">
+                {q.data.skill.name}
+              </span>
+              {q.data.projectScope && (
+                <span className="rounded-md border bg-muted px-2 py-1 text-muted-foreground">
+                  project scope: {q.data.projectScope}
+                </span>
+              )}
+              {q.data.hydratedKeys && q.data.hydratedKeys.length > 0 && (
+                <span className="text-muted-foreground">
+                  stdin keys:{" "}
+                  {q.data.hydratedKeys.map((k) => (
+                    <span
+                      key={k}
+                      className="ml-1 rounded bg-muted px-1.5 py-0.5 font-mono"
+                    >
+                      {k}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </div>
+            <div className="prose prose-sm max-h-[60vh] max-w-none overflow-y-auto rounded-md border bg-background p-3 dark:prose-invert">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {q.data.skill.instructions}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }
