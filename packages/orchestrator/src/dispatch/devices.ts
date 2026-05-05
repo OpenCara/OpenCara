@@ -14,6 +14,7 @@ import {
   applyFlowNodeConfigSet,
   applyIssueBodySet,
   applyTemplateNodeConfigSet,
+  type AgentCallResult,
 } from "../agent-calls/index.js";
 
 export interface ConnectedDevice {
@@ -155,9 +156,10 @@ export class DevicePool {
       // proxied it here using its device-level WS auth. We gate on:
       //   1. The runId belongs to a pending dispatch we issued.
       //   2. The dispatch went to THIS device (cross-check agentHostId).
-      //   3. The run has a projectId scope (otherwise the run can't make
-      //      agent-calls — null means a legacy path or a run that wasn't
-      //      configured for canvas use).
+      // The per-kind helpers in `applyAgentCall` enforce their own scope
+      // requirements (projectId for issue/flow, userId for template) —
+      // we do NOT broad-gate on projectId here, because template edits
+      // come from `/flows/:slug` which is user-scoped, not project-scoped.
       // Anything else is a silent ignore — same shape as log/done miss.
       const p = this.pending.get(msg.runId);
       if (!p) return;
@@ -166,12 +168,6 @@ export class DevicePool {
           runId: msg.runId,
           expected: p.agentHostId,
           got: agentHostId,
-        });
-        return;
-      }
-      if (!p.projectId) {
-        console.warn("[device-pool] agent-call on a run without projectId scope", {
-          runId: msg.runId,
         });
         return;
       }
@@ -191,23 +187,39 @@ export class DevicePool {
   // Routes an authenticated, scope-validated agent-call to its handler in
   // ../agent-calls/. New kinds are additions to this switch + a new helper
   // file; the discriminated union forces exhaustiveness at compile time.
+  // Each handler enforces its own scope: project-scoped kinds reject
+  // when projectId is null; user-scoped kinds reject when userId is null.
   private async applyAgentCall(
-    projectId: string,
+    projectId: string | null,
     userId: string | null,
     msg: Extract<DeviceToServerMessage, { type: "agent-call" }>,
   ): Promise<void> {
-    let result;
+    let result: AgentCallResult;
     switch (msg.kind) {
       case "issue.body.set":
+        if (!projectId) {
+          result = {
+            ok: false,
+            reason: "issue mutations require a project-scoped run",
+          };
+          break;
+        }
         result = await applyIssueBodySet(this.db, projectId, msg);
         break;
       case "flow.node.config.set":
+        if (!projectId) {
+          result = {
+            ok: false,
+            reason: "flow mutations require a project-scoped run",
+          };
+          break;
+        }
         result = await applyFlowNodeConfigSet(this.db, projectId, msg);
         break;
       case "template.node.config.set":
         if (!userId) {
           result = {
-            ok: false as const,
+            ok: false,
             reason: "template mutations require a user-scoped run",
           };
           break;

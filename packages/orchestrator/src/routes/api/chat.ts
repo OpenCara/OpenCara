@@ -17,6 +17,17 @@ interface ChatRoutesDeps {
 
 type PageContext = PageContextLike;
 
+/** Stdin keys the chat route owns. Builders MUST NOT return any of these
+ * in their `hydrated` map — a collision would silently change what the
+ * agent sees and break protocol contracts.
+ */
+const RESERVED_STDIN_KEYS = new Set([
+  "message",
+  "pageContext",
+  "history",
+  "skill",
+]);
+
 /**
  * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
  * the existing dispatcher; stdin carries `{ message, pageContext, history? }`,
@@ -124,10 +135,22 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // hydrated keys (issue body for canvas, flow graph for project flow,
     // etc.). Pages with no registered builder send the bare envelope —
     // back-compat with today's pathname-only behaviour.
+    //
+    // Reserved-key guard: a builder must not shadow the base envelope or
+    // skill key — that would silently change what the agent sees on
+    // stdin. Surfaced as a 500 because it's a builder bug, not user
+    // input.
     const stdinJson: Record<string, unknown> = { message, pageContext, history };
     if (skillResult) {
       stdinJson["skill"] = skillResult.skill;
       for (const [key, value] of Object.entries(skillResult.hydrated)) {
+        if (RESERVED_STDIN_KEYS.has(key)) {
+          console.error("[chat] builder hydrated reserved stdin key", {
+            page: pageContext.page,
+            key,
+          });
+          return c.json({ error: `builder hydrated reserved key: ${key}` }, 500);
+        }
         stdinJson[key] = value;
       }
     }

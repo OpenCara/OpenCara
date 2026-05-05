@@ -42,7 +42,9 @@ export interface SkillEnvelope {
  * needs a missing field must return null.
  */
 export interface PageContextLike {
-  page?: string;
+  /** Set by ChatPanel to a registered page id, or null when the URL doesn't
+   * match any pattern. Server treats both undefined and null as "no skill". */
+  page?: string | null;
   pathname?: string;
   projectId?: string;
   flowSlug?: string;

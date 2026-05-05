@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   agentRuns,
   flowRuns,
@@ -34,10 +34,7 @@ export const flowRunDetailBuilder: PageSkillBuilder = async (ctx) => {
   const stepIds = steps.map((s) => s.id);
   const linkedAgentRuns = stepIds.length
     ? await ctx.db.query.agentRuns.findMany({
-        where: and(
-          isNotNull(agentRuns.flowRunStepId),
-          inArray(agentRuns.flowRunStepId, stepIds),
-        ),
+        where: inArray(agentRuns.flowRunStepId, stepIds),
       })
     : [];
 

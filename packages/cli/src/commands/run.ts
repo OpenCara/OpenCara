@@ -130,7 +130,9 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
   const callParser = new AgentCallParser((call) => {
     // The discriminated union forces a switch — TS won't narrow a spread
     // alone. Each arm forwards the parsed payload verbatim; validation
-    // already happened in the parser.
+    // already happened in the parser. The `never` exhaustiveness arm
+    // ensures a future kind added to AgentCallSchema lights this file up
+    // at compile time instead of silently dropping the call.
     switch (call.kind) {
       case "issue.body.set":
         client.send({ type: "agent-call", runId, ...call });
@@ -141,6 +143,10 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
       case "template.node.config.set":
         client.send({ type: "agent-call", runId, ...call });
         return;
+      default: {
+        const exhaustive: never = call;
+        void exhaustive;
+      }
     }
   });
 
