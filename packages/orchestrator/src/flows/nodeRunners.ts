@@ -18,7 +18,7 @@ import {
   prompts,
 } from "../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../dispatch/dispatcher.js";
-import type { GithubAppClient } from "../github/app.js";
+import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
 
@@ -38,7 +38,7 @@ export interface NodeRunCtx {
   flowRunStepId: string;
   projectId: string;
   installation: { id: string; githubInstallationId: number };
-  project: { owner: string; name: string };
+  project: { owner: string; name: string; githubRepoId: number };
   event: { id: string; type: string; payload: unknown };
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
@@ -364,11 +364,19 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   const agentRunId = ulid();
   env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  // Build the full spec (with env populated) BEFORE inserting agent_runs so
-  // the persisted spec.env includes everything the agent will actually see.
-  // Important for audit/debug/retry — earlier this stored env={} and lost
-  // that signal. (The per-run token that motivated env={} no longer exists
-  // in the Option B design.)
+  // Token markers go into the persisted spec.env so the audit row shows
+  // injection happened — the real token is overwritten onto the live env
+  // AFTER insert (see below) and never reaches the DB. GIT_*_NAME/EMAIL
+  // are pinned so a host that ever runs multiple orchestrators doesn't
+  // leak its global ~/.gitconfig identity between concurrent runs.
+  const tokenPlaceholder = "<ephemeral>";
+  env["GH_TOKEN"] = tokenPlaceholder;
+  env["GITHUB_TOKEN"] = tokenPlaceholder;
+  env["GIT_AUTHOR_NAME"] = "opencara[bot]";
+  env["GIT_AUTHOR_EMAIL"] = "opencara[bot]@users.noreply.github.com";
+  env["GIT_COMMITTER_NAME"] = "opencara[bot]";
+  env["GIT_COMMITTER_EMAIL"] = "opencara[bot]@users.noreply.github.com";
+
   const spec = {
     kind: agent.name,
     command: agent.command,
@@ -386,6 +394,30 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     flowRunStepId: ctx.flowRunStepId,
     startedAt: new Date(),
   });
+
+  // Mint the real ephemeral token AFTER the insert. By here, the persisted
+  // spec.env still reads `<ephemeral>` for the token fields (the row was
+  // serialized at insert time); subsequent mutations of `env` only affect
+  // the dispatched copy. Mint failures are non-fatal: the agent runs
+  // without GH_TOKEN, and any actual gh use surfaces as a 401 downstream
+  // rather than masking it as a generic flow failure.
+  let mintedToken: EphemeralToken | null = null;
+  try {
+    mintedToken = await ctx.app.mintEphemeralToken({
+      installationId: ctx.installation.githubInstallationId,
+      repositoryIds: [ctx.project.githubRepoId],
+      permissions: { contents: "write", issues: "write", pull_requests: "write" },
+    });
+    env["GH_TOKEN"] = mintedToken.token;
+    env["GITHUB_TOKEN"] = mintedToken.token;
+  } catch (err) {
+    console.error(
+      "[flows] mintEphemeralToken failed; agent runs without GH_TOKEN",
+      err,
+    );
+    delete env["GH_TOKEN"];
+    delete env["GITHUB_TOKEN"];
+  }
 
   // Inject the issue-edit skill if this run has issue context (Projects v2
   // status-change trigger). Other trigger types don't get the skill — body
@@ -446,6 +478,15 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       .set({ status: "failed", finishedAt: new Date() })
       .where(eq(agentRuns.id, agentRunId));
     throw err;
+  } finally {
+    // Best-effort revoke. The token expires in ≤1h regardless, so a
+    // network blip here is logged + swallowed (worst case: token sits
+    // valid for the rest of its TTL, same as if we never revoked).
+    if (mintedToken) {
+      await ctx.app.revokeToken(mintedToken.token).catch((err: unknown) => {
+        console.error("[flows] revokeToken failed", err);
+      });
+    }
   }
 };
 
