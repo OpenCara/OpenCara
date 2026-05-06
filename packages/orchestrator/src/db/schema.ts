@@ -285,6 +285,18 @@ export const flowRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     error: text("error"),
+    // Why a 'cancelled' flow_run ended up that way. Populated alongside
+    // status='cancelled':
+    //   'trigger_skip' — the trigger node's SkipFlowError filter rejected
+    //     the event (e.g. wrong event type, action not in trigger filter,
+    //     branches-ignore match). Visible only when explicitly requested
+    //     for debug; default UI hides them as noise.
+    //   'abandoned' — reaper recovered a run that was still pending/running
+    //     when the orchestrator died. Surfaced normally; users want to see
+    //     these.
+    // null on succeeded/failed and on cancelled rows that pre-date this
+    // column (existing data is left as-is rather than backfilled).
+    cancelReason: text("cancel_reason"),
   },
   (t) => ({
     projectCreatedAtIdx: index("flow_runs_project_created_at_idx").on(

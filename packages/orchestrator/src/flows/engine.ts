@@ -414,6 +414,10 @@ export class FlowEngine {
         status: failed ? "failed" : skipped ? "cancelled" : "succeeded",
         finishedAt: new Date(),
         error: errorMsg,
+        // skipped → trigger_skip so the Flow runs page can hide these by
+        // default. (Other 'cancelled' rows come from the reaper, which
+        // sets cancel_reason='abandoned'.)
+        cancelReason: skipped ? "trigger_skip" : null,
       })
       .where(eq(flowRuns.id, flowRunId));
     await this.deps.pg.notify("flow_runs", flowRunId);
