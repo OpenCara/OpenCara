@@ -61,6 +61,12 @@ export interface NodeRunCtx {
    * worktree handle reachable upstream over the edge graph. Undefined
    * when the node has no worktree ancestor. */
   upstreamWorktree?: WorktreeHandle;
+  /** Captured stdout of the nearest upstream `agent` node, if any.
+   * Used by `github.create_pull_request` when its `body` config is
+   * null — that contract is "use the upstream agent's stdout", not
+   * "use whatever the immediate parent emitted" (which could be a
+   * worktree handle's JSON). */
+  upstreamAgentOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
 }
@@ -558,11 +564,21 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       }
 
       const tplVars = collectTemplateVars(ctx);
-      const title = renderTemplate(node.config.title, tplVars);
-      const renderedBody =
-        node.config.body !== null && node.config.body !== undefined
-          ? renderTemplate(node.config.body, tplVars)
-          : body;
+      const title = renderTemplate(node.config.title, tplVars, "create_pull_request.title");
+      // body: null is documented as "use the upstream agent's stdout" —
+      // resolve via the engine-supplied upstreamAgentOutput, NOT via
+      // immediate previousOutput which could be the worktree handle's
+      // JSON when worktree → create_pr is wired directly.
+      let renderedBody: string;
+      if (node.config.body !== null && node.config.body !== undefined) {
+        renderedBody = renderTemplate(node.config.body, tplVars, "create_pull_request.body");
+      } else if (ctx.upstreamAgentOutput !== undefined) {
+        renderedBody = ctx.upstreamAgentOutput.trim();
+      } else {
+        throw new Error(
+          "github.create_pull_request: body=null requires an upstream agent node to source the body from — wire an `agent` node above this one or set config.body to a literal/template",
+        );
+      }
 
       const res = await oct.request("POST /repos/{owner}/{repo}/pulls", {
         owner,
@@ -600,7 +616,11 @@ async function worktreeRunner(
   // it before dispatchAgentRun touches the env.
   tplVars["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  const branchName = renderTemplate(node.config.branchName, tplVars);
+  const branchName = renderTemplate(
+    node.config.branchName,
+    tplVars,
+    "git.create_worktree.branchName",
+  );
   if (branchName.length === 0) {
     throw new Error(
       `git.create_worktree: branchName template '${node.config.branchName}' rendered empty — fill in the template variables`,
@@ -880,6 +900,18 @@ function collectTemplateVars(ctx: NodeRunCtx): Record<string, string> {
   return vars;
 }
 
-function renderTemplate(tmpl: string, vars: Record<string, string>): string {
-  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, name: string) => vars[name] ?? "");
+function renderTemplate(tmpl: string, vars: Record<string, string>, where: string): string {
+  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
+    if (!(name in vars)) {
+      // Fail loud rather than silently producing "opencara/issue-" or
+      // "WIP: implement issue #". Operators will see this in
+      // flow_runs.error and know which env var is missing.
+      throw new Error(
+        `${where}: template variable {{${name}}} not in run env (available: ${
+          Object.keys(vars).sort().join(", ") || "(none)"
+        })`,
+      );
+    }
+    return vars[name]!;
+  });
 }

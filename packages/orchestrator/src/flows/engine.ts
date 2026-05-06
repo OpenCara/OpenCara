@@ -181,17 +181,30 @@ export class FlowEngine {
       where: eq(flowRunSteps.flowRunId, originalRunId),
     });
 
+    // Worktree-producing nodes from the original run can never be reused
+    // — the workdir was rm-rf'd at end of that run, so its descendants
+    // (which wrote into it) MUST also re-execute against the new
+    // checkout. Otherwise a `trigger → worktree → agent → create_pr`
+    // rerun-from-create_pr would skip the agent (its stdout was reused)
+    // and PR an empty branch. Compute the union of every worktree
+    // node's downstream closure and exclude that whole set from preload.
+    const worktreeForcedRerun = new Set<string>();
+    for (const s of allSteps) {
+      if (s.nodeKind !== "git.create_worktree") continue;
+      for (const id of computeDownstreamSet(def, s.nodeId)) {
+        worktreeForcedRerun.add(id);
+      }
+    }
+
     const outputs = new Map<string, string | undefined>();
     const reused: ReusedStep[] = [];
     for (const s of allSteps) {
       if (s.status !== "succeeded") continue;
       if (downstream.has(s.nodeId)) continue;
-      // git.create_worktree nodes can never be reused: the original
-      // worktree was cleaned up at the end of the source run, so its
-      // workdir no longer exists. Force re-execution so downstream
-      // nodes inherit a fresh worktree handle. (The rerun does its
-      // own cleanup at end-of-run.)
-      if (s.nodeKind === "git.create_worktree") continue;
+      // Worktree node + every descendant of it: the original workdir is
+      // gone, so even successful descendants can't be replayed against
+      // the new checkout from cached stdout. Force re-execution.
+      if (worktreeForcedRerun.has(s.nodeId)) continue;
       // Reconstruct stdoutCaptured by stitching the agent_run's stdout chunks.
       // Non-agent steps (trigger, action) have no agent_run; their downstream
       // gets undefined, which matches the original execution's previousOutput.
@@ -327,11 +340,15 @@ export class FlowEngine {
     // so those upstream nodes don't re-execute and their previousOutput
     // values still flow into the failed/downstream nodes correctly.
     const outputs = new Map<string, string | undefined>(preloaded?.outputs);
-    // Structured handles emitted by nodes (today: worktree handles from
-    // git.create_worktree). Walked upstream by `findUpstreamWorktree` so
-    // descendants can inherit cwd/hostId without putting them on edges.
-    // Cleaned up at the end of the run regardless of outcome.
-    const nodeContexts = new Map<string, WorktreeHandle>();
+    // Worktree handles emitted by `git.create_worktree` nodes. Walked
+    // upstream by `findUpstreamWorktree` so descendants can inherit
+    // cwd/hostId without putting them on edges. Cleaned up at the end
+    // of the run regardless of outcome.
+    const worktreeHandles = new Map<string, WorktreeHandle>();
+    // Quick node-kind lookup for the upstream-agent-output walk —
+    // avoids re-scanning def.nodes per ancestor visit.
+    const nodeKindById = new Map<string, string>();
+    for (const n of def.nodes) nodeKindById.set(n.id, n.kind);
     let nodeIdx = 0;
 
     // Materialise a flow_run_steps row for each reused upstream node so the
@@ -394,7 +411,17 @@ export class FlowEngine {
           // node, BEFORE its runner sees the ctx. The map only grows
           // monotonically across layers, so a node in layer N can read
           // any handle emitted in layers 0..N-1.
-          upstreamWorktree: findUpstreamWorktree(node.id, def.edges, nodeContexts),
+          upstreamWorktree: findUpstreamWorktree(node.id, def.edges, worktreeHandles),
+          // Same walk, but for the nearest upstream agent's stdout.
+          // create_pull_request uses this for its `body: null` path so
+          // that wiring `worktree → create_pr` directly doesn't pull
+          // the worktree handle's JSON into the PR body.
+          upstreamAgentOutput: findUpstreamAgentOutput(
+            node.id,
+            def.edges,
+            outputs,
+            nodeKindById,
+          ),
         }));
       if (layerJobs.length === 0) continue;
 
@@ -418,7 +445,7 @@ export class FlowEngine {
           }
           outputs.set(node.id, r.value.stdoutCaptured);
           if (r.value.nodeContext) {
-            nodeContexts.set(node.id, r.value.nodeContext);
+            worktreeHandles.set(node.id, r.value.nodeContext);
           }
         } else {
           failed = true;
@@ -433,8 +460,8 @@ export class FlowEngine {
     // device that allocated a worktree during this run to remove it.
     // Best-effort — a stuck or disconnected device leaves a tmp dir
     // behind, which is recoverable manually but should be rare.
-    if (nodeContexts.size > 0) {
-      await this.cleanupNodeContexts(prepared, nodeContexts);
+    if (worktreeHandles.size > 0) {
+      await this.cleanupWorktreeHandles(prepared, worktreeHandles);
     }
 
     await this.deps.db
@@ -456,9 +483,9 @@ export class FlowEngine {
   // own synthetic agent dispatch (no flow_run_step) so the agent_runs
   // table preserves the audit trail. Failures don't bubble — the worst
   // case is an orphaned tmp dir on the device.
-  private async cleanupNodeContexts(
+  private async cleanupWorktreeHandles(
     prepared: PreparedRun,
-    nodeContexts: Map<string, WorktreeHandle>,
+    handles: Map<string, WorktreeHandle>,
   ): Promise<void> {
     const ctx: NodeRunCtx = {
       db: this.deps.db,
@@ -485,7 +512,7 @@ export class FlowEngine {
       publicBaseUrl: this.deps.publicBaseUrl,
     };
     await Promise.allSettled(
-      [...nodeContexts.values()].map((handle) =>
+      [...handles.values()].map((handle) =>
         runWorktreeRemove(ctx, handle).catch((err) => {
           console.error("[flow-engine] worktree cleanup failed", {
             flowRunId: prepared.flowRunId,
@@ -514,6 +541,7 @@ export class FlowEngine {
       idx: number;
       previousOutput: string | undefined;
       upstreamWorktree: WorktreeHandle | undefined;
+      upstreamAgentOutput: string | undefined;
     },
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
@@ -526,7 +554,7 @@ export class FlowEngine {
   }> {
     void def;
     const { flowRunId, flowId, project, installation } = prepared;
-    const { node, idx, previousOutput, upstreamWorktree } = job;
+    const { node, idx, previousOutput, upstreamWorktree, upstreamAgentOutput } = job;
 
     const stepId = ulid();
     await this.deps.db.insert(flowRunSteps).values({
@@ -570,6 +598,7 @@ export class FlowEngine {
       issueContext,
       previousOutput,
       upstreamWorktree,
+      upstreamAgentOutput,
       publicBaseUrl: this.deps.publicBaseUrl,
     };
 
@@ -745,8 +774,8 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
 
 /**
  * BFS the edge graph from `nodeId` walking *backwards* (target → source).
- * Returns the first ancestor whose nodeContexts entry exists (today: a
- * worktree handle from a git.create_worktree node).
+ * Returns the first ancestor whose worktreeHandles entry exists (today:
+ * a worktree handle from a git.create_worktree node).
  *
  * Multi-parent fan-in: if two ancestors both produced worktrees the
  * traversal returns whichever the BFS visits first — a flow author who
@@ -756,9 +785,9 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
 function findUpstreamWorktree(
   nodeId: string,
   edges: FlowDefinition["edges"],
-  nodeContexts: Map<string, WorktreeHandle>,
+  worktreeHandles: Map<string, WorktreeHandle>,
 ): WorktreeHandle | undefined {
-  if (nodeContexts.size === 0) return undefined;
+  if (worktreeHandles.size === 0) return undefined;
   const seen = new Set<string>([nodeId]);
   const queue: string[] = [nodeId];
   while (queue.length > 0) {
@@ -768,8 +797,41 @@ function findUpstreamWorktree(
       const parent = e.source;
       if (seen.has(parent)) continue;
       seen.add(parent);
-      const handle = nodeContexts.get(parent);
+      const handle = worktreeHandles.get(parent);
       if (handle) return handle;
+      queue.push(parent);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Same backwards BFS as findUpstreamWorktree, but returns the captured
+ * stdout of the nearest ancestor whose kind is `agent`. Used by
+ * `github.create_pull_request` for its `body: null` path so the PR body
+ * always comes from an agent's output, never from a sibling node's
+ * structured handle JSON.
+ */
+function findUpstreamAgentOutput(
+  nodeId: string,
+  edges: FlowDefinition["edges"],
+  outputs: Map<string, string | undefined>,
+  nodeKindById: Map<string, string>,
+): string | undefined {
+  const seen = new Set<string>([nodeId]);
+  const queue: string[] = [nodeId];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const e of edges) {
+      if (e.target !== cur) continue;
+      const parent = e.source;
+      if (seen.has(parent)) continue;
+      seen.add(parent);
+      if (nodeKindById.get(parent) === "agent") {
+        // Found an agent ancestor. Return its captured stdout — even
+        // if undefined/empty, that's the answer (don't keep climbing).
+        return outputs.get(parent) ?? "";
+      }
       queue.push(parent);
     }
   }
