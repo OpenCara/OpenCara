@@ -20,6 +20,7 @@ import { promptRoutes } from "./routes/api/prompts.js";
 import { agentRoutes } from "./routes/api/agents.js";
 import { chatRoutes } from "./routes/api/chat.js";
 import { flowTemplateRoutes } from "./routes/api/flowTemplates.js";
+import { kanbanRoutes } from "./routes/api/kanban.js";
 import { deviceWsHandler } from "./routes/api/devices/ws.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
@@ -112,6 +113,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
   apiHono.route("/", chatRoutes({ db, pg, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL }));
   apiHono.route("/", flowTemplateRoutes({ db }));
+  apiHono.route("/", kanbanRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the
