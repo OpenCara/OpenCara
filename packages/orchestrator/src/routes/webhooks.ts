@@ -6,6 +6,7 @@ import {
   githubInstallations,
   issues,
   platformEvents,
+  projectV2Items,
   projectV2Links,
   projects,
 } from "../db/schema.js";
@@ -116,6 +117,33 @@ export function appWebhookRoutes(deps: WebhookDeps) {
             number: payload.issue.number,
             err,
           });
+        }
+
+        // Propagate label/assignee changes into any Kanban mirror that
+        // tracks this issue. The projects_v2_item webhook does NOT fire on
+        // label/assignee changes — only on the project-item state — so
+        // without this hand-off the kanban's labels column lags until the
+        // next backfill. This benefits any label change, not just the
+        // agent:* labels picker writes.
+        if (
+          (payload.action === "labeled" ||
+            payload.action === "unlabeled" ||
+            payload.action === "assigned" ||
+            payload.action === "unassigned") &&
+          payload.issue.node_id
+        ) {
+          try {
+            await syncIssueIntoKanbanMirror(
+              deps,
+              payload.issue,
+              installationRowId,
+            );
+          } catch (err) {
+            console.error("[webhooks] kanban label sync failed", {
+              issueNodeId: payload.issue.node_id,
+              err,
+            });
+          }
         }
       }
 
@@ -396,5 +424,53 @@ async function handleProjectsV2Event(
       await upsertItem(deps.db, link.id, snapshot);
       notifyKanbanLink(deps.pg, link.projectId, link.id);
     }
+  }
+}
+
+/**
+ * Propagate label/assignee changes into every Kanban mirror row tracking
+ * this issue, scoped to the webhook's installation. Without this the
+ * kanban labels column lags until the next backfill — the projects_v2_item
+ * channel doesn't fire on label changes.
+ */
+async function syncIssueIntoKanbanMirror(
+  deps: WebhookDeps,
+  issue: IssuePayload,
+  installationRowId: string | null,
+): Promise<void> {
+  if (!installationRowId) return;
+  const labels = (issue.labels ?? [])
+    .map((l) => ({ name: l.name ?? "", color: l.color ?? "" }))
+    .filter((l) => l.name);
+  const assignees = (issue.assignees ?? [])
+    .filter(
+      (a): a is { login: string; id: number } =>
+        typeof a.login === "string" && typeof a.id === "number",
+    )
+    .map((a) => ({ login: a.login, id: a.id }));
+
+  // Restrict to mirror rows whose owning project belongs to the same
+  // installation that delivered this webhook. Mirrors the scoping that
+  // handleProjectsV2Event already does — a webhook from installation X
+  // must never write into a kanban mirror that belongs to installation Y,
+  // even if both link to the same Projects v2 board.
+  const matches = await deps.db
+    .select({ item: projectV2Items, link: projectV2Links })
+    .from(projectV2Items)
+    .innerJoin(projectV2Links, eq(projectV2Items.projectV2LinkId, projectV2Links.id))
+    .innerJoin(projects, eq(projectV2Links.projectId, projects.id))
+    .where(
+      and(
+        eq(projectV2Items.contentNodeId, issue.node_id),
+        eq(projects.installationId, installationRowId),
+      ),
+    );
+
+  for (const { item, link } of matches) {
+    await deps.db
+      .update(projectV2Items)
+      .set({ labels, assignees, updatedAt: new Date() })
+      .where(eq(projectV2Items.id, item.id));
+    notifyKanbanLink(deps.pg, link.projectId, link.id);
   }
 }

@@ -5,11 +5,20 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { IssueBodyEditor } from "@/components/canvas/IssueBodyEditor";
 import {
+  agentsQuery,
   projectIssueDetailQuery,
   useSaveIssueBody,
+  useSetIssueAgent,
   useSetIssueDraft,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
@@ -259,6 +268,11 @@ function Header({
               GitHub <ExternalLink className="size-3" />
             </a>
           </div>
+          <AgentPicker
+            projectId={projectId}
+            issueNumber={issue.number}
+            labels={issue.labels}
+          />
         </div>
         <div className="flex items-center gap-2">
           {dirty && (
@@ -276,6 +290,94 @@ function Header({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Sentinel for the Select's "no agent assigned" option. Sent to the API as
+// `agentId: null`; can't use empty string because Radix Select treats "" as
+// no-value and refuses to render the trigger.
+const NO_AGENT_VALUE = "__none";
+
+/**
+ * Implementation-agent picker. Reads the current `agent:<name>` label from
+ * the issue (one-of-N enforced) and lets the user swap or clear it.
+ *
+ * The existing issue-implement flow auto-routes to whichever agent the
+ * label names when its trigger fires (e.g. card moves to "Ready" on the
+ * Kanban). Picking here doesn't dispatch — it just sets the routing.
+ */
+function AgentPicker({
+  projectId,
+  issueNumber,
+  labels,
+}: {
+  projectId: string;
+  issueNumber: number;
+  labels: { name: string; color: string }[];
+}) {
+  const agentsQ = useQuery(agentsQuery());
+  const setAgent = useSetIssueAgent(projectId, issueNumber);
+
+  const userAgents = agentsQ.data?.agents ?? [];
+  const currentLabelName = labels
+    .map((l) => l.name)
+    .find((n) => n.startsWith("agent:"));
+  const currentAgentName = currentLabelName?.slice("agent:".length) ?? null;
+  const currentAgent = currentAgentName
+    ? userAgents.find((a) => a.name === currentAgentName)
+    : undefined;
+
+  const value = currentAgent?.id ?? NO_AGENT_VALUE;
+
+  const onSelect = (next: string) => {
+    if (next === value) return;
+    if (next === NO_AGENT_VALUE) {
+      setAgent.mutate({ agentId: null, agentName: null });
+      return;
+    }
+    const agent = userAgents.find((a) => a.id === next);
+    if (!agent) return;
+    setAgent.mutate({ agentId: agent.id, agentName: agent.name });
+  };
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+      <span className="uppercase tracking-wide text-muted-foreground">
+        Implementation agent
+      </span>
+      <Select
+        value={value}
+        onValueChange={onSelect}
+        disabled={setAgent.isPending || agentsQ.isLoading}
+      >
+        <SelectTrigger className="h-8 w-56">
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_AGENT_VALUE}>None</SelectItem>
+          {userAgents.map((a) => (
+            <SelectItem key={a.id} value={a.id}>
+              {a.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {currentAgentName && !currentAgent && (
+        <span
+          className="text-amber-600 dark:text-amber-400"
+          title={`Issue is labeled agent:${currentAgentName} but you don't have an agent named "${currentAgentName}". Pick None to clear or rename your agent to take ownership.`}
+        >
+          (foreign: {currentAgentName})
+        </span>
+      )}
+      {setAgent.error && (
+        <span className="text-destructive">
+          {setAgent.error instanceof Error
+            ? setAgent.error.message
+            : String(setAgent.error)}
+        </span>
+      )}
     </div>
   );
 }

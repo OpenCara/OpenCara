@@ -165,6 +165,179 @@ export async function pushIssueBodyToGithub(
   return refreshed;
 }
 
+/**
+ * Set or clear the implementation-agent label on an issue.
+ *
+ * Convention (mirrors the existing `issue-implement` flow's routing): an
+ * issue can have at most one `agent:<name>` label at a time. The label is
+ * auto-created on the repo if missing, with a single distinctive color so
+ * all `agent:*` labels cluster visually.
+ *
+ * Implementation note: we use targeted DELETE + POST against GitHub
+ * directly, not the wholesale PUT label-set replace. The PUT path looked
+ * cleaner but it requires either a fresh GitHub-side read (extra round
+ * trip + race window) or trusting the local mirror — and the local mirror
+ * lags webhooks, so a PUT built from it can silently delete unrelated
+ * labels added by other integrations or users in between webhook events.
+ * DELETE per existing `agent:*` then POST the new one keeps unrelated
+ * labels untouched and avoids the mirror-staleness footgun entirely.
+ *
+ * Returns the refreshed issue row from our DB.
+ */
+const AGENT_LABEL_COLOR = "5856d6";
+const AGENT_LABEL_PREFIX = "agent:";
+
+export async function setIssueAgentLabel(
+  app: GithubAppClient,
+  project: { id: string; owner: string; name: string; installationId: string },
+  issueNumber: number,
+  agentName: string | null,
+  db: Db,
+): Promise<typeof issues.$inferSelect> {
+  const inst = await db.query.githubInstallations.findFirst({
+    where: (gi, { eq }) => eq(gi.id, project.installationId),
+  });
+  if (!inst) throw new Error(`installation row ${project.installationId} not found`);
+  const octokit = await app.forInstallation(inst.githubInstallationId);
+
+  const issueRow = await db.query.issues.findFirst({
+    where: (i, { eq, and, isNull }) =>
+      and(
+        eq(i.projectId, project.id),
+        eq(i.number, issueNumber),
+        isNull(i.removedAt),
+      ),
+  });
+  if (!issueRow) throw new Error(`issue ${issueNumber} not found in ${project.id}`);
+
+  const targetLabel = agentName ? `${AGENT_LABEL_PREFIX}${agentName}` : null;
+
+  // Read the *current* labels from GitHub. Local mirror lags; using it for
+  // the deletion list could leave a freshly-added (but unmirrored)
+  // `agent:other` label in place. One extra round-trip — worth it.
+  const listRes = await octokit.request(
+    "GET /repos/{owner}/{repo}/issues/{issue_number}/labels",
+    {
+      owner: project.owner,
+      repo: project.name,
+      issue_number: issueNumber,
+      per_page: 100,
+    },
+  );
+  const liveLabels = (listRes.data as Array<{ name?: string }>)
+    .map((l) => l.name ?? "")
+    .filter(Boolean);
+  const existingAgentLabels = liveLabels.filter((n) =>
+    n.startsWith(AGENT_LABEL_PREFIX),
+  );
+
+  // Drop every existing `agent:*` label except (if applicable) the one we
+  // are about to set — DELETE is idempotent enough but skipping a no-op is
+  // free and clearer in the log.
+  for (const name of existingAgentLabels) {
+    if (targetLabel && name === targetLabel) continue;
+    await octokit
+      .request(
+        "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}",
+        {
+          owner: project.owner,
+          repo: project.name,
+          issue_number: issueNumber,
+          name,
+        },
+      )
+      .catch((err: unknown) => {
+        // 404 here means another writer already removed it — fine.
+        if ((err as { status?: number }).status !== 404) throw err;
+      });
+  }
+
+  if (targetLabel) {
+    // Auto-create on the repo if missing. 422 from POST means another
+    // concurrent writer just created it (TOCTOU window between the GET
+    // 404 and our POST) — treat as success.
+    let labelExists = true;
+    try {
+      await octokit.request("GET /repos/{owner}/{repo}/labels/{name}", {
+        owner: project.owner,
+        repo: project.name,
+        name: targetLabel,
+      });
+    } catch (err) {
+      if ((err as { status?: number }).status === 404) {
+        labelExists = false;
+      } else {
+        throw err;
+      }
+    }
+    if (!labelExists) {
+      try {
+        await octokit.request("POST /repos/{owner}/{repo}/labels", {
+          owner: project.owner,
+          repo: project.name,
+          name: targetLabel,
+          color: AGENT_LABEL_COLOR,
+          description: `Implementation agent: ${agentName}`,
+        });
+      } catch (err) {
+        // 422 = "already_exists" — fine, race resolved by the other writer.
+        if ((err as { status?: number }).status !== 422) throw err;
+      }
+    }
+
+    // Skip the add if the issue already had this exact label (we kept it
+    // above and didn't delete it). Otherwise add. Also tolerant of the race
+    // where the label was just added by something else.
+    if (!existingAgentLabels.includes(targetLabel)) {
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+        {
+          owner: project.owner,
+          repo: project.name,
+          issue_number: issueNumber,
+          labels: [targetLabel],
+        },
+      );
+    }
+  }
+
+  // Re-read GitHub's current labels after our writes so the mirror reflects
+  // ground truth (rather than computing it client-side and risking drift).
+  const finalRes = await octokit.request(
+    "GET /repos/{owner}/{repo}/issues/{issue_number}/labels",
+    {
+      owner: project.owner,
+      repo: project.name,
+      issue_number: issueNumber,
+      per_page: 100,
+    },
+  );
+  const fresh = (finalRes.data as Array<{ name?: string; color?: string }>)
+    .map((l) => ({ name: l.name ?? "", color: l.color ?? "" }))
+    .filter((l) => l.name);
+  await db
+    .update(issues)
+    .set({ labels: fresh, updatedAt: new Date() })
+    .where(and(eq(issues.projectId, project.id), eq(issues.number, issueNumber)));
+
+  const refreshed = await db.query.issues.findFirst({
+    where: (i, { eq, and, isNull }) =>
+      and(
+        eq(i.projectId, project.id),
+        eq(i.number, issueNumber),
+        // Guard against a deletion racing the label update — webhooks can
+        // soft-delete this issue while we're mid-flight on GitHub's side.
+        isNull(i.removedAt),
+      ),
+  });
+  if (!refreshed) {
+    throw new Error(
+      `issue ${project.owner}/${project.name}#${issueNumber} disappeared after label updates`,
+    );
+  }
+  return refreshed;
+}
+
 // One-shot REST backfill of every issue in a repo. Called from project add.
 // GitHub's REST `/issues` endpoint also returns PRs — filtered out here. Runs
 // to completion (no early-exit) so a large backlog still lands; caller is
