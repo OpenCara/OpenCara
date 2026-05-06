@@ -13,7 +13,14 @@ export interface FlowGraphNode {
   id: string;
   kind: string;
   position: { x: number; y: number };
-  config?: { label?: string; event?: string; spec?: { command?: string }; labels?: string[] };
+  config?: {
+    label?: string;
+    event?: string;
+    spec?: { command?: string };
+    labels?: string[];
+    branchName?: string;
+    draft?: boolean;
+  };
 }
 export interface FlowGraphEdge {
   id: string;
@@ -91,6 +98,8 @@ function nodeTypeFor(kind: string): string {
   if (kind === "github.post_review") return "postReview";
   if (kind === "github.add_comment") return "addComment";
   if (kind === "github.add_label") return "addLabel";
+  if (kind === "git.create_worktree") return "createWorktree";
+  if (kind === "github.create_pull_request") return "createPR";
   return "trigger";
 }
 
@@ -108,6 +117,10 @@ function pickLabel(n: FlowGraphNode): string {
       return "Add comment";
     case "github.add_label":
       return "Add label";
+    case "git.create_worktree":
+      return "Create worktree";
+    case "github.create_pull_request":
+      return "Create PR";
     default:
       return n.kind;
   }
@@ -125,6 +138,10 @@ function pickSubtitle(n: FlowGraphNode): string | undefined {
       return n.config?.event;
     case "github.add_label":
       return n.config?.labels?.join(", ");
+    case "git.create_worktree":
+      return n.config?.branchName ?? undefined;
+    case "github.create_pull_request":
+      return n.config?.draft ? "draft" : undefined;
     default:
       return undefined;
   }

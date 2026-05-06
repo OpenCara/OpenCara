@@ -8,9 +8,9 @@ const echoImplementerPath = resolve(here, "../../examples/echo-implementer.mjs")
 
 export const issueImplementFlow: FlowDefinition = {
   slug: "issue-implement",
-  name: "Issue → Implement",
+  name: "Issue → Implement → PR",
   description:
-    "When a Projects v2 issue moves to Ready (or any chosen Status option), dispatch the implement agent with the issue's title, body, labels, and assignees on stdin. Add an `agent:<name>` label to the issue (e.g. `agent:claude-impl`) to pick a specific agent per-issue; without that label, the agent linked on this node runs as the default.",
+    "When a Projects v2 issue moves to Ready, allocate a fresh git worktree on a paired device, run the implement agent inside it (with the issue's title, body, labels, and assignees on stdin), and open a draft PR from the worktree branch. Add an `agent:<name>` label to the issue (e.g. `agent:claude-impl`) to pick a specific agent per-issue; without that label, the agent linked on this node runs as the default. The worktree is removed when the run finishes.",
   nodes: [
     {
       id: "t1",
@@ -25,9 +25,19 @@ export const issueImplementFlow: FlowDefinition = {
       },
     },
     {
+      id: "w1",
+      kind: "git.create_worktree",
+      position: { x: 280, y: 0 },
+      config: {
+        fromBranch: null, // = repo's default branch
+        branchName: "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
+        hostId: null,
+      },
+    },
+    {
       id: "a1",
       kind: "agent",
-      position: { x: 320, y: 0 },
+      position: { x: 560, y: 0 },
       config: {
         label: "Implement agent",
         spec: {
@@ -52,6 +62,21 @@ export const issueImplementFlow: FlowDefinition = {
         },
       },
     },
+    {
+      id: "p1",
+      kind: "github.create_pull_request",
+      position: { x: 840, y: 0 },
+      config: {
+        title: "WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}",
+        body: null, // = use the implement agent's stdout as the PR body
+        baseBranch: null, // = repo's default branch
+        draft: true,
+      },
+    },
   ],
-  edges: [{ id: "e1", source: "t1", target: "a1" }],
+  edges: [
+    { id: "e1", source: "t1", target: "w1" },
+    { id: "e2", source: "w1", target: "a1" },
+    { id: "e3", source: "a1", target: "p1" },
+  ],
 };

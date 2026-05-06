@@ -7,6 +7,7 @@ import type {
   FlowNode,
   TriggerNode,
 } from "@opencara/flows";
+import type { AgentSpec } from "@opencara/shared";
 import { and } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
@@ -17,7 +18,7 @@ import {
   projects,
   prompts,
 } from "../db/schema.js";
-import type { AgentDispatcher, LogStream } from "../dispatch/dispatcher.js";
+import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
@@ -26,6 +27,19 @@ export class SkipFlowError extends Error {
   constructor(reason: string) {
     super(reason);
   }
+}
+
+/**
+ * Structured handle from a `git.create_worktree` node, threaded downstream
+ * via the engine's nodeContexts channel. Downstream agent nodes inherit
+ * the cwd + device pin; a downstream `github.create_pull_request` reads
+ * `branch` as the PR head.
+ */
+export interface WorktreeHandle {
+  kind: "worktree";
+  workdir: string;
+  branch: string;
+  hostId: string;
 }
 
 export interface NodeRunCtx {
@@ -38,11 +52,21 @@ export interface NodeRunCtx {
   flowRunStepId: string;
   projectId: string;
   installation: { id: string; githubInstallationId: number };
-  project: { owner: string; name: string; githubRepoId: number };
+  project: { owner: string; name: string; githubRepoId: number; defaultBranch: string | null };
   event: { id: string; type: string; payload: unknown };
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
   previousOutput?: string;
+  /** Resolved by the engine before running each node — the nearest
+   * worktree handle reachable upstream over the edge graph. Undefined
+   * when the node has no worktree ancestor. */
+  upstreamWorktree?: WorktreeHandle;
+  /** Captured stdout of the nearest upstream `agent` node, if any.
+   * Used by `github.create_pull_request` when its `body` config is
+   * null — that contract is "use the upstream agent's stdout", not
+   * "use whatever the immediate parent emitted" (which could be a
+   * worktree handle's JSON). */
+  upstreamAgentOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
 }
@@ -51,6 +75,9 @@ export interface NodeRunResult {
   output?: unknown;
   /** stdout captured from an agent node, used as the next step's input. */
   stdoutCaptured?: string;
+  /** Structured handle this node emits for downstream consumption (today:
+   * worktree handles from git.create_worktree). */
+  nodeContext?: WorktreeHandle;
 }
 
 export type NodeRunner<N extends FlowNode = FlowNode> = (
@@ -364,59 +391,13 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   const agentRunId = ulid();
   env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  // Token markers go into the persisted spec.env so the audit row shows
-  // injection happened — the real token is overwritten onto the live env
-  // AFTER insert (see below) and never reaches the DB. GIT_*_NAME/EMAIL
-  // are pinned so a host that ever runs multiple orchestrators doesn't
-  // leak its global ~/.gitconfig identity between concurrent runs.
-  const tokenPlaceholder = "<ephemeral>";
-  env["GH_TOKEN"] = tokenPlaceholder;
-  env["GITHUB_TOKEN"] = tokenPlaceholder;
-  env["GIT_AUTHOR_NAME"] = "opencara[bot]";
-  env["GIT_AUTHOR_EMAIL"] = "opencara[bot]@users.noreply.github.com";
-  env["GIT_COMMITTER_NAME"] = "opencara[bot]";
-  env["GIT_COMMITTER_EMAIL"] = "opencara[bot]@users.noreply.github.com";
-
-  const spec = {
-    kind: agent.name,
-    command: agent.command,
-    args: agent.args,
-    env,
-    cwd: agent.cwd ?? undefined,
-  };
-
-  await ctx.db.insert(agentRuns).values({
-    id: agentRunId,
-    spec,
-    triggerEventId: ctx.event.id,
-    status: "running",
-    projectId: ctx.projectId,
-    flowRunStepId: ctx.flowRunStepId,
-    startedAt: new Date(),
-  });
-
-  // Mint the real ephemeral token AFTER the insert. By here, the persisted
-  // spec.env still reads `<ephemeral>` for the token fields (the row was
-  // serialized at insert time); subsequent mutations of `env` only affect
-  // the dispatched copy. Mint failures are non-fatal: the agent runs
-  // without GH_TOKEN, and any actual gh use surfaces as a 401 downstream
-  // rather than masking it as a generic flow failure.
-  let mintedToken: EphemeralToken | null = null;
-  try {
-    mintedToken = await ctx.app.mintEphemeralToken({
-      installationId: ctx.installation.githubInstallationId,
-      repositoryIds: [ctx.project.githubRepoId],
-      permissions: { contents: "write", issues: "write", pull_requests: "write" },
-    });
-    env["GH_TOKEN"] = mintedToken.token;
-    env["GITHUB_TOKEN"] = mintedToken.token;
-  } catch (err) {
-    console.error(
-      "[flows] mintEphemeralToken failed; agent runs without GH_TOKEN",
-      err,
-    );
-    delete env["GH_TOKEN"];
-    delete env["GITHUB_TOKEN"];
+  // Upstream worktree override: when this agent node sits below a
+  // git.create_worktree node, run inside that worktree on the same device.
+  // Surface workdir + branch in env so the agent's own scripts can see
+  // them without parsing nodeContext.
+  if (ctx.upstreamWorktree) {
+    env["OPENCARA_WORKTREE_DIR"] = ctx.upstreamWorktree.workdir;
+    env["OPENCARA_WORKTREE_BRANCH"] = ctx.upstreamWorktree.branch;
   }
 
   // Inject the issue-edit skill if this run has issue context (Projects v2
@@ -441,53 +422,22 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       }
     : undefined;
 
-  let seq = 0;
-  const onLog = (stream: LogStream, chunk: string) => {
-    const mySeq = seq++;
-    void ctx.db
-      .insert(agentRunLogs)
-      .values({ agentRunId, seq: mySeq, stream, chunk })
-      .then(() => ctx.pg.notify("agent_run_logs", agentRunId))
-      .catch((err: unknown) => {
-        console.error("[flows] log persist failed", err);
-      });
-  };
+  const result = await dispatchAgentRun(ctx, {
+    agentRunId,
+    kind: agent.name,
+    command: agent.command,
+    args: agent.args,
+    env,
+    cwd: ctx.upstreamWorktree?.workdir ?? agent.cwd ?? undefined,
+    stdinJson,
+    hostId: ctx.upstreamWorktree?.hostId ?? agent.hostId ?? null,
+    triggerEventId: ctx.event.id,
+  });
 
-  try {
-    const result = await ctx.dispatcher.run(spec, {
-      stdinJson,
-      onLog,
-      hostId: agent.hostId,
-      projectId: ctx.projectId,
-    });
-    await ctx.db
-      .update(agentRuns)
-      .set({
-        status: result.exitCode === 0 ? "succeeded" : "failed",
-        exitCode: result.exitCode,
-        finishedAt: new Date(),
-      })
-      .where(eq(agentRuns.id, agentRunId));
-    if (result.exitCode !== 0) {
-      throw new Error(`agent exited with code ${result.exitCode}`);
-    }
-    return { output: { exitCode: result.exitCode }, stdoutCaptured: result.stdoutCaptured };
-  } catch (err) {
-    await ctx.db
-      .update(agentRuns)
-      .set({ status: "failed", finishedAt: new Date() })
-      .where(eq(agentRuns.id, agentRunId));
-    throw err;
-  } finally {
-    // Best-effort revoke. The token expires in ≤1h regardless, so a
-    // network blip here is logged + swallowed (worst case: token sits
-    // valid for the rest of its TTL, same as if we never revoked).
-    if (mintedToken) {
-      await ctx.app.revokeToken(mintedToken.token).catch((err: unknown) => {
-        console.error("[flows] revokeToken failed", err);
-      });
-    }
+  if (result.exitCode !== 0) {
+    throw new Error(`agent exited with code ${result.exitCode}`);
   }
+  return { output: { exitCode: result.exitCode }, stdoutCaptured: result.stdoutCaptured };
 };
 
 // Inspect the triggering issue's labels for an `agent:<name>` marker and
@@ -544,10 +494,16 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
     pull_request?: { number: number; head: { sha: string } };
     issue?: { number: number };
   };
-  const issueNumber = prPayload.pull_request?.number ?? prPayload.issue?.number;
-  if (!issueNumber) throw new Error("action requires PR/issue number in event payload");
-
   const body = ctx.previousOutput?.trim() ?? "";
+
+  // Most actions act on the existing PR/issue from the trigger event; only
+  // github.create_pull_request opens a new one. Compute issueNumber lazily
+  // inside the branches that need it.
+  const issueNumber = prPayload.pull_request?.number ?? prPayload.issue?.number;
+  const requireIssueNumber = (kind: string): number => {
+    if (!issueNumber) throw new Error(`${kind} requires PR/issue number in event payload`);
+    return issueNumber;
+  };
 
   switch (node.kind) {
     case "github.post_review": {
@@ -557,7 +513,7 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
         {
           owner,
           repo,
-          pull_number: issueNumber,
+          pull_number: requireIssueNumber("post_review"),
           body: body || "_(no review body)_",
           event: node.config.event,
           commit_id: prPayload.pull_request.head.sha,
@@ -568,7 +524,12 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
     case "github.add_comment": {
       const res = await oct.request(
         "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        { owner, repo, issue_number: issueNumber, body: body || "_(no body)_" },
+        {
+          owner,
+          repo,
+          issue_number: requireIssueNumber("add_comment"),
+          body: body || "_(no body)_",
+        },
       );
       return { output: { commentId: res.data.id, htmlUrl: res.data.html_url } };
     }
@@ -576,12 +537,381 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       const labels = node.config.labels;
       const res = await oct.request(
         "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
-        { owner, repo, issue_number: issueNumber, labels },
+        { owner, repo, issue_number: requireIssueNumber("add_label"), labels },
       );
       return { output: { labels: res.data.map((l) => l.name) } };
+    }
+    case "git.create_worktree": {
+      // The worktree node is structurally an "action" in the schema (no
+      // upstream agent input, downstream-fanout-able), but its runtime is
+      // an agent dispatch on a device. Delegate to the dedicated runner.
+      return worktreeRunner(ctx, node);
+    }
+    case "github.create_pull_request": {
+      if (!ctx.upstreamWorktree) {
+        throw new Error(
+          "github.create_pull_request requires an upstream git.create_worktree node — this is the only way it can know the head branch",
+        );
+      }
+      const baseBranch =
+        node.config.baseBranch && node.config.baseBranch.length > 0
+          ? node.config.baseBranch
+          : ctx.project.defaultBranch ?? null;
+      if (!baseBranch) {
+        throw new Error(
+          `create_pull_request: no baseBranch configured and project ${owner}/${repo} has no default_branch on file — set config.baseBranch explicitly`,
+        );
+      }
+
+      const tplVars = collectTemplateVars(ctx);
+      const title = renderTemplate(node.config.title, tplVars, "create_pull_request.title");
+      // body: null is documented as "use the upstream agent's stdout" —
+      // resolve via the engine-supplied upstreamAgentOutput, NOT via
+      // immediate previousOutput which could be the worktree handle's
+      // JSON when worktree → create_pr is wired directly.
+      let renderedBody: string;
+      if (node.config.body !== null && node.config.body !== undefined) {
+        renderedBody = renderTemplate(node.config.body, tplVars, "create_pull_request.body");
+      } else if (ctx.upstreamAgentOutput !== undefined) {
+        renderedBody = ctx.upstreamAgentOutput.trim();
+      } else {
+        throw new Error(
+          "github.create_pull_request: body=null requires an upstream agent node to source the body from — wire an `agent` node above this one or set config.body to a literal/template",
+        );
+      }
+
+      const res = await oct.request("POST /repos/{owner}/{repo}/pulls", {
+        owner,
+        repo,
+        title,
+        body: renderedBody || "_(no body)_",
+        head: ctx.upstreamWorktree.branch,
+        base: baseBranch,
+        draft: node.config.draft,
+      });
+      return {
+        output: {
+          number: res.data.number,
+          htmlUrl: res.data.html_url,
+          headBranch: ctx.upstreamWorktree.branch,
+        },
+      };
     }
   }
 };
 
-// loadLinkedPrompt was inlined into agentRunner since it now also needs the
-// linked agent and the lookup logic is the same.
+// Run a `git.create_worktree` node by dispatching the CLI's `opencara
+// internal worktree create` subcommand on a device. The device clones
+// the repo into a tmp dir, branches off the configured base, and emits
+// `{"workdir":..., "branch":...}` on stdout. We parse that JSON, return
+// it as the node's `nodeContext` for downstream nodes to inherit, and
+// also surface it on `output` for visibility in the run UI.
+async function worktreeRunner(
+  ctx: NodeRunCtx,
+  node: Extract<ActionNode, { kind: "git.create_worktree" }>,
+): Promise<NodeRunResult> {
+  const agentRunId = ulid();
+  const tplVars = collectTemplateVars(ctx);
+  // Pre-stamp OPENCARA_AGENT_RUN_ID so the branch template can reference
+  // it before dispatchAgentRun touches the env.
+  tplVars["OPENCARA_AGENT_RUN_ID"] = agentRunId;
+
+  const branchName = renderTemplate(
+    node.config.branchName,
+    tplVars,
+    "git.create_worktree.branchName",
+  );
+  if (branchName.length === 0) {
+    throw new Error(
+      `git.create_worktree: branchName template '${node.config.branchName}' rendered empty — fill in the template variables`,
+    );
+  }
+
+  const fromBranch =
+    node.config.fromBranch && node.config.fromBranch.length > 0
+      ? node.config.fromBranch
+      : ctx.project.defaultBranch ?? "";
+
+  const env: Record<string, string> = {
+    OPENCARA_AGENT_RUN_ID: agentRunId,
+    OPENCARA_REPO: `${ctx.project.owner}/${ctx.project.name}`,
+  };
+
+  const result = await dispatchAgentRun(ctx, {
+    agentRunId,
+    kind: "git.create_worktree",
+    command: "opencara",
+    args: [
+      "internal",
+      "worktree",
+      "create",
+      "--repo",
+      `${ctx.project.owner}/${ctx.project.name}`,
+      "--branch",
+      branchName,
+      "--from-branch",
+      fromBranch,
+    ],
+    env,
+    hostId: node.config.hostId ?? null,
+    triggerEventId: ctx.event.id,
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(`git.create_worktree exited with code ${result.exitCode}`);
+  }
+
+  // Parse the JSON line — the CLI emits exactly one. Be defensive: scan
+  // last → first for the first parseable line, since the device's stdout
+  // may include a trailing newline or auxiliary lines if a future
+  // version adds progress output.
+  const lines = result.stdoutCaptured.split("\n").filter((l) => l.trim().length > 0);
+  let parsed: { workdir?: unknown; branch?: unknown } | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      parsed = JSON.parse(lines[i]!) as { workdir?: unknown; branch?: unknown };
+      if (typeof parsed.workdir === "string" && typeof parsed.branch === "string") break;
+      parsed = null;
+    } catch {
+      /* try previous line */
+    }
+  }
+  if (!parsed || typeof parsed.workdir !== "string" || typeof parsed.branch !== "string") {
+    throw new Error(
+      "git.create_worktree: device did not emit a parseable {workdir,branch} JSON line — check the device's CLI version (opencara internal worktree create)",
+    );
+  }
+
+  const handle: WorktreeHandle = {
+    kind: "worktree",
+    workdir: parsed.workdir,
+    branch: parsed.branch,
+    hostId: result.agentHostId,
+  };
+
+  return {
+    output: { workdir: handle.workdir, branch: handle.branch, hostId: handle.hostId },
+    nodeContext: handle,
+    stdoutCaptured: result.stdoutCaptured,
+  };
+}
+
+interface DispatchAgentRunOpts {
+  agentRunId: string;
+  kind: string;
+  command: string;
+  args: string[];
+  /** Mutable env reference. The helper stamps redacted markers + ephemeral
+   *  creds in place. The persisted `agent_runs.spec.env` snapshot freezes
+   *  the redacted markers; the live env is later overwritten with the
+   *  real token before dispatch. */
+  env: Record<string, string>;
+  cwd?: string;
+  stdinJson?: unknown;
+  hostId?: string | null;
+  /** triggerEventId on the agent_runs row. Pass null for synthetic flow-
+   *  cleanup runs that aren't tied to the originating event. */
+  triggerEventId: string | null;
+}
+
+/**
+ * Shared core: stamp ephemeral cred markers, persist agent_runs row,
+ * mint + inject the real GH_TOKEN, dispatch via the device pool, stream
+ * logs to agent_run_logs, update terminal status, revoke token in the
+ * finally. Both `agentRunner` (user agent) and `worktreeRunner`
+ * (synthetic CLI subcommand) flow through here so audit/trace/log
+ * behaviour is identical.
+ */
+async function dispatchAgentRun(
+  ctx: NodeRunCtx,
+  opts: DispatchAgentRunOpts,
+): Promise<RunResult> {
+  // Token markers go into the persisted spec.env so the audit row shows
+  // injection happened — the real token is overwritten onto the live env
+  // AFTER insert (see below) and never reaches the DB. GIT_*_NAME/EMAIL
+  // are pinned so a host that ever runs multiple orchestrators doesn't
+  // leak its global ~/.gitconfig identity between concurrent runs.
+  const tokenPlaceholder = "<ephemeral>";
+  opts.env["GH_TOKEN"] = tokenPlaceholder;
+  opts.env["GITHUB_TOKEN"] = tokenPlaceholder;
+  opts.env["GIT_AUTHOR_NAME"] = "opencara[bot]";
+  opts.env["GIT_AUTHOR_EMAIL"] = "opencara[bot]@users.noreply.github.com";
+  opts.env["GIT_COMMITTER_NAME"] = "opencara[bot]";
+  opts.env["GIT_COMMITTER_EMAIL"] = "opencara[bot]@users.noreply.github.com";
+
+  const spec: AgentSpec = {
+    kind: opts.kind,
+    command: opts.command,
+    args: opts.args,
+    env: opts.env,
+    cwd: opts.cwd,
+  };
+
+  await ctx.db.insert(agentRuns).values({
+    id: opts.agentRunId,
+    spec,
+    triggerEventId: opts.triggerEventId,
+    status: "running",
+    projectId: ctx.projectId,
+    flowRunStepId: ctx.flowRunStepId,
+    startedAt: new Date(),
+  });
+
+  // Mint AFTER insert. The persisted spec.env snapshot still carries the
+  // `<ephemeral>` markers; subsequent mutations of opts.env only affect
+  // the dispatched copy. Mint failures are non-fatal — the agent runs
+  // without GH_TOKEN, surfacing as 401s downstream rather than masking
+  // as a generic flow failure.
+  let mintedToken: EphemeralToken | null = null;
+  try {
+    mintedToken = await ctx.app.mintEphemeralToken({
+      installationId: ctx.installation.githubInstallationId,
+      repositoryIds: [ctx.project.githubRepoId],
+      permissions: { contents: "write", issues: "write", pull_requests: "write" },
+    });
+    opts.env["GH_TOKEN"] = mintedToken.token;
+    opts.env["GITHUB_TOKEN"] = mintedToken.token;
+  } catch (err) {
+    console.error(
+      "[flows] mintEphemeralToken failed; agent runs without GH_TOKEN",
+      err,
+    );
+    delete opts.env["GH_TOKEN"];
+    delete opts.env["GITHUB_TOKEN"];
+  }
+
+  let seq = 0;
+  const onLog = (stream: LogStream, chunk: string) => {
+    const mySeq = seq++;
+    void ctx.db
+      .insert(agentRunLogs)
+      .values({ agentRunId: opts.agentRunId, seq: mySeq, stream, chunk })
+      .then(() => ctx.pg.notify("agent_run_logs", opts.agentRunId))
+      .catch((err: unknown) => {
+        console.error("[flows] log persist failed", err);
+      });
+  };
+
+  try {
+    const result = await ctx.dispatcher.run(spec, {
+      stdinJson: opts.stdinJson,
+      onLog,
+      hostId: opts.hostId ?? undefined,
+      projectId: ctx.projectId,
+    });
+    await ctx.db
+      .update(agentRuns)
+      .set({
+        status: result.exitCode === 0 ? "succeeded" : "failed",
+        exitCode: result.exitCode,
+        finishedAt: new Date(),
+      })
+      .where(eq(agentRuns.id, opts.agentRunId));
+    return result;
+  } catch (err) {
+    await ctx.db
+      .update(agentRuns)
+      .set({ status: "failed", finishedAt: new Date() })
+      .where(eq(agentRuns.id, opts.agentRunId));
+    throw err;
+  } finally {
+    if (mintedToken) {
+      // Best-effort revoke. The token expires in ≤1h regardless, so a
+      // network blip here is logged + swallowed.
+      await ctx.app.revokeToken(mintedToken.token).catch((err: unknown) => {
+        console.error("[flows] revokeToken failed", err);
+      });
+    }
+  }
+}
+
+/**
+ * Run a synthetic agent dispatch for a worktree-removal at end-of-run.
+ * Does NOT mint a token (rm doesn't need GitHub auth) and does NOT bind
+ * to a flow_run_step (cleanup is graph-orthogonal). Best-effort: any
+ * error is swallowed by the caller in engine.ts.
+ */
+export async function runWorktreeRemove(
+  ctx: NodeRunCtx,
+  handle: WorktreeHandle,
+): Promise<void> {
+  const agentRunId = ulid();
+  const env: Record<string, string> = {
+    OPENCARA_AGENT_RUN_ID: agentRunId,
+  };
+  const spec: AgentSpec = {
+    kind: "git.remove_worktree",
+    command: "opencara",
+    args: ["internal", "worktree", "remove", "--workdir", handle.workdir],
+    env,
+  };
+  await ctx.db.insert(agentRuns).values({
+    id: agentRunId,
+    spec,
+    status: "running",
+    projectId: ctx.projectId,
+    // No flow_run_step — cleanup is orthogonal to the graph.
+    flowRunStepId: null,
+    startedAt: new Date(),
+  });
+
+  let seq = 0;
+  const onLog = (stream: LogStream, chunk: string) => {
+    const mySeq = seq++;
+    void ctx.db
+      .insert(agentRunLogs)
+      .values({ agentRunId, seq: mySeq, stream, chunk })
+      .then(() => ctx.pg.notify("agent_run_logs", agentRunId))
+      .catch(() => undefined);
+  };
+
+  try {
+    const result = await ctx.dispatcher.run(spec, {
+      onLog,
+      hostId: handle.hostId,
+      projectId: ctx.projectId,
+    });
+    await ctx.db
+      .update(agentRuns)
+      .set({
+        status: result.exitCode === 0 ? "succeeded" : "failed",
+        exitCode: result.exitCode,
+        finishedAt: new Date(),
+      })
+      .where(eq(agentRuns.id, agentRunId));
+  } catch (err) {
+    await ctx.db
+      .update(agentRuns)
+      .set({ status: "failed", finishedAt: new Date() })
+      .where(eq(agentRuns.id, agentRunId));
+    throw err;
+  }
+}
+
+// Pulls scalar env-style values from the run context for {{VAR}}
+// substitution in node config templates. Mirrors the agent's own env
+// view: prContext.envExtras / issueContext.envExtras / project basics.
+function collectTemplateVars(ctx: NodeRunCtx): Record<string, string> {
+  const vars: Record<string, string> = {
+    OPENCARA_REPO: `${ctx.project.owner}/${ctx.project.name}`,
+  };
+  if (ctx.prContext) Object.assign(vars, ctx.prContext.envExtras);
+  if (ctx.issueContext) Object.assign(vars, ctx.issueContext.envExtras);
+  return vars;
+}
+
+function renderTemplate(tmpl: string, vars: Record<string, string>, where: string): string {
+  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
+    if (!(name in vars)) {
+      // Fail loud rather than silently producing "opencara/issue-" or
+      // "WIP: implement issue #". Operators will see this in
+      // flow_runs.error and know which env var is missing.
+      throw new Error(
+        `${where}: template variable {{${name}}} not in run env (available: ${
+          Object.keys(vars).sort().join(", ") || "(none)"
+        })`,
+      );
+    }
+    return vars[name]!;
+  });
+}

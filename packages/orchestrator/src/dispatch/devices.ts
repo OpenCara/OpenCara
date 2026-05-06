@@ -148,6 +148,7 @@ export class DevicePool {
       p.resolve({
         exitCode,
         stdoutCaptured: p.stdoutCaptured.join(""),
+        agentHostId: p.agentHostId,
       });
       return;
     }
