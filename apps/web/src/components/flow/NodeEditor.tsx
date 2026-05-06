@@ -95,9 +95,17 @@ export function NodeEditor({
       {selectedNode && selectedNode.kind === "github.pull_request" && (
         <TriggerNodePanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
+      {selectedNode && selectedNode.kind === "git.create_worktree" && (
+        <WorktreeNodePanel scope={scope} node={selectedNode} onClose={onClose} />
+      )}
+      {selectedNode && selectedNode.kind === "github.create_pull_request" && (
+        <CreatePRNodePanel scope={scope} node={selectedNode} onClose={onClose} />
+      )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
-        selectedNode.kind !== "github.pull_request" && (
+        selectedNode.kind !== "github.pull_request" &&
+        selectedNode.kind !== "git.create_worktree" &&
+        selectedNode.kind !== "github.create_pull_request" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
@@ -608,6 +616,234 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
             onClick={handleSave}
           >
             {set.isPending ? "Saving…" : "Save filters"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── git.create_worktree config panel ────────────────────────── */
+
+interface WorktreeNodePanelProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+  onClose: () => void;
+}
+
+function WorktreeNodePanel({ scope, node, onClose }: WorktreeNodePanelProps) {
+  const cfg = (node.config ?? {}) as {
+    fromBranch?: string | null;
+    branchName?: string;
+    hostId?: string | null;
+  };
+  const [fromBranch, setFromBranch] = useState(cfg.fromBranch ?? "");
+  const [branchName, setBranchName] = useState(
+    cfg.branchName ?? "opencara/{{OPENCARA_AGENT_RUN_ID}}",
+  );
+  const [hostId, setHostId] = useState(cfg.hostId ?? "");
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setFromBranch(cfg.fromBranch ?? "");
+    setBranchName(cfg.branchName ?? "opencara/{{OPENCARA_AGENT_RUN_ID}}");
+    setHostId(cfg.hostId ?? "");
+  }, [cfg.fromBranch, cfg.branchName, cfg.hostId]);
+
+  const save = () => {
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        fromBranch: fromBranch.length > 0 ? fromBranch : null,
+        branchName,
+        hostId: hostId.length > 0 ? hostId : null,
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Create worktree</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Allocates a fresh git checkout on a paired device. Downstream
+              agent nodes inherit the cwd + device pin.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <label className="text-sm font-medium">Branch name</label>
+          <Input
+            value={branchName}
+            onChange={(e) => setBranchName(e.target.value)}
+            className="mt-1 font-mono text-xs"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Template — substitutes <code className="font-mono">{`{{ENV_VAR}}`}</code>{" "}
+            against the run env.
+          </p>
+        </div>
+        <div>
+          <label className="text-sm font-medium">From branch</label>
+          <Input
+            value={fromBranch}
+            onChange={(e) => setFromBranch(e.target.value)}
+            placeholder="(repo default)"
+            className="mt-1 font-mono text-xs"
+          />
+        </div>
+        <div>
+          <label className="text-sm font-medium">Pin to device (host id)</label>
+          <Input
+            value={hostId}
+            onChange={(e) => setHostId(e.target.value)}
+            placeholder="(any idle device)"
+            className="mt-1 font-mono text-xs"
+          />
+        </div>
+
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button size="sm" disabled={set.isPending} onClick={save}>
+            {set.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── github.create_pull_request config panel ─────────────────── */
+
+interface CreatePRNodePanelProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+  onClose: () => void;
+}
+
+function CreatePRNodePanel({ scope, node, onClose }: CreatePRNodePanelProps) {
+  const cfg = (node.config ?? {}) as {
+    title?: string;
+    body?: string | null;
+    baseBranch?: string | null;
+    draft?: boolean;
+  };
+  const [title, setTitle] = useState(
+    cfg.title ?? "WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}",
+  );
+  // Toggle between "use the upstream agent's stdout" (null) and a fixed
+  // template body. Most flows want the former; this is just an escape hatch.
+  const [useStdout, setUseStdout] = useState(cfg.body === null || cfg.body === undefined);
+  const [body, setBody] = useState(cfg.body ?? "");
+  const [baseBranch, setBaseBranch] = useState(cfg.baseBranch ?? "");
+  const [draft, setDraft] = useState(cfg.draft ?? true);
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setTitle(cfg.title ?? "WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}");
+    setUseStdout(cfg.body === null || cfg.body === undefined);
+    setBody(cfg.body ?? "");
+    setBaseBranch(cfg.baseBranch ?? "");
+    setDraft(cfg.draft ?? true);
+  }, [cfg.title, cfg.body, cfg.baseBranch, cfg.draft]);
+
+  const save = () => {
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        title,
+        body: useStdout ? null : body,
+        baseBranch: baseBranch.length > 0 ? baseBranch : null,
+        draft,
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Create pull request</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Opens a PR using the head branch from the upstream worktree node.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <label className="text-sm font-medium">Title</label>
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="mt-1 font-mono text-xs"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Template — substitutes <code className="font-mono">{`{{ENV_VAR}}`}</code>.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={useStdout}
+            onChange={(e) => setUseStdout(e.target.checked)}
+            className="size-4 rounded border-input"
+          />
+          <span className="font-medium">Use upstream agent's stdout as body</span>
+        </label>
+        {!useStdout && (
+          <div>
+            <label className="text-sm font-medium">Body template</label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={5}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+            />
+          </div>
+        )}
+        <div>
+          <label className="text-sm font-medium">Base branch</label>
+          <Input
+            value={baseBranch}
+            onChange={(e) => setBaseBranch(e.target.value)}
+            placeholder="(repo default)"
+            className="mt-1 font-mono text-xs"
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={draft}
+            onChange={(e) => setDraft(e.target.checked)}
+            className="size-4 rounded border-input"
+          />
+          <span className="font-medium">Open as draft</span>
+        </label>
+
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button size="sm" disabled={set.isPending} onClick={save}>
+            {set.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </CardContent>

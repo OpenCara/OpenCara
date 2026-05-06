@@ -33,6 +33,14 @@ export interface RunResult {
   exitCode: number;
   /** Full stdout buffer for the next pipeline step / action input. */
   stdoutCaptured: string;
+  /**
+   * Device that actually ran the job. Equals `ctx.hostId` for pinned
+   * dispatches; for unpinned ones it's whoever the dispatcher's
+   * pickIdle() chose. The flow engine uses this to thread structured
+   * handles (e.g. a worktree path) back to downstream nodes that must
+   * execute on the SAME device.
+   */
+  agentHostId: string;
 }
 
 export interface AgentDispatcher {

@@ -97,6 +97,42 @@ export const ActionNodeSchema = z.discriminatedUnion("kind", [
     position: Position,
     config: z.object({ labels: z.array(z.string()).min(1) }),
   }),
+  // Allocates an isolated git checkout on a paired device, on a fresh
+  // branch off the configured base. The handle (workdir + branch + hostId)
+  // is threaded through edges; downstream agent nodes inherit cwd/hostId,
+  // and a downstream github.create_pull_request reads the branch as PR
+  // head. The engine cleans the worktree up at end-of-flow-run regardless
+  // of success/failure.
+  z.object({
+    id: z.string(),
+    kind: z.literal("git.create_worktree"),
+    position: Position,
+    config: z.object({
+      // null = repo's default branch
+      fromBranch: z.string().nullable().default(null),
+      // Template; supports {{ENV_VAR}} substitution against the agent-run
+      // env (OPENCARA_ISSUE_NUMBER, OPENCARA_AGENT_RUN_ID, ...).
+      branchName: z.string().default("opencara/{{OPENCARA_AGENT_RUN_ID}}"),
+      // Optional pin. null = let the dispatcher pick any idle device.
+      hostId: z.string().nullable().default(null),
+    }),
+  }),
+  // Opens a PR using the head branch from the upstream git.create_worktree
+  // node. Throws at runtime if no upstream worktree handle is reachable.
+  z.object({
+    id: z.string(),
+    kind: z.literal("github.create_pull_request"),
+    position: Position,
+    config: z.object({
+      // Templates support {{ENV_VAR}} substitution.
+      title: z.string().default("WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}"),
+      // null = use the upstream node's previousOutput verbatim as the body.
+      body: z.string().nullable().default(null),
+      // null = repo's default branch.
+      baseBranch: z.string().nullable().default(null),
+      draft: z.boolean().default(true),
+    }),
+  }),
 ]);
 export type ActionNode = z.infer<typeof ActionNodeSchema>;
 

@@ -2,6 +2,7 @@
 import { run } from "./commands/run.js";
 import { status } from "./commands/status.js";
 import { logout } from "./commands/logout.js";
+import { internal } from "./commands/internal.js";
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -15,6 +16,10 @@ async function main(): Promise<void> {
       return;
     case "logout":
       await logout();
+      return;
+    case "internal":
+      // Orchestrator-facing infrastructure. Not in --help.
+      await internal(argv.slice(1));
       return;
     case "--help":
     case "-h":

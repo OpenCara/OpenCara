@@ -1,6 +1,15 @@
 import type { NodeProps } from "@xyflow/react";
 import { Handle, Position } from "@xyflow/react";
-import { Webhook, Bot, Send, Tag, MessageCircle, type LucideIcon } from "lucide-react";
+import {
+  Webhook,
+  Bot,
+  Send,
+  Tag,
+  MessageCircle,
+  GitBranch,
+  GitPullRequest,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
@@ -66,6 +75,13 @@ export function AddCommentNode({ data }: NodeProps) {
 export function AddLabelNode({ data }: NodeProps) {
   return <BaseNode data={data as NodeData} icon={Tag} hasOut={false} />;
 }
+export function CreateWorktreeNode({ data }: NodeProps) {
+  return <BaseNode data={data as NodeData} icon={GitBranch} />;
+}
+export function CreatePRNode({ data }: NodeProps) {
+  // Terminal: opens a PR and exposes nothing further to chain.
+  return <BaseNode data={data as NodeData} icon={GitPullRequest} hasOut={false} />;
+}
 
 export const flowNodeTypes = {
   trigger: TriggerNode,
@@ -73,4 +89,6 @@ export const flowNodeTypes = {
   postReview: PostReviewNode,
   addComment: AddCommentNode,
   addLabel: AddLabelNode,
+  createWorktree: CreateWorktreeNode,
+  createPR: CreatePRNode,
 };

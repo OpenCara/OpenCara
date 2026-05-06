@@ -27,8 +27,10 @@ import {
   actionRunner,
   agentRunner,
   triggerRunner,
+  runWorktreeRemove,
   SkipFlowError,
   type NodeRunCtx,
+  type WorktreeHandle,
 } from "./nodeRunners.js";
 
 export interface PlatformEventInput {
@@ -184,6 +186,12 @@ export class FlowEngine {
     for (const s of allSteps) {
       if (s.status !== "succeeded") continue;
       if (downstream.has(s.nodeId)) continue;
+      // git.create_worktree nodes can never be reused: the original
+      // worktree was cleaned up at the end of the source run, so its
+      // workdir no longer exists. Force re-execution so downstream
+      // nodes inherit a fresh worktree handle. (The rerun does its
+      // own cleanup at end-of-run.)
+      if (s.nodeKind === "git.create_worktree") continue;
       // Reconstruct stdoutCaptured by stitching the agent_run's stdout chunks.
       // Non-agent steps (trigger, action) have no agent_run; their downstream
       // gets undefined, which matches the original execution's previousOutput.
@@ -319,6 +327,11 @@ export class FlowEngine {
     // so those upstream nodes don't re-execute and their previousOutput
     // values still flow into the failed/downstream nodes correctly.
     const outputs = new Map<string, string | undefined>(preloaded?.outputs);
+    // Structured handles emitted by nodes (today: worktree handles from
+    // git.create_worktree). Walked upstream by `findUpstreamWorktree` so
+    // descendants can inherit cwd/hostId without putting them on edges.
+    // Cleaned up at the end of the run regardless of outcome.
+    const nodeContexts = new Map<string, WorktreeHandle>();
     let nodeIdx = 0;
 
     // Materialise a flow_run_steps row for each reused upstream node so the
@@ -377,6 +390,11 @@ export class FlowEngine {
           node,
           idx: nodeIdx++,
           previousOutput: buildFanInInput(node, def.edges, outputs, labels),
+          // Resolve the nearest upstream worktree handle (if any) per
+          // node, BEFORE its runner sees the ctx. The map only grows
+          // monotonically across layers, so a node in layer N can read
+          // any handle emitted in layers 0..N-1.
+          upstreamWorktree: findUpstreamWorktree(node.id, def.edges, nodeContexts),
         }));
       if (layerJobs.length === 0) continue;
 
@@ -399,6 +417,9 @@ export class FlowEngine {
             continue;
           }
           outputs.set(node.id, r.value.stdoutCaptured);
+          if (r.value.nodeContext) {
+            nodeContexts.set(node.id, r.value.nodeContext);
+          }
         } else {
           failed = true;
           errorMsg ??= r.reason instanceof Error ? r.reason.message : String(r.reason);
@@ -406,6 +427,14 @@ export class FlowEngine {
       }
 
       if (failed || skipped) break outer;
+    }
+
+    // Worktree cleanup: regardless of success/failure/skip, ask each
+    // device that allocated a worktree during this run to remove it.
+    // Best-effort — a stuck or disconnected device leaves a tmp dir
+    // behind, which is recoverable manually but should be rare.
+    if (nodeContexts.size > 0) {
+      await this.cleanupNodeContexts(prepared, nodeContexts);
     }
 
     await this.deps.db
@@ -423,6 +452,52 @@ export class FlowEngine {
     await this.deps.pg.notify("flow_runs", flowRunId);
   }
 
+  // Tear down every worktree handle the run produced. Each removal is its
+  // own synthetic agent dispatch (no flow_run_step) so the agent_runs
+  // table preserves the audit trail. Failures don't bubble — the worst
+  // case is an orphaned tmp dir on the device.
+  private async cleanupNodeContexts(
+    prepared: PreparedRun,
+    nodeContexts: Map<string, WorktreeHandle>,
+  ): Promise<void> {
+    const ctx: NodeRunCtx = {
+      db: this.deps.db,
+      pg: this.deps.pg,
+      app: this.deps.app,
+      dispatcher: this.deps.dispatcher,
+      flowId: prepared.flowId,
+      flowRunId: prepared.flowRunId,
+      // No specific step — cleanup is graph-orthogonal. The runner skips
+      // the flow_run_step linkage when this is empty.
+      flowRunStepId: "",
+      projectId: prepared.project.id,
+      installation: {
+        id: prepared.installation.id,
+        githubInstallationId: prepared.installation.githubInstallationId,
+      },
+      project: {
+        owner: prepared.project.owner,
+        name: prepared.project.name,
+        githubRepoId: prepared.project.githubRepoId,
+        defaultBranch: prepared.project.defaultBranch,
+      },
+      event: { id: "", type: "cleanup", payload: null },
+      publicBaseUrl: this.deps.publicBaseUrl,
+    };
+    await Promise.allSettled(
+      [...nodeContexts.values()].map((handle) =>
+        runWorktreeRemove(ctx, handle).catch((err) => {
+          console.error("[flow-engine] worktree cleanup failed", {
+            flowRunId: prepared.flowRunId,
+            workdir: handle.workdir,
+            hostId: handle.hostId,
+            err,
+          });
+        }),
+      ),
+    );
+  }
+
   /**
    * Run a single node: insert the step row, dispatch to its runner, persist
    * the outcome. Returns the captured stdout (for downstream fan-in) and a
@@ -434,14 +509,24 @@ export class FlowEngine {
   private async runNodeStep(
     prepared: PreparedRun,
     def: FlowDefinition,
-    job: { node: FlowNode; idx: number; previousOutput: string | undefined },
+    job: {
+      node: FlowNode;
+      idx: number;
+      previousOutput: string | undefined;
+      upstreamWorktree: WorktreeHandle | undefined;
+    },
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
     issueContext: IssueStatusContext | undefined,
-  ): Promise<{ stdoutCaptured?: string; skipped: boolean; skipReason?: string }> {
+  ): Promise<{
+    stdoutCaptured?: string;
+    nodeContext?: WorktreeHandle;
+    skipped: boolean;
+    skipReason?: string;
+  }> {
     void def;
     const { flowRunId, flowId, project, installation } = prepared;
-    const { node, idx, previousOutput } = job;
+    const { node, idx, previousOutput, upstreamWorktree } = job;
 
     const stepId = ulid();
     await this.deps.db.insert(flowRunSteps).values({
@@ -478,11 +563,13 @@ export class FlowEngine {
         owner: project.owner,
         name: project.name,
         githubRepoId: project.githubRepoId,
+        defaultBranch: project.defaultBranch,
       },
       event,
       prContext,
       issueContext,
       previousOutput,
+      upstreamWorktree,
       publicBaseUrl: this.deps.publicBaseUrl,
     };
 
@@ -506,7 +593,11 @@ export class FlowEngine {
         .where(eq(flowRunSteps.id, stepId));
       await this.deps.pg.notify("flow_run_steps", flowRunId);
 
-      return { stdoutCaptured: result.stdoutCaptured, skipped: false };
+      return {
+        stdoutCaptured: result.stdoutCaptured,
+        nodeContext: result.nodeContext,
+        skipped: false,
+      };
     } catch (err) {
       if (err instanceof SkipFlowError) {
         await this.deps.db
@@ -650,6 +741,39 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
     }
   }
   return layers;
+}
+
+/**
+ * BFS the edge graph from `nodeId` walking *backwards* (target → source).
+ * Returns the first ancestor whose nodeContexts entry exists (today: a
+ * worktree handle from a git.create_worktree node).
+ *
+ * Multi-parent fan-in: if two ancestors both produced worktrees the
+ * traversal returns whichever the BFS visits first — a flow author who
+ * wires two worktree producers into one descendant has authored an
+ * ambiguous graph; we pick deterministically rather than erroring.
+ */
+function findUpstreamWorktree(
+  nodeId: string,
+  edges: FlowDefinition["edges"],
+  nodeContexts: Map<string, WorktreeHandle>,
+): WorktreeHandle | undefined {
+  if (nodeContexts.size === 0) return undefined;
+  const seen = new Set<string>([nodeId]);
+  const queue: string[] = [nodeId];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const e of edges) {
+      if (e.target !== cur) continue;
+      const parent = e.source;
+      if (seen.has(parent)) continue;
+      seen.add(parent);
+      const handle = nodeContexts.get(parent);
+      if (handle) return handle;
+      queue.push(parent);
+    }
+  }
+  return undefined;
 }
 
 /**

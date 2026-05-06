@@ -72,3 +72,14 @@ Limitations (v1):
 
 - No refresh — runs longer than ~1h hit a 401 on late `gh` calls. Most agent runs finish in minutes.
 - The smoke-test endpoint (`POST /api/agents/:id/test`) does not inject a token; test runs already see `OPENCARA_TEST=1`.
+
+## Flow node kinds
+
+In addition to `agent` and the existing `github.{post_review,add_comment,add_label}` actions, the flow engine ships two nodes for the issue → implement → PR pipeline:
+
+- **`git.create_worktree`** — runs on a paired device. Allocates an isolated `git clone` of the project repo under the device's tmpdir, branches off `fromBranch` (default: repo default), and emits a `{workdir, branch}` handle. Downstream `agent` nodes inherit `cwd` and the device pin (so the implementer agent runs *inside* the checkout); the worktree is removed at end-of-run regardless of success/failure.
+- **`github.create_pull_request`** — opens a PR using the upstream worktree's branch as the head. Title and body support `{{ENV_VAR}}` templates (env vars seen by the run, e.g. `OPENCARA_ISSUE_NUMBER`). Body defaults to the upstream agent's stdout.
+
+Both nodes are wired into the built-in `issue-implement` flow template.
+
+The worktree node uses the CLI's `opencara internal worktree {create,remove}` subcommands. **Paired devices must be running a CLI build that includes these subcommands** — older CLIs will fail the worktree step with `unknown command: internal`. Rebuild + redeploy `opencara` on each paired host after upgrading the orchestrator.
