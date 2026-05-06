@@ -293,8 +293,11 @@ export class FlowEngine {
 
     // Pre-build PR context once if it's a pull_request event (cheap optimization;
     // avoids re-fetching the diff for every agent node in the chain).
+    // pull_request_review events use the same context shape — both carry a
+    // `pull_request` field and the buildPullRequestContext helper extracts
+    // review.state / review.body into envExtras when present.
     let prContext: PullRequestContext | undefined;
-    if (event.type === "pull_request") {
+    if (event.type === "pull_request" || event.type === "pull_request_review") {
       try {
         prContext = await buildPullRequestContext(
           this.deps.app,

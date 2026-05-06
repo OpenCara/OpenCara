@@ -82,4 +82,28 @@ In addition to `agent` and the existing `github.{post_review,add_comment,add_lab
 
 Both nodes are wired into the built-in `issue-implement` flow template.
 
-The worktree node uses the CLI's `opencara internal worktree {create,remove}` subcommands. **Paired devices must be running a CLI build that includes these subcommands** — older CLIs will fail the worktree step with `unknown command: internal`. Rebuild + redeploy `opencara` on each paired host after upgrading the orchestrator.
+The worktree node uses the CLI's `opencara internal worktree {create,remove,write-session}` subcommands. **Paired devices must be running a CLI build that includes these subcommands** — older CLIs will fail the worktree step with `unknown command: internal`. Rebuild + redeploy `opencara` on each paired host after upgrading the orchestrator.
+
+## Agent kinds (resumable agents)
+
+`agents.kind` selects how the orchestrator invokes an agent at dispatch time. Four named kinds get **per-run conversation resume** — the second iteration on the same PR (e.g. when a reviewer leaves a review) wakes the agent up at the same point in the conversation, on the same device, with its prior plan/scratchpad intact:
+
+| Kind | Binary | Resume model |
+|---|---|---|
+| `claude` | `claude` | Orchestrator generates a UUID and passes `--session-id <uuid>` on first run, `--resume <uuid>` afterwards. |
+| `codex` | `codex` | First run is `codex exec --json …`; resume is `codex exec resume <id> …`. Session id parsed from the first JSONL frame's `payload.id`. |
+| `opencode` | `opencode` | `opencode run --format json [--session <id>] …`. Session id read from each event's `sessionID` field. |
+| `pi` | `pi` (`@mariozechner/pi-coding-agent`) | `pi --mode json [--session <id>] …`. Session id read from line-1's `id` field. |
+| `custom` | (operator-defined) | No resume. Free-form `command + args` from the agents row, exactly like before. |
+
+Pick the kind in the agents view (`/agents`). For named kinds, set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). The "Extra args" field is appended to the adapter's base args — that's where you put `--provider X --model Y` for pi, model overrides, etc.
+
+## PR review → fix loop
+
+Built-in flow `pr-review-fix` triggers when a reviewer submits a review on a PR opened by `issue-implement`. It clones the PR's head branch in place into a fresh worktree, then dispatches the agent — pinned to the **same device** that ran the original implementation, **resuming the same conversation** via the per-kind adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
+
+How the device pin works: every `git.create_worktree` upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host. If the pinned host is offline at trigger time, the engine falls back to `pickIdle()` and the agent starts a fresh conversation (no session id is reachable on a different device).
+
+The review-fix flow only fires on `commented` and `changes_requested` review states by default — `approved` reviews skip it (no fix needed). Adjust in the trigger node config.
+
+**No iteration cap:** GitHub's review/push cycle is the bound. If the operator needs to stop a runaway loop, disable the flow.

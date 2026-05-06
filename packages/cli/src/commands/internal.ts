@@ -1,13 +1,25 @@
 // `opencara internal` is orchestrator-facing infrastructure, not a stable
 // operator surface. It's invoked as a subprocess by the orchestrator's
-// flow engine to perform device-local work (today: worktree allocation
-// and cleanup) without bumping the WS wire protocol. Operators don't run
-// it directly; the flag set is whatever the engine generates.
+// flow engine to perform device-local work (today: worktree allocation,
+// cleanup, and per-PR-branch agent-session-id storage) without bumping
+// the WS wire protocol. Operators don't run it directly; the flag set
+// is whatever the engine generates.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  realpathSync,
+  writeFileSync,
+  renameSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
+
+const SESSION_ROOT = join(homedir(), ".opencara", "sessions");
 
 export async function internal(argv: string[]): Promise<void> {
   const sub = argv[0];
@@ -17,6 +29,7 @@ export async function internal(argv: string[]): Promise<void> {
     const opArgs = rest.slice(1);
     if (op === "create") return worktreeCreate(opArgs);
     if (op === "remove") return worktreeRemove(opArgs);
+    if (op === "write-session") return worktreeWriteSession(opArgs);
     fail(`unknown worktree op: ${op ?? "(none)"}`);
   }
   fail(`unknown internal subcommand: ${sub ?? "(none)"}`);
@@ -27,6 +40,11 @@ function worktreeCreate(args: string[]): void {
   const branch = pickFlag(args, "--branch");
   const fromRaw = pickFlag(args, "--from-branch") ?? "";
   const fromBranch = fromRaw.length > 0 ? fromRaw : null;
+  // Stable per-PR-branch dir for agent-session.json + scratchpad.
+  // Engine passes a slug like "owner/repo/branch-foo"; CLI mkdir's it
+  // under ~/.opencara/sessions/ and reads any pre-existing session
+  // file to seed conversation resume.
+  const sessionKey = pickFlag(args, "--session-key");
   if (!repo || !branch) {
     fail("worktree create requires --repo OWNER/NAME and --branch <name>");
   }
@@ -67,7 +85,14 @@ function worktreeCreate(args: string[]): void {
 
   try {
     git(dir, cloneArgs);
-    git(dir, ["checkout", "-b", branch]);
+    // If the branch we're "creating" matches the from-branch we just
+    // cloned (review-fix flow: clones the existing PR branch), `-b`
+    // would error with "branch already exists". Just check it out.
+    if (fromBranch && branch === fromBranch) {
+      git(dir, ["checkout", branch]);
+    } else {
+      git(dir, ["checkout", "-b", branch]);
+    }
     git(dir, ["config", "credential.helper", HELPER_SNIPPET]);
   } catch (err) {
     // Best-effort cleanup of the half-built dir before bubbling.
@@ -79,7 +104,75 @@ function worktreeCreate(args: string[]): void {
     throw err;
   }
 
-  process.stdout.write(`${JSON.stringify({ workdir: dir, branch })}\n`);
+  // Per-PR-branch persistent dir. Encode the slug safely so a branch
+  // like "feat/x" doesn't escape the sessions root. The orchestrator
+  // chooses the slug; we just sanity-check + mkdir.
+  let sessionDir: string | null = null;
+  let priorSession: { kind: string; id: string } | null = null;
+  if (sessionKey) {
+    const safeKey = sessionKey
+      .split("/")
+      .map((part) => part.replace(/[^A-Za-z0-9._-]/g, "_"))
+      .filter((s) => s.length > 0)
+      .join(sep);
+    if (!safeKey) fail(`invalid --session-key '${sessionKey}'`);
+    sessionDir = join(SESSION_ROOT, safeKey);
+    mkdirSync(sessionDir, { recursive: true });
+    const sessionFile = join(sessionDir, "agent-session.json");
+    if (existsSync(sessionFile)) {
+      try {
+        const parsed = JSON.parse(readFileSync(sessionFile, "utf8")) as {
+          kind?: unknown;
+          id?: unknown;
+        };
+        if (typeof parsed.kind === "string" && typeof parsed.id === "string") {
+          priorSession = { kind: parsed.kind, id: parsed.id };
+        }
+      } catch {
+        // Malformed file — leave priorSession null so the agent does a
+        // fresh run rather than resuming from corrupt state.
+      }
+    }
+  }
+
+  process.stdout.write(
+    `${JSON.stringify({ workdir: dir, branch, sessionDir, priorSession })}\n`,
+  );
+}
+
+function worktreeWriteSession(args: string[]): void {
+  const dir = pickFlag(args, "--session-dir");
+  const kind = pickFlag(args, "--kind");
+  const id = pickFlag(args, "--id");
+  if (!dir || !kind || !id) {
+    fail("worktree write-session requires --session-dir <path> --kind <k> --id <id>");
+  }
+  // Sandbox: only write under ~/.opencara/sessions/. Defends against
+  // an injected --session-dir that aims at $HOME or /etc. Ensure the
+  // root exists first so realpathSync doesn't ENOENT on a fresh box.
+  mkdirSync(SESSION_ROOT, { recursive: true });
+  const root = realpathSync(SESSION_ROOT);
+  let resolved: string;
+  try {
+    resolved = realpathSync(dir);
+  } catch (err) {
+    fail(`worktree write-session: cannot resolve ${dir}: ${(err as Error).message}`);
+  }
+  if (resolved !== root && !resolved.startsWith(root + sep)) {
+    fail(`worktree write-session: refuses to write to ${resolved} (not under ${root})`);
+  }
+  if (!/^[\w-]+$/.test(kind)) {
+    fail(`worktree write-session: invalid --kind '${kind}'`);
+  }
+  if (id.length === 0 || id.length > 200) {
+    fail("worktree write-session: --id must be 1..200 chars");
+  }
+  // Atomic write via tmp-then-rename so a crashed write doesn't leave
+  // a half-flushed file that would deserialize as malformed.
+  const dst = join(resolved, "agent-session.json");
+  const tmp = `${dst}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ kind, id }) + "\n", { encoding: "utf8" });
+  renameSync(tmp, dst);
 }
 
 function worktreeRemove(args: string[]): void {

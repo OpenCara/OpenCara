@@ -31,6 +31,7 @@ import {
   useDeleteAgent,
   useTestAgent,
   useUpdateAgent,
+  type AgentKind,
   type AgentRow,
   type DeviceRow,
 } from "@/lib/queries";
@@ -43,6 +44,79 @@ import { useRegisterChatAction } from "@/lib/chatActions";
 // the placeholder), so use a clearly-namespaced literal that can't
 // collide with a real ULID device id.
 const ANY_DEVICE = "__any" as const;
+
+// Per-kind UI hints. The orchestrator's adapter library
+// (packages/orchestrator/src/agents/kinds.ts) is the source of
+// behavioural truth; these strings duplicate its `authHints` for the
+// form. Kept short — operators read them while authoring the agent.
+const KIND_HINTS: Record<
+  AgentKind,
+  { label: string; envHint: string; argsPlaceholder: string; argsHint: string }
+> = {
+  claude: {
+    label: "Claude Code",
+    envHint:
+      "Set ANTHROPIC_API_KEY here, or run `claude auth login` once on the device.",
+    argsPlaceholder: "(usually empty — claude needs no extras)",
+    argsHint:
+      "Optional extra args. Adapter already passes -p / --output-format json / --resume.",
+  },
+  codex: {
+    label: "Codex (OpenAI)",
+    envHint:
+      "Set OPENAI_API_KEY here, or run `codex login --with-api-key` once on the device.",
+    argsPlaceholder: "(usually empty)",
+    argsHint:
+      "Optional extra args. Adapter already passes exec --json --skip-git-repo-check -a never.",
+  },
+  opencode: {
+    label: "opencode",
+    envHint:
+      "Set the provider key (ANTHROPIC_API_KEY / OPENAI_API_KEY / …) for the model your opencode config picks.",
+    argsPlaceholder: "(usually empty)",
+    argsHint:
+      "Optional extra args. Adapter already passes run --format json --dangerously-skip-permissions.",
+  },
+  pi: {
+    label: "pi (pi-coding-agent)",
+    envHint:
+      "Set the provider's *_API_KEY (e.g. KIMI_API_KEY, MINIMAX_CN_API_KEY) for the model you select via --provider/--model.",
+    argsPlaceholder: "--provider kimi-coding --model kimi-k2-thinking",
+    argsHint:
+      "Pass --provider X --model Y here. Adapter passes --mode json / --offline / --no-context-files.",
+  },
+  custom: {
+    label: "Custom (no resume)",
+    envHint: "Set whatever your command needs.",
+    argsPlaceholder: "node /path/to/script.mjs --foo bar",
+    argsHint: "Full shell-style invocation. No conversation resume across runs.",
+  },
+};
+
+const KIND_ORDER: AgentKind[] = ["claude", "codex", "opencode", "pi", "custom"];
+
+interface KindPickerProps {
+  value: AgentKind;
+  onChange: (next: AgentKind) => void;
+  id?: string;
+}
+
+function KindPicker({ value, onChange, id }: KindPickerProps) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as AgentKind)}>
+      <SelectTrigger id={id}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {KIND_ORDER.map((k) => (
+          <SelectItem key={k} value={k}>
+            {KIND_HINTS[k].label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 interface DevicePickerProps {
   /** "" = any device, otherwise a host id. */
@@ -147,7 +221,11 @@ export function AgentsPage() {
 
 function NewAgentCard() {
   const [name, setName] = useState("");
-  const [command, setCommand] = useState("");
+  // Default kind=claude — most users will want resume support; setting
+  // the default to `custom` would silently disable it without making
+  // the dropdown's value visible. (`custom` stays one click away.)
+  const [kind, setKind] = useState<AgentKind>("claude");
+  const [commandOrArgs, setCommandOrArgs] = useState("");
   const [envText, setEnvText] = useState("");
   const [hostId, setHostId] = useState<string>(ANY_DEVICE);
   const devicesQ = useQuery(devicesQuery());
@@ -158,11 +236,17 @@ function NewAgentCard() {
   // into this draft form (multi-line replies are flattened so the input keeps
   // working as a single line).
   useRegisterChatAction("command", (text) =>
-    setCommand(text.trim().split(/\r?\n/).join(" ")),
+    setCommandOrArgs(text.trim().split(/\r?\n/).join(" ")),
   );
   useRegisterChatAction("agent-env", (text) => setEnvText(text.trim()));
 
   const env = parseEnv(envText);
+  const hint = KIND_HINTS[kind];
+  const isCustom = kind === "custom";
+  // For kind=custom, the field below is the full command and is required.
+  // For named kinds, it's optional extras (the adapter handles the base
+  // invocation).
+  const canSave = name.trim().length > 0 && (!isCustom || commandOrArgs.trim().length > 0);
 
   return (
     <Card>
@@ -193,17 +277,19 @@ function NewAgentCard() {
           </div>
         </div>
         <div>
-          <Label htmlFor="new-agent-command">Command</Label>
+          <Label htmlFor="new-agent-kind">Kind</Label>
+          <KindPicker id="new-agent-kind" value={kind} onChange={setKind} />
+        </div>
+        <div>
+          <Label htmlFor="new-agent-command">{isCustom ? "Command" : "Extra args"}</Label>
           <Input
             id="new-agent-command"
-            placeholder='e.g. node /usr/local/bin/reviewer.mjs --model claude-sonnet-4-6'
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
+            placeholder={hint.argsPlaceholder}
+            value={commandOrArgs}
+            onChange={(e) => setCommandOrArgs(e.target.value)}
             className="font-mono text-xs"
           />
-          <p className="mt-1 text-xs text-muted-foreground">
-            Full invocation. Use double or single quotes for arguments containing spaces.
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground">{hint.argsHint}</p>
         </div>
         <div>
           <Label htmlFor="new-agent-env">Env vars (KEY=value, one per line)</Label>
@@ -214,6 +300,7 @@ function NewAgentCard() {
             onChange={(e) => setEnvText(e.target.value)}
             className="min-h-20 font-mono text-xs"
           />
+          <p className="mt-1 text-xs text-muted-foreground">{hint.envHint}</p>
         </div>
         {error !== null && error !== undefined && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -222,19 +309,23 @@ function NewAgentCard() {
         )}
         <div className="flex justify-end">
           <Button
-            disabled={!name.trim() || !command.trim() || create.isPending}
+            disabled={!canSave || create.isPending}
             onClick={() =>
               create.mutate(
                 {
                   name: name.trim(),
-                  command: command.trim(),
+                  kind,
+                  ...(isCustom
+                    ? { command: commandOrArgs.trim() }
+                    : { extraArgs: commandOrArgs.trim() }),
                   env,
                   hostId: hostId === ANY_DEVICE ? null : hostId,
                 },
                 {
                   onSuccess: () => {
                     setName("");
-                    setCommand("");
+                    setKind("claude");
+                    setCommandOrArgs("");
                     setEnvText("");
                     setHostId(ANY_DEVICE);
                   },
@@ -254,7 +345,12 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const [editing, setEditing] = useState(false);
   const [testOpen, setTestOpen] = useState(false);
   const [name, setName] = useState(agent.name);
-  const [command, setCommand] = useState(joinCommand(agent));
+  const [kind, setKind] = useState<AgentKind>(agent.kind);
+  // For kind=custom this holds the full command; for named kinds, it's
+  // the operator's `agent.args` joined back to a shell-style string.
+  const [commandOrArgs, setCommandOrArgs] = useState(
+    agent.kind === "custom" ? joinCommand(agent) : agent.args.join(" "),
+  );
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
@@ -265,7 +361,8 @@ function AgentCard({ agent }: { agent: AgentRow }) {
 
   const reset = () => {
     setName(agent.name);
-    setCommand(joinCommand(agent));
+    setKind(agent.kind);
+    setCommandOrArgs(agent.kind === "custom" ? joinCommand(agent) : agent.args.join(" "));
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
   };
@@ -307,20 +404,29 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 <Button
                   size="sm"
                   disabled={update.isPending}
-                  onClick={() =>
+                  onClick={() => {
+                    const isCustom = kind === "custom";
                     update.mutate(
                       {
                         id: agent.id,
                         patch: {
                           name: name.trim(),
-                          command: command.trim(),
+                          kind,
+                          // For kind=custom, the command field tokenizes
+                          // into command+args server-side. For named
+                          // kinds, the field carries extra args; the
+                          // server stores `kind` as the placeholder
+                          // command and tokenizes extras into args.
+                          ...(isCustom
+                            ? ({ command: commandOrArgs.trim() } as Record<string, string>)
+                            : ({ extraArgs: commandOrArgs.trim() } as Record<string, string>)),
                           env: parseEnv(envText),
                           hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
                       },
                       { onSuccess: () => setEditing(false) },
-                    )
-                  }
+                    );
+                  }}
                 >
                   {update.isPending ? "Saving…" : "Save"}
                 </Button>
@@ -369,15 +475,27 @@ function AgentCard({ agent }: { agent: AgentRow }) {
               />
             </div>
             <div>
-              <Label>Command</Label>
+              <Label>Kind</Label>
+              <KindPicker
+                value={kind}
+                onChange={(next) => {
+                  // Switching kind clears the args field — the previous
+                  // text is shaped for a different CLI and almost never
+                  // makes sense to carry over.
+                  if (next !== kind) setCommandOrArgs("");
+                  setKind(next);
+                }}
+              />
+            </div>
+            <div>
+              <Label>{kind === "custom" ? "Command" : "Extra args"}</Label>
               <Input
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
+                value={commandOrArgs}
+                onChange={(e) => setCommandOrArgs(e.target.value)}
+                placeholder={KIND_HINTS[kind].argsPlaceholder}
                 className="font-mono text-xs"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Full invocation. Quote arguments with spaces.
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].argsHint}</p>
             </div>
             <div>
               <Label>Env (KEY=value)</Label>
@@ -386,11 +504,15 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 onChange={(e) => setEnvText(e.target.value)}
                 className="min-h-20 font-mono text-xs"
               />
+              <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].envHint}</p>
             </div>
           </>
         ) : (
           <pre className="whitespace-pre-wrap rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
-            {[`$ ${agent.command}${agent.args.length ? " " : ""}${agent.args.join(" ")}`]
+            {[
+              `[${KIND_HINTS[agent.kind].label}]`,
+              `$ ${agent.command}${agent.args.length ? " " : ""}${agent.args.join(" ")}`,
+            ]
               .concat(
                 Object.entries(agent.env).length > 0
                   ? Object.entries(agent.env).map(

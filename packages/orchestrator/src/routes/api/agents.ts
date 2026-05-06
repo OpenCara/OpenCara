@@ -6,6 +6,7 @@ import type { Db } from "../../db/client.js";
 import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
+import { isAgentKind, type AgentKind } from "../../agents/kinds.js";
 
 interface AgentRoutesDeps {
   db: Db;
@@ -31,14 +32,32 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const user = c.get("user")!;
     const body = await c.req.json().catch(() => ({}));
     const name = String(body.name ?? "").trim();
-    const rawCommand = String(body.command ?? "").trim();
-    if (!name || !rawCommand) {
-      return c.json({ error: "name and command required" }, 400);
+
+    // `kind` selects per-kind adapter (claude/codex/opencode/pi) or
+    // falls back to legacy opaque-subprocess (`custom`). Older clients
+    // that don't send the field default to `custom`.
+    const kind: AgentKind = isAgentKind(body.kind) ? body.kind : "custom";
+
+    // For kind=custom, we tokenize a free-form Command field as before.
+    // For named kinds, the adapter builds the invocation at dispatch
+    // time — the row's `command` is the kind label (informational only)
+    // and `args` carries operator extras (e.g. `--provider X --model Y`
+    // for pi). The UI sends `extraArgs` as a free-form string that we
+    // tokenize the same way as a Command.
+    let command: string;
+    let args: string[];
+    if (kind === "custom") {
+      const rawCommand = String(body.command ?? "").trim();
+      if (!name || !rawCommand) {
+        return c.json({ error: "name and command required for kind=custom" }, 400);
+      }
+      ({ command, args } = tokenizeCommand(rawCommand));
+    } else {
+      if (!name) return c.json({ error: "name required" }, 400);
+      command = kind;
+      args = parseExtraArgs(body);
     }
-    // The UI exposes a single "Command" field that holds the full invocation
-    // ("node /path/to/script.mjs --print"). The dispatcher still wants
-    // command + args[], so tokenize on the way in. body.args is ignored.
-    const { command, args } = tokenizeCommand(rawCommand);
+
     const env =
       body.env && typeof body.env === "object" && !Array.isArray(body.env)
         ? Object.fromEntries(
@@ -56,6 +75,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         id,
         userId: user.id,
         name,
+        kind,
         command,
         args,
         env,
@@ -75,6 +95,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           id,
           userId: user.id,
           name,
+          kind,
           command,
           args,
           env,
@@ -102,13 +123,32 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const body = await c.req.json().catch(() => ({}));
     const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
     if (typeof body.name === "string") updates.name = body.name.trim();
-    if (typeof body.command === "string") {
-      // Tokenize the full command line into command + args[]. body.args from
-      // older clients is ignored — the single Command field is the source of
-      // truth for both fields now.
+
+    // Determine the effective kind for this update. If the body is
+    // changing kind, use the new value; otherwise read the existing
+    // row to know how to interpret command/extraArgs.
+    let effectiveKind: AgentKind | undefined;
+    if (body.kind !== undefined) {
+      if (!isAgentKind(body.kind)) return c.json({ error: "invalid kind" }, 400);
+      updates.kind = body.kind;
+      effectiveKind = body.kind;
+    }
+    if (effectiveKind === undefined && (body.command !== undefined || body.extraArgs !== undefined)) {
+      const existing = await deps.db.query.agents.findFirst({
+        where: and(eq(agents.id, id), eq(agents.userId, user.id)),
+      });
+      effectiveKind = existing?.kind;
+    }
+
+    if (effectiveKind === "custom" && typeof body.command === "string") {
       const { command, args } = tokenizeCommand(body.command.trim());
       updates.command = command;
       updates.args = args;
+    } else if (effectiveKind && effectiveKind !== "custom") {
+      updates.command = effectiveKind;
+      if (body.extraArgs !== undefined || body.command !== undefined) {
+        updates.args = parseExtraArgs(body);
+      }
     }
     if (body.env && typeof body.env === "object" && !Array.isArray(body.env)) {
       updates.env = Object.fromEntries(
@@ -296,6 +336,34 @@ async function resolveHostId(
  * Backslash escapes are NOT supported — keep the surface area small. If a
  * user needs literal quotes, wrap the opposite quote style around them.
  */
+/**
+ * Pull "extra args" out of a request body, accepting either:
+ * - `extraArgs` as a free-form string (tokenized like a Command field)
+ * - `extraArgs` as a string array (already tokenized by the UI)
+ * - Falls back to `body.command` (older clients send extras there).
+ *
+ * For named-kind agents this populates `agents.args`, which the per-
+ * kind adapter appends to its base args at dispatch time.
+ */
+function parseExtraArgs(body: Record<string, unknown>): string[] {
+  if (Array.isArray(body.extraArgs)) {
+    return body.extraArgs.map((s) => String(s));
+  }
+  if (typeof body.extraArgs === "string") {
+    const trimmed = body.extraArgs.trim();
+    if (!trimmed) return [];
+    // Reuse tokenizeCommand by prefixing a dummy "command" so its
+    // args[] result becomes our extra-args list.
+    return tokenizeCommand(`_ ${trimmed}`).args;
+  }
+  if (typeof body.command === "string") {
+    const trimmed = body.command.trim();
+    if (!trimmed) return [];
+    return tokenizeCommand(`_ ${trimmed}`).args;
+  }
+  return [];
+}
+
 export function tokenizeCommand(input: string): {
   command: string;
   args: string[];

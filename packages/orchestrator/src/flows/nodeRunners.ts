@@ -22,6 +22,8 @@ import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatch
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
+import { adapterFor, type AgentKind } from "../agents/kinds.js";
+import { worktreePins } from "../db/schema.js";
 
 export class SkipFlowError extends Error {
   constructor(reason: string) {
@@ -33,13 +35,23 @@ export class SkipFlowError extends Error {
  * Structured handle from a `git.create_worktree` node, threaded downstream
  * via the engine's nodeContexts channel. Downstream agent nodes inherit
  * the cwd + device pin; a downstream `github.create_pull_request` reads
- * `branch` as the PR head.
+ * `branch` as the PR head; downstream agents whose kind matches
+ * `priorSession.kind` resume the prior conversation.
  */
 export interface WorktreeHandle {
   kind: "worktree";
   workdir: string;
   branch: string;
   hostId: string;
+  /** Per-PR-branch persistent dir on the agent device (created by the
+   *  CLI). The agent's session id file lives at
+   *  `${sessionDir}/agent-session.json`. May be null if the worktree
+   *  ran without a session-key (legacy) — agents will start fresh. */
+  sessionDir: string | null;
+  /** Read off the device on `git.create_worktree`. When the downstream
+   *  agent's kind matches `priorSession.kind`, the orchestrator passes
+   *  `priorSession.id` to the per-kind adapter as `resumeSessionId`. */
+  priorSession: { kind: AgentKind; id: string } | null;
 }
 
 export interface NodeRunCtx {
@@ -97,8 +109,13 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (node.kind !== "github.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${(node as { kind: string }).kind}`);
   }
-  if (ctx.event.type !== "pull_request") {
-    throw new SkipFlowError("not a pull_request event");
+  // The trigger handles two webhook event types: `pull_request` (PR
+  // lifecycle) and `pull_request_review` (review-submitted, the
+  // wake-up signal for review-fix flows). They have different
+  // payload shapes; for review events we synthesise a `pull_request`
+  // action of `review_submitted`.
+  if (ctx.event.type !== "pull_request" && ctx.event.type !== "pull_request_review") {
+    throw new SkipFlowError("not a pull_request or pull_request_review event");
   }
   const payload = ctx.event.payload as {
     action?: string;
@@ -107,14 +124,32 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
       labels?: Array<{ name?: string }>;
       draft?: boolean;
     };
+    review?: { state?: string };
   };
 
-  const action = payload.action ?? "";
+  // Map the review-submitted webhook action `submitted` → our
+  // synthetic `review_submitted` so the operator sees one consistent
+  // action enum.
+  const action =
+    ctx.event.type === "pull_request_review"
+      ? payload.action === "submitted"
+        ? "review_submitted"
+        : `review_${payload.action ?? ""}`
+      : payload.action ?? "";
   if (!node.config.actions.includes(action as never)) {
     throw new SkipFlowError(`pull_request action '${action}' not in trigger filter`);
   }
 
   const cfg = node.config;
+
+  // Optional filter: only fire on certain review states (approved /
+  // changes_requested / commented / dismissed). Empty list = match any.
+  if (action === "review_submitted" && cfg.reviewStates.length > 0) {
+    const state = payload.review?.state ?? "";
+    if (!(cfg.reviewStates as string[]).includes(state)) {
+      throw new SkipFlowError(`review state '${state}' not in reviewStates filter`);
+    }
+  }
 
   if (cfg.ignoreDrafts && payload.pull_request?.draft === true) {
     throw new SkipFlowError("PR is a draft");
@@ -393,11 +428,14 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
 
   // Upstream worktree override: when this agent node sits below a
   // git.create_worktree node, run inside that worktree on the same device.
-  // Surface workdir + branch in env so the agent's own scripts can see
-  // them without parsing nodeContext.
+  // Surface workdir/branch/sessionDir in env so the agent's own scripts
+  // can see them without parsing nodeContext.
   if (ctx.upstreamWorktree) {
     env["OPENCARA_WORKTREE_DIR"] = ctx.upstreamWorktree.workdir;
     env["OPENCARA_WORKTREE_BRANCH"] = ctx.upstreamWorktree.branch;
+    if (ctx.upstreamWorktree.sessionDir) {
+      env["OPENCARA_SESSION_DIR"] = ctx.upstreamWorktree.sessionDir;
+    }
   }
 
   // Inject the issue-edit skill if this run has issue context (Projects v2
@@ -422,17 +460,94 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       }
     : undefined;
 
+  // For named-kind agents (claude/codex/opencode/pi), the per-kind
+  // adapter builds the invocation — including the resume flag when
+  // a prior session id is reachable on the device. For kind=custom,
+  // the agent row's command/args are used as-is (legacy behaviour).
+  const agentKind: AgentKind = agent.kind;
+  let invCommand = agent.command;
+  let invArgs = agent.args;
+  let preassignedSessionId: string | undefined;
+  if (agentKind !== "custom") {
+    const adapter = adapterFor(agentKind);
+    // Resume only when the upstream session was started by the SAME
+    // kind. A flow that switches kinds mid-loop starts fresh — its
+    // resume id wouldn't parse with the new CLI's session format.
+    const resumeSessionId =
+      ctx.upstreamWorktree?.priorSession?.kind === agentKind
+        ? ctx.upstreamWorktree.priorSession.id
+        : null;
+    const inv = adapter.buildInvocation({
+      prompt: linkedPromptBody ?? "",
+      cwd: ctx.upstreamWorktree?.workdir ?? agent.cwd ?? "",
+      sessionDir: ctx.upstreamWorktree?.sessionDir ?? "",
+      resumeSessionId,
+      extraArgs: agent.args,
+    });
+    invCommand = inv.command;
+    invArgs = inv.args;
+    preassignedSessionId = inv.preassignedSessionId;
+    if (inv.extraEnv) Object.assign(env, inv.extraEnv);
+  }
+
   const result = await dispatchAgentRun(ctx, {
     agentRunId,
     kind: agent.name,
-    command: agent.command,
-    args: agent.args,
+    command: invCommand,
+    args: invArgs,
     env,
     cwd: ctx.upstreamWorktree?.workdir ?? agent.cwd ?? undefined,
     stdinJson,
     hostId: ctx.upstreamWorktree?.hostId ?? agent.hostId ?? null,
     triggerEventId: ctx.event.id,
   });
+
+  // Best-effort post-run session write-back. Only for named-kind
+  // agents that actually ran in a worktree — without a sessionDir
+  // there's nowhere to put the file. Failures are logged + swallowed:
+  // worst case, the next iteration starts fresh (no resume).
+  if (
+    agentKind !== "custom" &&
+    ctx.upstreamWorktree?.sessionDir &&
+    result.stdoutCaptured.length > 0
+  ) {
+    const adapter = adapterFor(agentKind);
+    const newId = adapter.parseSessionId(result.stdoutCaptured, preassignedSessionId);
+    const priorId = ctx.upstreamWorktree.priorSession?.id;
+    if (newId && newId !== priorId) {
+      try {
+        await ctx.dispatcher.run(
+          {
+            kind: "internal:worktree-write-session",
+            command: "opencara",
+            args: [
+              "internal",
+              "worktree",
+              "write-session",
+              "--session-dir",
+              ctx.upstreamWorktree.sessionDir,
+              "--kind",
+              agentKind,
+              "--id",
+              newId,
+            ],
+            env: {},
+          },
+          {
+            onLog: () => undefined,
+            hostId: result.agentHostId,
+            projectId: ctx.projectId,
+          },
+        );
+      } catch (err) {
+        console.error("[flows] worktree-write-session failed", {
+          flowRunId: ctx.flowRunId,
+          hostId: result.agentHostId,
+          err,
+        });
+      }
+    }
+  }
 
   if (result.exitCode !== 0) {
     throw new Error(`agent exited with code ${result.exitCode}`);
@@ -632,9 +747,29 @@ async function worktreeRunner(
       ? node.config.fromBranch
       : ctx.project.defaultBranch ?? "";
 
+  const ownerRepo = `${ctx.project.owner}/${ctx.project.name}`;
+  // Stable session-key threaded through to the device. Same key from
+  // the implement flow's worktree run AND from any later review-fix
+  // iteration on the same PR — that's how the agent's session-id file
+  // is rediscovered on the second iteration.
+  const sessionKey = `${ownerRepo}/branch-${branchName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+
+  // Worktree pin lookup: prefer the device that ran a previous
+  // worktree on this branch, since the agent-session.json file lives
+  // on that device's disk. The pin's host might be offline, in which
+  // case we fall back to pickIdle and emit a warning so the operator
+  // sees that resume isn't possible this iteration.
+  let pinnedHostId: string | null = node.config.hostId ?? null;
+  if (!pinnedHostId) {
+    const existing = await ctx.db.query.worktreePins.findFirst({
+      where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
+    });
+    if (existing) pinnedHostId = existing.hostId;
+  }
+
   const env: Record<string, string> = {
     OPENCARA_AGENT_RUN_ID: agentRunId,
-    OPENCARA_REPO: `${ctx.project.owner}/${ctx.project.name}`,
+    OPENCARA_REPO: ownerRepo,
   };
 
   const result = await dispatchAgentRun(ctx, {
@@ -646,14 +781,16 @@ async function worktreeRunner(
       "worktree",
       "create",
       "--repo",
-      `${ctx.project.owner}/${ctx.project.name}`,
+      ownerRepo,
       "--branch",
       branchName,
       "--from-branch",
       fromBranch,
+      "--session-key",
+      sessionKey,
     ],
     env,
-    hostId: node.config.hostId ?? null,
+    hostId: pinnedHostId,
     triggerEventId: ctx.event.id,
   });
 
@@ -666,10 +803,16 @@ async function worktreeRunner(
   // may include a trailing newline or auxiliary lines if a future
   // version adds progress output.
   const lines = result.stdoutCaptured.split("\n").filter((l) => l.trim().length > 0);
-  let parsed: { workdir?: unknown; branch?: unknown } | null = null;
+  type DevicePayload = {
+    workdir?: unknown;
+    branch?: unknown;
+    sessionDir?: unknown;
+    priorSession?: unknown;
+  };
+  let parsed: DevicePayload | null = null;
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
-      parsed = JSON.parse(lines[i]!) as { workdir?: unknown; branch?: unknown };
+      parsed = JSON.parse(lines[i]!) as DevicePayload;
       if (typeof parsed.workdir === "string" && typeof parsed.branch === "string") break;
       parsed = null;
     } catch {
@@ -682,15 +825,53 @@ async function worktreeRunner(
     );
   }
 
+  const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
+  let priorSession: { kind: AgentKind; id: string } | null = null;
+  if (parsed.priorSession && typeof parsed.priorSession === "object") {
+    const ps = parsed.priorSession as { kind?: unknown; id?: unknown };
+    if (typeof ps.kind === "string" && typeof ps.id === "string") {
+      // Trust the device's stored kind only if it's one of our known set;
+      // a stale "custom" or unknown-kind file won't try to resume.
+      const knownKinds: AgentKind[] = ["claude", "codex", "opencode", "pi"];
+      if ((knownKinds as string[]).includes(ps.kind)) {
+        priorSession = { kind: ps.kind as AgentKind, id: ps.id };
+      }
+    }
+  }
+
   const handle: WorktreeHandle = {
     kind: "worktree",
     workdir: parsed.workdir,
     branch: parsed.branch,
     hostId: result.agentHostId,
+    sessionDir,
+    priorSession,
   };
 
+  // Upsert the device pin for future iterations on this branch.
+  const pinId = ulid();
+  await ctx.db
+    .insert(worktreePins)
+    .values({
+      id: pinId,
+      ownerRepo,
+      branch: branchName,
+      hostId: result.agentHostId,
+      lastRunAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [worktreePins.ownerRepo, worktreePins.branch],
+      set: { hostId: result.agentHostId, lastRunAt: new Date() },
+    });
+
   return {
-    output: { workdir: handle.workdir, branch: handle.branch, hostId: handle.hostId },
+    output: {
+      workdir: handle.workdir,
+      branch: handle.branch,
+      hostId: handle.hostId,
+      sessionDir: handle.sessionDir,
+      priorSession: handle.priorSession,
+    },
     nodeContext: handle,
     stdoutCaptured: result.stdoutCaptured,
   };
