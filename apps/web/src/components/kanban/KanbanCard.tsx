@@ -14,12 +14,37 @@ const STATE_VARIANT: Record<
   MERGED: "outline",
 };
 
+/**
+ * True when the GitHub issue url belongs to this opencara project's repo.
+ * Used to scope the in-app Edit pencil — Projects v2 boards can include
+ * issues from any repo, but /projects/:id/issues/:n on opencara only knows
+ * about this project's repo.
+ */
+function isOwnRepoIssue(
+  contentUrl: string | null,
+  projectRepo: { owner: string; name: string } | null,
+): boolean {
+  if (!contentUrl || !projectRepo) return false;
+  const expected = `https://github.com/${projectRepo.owner}/${projectRepo.name}/issues/`;
+  return contentUrl.startsWith(expected);
+}
+
 export function KanbanCard({
   item,
   projectId,
+  projectRepo,
 }: {
   item: KanbanItem;
   projectId: string;
+  /**
+   * Repo identity for this opencara project. Used to gate the in-app Edit
+   * pencil — Projects v2 boards can mix items from multiple repos, and
+   * /projects/:id/issues/:n routes to *this project's repo* by number, so
+   * sending users there from a foreign-repo card would land on the wrong
+   * issue (or 404). Null when the project lookup failed; we then hide the
+   * pencil universally.
+   */
+  projectRepo: { owner: string; name: string } | null;
 }) {
   // Drag handle covers the whole card. The action icons (ExternalLink,
   // Pencil) stop pointerdown so they're clickable without starting a drag.
@@ -108,16 +133,18 @@ export function KanbanCard({
           )}
         </div>
         <div className="flex flex-col items-center gap-1">
-          {item.kind === "issue" && item.contentNumber !== null && (
-            <Link
-              to={`/projects/${projectId}/issues/${item.contentNumber}`}
-              className="text-muted-foreground hover:text-foreground"
-              title="Edit in opencara"
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              <Pencil className="size-3.5" />
-            </Link>
-          )}
+          {item.kind === "issue" &&
+            item.contentNumber !== null &&
+            isOwnRepoIssue(item.contentUrl, projectRepo) && (
+              <Link
+                to={`/projects/${projectId}/issues/${item.contentNumber}`}
+                className="text-muted-foreground hover:text-foreground"
+                title="Edit in opencara"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <Pencil className="size-3.5" />
+              </Link>
+            )}
           {item.contentUrl && (
             <a
               href={item.contentUrl}

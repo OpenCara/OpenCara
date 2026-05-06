@@ -641,6 +641,13 @@ export interface KanbanBoardData {
   link: KanbanLink | null;
   columns: KanbanStatusOption[];
   items: KanbanItem[];
+  /**
+   * Repo identity of *this* opencara project. The Kanban board can pull in
+   * items from any repo on a multi-repo Projects v2 board, so the UI uses
+   * this to decide whether an item belongs to our project's repo (and is
+   * thus reachable via the in-app issue route).
+   */
+  projectRepo: { owner: string; name: string } | null;
 }
 
 export const kanbanQuery = (projectId: string) => ({
@@ -736,10 +743,12 @@ export function useKanbanStream(
         console.error("[kanban-sse] parse failed", err);
       }
     };
+    const onPing = () => undefined;
     es.addEventListener("snapshot", onSnapshot);
-    es.addEventListener("ping", () => undefined);
+    es.addEventListener("ping", onPing);
     return () => {
       es.removeEventListener("snapshot", onSnapshot);
+      es.removeEventListener("ping", onPing);
       es.close();
     };
   }, [projectId, enabled, qc]);

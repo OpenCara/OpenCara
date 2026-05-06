@@ -12,8 +12,10 @@
 //
 // SSE wires through a dedicated `kanban_link` Postgres channel. After any
 // route or webhook writes through to project_v2_links / project_v2_items,
-// it calls `notifyKanbanLink(pg, linkId)`. The SSE handler LISTENs on the
-// channel and re-snapshots when its link's id arrives.
+// it calls `notifyKanbanLink(pg, projectId, linkId)`. The SSE handler
+// LISTENs on the channel and re-snapshots when the payload's projectId
+// matches its own — projectId is the stable identity across unlink/relink,
+// linkId rotates.
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -45,11 +47,30 @@ interface KanbanRoutesDeps {
 
 const KANBAN_NOTIFY_CHANNEL = "kanban_link";
 
-/** Fire-and-forget pg notify for a board link. Errors logged, never thrown. */
-export function notifyKanbanLink(pg: Sql, linkId: string): void {
-  pg.notify(KANBAN_NOTIFY_CHANNEL, linkId).catch((err: unknown) => {
-    console.error("[kanban] notify failed", { linkId, err });
-  });
+/**
+ * Notify payload shape on the `kanban_link` channel. We carry projectId so
+ * SSE handlers can filter by *project* rather than by current link id —
+ * filtering by link id misses unlink-then-relink races where the SSE handler
+ * is still tracking the old link when the new one fires its first notify.
+ * linkId is informational (null when the link was just deleted).
+ */
+export interface KanbanNotify {
+  projectId: string;
+  linkId: string | null;
+}
+
+/** Fire-and-forget pg notify for a board change. Errors logged, never thrown. */
+export function notifyKanbanLink(
+  pg: Sql,
+  projectId: string,
+  linkId: string | null,
+): void {
+  const payload: KanbanNotify = { projectId, linkId };
+  pg.notify(KANBAN_NOTIFY_CHANNEL, JSON.stringify(payload)).catch(
+    (err: unknown) => {
+      console.error("[kanban] notify failed", { projectId, linkId, err });
+    },
+  );
 }
 
 export function kanbanRoutes(deps: KanbanRoutesDeps) {
@@ -159,7 +180,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         await upsertItem(deps.db, linkId, it);
       }
 
-      notifyKanbanLink(deps.pg, linkId);
+      notifyKanbanLink(deps.pg, id, linkId);
       const fresh = await deps.db.query.projectV2Links.findFirst({
         where: eq(projectV2Links.id, linkId),
       });
@@ -181,16 +202,31 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     await deps.db
       .delete(projectV2Links)
       .where(eq(projectV2Links.projectId, id));
-    if (existing) notifyKanbanLink(deps.pg, existing.id);
+    // Notify with linkId=null so subscribers know the project just lost its link.
+    notifyKanbanLink(deps.pg, id, existing?.id ?? null);
     return c.body(null, 204);
   });
 
   r.get("/projects/:id/kanban", auth, async (c) => {
     const id = c.req.param("id");
+    // Carry project repo identity so the UI can decide whether an item
+    // (which on a multi-repo Projects v2 board can come from any repo)
+    // belongs to *this* project's repo. Used to gate the in-app Edit
+    // pencil — sending users to /projects/:id/issues/:n on a foreign
+    // repo's issue would route to the wrong record.
+    const project = await deps.db.query.projects.findFirst({
+      where: eq(projects.id, id),
+    });
+    const projectRepo = project
+      ? { owner: project.owner, name: project.name }
+      : null;
+
     const link = await deps.db.query.projectV2Links.findFirst({
       where: eq(projectV2Links.projectId, id),
     });
-    if (!link) return c.json({ link: null, columns: [], items: [] });
+    if (!link) {
+      return c.json({ link: null, columns: [], items: [], projectRepo });
+    }
 
     const items = await deps.db
       .select()
@@ -202,6 +238,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       link,
       columns: link.statusOptions,
       items,
+      projectRepo,
     });
   });
 
@@ -316,69 +353,109 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       // in. The webhook will overwrite this once it lands.
       fresh = { ...itemRow, statusOptionId };
     }
-    notifyKanbanLink(deps.pg, link.id);
+    notifyKanbanLink(deps.pg, id, link.id);
     return c.json({ item: fresh });
   });
 
   // SSE: send the full board snapshot on connect, then a fresh snapshot
   // every time something pings the `kanban_link` Postgres channel for
-  // this link id. The client just replaces its kanbanQuery cache with the
-  // pushed payload — no extra refetch round-trip.
+  // *this project*. The client just replaces its kanbanQuery cache with
+  // the pushed payload — no extra refetch round-trip.
+  //
+  // Two correctness properties this handler guards:
+  //
+  //   1. Filter by projectId, not linkId. The link id rotates on
+  //      unlink-then-relink, but the project id is stable for the life of
+  //      this session. Filtering by linkId would race: if board A is
+  //      unlinked and board B is linked before our previous snapshot
+  //      finishes, the B notify fires while we still have A's id cached
+  //      and gets dropped.
+  //
+  //   2. Serialize snapshot writes through one promise chain. Concurrent
+  //      writeSnapshot() calls can finish out of order; the client just
+  //      replaces cache with whichever lands last. The chain ensures
+  //      arrival order on the wire matches notify order.
   r.get("/projects/:id/kanban/stream", auth, (c) => {
     const id = c.req.param("id");
     return streamSSE(c, async (sse) => {
       const loadSnapshot = async () => {
+        const project = await deps.db.query.projects.findFirst({
+          where: eq(projects.id, id),
+        });
+        const projectRepo = project
+          ? { owner: project.owner, name: project.name }
+          : null;
+
         const link = await deps.db.query.projectV2Links.findFirst({
           where: eq(projectV2Links.projectId, id),
         });
-        if (!link) return { link: null, columns: [], items: [] } as const;
+        if (!link) {
+          return {
+            link: null,
+            columns: [],
+            items: [],
+            projectRepo,
+          } as const;
+        }
         const items = await deps.db
           .select()
           .from(projectV2Items)
           .where(eq(projectV2Items.projectV2LinkId, link.id))
           .orderBy(asc(projectV2Items.updatedAt));
-        return { link, columns: link.statusOptions, items } as const;
+        return {
+          link,
+          columns: link.statusOptions,
+          items,
+          projectRepo,
+        } as const;
       };
 
-      const writeSnapshot = async () => {
-        const snap = await loadSnapshot();
-        await sse.writeSSE({
-          event: "snapshot",
-          data: JSON.stringify(snap),
-        });
-        return snap;
-      };
-
-      const initial = await writeSnapshot();
-      // Track the active link id; it can change if the user re-links to a
-      // different board mid-stream. We only re-snap on notifies that match
-      // the current link OR when the link is null (so a brand-new link
-      // surfaces here without the user having to reload).
-      let currentLinkId: string | null = initial.link?.id ?? null;
-
-      const onNotify = (payload: string) => {
-        if (currentLinkId !== null && payload !== currentLinkId) return;
-        writeSnapshot()
-          .then((next) => {
-            currentLinkId = next.link?.id ?? null;
-          })
-          .catch((err: unknown) => {
+      let writeChain: Promise<void> = Promise.resolve();
+      const enqueueSnapshot = () => {
+        writeChain = writeChain.then(async () => {
+          try {
+            const snap = await loadSnapshot();
+            await sse.writeSSE({
+              event: "snapshot",
+              data: JSON.stringify(snap),
+            });
+          } catch (err) {
             console.error("[kanban-sse] snapshot failed", { id, err });
-          });
+          }
+        });
+        return writeChain;
       };
-      const sub = await deps.pg.listen(KANBAN_NOTIFY_CHANNEL, onNotify);
 
-      // When unlinked, also subscribe so we hear the next link's first notify.
-      // pg.listen is for the channel as a whole; the filter above handles
-      // the targeting.
+      const onNotify = (raw: string) => {
+        // Payload is JSON: { projectId, linkId }. Filter by projectId so
+        // unrelated projects' notifies don't trigger a snapshot here.
+        let payload: KanbanNotify | null = null;
+        try {
+          payload = JSON.parse(raw) as KanbanNotify;
+        } catch {
+          return;
+        }
+        if (!payload || payload.projectId !== id) return;
+        void enqueueSnapshot();
+      };
 
       const heartbeat = setInterval(() => {
         sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
       }, 15_000);
 
+      let sub: { unlisten: () => Promise<void> } | null = null;
+      try {
+        await enqueueSnapshot();
+        sub = await deps.pg.listen(KANBAN_NOTIFY_CHANNEL, onNotify);
+      } catch (err) {
+        clearInterval(heartbeat);
+        if (sub) await sub.unlisten().catch(() => undefined);
+        throw err;
+      }
+
       sse.onAbort(async () => {
         clearInterval(heartbeat);
-        await sub.unlisten();
+        if (sub) await sub.unlisten().catch(() => undefined);
       });
     });
   });
@@ -401,7 +478,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
         octokit,
       );
-      notifyKanbanLink(deps.pg, link.id);
+      notifyKanbanLink(deps.pg, id, link.id);
       const fresh = await deps.db.query.projectV2Links.findFirst({
         where: eq(projectV2Links.id, link.id),
       });

@@ -239,6 +239,7 @@ function LinkedBoard({
               <Column
                 key={col.optionId}
                 projectId={projectId}
+                projectRepo={data.projectRepo}
                 option={col}
                 items={grouped.get(col.optionId) ?? []}
               />
@@ -247,6 +248,7 @@ function LinkedBoard({
                 even when no items are sitting there. */}
             <Column
               projectId={projectId}
+              projectRepo={data.projectRepo}
               option={{
                 optionId: NO_STATUS_COLUMN_ID,
                 name: "No status",
@@ -266,10 +268,12 @@ function Column({
   option,
   items,
   projectId,
+  projectRepo,
 }: {
   option: KanbanStatusOption;
   items: KanbanItem[];
   projectId: string;
+  projectRepo: { owner: string; name: string } | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: option.optionId });
   return (
@@ -298,7 +302,12 @@ function Column({
           </div>
         ) : (
           items.map((it) => (
-            <KanbanCard key={it.id} item={it} projectId={projectId} />
+            <KanbanCard
+              key={it.id}
+              item={it}
+              projectId={projectId}
+              projectRepo={projectRepo}
+            />
           ))
         )}
       </div>

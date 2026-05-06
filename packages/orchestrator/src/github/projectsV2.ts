@@ -579,6 +579,9 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
   // Issue + PullRequest carry assignees + labels; DraftIssue does not.
   const hasAssignableContent =
     c?.__typename === "Issue" || c?.__typename === "PullRequest";
+  // Note: GitHub GraphQL exposes the user as `databaseId`; we store it under
+  // `id` to match the existing `issues.assignees` shape in our DB so the
+  // frontend can share render helpers between Issues and Kanban tabs.
   const assignees = hasAssignableContent
     ? (c.assignees?.nodes ?? [])
         .filter(

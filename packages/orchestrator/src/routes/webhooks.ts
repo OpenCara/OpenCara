@@ -336,7 +336,7 @@ async function handleProjectsV2Event(
       // keep their tabs visible (empty state); users can pick a new board.
       for (const link of links) {
         await deps.db.delete(projectV2Links).where(eq(projectV2Links.id, link.id));
-        notifyKanbanLink(deps.pg, link.id);
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
       return;
     }
@@ -352,7 +352,7 @@ async function handleProjectsV2Event(
           { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
           octokit,
         );
-        notifyKanbanLink(deps.pg, link.id);
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
     }
     return;
@@ -369,7 +369,7 @@ async function handleProjectsV2Event(
     if (payload.action === "deleted") {
       for (const link of links) {
         await deleteItem(deps.db, link.id, itemNodeId);
-        notifyKanbanLink(deps.pg, link.id);
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
       return;
     }
@@ -388,13 +388,13 @@ async function handleProjectsV2Event(
       // from every linked mirror.
       for (const link of links) {
         await deleteItem(deps.db, link.id, itemNodeId);
-        notifyKanbanLink(deps.pg, link.id);
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
       return;
     }
     for (const link of links) {
       await upsertItem(deps.db, link.id, snapshot);
-      notifyKanbanLink(deps.pg, link.id);
+      notifyKanbanLink(deps.pg, link.projectId, link.id);
     }
   }
 }
