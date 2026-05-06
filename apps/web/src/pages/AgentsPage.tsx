@@ -51,10 +51,20 @@ const ANY_DEVICE = "__any" as const;
 // form. Kept short — operators read them while authoring the agent.
 const KIND_HINTS: Record<
   AgentKind,
-  { label: string; envHint: string; argsPlaceholder: string; argsHint: string }
+  {
+    label: string;
+    /** What the dispatcher runs by default for this kind. Shown as the
+     *  placeholder of the "Command" field so operators can see what
+     *  they're overriding. Custom has no default. */
+    defaultCommand: string | null;
+    envHint: string;
+    argsPlaceholder: string;
+    argsHint: string;
+  }
 > = {
   claude: {
     label: "Claude Code",
+    defaultCommand: "claude",
     envHint:
       "Set ANTHROPIC_API_KEY here, or run `claude auth login` once on the device.",
     argsPlaceholder: "(usually empty — claude needs no extras)",
@@ -63,6 +73,7 @@ const KIND_HINTS: Record<
   },
   codex: {
     label: "Codex (OpenAI)",
+    defaultCommand: "codex",
     envHint:
       "Set OPENAI_API_KEY here, or run `codex login --with-api-key` once on the device.",
     argsPlaceholder: "(usually empty)",
@@ -71,6 +82,7 @@ const KIND_HINTS: Record<
   },
   opencode: {
     label: "opencode",
+    defaultCommand: "opencode",
     envHint:
       "Set the provider key (ANTHROPIC_API_KEY / OPENAI_API_KEY / …) for the model your opencode config picks.",
     argsPlaceholder: "(usually empty)",
@@ -79,6 +91,7 @@ const KIND_HINTS: Record<
   },
   pi: {
     label: "pi (pi-coding-agent)",
+    defaultCommand: "pi",
     envHint:
       "Set the provider's *_API_KEY (e.g. KIMI_API_KEY, MINIMAX_CN_API_KEY) for the model you select via --provider/--model.",
     argsPlaceholder: "--provider kimi-coding --model kimi-k2-thinking",
@@ -87,11 +100,15 @@ const KIND_HINTS: Record<
   },
   custom: {
     label: "Custom (no resume)",
+    defaultCommand: null,
     envHint: "Set whatever your command needs.",
     argsPlaceholder: "node /path/to/script.mjs --foo bar",
     argsHint: "Full shell-style invocation. No conversation resume across runs.",
   },
 };
+
+const COMMAND_OVERRIDE_HINT =
+  "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
 
 const KIND_ORDER: AgentKind[] = ["claude", "codex", "opencode", "pi", "custom"];
 
@@ -225,7 +242,12 @@ function NewAgentCard() {
   // the default to `custom` would silently disable it without making
   // the dropdown's value visible. (`custom` stays one click away.)
   const [kind, setKind] = useState<AgentKind>("claude");
-  const [commandOrArgs, setCommandOrArgs] = useState("");
+  // For named kinds: optional binary override (empty = adapter default,
+  // shown as placeholder). For custom: the full invocation (required).
+  const [command, setCommand] = useState("");
+  // Operator extras for named kinds (e.g. `--provider X --model Y` for
+  // pi). Hidden for custom (extras are part of the Command field).
+  const [extraArgs, setExtraArgs] = useState("");
   const [envText, setEnvText] = useState("");
   const [hostId, setHostId] = useState<string>(ANY_DEVICE);
   const devicesQ = useQuery(devicesQuery());
@@ -236,17 +258,17 @@ function NewAgentCard() {
   // into this draft form (multi-line replies are flattened so the input keeps
   // working as a single line).
   useRegisterChatAction("command", (text) =>
-    setCommandOrArgs(text.trim().split(/\r?\n/).join(" ")),
+    setCommand(text.trim().split(/\r?\n/).join(" ")),
   );
   useRegisterChatAction("agent-env", (text) => setEnvText(text.trim()));
 
   const env = parseEnv(envText);
   const hint = KIND_HINTS[kind];
   const isCustom = kind === "custom";
-  // For kind=custom, the field below is the full command and is required.
-  // For named kinds, it's optional extras (the adapter handles the base
-  // invocation).
-  const canSave = name.trim().length > 0 && (!isCustom || commandOrArgs.trim().length > 0);
+  // For kind=custom, the Command field holds the full invocation and is
+  // required. For named kinds, both Command (override) and Extra args are
+  // optional — the adapter handles the base invocation.
+  const canSave = name.trim().length > 0 && (!isCustom || command.trim().length > 0);
 
   return (
     <Card>
@@ -278,19 +300,46 @@ function NewAgentCard() {
         </div>
         <div>
           <Label htmlFor="new-agent-kind">Kind</Label>
-          <KindPicker id="new-agent-kind" value={kind} onChange={setKind} />
+          <KindPicker
+            id="new-agent-kind"
+            value={kind}
+            onChange={(next) => {
+              // Switching kind clears both fields — content shaped for
+              // a different CLI almost never carries over.
+              if (next !== kind) {
+                setCommand("");
+                setExtraArgs("");
+              }
+              setKind(next);
+            }}
+          />
         </div>
         <div>
-          <Label htmlFor="new-agent-command">{isCustom ? "Command" : "Extra args"}</Label>
+          <Label htmlFor="new-agent-command">Command</Label>
           <Input
             id="new-agent-command"
-            placeholder={hint.argsPlaceholder}
-            value={commandOrArgs}
-            onChange={(e) => setCommandOrArgs(e.target.value)}
+            placeholder={isCustom ? hint.argsPlaceholder : hint.defaultCommand ?? ""}
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
             className="font-mono text-xs"
           />
-          <p className="mt-1 text-xs text-muted-foreground">{hint.argsHint}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isCustom ? hint.argsHint : COMMAND_OVERRIDE_HINT}
+          </p>
         </div>
+        {!isCustom && (
+          <div>
+            <Label htmlFor="new-agent-extra-args">Extra args</Label>
+            <Input
+              id="new-agent-extra-args"
+              placeholder={hint.argsPlaceholder}
+              value={extraArgs}
+              onChange={(e) => setExtraArgs(e.target.value)}
+              className="font-mono text-xs"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">{hint.argsHint}</p>
+          </div>
+        )}
         <div>
           <Label htmlFor="new-agent-env">Env vars (KEY=value, one per line)</Label>
           <Textarea
@@ -315,9 +364,15 @@ function NewAgentCard() {
                 {
                   name: name.trim(),
                   kind,
+                  // Custom: command is required + holds the full invocation.
+                  // Named: command is the optional binary override; extras
+                  // go into a separate field.
                   ...(isCustom
-                    ? { command: commandOrArgs.trim() }
-                    : { extraArgs: commandOrArgs.trim() }),
+                    ? { command: command.trim() }
+                    : {
+                        command: command.trim(),
+                        extraArgs: extraArgs.trim(),
+                      }),
                   env,
                   hostId: hostId === ANY_DEVICE ? null : hostId,
                 },
@@ -325,7 +380,8 @@ function NewAgentCard() {
                   onSuccess: () => {
                     setName("");
                     setKind("claude");
-                    setCommandOrArgs("");
+                    setCommand("");
+                    setExtraArgs("");
                     setEnvText("");
                     setHostId(ANY_DEVICE);
                   },
@@ -346,10 +402,21 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const [testOpen, setTestOpen] = useState(false);
   const [name, setName] = useState(agent.name);
   const [kind, setKind] = useState<AgentKind>(agent.kind);
-  // For kind=custom this holds the full command; for named kinds, it's
-  // the operator's `agent.args` joined back to a shell-style string.
-  const [commandOrArgs, setCommandOrArgs] = useState(
-    agent.kind === "custom" ? joinCommand(agent) : agent.args.join(" "),
+  // For kind=custom: full invocation, joinCommand stitches command+args
+  // back into a shell-style string. For named kinds: just the binary
+  // override (agent.command), shown empty when it equals the kind label
+  // so the placeholder reads as the default.
+  const [command, setCommand] = useState(
+    agent.kind === "custom"
+      ? joinCommand(agent)
+      : agent.command === agent.kind
+        ? ""
+        : agent.command,
+  );
+  // Operator extras for named kinds (named-kind args column). Hidden
+  // for custom — extras are part of the Command field there.
+  const [extraArgs, setExtraArgs] = useState(
+    agent.kind === "custom" ? "" : agent.args.join(" "),
   );
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
@@ -362,7 +429,14 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const reset = () => {
     setName(agent.name);
     setKind(agent.kind);
-    setCommandOrArgs(agent.kind === "custom" ? joinCommand(agent) : agent.args.join(" "));
+    setCommand(
+      agent.kind === "custom"
+        ? joinCommand(agent)
+        : agent.command === agent.kind
+          ? ""
+          : agent.command,
+    );
+    setExtraArgs(agent.kind === "custom" ? "" : agent.args.join(" "));
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
   };
@@ -412,14 +486,17 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                         patch: {
                           name: name.trim(),
                           kind,
-                          // For kind=custom, the command field tokenizes
-                          // into command+args server-side. For named
-                          // kinds, the field carries extra args; the
-                          // server stores `kind` as the placeholder
-                          // command and tokenizes extras into args.
+                          // For kind=custom: command field is the full
+                          // invocation (server tokenizes into command+args).
+                          // For named kinds: command is the optional binary
+                          // override (empty = adapter default), and
+                          // extraArgs goes into agents.args.
                           ...(isCustom
-                            ? ({ command: commandOrArgs.trim() } as Record<string, string>)
-                            : ({ extraArgs: commandOrArgs.trim() } as Record<string, string>)),
+                            ? ({ command: command.trim() } as Record<string, string>)
+                            : ({
+                                command: command.trim(),
+                                extraArgs: extraArgs.trim(),
+                              } as Record<string, string>)),
                           env: parseEnv(envText),
                           hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
@@ -479,24 +556,46 @@ function AgentCard({ agent }: { agent: AgentRow }) {
               <KindPicker
                 value={kind}
                 onChange={(next) => {
-                  // Switching kind clears the args field — the previous
-                  // text is shaped for a different CLI and almost never
-                  // makes sense to carry over.
-                  if (next !== kind) setCommandOrArgs("");
+                  // Switching kind clears both fields — content shaped
+                  // for a different CLI almost never carries over.
+                  if (next !== kind) {
+                    setCommand("");
+                    setExtraArgs("");
+                  }
                   setKind(next);
                 }}
               />
             </div>
             <div>
-              <Label>{kind === "custom" ? "Command" : "Extra args"}</Label>
+              <Label>Command</Label>
               <Input
-                value={commandOrArgs}
-                onChange={(e) => setCommandOrArgs(e.target.value)}
-                placeholder={KIND_HINTS[kind].argsPlaceholder}
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={
+                  kind === "custom"
+                    ? KIND_HINTS.custom.argsPlaceholder
+                    : KIND_HINTS[kind].defaultCommand ?? ""
+                }
                 className="font-mono text-xs"
               />
-              <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].argsHint}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {kind === "custom" ? KIND_HINTS.custom.argsHint : COMMAND_OVERRIDE_HINT}
+              </p>
             </div>
+            {kind !== "custom" && (
+              <div>
+                <Label>Extra args</Label>
+                <Input
+                  value={extraArgs}
+                  onChange={(e) => setExtraArgs(e.target.value)}
+                  placeholder={KIND_HINTS[kind].argsPlaceholder}
+                  className="font-mono text-xs"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {KIND_HINTS[kind].argsHint}
+                </p>
+              </div>
+            )}
             <div>
               <Label>Env (KEY=value)</Label>
               <Textarea

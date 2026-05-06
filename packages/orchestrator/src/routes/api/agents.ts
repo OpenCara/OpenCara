@@ -40,8 +40,11 @@ export function agentRoutes(deps: AgentRoutesDeps) {
 
     // For kind=custom, we tokenize a free-form Command field as before.
     // For named kinds, the adapter builds the invocation at dispatch
-    // time — the row's `command` is the kind label (informational only)
-    // and `args` carries operator extras (e.g. `--provider X --model Y`
+    // time — the row's `command` is an OPTIONAL binary override (empty
+    // = use the adapter's default like "claude"; populated with e.g.
+    // "npx @anthropic-ai/claude-code@latest" replaces the binary at
+    // dispatch — see `tokenizeShellLike` in flows/nodeRunners.ts).
+    // `args` carries operator extras (e.g. `--provider X --model Y`
     // for pi). The UI sends `extraArgs` as a free-form string that we
     // tokenize the same way as a Command.
     let command: string;
@@ -54,7 +57,10 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       ({ command, args } = tokenizeCommand(rawCommand));
     } else {
       if (!name) return c.json({ error: "name required" }, 400);
-      command = kind;
+      const rawOverride = typeof body.command === "string" ? body.command.trim() : "";
+      // Empty / kind label = no override (dispatch uses adapter default).
+      // Anything else gets stored verbatim and tokenized at dispatch.
+      command = rawOverride.length > 0 ? rawOverride : kind;
       args = parseExtraArgs(body);
     }
 
@@ -145,8 +151,13 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       updates.command = command;
       updates.args = args;
     } else if (effectiveKind && effectiveKind !== "custom") {
-      updates.command = effectiveKind;
-      if (body.extraArgs !== undefined || body.command !== undefined) {
+      // Named kind: body.command is the binary override (empty = kind
+      // default). Stored verbatim; nodeRunners tokenizes at dispatch.
+      if (typeof body.command === "string") {
+        const trimmed = body.command.trim();
+        updates.command = trimmed.length > 0 ? trimmed : effectiveKind;
+      }
+      if (body.extraArgs !== undefined) {
         updates.args = parseExtraArgs(body);
       }
     }

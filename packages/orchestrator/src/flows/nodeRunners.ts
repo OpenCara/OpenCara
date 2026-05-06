@@ -488,6 +488,21 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     invArgs = inv.args;
     preassignedSessionId = inv.preassignedSessionId;
     if (inv.extraEnv) Object.assign(env, inv.extraEnv);
+
+    // Operator can override the binary that runs the kind via
+    // `agent.command`. The default is the kind label (e.g. "claude")
+    // — which already matches `inv.command`, so the override is a
+    // no-op. Setting it to e.g. "npx @anthropic-ai/claude-code@latest"
+    // re-tokenizes here: the first token replaces inv.command, the
+    // rest are spliced BEFORE the adapter's args (so subcommands like
+    // codex's "exec" still come AFTER the override). This is how a
+    // user can pin a specific package version without changing the
+    // adapter or the schema.
+    const overrideTokens = tokenizeShellLike(agent.command);
+    if (overrideTokens.length > 0 && overrideTokens[0] !== inv.command) {
+      invCommand = overrideTokens[0]!;
+      invArgs = [...overrideTokens.slice(1), ...inv.args];
+    }
   }
 
   const result = await dispatchAgentRun(ctx, {
@@ -1079,6 +1094,46 @@ function collectTemplateVars(ctx: NodeRunCtx): Record<string, string> {
   if (ctx.prContext) Object.assign(vars, ctx.prContext.envExtras);
   if (ctx.issueContext) Object.assign(vars, ctx.issueContext.envExtras);
   return vars;
+}
+
+// Same shell-style tokenizer as routes/api/agents.ts (whitespace
+// separates, single/double quotes group). Inlined here to avoid a
+// cross-cutting import; if a third caller appears, lift to shared.
+function tokenizeShellLike(input: string): string[] {
+  const tokens: string[] = [];
+  let buf = "";
+  let quote: '"' | "'" | null = null;
+  let inToken = false;
+  const flush = () => {
+    if (inToken) {
+      tokens.push(buf);
+      buf = "";
+      inToken = false;
+    }
+  };
+  for (const ch of input) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else {
+        buf += ch;
+        inToken = true;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      inToken = true;
+      continue;
+    }
+    if (ch === " " || ch === "\t" || ch === "\n") {
+      flush();
+      continue;
+    }
+    buf += ch;
+    inToken = true;
+  }
+  flush();
+  return tokens;
 }
 
 function renderTemplate(tmpl: string, vars: Record<string, string>, where: string): string {
