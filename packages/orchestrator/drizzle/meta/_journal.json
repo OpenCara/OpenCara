@@ -127,6 +127,13 @@
       "when": 1777380000000,
       "tag": "0017_kanban_followups",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777390000000,
+      "tag": "0018_kanban_card_details",
+      "breakpoints": true
     }
   ]
 }

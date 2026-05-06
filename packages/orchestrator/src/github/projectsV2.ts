@@ -50,6 +50,9 @@ export interface ProjectV2ItemSnapshot {
   contentState: string | null;
   statusOptionId: string | null;
   isArchived: boolean;
+  // Card detail caches. Drafts have neither — both stay [].
+  assignees: { login: string; id: number }[];
+  labels: { name: string; color: string }[];
   updatedAt: string | null;
 }
 
@@ -189,6 +192,13 @@ interface FetchItemsResponse {
   } | null;
 }
 
+interface RawAssignees {
+  nodes: Array<{ login: string; databaseId: number }> | null;
+}
+interface RawLabels {
+  nodes: Array<{ name: string; color: string }> | null;
+}
+
 interface RawItem {
   id: string;
   type: string; // "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE" | "REDACTED"
@@ -206,6 +216,8 @@ interface RawItem {
         title: string;
         url: string;
         state: string;
+        assignees?: RawAssignees | null;
+        labels?: RawLabels | null;
       }
     | {
         __typename: "PullRequest";
@@ -214,6 +226,8 @@ interface RawItem {
         title: string;
         url: string;
         state: string;
+        assignees?: RawAssignees | null;
+        labels?: RawLabels | null;
       }
     | {
         __typename: "DraftIssue";
@@ -307,6 +321,8 @@ export async function fetchProjectSnapshot(
                   title
                   url
                   state
+                  assignees(first: 5) { nodes { login databaseId } }
+                  labels(first: 10) { nodes { name color } }
                 }
                 ... on PullRequest {
                   id
@@ -314,6 +330,8 @@ export async function fetchProjectSnapshot(
                   title
                   url
                   state
+                  assignees(first: 5) { nodes { login databaseId } }
+                  labels(first: 10) { nodes { name color } }
                 }
                 ... on DraftIssue {
                   id
@@ -385,8 +403,16 @@ export async function fetchItemSnapshot(
           }
           content {
             __typename
-            ... on Issue { id number title url state }
-            ... on PullRequest { id number title url state }
+            ... on Issue {
+              id number title url state
+              assignees(first: 5) { nodes { login databaseId } }
+              labels(first: 10) { nodes { name color } }
+            }
+            ... on PullRequest {
+              id number title url state
+              assignees(first: 5) { nodes { login databaseId } }
+              labels(first: 10) { nodes { name color } }
+            }
             ... on DraftIssue { id title }
           }
         }
@@ -423,6 +449,8 @@ export async function upsertItem(
       contentState: it.contentState,
       statusOptionId: it.statusOptionId ?? null,
       isArchived: it.isArchived,
+      assignees: it.assignees,
+      labels: it.labels,
       updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
     })
     .onConflictDoUpdate({
@@ -436,6 +464,8 @@ export async function upsertItem(
         contentState: it.contentState,
         statusOptionId: it.statusOptionId ?? null,
         isArchived: it.isArchived,
+        assignees: it.assignees,
+        labels: it.labels,
         updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
       },
     });
@@ -546,6 +576,29 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
   const contentState =
     c && (c.__typename === "Issue" || c.__typename === "PullRequest") ? c.state : null;
 
+  // Issue + PullRequest carry assignees + labels; DraftIssue does not.
+  const hasAssignableContent =
+    c?.__typename === "Issue" || c?.__typename === "PullRequest";
+  // Note: GitHub GraphQL exposes the user as `databaseId`; we store it under
+  // `id` to match the existing `issues.assignees` shape in our DB so the
+  // frontend can share render helpers between Issues and Kanban tabs.
+  const assignees = hasAssignableContent
+    ? (c.assignees?.nodes ?? [])
+        .filter(
+          (a): a is { login: string; databaseId: number } =>
+            typeof a.login === "string" && typeof a.databaseId === "number",
+        )
+        .map((a) => ({ login: a.login, id: a.databaseId }))
+    : [];
+  const labels = hasAssignableContent
+    ? (c.labels?.nodes ?? [])
+        .filter(
+          (l): l is { name: string; color: string } =>
+            typeof l.name === "string" && typeof l.color === "string",
+        )
+        .map((l) => ({ name: l.name, color: l.color }))
+    : [];
+
   return {
     itemNodeId: raw.id,
     kind,
@@ -556,6 +609,8 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
     contentState,
     statusOptionId: raw.fieldValueByName?.optionId ?? null,
     isArchived: raw.isArchived,
+    assignees,
+    labels,
     updatedAt: raw.updatedAt,
   };
 }

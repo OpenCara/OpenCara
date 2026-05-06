@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
+import type { Sql } from "postgres";
 import type { Db } from "../db/client.js";
 import {
   githubInstallations,
@@ -17,10 +18,12 @@ import {
   fetchItemSnapshot,
   upsertItem,
 } from "../github/projectsV2.js";
+import { notifyKanbanLink } from "./api/kanban.js";
 import type { FlowEngine } from "../flows/engine.js";
 
 interface WebhookDeps {
   db: Db;
+  pg: Sql;
   app: GithubAppClient;
   flowEngine?: FlowEngine;
 }
@@ -333,6 +336,7 @@ async function handleProjectsV2Event(
       // keep their tabs visible (empty state); users can pick a new board.
       for (const link of links) {
         await deps.db.delete(projectV2Links).where(eq(projectV2Links.id, link.id));
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
       return;
     }
@@ -348,6 +352,7 @@ async function handleProjectsV2Event(
           { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
           octokit,
         );
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
     }
     return;
@@ -364,6 +369,7 @@ async function handleProjectsV2Event(
     if (payload.action === "deleted") {
       for (const link of links) {
         await deleteItem(deps.db, link.id, itemNodeId);
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
       return;
     }
@@ -382,11 +388,13 @@ async function handleProjectsV2Event(
       // from every linked mirror.
       for (const link of links) {
         await deleteItem(deps.db, link.id, itemNodeId);
+        notifyKanbanLink(deps.pg, link.projectId, link.id);
       }
       return;
     }
     for (const link of links) {
       await upsertItem(deps.db, link.id, snapshot);
+      notifyKanbanLink(deps.pg, link.projectId, link.id);
     }
   }
 }
