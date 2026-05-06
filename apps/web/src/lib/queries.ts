@@ -704,6 +704,46 @@ export function useRefreshKanban(projectId: string) {
   });
 }
 
+export function useSetItemStatus(projectId: string) {
+  const qc = useQueryClient();
+  const queryKey = ["projects", projectId, "kanban"] as const;
+  return useMutation({
+    mutationFn: (vars: { itemNodeId: string; statusOptionId: string | null }) =>
+      api.patch<{ item: KanbanItem }>(
+        `/api/projects/${projectId}/kanban/items/${encodeURIComponent(
+          vars.itemNodeId,
+        )}`,
+        { statusOptionId: vars.statusOptionId },
+      ),
+    // Optimistic update: rewrite the matching item's statusOptionId in the
+    // cached board snapshot so the card jumps to the new column the moment
+    // the user drops it. If the PATCH fails, restore the snapshot.
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey, exact: true });
+      const prev = qc.getQueryData<KanbanBoardData>(queryKey);
+      if (prev) {
+        qc.setQueryData<KanbanBoardData>(queryKey, {
+          ...prev,
+          items: prev.items.map((it) =>
+            it.githubItemNodeId === vars.itemNodeId
+              ? { ...it, statusOptionId: vars.statusOptionId }
+              : it,
+          ),
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(queryKey, ctx.prev);
+    },
+    onSettled: () => {
+      // Webhook is authoritative — refetch so any concurrent change made by
+      // someone else on GitHub also reconciles.
+      qc.invalidateQueries({ queryKey, exact: true });
+    },
+  });
+}
+
 export function useLogout() {
   const qc = useQueryClient();
   return useMutation({

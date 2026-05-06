@@ -1,4 +1,6 @@
 import { ExternalLink } from "lucide-react";
+import { useDraggable } from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 import { Badge } from "@/components/ui/badge";
 import type { KanbanItem } from "@/lib/queries";
 
@@ -12,6 +14,12 @@ const STATE_VARIANT: Record<
 };
 
 export function KanbanCard({ item }: { item: KanbanItem }) {
+  // Drag handle covers the whole card. The ExternalLink anchor inside has
+  // its own click handler; the DndContext's PointerSensor activationDistance
+  // (5px) keeps small clicks from being mistaken for drags.
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({ id: item.githubItemNodeId });
+
   const state = item.contentState?.toUpperCase() ?? null;
   const stateLabel =
     item.kind === "draft"
@@ -21,8 +29,20 @@ export function KanbanCard({ item }: { item: KanbanItem }) {
         : "—";
   const variant = state ? (STATE_VARIANT[state] ?? "secondary") : "outline";
 
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    opacity: isDragging ? 0.4 : undefined,
+    cursor: isDragging ? "grabbing" : "grab",
+  };
+
   return (
-    <div className="rounded-md border bg-card p-3 shadow-sm transition-colors hover:bg-accent/40">
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="touch-none rounded-md border bg-card p-3 shadow-sm transition-colors hover:bg-accent/40"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium leading-snug">
@@ -42,6 +62,10 @@ export function KanbanCard({ item }: { item: KanbanItem }) {
             rel="noreferrer"
             className="text-muted-foreground hover:text-foreground"
             title="Open on GitHub"
+            // Stop the pointerdown from reaching the drag listeners — without
+            // this the icon never gets a clean click because the sensor
+            // grabs every pointerdown on the card.
+            onPointerDown={(e) => e.stopPropagation()}
           >
             <ExternalLink className="size-3.5" />
           </a>
