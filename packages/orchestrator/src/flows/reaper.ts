@@ -33,10 +33,8 @@ export async function reapOrphanedRuns(
     .where(inArray(flowRunSteps.status, ["pending", "running"]))
     .returning({ id: flowRunSteps.id });
 
-  // flow_runs: cancelled (we didn't fail; the system terminated it).
-  // cancel_reason='abandoned' so the Flow runs page can distinguish these
-  // from trigger-skip noise — abandoned runs represent real lost work and
-  // stay visible.
+  // flow_runs: cancelled. cancel_reason='abandoned' so the Flow runs page
+  // keeps these visible (vs. trigger_skip noise that gets filtered out).
   const flow = await db
     .update(flowRuns)
     .set({

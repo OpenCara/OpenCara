@@ -45,10 +45,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
     });
     if (!flow) return c.json({ error: "not found" }, 404);
-    // Hide trigger-skip noise unless caller opts in. Each inbound webhook
-    // fans out to (project flow × event), so a single pull_request webhook
-    // generates one cancelled-with-trigger-skip row per flow whose trigger
-    // doesn't match — that's most of the rows on this page.
+    // Hide trigger-skip rows by default; ?includeSkipped=true shows them.
+    // Webhook fan-out to (project flow × event) makes these the bulk of
+    // the rows otherwise.
     const includeSkipped = c.req.query("includeSkipped") === "true";
     const runs = await deps.db.query.flowRuns.findMany({
       where: includeSkipped
@@ -336,8 +335,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   r.get("/projects/:id/flow-runs", auth, async (c) => {
     const projectId = c.req.param("id");
     const limit = clampLimit(c.req.query("limit"));
-    // See /flows/:slug — trigger-skip rows are noise from the webhook
-    // fan-out to (flow × event); hide unless ?includeSkipped=true.
+    // Hide trigger-skip rows by default; ?includeSkipped=true shows them.
     const includeSkipped = c.req.query("includeSkipped") === "true";
     const rows = await deps.db.query.flowRuns.findMany({
       where: includeSkipped
