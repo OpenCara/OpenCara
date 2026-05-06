@@ -474,7 +474,11 @@ export class FlowEngine {
         id: installation.id,
         githubInstallationId: installation.githubInstallationId,
       },
-      project: { owner: project.owner, name: project.name },
+      project: {
+        owner: project.owner,
+        name: project.name,
+        githubRepoId: project.githubRepoId,
+      },
       event,
       prContext,
       issueContext,
