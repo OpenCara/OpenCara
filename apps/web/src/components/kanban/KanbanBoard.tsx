@@ -1,11 +1,23 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import {
   kanbanQuery,
   useRefreshKanban,
+  useSetItemStatus,
   useUnlinkKanban,
   type KanbanBoardData,
   type KanbanItem,
@@ -14,6 +26,10 @@ import {
 import { formatRelative } from "@/lib/format";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanLinkPicker } from "./KanbanLinkPicker";
+
+// Sentinel column id for items that have no Status set. Mirrors the synthetic
+// "No status" column in the UI; mapped to `null` when sent to the API.
+const NO_STATUS_COLUMN_ID = "__none";
 
 export function KanbanTab({ projectId }: { projectId: string }) {
   const q = useQuery(kanbanQuery(projectId));
@@ -42,7 +58,33 @@ function LinkedBoard({
 }) {
   const refresh = useRefreshKanban(projectId);
   const unlink = useUnlinkKanban(projectId);
+  const setStatus = useSetItemStatus(projectId);
   const link = data.link!;
+
+  // PointerSensor with a small activation distance so click-to-open-on-GitHub
+  // (the ExternalLink icon inside the card) still works without a drag start.
+  // KeyboardSensor uses sortableKeyboardCoordinates so column-to-column
+  // navigation actually moves cards — without it, the default coordinate
+  // getter only handles within-list reordering and arrow keys feel inert.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+    const targetColumnId = String(over.id);
+    const itemNodeId = String(active.id);
+    const item = data.items.find((it) => it.githubItemNodeId === itemNodeId);
+    if (!item) return;
+    const nextStatusOptionId =
+      targetColumnId === NO_STATUS_COLUMN_ID ? null : targetColumnId;
+    if (item.statusOptionId === nextStatusOptionId) return;
+    setStatus.mutate({ itemNodeId, statusOptionId: nextStatusOptionId });
+  };
 
   // Group items by status_option_id. Items with a null/unknown option go into
   // a synthetic "No status" column so they're still visible — Projects v2
@@ -135,32 +177,43 @@ function LinkedBoard({
         </div>
       )}
 
+      {setStatus.error && (
+        <div className="text-xs text-destructive">
+          Drag failed:{" "}
+          {setStatus.error instanceof Error
+            ? setStatus.error.message
+            : String(setStatus.error)}
+        </div>
+      )}
+
       {orderedColumns.length === 0 ? (
         <div className="rounded-md border bg-muted/30 p-6 text-sm text-muted-foreground">
           This board has no Status field options. Add some on GitHub and click
           Refresh.
         </div>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-2">
-          {orderedColumns.map((col) => (
-            <Column
-              key={col.optionId}
-              option={col}
-              items={grouped.get(col.optionId) ?? []}
-            />
-          ))}
-          {noStatusItems.length > 0 && (
+        <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {orderedColumns.map((col) => (
+              <Column
+                key={col.optionId}
+                option={col}
+                items={grouped.get(col.optionId) ?? []}
+              />
+            ))}
+            {/* Always rendered — it's a valid drop target for "clear Status",
+                even when no items are sitting there. */}
             <Column
               option={{
-                optionId: "__none",
+                optionId: NO_STATUS_COLUMN_ID,
                 name: "No status",
                 color: "GRAY",
                 position: 999,
               }}
               items={noStatusItems}
             />
-          )}
-        </div>
+          </div>
+        </DndContext>
       )}
     </div>
   );
@@ -173,8 +226,15 @@ function Column({
   option: KanbanStatusOption;
   items: KanbanItem[];
 }) {
+  const { setNodeRef, isOver } = useDroppable({ id: option.optionId });
   return (
-    <div className="flex w-72 shrink-0 flex-col rounded-md border bg-muted/30">
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "flex w-72 shrink-0 flex-col rounded-md border bg-muted/30 transition-colors",
+        isOver && "border-primary bg-accent/40",
+      )}
+    >
       <div className="flex items-center justify-between border-b bg-background/50 px-3 py-2">
         <div className="flex items-center gap-2">
           <span
@@ -189,7 +249,7 @@ function Column({
       <div className="flex flex-col gap-2 p-2">
         {items.length === 0 ? (
           <div className="px-1 py-6 text-center text-xs text-muted-foreground">
-            Empty
+            {isOver ? "Drop here" : "Empty"}
           </div>
         ) : (
           items.map((it) => <KanbanCard key={it.id} item={it} />)

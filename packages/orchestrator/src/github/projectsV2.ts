@@ -1,12 +1,12 @@
-// GitHub Projects v2 GraphQL helpers — Phase 1 read-side only.
+// GitHub Projects v2 GraphQL helpers.
 //
 // Projects v2 lives entirely in GraphQL (the REST `projects` endpoints serve
 // the legacy v1 product). The Octokit returned by GithubAppClient.forInstallation
 // already supports `.graphql(query, vars)` with installation-scoped auth, so
 // no extra deps are needed here.
 //
-// Phase 2 will add `setItemStatus` (the updateProjectV2ItemFieldValue
-// mutation) for bidirectional drag.
+// Phase 1 implemented read-side helpers (list, snapshot, backfill, single-item
+// refresh). Phase 2 adds `setItemStatus` for bidirectional drag.
 
 import { ulid } from "ulid";
 import { and, eq } from "drizzle-orm";
@@ -439,6 +439,80 @@ export async function upsertItem(
         updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
       },
     });
+}
+
+interface SetItemStatusResponse {
+  updateProjectV2ItemFieldValue: {
+    projectV2Item: { id: string };
+  } | null;
+  // For the clearProjectV2ItemFieldValue path:
+  clearProjectV2ItemFieldValue?: {
+    projectV2Item: { id: string };
+  } | null;
+}
+
+/**
+ * Set or clear the Status (single-select) field on a Projects v2 item.
+ *
+ * GitHub splits set vs. clear into two distinct mutations:
+ *   - updateProjectV2ItemFieldValue with a singleSelectOptionId sets the value
+ *   - clearProjectV2ItemFieldValue clears it
+ * The "set to null" shape on update is not accepted, so route by `optionId`.
+ *
+ * Throws on GraphQL error so the route can surface the failure to the UI for
+ * optimistic rollback.
+ */
+export async function setItemStatus(
+  octokit: Octokit,
+  link: {
+    githubProjectNodeId: string;
+    statusFieldNodeId: string;
+  },
+  itemNodeId: string,
+  optionId: string | null,
+): Promise<void> {
+  if (optionId === null) {
+    const mutation = /* GraphQL */ `
+      mutation ClearStatus($projectId: ID!, $itemId: ID!, $fieldId: ID!) {
+        clearProjectV2ItemFieldValue(
+          input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId }
+        ) {
+          projectV2Item { id }
+        }
+      }
+    `;
+    await octokit.graphql<SetItemStatusResponse>(mutation, {
+      projectId: link.githubProjectNodeId,
+      itemId: itemNodeId,
+      fieldId: link.statusFieldNodeId,
+    });
+    return;
+  }
+  const mutation = /* GraphQL */ `
+    mutation SetStatus(
+      $projectId: ID!
+      $itemId: ID!
+      $fieldId: ID!
+      $optionId: String!
+    ) {
+      updateProjectV2ItemFieldValue(
+        input: {
+          projectId: $projectId
+          itemId: $itemId
+          fieldId: $fieldId
+          value: { singleSelectOptionId: $optionId }
+        }
+      ) {
+        projectV2Item { id }
+      }
+    }
+  `;
+  await octokit.graphql<SetItemStatusResponse>(mutation, {
+    projectId: link.githubProjectNodeId,
+    itemId: itemNodeId,
+    fieldId: link.statusFieldNodeId,
+    optionId,
+  });
 }
 
 /** Delete a mirrored item by (link, node id). Idempotent. */

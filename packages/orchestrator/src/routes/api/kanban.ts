@@ -1,18 +1,17 @@
-// Phase 1 of the Kanban tab: read-side API.
+// Kanban tab API.
 //
 // Routes (all under /api):
-//   GET    /projects/:id/kanban/projects   — discover boards on GitHub
-//   GET    /projects/:id/kanban/link       — current link for this opencara project
-//   PUT    /projects/:id/kanban/link       — link a Projects v2 board (triggers backfill)
-//   DELETE /projects/:id/kanban/link       — unlink (cascades to items)
-//   GET    /projects/:id/kanban            — read the local mirror, shaped for the UI
-//   POST   /projects/:id/kanban/refresh    — force a re-pull from GitHub
-//
-// The PATCH .../items/:itemNodeId mutation belongs to Phase 2.
+//   GET    /projects/:id/kanban/projects                — discover boards on GitHub
+//   GET    /projects/:id/kanban/link                    — current link for this opencara project
+//   PUT    /projects/:id/kanban/link                    — link a Projects v2 board (triggers backfill)
+//   DELETE /projects/:id/kanban/link                    — unlink (cascades to items)
+//   GET    /projects/:id/kanban                         — read the local mirror, shaped for the UI
+//   POST   /projects/:id/kanban/refresh                 — force a re-pull from GitHub
+//   PATCH  /projects/:id/kanban/items/:itemNodeId       — set Status field on a board item
 
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { eq, asc } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   githubInstallations,
@@ -26,6 +25,7 @@ import {
   backfillBoard,
   fetchProjectSnapshot,
   listAvailableProjects,
+  setItemStatus,
   upsertItem,
 } from "../../github/projectsV2.js";
 
@@ -180,6 +180,120 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       columns: link.statusOptions,
       items,
     });
+  });
+
+  // Phase 2: set the Status (single-select) field on a board item. The drag
+  // handler in the UI fires this with optimistic update + rollback. Body:
+  //   { statusOptionId: string | null }
+  // null clears the field; non-null must be one of link.statusOptions[*].optionId.
+  // Last-writer-wins: a webhook arriving after our update is authoritative,
+  // so we don't bother locking the local row.
+  r.patch("/projects/:id/kanban/items/:itemNodeId", auth, async (c) => {
+    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
+    const id = c.req.param("id");
+    const itemNodeId = c.req.param("itemNodeId");
+    if (!itemNodeId) return c.json({ error: "itemNodeId required" }, 400);
+
+    const body = (await c.req.json().catch(() => ({}))) as {
+      statusOptionId?: unknown;
+    };
+    let statusOptionId: string | null;
+    if (body.statusOptionId === null) {
+      statusOptionId = null;
+    } else if (typeof body.statusOptionId === "string" && body.statusOptionId) {
+      statusOptionId = body.statusOptionId;
+    } else {
+      return c.json(
+        { error: "statusOptionId (string or null) required" },
+        400,
+      );
+    }
+
+    const ctx = await loadProject(id);
+    if (!ctx) return c.json({ error: "project not found" }, 404);
+    const link = await deps.db.query.projectV2Links.findFirst({
+      where: eq(projectV2Links.projectId, id),
+    });
+    if (!link) return c.json({ error: "not linked" }, 404);
+
+    if (
+      statusOptionId !== null &&
+      !link.statusOptions.some((o) => o.optionId === statusOptionId)
+    ) {
+      return c.json(
+        { error: "statusOptionId not in link.statusOptions" },
+        400,
+      );
+    }
+
+    // Verify the item belongs to this link before mutating GitHub. Stops the
+    // PATCH route from being abused as a generic "set status on any node id"
+    // proxy by an authenticated user — they can only target items their
+    // project's mirror knows about.
+    const itemRow = await deps.db.query.projectV2Items.findFirst({
+      where: and(
+        eq(projectV2Items.projectV2LinkId, link.id),
+        eq(projectV2Items.githubItemNodeId, itemNodeId),
+      ),
+    });
+    if (!itemRow) return c.json({ error: "item not in this board" }, 404);
+
+    try {
+      const octokit = await deps.app.forInstallation(
+        ctx.installation.githubInstallationId,
+      );
+      await setItemStatus(
+        octokit,
+        {
+          githubProjectNodeId: link.githubProjectNodeId,
+          statusFieldNodeId: link.statusFieldNodeId,
+        },
+        itemNodeId,
+        statusOptionId,
+      );
+    } catch (err) {
+      console.error("[kanban] setItemStatus failed", {
+        id,
+        itemNodeId,
+        statusOptionId,
+        err,
+      });
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        502,
+      );
+    }
+
+    // Mutation succeeded on GitHub. Mirror the change locally so the UI
+    // doesn't have to wait for the webhook round-trip — but treat GitHub's
+    // success as the source of truth for this request. If the local DB
+    // write fails, we log it and still return success: the user's drag
+    // already took effect on GitHub, and the upcoming webhook (or a manual
+    // Refresh) will reconcile the mirror. Returning 5xx here would tell
+    // the client to roll back the optimistic move that's already
+    // authoritative on GitHub.
+    let fresh = itemRow;
+    try {
+      await deps.db
+        .update(projectV2Items)
+        .set({ statusOptionId, updatedAt: new Date() })
+        .where(eq(projectV2Items.id, itemRow.id));
+      const refreshed = await deps.db.query.projectV2Items.findFirst({
+        where: eq(projectV2Items.id, itemRow.id),
+      });
+      if (refreshed) fresh = refreshed;
+    } catch (err) {
+      console.error("[kanban] mirror update failed after GitHub success", {
+        id,
+        itemNodeId,
+        statusOptionId,
+        err,
+      });
+      // Hand back the pre-update row with the new statusOptionId synthesised
+      // in. The webhook will overwrite this once it lands.
+      fresh = { ...itemRow, statusOptionId };
+    }
+    return c.json({ item: fresh });
   });
 
   r.post("/projects/:id/kanban/refresh", auth, async (c) => {
