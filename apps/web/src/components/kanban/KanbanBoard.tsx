@@ -10,8 +10,10 @@ import {
   useDroppable,
   type DragEndEvent,
 } from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import {
   kanbanQuery,
   useRefreshKanban,
@@ -61,9 +63,14 @@ function LinkedBoard({
 
   // PointerSensor with a small activation distance so click-to-open-on-GitHub
   // (the ExternalLink icon inside the card) still works without a drag start.
+  // KeyboardSensor uses sortableKeyboardCoordinates so column-to-column
+  // navigation actually moves cards — without it, the default coordinate
+  // getter only handles within-list reordering and arrow keys feel inert.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -223,9 +230,10 @@ function Column({
   return (
     <div
       ref={setNodeRef}
-      className={`flex w-72 shrink-0 flex-col rounded-md border bg-muted/30 transition-colors ${
-        isOver ? "border-primary bg-accent/40" : ""
-      }`}
+      className={cn(
+        "flex w-72 shrink-0 flex-col rounded-md border bg-muted/30 transition-colors",
+        isOver && "border-primary bg-accent/40",
+      )}
     >
       <div className="flex items-center justify-between border-b bg-background/50 px-3 py-2">
         <div className="flex items-center gap-2">

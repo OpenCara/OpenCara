@@ -264,18 +264,35 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       );
     }
 
-    // Mutation succeeded on GitHub; mirror the change locally now so the UI
-    // doesn't have to wait for the webhook round-trip. Webhook is still
-    // authoritative — when it lands, it overwrites this with whatever
-    // GitHub's current state is.
-    await deps.db
-      .update(projectV2Items)
-      .set({ statusOptionId, updatedAt: new Date() })
-      .where(eq(projectV2Items.id, itemRow.id));
-
-    const fresh = await deps.db.query.projectV2Items.findFirst({
-      where: eq(projectV2Items.id, itemRow.id),
-    });
+    // Mutation succeeded on GitHub. Mirror the change locally so the UI
+    // doesn't have to wait for the webhook round-trip — but treat GitHub's
+    // success as the source of truth for this request. If the local DB
+    // write fails, we log it and still return success: the user's drag
+    // already took effect on GitHub, and the upcoming webhook (or a manual
+    // Refresh) will reconcile the mirror. Returning 5xx here would tell
+    // the client to roll back the optimistic move that's already
+    // authoritative on GitHub.
+    let fresh = itemRow;
+    try {
+      await deps.db
+        .update(projectV2Items)
+        .set({ statusOptionId, updatedAt: new Date() })
+        .where(eq(projectV2Items.id, itemRow.id));
+      const refreshed = await deps.db.query.projectV2Items.findFirst({
+        where: eq(projectV2Items.id, itemRow.id),
+      });
+      if (refreshed) fresh = refreshed;
+    } catch (err) {
+      console.error("[kanban] mirror update failed after GitHub success", {
+        id,
+        itemNodeId,
+        statusOptionId,
+        err,
+      });
+      // Hand back the pre-update row with the new statusOptionId synthesised
+      // in. The webhook will overwrite this once it lands.
+      fresh = { ...itemRow, statusOptionId };
+    }
     return c.json({ item: fresh });
   });
 
