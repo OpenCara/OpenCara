@@ -6,6 +6,7 @@ import {
   githubInstallations,
   issues,
   platformEvents,
+  projectV2Items,
   projectV2Links,
   projects,
 } from "../db/schema.js";
@@ -116,6 +117,29 @@ export function appWebhookRoutes(deps: WebhookDeps) {
             number: payload.issue.number,
             err,
           });
+        }
+
+        // Propagate label/assignee changes into any Kanban mirror that
+        // tracks this issue. The projects_v2_item webhook does NOT fire on
+        // label/assignee changes — only on the project-item state — so
+        // without this hand-off the kanban's labels column lags until the
+        // next backfill. This benefits any label change, not just the
+        // agent:* labels picker writes.
+        if (
+          (payload.action === "labeled" ||
+            payload.action === "unlabeled" ||
+            payload.action === "assigned" ||
+            payload.action === "unassigned") &&
+          payload.issue.node_id
+        ) {
+          try {
+            await syncIssueIntoKanbanMirror(deps, payload.issue);
+          } catch (err) {
+            console.error("[webhooks] kanban label sync failed", {
+              issueNodeId: payload.issue.node_id,
+              err,
+            });
+          }
         }
       }
 
@@ -396,5 +420,44 @@ async function handleProjectsV2Event(
       await upsertItem(deps.db, link.id, snapshot);
       notifyKanbanLink(deps.pg, link.projectId, link.id);
     }
+  }
+}
+
+/**
+ * Mirror label/assignee changes from an `issues` webhook into every Kanban
+ * board's `project_v2_items` row that tracks this issue. The projects_v2_item
+ * stream doesn't fire on label changes, so without this the Kanban tab's
+ * labels column lags until a backfill runs. We notify the SSE channel for
+ * each affected board so connected clients see the change immediately.
+ */
+async function syncIssueIntoKanbanMirror(
+  deps: WebhookDeps,
+  issue: IssuePayload,
+): Promise<void> {
+  const labels = (issue.labels ?? [])
+    .map((l) => ({ name: l.name ?? "", color: l.color ?? "" }))
+    .filter((l) => l.name);
+  const assignees = (issue.assignees ?? [])
+    .filter(
+      (a): a is { login: string; id: number } =>
+        typeof a.login === "string" && typeof a.id === "number",
+    )
+    .map((a) => ({ login: a.login, id: a.id }));
+
+  // Find every kanban mirror row that points at this issue's GraphQL node id.
+  // One issue can appear on multiple boards (different opencara projects all
+  // linked to the same Projects v2). Update each.
+  const matches = await deps.db
+    .select({ item: projectV2Items, link: projectV2Links })
+    .from(projectV2Items)
+    .innerJoin(projectV2Links, eq(projectV2Items.projectV2LinkId, projectV2Links.id))
+    .where(eq(projectV2Items.contentNodeId, issue.node_id));
+
+  for (const { item, link } of matches) {
+    await deps.db
+      .update(projectV2Items)
+      .set({ labels, assignees, updatedAt: new Date() })
+      .where(eq(projectV2Items.id, item.id));
+    notifyKanbanLink(deps.pg, link.projectId, link.id);
   }
 }

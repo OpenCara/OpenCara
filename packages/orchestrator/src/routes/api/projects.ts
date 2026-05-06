@@ -4,6 +4,7 @@ import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
+  agents,
   githubInstallations,
   issues,
   platformEvents,
@@ -11,7 +12,11 @@ import {
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { GithubAppClient } from "../../github/app.js";
-import { backfillIssues, pushIssueBodyToGithub } from "../../github/issues.js";
+import {
+  backfillIssues,
+  pushIssueBodyToGithub,
+  setIssueAgentLabel,
+} from "../../github/issues.js";
 
 interface ProjectRoutesDeps {
   db: Db;
@@ -284,6 +289,72 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       where: (i, { and, eq }) => and(eq(i.projectId, id), eq(i.number, number)),
     });
     return c.json({ issue: refreshed });
+  });
+
+  // Set or clear the implementation-agent label on an issue. Body:
+  //   { agentId: string | null }
+  // null clears all agent:* labels; non-null must reference an agent owned
+  // by the current user (mirrors the user-scoped agents table). Resolves to
+  // the agent's name and writes label `agent:<name>` on GitHub. Auto-creates
+  // the label on the repo if it doesn't exist (color #5856d6). The existing
+  // issue-implement flow already routes to this label convention when its
+  // trigger fires — no flow changes needed.
+  r.patch("/:id/issues/:number/agent", async (c) => {
+    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
+    const user = c.get("user")!;
+    const id = c.req.param("id");
+    const number = Number.parseInt(c.req.param("number"), 10);
+    if (!Number.isFinite(number)) {
+      return c.json({ error: "invalid issue number" }, 400);
+    }
+    const reqBody = (await c.req.json().catch(() => null)) as {
+      agentId?: unknown;
+    } | null;
+    if (!reqBody || (reqBody.agentId !== null && typeof reqBody.agentId !== "string")) {
+      return c.json({ error: "agentId (string or null) required" }, 400);
+    }
+    const agentIdRaw = reqBody.agentId;
+
+    const project = await deps.db.query.projects.findFirst({
+      where: eq(projects.id, id),
+    });
+    if (!project) return c.json({ error: "project not found" }, 404);
+
+    let agentName: string | null = null;
+    if (typeof agentIdRaw === "string" && agentIdRaw) {
+      const agent = await deps.db.query.agents.findFirst({
+        where: and(eq(agents.id, agentIdRaw), eq(agents.userId, user.id)),
+      });
+      if (!agent) return c.json({ error: "agent not found or not yours" }, 404);
+      agentName = agent.name;
+    }
+
+    try {
+      const refreshed = await setIssueAgentLabel(
+        deps.app,
+        {
+          id: project.id,
+          owner: project.owner,
+          name: project.name,
+          installationId: project.installationId,
+        },
+        number,
+        agentName,
+        deps.db,
+      );
+      return c.json({ issue: refreshed });
+    } catch (err) {
+      console.error("[projects] set agent label failed", {
+        projectId: id,
+        number,
+        agentName,
+        err,
+      });
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        500,
+      );
+    }
   });
 
   // Manual one-shot backfill for a project that pre-dates the issues feature

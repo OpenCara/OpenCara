@@ -238,6 +238,59 @@ export function useSaveIssueBody(projectId: string, issueNumber: number) {
   });
 }
 
+/**
+ * Set or clear the implementation-agent label on an issue.
+ *
+ * Pass an `agentId` from the user's `agentsQuery` to assign; pass `null` to
+ * remove all `agent:*` labels. The server resolves the id to the agent's
+ * name and writes label `agent:<name>` to GitHub (auto-creating the label
+ * if missing). The existing issue-implement flow already routes to this
+ * label when it dispatches.
+ *
+ * Optimistic update: rewrite the issue's `labels` array locally before the
+ * round-trip, roll back on error, refetch on settle so out-of-band label
+ * edits also reconcile.
+ */
+export function useSetIssueAgent(projectId: string, issueNumber: number) {
+  const qc = useQueryClient();
+  const detailKey = ["projects", projectId, "issues", issueNumber] as const;
+  return useMutation({
+    mutationFn: (vars: { agentId: string | null; agentName: string | null }) =>
+      api.patch<{ issue: ProjectIssueDetail }>(
+        `/api/projects/${projectId}/issues/${issueNumber}/agent`,
+        { agentId: vars.agentId },
+      ),
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: detailKey });
+      const prev = qc.getQueryData<{ issue: ProjectIssueDetail }>(detailKey);
+      if (prev) {
+        const filtered = prev.issue.labels.filter(
+          (l) => !l.name.startsWith("agent:"),
+        );
+        const next = vars.agentName
+          ? [...filtered, { name: `agent:${vars.agentName}`, color: "5856d6" }]
+          : filtered;
+        qc.setQueryData(detailKey, {
+          ...prev,
+          issue: { ...prev.issue, labels: next },
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+    },
+    onSettled: (data) => {
+      if (data) qc.setQueryData(detailKey, data);
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "issues"] });
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
 export function useSetIssueDraft(projectId: string, issueNumber: number) {
   const qc = useQueryClient();
   return useMutation({

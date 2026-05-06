@@ -165,6 +165,112 @@ export async function pushIssueBodyToGithub(
   return refreshed;
 }
 
+/**
+ * Set or clear the implementation-agent label on an issue.
+ *
+ * Convention (mirrors the existing `issue-implement` flow's routing): an
+ * issue can have at most one `agent:<name>` label at a time. Picking an
+ * agent in the UI replaces whatever was there; passing `null` clears all
+ * `agent:*` labels.
+ *
+ * The label is auto-created on the repo if missing, with a single distinctive
+ * color so all `agent:*` labels cluster visually on issue listings.
+ *
+ * Returns the refreshed issue row from our DB (re-mirrored from GitHub's
+ * response so the labels column reflects what's really there now).
+ */
+const AGENT_LABEL_COLOR = "5856d6";
+const AGENT_LABEL_PREFIX = "agent:";
+
+export async function setIssueAgentLabel(
+  app: GithubAppClient,
+  project: { id: string; owner: string; name: string; installationId: string },
+  issueNumber: number,
+  agentName: string | null,
+  db: Db,
+): Promise<typeof issues.$inferSelect> {
+  const inst = await db.query.githubInstallations.findFirst({
+    where: (gi, { eq }) => eq(gi.id, project.installationId),
+  });
+  if (!inst) throw new Error(`installation row ${project.installationId} not found`);
+  const octokit = await app.forInstallation(inst.githubInstallationId);
+
+  const issueRow = await db.query.issues.findFirst({
+    where: (i, { eq, and, isNull }) =>
+      and(
+        eq(i.projectId, project.id),
+        eq(i.number, issueNumber),
+        isNull(i.removedAt),
+      ),
+  });
+  if (!issueRow) throw new Error(`issue ${issueNumber} not found in ${project.id}`);
+
+  const targetLabel = agentName ? `${AGENT_LABEL_PREFIX}${agentName}` : null;
+  const filtered = issueRow.labels
+    .map((l) => l.name)
+    .filter((name) => !name.startsWith(AGENT_LABEL_PREFIX));
+  const nextLabels = targetLabel ? [...filtered, targetLabel] : filtered;
+
+  // Auto-create the label on the repo if it doesn't exist; setLabels otherwise
+  // 422s on unknown labels. Idempotent — getLabel 404 → createLabel; existing
+  // label is left alone (no color update so user customizations stick).
+  if (targetLabel) {
+    try {
+      await octokit.request("GET /repos/{owner}/{repo}/labels/{name}", {
+        owner: project.owner,
+        repo: project.name,
+        name: targetLabel,
+      });
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status === 404) {
+        await octokit.request("POST /repos/{owner}/{repo}/labels", {
+          owner: project.owner,
+          repo: project.name,
+          name: targetLabel,
+          color: AGENT_LABEL_COLOR,
+          description: `Implementation agent: ${agentName}`,
+        });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // PUT replaces the label set entirely — atomic remove-others + add-new.
+  const res = await octokit.request(
+    "PUT /repos/{owner}/{repo}/issues/{issue_number}/labels",
+    {
+      owner: project.owner,
+      repo: project.name,
+      issue_number: issueNumber,
+      labels: nextLabels,
+    },
+  );
+
+  // The PUT response is a Label[]; shape it into our IssuePayload-style
+  // labels list and update the issues row directly. Skipping the full
+  // upsertIssueFromWebhook keeps body/draft fields untouched.
+  const fresh = (res.data as Array<{ name?: string; color?: string }>)
+    .map((l) => ({ name: l.name ?? "", color: l.color ?? "" }))
+    .filter((l) => l.name);
+  await db
+    .update(issues)
+    .set({ labels: fresh, updatedAt: new Date() })
+    .where(and(eq(issues.projectId, project.id), eq(issues.number, issueNumber)));
+
+  const refreshed = await db.query.issues.findFirst({
+    where: (i, { eq, and }) =>
+      and(eq(i.projectId, project.id), eq(i.number, issueNumber)),
+  });
+  if (!refreshed) {
+    throw new Error(
+      `issue ${project.owner}/${project.name}#${issueNumber} disappeared after labels PUT`,
+    );
+  }
+  return refreshed;
+}
+
 // One-shot REST backfill of every issue in a repo. Called from project add.
 // GitHub's REST `/issues` endpoint also returns PRs — filtered out here. Runs
 // to completion (no early-exit) so a large backlog still lands; caller is
