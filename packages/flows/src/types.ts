@@ -90,10 +90,39 @@ export const AgentNodeSchema = z.object({
       env: z.array(z.string()).default([]),
       stdinJson: z.boolean().default(true),
     }),
+    // When set, the engine allocates (or reuses) a stable per-PR-branch
+    // worktree on a paired device before dispatching the agent. The
+    // worktree persists across flow runs (so a review-fix iteration
+    // reuses the implementer's checkout) and is removed when the PR
+    // closes — see `pull_request.closed` handler in routes/webhooks.ts.
+    // Pinned to the device that first allocated it via `worktree_pins`
+    // (owner_repo, branch) → host_id; the agent's session id file
+    // (`agent-session.json`) lives in a sibling sessions/ dir on the
+    // same device, which is how conversation resume works without a
+    // shared filesystem.
+    worktree: z
+      .object({
+        // null = repo's default branch
+        fromBranch: z.string().nullable().default(null),
+        // Template; supports {{ENV_VAR}} substitution against the
+        // run env. Must render to a non-empty string at dispatch.
+        // Same template across implement / review-fix flows is what
+        // makes the second one find the first one's checkout.
+        branchName: z.string(),
+        // Optional pin. null = let worktree_pins / pickIdle decide.
+        hostId: z.string().nullable().default(null),
+      })
+      .optional(),
   }),
 });
 export type AgentNode = z.infer<typeof AgentNodeSchema>;
 
+// Worktree allocation + PR creation are no longer dedicated action
+// nodes. A worktree is now an option on the agent node itself
+// (`agent.config.worktree`) and PR creation is the agent's
+// responsibility — the agent has GH_TOKEN injected (PR #22) and uses
+// `gh pr create` from inside its worktree. This keeps the engine's
+// surface to "trigger → agent → optional GitHub side-effect actions".
 export const ActionNodeSchema = z.discriminatedUnion("kind", [
   z.object({
     id: z.string(),
@@ -114,42 +143,6 @@ export const ActionNodeSchema = z.discriminatedUnion("kind", [
     kind: z.literal("github.add_label"),
     position: Position,
     config: z.object({ labels: z.array(z.string()).min(1) }),
-  }),
-  // Allocates an isolated git checkout on a paired device, on a fresh
-  // branch off the configured base. The handle (workdir + branch + hostId)
-  // is threaded through edges; downstream agent nodes inherit cwd/hostId,
-  // and a downstream github.create_pull_request reads the branch as PR
-  // head. The engine cleans the worktree up at end-of-flow-run regardless
-  // of success/failure.
-  z.object({
-    id: z.string(),
-    kind: z.literal("git.create_worktree"),
-    position: Position,
-    config: z.object({
-      // null = repo's default branch
-      fromBranch: z.string().nullable().default(null),
-      // Template; supports {{ENV_VAR}} substitution against the agent-run
-      // env (OPENCARA_ISSUE_NUMBER, OPENCARA_AGENT_RUN_ID, ...).
-      branchName: z.string().default("opencara/{{OPENCARA_AGENT_RUN_ID}}"),
-      // Optional pin. null = let the dispatcher pick any idle device.
-      hostId: z.string().nullable().default(null),
-    }),
-  }),
-  // Opens a PR using the head branch from the upstream git.create_worktree
-  // node. Throws at runtime if no upstream worktree handle is reachable.
-  z.object({
-    id: z.string(),
-    kind: z.literal("github.create_pull_request"),
-    position: Position,
-    config: z.object({
-      // Templates support {{ENV_VAR}} substitution.
-      title: z.string().default("WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}"),
-      // null = use the upstream node's previousOutput verbatim as the body.
-      body: z.string().nullable().default(null),
-      // null = repo's default branch.
-      baseBranch: z.string().nullable().default(null),
-      draft: z.boolean().default(true),
-    }),
   }),
 ]);
 export type ActionNode = z.infer<typeof ActionNodeSchema>;

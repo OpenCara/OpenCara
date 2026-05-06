@@ -21,11 +21,15 @@ import {
 } from "../github/projectsV2.js";
 import { notifyKanbanLink } from "./api/kanban.js";
 import type { FlowEngine } from "../flows/engine.js";
+import type { AgentDispatcher } from "../dispatch/dispatcher.js";
+import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
 
 interface WebhookDeps {
   db: Db;
   pg: Sql;
   app: GithubAppClient;
+  /** Required for the `pull_request.closed` worktree cleanup path. */
+  dispatcher: AgentDispatcher;
   flowEngine?: FlowEngine;
 }
 
@@ -154,6 +158,35 @@ export function appWebhookRoutes(deps: WebhookDeps) {
           projectId: projectRowId,
           payload,
         });
+      }
+
+      // PR-close worktree teardown. Removes the per-(repo, branch)
+      // checkout + agent-session.json on the pinned device, regardless
+      // of merge state — a closed-without-merge PR's branch is just as
+      // dead as a merged one's, and leaving the worktree alive ties up
+      // disk on the device. Fire-and-forget; failures are logged
+      // inside cleanupClosedPrWorktree.
+      if (eventType === "pull_request" && payload.action === "closed") {
+        const prAny = payload as unknown as {
+          pull_request?: { head?: { ref?: string } };
+          repository?: { full_name?: string };
+        };
+        const headRef = prAny.pull_request?.head?.ref;
+        const ownerRepo = prAny.repository?.full_name;
+        if (headRef && ownerRepo) {
+          void cleanupClosedPrWorktree(
+            { db: deps.db, pg: deps.pg, dispatcher: deps.dispatcher },
+            ownerRepo,
+            headRef,
+            projectRowId,
+          ).catch((err) =>
+            console.error("[webhooks] PR-close worktree cleanup failed", {
+              ownerRepo,
+              headRef,
+              err,
+            }),
+          );
+        }
       }
     } catch (err) {
       console.error("[webhooks] handler error", { eventType, deliveryId, err });

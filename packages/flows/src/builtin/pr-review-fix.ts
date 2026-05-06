@@ -6,23 +6,24 @@ const here = dirname(fileURLToPath(import.meta.url));
 // dist/builtin/pr-review-fix.js → ../../examples/echo-implementer.mjs
 const echoImplementerPath = resolve(here, "../../examples/echo-implementer.mjs");
 
-// Wakes the implementer agent up when a reviewer leaves a review on a
-// PR opened by the issue-implement flow. The worktree node clones the
-// PR's existing head branch (no new branch created), and the agent
-// node — pinned to the device that ran the original implementation,
-// reading its prior session id from `~/.opencara/sessions/<.../>` —
-// resumes the same conversation, applies the feedback, and pushes
-// more commits to the same branch. GitHub's review/push cycle is the
+// Wakes the implementer agent up when a reviewer leaves a review on
+// a PR opened by the issue-implement flow. The agent runs in the
+// SAME worktree (same device, same checkout) as the implementer —
+// `worktree create` is idempotent and `worktree_pins(repo, branch)`
+// keeps the device pinned. With kind != "custom", the per-kind
+// adapter resumes the conversation from `agent-session.json` left
+// behind by the implementer, applies the feedback, and pushes more
+// commits to the same branch. GitHub's review/push cycle is the
 // "loop"; no engine-side iteration cap.
 //
-// Pair this flow with an agent of kind != "custom" (claude/codex/
-// opencode/pi) so the per-kind adapter can wire `--resume <id>`. A
-// kind=custom agent will start a fresh conversation each iteration.
+// Pair this flow with kind=claude/codex/opencode/pi so the adapter
+// can wire `--resume <id>`. kind=custom starts a fresh conversation
+// each iteration (no resume).
 export const prReviewFixFlow: FlowDefinition = {
   slug: "pr-review-fix",
   name: "PR review → Fix (resume)",
   description:
-    "When a reviewer submits a review on a PR opened by `issue-implement`, dispatch the same agent that opened the PR to apply the feedback. The agent runs on the same device with its prior conversation resumed (kind-aware, see `agent.kind`). The review body and state are surfaced via `OPENCARA_REVIEW_BODY` / `OPENCARA_REVIEW_STATE` env vars and on stdin.",
+    "When a reviewer submits a review on a PR opened by `issue-implement`, dispatch the same agent that opened the PR to apply the feedback. The agent runs on the same device, in the same worktree, with its prior conversation resumed (kind-aware, see `agent.kind`). The review body and state are surfaced via `OPENCARA_REVIEW_BODY` / `OPENCARA_REVIEW_STATE` env vars and on stdin. The agent commits and pushes to the existing PR branch — it does NOT open a new PR.",
   nodes: [
     {
       id: "t1",
@@ -44,21 +45,9 @@ export const prReviewFixFlow: FlowDefinition = {
       },
     },
     {
-      id: "w1",
-      kind: "git.create_worktree",
-      position: { x: 280, y: 0 },
-      config: {
-        // Clone the PR's existing head branch in place — the worktree
-        // node detects fromBranch == branchName and skips `checkout -b`.
-        fromBranch: "{{OPENCARA_PR_HEAD_REF}}",
-        branchName: "{{OPENCARA_PR_HEAD_REF}}",
-        hostId: null,
-      },
-    },
-    {
       id: "a1",
       kind: "agent",
-      position: { x: 560, y: 0 },
+      position: { x: 320, y: 0 },
       config: {
         label: "Fix agent",
         spec: {
@@ -85,11 +74,18 @@ export const prReviewFixFlow: FlowDefinition = {
           ],
           stdinJson: true,
         },
+        // Same branchName template as the implement flow (the PR's
+        // head ref equals `opencara/issue-<n>`). The per-(repo,
+        // branch) pin makes the second iteration land on the
+        // implementer's device + checkout, where the
+        // agent-session.json file is.
+        worktree: {
+          fromBranch: "{{OPENCARA_PR_HEAD_REF}}",
+          branchName: "{{OPENCARA_PR_HEAD_REF}}",
+          hostId: null,
+        },
       },
     },
   ],
-  edges: [
-    { id: "e1", source: "t1", target: "w1" },
-    { id: "e2", source: "w1", target: "a1" },
-  ],
+  edges: [{ id: "e1", source: "t1", target: "a1" }],
 };

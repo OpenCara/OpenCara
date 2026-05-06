@@ -31,29 +31,6 @@ export class SkipFlowError extends Error {
   }
 }
 
-/**
- * Structured handle from a `git.create_worktree` node, threaded downstream
- * via the engine's nodeContexts channel. Downstream agent nodes inherit
- * the cwd + device pin; a downstream `github.create_pull_request` reads
- * `branch` as the PR head; downstream agents whose kind matches
- * `priorSession.kind` resume the prior conversation.
- */
-export interface WorktreeHandle {
-  kind: "worktree";
-  workdir: string;
-  branch: string;
-  hostId: string;
-  /** Per-PR-branch persistent dir on the agent device (created by the
-   *  CLI). The agent's session id file lives at
-   *  `${sessionDir}/agent-session.json`. May be null if the worktree
-   *  ran without a session-key (legacy) — agents will start fresh. */
-  sessionDir: string | null;
-  /** Read off the device on `git.create_worktree`. When the downstream
-   *  agent's kind matches `priorSession.kind`, the orchestrator passes
-   *  `priorSession.id` to the per-kind adapter as `resumeSessionId`. */
-  priorSession: { kind: AgentKind; id: string } | null;
-}
-
 export interface NodeRunCtx {
   db: Db;
   pg: Sql;
@@ -69,16 +46,6 @@ export interface NodeRunCtx {
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
   previousOutput?: string;
-  /** Resolved by the engine before running each node — the nearest
-   * worktree handle reachable upstream over the edge graph. Undefined
-   * when the node has no worktree ancestor. */
-  upstreamWorktree?: WorktreeHandle;
-  /** Captured stdout of the nearest upstream `agent` node, if any.
-   * Used by `github.create_pull_request` when its `body` config is
-   * null — that contract is "use the upstream agent's stdout", not
-   * "use whatever the immediate parent emitted" (which could be a
-   * worktree handle's JSON). */
-  upstreamAgentOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
 }
@@ -87,9 +54,6 @@ export interface NodeRunResult {
   output?: unknown;
   /** stdout captured from an agent node, used as the next step's input. */
   stdoutCaptured?: string;
-  /** Structured handle this node emits for downstream consumption (today:
-   * worktree handles from git.create_worktree). */
-  nodeContext?: WorktreeHandle;
 }
 
 export type NodeRunner<N extends FlowNode = FlowNode> = (
@@ -426,16 +390,168 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   const agentRunId = ulid();
   env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  // Upstream worktree override: when this agent node sits below a
-  // git.create_worktree node, run inside that worktree on the same device.
-  // Surface workdir/branch/sessionDir in env so the agent's own scripts
-  // can see them without parsing nodeContext.
-  if (ctx.upstreamWorktree) {
-    env["OPENCARA_WORKTREE_DIR"] = ctx.upstreamWorktree.workdir;
-    env["OPENCARA_WORKTREE_BRANCH"] = ctx.upstreamWorktree.branch;
-    if (ctx.upstreamWorktree.sessionDir) {
-      env["OPENCARA_SESSION_DIR"] = ctx.upstreamWorktree.sessionDir;
+  // If the operator wired a worktree onto this agent node, allocate
+  // (or reuse) the per-PR-branch checkout on a paired device BEFORE
+  // dispatching the agent. The worktree persists across flow runs and
+  // is removed by the `pull_request.closed` webhook handler — the
+  // first iteration clones, every subsequent iteration on the same
+  // (repo, branch) finds .git/ already present and just fetches +
+  // checks out the branch. Pinning sticks the device that allocated
+  // first so the agent-session.json file (used for conversation
+  // resume) survives across iterations.
+  let worktree: {
+    workdir: string;
+    branch: string;
+    sessionDir: string | null;
+    hostId: string;
+    priorSession: { kind: AgentKind; id: string } | null;
+  } | null = null;
+  if (node.config.worktree) {
+    const tplVars = collectTemplateVars(ctx);
+    tplVars["OPENCARA_AGENT_RUN_ID"] = agentRunId;
+    const branchName = renderTemplate(
+      node.config.worktree.branchName,
+      tplVars,
+      "agent.worktree.branchName",
+    );
+    if (branchName.length === 0) {
+      throw new Error(
+        `agent.worktree.branchName template '${node.config.worktree.branchName}' rendered empty — fill in the template variables`,
+      );
     }
+    const fromBranch =
+      node.config.worktree.fromBranch && node.config.worktree.fromBranch.length > 0
+        ? node.config.worktree.fromBranch
+        : ctx.project.defaultBranch ?? "";
+    const ownerRepo = `${ctx.project.owner}/${ctx.project.name}`;
+    // Stable per-(repo, branch) slug. The implement flow's first run
+    // and any later review-fix iteration on the same PR compute the
+    // same slug → the second one finds the first's checkout +
+    // session-id file on the same pinned device.
+    const key = `${ownerRepo}/branch-${branchName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+
+    // Pin lookup: prefer the device that allocated the worktree on a
+    // previous iteration of this branch. Fall back to pickIdle() if
+    // no pin exists OR the pinned device is currently disconnected
+    // (the dispatcher will throw "pinned device <id> is not
+    // connected" otherwise; pickIdle gives a graceful degrade — the
+    // agent starts a fresh conversation in a fresh checkout, which
+    // is the right behaviour even if it loses resume).
+    let pinnedHostId: string | null = node.config.worktree.hostId ?? null;
+    if (!pinnedHostId) {
+      const existing = await ctx.db.query.worktreePins.findFirst({
+        where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
+      });
+      if (existing) pinnedHostId = existing.hostId;
+    }
+
+    // Sub-dispatch: opencara internal worktree create. Idempotent —
+    // creates the dir + clone on first run, fetches + checkouts on
+    // subsequent runs. Persisted as its own agent_runs row with
+    // flowRunStepId=null so the engine's "find the agent_run for
+    // this step" lookups still hit the primary agent run below.
+    const allocateRunId = ulid();
+    const allocateEnv: Record<string, string> = {
+      OPENCARA_AGENT_RUN_ID: allocateRunId,
+      OPENCARA_REPO: ownerRepo,
+    };
+    const allocateResult = await dispatchAgentRun(ctx, {
+      agentRunId: allocateRunId,
+      kind: "internal:worktree-allocate",
+      command: "opencara",
+      args: [
+        "internal",
+        "worktree",
+        "create",
+        "--repo",
+        ownerRepo,
+        "--branch",
+        branchName,
+        "--from-branch",
+        fromBranch,
+        "--key",
+        key,
+      ],
+      env: allocateEnv,
+      hostId: pinnedHostId,
+      triggerEventId: ctx.event.id,
+      flowRunStepId: null,
+    });
+    if (allocateResult.exitCode !== 0) {
+      throw new Error(`worktree allocation exited with code ${allocateResult.exitCode}`);
+    }
+
+    // Parse {workdir, branch, sessionDir, priorSession} from the CLI's
+    // single-line JSON. Defensive last→first scan in case future
+    // versions interleave progress lines.
+    const lines = allocateResult.stdoutCaptured
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
+    type DevicePayload = {
+      workdir?: unknown;
+      branch?: unknown;
+      sessionDir?: unknown;
+      priorSession?: unknown;
+    };
+    let parsed: DevicePayload | null = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        parsed = JSON.parse(lines[i]!) as DevicePayload;
+        if (typeof parsed.workdir === "string" && typeof parsed.branch === "string") break;
+        parsed = null;
+      } catch {
+        /* try previous line */
+      }
+    }
+    if (!parsed || typeof parsed.workdir !== "string" || typeof parsed.branch !== "string") {
+      throw new Error(
+        "agent.worktree: device did not emit a parseable {workdir, branch} JSON line — check the CLI version (opencara internal worktree create)",
+      );
+    }
+
+    const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
+    let priorSession: { kind: AgentKind; id: string } | null = null;
+    if (parsed.priorSession && typeof parsed.priorSession === "object") {
+      const ps = parsed.priorSession as { kind?: unknown; id?: unknown };
+      const knownKinds: AgentKind[] = ["claude", "codex", "opencode", "pi"];
+      if (
+        typeof ps.kind === "string" &&
+        typeof ps.id === "string" &&
+        (knownKinds as string[]).includes(ps.kind)
+      ) {
+        priorSession = { kind: ps.kind as AgentKind, id: ps.id };
+      }
+    }
+
+    // Upsert the pin so the next iteration on this branch hits the
+    // same device. lastRunAt drives the reaper's pruning later.
+    await ctx.db
+      .insert(worktreePins)
+      .values({
+        id: ulid(),
+        ownerRepo,
+        branch: branchName,
+        hostId: allocateResult.agentHostId,
+        lastRunAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [worktreePins.ownerRepo, worktreePins.branch],
+        set: { hostId: allocateResult.agentHostId, lastRunAt: new Date() },
+      });
+
+    worktree = {
+      workdir: parsed.workdir,
+      branch: parsed.branch,
+      sessionDir,
+      hostId: allocateResult.agentHostId,
+      priorSession,
+    };
+
+    // Surface to the agent's env so its scripts can see them without
+    // parsing the spec.
+    env["OPENCARA_WORKTREE_DIR"] = worktree.workdir;
+    env["OPENCARA_WORKTREE_BRANCH"] = worktree.branch;
+    if (worktree.sessionDir) env["OPENCARA_SESSION_DIR"] = worktree.sessionDir;
   }
 
   // Inject the issue-edit skill if this run has issue context (Projects v2
@@ -470,17 +586,15 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   let preassignedSessionId: string | undefined;
   if (agentKind !== "custom") {
     const adapter = adapterFor(agentKind);
-    // Resume only when the upstream session was started by the SAME
-    // kind. A flow that switches kinds mid-loop starts fresh — its
-    // resume id wouldn't parse with the new CLI's session format.
+    // Resume only when the prior session was started by the SAME
+    // kind. A switch (e.g. claude → codex) starts fresh; the resume
+    // id wouldn't parse with the new CLI's session format.
     const resumeSessionId =
-      ctx.upstreamWorktree?.priorSession?.kind === agentKind
-        ? ctx.upstreamWorktree.priorSession.id
-        : null;
+      worktree?.priorSession?.kind === agentKind ? worktree.priorSession.id : null;
     const inv = adapter.buildInvocation({
       prompt: linkedPromptBody ?? "",
-      cwd: ctx.upstreamWorktree?.workdir ?? agent.cwd ?? "",
-      sessionDir: ctx.upstreamWorktree?.sessionDir ?? "",
+      cwd: worktree?.workdir ?? agent.cwd ?? "",
+      sessionDir: worktree?.sessionDir ?? "",
       resumeSessionId,
       extraArgs: agent.args,
     });
@@ -495,9 +609,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     // no-op. Setting it to e.g. "npx @anthropic-ai/claude-code@latest"
     // re-tokenizes here: the first token replaces inv.command, the
     // rest are spliced BEFORE the adapter's args (so subcommands like
-    // codex's "exec" still come AFTER the override). This is how a
-    // user can pin a specific package version without changing the
-    // adapter or the schema.
+    // codex's "exec" still come AFTER the override).
     const overrideTokens = tokenizeShellLike(agent.command);
     if (overrideTokens.length > 0 && overrideTokens[0] !== inv.command) {
       invCommand = overrideTokens[0]!;
@@ -511,9 +623,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     command: invCommand,
     args: invArgs,
     env,
-    cwd: ctx.upstreamWorktree?.workdir ?? agent.cwd ?? undefined,
+    cwd: worktree?.workdir ?? agent.cwd ?? undefined,
     stdinJson,
-    hostId: ctx.upstreamWorktree?.hostId ?? agent.hostId ?? null,
+    hostId: worktree?.hostId ?? agent.hostId ?? null,
     triggerEventId: ctx.event.id,
   });
 
@@ -521,14 +633,10 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // agents that actually ran in a worktree — without a sessionDir
   // there's nowhere to put the file. Failures are logged + swallowed:
   // worst case, the next iteration starts fresh (no resume).
-  if (
-    agentKind !== "custom" &&
-    ctx.upstreamWorktree?.sessionDir &&
-    result.stdoutCaptured.length > 0
-  ) {
+  if (agentKind !== "custom" && worktree?.sessionDir && result.stdoutCaptured.length > 0) {
     const adapter = adapterFor(agentKind);
     const newId = adapter.parseSessionId(result.stdoutCaptured, preassignedSessionId);
-    const priorId = ctx.upstreamWorktree.priorSession?.id;
+    const priorId = worktree.priorSession?.id;
     if (newId && newId !== priorId) {
       try {
         await ctx.dispatcher.run(
@@ -540,7 +648,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
               "worktree",
               "write-session",
               "--session-dir",
-              ctx.upstreamWorktree.sessionDir,
+              worktree.sessionDir,
               "--kind",
               agentKind,
               "--id",
@@ -671,226 +779,8 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       );
       return { output: { labels: res.data.map((l) => l.name) } };
     }
-    case "git.create_worktree": {
-      // The worktree node is structurally an "action" in the schema (no
-      // upstream agent input, downstream-fanout-able), but its runtime is
-      // an agent dispatch on a device. Delegate to the dedicated runner.
-      return worktreeRunner(ctx, node);
-    }
-    case "github.create_pull_request": {
-      if (!ctx.upstreamWorktree) {
-        throw new Error(
-          "github.create_pull_request requires an upstream git.create_worktree node — this is the only way it can know the head branch",
-        );
-      }
-      const baseBranch =
-        node.config.baseBranch && node.config.baseBranch.length > 0
-          ? node.config.baseBranch
-          : ctx.project.defaultBranch ?? null;
-      if (!baseBranch) {
-        throw new Error(
-          `create_pull_request: no baseBranch configured and project ${owner}/${repo} has no default_branch on file — set config.baseBranch explicitly`,
-        );
-      }
-
-      const tplVars = collectTemplateVars(ctx);
-      const title = renderTemplate(node.config.title, tplVars, "create_pull_request.title");
-      // body: null is documented as "use the upstream agent's stdout" —
-      // resolve via the engine-supplied upstreamAgentOutput, NOT via
-      // immediate previousOutput which could be the worktree handle's
-      // JSON when worktree → create_pr is wired directly.
-      let renderedBody: string;
-      if (node.config.body !== null && node.config.body !== undefined) {
-        renderedBody = renderTemplate(node.config.body, tplVars, "create_pull_request.body");
-      } else if (ctx.upstreamAgentOutput !== undefined) {
-        renderedBody = ctx.upstreamAgentOutput.trim();
-      } else {
-        throw new Error(
-          "github.create_pull_request: body=null requires an upstream agent node to source the body from — wire an `agent` node above this one or set config.body to a literal/template",
-        );
-      }
-
-      const res = await oct.request("POST /repos/{owner}/{repo}/pulls", {
-        owner,
-        repo,
-        title,
-        body: renderedBody || "_(no body)_",
-        head: ctx.upstreamWorktree.branch,
-        base: baseBranch,
-        draft: node.config.draft,
-      });
-      return {
-        output: {
-          number: res.data.number,
-          htmlUrl: res.data.html_url,
-          headBranch: ctx.upstreamWorktree.branch,
-        },
-      };
-    }
   }
 };
-
-// Run a `git.create_worktree` node by dispatching the CLI's `opencara
-// internal worktree create` subcommand on a device. The device clones
-// the repo into a tmp dir, branches off the configured base, and emits
-// `{"workdir":..., "branch":...}` on stdout. We parse that JSON, return
-// it as the node's `nodeContext` for downstream nodes to inherit, and
-// also surface it on `output` for visibility in the run UI.
-async function worktreeRunner(
-  ctx: NodeRunCtx,
-  node: Extract<ActionNode, { kind: "git.create_worktree" }>,
-): Promise<NodeRunResult> {
-  const agentRunId = ulid();
-  const tplVars = collectTemplateVars(ctx);
-  // Pre-stamp OPENCARA_AGENT_RUN_ID so the branch template can reference
-  // it before dispatchAgentRun touches the env.
-  tplVars["OPENCARA_AGENT_RUN_ID"] = agentRunId;
-
-  const branchName = renderTemplate(
-    node.config.branchName,
-    tplVars,
-    "git.create_worktree.branchName",
-  );
-  if (branchName.length === 0) {
-    throw new Error(
-      `git.create_worktree: branchName template '${node.config.branchName}' rendered empty — fill in the template variables`,
-    );
-  }
-
-  const fromBranch =
-    node.config.fromBranch && node.config.fromBranch.length > 0
-      ? node.config.fromBranch
-      : ctx.project.defaultBranch ?? "";
-
-  const ownerRepo = `${ctx.project.owner}/${ctx.project.name}`;
-  // Stable session-key threaded through to the device. Same key from
-  // the implement flow's worktree run AND from any later review-fix
-  // iteration on the same PR — that's how the agent's session-id file
-  // is rediscovered on the second iteration.
-  const sessionKey = `${ownerRepo}/branch-${branchName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
-
-  // Worktree pin lookup: prefer the device that ran a previous
-  // worktree on this branch, since the agent-session.json file lives
-  // on that device's disk. The pin's host might be offline, in which
-  // case we fall back to pickIdle and emit a warning so the operator
-  // sees that resume isn't possible this iteration.
-  let pinnedHostId: string | null = node.config.hostId ?? null;
-  if (!pinnedHostId) {
-    const existing = await ctx.db.query.worktreePins.findFirst({
-      where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
-    });
-    if (existing) pinnedHostId = existing.hostId;
-  }
-
-  const env: Record<string, string> = {
-    OPENCARA_AGENT_RUN_ID: agentRunId,
-    OPENCARA_REPO: ownerRepo,
-  };
-
-  const result = await dispatchAgentRun(ctx, {
-    agentRunId,
-    kind: "git.create_worktree",
-    command: "opencara",
-    args: [
-      "internal",
-      "worktree",
-      "create",
-      "--repo",
-      ownerRepo,
-      "--branch",
-      branchName,
-      "--from-branch",
-      fromBranch,
-      "--session-key",
-      sessionKey,
-    ],
-    env,
-    hostId: pinnedHostId,
-    triggerEventId: ctx.event.id,
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(`git.create_worktree exited with code ${result.exitCode}`);
-  }
-
-  // Parse the JSON line — the CLI emits exactly one. Be defensive: scan
-  // last → first for the first parseable line, since the device's stdout
-  // may include a trailing newline or auxiliary lines if a future
-  // version adds progress output.
-  const lines = result.stdoutCaptured.split("\n").filter((l) => l.trim().length > 0);
-  type DevicePayload = {
-    workdir?: unknown;
-    branch?: unknown;
-    sessionDir?: unknown;
-    priorSession?: unknown;
-  };
-  let parsed: DevicePayload | null = null;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      parsed = JSON.parse(lines[i]!) as DevicePayload;
-      if (typeof parsed.workdir === "string" && typeof parsed.branch === "string") break;
-      parsed = null;
-    } catch {
-      /* try previous line */
-    }
-  }
-  if (!parsed || typeof parsed.workdir !== "string" || typeof parsed.branch !== "string") {
-    throw new Error(
-      "git.create_worktree: device did not emit a parseable {workdir,branch} JSON line — check the device's CLI version (opencara internal worktree create)",
-    );
-  }
-
-  const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
-  let priorSession: { kind: AgentKind; id: string } | null = null;
-  if (parsed.priorSession && typeof parsed.priorSession === "object") {
-    const ps = parsed.priorSession as { kind?: unknown; id?: unknown };
-    if (typeof ps.kind === "string" && typeof ps.id === "string") {
-      // Trust the device's stored kind only if it's one of our known set;
-      // a stale "custom" or unknown-kind file won't try to resume.
-      const knownKinds: AgentKind[] = ["claude", "codex", "opencode", "pi"];
-      if ((knownKinds as string[]).includes(ps.kind)) {
-        priorSession = { kind: ps.kind as AgentKind, id: ps.id };
-      }
-    }
-  }
-
-  const handle: WorktreeHandle = {
-    kind: "worktree",
-    workdir: parsed.workdir,
-    branch: parsed.branch,
-    hostId: result.agentHostId,
-    sessionDir,
-    priorSession,
-  };
-
-  // Upsert the device pin for future iterations on this branch.
-  const pinId = ulid();
-  await ctx.db
-    .insert(worktreePins)
-    .values({
-      id: pinId,
-      ownerRepo,
-      branch: branchName,
-      hostId: result.agentHostId,
-      lastRunAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [worktreePins.ownerRepo, worktreePins.branch],
-      set: { hostId: result.agentHostId, lastRunAt: new Date() },
-    });
-
-  return {
-    output: {
-      workdir: handle.workdir,
-      branch: handle.branch,
-      hostId: handle.hostId,
-      sessionDir: handle.sessionDir,
-      priorSession: handle.priorSession,
-    },
-    nodeContext: handle,
-    stdoutCaptured: result.stdoutCaptured,
-  };
-}
 
 interface DispatchAgentRunOpts {
   agentRunId: string;
@@ -908,6 +798,11 @@ interface DispatchAgentRunOpts {
   /** triggerEventId on the agent_runs row. Pass null for synthetic flow-
    *  cleanup runs that aren't tied to the originating event. */
   triggerEventId: string | null;
+  /** Override the agent_runs row's flowRunStepId. Defaults to
+   *  `ctx.flowRunStepId`. Set to null for sub-runs that share a step
+   *  with another agent dispatch (e.g. a worktree-allocate that
+   *  precedes the agent's main dispatch in the same flow_run_step). */
+  flowRunStepId?: string | null;
 }
 
 /**
@@ -943,13 +838,14 @@ async function dispatchAgentRun(
     cwd: opts.cwd,
   };
 
+  const stepId = opts.flowRunStepId === undefined ? ctx.flowRunStepId : opts.flowRunStepId;
   await ctx.db.insert(agentRuns).values({
     id: opts.agentRunId,
     spec,
     triggerEventId: opts.triggerEventId,
     status: "running",
     projectId: ctx.projectId,
-    flowRunStepId: ctx.flowRunStepId,
+    flowRunStepId: stepId,
     startedAt: new Date(),
   });
 
@@ -1018,69 +914,6 @@ async function dispatchAgentRun(
         console.error("[flows] revokeToken failed", err);
       });
     }
-  }
-}
-
-/**
- * Run a synthetic agent dispatch for a worktree-removal at end-of-run.
- * Does NOT mint a token (rm doesn't need GitHub auth) and does NOT bind
- * to a flow_run_step (cleanup is graph-orthogonal). Best-effort: any
- * error is swallowed by the caller in engine.ts.
- */
-export async function runWorktreeRemove(
-  ctx: NodeRunCtx,
-  handle: WorktreeHandle,
-): Promise<void> {
-  const agentRunId = ulid();
-  const env: Record<string, string> = {
-    OPENCARA_AGENT_RUN_ID: agentRunId,
-  };
-  const spec: AgentSpec = {
-    kind: "git.remove_worktree",
-    command: "opencara",
-    args: ["internal", "worktree", "remove", "--workdir", handle.workdir],
-    env,
-  };
-  await ctx.db.insert(agentRuns).values({
-    id: agentRunId,
-    spec,
-    status: "running",
-    projectId: ctx.projectId,
-    // No flow_run_step — cleanup is orthogonal to the graph.
-    flowRunStepId: null,
-    startedAt: new Date(),
-  });
-
-  let seq = 0;
-  const onLog = (stream: LogStream, chunk: string) => {
-    const mySeq = seq++;
-    void ctx.db
-      .insert(agentRunLogs)
-      .values({ agentRunId, seq: mySeq, stream, chunk })
-      .then(() => ctx.pg.notify("agent_run_logs", agentRunId))
-      .catch(() => undefined);
-  };
-
-  try {
-    const result = await ctx.dispatcher.run(spec, {
-      onLog,
-      hostId: handle.hostId,
-      projectId: ctx.projectId,
-    });
-    await ctx.db
-      .update(agentRuns)
-      .set({
-        status: result.exitCode === 0 ? "succeeded" : "failed",
-        exitCode: result.exitCode,
-        finishedAt: new Date(),
-      })
-      .where(eq(agentRuns.id, agentRunId));
-  } catch (err) {
-    await ctx.db
-      .update(agentRuns)
-      .set({ status: "failed", finishedAt: new Date() })
-      .where(eq(agentRuns.id, agentRunId));
-    throw err;
   }
 }
 
