@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 
@@ -631,6 +632,8 @@ export interface KanbanItem {
   contentState: string | null;
   statusOptionId: string | null;
   isArchived: boolean;
+  assignees: { login: string; id: number }[];
+  labels: { name: string; color: string }[];
   updatedAt: string;
 }
 
@@ -702,6 +705,44 @@ export function useRefreshKanban(projectId: string) {
       });
     },
   });
+}
+
+/**
+ * Subscribe to /api/projects/:id/kanban/stream while mounted. Each `snapshot`
+ * SSE event replaces the kanbanQuery cache directly — no extra refetch — so
+ * webhook + cross-tab updates land immediately. EventSource auto-reconnects
+ * on transient errors. The matching enabled-on flag falls back to true; pass
+ * false to skip subscription (e.g. while the picker is showing).
+ */
+export function useKanbanStream(
+  projectId: string,
+  enabled: boolean = true,
+): void {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!enabled) return;
+    const es = new EventSource(
+      `/api/projects/${projectId}/kanban/stream`,
+      { withCredentials: true },
+    );
+    const onSnapshot = (e: MessageEvent) => {
+      try {
+        const snap = JSON.parse(e.data) as KanbanBoardData;
+        qc.setQueryData<KanbanBoardData>(
+          ["projects", projectId, "kanban"],
+          snap,
+        );
+      } catch (err) {
+        console.error("[kanban-sse] parse failed", err);
+      }
+    };
+    es.addEventListener("snapshot", onSnapshot);
+    es.addEventListener("ping", () => undefined);
+    return () => {
+      es.removeEventListener("snapshot", onSnapshot);
+      es.close();
+    };
+  }, [projectId, enabled, qc]);
 }
 
 export function useSetItemStatus(projectId: string) {

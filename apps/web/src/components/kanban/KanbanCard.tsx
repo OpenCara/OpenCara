@@ -1,4 +1,5 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Pencil } from "lucide-react";
+import { Link } from "react-router";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { Badge } from "@/components/ui/badge";
@@ -13,10 +14,15 @@ const STATE_VARIANT: Record<
   MERGED: "outline",
 };
 
-export function KanbanCard({ item }: { item: KanbanItem }) {
-  // Drag handle covers the whole card. The ExternalLink anchor inside has
-  // its own click handler; the DndContext's PointerSensor activationDistance
-  // (5px) keeps small clicks from being mistaken for drags.
+export function KanbanCard({
+  item,
+  projectId,
+}: {
+  item: KanbanItem;
+  projectId: string;
+}) {
+  // Drag handle covers the whole card. The action icons (ExternalLink,
+  // Pencil) stop pointerdown so they're clickable without starting a drag.
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({ id: item.githubItemNodeId });
 
@@ -35,6 +41,12 @@ export function KanbanCard({ item }: { item: KanbanItem }) {
     cursor: isDragging ? "grabbing" : "grab",
   };
 
+  const visibleLabels = item.labels.slice(0, 4);
+  const extraLabelCount = item.labels.length - visibleLabels.length;
+
+  const visibleAssignees = item.assignees.slice(0, 3);
+  const extraAssigneeCount = item.assignees.length - visibleAssignees.length;
+
   return (
     <div
       ref={setNodeRef}
@@ -48,28 +60,77 @@ export function KanbanCard({ item }: { item: KanbanItem }) {
           <div className="text-sm font-medium leading-snug">
             {item.contentTitle}
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {item.contentNumber !== null && <span>#{item.contentNumber}</span>}
             <Badge variant={variant} className="text-[10px] uppercase">
               {stateLabel}
             </Badge>
+            {item.isArchived && (
+              <Badge
+                variant="outline"
+                className="text-[10px] uppercase text-muted-foreground"
+              >
+                archived
+              </Badge>
+            )}
           </div>
+          {visibleLabels.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {visibleLabels.map((l) => (
+                <span
+                  key={l.name}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                  style={{
+                    backgroundColor: `#${l.color}33`,
+                    color: `#${l.color}`,
+                    border: `1px solid #${l.color}66`,
+                  }}
+                >
+                  {l.name}
+                </span>
+              ))}
+              {extraLabelCount > 0 && (
+                <span className="text-[10px] text-muted-foreground">
+                  +{extraLabelCount}
+                </span>
+              )}
+            </div>
+          )}
+          {visibleAssignees.length > 0 && (
+            <div className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground">
+              {visibleAssignees.map((a) => (
+                <span key={a.id}>@{a.login}</span>
+              ))}
+              {extraAssigneeCount > 0 && (
+                <span>+{extraAssigneeCount}</span>
+              )}
+            </div>
+          )}
         </div>
-        {item.contentUrl && (
-          <a
-            href={item.contentUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-muted-foreground hover:text-foreground"
-            title="Open on GitHub"
-            // Stop the pointerdown from reaching the drag listeners — without
-            // this the icon never gets a clean click because the sensor
-            // grabs every pointerdown on the card.
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <ExternalLink className="size-3.5" />
-          </a>
-        )}
+        <div className="flex flex-col items-center gap-1">
+          {item.kind === "issue" && item.contentNumber !== null && (
+            <Link
+              to={`/projects/${projectId}/issues/${item.contentNumber}`}
+              className="text-muted-foreground hover:text-foreground"
+              title="Edit in opencara"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <Pencil className="size-3.5" />
+            </Link>
+          )}
+          {item.contentUrl && (
+            <a
+              href={item.contentUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-muted-foreground hover:text-foreground"
+              title="Open on GitHub"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <ExternalLink className="size-3.5" />
+            </a>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -8,10 +8,18 @@
 //   GET    /projects/:id/kanban                         — read the local mirror, shaped for the UI
 //   POST   /projects/:id/kanban/refresh                 — force a re-pull from GitHub
 //   PATCH  /projects/:id/kanban/items/:itemNodeId       — set Status field on a board item
+//   GET    /projects/:id/kanban/stream                  — SSE: snapshot + on-change pushes
+//
+// SSE wires through a dedicated `kanban_link` Postgres channel. After any
+// route or webhook writes through to project_v2_links / project_v2_items,
+// it calls `notifyKanbanLink(pg, linkId)`. The SSE handler LISTENs on the
+// channel and re-snapshots when its link's id arrives.
 
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { ulid } from "ulid";
 import { and, asc, eq } from "drizzle-orm";
+import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
   githubInstallations,
@@ -31,7 +39,17 @@ import {
 
 interface KanbanRoutesDeps {
   db: Db;
+  pg: Sql;
   app?: GithubAppClient;
+}
+
+const KANBAN_NOTIFY_CHANNEL = "kanban_link";
+
+/** Fire-and-forget pg notify for a board link. Errors logged, never thrown. */
+export function notifyKanbanLink(pg: Sql, linkId: string): void {
+  pg.notify(KANBAN_NOTIFY_CHANNEL, linkId).catch((err: unknown) => {
+    console.error("[kanban] notify failed", { linkId, err });
+  });
 }
 
 export function kanbanRoutes(deps: KanbanRoutesDeps) {
@@ -141,6 +159,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         await upsertItem(deps.db, linkId, it);
       }
 
+      notifyKanbanLink(deps.pg, linkId);
       const fresh = await deps.db.query.projectV2Links.findFirst({
         where: eq(projectV2Links.id, linkId),
       });
@@ -156,9 +175,13 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
 
   r.delete("/projects/:id/kanban/link", auth, async (c) => {
     const id = c.req.param("id");
+    const existing = await deps.db.query.projectV2Links.findFirst({
+      where: eq(projectV2Links.projectId, id),
+    });
     await deps.db
       .delete(projectV2Links)
       .where(eq(projectV2Links.projectId, id));
+    if (existing) notifyKanbanLink(deps.pg, existing.id);
     return c.body(null, 204);
   });
 
@@ -293,7 +316,71 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       // in. The webhook will overwrite this once it lands.
       fresh = { ...itemRow, statusOptionId };
     }
+    notifyKanbanLink(deps.pg, link.id);
     return c.json({ item: fresh });
+  });
+
+  // SSE: send the full board snapshot on connect, then a fresh snapshot
+  // every time something pings the `kanban_link` Postgres channel for
+  // this link id. The client just replaces its kanbanQuery cache with the
+  // pushed payload — no extra refetch round-trip.
+  r.get("/projects/:id/kanban/stream", auth, (c) => {
+    const id = c.req.param("id");
+    return streamSSE(c, async (sse) => {
+      const loadSnapshot = async () => {
+        const link = await deps.db.query.projectV2Links.findFirst({
+          where: eq(projectV2Links.projectId, id),
+        });
+        if (!link) return { link: null, columns: [], items: [] } as const;
+        const items = await deps.db
+          .select()
+          .from(projectV2Items)
+          .where(eq(projectV2Items.projectV2LinkId, link.id))
+          .orderBy(asc(projectV2Items.updatedAt));
+        return { link, columns: link.statusOptions, items } as const;
+      };
+
+      const writeSnapshot = async () => {
+        const snap = await loadSnapshot();
+        await sse.writeSSE({
+          event: "snapshot",
+          data: JSON.stringify(snap),
+        });
+        return snap;
+      };
+
+      const initial = await writeSnapshot();
+      // Track the active link id; it can change if the user re-links to a
+      // different board mid-stream. We only re-snap on notifies that match
+      // the current link OR when the link is null (so a brand-new link
+      // surfaces here without the user having to reload).
+      let currentLinkId: string | null = initial.link?.id ?? null;
+
+      const onNotify = (payload: string) => {
+        if (currentLinkId !== null && payload !== currentLinkId) return;
+        writeSnapshot()
+          .then((next) => {
+            currentLinkId = next.link?.id ?? null;
+          })
+          .catch((err: unknown) => {
+            console.error("[kanban-sse] snapshot failed", { id, err });
+          });
+      };
+      const sub = await deps.pg.listen(KANBAN_NOTIFY_CHANNEL, onNotify);
+
+      // When unlinked, also subscribe so we hear the next link's first notify.
+      // pg.listen is for the channel as a whole; the filter above handles
+      // the targeting.
+
+      const heartbeat = setInterval(() => {
+        sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
+      }, 15_000);
+
+      sse.onAbort(async () => {
+        clearInterval(heartbeat);
+        await sub.unlisten();
+      });
+    });
   });
 
   r.post("/projects/:id/kanban/refresh", auth, async (c) => {
@@ -314,6 +401,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
         octokit,
       );
+      notifyKanbanLink(deps.pg, link.id);
       const fresh = await deps.db.query.projectV2Links.findFirst({
         where: eq(projectV2Links.id, link.id),
       });

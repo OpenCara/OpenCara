@@ -51,7 +51,7 @@ const flowEngine = githubApp
 if (githubApp) {
   app.route(
     "/webhooks/github",
-    appWebhookRoutes({ db, app: githubApp, flowEngine: flowEngine ?? undefined }),
+    appWebhookRoutes({ db, pg, app: githubApp, flowEngine: flowEngine ?? undefined }),
   );
   console.log("[orchestrator] GitHub App webhook handler mounted at /webhooks/github");
 } else {
@@ -113,7 +113,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
   apiHono.route("/", chatRoutes({ db, pg, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL }));
   apiHono.route("/", flowTemplateRoutes({ db }));
-  apiHono.route("/", kanbanRoutes({ db, app: githubApp ?? undefined }));
+  apiHono.route("/", kanbanRoutes({ db, pg, app: githubApp ?? undefined }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the

@@ -515,6 +515,17 @@ export const projectV2Items = pgTable(
     // there's no archivedAt timestamp. Store the boolean to avoid implying
     // a real archive time we don't actually have.
     isArchived: boolean("is_archived").notNull().default(false),
+    // Card detail caches (Phase 3). Issues/PRs only — drafts have neither.
+    // Mirrors the shape used by `issues.assignees` / `issues.labels` so the
+    // UI can share the rendering helpers.
+    assignees: jsonb("assignees")
+      .$type<{ login: string; id: number }[]>()
+      .notNull()
+      .default([]),
+    labels: jsonb("labels")
+      .$type<{ name: string; color: string }[]>()
+      .notNull()
+      .default([]),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

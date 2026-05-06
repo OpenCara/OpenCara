@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import {
   DndContext,
   PointerSensor,
@@ -16,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   kanbanQuery,
+  useKanbanStream,
   useRefreshKanban,
   useSetItemStatus,
   useUnlinkKanban,
@@ -33,6 +35,9 @@ const NO_STATUS_COLUMN_ID = "__none";
 
 export function KanbanTab({ projectId }: { projectId: string }) {
   const q = useQuery(kanbanQuery(projectId));
+  // SSE subscription is mounted regardless of link state — it'll surface a
+  // brand-new link the moment it's created (see kanban.ts onNotify filter).
+  useKanbanStream(projectId);
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
   if (q.error) {
     return (
@@ -60,6 +65,18 @@ function LinkedBoard({
   const unlink = useUnlinkKanban(projectId);
   const setStatus = useSetItemStatus(projectId);
   const link = data.link!;
+
+  const [showArchived, setShowArchived] = useState(false);
+  const [search, setSearch] = useState("");
+  const visibleItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return data.items.filter((it) => {
+      if (!showArchived && it.isArchived) return false;
+      if (q && !it.contentTitle.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [data.items, showArchived, search]);
+  const hiddenCount = data.items.length - visibleItems.length;
 
   // PointerSensor with a small activation distance so click-to-open-on-GitHub
   // (the ExternalLink icon inside the card) still works without a drag start.
@@ -91,7 +108,7 @@ function LinkedBoard({
   // happily lets items have no Status set.
   const grouped = useMemo(() => {
     const map = new Map<string | null, KanbanItem[]>();
-    for (const it of data.items) {
+    for (const it of visibleItems) {
       const key = it.statusOptionId;
       const list = map.get(key) ?? [];
       list.push(it);
@@ -104,7 +121,7 @@ function LinkedBoard({
       );
     }
     return map;
-  }, [data.items]);
+  }, [visibleItems]);
 
   const orderedColumns: KanbanStatusOption[] = useMemo(() => {
     return [...data.columns].sort((a, b) => a.position - b.position);
@@ -168,6 +185,30 @@ function LinkedBoard({
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <Input
+          type="search"
+          value={search}
+          placeholder="Search by title…"
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-8 max-w-xs"
+        />
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            className="size-3.5"
+          />
+          Show archived
+        </label>
+        {hiddenCount > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {hiddenCount} hidden by filter
+          </span>
+        )}
+      </div>
+
       {refresh.error && (
         <div className="text-xs text-destructive">
           Refresh failed:{" "}
@@ -197,6 +238,7 @@ function LinkedBoard({
             {orderedColumns.map((col) => (
               <Column
                 key={col.optionId}
+                projectId={projectId}
                 option={col}
                 items={grouped.get(col.optionId) ?? []}
               />
@@ -204,6 +246,7 @@ function LinkedBoard({
             {/* Always rendered — it's a valid drop target for "clear Status",
                 even when no items are sitting there. */}
             <Column
+              projectId={projectId}
               option={{
                 optionId: NO_STATUS_COLUMN_ID,
                 name: "No status",
@@ -222,9 +265,11 @@ function LinkedBoard({
 function Column({
   option,
   items,
+  projectId,
 }: {
   option: KanbanStatusOption;
   items: KanbanItem[];
+  projectId: string;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: option.optionId });
   return (
@@ -252,7 +297,9 @@ function Column({
             {isOver ? "Drop here" : "Empty"}
           </div>
         ) : (
-          items.map((it) => <KanbanCard key={it.id} item={it} />)
+          items.map((it) => (
+            <KanbanCard key={it.id} item={it} projectId={projectId} />
+          ))
         )}
       </div>
     </div>
