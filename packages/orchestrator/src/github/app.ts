@@ -89,8 +89,8 @@ export function createGithubAppClient(
     // DELETE /installation/token authenticates with the installation token
     // itself, not the App JWT — so we use a one-shot Octokit with that token
     // rather than the app-level client.
-    const oct = new Octokit({ auth: token });
-    await oct.request("DELETE /installation/token");
+    const client = new Octokit({ auth: token });
+    await client.request("DELETE /installation/token");
   };
 
   const webhooks = new Webhooks({ secret: webhookSecret });

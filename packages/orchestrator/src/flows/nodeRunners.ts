@@ -364,19 +364,14 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   const agentRunId = ulid();
   env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  // Stamp ephemeral GitHub creds into env BEFORE the agent_runs insert so
-  // the persisted spec.env shows that injection happened, but with redacted
-  // marker values — the real token is short-lived (≤1h) and per-run, so
-  // there's no value in persisting it and a clear cost in leaking it via
-  // audit/debug. The actual token is written to the live env object AFTER
-  // insert, below.
-  //
-  // GIT_AUTHOR_*/GIT_COMMITTER_* are pinned per run so that a host running
-  // multiple orchestrators (future) doesn't have its global ~/.gitconfig
-  // user identity leak between concurrent agent runs.
-  const TOKEN_PLACEHOLDER = "<ephemeral>";
-  env["GH_TOKEN"] = TOKEN_PLACEHOLDER;
-  env["GITHUB_TOKEN"] = TOKEN_PLACEHOLDER;
+  // Token markers go into the persisted spec.env so the audit row shows
+  // injection happened — the real token is overwritten onto the live env
+  // AFTER insert (see below) and never reaches the DB. GIT_*_NAME/EMAIL
+  // are pinned so a host that ever runs multiple orchestrators doesn't
+  // leak its global ~/.gitconfig identity between concurrent runs.
+  const tokenPlaceholder = "<ephemeral>";
+  env["GH_TOKEN"] = tokenPlaceholder;
+  env["GITHUB_TOKEN"] = tokenPlaceholder;
   env["GIT_AUTHOR_NAME"] = "opencara[bot]";
   env["GIT_AUTHOR_EMAIL"] = "opencara[bot]@users.noreply.github.com";
   env["GIT_COMMITTER_NAME"] = "opencara[bot]";
@@ -411,7 +406,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     mintedToken = await ctx.app.mintEphemeralToken({
       installationId: ctx.installation.githubInstallationId,
       repositoryIds: [ctx.project.githubRepoId],
-      permissions: { contents: "read", issues: "write", pull_requests: "write" },
+      permissions: { contents: "write", issues: "write", pull_requests: "write" },
     });
     env["GH_TOKEN"] = mintedToken.token;
     env["GITHUB_TOKEN"] = mintedToken.token;
