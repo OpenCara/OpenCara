@@ -120,6 +120,13 @@
       "when": 1777370000000,
       "tag": "0016_kanban",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1777380000000,
+      "tag": "0017_kanban_followups",
+      "breakpoints": true
     }
   ]
 }

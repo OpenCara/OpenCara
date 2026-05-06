@@ -34,6 +34,7 @@ export interface ProjectV2Snapshot {
   number: number;
   title: string;
   ownerLogin: string;
+  ownerType: "Organization" | "User";
   statusFieldNodeId: string;
   statusOptions: StatusOption[];
   items: ProjectV2ItemSnapshot[];
@@ -48,7 +49,7 @@ export interface ProjectV2ItemSnapshot {
   contentUrl: string | null;
   contentState: string | null;
   statusOptionId: string | null;
-  archivedAt: string | null;
+  isArchived: boolean;
   updatedAt: string | null;
 }
 
@@ -124,11 +125,25 @@ export async function listAvailableProjects(
   try {
     res = await octokit.graphql<ListProjectsResponse>(query, { owner, repo });
   } catch (err) {
-    // The `organization(login:...)` selection 404s when the owner is a user
-    // account; Octokit surfaces partial GraphQL data alongside the error.
-    // Use the data we did get.
+    // The `organization(login:...)` selection fails (NOT_FOUND) when the
+    // owner is a User account, not an Org. Octokit surfaces partial data
+    // alongside the error. Only swallow that specific failure mode — any
+    // other GraphQL error (auth, rate limit, network, schema mismatch)
+    // should propagate so the caller surfaces it.
+    const errs = (err as {
+      errors?: Array<{ type?: string; path?: Array<string | number> }>;
+    }).errors;
     const partial = (err as { data?: ListProjectsResponse }).data;
-    if (!partial) throw err;
+    const onlyOrgLookupFailed =
+      Array.isArray(errs) &&
+      errs.length > 0 &&
+      errs.every(
+        (e) =>
+          e.type === "NOT_FOUND" &&
+          Array.isArray(e.path) &&
+          e.path[0] === "organization",
+      );
+    if (!partial || !onlyOrgLookupFailed) throw err;
     res = partial;
   }
 
@@ -321,7 +336,7 @@ export async function fetchProjectSnapshot(
     );
     const conn = page.node?.items;
     if (!conn) break;
-    for (const raw of conn.nodes) {
+    for (const raw of conn.nodes ?? []) {
       items.push(itemSnapshotFromRaw(raw));
     }
     if (!conn.pageInfo.hasNextPage || !conn.pageInfo.endCursor) break;
@@ -333,6 +348,8 @@ export async function fetchProjectSnapshot(
     number: project.number,
     title: project.title,
     ownerLogin: project.owner?.login ?? "",
+    ownerType:
+      project.owner?.__typename === "User" ? "User" : "Organization",
     statusFieldNodeId: project.field.id,
     statusOptions,
     items,
@@ -340,7 +357,7 @@ export async function fetchProjectSnapshot(
 }
 
 interface FetchSingleItemResponse {
-  node: (RawItem & { project?: { id: string } | null }) | null;
+  node: RawItem | null;
 }
 
 /**
@@ -384,9 +401,8 @@ export async function fetchItemSnapshot(
 }
 
 /**
- * Upsert (or delete-on-archive-redacted) a single item snapshot into the
- * mirror. Mirrors the core of backfillBoard's per-item path so the webhook
- * stays in sync with on-demand refreshes.
+ * Upsert a single item snapshot into the mirror. Used by both the webhook
+ * handler and the backfill loop so the two paths stay in sync.
  */
 export async function upsertItem(
   db: Db,
@@ -405,8 +421,8 @@ export async function upsertItem(
       contentTitle: it.contentTitle,
       contentUrl: it.contentUrl,
       contentState: it.contentState,
-      statusOptionId: it.statusOptionId,
-      archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
+      statusOptionId: it.statusOptionId ?? null,
+      isArchived: it.isArchived,
       updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
     })
     .onConflictDoUpdate({
@@ -418,8 +434,8 @@ export async function upsertItem(
         contentTitle: it.contentTitle,
         contentUrl: it.contentUrl,
         contentState: it.contentState,
-        statusOptionId: it.statusOptionId,
-        archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
+        statusOptionId: it.statusOptionId ?? null,
+        isArchived: it.isArchived,
         updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
       },
     });
@@ -465,23 +481,36 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
     contentUrl,
     contentState,
     statusOptionId: raw.fieldValueByName?.optionId ?? null,
-    archivedAt: raw.isArchived ? raw.updatedAt : null,
+    isArchived: raw.isArchived,
     updatedAt: raw.updatedAt,
   };
 }
 
 /**
  * Replace the local mirror for a link with a fresh snapshot from GitHub.
- * Strategy: fetch snapshot, upsert every item, then delete any rows whose
- * `github_item_node_id` no longer appears (covers items removed from the
- * board between syncs without us seeing the webhook). Runs in two
- * sequential SQL passes — fine for the v1 board sizes we care about.
+ *
+ * Race model: a webhook can fire mid-backfill and insert a brand-new row
+ * for an item that wasn't on the board when our GraphQL paginate started.
+ * To avoid deleting that row in the cleanup pass, we **freeze the set of
+ * existing item ids before the GraphQL fetch**. Cleanup only deletes rows
+ * from that frozen set — anything inserted after the freeze is left alone
+ * even if it didn't appear in `seen`. Conversely, an item that existed
+ * before the fetch but didn't appear in the snapshot was either deleted on
+ * GitHub or filtered out (e.g. archived + we drop archived) — safe to
+ * remove.
  */
 export async function backfillBoard(
   db: Db,
   link: { id: string; githubProjectNodeId: string },
   octokit: Octokit,
 ): Promise<{ snapshot: ProjectV2Snapshot; itemCount: number }> {
+  // Freeze the pre-fetch set of mirrored items.
+  const before = await db
+    .select({ githubItemNodeId: projectV2Items.githubItemNodeId })
+    .from(projectV2Items)
+    .where(eq(projectV2Items.projectV2LinkId, link.id));
+  const beforeIds = new Set(before.map((r) => r.githubItemNodeId));
+
   const snapshot = await fetchProjectSnapshot(octokit, link.githubProjectNodeId);
 
   await db
@@ -490,6 +519,7 @@ export async function backfillBoard(
       githubProjectNumber: snapshot.number,
       githubProjectTitle: snapshot.title,
       githubProjectOwner: snapshot.ownerLogin,
+      githubProjectOwnerType: snapshot.ownerType,
       statusFieldNodeId: snapshot.statusFieldNodeId,
       statusOptions: snapshot.statusOptions,
       lastSyncedAt: new Date(),
@@ -500,57 +530,15 @@ export async function backfillBoard(
   const seen = new Set<string>();
   for (const it of snapshot.items) {
     seen.add(it.itemNodeId);
-    await db
-      .insert(projectV2Items)
-      .values({
-        id: ulid(),
-        projectV2LinkId: link.id,
-        githubItemNodeId: it.itemNodeId,
-        kind: it.kind,
-        contentNodeId: it.contentNodeId,
-        contentNumber: it.contentNumber,
-        contentTitle: it.contentTitle,
-        contentUrl: it.contentUrl,
-        contentState: it.contentState,
-        statusOptionId: it.statusOptionId,
-        archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
-        updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [projectV2Items.projectV2LinkId, projectV2Items.githubItemNodeId],
-        set: {
-          kind: it.kind,
-          contentNodeId: it.contentNodeId,
-          contentNumber: it.contentNumber,
-          contentTitle: it.contentTitle,
-          contentUrl: it.contentUrl,
-          contentState: it.contentState,
-          statusOptionId: it.statusOptionId,
-          archivedAt: it.archivedAt ? new Date(it.archivedAt) : null,
-          updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
-        },
-      });
+    await upsertItem(db, link.id, it);
   }
 
-  // Drop rows that no longer appear on the board. Cheap-but-correct:
-  // re-read this link's items and delete by node id any not in `seen`.
-  const existing = await db
-    .select({
-      id: projectV2Items.id,
-      githubItemNodeId: projectV2Items.githubItemNodeId,
-    })
-    .from(projectV2Items)
-    .where(eq(projectV2Items.projectV2LinkId, link.id));
-  for (const row of existing) {
-    if (!seen.has(row.githubItemNodeId)) {
-      await db
-        .delete(projectV2Items)
-        .where(
-          and(
-            eq(projectV2Items.projectV2LinkId, link.id),
-            eq(projectV2Items.githubItemNodeId, row.githubItemNodeId),
-          ),
-        );
+  // Delete only rows that existed at the freeze point AND weren't in the
+  // new snapshot. Webhook-inserted rows that arrived after the freeze are
+  // not candidates for deletion.
+  for (const id of beforeIds) {
+    if (!seen.has(id)) {
+      await deleteItem(db, link.id, id);
     }
   }
 

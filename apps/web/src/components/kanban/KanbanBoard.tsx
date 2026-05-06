@@ -70,7 +70,12 @@ function LinkedBoard({
 
   const noStatusItems = grouped.get(null) ?? [];
 
-  const githubBoardUrl = `https://github.com/${link.githubProjectOwner}/projects/${link.githubProjectNumber}`;
+  // Canonical Projects v2 URL differs by owner type — orgs live under /orgs/,
+  // user-owned boards under /users/. The flat /{owner}/projects/N form 404s.
+  const githubBoardUrl =
+    link.githubProjectOwnerType === "User"
+      ? `https://github.com/users/${link.githubProjectOwner}/projects/${link.githubProjectNumber}`
+      : `https://github.com/orgs/${link.githubProjectOwner}/projects/${link.githubProjectNumber}`;
 
   return (
     <div className="space-y-4">

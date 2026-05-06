@@ -24,7 +24,9 @@ import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { GithubAppClient } from "../../github/app.js";
 import {
   backfillBoard,
+  fetchProjectSnapshot,
   listAvailableProjects,
+  upsertItem,
 } from "../../github/projectsV2.js";
 
 interface KanbanRoutesDeps {
@@ -108,41 +110,35 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       const octokit = await deps.app.forInstallation(
         ctx.installation.githubInstallationId,
       );
-      // Replace any prior link first; cascade deletes the items mirror so the
-      // backfill can repopulate cleanly. Do it inside one logical step so the
-      // window between "no link" and "new link inserted" stays small.
+
+      // Validate the new board BEFORE touching the existing link. If the
+      // GraphQL fetch fails (board removed, no Status field, perms missing,
+      // etc.), the user keeps whatever link they had — we do not strand
+      // the project unlinked just because the new candidate didn't pan out.
+      const snapshot = await fetchProjectSnapshot(octokit, projectNodeId);
+
+      const linkId = ulid();
+      // Replace + populate now that we trust the snapshot. If the DB ops
+      // below fail mid-way, the user loses the old link — DB failures are
+      // rare and a retry repairs state. The much more common failure mode
+      // (bad node id, missing Status field) is already handled above.
       await deps.db
         .delete(projectV2Links)
         .where(eq(projectV2Links.projectId, id));
-
-      const linkId = ulid();
-      // Insert a placeholder row with empty status_options; backfillBoard
-      // will fill it in. Doing this in two steps keeps backfillBoard's
-      // signature simple (it always works on an existing link).
       await deps.db.insert(projectV2Links).values({
         id: linkId,
         projectId: id,
-        githubProjectNodeId: projectNodeId,
-        githubProjectNumber: 0,
-        githubProjectOwner: "",
-        githubProjectTitle: "",
-        statusFieldNodeId: "",
-        statusOptions: [],
+        githubProjectNodeId: snapshot.nodeId,
+        githubProjectNumber: snapshot.number,
+        githubProjectOwner: snapshot.ownerLogin,
+        githubProjectOwnerType: snapshot.ownerType,
+        githubProjectTitle: snapshot.title,
+        statusFieldNodeId: snapshot.statusFieldNodeId,
+        statusOptions: snapshot.statusOptions,
+        lastSyncedAt: new Date(),
       });
-
-      try {
-        await backfillBoard(
-          deps.db,
-          { id: linkId, githubProjectNodeId: projectNodeId },
-          octokit,
-        );
-      } catch (err) {
-        // Roll back the placeholder so the user isn't stuck with a half-linked
-        // row that the UI can't render.
-        await deps.db
-          .delete(projectV2Links)
-          .where(eq(projectV2Links.id, linkId));
-        throw err;
+      for (const it of snapshot.items) {
+        await upsertItem(deps.db, linkId, it);
       }
 
       const fresh = await deps.db.query.projectV2Links.findFirst({

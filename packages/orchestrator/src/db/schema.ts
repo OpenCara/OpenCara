@@ -469,6 +469,10 @@ export const projectV2Links = pgTable(
     githubProjectNodeId: text("github_project_node_id").notNull(),
     githubProjectNumber: integer("github_project_number").notNull(),
     githubProjectOwner: text("github_project_owner").notNull(),
+    // 'Organization' | 'User'. Needed to construct the canonical board URL
+    // (/orgs/{owner}/projects/{n} vs /users/{owner}/projects/{n}); the two
+    // shapes can't be inferred from the login alone.
+    githubProjectOwnerType: text("github_project_owner_type").notNull().default("Organization"),
     githubProjectTitle: text("github_project_title").notNull(),
     statusFieldNodeId: text("status_field_node_id").notNull(),
     statusOptions: jsonb("status_options")
@@ -507,7 +511,10 @@ export const projectV2Items = pgTable(
     // 'OPEN' | 'CLOSED' | 'MERGED' | null (drafts have no state)
     contentState: text("content_state"),
     statusOptionId: text("status_option_id"),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    // GitHub's ProjectV2Item GraphQL exposes only `isArchived: Boolean!` —
+    // there's no archivedAt timestamp. Store the boolean to avoid implying
+    // a real archive time we don't actually have.
+    isArchived: boolean("is_archived").notNull().default(false),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

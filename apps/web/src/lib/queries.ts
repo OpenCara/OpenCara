@@ -610,6 +610,7 @@ export interface KanbanLink {
   githubProjectNodeId: string;
   githubProjectNumber: number;
   githubProjectOwner: string;
+  githubProjectOwnerType: "Organization" | "User";
   githubProjectTitle: string;
   statusFieldNodeId: string;
   statusOptions: KanbanStatusOption[];
@@ -629,7 +630,7 @@ export interface KanbanItem {
   contentUrl: string | null;
   contentState: string | null;
   statusOptionId: string | null;
-  archivedAt: string | null;
+  isArchived: boolean;
   updatedAt: string;
 }
 
@@ -662,7 +663,11 @@ export function useLinkKanban(projectId: string) {
         { projectNodeId },
       ),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "kanban"] });
+      // exact:true keeps the discovery list cached across link/unlink/refresh.
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
     },
   });
 }
@@ -673,7 +678,11 @@ export function useUnlinkKanban(projectId: string) {
     mutationFn: () =>
       api.delete<void>(`/api/projects/${projectId}/kanban/link`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "kanban"] });
+      // exact:true keeps the discovery list cached across link/unlink/refresh.
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
     },
   });
 }
@@ -686,7 +695,11 @@ export function useRefreshKanban(projectId: string) {
         `/api/projects/${projectId}/kanban/refresh`,
       ),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "kanban"] });
+      // exact:true keeps the discovery list cached across link/unlink/refresh.
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
     },
   });
 }

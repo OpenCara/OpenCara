@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   githubInstallations,
@@ -282,8 +282,19 @@ async function handleMetaEvent(
  *
  * `projects_v2_item` events fire when items are created/edited/deleted/
  * archived/restored on the board. We always have the project_node_id on
- * the payload, so we look up the link by that. If no opencara project has
- * linked this board, we ignore the event (the user hasn't opted in).
+ * the payload, so we look up the link(s) by that.
+ *
+ * **Fan-out:** the same Projects v2 board can be linked by multiple opencara
+ * projects (different repos, different installations). The lookup uses
+ * `findMany` and applies the update to every matching link. Without the
+ * fan-out, only one of the linked mirrors gets updated and the others
+ * silently drift.
+ *
+ * **Installation scoping:** the lookup also joins through `projects` and
+ * requires `projects.installationId === installRow.id`. Without that, a
+ * webhook from installation X could mutate a link owned by installation Y
+ * that happens to point at the same board node id (which can happen when
+ * two orgs both have access to the same project).
  */
 async function handleProjectsV2Event(
   deps: WebhookDeps,
@@ -296,29 +307,48 @@ async function handleProjectsV2Event(
   });
   if (!installRow) return;
 
+  // Find every link that points at this board AND belongs to a project
+  // owned by the installation that delivered this webhook.
+  const linksForBoard = async (projectNodeId: string) => {
+    const rows = await deps.db
+      .select({ link: projectV2Links })
+      .from(projectV2Links)
+      .innerJoin(projects, eq(projectV2Links.projectId, projects.id))
+      .where(
+        and(
+          eq(projectV2Links.githubProjectNodeId, projectNodeId),
+          eq(projects.installationId, installRow.id),
+        ),
+      );
+    return rows.map((r) => r.link);
+  };
+
   if (eventType === "projects_v2") {
     const projectNodeId = payload.projects_v2?.node_id;
     if (!projectNodeId) return;
-    const link = await deps.db.query.projectV2Links.findFirst({
-      where: eq(projectV2Links.githubProjectNodeId, projectNodeId),
-    });
-    if (!link) return;
+    const links = await linksForBoard(projectNodeId);
+    if (links.length === 0) return;
     if (payload.action === "deleted") {
-      // Drop the link entirely — items cascade. The opencara project keeps
-      // its tab visible (empty state); the user can pick a new board.
-      await deps.db.delete(projectV2Links).where(eq(projectV2Links.id, link.id));
+      // Drop every matching link — items cascade. The opencara projects
+      // keep their tabs visible (empty state); users can pick a new board.
+      for (const link of links) {
+        await deps.db.delete(projectV2Links).where(eq(projectV2Links.id, link.id));
+      }
       return;
     }
     if (payload.action === "edited") {
-      // Title / Status options may have changed. A full backfill reconciles
-      // both the link metadata and any items whose status_option_id was on
-      // an option that got renamed or removed.
+      // Title / Status options may have changed. Full backfill reconciles
+      // both link metadata and items whose status_option_id was on an
+      // option that got renamed or removed. One backfill per linked mirror
+      // (each is a separate opencara project's local copy).
       const octokit = await deps.app.forInstallation(installRow.githubInstallationId);
-      await backfillBoard(
-        deps.db,
-        { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
-        octokit,
-      );
+      for (const link of links) {
+        await backfillBoard(
+          deps.db,
+          { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
+          octokit,
+        );
+      }
     }
     return;
   }
@@ -328,28 +358,35 @@ async function handleProjectsV2Event(
     const projectNodeId = item?.project_node_id;
     const itemNodeId = item?.node_id;
     if (!projectNodeId || !itemNodeId) return;
-    const link = await deps.db.query.projectV2Links.findFirst({
-      where: eq(projectV2Links.githubProjectNodeId, projectNodeId),
-    });
-    if (!link) return;
+    const links = await linksForBoard(projectNodeId);
+    if (links.length === 0) return;
 
     if (payload.action === "deleted") {
-      await deleteItem(deps.db, link.id, itemNodeId);
+      for (const link of links) {
+        await deleteItem(deps.db, link.id, itemNodeId);
+      }
       return;
     }
 
     // For created / edited / reordered / archived / restored / converted:
-    // the cheapest correct path is to fetch the single item's current state
-    // via GraphQL and upsert. Parsing the partial diff out of `changes`
-    // would be faster but the shape is field-type-dependent; refresh-on-event
-    // keeps the mirror trustworthy without a webhook-payload taxonomy.
+    // fetch the single item's current state via GraphQL and upsert into
+    // every matching link's mirror. Parsing the partial diff out of
+    // `changes` would be faster but the shape is field-type-dependent;
+    // refresh-on-event keeps the mirror trustworthy without a webhook-
+    // payload taxonomy. One GraphQL fetch shared across all linked
+    // mirrors.
     const octokit = await deps.app.forInstallation(installRow.githubInstallationId);
     const snapshot = await fetchItemSnapshot(octokit, itemNodeId);
     if (!snapshot) {
-      // Race: item was edited then deleted before we fetched. Drop the row.
-      await deleteItem(deps.db, link.id, itemNodeId);
+      // Race: item was edited then deleted before we fetched. Drop the row
+      // from every linked mirror.
+      for (const link of links) {
+        await deleteItem(deps.db, link.id, itemNodeId);
+      }
       return;
     }
-    await upsertItem(deps.db, link.id, snapshot);
+    for (const link of links) {
+      await upsertItem(deps.db, link.id, snapshot);
+    }
   }
 }
