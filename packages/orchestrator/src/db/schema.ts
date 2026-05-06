@@ -285,6 +285,11 @@ export const flowRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     error: text("error"),
+    // Why a 'cancelled' run ended up cancelled. 'trigger_skip' = trigger
+    // node rejected the event (default-hidden noise from webhook fan-out);
+    // 'abandoned' = reaper restored at boot. Null on non-cancelled runs
+    // and pre-column rows.
+    cancelReason: text("cancel_reason"),
   },
   (t) => ({
     projectCreatedAtIdx: index("flow_runs_project_created_at_idx").on(

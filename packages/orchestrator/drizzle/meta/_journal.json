@@ -134,6 +134,13 @@
       "when": 1777390000000,
       "tag": "0018_kanban_card_details",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0019_flow_run_cancel_reason",
+      "breakpoints": true
     }
   ]
 }

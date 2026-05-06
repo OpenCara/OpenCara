@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { ulid } from "ulid";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
@@ -45,8 +45,17 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
     });
     if (!flow) return c.json({ error: "not found" }, 404);
+    // Hide trigger-skip rows by default; ?includeSkipped=true shows them.
+    // Webhook fan-out to (project flow × event) makes these the bulk of
+    // the rows otherwise.
+    const includeSkipped = c.req.query("includeSkipped") === "true";
     const runs = await deps.db.query.flowRuns.findMany({
-      where: eq(flowRuns.flowId, flow.id),
+      where: includeSkipped
+        ? eq(flowRuns.flowId, flow.id)
+        : and(
+            eq(flowRuns.flowId, flow.id),
+            sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
+          ),
       orderBy: [desc(flowRuns.createdAt)],
       limit: 50,
     });
@@ -326,8 +335,15 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   r.get("/projects/:id/flow-runs", auth, async (c) => {
     const projectId = c.req.param("id");
     const limit = clampLimit(c.req.query("limit"));
+    // Hide trigger-skip rows by default; ?includeSkipped=true shows them.
+    const includeSkipped = c.req.query("includeSkipped") === "true";
     const rows = await deps.db.query.flowRuns.findMany({
-      where: eq(flowRuns.projectId, projectId),
+      where: includeSkipped
+        ? eq(flowRuns.projectId, projectId)
+        : and(
+            eq(flowRuns.projectId, projectId),
+            sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
+          ),
       orderBy: [desc(flowRuns.createdAt)],
       limit,
     });

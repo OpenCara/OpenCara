@@ -33,12 +33,14 @@ export async function reapOrphanedRuns(
     .where(inArray(flowRunSteps.status, ["pending", "running"]))
     .returning({ id: flowRunSteps.id });
 
-  // flow_runs: cancelled (we didn't fail; the system terminated it).
+  // flow_runs: cancelled. cancel_reason='abandoned' so the Flow runs page
+  // keeps these visible (vs. trigger_skip noise that gets filtered out).
   const flow = await db
     .update(flowRuns)
     .set({
       status: "cancelled",
       error: sql`COALESCE(${flowRuns.error}, ${REASON})`,
+      cancelReason: sql`COALESCE(${flowRuns.cancelReason}, 'abandoned')`,
     })
     .where(inArray(flowRuns.status, ["pending", "running"]))
     .returning({ id: flowRuns.id });
