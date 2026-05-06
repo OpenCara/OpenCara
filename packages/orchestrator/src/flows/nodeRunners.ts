@@ -70,16 +70,14 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (node.kind === "github.projects_v2_item") {
     return projectsV2ItemTrigger(ctx, node);
   }
+  if (node.kind === "github.pull_request_review") {
+    return pullRequestReviewTrigger(ctx, node);
+  }
   if (node.kind !== "github.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${(node as { kind: string }).kind}`);
   }
-  // The trigger handles two webhook event types: `pull_request` (PR
-  // lifecycle) and `pull_request_review` (review-submitted, the
-  // wake-up signal for review-fix flows). They have different
-  // payload shapes; for review events we synthesise a `pull_request`
-  // action of `review_submitted`.
-  if (ctx.event.type !== "pull_request" && ctx.event.type !== "pull_request_review") {
-    throw new SkipFlowError("not a pull_request or pull_request_review event");
+  if (ctx.event.type !== "pull_request") {
+    throw new SkipFlowError("not a pull_request event");
   }
   const payload = ctx.event.payload as {
     action?: string;
@@ -88,32 +86,14 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
       labels?: Array<{ name?: string }>;
       draft?: boolean;
     };
-    review?: { state?: string };
   };
 
-  // Map the review-submitted webhook action `submitted` → our
-  // synthetic `review_submitted` so the operator sees one consistent
-  // action enum.
-  const action =
-    ctx.event.type === "pull_request_review"
-      ? payload.action === "submitted"
-        ? "review_submitted"
-        : `review_${payload.action ?? ""}`
-      : payload.action ?? "";
+  const action = payload.action ?? "";
   if (!node.config.actions.includes(action as never)) {
     throw new SkipFlowError(`pull_request action '${action}' not in trigger filter`);
   }
 
   const cfg = node.config;
-
-  // Optional filter: only fire on certain review states (approved /
-  // changes_requested / commented / dismissed). Empty list = match any.
-  if (action === "review_submitted" && cfg.reviewStates.length > 0) {
-    const state = payload.review?.state ?? "";
-    if (!(cfg.reviewStates as string[]).includes(state)) {
-      throw new SkipFlowError(`review state '${state}' not in reviewStates filter`);
-    }
-  }
 
   if (cfg.ignoreDrafts && payload.pull_request?.draft === true) {
     throw new SkipFlowError("PR is a draft");
@@ -179,6 +159,40 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
 // we skip the option-name filters rather than blocking. projectNumber is not
 // yet enforced because the webhook only carries `project_node_id`; resolving
 // to a number would need GraphQL and isn't worth the complexity for MVP.
+// Match a github.pull_request_review event. Only fires on
+// `submitted` reviews (the "Submit review" button click); `edited` /
+// `dismissed` aren't useful wake-up signals for the review-fix loop
+// and would surprise operators by re-running the agent on a
+// reviewer's typo fix. Filters by review state if configured.
+async function pullRequestReviewTrigger(
+  ctx: NodeRunCtx,
+  node: TriggerNode,
+): Promise<NodeRunResult> {
+  if (node.kind !== "github.pull_request_review") {
+    throw new SkipFlowError(`expected pull_request_review trigger, got ${node.kind}`);
+  }
+  if (ctx.event.type !== "pull_request_review") {
+    throw new SkipFlowError("not a pull_request_review event");
+  }
+  const payload = ctx.event.payload as {
+    action?: string;
+    review?: { state?: string };
+  };
+  if (payload.action !== "submitted") {
+    throw new SkipFlowError(
+      `pull_request_review action '${payload.action ?? ""}' is not 'submitted'`,
+    );
+  }
+  const state = payload.review?.state ?? "";
+  if (
+    node.config.reviewStates.length > 0 &&
+    !(node.config.reviewStates as string[]).includes(state)
+  ) {
+    throw new SkipFlowError(`review state '${state}' not in reviewStates filter`);
+  }
+  return { output: { matched: true, reviewState: state } };
+}
+
 async function projectsV2ItemTrigger(
   ctx: NodeRunCtx,
   node: TriggerNode,
@@ -350,7 +364,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   if (!agent) {
     if (!setting?.agentId) {
       throw new Error(
-        `agent node '${node.id}' has no linked agent and no agent:<name> label on the issue — link a default from the flow detail page or label the issue`,
+        `agent node '${node.id}' has no linked agent and no agent:<name> label on the issue or PR — link a default from the flow detail page or label the issue/PR`,
       );
     }
     agent =
@@ -678,26 +692,47 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   return { output: { exitCode: result.exitCode }, stdoutCaptured: result.stdoutCaptured };
 };
 
-// Inspect the triggering issue's labels for an `agent:<name>` marker and
-// look that agent up by (name, project_owner_user_id). Returns null when no
-// such label exists (caller falls back to the linked agent). Throws a
-// SkipFlowError when the label is present but malformed/duplicate, and a
-// regular Error when the label points at an unknown agent (user error worth
-// surfacing rather than swallowing).
+// Inspect the triggering artifact's labels for an `agent:<name>` marker
+// and look that agent up by (name, project_owner_user_id). Returns null
+// when no such label exists (caller falls back to the linked agent).
+// Throws a SkipFlowError when the label is present but malformed/
+// duplicate, and a regular Error when the label points at an unknown
+// agent (user error worth surfacing rather than swallowing).
+//
+// Sources walked:
+//   - issueContext.stdin.issue.labels — the projects_v2_item path
+//     (issue-implement flow): label set on the issue.
+//   - prContext.stdin.pr.labels (only for pull_request_review events)
+//     — the pr-review-fix path: label set on the PR. Operators can
+//     change the agent mid-PR by relabeling.
+//
+// We deliberately do NOT walk PR labels for `pull_request` lifecycle
+// events (opened/synchronize/...) because those flows (pr-review,
+// pr-review-multi) use multi-agent fan-out via flow_node_settings;
+// reading PR labels would silently route them away from the operator's
+// linked reviewers.
 async function resolveLabelRoutedAgent(
   ctx: NodeRunCtx,
 ): Promise<typeof agents.$inferSelect | null> {
-  const labels = ctx.issueContext?.stdin.issue?.labels ?? [];
+  const sources: string[] = [];
+  for (const l of ctx.issueContext?.stdin.issue?.labels ?? []) {
+    if (typeof l.name === "string") sources.push(l.name);
+  }
+  if (ctx.event.type === "pull_request_review" && ctx.prContext?.stdin.pr) {
+    const pr = ctx.prContext.stdin.pr as { labels?: Array<{ name?: unknown }> };
+    for (const l of pr.labels ?? []) {
+      if (typeof l.name === "string") sources.push(l.name);
+    }
+  }
   const PREFIX = "agent:";
-  const requested = labels
-    .map((l) => l.name)
-    .filter((n): n is string => typeof n === "string" && n.startsWith(PREFIX))
+  const requested = sources
+    .filter((n) => n.startsWith(PREFIX))
     .map((n) => n.slice(PREFIX.length).trim())
     .filter((n) => n.length > 0);
   if (requested.length === 0) return null;
   if (requested.length > 1) {
     throw new SkipFlowError(
-      `multiple agent:<name> labels on issue (${requested.join(", ")}); pick one`,
+      `multiple agent:<name> labels on issue/PR (${requested.join(", ")}); pick one`,
     );
   }
   const name = requested[0]!;
@@ -718,7 +753,7 @@ async function resolveLabelRoutedAgent(
   });
   if (!found) {
     throw new Error(
-      `issue label requested agent:${name} but no agent named '${name}' exists for the project owner — create it on /agents or fix the label`,
+      `label requested agent:${name} but no agent named '${name}' exists for the project owner — create it on /agents or fix the label`,
     );
   }
   return found;

@@ -27,17 +27,9 @@ export const prReviewFixFlow: FlowDefinition = {
   nodes: [
     {
       id: "t1",
-      kind: "github.pull_request",
+      kind: "github.pull_request_review",
       position: { x: 0, y: 0 },
       config: {
-        actions: ["review_submitted"],
-        branches: [],
-        branchesIgnore: [],
-        paths: [],
-        pathsIgnore: [],
-        labels: [],
-        labelsIgnore: [],
-        ignoreDrafts: false,
         // Default: fire on commented + changes_requested. Approved
         // reviews don't need a fix iteration; dismissed don't either.
         // Operators can broaden / narrow this in the trigger panel.

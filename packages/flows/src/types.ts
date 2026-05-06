@@ -3,26 +3,18 @@ import { AgentSpecSchema } from "@opencara/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
-// Mirrors GitHub Actions' on.pull_request + on.pull_request_review
-// filter set. The `review_submitted` action fires from a separate
-// GitHub webhook event (pull_request_review) but is matched by the
-// same trigger node so a single flow can choose to wake up on
-// review-submission.
+// Mirrors GitHub Actions' on.pull_request filter set. PR-review
+// events are a SEPARATE trigger kind (see
+// GithubPullRequestReviewTriggerSchema) — splitting them keeps the
+// pull_request trigger's filters (branches/paths/labels/drafts)
+// from leaking into the review-fix flow's narrower config surface.
 export const GithubPullRequestTriggerSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),
   position: Position,
   config: z.object({
     actions: z
-      .array(
-        z.enum([
-          "opened",
-          "synchronize",
-          "reopened",
-          "ready_for_review",
-          "review_submitted",
-        ]),
-      )
+      .array(z.enum(["opened", "synchronize", "reopened", "ready_for_review"]))
       .min(1),
     branches: z.array(z.string()).default([]),
     branchesIgnore: z.array(z.string()).default([]),
@@ -31,15 +23,33 @@ export const GithubPullRequestTriggerSchema = z.object({
     labels: z.array(z.string()).default([]),
     labelsIgnore: z.array(z.string()).default([]),
     ignoreDrafts: z.boolean().default(false),
-    // When `review_submitted` is in `actions`, also filter by the
-    // review's state. Empty = match any state. GitHub sends one of
-    // `approved | changes_requested | commented | dismissed`.
-    reviewStates: z
-      .array(z.enum(["approved", "changes_requested", "commented", "dismissed"]))
-      .default([]),
   }),
 });
 export type GithubPullRequestTrigger = z.infer<typeof GithubPullRequestTriggerSchema>;
+
+// Fires on the GitHub `pull_request_review` event (a reviewer hitting
+// "Submit review" or its API equivalent). The orchestrator surfaces the
+// review state + body via OPENCARA_REVIEW_* env vars, and the agent's
+// label routing reads the *PR's* labels (not the closing issue's),
+// so an operator can move the loop to a different agent mid-PR by
+// labeling the PR `agent:<name>`.
+export const GithubPullRequestReviewTriggerSchema = z.object({
+  id: z.string(),
+  kind: z.literal("github.pull_request_review"),
+  position: Position,
+  config: z.object({
+    // Empty = match any state. Default fires on the two states that
+    // mean "the reviewer wants something changed". Approved /
+    // dismissed reviews don't need a fix iteration; ignoring them by
+    // default keeps the loop quiet.
+    reviewStates: z
+      .array(z.enum(["approved", "changes_requested", "commented", "dismissed"]))
+      .default(["commented", "changes_requested"]),
+  }),
+});
+export type GithubPullRequestReviewTrigger = z.infer<
+  typeof GithubPullRequestReviewTriggerSchema
+>;
 
 // GitHub Projects v2 item status-change trigger. Fires when a project board
 // status (or any single-select field) of a linked Issue/PR/DraftIssue changes
@@ -67,12 +77,14 @@ export type GithubProjectsV2ItemTrigger = z.infer<typeof GithubProjectsV2ItemTri
 
 export const TriggerNodeSchema = z.discriminatedUnion("kind", [
   GithubPullRequestTriggerSchema,
+  GithubPullRequestReviewTriggerSchema,
   GithubProjectsV2ItemTriggerSchema,
 ]);
 export type TriggerNode = z.infer<typeof TriggerNodeSchema>;
 
 export const TRIGGER_KINDS = [
   "github.pull_request",
+  "github.pull_request_review",
   "github.projects_v2_item",
 ] as const;
 export function isTriggerKind(kind: string): boolean {

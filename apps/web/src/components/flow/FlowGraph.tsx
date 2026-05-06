@@ -106,6 +106,8 @@ function pickLabel(n: FlowGraphNode): string {
   switch (n.kind) {
     case "github.pull_request":
       return "Pull request";
+    case "github.pull_request_review":
+      return "PR review submitted";
     case "github.projects_v2_item":
       return "Project status change";
     case "agent":
@@ -124,6 +126,8 @@ function pickLabel(n: FlowGraphNode): string {
 function pickSubtitle(n: FlowGraphNode): string | undefined {
   switch (n.kind) {
     case "github.pull_request":
+      return "trigger";
+    case "github.pull_request_review":
       return "trigger";
     case "github.projects_v2_item":
       return "trigger";

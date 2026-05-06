@@ -25,7 +25,6 @@ export const prReviewFlow: FlowDefinition = {
         labels: [],
         labelsIgnore: [],
         ignoreDrafts: false,
-        reviewStates: [],
       },
     },
     {

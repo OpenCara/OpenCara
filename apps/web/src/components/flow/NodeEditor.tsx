@@ -96,9 +96,13 @@ export function NodeEditor({
       {selectedNode && selectedNode.kind === "github.pull_request" && (
         <TriggerNodePanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
+      {selectedNode && selectedNode.kind === "github.pull_request_review" && (
+        <PullRequestReviewTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
+      )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
-        selectedNode.kind !== "github.pull_request" && (
+        selectedNode.kind !== "github.pull_request" &&
+        selectedNode.kind !== "github.pull_request_review" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
@@ -741,6 +745,97 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   );
 }
 
+/* ─── github.pull_request_review trigger panel ────────────────── */
+
+const REVIEW_STATES = ["approved", "changes_requested", "commented", "dismissed"] as const;
+type ReviewState = (typeof REVIEW_STATES)[number];
+
+interface PRReviewTriggerPanelProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+  onClose: () => void;
+}
+
+function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTriggerPanelProps) {
+  const cfg = (node.config ?? {}) as { reviewStates?: ReviewState[] };
+  const initial = useMemo<ReviewState[]>(
+    () => cfg.reviewStates ?? ["commented", "changes_requested"],
+    [cfg.reviewStates],
+  );
+  const [states, setStates] = useState<ReviewState[]>(initial);
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setStates(initial);
+  }, [initial]);
+
+  const toggle = (s: ReviewState) =>
+    setStates((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
+
+  const save = () => {
+    set.mutate({ nodeId: node.id, config: { reviewStates: states } });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">PR review submitted</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Fires on the GitHub <code className="font-mono">pull_request_review</code> event
+              when the action is <code className="font-mono">submitted</code>.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Review states</div>
+          <div className="flex flex-wrap gap-2">
+            {REVIEW_STATES.map((s) => {
+              const isActive = states.includes(s);
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => toggle(s)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-xs",
+                    isActive
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40",
+                  )}
+                >
+                  {s}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Empty = match any state. Default is{" "}
+            <code className="font-mono">commented + changes_requested</code> — approved /
+            dismissed reviews don't need a fix iteration.
+          </p>
+        </div>
+
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button size="sm" disabled={set.isPending} onClick={save}>
+            {set.isPending ? "Saving…" : "Save filters"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 interface ChipFieldProps {
   label: string;

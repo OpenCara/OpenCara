@@ -41,7 +41,6 @@ export const prReviewMultiFlow: FlowDefinition = {
         labels: [],
         labelsIgnore: [],
         ignoreDrafts: false,
-        reviewStates: [],
       },
     },
     {
