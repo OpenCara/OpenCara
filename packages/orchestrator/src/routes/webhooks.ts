@@ -133,7 +133,11 @@ export function appWebhookRoutes(deps: WebhookDeps) {
           payload.issue.node_id
         ) {
           try {
-            await syncIssueIntoKanbanMirror(deps, payload.issue);
+            await syncIssueIntoKanbanMirror(
+              deps,
+              payload.issue,
+              installationRowId,
+            );
           } catch (err) {
             console.error("[webhooks] kanban label sync failed", {
               issueNodeId: payload.issue.node_id,
@@ -424,16 +428,17 @@ async function handleProjectsV2Event(
 }
 
 /**
- * Mirror label/assignee changes from an `issues` webhook into every Kanban
- * board's `project_v2_items` row that tracks this issue. The projects_v2_item
- * stream doesn't fire on label changes, so without this the Kanban tab's
- * labels column lags until a backfill runs. We notify the SSE channel for
- * each affected board so connected clients see the change immediately.
+ * Propagate label/assignee changes into every Kanban mirror row tracking
+ * this issue, scoped to the webhook's installation. Without this the
+ * kanban labels column lags until the next backfill — the projects_v2_item
+ * channel doesn't fire on label changes.
  */
 async function syncIssueIntoKanbanMirror(
   deps: WebhookDeps,
   issue: IssuePayload,
+  installationRowId: string | null,
 ): Promise<void> {
+  if (!installationRowId) return;
   const labels = (issue.labels ?? [])
     .map((l) => ({ name: l.name ?? "", color: l.color ?? "" }))
     .filter((l) => l.name);
@@ -444,14 +449,22 @@ async function syncIssueIntoKanbanMirror(
     )
     .map((a) => ({ login: a.login, id: a.id }));
 
-  // Find every kanban mirror row that points at this issue's GraphQL node id.
-  // One issue can appear on multiple boards (different opencara projects all
-  // linked to the same Projects v2). Update each.
+  // Restrict to mirror rows whose owning project belongs to the same
+  // installation that delivered this webhook. Mirrors the scoping that
+  // handleProjectsV2Event already does — a webhook from installation X
+  // must never write into a kanban mirror that belongs to installation Y,
+  // even if both link to the same Projects v2 board.
   const matches = await deps.db
     .select({ item: projectV2Items, link: projectV2Links })
     .from(projectV2Items)
     .innerJoin(projectV2Links, eq(projectV2Items.projectV2LinkId, projectV2Links.id))
-    .where(eq(projectV2Items.contentNodeId, issue.node_id));
+    .innerJoin(projects, eq(projectV2Links.projectId, projects.id))
+    .where(
+      and(
+        eq(projectV2Items.contentNodeId, issue.node_id),
+        eq(projects.installationId, installationRowId),
+      ),
+    );
 
   for (const { item, link } of matches) {
     await deps.db

@@ -318,7 +318,15 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const project = await deps.db.query.projects.findFirst({
       where: eq(projects.id, id),
     });
-    if (!project) return c.json({ error: "project not found" }, 404);
+    // Hide existence of foreign projects: a 404 here covers both the
+    // missing-project case and the not-yours case. Without this check,
+    // any authenticated user who learned a project id could write
+    // `agent:*` labels into another project's GitHub repo. The wider
+    // codebase still has this gap on other PATCH routes (body, draft) —
+    // tracked separately; tightening on this new route at minimum.
+    if (!project || project.addedByUserId !== user.id) {
+      return c.json({ error: "project not found" }, 404);
+    }
 
     let agentName: string | null = null;
     if (typeof agentIdRaw === "string" && agentIdRaw) {

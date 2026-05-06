@@ -267,8 +267,21 @@ export function useSetIssueAgent(projectId: string, issueNumber: number) {
         const filtered = prev.issue.labels.filter(
           (l) => !l.name.startsWith("agent:"),
         );
+        // Reuse an existing label's color if the user previously had one
+        // and is just renaming. Otherwise leave color empty and let the
+        // server reconcile — the hardcoded fallback would briefly show
+        // the wrong color on labels customised on GitHub side.
+        const priorAgentColor = prev.issue.labels.find((l) =>
+          l.name.startsWith("agent:"),
+        )?.color;
         const next = vars.agentName
-          ? [...filtered, { name: `agent:${vars.agentName}`, color: "5856d6" }]
+          ? [
+              ...filtered,
+              {
+                name: `agent:${vars.agentName}`,
+                color: priorAgentColor ?? "",
+              },
+            ]
           : filtered;
         qc.setQueryData(detailKey, {
           ...prev,
@@ -280,9 +293,26 @@ export function useSetIssueAgent(projectId: string, issueNumber: number) {
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
     },
-    onSettled: (data) => {
-      if (data) qc.setQueryData(detailKey, data);
-      qc.invalidateQueries({ queryKey: ["projects", projectId, "issues"] });
+    // Success-only invalidation: a failed mutation already rolled back
+    // via onError; refetching after failure is wasted work.
+    onSuccess: (data) => {
+      qc.setQueryData(detailKey, data);
+      // Predicate-based invalidate: refresh the issues *list* but not the
+      // detail (which we just wrote authoritatively above). Without this,
+      // the wider ["projects", id, "issues"] key match cascades into the
+      // detail and immediately undoes our setQueryData.
+      qc.invalidateQueries({
+        predicate: (q) => {
+          const k = q.queryKey;
+          return (
+            Array.isArray(k) &&
+            k[0] === "projects" &&
+            k[1] === projectId &&
+            k[2] === "issues" &&
+            k.length === 3
+          );
+        },
+      });
       qc.invalidateQueries({
         queryKey: ["projects", projectId, "kanban"],
         exact: true,
