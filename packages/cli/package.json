@@ -11,11 +11,13 @@
   "homepage": "https://opencara.com",
   "type": "module",
   "bin": {
-    "opencara": "./dist/bin.js"
+    "opencara": "./dist/bin.js",
+    "opencara-mcp": "./dist/opencara-mcp.js"
   },
   "main": "./dist/bin.js",
   "files": [
-    "dist/bin.js"
+    "dist/bin.js",
+    "dist/opencara-mcp.js"
   ],
   "scripts": {
     "build": "tsc -b && node build.mjs",

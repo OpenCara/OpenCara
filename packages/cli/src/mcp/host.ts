@@ -19,6 +19,7 @@
 // that wiring lives one level up in #29. Here it's a small, testable
 // orchestrator.
 
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as pathResolve } from "node:path";
 import { IpcServer, IPC_SOCKET_ENV, defaultIpcSocketPath } from "./ipc.js";
@@ -42,17 +43,32 @@ export interface McpHostOptions {
 }
 
 /**
- * Default invocation: locate this file, walk to the source bin/, and ask
- * `tsx` to run it. Works in development (where the source tree is
- * present); a production build would pass an explicit binary path.
+ * Default invocation. Three layouts to handle:
+ *
+ *   1. Source dev (`pnpm --filter opencara dev` / spike scripts).
+ *      `import.meta.url` resolves to packages/cli/src/mcp/host.ts;
+ *      the source bin lives at ../bin/opencara-mcp.ts. Run via tsx.
+ *
+ *   2. Bundled / installed (`npm i -g opencara`). esbuild collapses
+ *      everything into dist/bin.js; opencara-mcp ships as a sibling
+ *      dist/opencara-mcp.js with its own shebang. Run via node.
+ *
+ *   3. Last resort: rely on `opencara-mcp` being on PATH (npm sets up
+ *      the bin shim during install). Used if neither file exists at
+ *      the resolved location — shouldn't happen but keeps us out of
+ *      "throws at session start" territory.
  */
 function defaultMcpInvocation(): { command: string; args: string[] } {
   const here = dirname(fileURLToPath(import.meta.url));
-  // host.ts lives at packages/cli/src/mcp/host.ts (in src tree) or
-  // packages/cli/dist/mcp/host.js (after `tsc -b`). Both layouts are
-  // sibling to a `bin/` dir under the same parent.
-  const binPath = pathResolve(here, "..", "bin", "opencara-mcp.ts");
-  return { command: "tsx", args: [binPath] };
+  const sourceBin = pathResolve(here, "..", "bin", "opencara-mcp.ts");
+  if (existsSync(sourceBin)) {
+    return { command: "tsx", args: [sourceBin] };
+  }
+  const distBin = pathResolve(here, "opencara-mcp.js");
+  if (existsSync(distBin)) {
+    return { command: "node", args: [distBin] };
+  }
+  return { command: "opencara-mcp", args: [] };
 }
 
 export class McpHost {
