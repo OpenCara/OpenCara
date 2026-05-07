@@ -99,10 +99,14 @@ export function NodeEditor({
       {selectedNode && selectedNode.kind === "github.pull_request_review" && (
         <PullRequestReviewTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
+      {selectedNode && selectedNode.kind === "github.projects_v2_item" && (
+        <ProjectsV2ItemTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
+      )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
         selectedNode.kind !== "github.pull_request" &&
-        selectedNode.kind !== "github.pull_request_review" && (
+        selectedNode.kind !== "github.pull_request_review" &&
+        selectedNode.kind !== "github.projects_v2_item" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
@@ -846,6 +850,174 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
         )}
         <div className="flex justify-end">
           <Button size="sm" disabled={set.isPending} onClick={save}>
+            {set.isPending ? "Saving…" : "Save filters"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── github.projects_v2_item trigger panel ───────────────────── */
+
+const PROJECTS_V2_CONTENT_TYPES = ["Issue", "PullRequest", "DraftIssue"] as const;
+type ProjectsV2ContentType = (typeof PROJECTS_V2_CONTENT_TYPES)[number];
+
+interface ProjectsV2ItemTriggerPanelProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+  onClose: () => void;
+}
+
+function ProjectsV2ItemTriggerPanel({
+  scope,
+  node,
+  onClose,
+}: ProjectsV2ItemTriggerPanelProps) {
+  const cfg = (node.config ?? {}) as {
+    projectNumber?: number | null;
+    fieldName?: string;
+    fromOptions?: string[];
+    toOptions?: string[];
+    contentTypes?: ProjectsV2ContentType[];
+  };
+  const initialFieldName = cfg.fieldName ?? "Status";
+  const initialFrom = (cfg.fromOptions ?? []).join(", ");
+  const initialTo = (cfg.toOptions ?? []).join(", ");
+  const initialTypes = useMemo<ProjectsV2ContentType[]>(
+    () => cfg.contentTypes ?? ["Issue"],
+    [cfg.contentTypes],
+  );
+  const initialProjectNumber =
+    typeof cfg.projectNumber === "number" ? String(cfg.projectNumber) : "";
+
+  const [fieldName, setFieldName] = useState(initialFieldName);
+  const [fromOptions, setFromOptions] = useState(initialFrom);
+  const [toOptions, setToOptions] = useState(initialTo);
+  const [contentTypes, setContentTypes] = useState<ProjectsV2ContentType[]>(initialTypes);
+  const [projectNumber, setProjectNumber] = useState(initialProjectNumber);
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setFieldName(initialFieldName);
+    setFromOptions(initialFrom);
+    setToOptions(initialTo);
+    setContentTypes(initialTypes);
+    setProjectNumber(initialProjectNumber);
+  }, [initialFieldName, initialFrom, initialTo, initialTypes, initialProjectNumber]);
+
+  const toggleType = (t: ProjectsV2ContentType) =>
+    setContentTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+
+  const save = () => {
+    const trimmedField = fieldName.trim();
+    const trimmedNum = projectNumber.trim();
+    let parsedNum: number | null = null;
+    if (trimmedNum.length > 0) {
+      const n = Number(trimmedNum);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return;
+      parsedNum = n;
+    }
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        projectNumber: parsedNum,
+        fieldName: trimmedField.length > 0 ? trimmedField : "Status",
+        fromOptions: parseList(fromOptions),
+        toOptions: parseList(toOptions),
+        contentTypes,
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Project status change</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Fires on the GitHub <code className="font-mono">projects_v2_item</code> webhook
+              when an item moves between options of a single-select field.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Content types</div>
+          <div className="flex flex-wrap gap-2">
+            {PROJECTS_V2_CONTENT_TYPES.map((t) => {
+              const isActive = contentTypes.includes(t);
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => toggleType(t)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-xs",
+                    isActive
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40",
+                  )}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Default <code className="font-mono">Issue</code>. Pick at least one.
+          </p>
+        </div>
+
+        <ChipField
+          label="Field name"
+          placeholder="Status"
+          help="The single-select field on the project board whose option-change should fire the trigger. Default is `Status` (matches GitHub's default board)."
+          value={fieldName}
+          onChange={setFieldName}
+        />
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <ChipField
+            label="From options"
+            placeholder="* (any)"
+            help="Comma-separated option names the item must have moved FROM. Empty = any state."
+            value={fromOptions}
+            onChange={setFromOptions}
+          />
+          <ChipField
+            label="To options"
+            placeholder="* (any)"
+            help="Comma-separated option names the item must have moved TO. Empty = any state."
+            value={toOptions}
+            onChange={setToOptions}
+          />
+        </div>
+
+        <ChipField
+          label="Project number (optional)"
+          placeholder="(any board on the org/user)"
+          help="Restrict to a specific Projects v2 board number. Leave empty to match any."
+          value={projectNumber}
+          onChange={setProjectNumber}
+        />
+
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            disabled={set.isPending || contentTypes.length === 0}
+            onClick={save}
+          >
             {set.isPending ? "Saving…" : "Save filters"}
           </Button>
         </div>

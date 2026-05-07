@@ -21,6 +21,11 @@ export interface FlowGraphNode {
     /** AgentNode worktree option — when set, shows up as a branch
      *  hint on the agent node's subtitle. */
     worktree?: { branchName?: string };
+    /** ProjectsV2 trigger filters — surfaced on the graph card as
+     *  e.g. "Status: Backlog → Ready". */
+    fromOptions?: string[];
+    toOptions?: string[];
+    fieldName?: string;
   };
 }
 export interface FlowGraphEdge {
@@ -129,8 +134,15 @@ function pickSubtitle(n: FlowGraphNode): string | undefined {
       return "trigger";
     case "github.pull_request_review":
       return "trigger";
-    case "github.projects_v2_item":
-      return "trigger";
+    case "github.projects_v2_item": {
+      // Compose `Status: Backlog → Ready` from from/to options. * for empty.
+      const field = n.config?.fieldName ?? "Status";
+      const fromList = n.config?.fromOptions ?? [];
+      const toList = n.config?.toOptions ?? [];
+      const fromStr = fromList.length === 0 ? "*" : fromList.join("|");
+      const toStr = toList.length === 0 ? "*" : toList.join("|");
+      return `${field}: ${fromStr} → ${toStr}`;
+    }
     case "agent":
       // When the agent has a worktree option, show the branch
       // template instead of the (rarely-set) spec.command — the
