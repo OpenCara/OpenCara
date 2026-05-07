@@ -22,6 +22,9 @@
 // `acp.history` into the prompt content as a single text block so the
 // agent has at least the recent turns.
 
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve as pathResolve } from "node:path";
 import type {
   AcpHistoryTurn,
   AgentCallRequest,
@@ -101,9 +104,17 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   });
   const host = new McpHost({ runId, router: bridge.router });
 
+  // Some ACP adapters ship inside this same `opencara` package (e.g.
+  // `claude-acp` for the local Claude Code shim). The orchestrator
+  // sends a logical command name in `spec.command`; the device resolves
+  // it to a concrete invocation here so we don't have to symlink the
+  // cli's bin entries into PATH on every device. Unknown commands pass
+  // through unchanged (e.g. `npx --yes @zed-industries/codex-acp`).
+  const resolved = resolveLocalAcpAdapter(spec.command, spec.args);
+
   const client = new AcpClient({
-    command: spec.command,
-    args: spec.args,
+    command: resolved.command,
+    args: resolved.args,
     env: spec.env,
     cwd: spec.cwd,
   });
@@ -241,4 +252,43 @@ export function translateUpdate(
 function textOfContent(content: ContentBlock): string {
   if (content.type !== "text") return "";
   return content.text ?? "";
+}
+
+// ─── Local-adapter resolution ──────────────────────────────────────
+
+/**
+ * Bin names that ship inside this package and get resolved to a local
+ * path before spawning. Mirrors what `McpHost.defaultMcpInvocation` does
+ * for opencara-mcp; centralized here so any future in-package adapter
+ * (e.g. an opencode shim) is one entry.
+ *
+ * Resolution priority per name:
+ *   1. Source dev: `tsx <repo>/packages/cli/src/bin/<name>.ts` if the
+ *      .ts file exists relative to this module's dir.
+ *   2. Bundled: `node <here>/<name>.js` if dist/<name>.js is a sibling
+ *      of the bundled bin.js.
+ *   3. Fall through: original spec.command/args (relies on PATH).
+ */
+const LOCAL_ACP_ADAPTERS = new Set(["claude-acp"]);
+
+function resolveLocalAcpAdapter(
+  command: string,
+  args: readonly string[],
+): { command: string; args: string[] } {
+  if (!LOCAL_ACP_ADAPTERS.has(command)) {
+    return { command, args: [...args] };
+  }
+  const here = dirname(fileURLToPath(import.meta.url));
+  // Source mode: packages/cli/src/runner/acpRunner.ts → ../bin/<name>.ts
+  const sourceBin = pathResolve(here, "..", "bin", `${command}.ts`);
+  if (existsSync(sourceBin)) {
+    return { command: "tsx", args: [sourceBin, ...args] };
+  }
+  // Bundled mode: dist/bin.js → ./<name>.js (sibling of bundled cli)
+  const distBin = pathResolve(here, `${command}.js`);
+  if (existsSync(distBin)) {
+    return { command: "node", args: [distBin, ...args] };
+  }
+  // Last resort: rely on PATH (npm i -g opencara puts the bin there).
+  return { command, args: [...args] };
 }

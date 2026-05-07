@@ -66,8 +66,15 @@ await build({
   outfile: "dist/opencara-mcp.js",
 });
 
-// Make the binaries executable so `opencara …` and `opencara-mcp` (the
-// agent-spawned MCP subprocess) run straight from npm install without
-// needing `node ./node_modules/.bin/<binary>`.
+await build({
+  ...common,
+  entryPoints: ["src/bin/claude-acp.ts"],
+  outfile: "dist/claude-acp.js",
+});
+
+// Make the binaries executable so `opencara …`, `opencara-mcp`, and
+// `claude-acp` run straight from npm install without needing
+// `node ./node_modules/.bin/<binary>`.
 await chmod("dist/bin.js", 0o755);
 await chmod("dist/opencara-mcp.js", 0o755);
+await chmod("dist/claude-acp.js", 0o755);
