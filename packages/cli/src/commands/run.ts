@@ -13,7 +13,7 @@ import { statfsSync } from "node:fs";
 import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
-import { runJob } from "../runner/spawn.js";
+import { runAcpJob, runJob, type AcpRunController } from "../runner/spawn.js";
 import { AgentCallParser } from "../runner/agentCallParser.js";
 import type {
   AgentSpec,
@@ -78,6 +78,13 @@ export async function run(opts: RunOpts = {}): Promise<void> {
   client.start();
 }
 
+/**
+ * In-flight ACP job controllers, keyed by runId. The WS receiver looks
+ * up the controller when an `agent-call-result` frame arrives so the
+ * matching tool-call promise resolves on the right run.
+ */
+const acpControllers = new Map<string, AcpRunController>();
+
 function handleServerMessage(
   msg: ServerToDeviceMessage,
   client: WsClient,
@@ -90,6 +97,13 @@ function handleServerMessage(
   if (msg.type === "ping") return;
   if (msg.type === "job") {
     void executeJob(msg, client);
+    return;
+  }
+  if (msg.type === "agent-call-result") {
+    // Route to the active ACP run for this id. Stale results (run already
+    // ended) are dropped silently — same posture as a stale log frame.
+    acpControllers.get(msg.runId)?.onAgentCallResult(msg);
+    return;
   }
 }
 
@@ -120,13 +134,53 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
     flushTimer = setTimeout(flush, LOG_FLUSH_MS);
   };
 
-  // Parses ```opencara-call\n…\n``` fenced blocks out of the agent's
-  // stdout and forwards them to the orchestrator over the same WS we got
-  // the job over. Fire-and-forget: there is no response message — the
-  // mutation is applied transparently and the user sees the result on
-  // their canvas page. The fenced block IS still streamed back as a
-  // normal log frame in the same callback, so the user sees what the
-  // agent asked for in the chat reply.
+  // ACP+MCP path (#29). Spec carries an `acp` payload when the
+  // orchestrator's chat-route feature flag is on for this kind. The
+  // legacy stdin-JSON envelope is bypassed entirely — opencara-mcp
+  // exposes the mutation tools to the agent over MCP instead.
+  if (job.spec.acp) {
+    const handle = runAcpJob({
+      runId,
+      spec: job.spec as AgentSpec,
+      handlers: {
+        onLog: (stream, chunk) => {
+          pending[stream] += chunk;
+          scheduleFlush();
+        },
+        sendAgentCall: (req) => client.send(req),
+      },
+    });
+    acpControllers.set(runId, handle.controller);
+    try {
+      const result = await handle.promise;
+      flush();
+      client.send({
+        type: "done",
+        runId,
+        status: result.exitCode === 0 ? "succeeded" : "failed",
+        exitCode: result.exitCode,
+      });
+      console.log(
+        `[opencara] job ${runId.slice(-8)} (acp) → ${result.stopReason} exit=${result.exitCode}`,
+      );
+    } catch (err) {
+      flush();
+      const message = err instanceof Error ? err.message : String(err);
+      client.send({ type: "done", runId, status: "failed", errorMessage: message });
+      console.error(`[opencara] job ${runId.slice(-8)} (acp) failed`, message);
+    } finally {
+      acpControllers.delete(runId);
+    }
+    return;
+  }
+
+  // Legacy stdin-JSON path. Parses ```opencara-call\n…\n``` fenced
+  // blocks out of the agent's stdout and forwards them to the
+  // orchestrator over the same WS we got the job over. Fire-and-forget:
+  // there is no response message — the mutation is applied transparently
+  // and the user sees the result on their canvas page. The fenced block
+  // IS still streamed back as a normal log frame in the same callback,
+  // so the user sees what the agent asked for in the chat reply.
   const callParser = new AgentCallParser((call) => {
     // The discriminated union forces a switch — TS won't narrow a spread
     // alone. Each arm forwards the parsed payload verbatim; validation

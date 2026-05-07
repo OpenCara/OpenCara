@@ -2,11 +2,40 @@ import { Hono } from "hono";
 import { ulid } from "ulid";
 import { and, eq } from "drizzle-orm";
 import type { Sql } from "postgres";
+import type { AcpHistoryTurn, AgentSpec } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
 import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { resolvePageSkill, type PageContextLike } from "../../flows/skills.js";
+
+/**
+ * Feature flag for the ACP+MCP cutover (#29). When `OPENCARA_ACP=1`, chat
+ * runs whose agent is in the cutover allowlist (currently only `codex`)
+ * are dispatched with `spec.acp` set instead of the legacy stdin-JSON
+ * envelope. Other kinds error out so the operator notices the flag is
+ * doing something they don't expect; they should disable the flag or
+ * pick a codex agent.
+ *
+ * #30 will broaden the allowlist and eventually delete the flag.
+ */
+const ACP_ENABLED = process.env["OPENCARA_ACP"] === "1";
+
+/**
+ * Kinds that the ACP path supports right now. Chat agents are
+ * registered via the `agents` table; their `kind` is whatever the user
+ * typed in the dashboard's agent picker. We match case-insensitively so
+ * "Codex", "codex", "CODEX" all hit the cutover.
+ */
+const ACP_KIND_ALLOWLIST = new Set(["codex"]);
+
+/**
+ * The codex-acp adapter binary, invoked via npx so we don't have to ship
+ * it inside our dist bundle. Pinned to a major version so adapter API
+ * changes don't surprise us mid-deploy. Bumped on intent.
+ */
+const CODEX_ACP_COMMAND = "npx";
+const CODEX_ACP_ARGS = ["--yes", "@zed-industries/codex-acp"];
 
 interface ChatRoutesDeps {
   db: Db;
@@ -103,13 +132,60 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       OPENCARA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
       OPENCARA_AGENT_RUN_ID: agentRunId,
     };
-    const spec = {
-      kind: agent.name,
-      command: agent.command,
-      args: agent.args,
-      env,
-      cwd: agent.cwd ?? undefined,
-    };
+
+    // Decide between the ACP+MCP path and the legacy stdin-JSON path.
+    //
+    // ACP path: feature flag on AND agent.kind is in the cutover
+    // allowlist. We override `command`/`args` with the codex-acp adapter
+    // and attach an `acp` payload; the device's `runAcpJob` path picks
+    // it up.
+    //
+    // Legacy path: anything else. Mirrors today's behaviour bit for bit.
+    //
+    // If the flag is on but the kind is NOT supported, error rather than
+    // silently fall back — the operator probably meant something else.
+    const useAcp = ACP_ENABLED && ACP_KIND_ALLOWLIST.has(agent.kind.toLowerCase());
+    if (ACP_ENABLED && !useAcp) {
+      return c.json(
+        {
+          error:
+            `OPENCARA_ACP is set but agent kind "${agent.kind}" is not in the ACP cutover allowlist (only "codex" today). ` +
+            `Disable the flag or pick a codex agent.`,
+        },
+        400,
+      );
+    }
+
+    const spec: AgentSpec = useAcp
+      ? {
+          // Keep `agent.name` as the spec kind label to match the legacy
+          // path's convention — downstream log lines and run history
+          // already use this for display. The ACP cutover allowlist
+          // check above ran on `agent.kind` (the enum), not the label.
+          kind: agent.name,
+          command: CODEX_ACP_COMMAND,
+          args: CODEX_ACP_ARGS,
+          env,
+          cwd: agent.cwd ?? undefined,
+          acp: {
+            // System prompt = page-skill markdown if present, else a
+            // generic instruction so the agent has SOMETHING to ground
+            // itself on. Empty system prompt confuses some models.
+            systemPromptMd:
+              skillResult?.skill.instructions ??
+              "You are an opencara chat agent. Respond to the user's message about the current page.",
+            userPromptMd: message,
+            history: normalizeHistory(history),
+            pageContextJson: JSON.stringify(pageContext),
+          },
+        }
+      : {
+          kind: agent.name,
+          command: agent.command,
+          args: agent.args,
+          env,
+          cwd: agent.cwd ?? undefined,
+        };
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
       spec,
@@ -140,19 +216,26 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // skill key — that would silently change what the agent sees on
     // stdin. Surfaced as a 500 because it's a builder bug, not user
     // input.
-    const stdinJson: Record<string, unknown> = { message, pageContext, history };
-    if (skillResult) {
-      stdinJson["skill"] = skillResult.skill;
-      for (const [key, value] of Object.entries(skillResult.hydrated)) {
-        if (RESERVED_STDIN_KEYS.has(key)) {
-          console.error("[chat] builder hydrated reserved stdin key", {
-            page: pageContext.page,
-            key,
-          });
-          return c.json({ error: `builder hydrated reserved key: ${key}` }, 500);
+    //
+    // ACP path skips this entirely — `spec.acp` carries everything the
+    // device runner needs, and `stdinJson` is left undefined.
+    let stdinJson: Record<string, unknown> | undefined;
+    if (!useAcp) {
+      const json: Record<string, unknown> = { message, pageContext, history };
+      if (skillResult) {
+        json["skill"] = skillResult.skill;
+        for (const [key, value] of Object.entries(skillResult.hydrated)) {
+          if (RESERVED_STDIN_KEYS.has(key)) {
+            console.error("[chat] builder hydrated reserved stdin key", {
+              page: pageContext.page,
+              key,
+            });
+            return c.json({ error: `builder hydrated reserved key: ${key}` }, 500);
+          }
+          json[key] = value;
         }
-        stdinJson[key] = value;
       }
+      stdinJson = json;
     }
 
     // Fire-and-forget the dispatcher; the SSE stream is the client's only view.
@@ -228,4 +311,22 @@ export function chatRoutes(deps: ChatRoutesDeps) {
   });
 
   return r;
+}
+
+/**
+ * Coerce the chat panel's free-form history payload into the strict
+ * `AcpHistoryTurn[]` shape. The panel sends `{role, text}` tuples but
+ * may include other fields we don't care about; we just keep the two
+ * we need and drop anything that doesn't have a recognized role.
+ */
+function normalizeHistory(history: unknown[]): AcpHistoryTurn[] {
+  const out: AcpHistoryTurn[] = [];
+  for (const raw of history) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as { role?: unknown; text?: unknown };
+    if (r.role !== "user" && r.role !== "assistant") continue;
+    if (typeof r.text !== "string") continue;
+    out.push({ role: r.role, text: r.text });
+  }
+  return out;
 }
