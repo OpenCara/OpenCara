@@ -12,12 +12,14 @@
   "type": "module",
   "bin": {
     "opencara": "./dist/bin.js",
-    "opencara-mcp": "./dist/opencara-mcp.js"
+    "opencara-mcp": "./dist/opencara-mcp.js",
+    "claude-acp": "./dist/claude-acp.js"
   },
   "main": "./dist/bin.js",
   "files": [
     "dist/bin.js",
-    "dist/opencara-mcp.js"
+    "dist/opencara-mcp.js",
+    "dist/claude-acp.js"
   ],
   "scripts": {
     "build": "tsc -b && node build.mjs",

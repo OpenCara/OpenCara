@@ -18,22 +18,29 @@ import type { AcpHistoryTurn, AcpSpec, AgentSpec } from "@opencara/shared";
 const ACP_ENABLED = process.env["OPENCARA_ACP"] === "1";
 
 /**
- * Agent kinds the ACP path supports today. Lowercased for the
- * comparison; the DB column uses the agentKindEnum so casing is
- * already canonical, but be defensive in case operator UI tooling
- * normalizes differently.
+ * Per-kind ACP adapter invocation. Adding a new kind is a one-line
+ * append here.
+ *
+ * - codex: `npx --yes @zed-industries/codex-acp` — third-party Rust
+ *   adapter that links the codex-rs SDK directly. The npm package's
+ *   optionalDependencies pull the right platform binary on first use.
+ * - claude: `claude-acp` — our own thin shim
+ *   (`packages/cli/src/bin/claude-acp.ts`) that wraps the local
+ *   `claude` CLI. No third-party in the critical path; full Claude Code
+ *   fidelity (CLAUDE.md, settings.json, MCP servers, OAuth auth) by
+ *   delegating to the actual binary. The bin ships in opencara@latest
+ *   so paired devices have it on PATH after `npm i -g opencara`.
  */
-const ACP_KIND_ALLOWLIST = new Set(["codex"]);
+const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] }>([
+  [
+    "codex",
+    { command: "npx", args: ["--yes", "@zed-industries/codex-acp"] },
+  ],
+  ["claude", { command: "claude-acp", args: [] }],
+]);
 
-/**
- * The codex-acp adapter binary. `npx --yes` so devices don't need a
- * pre-install; the package's optionalDependencies pull the right
- * platform binary on first use. Pinned to a major in
- * packages/cli/package.json so adapter API changes don't surprise
- * a running deploy mid-session.
- */
-const CODEX_ACP_COMMAND = "npx";
-const CODEX_ACP_ARGS = ["--yes", "@zed-industries/codex-acp"];
+/** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */
+const ACP_KIND_ALLOWLIST = new Set(ACP_ADAPTERS.keys());
 
 export function isAcpEnabled(): boolean {
   return ACP_ENABLED;
@@ -55,18 +62,19 @@ export function checkAcpEligibility(agentKind: string): AcpEligibility {
   if (!ACP_ENABLED) return { useAcp: false, refuseReason: null };
   const allowed = ACP_KIND_ALLOWLIST.has(agentKind.toLowerCase());
   if (!allowed) {
+    const supported = [...ACP_KIND_ALLOWLIST].join(", ");
     return {
       useAcp: false,
       refuseReason:
-        `OPENCARA_ACP is set but agent kind "${agentKind}" is not in the ACP cutover allowlist (only "codex" today). ` +
-        `Disable the flag or pick a codex agent.`,
+        `OPENCARA_ACP is set but agent kind "${agentKind}" is not in the ACP cutover allowlist. ` +
+        `Supported: ${supported}. Disable the flag or switch the agent to a supported kind.`,
     };
   }
   return { useAcp: true, refuseReason: null };
 }
 
 export interface BuildAcpSpecOpts {
-  agent: { name: string; cwd: string | null };
+  agent: { kind: string; name: string; cwd: string | null };
   env: Record<string, string>;
   systemPromptMd: string;
   userPromptMd: string;
@@ -77,8 +85,18 @@ export interface BuildAcpSpecOpts {
 /**
  * Construct the AgentSpec for an ACP+MCP run. Callers should already
  * have confirmed eligibility via `checkAcpEligibility`.
+ *
+ * Throws if the agent's kind has no adapter mapping — defense in depth
+ * against a caller that built the spec without checking eligibility.
  */
 export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
+  const adapter = ACP_ADAPTERS.get(opts.agent.kind.toLowerCase());
+  if (!adapter) {
+    throw new Error(
+      `buildAcpSpec: no ACP adapter for agent kind "${opts.agent.kind}" — ` +
+        `caller must run checkAcpEligibility first`,
+    );
+  }
   const acp: AcpSpec = {
     systemPromptMd: opts.systemPromptMd,
     userPromptMd: opts.userPromptMd,
@@ -89,8 +107,8 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
   };
   return {
     kind: opts.agent.name,
-    command: CODEX_ACP_COMMAND,
-    args: [...CODEX_ACP_ARGS],
+    command: adapter.command,
+    args: [...adapter.args],
     env: opts.env,
     cwd: opts.agent.cwd ?? undefined,
     acp,
