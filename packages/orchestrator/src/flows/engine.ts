@@ -30,6 +30,7 @@ import {
   SkipFlowError,
   type NodeRunCtx,
 } from "./nodeRunners.js";
+import { extractAgentResultText } from "../agents/output.js";
 
 export interface PlatformEventInput {
   id: string;
@@ -208,7 +209,14 @@ export class FlowEngine {
           .orderBy(asc(agentRunLogs.seq));
         stdoutCaptured = logRows.map((r) => r.chunk).join("");
       }
-      outputs.set(s.nodeId, stdoutCaptured);
+      // Strip agent envelope/JSONL noise so downstream nodes see clean
+      // text. Without this, fan-in to a synthesizer overflows context
+      // (codex's --json output runs to >1MB on tool-use turns; claude's
+      // single-JSON envelope adds ~500B of metadata per call).
+      outputs.set(
+        s.nodeId,
+        stdoutCaptured !== undefined ? extractAgentResultText(stdoutCaptured) : undefined,
+      );
       reused.push({
         nodeId: s.nodeId,
         nodeKind: s.nodeKind,
@@ -408,7 +416,14 @@ export class FlowEngine {
             errorMsg ??= r.value.skipReason;
             continue;
           }
-          outputs.set(node.id, r.value.stdoutCaptured);
+          // Same envelope/JSONL extraction as the recovery path above —
+          // see comment there for why.
+          outputs.set(
+            node.id,
+            r.value.stdoutCaptured !== undefined
+              ? extractAgentResultText(r.value.stdoutCaptured)
+              : undefined,
+          );
         } else {
           failed = true;
           errorMsg ??= r.reason instanceof Error ? r.reason.message : String(r.reason);
