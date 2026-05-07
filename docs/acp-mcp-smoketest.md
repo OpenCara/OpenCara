@@ -68,22 +68,47 @@ gets its own per-run socket path (`/tmp/opencara-mcp-smoke-<id>.sock`).
 The two harnesses must never see each other's tool calls — verified by
 matching `runId` echoes in each terminal's `[smoke] tool-call:` output.
 
-## Step 4: Real orchestrator (optional, on opencara.com host)
+## Step 4: Chat-route end-to-end (#29, codex behind a flag)
 
-Once #29 cuts over the chat path, the same flow can be exercised against a
-real orchestrator + DB. Until then, drive it manually:
+#29 wires the chat route to use the ACP+MCP path for `kind: "codex"`
+agents when `OPENCARA_ACP=1`. To exercise it on the dev host:
 
-1. On the production host, register a device (`opencara run`) and pair it.
-2. Create a run via the orchestrator API with a `mcpServers` field
-   pointing at `opencara-mcp` (path on the device's filesystem).
-3. Trigger a chat message that asks the agent to mutate an issue body.
-4. Observe the issue's `draftBodyMd` change in the DB.
-5. The agent's chat reply should reference the success (or failure) of the
-   tool call.
+1. Restart the orchestrator with the flag set:
 
-Capture the wire frames (Gemini stderr, opencara-mcp's IPC, the device
-WS) for any future debugging — the smoke harness writes everything to
-`./.opencara-mcp-smoke/frames-<timestamp>.jsonl`.
+   ```bash
+   OPENCARA_ACP=1 pnpm -r dev
+   ```
+
+2. In the dashboard, create or edit a Codex agent (`agents` table row
+   with `kind = "codex"`). Command/args don't matter on this path — the
+   chat route hardcodes `npx --yes @zed-industries/codex-acp`.
+
+3. Make sure your chosen device has `OPENAI_API_KEY` exported in its
+   environment (`opencara run` inherits it).
+
+4. Open the chat panel on `IssueDetailPage` for any issue, ask the
+   codex agent to update the body. Watch the panel SSE stream:
+   - You should see `[think] …`, `[tool] opencara_issue_body_set
+     (in_progress)`, then `→ completed`, then the agent's final reply.
+   - The issue's `draftBodyMd` should change in the DB.
+
+5. Try a non-codex agent with the flag still on — the chat route
+   should return 400 with a clear "ACP cutover allowlist" error.
+
+6. Disable the flag (restart without `OPENCARA_ACP`) and re-run with
+   any agent: behavior must be bit-identical to before #29.
+
+### Known limitations of #29 MVP
+
+- Each chat turn opens a fresh ACP session; the agent has no memory of
+  prior turns beyond what the orchestrator replays via `acp.history`
+  (a single text block prepended to the prompt). Persisting the codex
+  sessionId for `session/load` is a follow-up.
+- The published `opencara` npm package's bundle does not include
+  `opencara-mcp` yet; the ACP path requires running from a source
+  checkout. Build pipeline updates land before #30 ships.
+- Other agents (Claude / pi / opencode) stay on the legacy stdin-JSON
+  path. #30 cuts them over and deletes the legacy code.
 
 ## What this runbook does NOT cover
 
