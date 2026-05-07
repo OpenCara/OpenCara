@@ -172,10 +172,78 @@ export const AgentCallSchema = z.discriminatedUnion("kind", [
 ]);
 export type AgentCall = z.infer<typeof AgentCallSchema>;
 
+/**
+ * Device → server: request semantics for `agent-call`. Same payload as the
+ * fire-and-forget `AgentCall` above, but the device awaits an
+ * `agent-call-result` keyed by the same `callId`.
+ *
+ * Introduced for the ACP/MCP path (#28): MCP tools have return values, so
+ * we need to surface success/failure back to the agent. The legacy
+ * `agent-call` (no response) stays in the union until #30 deletes it.
+ *
+ * Wire-compatibility note: a fenced-block parser in the legacy CLI never
+ * emits `agent-call-request`, only `agent-call`, so existing devices keep
+ * working. New ACP-driven devices emit `agent-call-request` exclusively.
+ */
+const AgentCallRequestEnvelope = {
+  type: z.literal("agent-call-request"),
+  runId: z.string(),
+  callId: z.string(),
+};
+
+export const IssueBodySetCallRequestSchema = z.object({
+  ...AgentCallRequestEnvelope,
+  kind: z.literal("issue.body.set"),
+  issueNumber: z.number().int(),
+  bodyMd: z.string(),
+});
+
+export const FlowNodeConfigSetCallRequestSchema = z.object({
+  ...AgentCallRequestEnvelope,
+  kind: z.literal("flow.node.config.set"),
+  flowSlug: z.string().min(1),
+  nodeId: z.string().min(1),
+  config: z.record(z.string(), z.unknown()),
+});
+
+export const TemplateNodeConfigSetCallRequestSchema = z.object({
+  ...AgentCallRequestEnvelope,
+  kind: z.literal("template.node.config.set"),
+  templateSlug: z.string().min(1),
+  nodeId: z.string().min(1),
+  config: z.record(z.string(), z.unknown()),
+});
+
+export const AgentCallRequestSchema = z.discriminatedUnion("kind", [
+  IssueBodySetCallRequestSchema,
+  FlowNodeConfigSetCallRequestSchema,
+  TemplateNodeConfigSetCallRequestSchema,
+]);
+export type AgentCallRequest = z.infer<typeof AgentCallRequestSchema>;
+
+/**
+ * Server → device: response to a prior `agent-call-request`, correlated by
+ * `callId`. Either the mutation applied (`ok: true`) or it was rejected
+ * (scope check, validation, missing resource — `ok: false`). The device
+ * forwards this to the MCP server, which in turn returns it as the tool
+ * result to the agent.
+ */
+export const AgentCallResultSchema = z.object({
+  type: z.literal("agent-call-result"),
+  runId: z.string(),
+  callId: z.string(),
+  result: z.union([
+    z.object({ ok: z.literal(true) }),
+    z.object({ ok: z.literal(false), reason: z.string() }),
+  ]),
+});
+export type AgentCallResultMessage = z.infer<typeof AgentCallResultSchema>;
+
 export const ServerToDeviceMessageSchema = z.discriminatedUnion("type", [
   JobAssignmentSchema,
   HelloAckSchema,
   PingSchema,
+  AgentCallResultSchema,
 ]);
 export type ServerToDeviceMessage = z.infer<typeof ServerToDeviceMessageSchema>;
 
@@ -190,6 +258,7 @@ export const DeviceToServerMessageSchema = z.union([
   RunDoneSchema,
   PongSchema,
   AgentCallSchema,
+  AgentCallRequestSchema,
 ]);
 export type DeviceToServerMessage = z.infer<typeof DeviceToServerMessageSchema>;
 
