@@ -45,7 +45,7 @@ function parseArgs(): SmokeArgs {
   return {
     prompt: userArgs.join(" "),
     command: env["OPENCARA_ACP_COMMAND"] ?? "gemini",
-    args: (env["OPENCARA_ACP_ARGS"] ?? "--experimental-acp")
+    args: (env["OPENCARA_ACP_ARGS"] ?? "--acp")
       .split(/\s+/)
       .filter(Boolean),
     workdir: env["OPENCARA_ACP_CWD"] ?? cwd(),

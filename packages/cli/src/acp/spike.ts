@@ -50,7 +50,7 @@ function parseArgs(): CliArgs {
   }
   const prompt = userArgs.join(" ");
   const command = env["OPENCARA_ACP_COMMAND"] ?? "gemini";
-  const argsString = env["OPENCARA_ACP_ARGS"] ?? "--experimental-acp";
+  const argsString = env["OPENCARA_ACP_ARGS"] ?? "--acp";
   const args = argsString.length > 0 ? argsString.split(/\s+/).filter(Boolean) : [];
   const workdir = env["OPENCARA_ACP_CWD"] ?? cwd();
   const dumpDir = env["OPENCARA_ACP_DUMP_DIR"] ?? resolve(workdir, ".opencara-acp-spike");
