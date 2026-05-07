@@ -120,10 +120,14 @@ const codexAdapter: AgentKindAdapter = {
       // git-repo check is redundant. Keeping it on would error if the
       // agent kind is ever paired with a non-worktree dispatch.
       "--skip-git-repo-check",
-      // Headless: never prompt for approval. (Default policies prompt
-      // on tool use; --help recommends `never` for non-interactive.)
-      "-a",
-      "never",
+      // Headless: bypass all approval prompts. The codex CLI dropped
+      // `-a never` in 2026-Q2 in favor of this unified flag (the
+      // adapter shipped on opencara@v0.103.0 still had the old `-a`
+      // and broke when the device's codex auto-updated). Sandbox is
+      // also fully bypassed, matching the previous "never ask" semantics
+      // the orchestrator-managed worktree expects (the agent has full
+      // write access to its own scratch tree by design).
+      "--dangerously-bypass-approvals-and-sandbox",
     ];
     if (resumeSessionId) {
       return {
