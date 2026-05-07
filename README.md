@@ -73,13 +73,38 @@ Limitations (v1):
 - No refresh — runs longer than ~1h hit a 401 on late `gh` calls. Most agent runs finish in minutes.
 - The smoke-test endpoint (`POST /api/agents/:id/test`) does not inject a token; test runs already see `OPENCARA_TEST=1`.
 
-## Flow node kinds
+## Worktrees + PR creation
 
-In addition to `agent` and the existing `github.{post_review,add_comment,add_label}` actions, the flow engine ships two nodes for the issue → implement → PR pipeline:
+Agents that need a checkout configure a worktree directly on the agent flow node — `agent.config.worktree = { fromBranch, branchName, hostId }`. The engine allocates (or reuses) a stable per-`(repo, branch)` working directory on a paired device under `~/.opencara/work/<owner>/<repo>/branch-<safe>/checkout/` and exposes it to the agent via `OPENCARA_WORKTREE_DIR` / `OPENCARA_WORKTREE_BRANCH` / `OPENCARA_SESSION_DIR`. The agent commits, pushes, and (for the issue-implement flow) calls `gh pr create` itself — there is no dedicated `github.create_pull_request` flow node; the agent's `GH_TOKEN` env (PR #22) is what makes this work.
 
-- **`git.create_worktree`** — runs on a paired device. Allocates an isolated `git clone` of the project repo under the device's tmpdir, branches off `fromBranch` (default: repo default), and emits a `{workdir, branch}` handle. Downstream `agent` nodes inherit `cwd` and the device pin (so the implementer agent runs *inside* the checkout); the worktree is removed at end-of-run regardless of success/failure.
-- **`github.create_pull_request`** — opens a PR using the upstream worktree's branch as the head. Title and body support `{{ENV_VAR}}` templates (env vars seen by the run, e.g. `OPENCARA_ISSUE_NUMBER`). Body defaults to the upstream agent's stdout.
+**Worktrees persist across flow runs** on the same PR branch. The implementer's run clones; subsequent `pr-review-fix` iterations on the same PR find `.git/` already present and just `git fetch` + checkout. The pinned device + the agent's session id file (`agent-session.json` next to the worktree) are what make the resumable review-fix loop possible.
 
-Both nodes are wired into the built-in `issue-implement` flow template.
+**Cleanup is event-driven, not time-bounded.** When GitHub fires `pull_request.closed` (merged or not), the orchestrator dispatches `opencara internal worktree remove --key <slug>` to the pinned device, wiping both the checkout and the session dir, and deletes the `worktree_pins` row. Orphaned worktrees on disconnected devices (rare) need manual cleanup.
 
-The worktree node uses the CLI's `opencara internal worktree {create,remove}` subcommands. **Paired devices must be running a CLI build that includes these subcommands** — older CLIs will fail the worktree step with `unknown command: internal`. Rebuild + redeploy `opencara` on each paired host after upgrading the orchestrator.
+CLI side: `opencara internal worktree {create,remove,write-session}`. **Paired devices must be running a CLI build that includes these subcommands** — older CLIs fail with `unknown command: internal`. Rebuild + redeploy `opencara` on each paired host after upgrading the orchestrator.
+
+> **Upgrade note:** the previous release shipped two dedicated flow nodes for this — `git.create_worktree` and `github.create_pull_request`. They're gone in this release. Project flows that adopted the old issue-implement / pr-review-fix templates have those node kinds in their stored graph and will fail to parse on the next webhook event. Recovery: re-adopt the built-in templates from the project's flows page (the orchestrator re-seeds the latest shape on startup).
+
+## Agent kinds (resumable agents)
+
+`agents.kind` selects how the orchestrator invokes an agent at dispatch time. Four named kinds get **per-run conversation resume** — the second iteration on the same PR (e.g. when a reviewer leaves a review) wakes the agent up at the same point in the conversation, on the same device, with its prior plan/scratchpad intact:
+
+| Kind | Binary | Resume model |
+|---|---|---|
+| `claude` | `claude` | Orchestrator generates a UUID and passes `--session-id <uuid>` on first run, `--resume <uuid>` afterwards. |
+| `codex` | `codex` | First run is `codex exec --json …`; resume is `codex exec resume <id> …`. Session id parsed from the first JSONL frame's `payload.id`. |
+| `opencode` | `opencode` | `opencode run --format json [--session <id>] …`. Session id read from each event's `sessionID` field. |
+| `pi` | `pi` (`@mariozechner/pi-coding-agent`) | `pi --mode json [--session <id>] …`. Session id read from line-1's `id` field. |
+| `custom` | (operator-defined) | No resume. Free-form `command + args` from the agents row, exactly like before. |
+
+Pick the kind in the agents view (`/agents`). For named kinds, set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). The "Extra args" field is appended to the adapter's base args — that's where you put `--provider X --model Y` for pi, model overrides, etc.
+
+## PR review → fix loop
+
+Built-in flow `pr-review-fix` triggers when a reviewer submits a review on a PR opened by `issue-implement`. It clones the PR's head branch in place into a fresh worktree, then dispatches the agent — pinned to the **same device** that ran the original implementation, **resuming the same conversation** via the per-kind adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
+
+How the device pin works: every `git.create_worktree` upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host. If the pinned host is offline at trigger time, the engine falls back to `pickIdle()` and the agent starts a fresh conversation (no session id is reachable on a different device).
+
+The review-fix flow only fires on `commented` and `changes_requested` review states by default — `approved` reviews skip it (no fix needed). Adjust in the trigger node config.
+
+**No iteration cap:** GitHub's review/push cycle is the bound. If the operator needs to stop a runaway loop, disable the flow.

@@ -45,4 +45,12 @@ export interface RunResult {
 
 export interface AgentDispatcher {
   run(spec: AgentSpec, ctx: RunContext): Promise<RunResult>;
+  /**
+   * True if the host is currently connected and dispatchable. Used by
+   * callers that want to fall back to an unpinned dispatch when their
+   * preferred host is offline (e.g. worktree allocation can graceful-
+   * degrade to a fresh checkout on any idle device when the previous
+   * pinned one is gone).
+   */
+  isConnected(hostId: string): boolean;
 }

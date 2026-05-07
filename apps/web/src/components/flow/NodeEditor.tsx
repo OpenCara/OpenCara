@@ -5,6 +5,7 @@ import { Bot, Cpu, ExternalLink, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -95,17 +96,17 @@ export function NodeEditor({
       {selectedNode && selectedNode.kind === "github.pull_request" && (
         <TriggerNodePanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
-      {selectedNode && selectedNode.kind === "git.create_worktree" && (
-        <WorktreeNodePanel scope={scope} node={selectedNode} onClose={onClose} />
+      {selectedNode && selectedNode.kind === "github.pull_request_review" && (
+        <PullRequestReviewTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
-      {selectedNode && selectedNode.kind === "github.create_pull_request" && (
-        <CreatePRNodePanel scope={scope} node={selectedNode} onClose={onClose} />
+      {selectedNode && selectedNode.kind === "github.projects_v2_item" && (
+        <ProjectsV2ItemTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
         selectedNode.kind !== "github.pull_request" &&
-        selectedNode.kind !== "git.create_worktree" &&
-        selectedNode.kind !== "github.create_pull_request" && (
+        selectedNode.kind !== "github.pull_request_review" &&
+        selectedNode.kind !== "github.projects_v2_item" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
@@ -399,8 +400,133 @@ function AgentNodePanel({
             Manage prompts <ExternalLink className="size-3" />
           </Link>
         </div>
+
+        <AgentWorktreeSection scope={scope} node={node} />
       </CardContent>
     </Card>
+  );
+}
+
+/* ─── Worktree sub-section on the agent panel ──────────────────── */
+
+interface AgentWorktreeSectionProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+}
+
+function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
+  // The worktree option lives on agent.config.worktree. node.config
+  // is whatever's stored in graph_json — we read existing values
+  // and on Save send the FULL config (preserving label, spec,
+  // contextInjection) so we don't clobber unrelated keys.
+  const cfg = (node.config ?? {}) as {
+    label?: string;
+    spec?: unknown;
+    contextInjection?: unknown;
+    worktree?: { fromBranch?: string | null; branchName?: string; hostId?: string | null };
+  };
+  const wt = cfg.worktree;
+  const [enabled, setEnabled] = useState(Boolean(wt));
+  const [fromBranch, setFromBranch] = useState(wt?.fromBranch ?? "");
+  const [branchName, setBranchName] = useState(
+    wt?.branchName ?? "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
+  );
+  const [hostId, setHostId] = useState(wt?.hostId ?? "");
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setEnabled(Boolean(wt));
+    setFromBranch(wt?.fromBranch ?? "");
+    setBranchName(wt?.branchName ?? "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}");
+    setHostId(wt?.hostId ?? "");
+  }, [node.id, wt?.fromBranch, wt?.branchName, wt?.hostId, wt]);
+
+  const save = () => {
+    // Preserve label/spec/contextInjection (not mutated here) and
+    // write the worktree subfield. Pass the entire object back; the
+    // server replaces node.config wholesale.
+    const nextConfig: Record<string, unknown> = {
+      label: cfg.label,
+      spec: cfg.spec,
+      contextInjection: cfg.contextInjection,
+    };
+    if (enabled) {
+      if (!branchName.trim()) return;
+      nextConfig.worktree = {
+        fromBranch: fromBranch.trim().length > 0 ? fromBranch.trim() : null,
+        branchName: branchName.trim(),
+        hostId: hostId.trim().length > 0 ? hostId.trim() : null,
+      };
+    }
+    // (When enabled = false, we omit the field; node.config.worktree
+    // is optional in the schema.)
+    set.mutate({ nodeId: node.id, config: nextConfig });
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          className="size-4 rounded border-input"
+        />
+        <span>Run in a per-PR-branch worktree</span>
+      </label>
+      <p className="text-xs text-muted-foreground">
+        Allocates a stable git checkout on a paired device, keyed by{" "}
+        <code className="font-mono">(repo, branch)</code>. The same branch
+        across the implement and review-fix flows reuses the same checkout
+        and the agent's prior session id; removed on{" "}
+        <code className="font-mono">pull_request.closed</code>.
+      </p>
+      {enabled && (
+        <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+          <div>
+            <Label>Branch name</Label>
+            <Input
+              value={branchName}
+              onChange={(e) => setBranchName(e.target.value)}
+              placeholder="opencara/issue-{{OPENCARA_ISSUE_NUMBER}}"
+              className="mt-1 font-mono text-xs"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Template; supports <code className="font-mono">{`{{ENV_VAR}}`}</code>{" "}
+              substitution against the run env.
+            </p>
+          </div>
+          <div>
+            <Label>From branch</Label>
+            <Input
+              value={fromBranch}
+              onChange={(e) => setFromBranch(e.target.value)}
+              placeholder="(repo default)"
+              className="mt-1 font-mono text-xs"
+            />
+          </div>
+          <div>
+            <Label>Pin to device (host id)</Label>
+            <Input
+              value={hostId}
+              onChange={(e) => setHostId(e.target.value)}
+              placeholder="(any idle device or persisted pin)"
+              className="mt-1 font-mono text-xs"
+            />
+          </div>
+        </div>
+      )}
+      {set.error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {(set.error as Error).message ?? "Save failed"}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button size="sm" disabled={set.isPending} onClick={save}>
+          {set.isPending ? "Saving…" : "Save worktree"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -623,41 +749,43 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   );
 }
 
-/* ─── git.create_worktree config panel ────────────────────────── */
+/* ─── github.pull_request_review trigger panel ────────────────── */
 
-interface WorktreeNodePanelProps {
+const REVIEW_STATES = ["approved", "changes_requested", "commented", "dismissed"] as const;
+type ReviewState = (typeof REVIEW_STATES)[number];
+
+interface PRReviewTriggerPanelProps {
   scope: EditorScope;
   node: NodeEditorNode;
   onClose: () => void;
 }
 
-function WorktreeNodePanel({ scope, node, onClose }: WorktreeNodePanelProps) {
+function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTriggerPanelProps) {
   const cfg = (node.config ?? {}) as {
-    fromBranch?: string | null;
-    branchName?: string;
-    hostId?: string | null;
+    reviewStates?: ReviewState[];
+    users?: string[];
   };
-  const [fromBranch, setFromBranch] = useState(cfg.fromBranch ?? "");
-  const [branchName, setBranchName] = useState(
-    cfg.branchName ?? "opencara/{{OPENCARA_AGENT_RUN_ID}}",
+  const initialStates = useMemo<ReviewState[]>(
+    () => cfg.reviewStates ?? ["commented", "changes_requested"],
+    [cfg.reviewStates],
   );
-  const [hostId, setHostId] = useState(cfg.hostId ?? "");
+  const initialUsers = useMemo(() => (cfg.users ?? ["opencara[bot]"]).join(", "), [cfg.users]);
+  const [states, setStates] = useState<ReviewState[]>(initialStates);
+  const [users, setUsers] = useState(initialUsers);
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
-    setFromBranch(cfg.fromBranch ?? "");
-    setBranchName(cfg.branchName ?? "opencara/{{OPENCARA_AGENT_RUN_ID}}");
-    setHostId(cfg.hostId ?? "");
-  }, [cfg.fromBranch, cfg.branchName, cfg.hostId]);
+    setStates(initialStates);
+    setUsers(initialUsers);
+  }, [initialStates, initialUsers]);
+
+  const toggle = (s: ReviewState) =>
+    setStates((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
 
   const save = () => {
     set.mutate({
       nodeId: node.id,
-      config: {
-        fromBranch: fromBranch.length > 0 ? fromBranch : null,
-        branchName,
-        hostId: hostId.length > 0 ? hostId : null,
-      },
+      config: { reviewStates: states, users: parseList(users) },
     });
   };
 
@@ -666,10 +794,10 @@ function WorktreeNodePanel({ scope, node, onClose }: WorktreeNodePanelProps) {
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-base">Create worktree</CardTitle>
+            <CardTitle className="text-base">PR review submitted</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Allocates a fresh git checkout on a paired device. Downstream
-              agent nodes inherit the cwd + device pin.
+              Fires on the GitHub <code className="font-mono">pull_request_review</code> event
+              when the action is <code className="font-mono">submitted</code>.
             </p>
           </div>
           <Button size="sm" variant="ghost" onClick={onClose}>
@@ -678,36 +806,42 @@ function WorktreeNodePanel({ scope, node, onClose }: WorktreeNodePanelProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div>
-          <label className="text-sm font-medium">Branch name</label>
-          <Input
-            value={branchName}
-            onChange={(e) => setBranchName(e.target.value)}
-            className="mt-1 font-mono text-xs"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            Template — substitutes <code className="font-mono">{`{{ENV_VAR}}`}</code>{" "}
-            against the run env.
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Review states</div>
+          <div className="flex flex-wrap gap-2">
+            {REVIEW_STATES.map((s) => {
+              const isActive = states.includes(s);
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => toggle(s)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-xs",
+                    isActive
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40",
+                  )}
+                >
+                  {s}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Empty = match any state. Default is{" "}
+            <code className="font-mono">commented + changes_requested</code> — approved /
+            dismissed reviews don't need a fix iteration.
           </p>
         </div>
-        <div>
-          <label className="text-sm font-medium">From branch</label>
-          <Input
-            value={fromBranch}
-            onChange={(e) => setFromBranch(e.target.value)}
-            placeholder="(repo default)"
-            className="mt-1 font-mono text-xs"
-          />
-        </div>
-        <div>
-          <label className="text-sm font-medium">Pin to device (host id)</label>
-          <Input
-            value={hostId}
-            onChange={(e) => setHostId(e.target.value)}
-            placeholder="(any idle device)"
-            className="mt-1 font-mono text-xs"
-          />
-        </div>
+
+        <ChipField
+          label="Users (whitelist)"
+          placeholder="opencara[bot], opencara*, alice"
+          help="Reviewer logins that may fire this trigger. Globs work (`*` matches anything, `opencara*` matches `opencara[bot]` etc.). Empty = match any user. Default `opencara[bot]` lets pr-review-fix run as the second half of an automated review→fix loop with `pr-review` / `pr-review-multi` — add human logins to opt them in."
+          value={users}
+          onChange={setUsers}
+        />
 
         {set.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -716,7 +850,7 @@ function WorktreeNodePanel({ scope, node, onClose }: WorktreeNodePanelProps) {
         )}
         <div className="flex justify-end">
           <Button size="sm" disabled={set.isPending} onClick={save}>
-            {set.isPending ? "Saving…" : "Save"}
+            {set.isPending ? "Saving…" : "Save filters"}
           </Button>
         </div>
       </CardContent>
@@ -724,48 +858,74 @@ function WorktreeNodePanel({ scope, node, onClose }: WorktreeNodePanelProps) {
   );
 }
 
-/* ─── github.create_pull_request config panel ─────────────────── */
+/* ─── github.projects_v2_item trigger panel ───────────────────── */
 
-interface CreatePRNodePanelProps {
+const PROJECTS_V2_CONTENT_TYPES = ["Issue", "PullRequest", "DraftIssue"] as const;
+type ProjectsV2ContentType = (typeof PROJECTS_V2_CONTENT_TYPES)[number];
+
+interface ProjectsV2ItemTriggerPanelProps {
   scope: EditorScope;
   node: NodeEditorNode;
   onClose: () => void;
 }
 
-function CreatePRNodePanel({ scope, node, onClose }: CreatePRNodePanelProps) {
+function ProjectsV2ItemTriggerPanel({
+  scope,
+  node,
+  onClose,
+}: ProjectsV2ItemTriggerPanelProps) {
   const cfg = (node.config ?? {}) as {
-    title?: string;
-    body?: string | null;
-    baseBranch?: string | null;
-    draft?: boolean;
+    projectNumber?: number | null;
+    fieldName?: string;
+    fromOptions?: string[];
+    toOptions?: string[];
+    contentTypes?: ProjectsV2ContentType[];
   };
-  const [title, setTitle] = useState(
-    cfg.title ?? "WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}",
+  const initialFieldName = cfg.fieldName ?? "Status";
+  const initialFrom = (cfg.fromOptions ?? []).join(", ");
+  const initialTo = (cfg.toOptions ?? []).join(", ");
+  const initialTypes = useMemo<ProjectsV2ContentType[]>(
+    () => cfg.contentTypes ?? ["Issue"],
+    [cfg.contentTypes],
   );
-  // Toggle between "use the upstream agent's stdout" (null) and a fixed
-  // template body. Most flows want the former; this is just an escape hatch.
-  const [useStdout, setUseStdout] = useState(cfg.body === null || cfg.body === undefined);
-  const [body, setBody] = useState(cfg.body ?? "");
-  const [baseBranch, setBaseBranch] = useState(cfg.baseBranch ?? "");
-  const [draft, setDraft] = useState(cfg.draft ?? true);
+  const initialProjectNumber =
+    typeof cfg.projectNumber === "number" ? String(cfg.projectNumber) : "";
+
+  const [fieldName, setFieldName] = useState(initialFieldName);
+  const [fromOptions, setFromOptions] = useState(initialFrom);
+  const [toOptions, setToOptions] = useState(initialTo);
+  const [contentTypes, setContentTypes] = useState<ProjectsV2ContentType[]>(initialTypes);
+  const [projectNumber, setProjectNumber] = useState(initialProjectNumber);
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
-    setTitle(cfg.title ?? "WIP: implement issue #{{OPENCARA_ISSUE_NUMBER}}");
-    setUseStdout(cfg.body === null || cfg.body === undefined);
-    setBody(cfg.body ?? "");
-    setBaseBranch(cfg.baseBranch ?? "");
-    setDraft(cfg.draft ?? true);
-  }, [cfg.title, cfg.body, cfg.baseBranch, cfg.draft]);
+    setFieldName(initialFieldName);
+    setFromOptions(initialFrom);
+    setToOptions(initialTo);
+    setContentTypes(initialTypes);
+    setProjectNumber(initialProjectNumber);
+  }, [initialFieldName, initialFrom, initialTo, initialTypes, initialProjectNumber]);
+
+  const toggleType = (t: ProjectsV2ContentType) =>
+    setContentTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   const save = () => {
+    const trimmedField = fieldName.trim();
+    const trimmedNum = projectNumber.trim();
+    let parsedNum: number | null = null;
+    if (trimmedNum.length > 0) {
+      const n = Number(trimmedNum);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return;
+      parsedNum = n;
+    }
     set.mutate({
       nodeId: node.id,
       config: {
-        title,
-        body: useStdout ? null : body,
-        baseBranch: baseBranch.length > 0 ? baseBranch : null,
-        draft,
+        projectNumber: parsedNum,
+        fieldName: trimmedField.length > 0 ? trimmedField : "Status",
+        fromOptions: parseList(fromOptions),
+        toOptions: parseList(toOptions),
+        contentTypes,
       },
     });
   };
@@ -775,9 +935,10 @@ function CreatePRNodePanel({ scope, node, onClose }: CreatePRNodePanelProps) {
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-base">Create pull request</CardTitle>
+            <CardTitle className="text-base">Project status change</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Opens a PR using the head branch from the upstream worktree node.
+              Fires on the GitHub <code className="font-mono">projects_v2_item</code> webhook
+              when an item moves between options of a single-select field.
             </p>
           </div>
           <Button size="sm" variant="ghost" onClick={onClose}>
@@ -786,55 +947,65 @@ function CreatePRNodePanel({ scope, node, onClose }: CreatePRNodePanelProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div>
-          <label className="text-sm font-medium">Title</label>
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="mt-1 font-mono text-xs"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            Template — substitutes <code className="font-mono">{`{{ENV_VAR}}`}</code>.
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Content types</div>
+          <div className="flex flex-wrap gap-2">
+            {PROJECTS_V2_CONTENT_TYPES.map((t) => {
+              const isActive = contentTypes.includes(t);
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => toggleType(t)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-xs",
+                    isActive
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-foreground/40",
+                  )}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Default <code className="font-mono">Issue</code>. Pick at least one.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={useStdout}
-            onChange={(e) => setUseStdout(e.target.checked)}
-            className="size-4 rounded border-input"
+
+        <ChipField
+          label="Field name"
+          placeholder="Status"
+          help="The single-select field on the project board whose option-change should fire the trigger. Default is `Status` (matches GitHub's default board)."
+          value={fieldName}
+          onChange={setFieldName}
+        />
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <ChipField
+            label="From options"
+            placeholder="* (any)"
+            help="Comma-separated option names the item must have moved FROM. Empty = any state."
+            value={fromOptions}
+            onChange={setFromOptions}
           />
-          <span className="font-medium">Use upstream agent's stdout as body</span>
-        </label>
-        {!useStdout && (
-          <div>
-            <label className="text-sm font-medium">Body template</label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={5}
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
-            />
-          </div>
-        )}
-        <div>
-          <label className="text-sm font-medium">Base branch</label>
-          <Input
-            value={baseBranch}
-            onChange={(e) => setBaseBranch(e.target.value)}
-            placeholder="(repo default)"
-            className="mt-1 font-mono text-xs"
+          <ChipField
+            label="To options"
+            placeholder="* (any)"
+            help="Comma-separated option names the item must have moved TO. Empty = any state."
+            value={toOptions}
+            onChange={setToOptions}
           />
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={draft}
-            onChange={(e) => setDraft(e.target.checked)}
-            className="size-4 rounded border-input"
-          />
-          <span className="font-medium">Open as draft</span>
-        </label>
+
+        <ChipField
+          label="Project number (optional)"
+          placeholder="(any board on the org/user)"
+          help="Restrict to a specific Projects v2 board number. Leave empty to match any."
+          value={projectNumber}
+          onChange={setProjectNumber}
+        />
 
         {set.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -842,8 +1013,12 @@ function CreatePRNodePanel({ scope, node, onClose }: CreatePRNodePanelProps) {
           </div>
         )}
         <div className="flex justify-end">
-          <Button size="sm" disabled={set.isPending} onClick={save}>
-            {set.isPending ? "Saving…" : "Save"}
+          <Button
+            size="sm"
+            disabled={set.isPending || contentTypes.length === 0}
+            onClick={save}
+          >
+            {set.isPending ? "Saving…" : "Save filters"}
           </Button>
         </div>
       </CardContent>

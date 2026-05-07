@@ -18,8 +18,14 @@ export interface FlowGraphNode {
     event?: string;
     spec?: { command?: string };
     labels?: string[];
-    branchName?: string;
-    draft?: boolean;
+    /** AgentNode worktree option — when set, shows up as a branch
+     *  hint on the agent node's subtitle. */
+    worktree?: { branchName?: string };
+    /** ProjectsV2 trigger filters — surfaced on the graph card as
+     *  e.g. "Status: Backlog → Ready". */
+    fromOptions?: string[];
+    toOptions?: string[];
+    fieldName?: string;
   };
 }
 export interface FlowGraphEdge {
@@ -98,8 +104,6 @@ function nodeTypeFor(kind: string): string {
   if (kind === "github.post_review") return "postReview";
   if (kind === "github.add_comment") return "addComment";
   if (kind === "github.add_label") return "addLabel";
-  if (kind === "git.create_worktree") return "createWorktree";
-  if (kind === "github.create_pull_request") return "createPR";
   return "trigger";
 }
 
@@ -107,6 +111,8 @@ function pickLabel(n: FlowGraphNode): string {
   switch (n.kind) {
     case "github.pull_request":
       return "Pull request";
+    case "github.pull_request_review":
+      return "PR review submitted";
     case "github.projects_v2_item":
       return "Project status change";
     case "agent":
@@ -117,10 +123,6 @@ function pickLabel(n: FlowGraphNode): string {
       return "Add comment";
     case "github.add_label":
       return "Add label";
-    case "git.create_worktree":
-      return "Create worktree";
-    case "github.create_pull_request":
-      return "Create PR";
     default:
       return n.kind;
   }
@@ -130,18 +132,26 @@ function pickSubtitle(n: FlowGraphNode): string | undefined {
   switch (n.kind) {
     case "github.pull_request":
       return "trigger";
-    case "github.projects_v2_item":
+    case "github.pull_request_review":
       return "trigger";
+    case "github.projects_v2_item": {
+      // Compose `Status: Backlog → Ready` from from/to options. * for empty.
+      const field = n.config?.fieldName ?? "Status";
+      const fromList = n.config?.fromOptions ?? [];
+      const toList = n.config?.toOptions ?? [];
+      const fromStr = fromList.length === 0 ? "*" : fromList.join("|");
+      const toStr = toList.length === 0 ? "*" : toList.join("|");
+      return `${field}: ${fromStr} → ${toStr}`;
+    }
     case "agent":
-      return n.config?.spec?.command ?? undefined;
+      // When the agent has a worktree option, show the branch
+      // template instead of the (rarely-set) spec.command — the
+      // branch is the more useful at-a-glance summary.
+      return n.config?.worktree?.branchName ?? n.config?.spec?.command ?? undefined;
     case "github.post_review":
       return n.config?.event;
     case "github.add_label":
       return n.config?.labels?.join(", ");
-    case "git.create_worktree":
-      return n.config?.branchName ?? undefined;
-    case "github.create_pull_request":
-      return n.config?.draft ? "draft" : undefined;
     default:
       return undefined;
   }

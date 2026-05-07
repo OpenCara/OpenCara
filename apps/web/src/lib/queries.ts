@@ -454,10 +454,15 @@ export interface FlowNodeSetting {
   updatedAt: string;
 }
 
+export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "custom";
+
 export interface AgentRow {
   id: string;
   userId: string;
   name: string;
+  /** Selects per-kind adapter at dispatch time. `custom` = legacy
+   *  opaque-subprocess behaviour (no conversation resume across runs). */
+  kind: AgentKind;
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -478,8 +483,15 @@ export function useCreateAgent() {
   return useMutation({
     mutationFn: (vars: {
       name: string;
-      /** Full shell-style command incl. args (e.g. `node script.mjs --foo`). Server tokenizes. */
-      command: string;
+      /** Selects per-kind adapter (claude/codex/opencode/pi) or `custom`
+       *  for the legacy free-form command. Defaults to `custom` server-side. */
+      kind?: AgentKind;
+      /** For kind=custom: full shell-style command incl. args. Server tokenizes. */
+      command?: string;
+      /** For kind!=custom: extra args appended to the adapter's base args
+       *  (e.g. `--provider kimi-coding --model kimi-k2-thinking` for pi).
+       *  Free-form string — server tokenizes the same way as Command. */
+      extraArgs?: string;
       env?: Record<string, string>;
       cwd?: string | null;
       /** Specific device id; null/undefined = "any idle device". */

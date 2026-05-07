@@ -276,6 +276,10 @@ export class DevicePool {
 export class WebSocketDispatcher implements AgentDispatcher {
   constructor(private pool: DevicePool) {}
 
+  isConnected(hostId: string): boolean {
+    return this.pool.isConnected(hostId);
+  }
+
   async run(spec: AgentSpec, ctx: RunContext): Promise<RunResult> {
     let dev: ConnectedDevice | null;
     if (ctx.hostId) {

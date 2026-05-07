@@ -9,6 +9,10 @@ export interface PullRequestContext {
     pr: unknown;
     diff: string;
     previousOutput?: string;
+    /** Set on `pull_request_review` events — the reviewer's verdict.
+     *  Surfaced to the agent so the review-fix flow can read it as
+     *  the next instruction without scraping env vars. */
+    review?: { state?: string; body?: string | null; user?: { login?: string } };
   };
 }
 
@@ -44,10 +48,18 @@ interface ProjectLike {
 interface PullRequestPayload {
   pull_request: {
     number: number;
-    head: { sha: string };
+    head: { sha: string; ref?: string };
     base: { sha: string };
   };
   repository: { full_name: string };
+  // Present on `pull_request_review` events (the review-fix flow's
+  // wake-up signal). When set, surfaced into envExtras so the agent
+  // node downstream can read the reviewer's verdict.
+  review?: {
+    state?: string;
+    body?: string | null;
+    user?: { login?: string };
+  };
 }
 
 export async function buildPullRequestContext(
@@ -67,14 +79,25 @@ export async function buildPullRequestContext(
   });
   const diff = String(diffRes.data);
 
+  const envExtras: Record<string, string> = {
+    OPENCARA_REPO: payload.repository.full_name,
+    OPENCARA_PR_NUMBER: String(prNumber),
+    OPENCARA_PR_HEAD_SHA: payload.pull_request.head.sha,
+    OPENCARA_PR_BASE_SHA: payload.pull_request.base.sha,
+  };
+  if (payload.pull_request.head.ref) {
+    envExtras["OPENCARA_PR_HEAD_REF"] = payload.pull_request.head.ref;
+  }
+  if (payload.review) {
+    if (payload.review.state) envExtras["OPENCARA_REVIEW_STATE"] = payload.review.state;
+    if (payload.review.body) envExtras["OPENCARA_REVIEW_BODY"] = payload.review.body;
+    if (payload.review.user?.login)
+      envExtras["OPENCARA_REVIEW_AUTHOR"] = payload.review.user.login;
+  }
+
   return {
-    envExtras: {
-      OPENCARA_REPO: payload.repository.full_name,
-      OPENCARA_PR_NUMBER: String(prNumber),
-      OPENCARA_PR_HEAD_SHA: payload.pull_request.head.sha,
-      OPENCARA_PR_BASE_SHA: payload.pull_request.base.sha,
-    },
-    stdin: { pr: payload.pull_request, diff },
+    envExtras,
+    stdin: { pr: payload.pull_request, diff, review: payload.review },
   };
 }
 

@@ -44,6 +44,17 @@ export const flowStepStatusEnum = pgEnum("flow_step_status", [
   "skipped",
 ]);
 
+// Supported agent kinds. `custom` is the escape hatch for arbitrary
+// command/args; only the four named kinds get per-run conversation
+// resume via the adapter library in `src/agents/kinds.ts`.
+export const agentKindEnum = pgEnum("agent_kind", [
+  "claude",
+  "codex",
+  "opencode",
+  "pi",
+  "custom",
+]);
+
 export const users = pgTable(
   "users",
   {
@@ -326,6 +337,13 @@ export const agents = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    // `kind != 'custom'` selects a per-kind adapter (src/agents/kinds.ts)
+    // that builds the spec at dispatch time; for those rows, `command`/
+    // `args`/`cwd` columns are ignored (operators may still set `args`
+    // for kind-specific extras like `--model X --provider Y` that the
+    // adapter passes through). `kind = 'custom'` keeps the legacy
+    // opaque-subprocess behaviour and disables conversation resume.
+    kind: agentKindEnum("kind").notNull().default("custom"),
     command: text("command").notNull(),
     args: jsonb("args").$type<string[]>().notNull().default([]),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
@@ -340,6 +358,31 @@ export const agents = pgTable(
   (t) => ({
     userNameUq: uniqueIndex("agents_user_name_uq").on(t.userId, t.name),
     userIdx: index("agents_user_id_idx").on(t.userId),
+  }),
+);
+
+// Sticks a (owner_repo, branch) to the agent host that first ran a
+// worktree on it. The session-id file lives on that device under
+// ~/.opencara/sessions/<...>/agent-session.json — without pinning the
+// device we can't find the file on the next iteration, so the agent
+// would always start a fresh conversation. Pin is upserted by the
+// engine after every successful `git.create_worktree` dispatch and
+// pruned by the reaper after 30 days of inactivity (PRs typically
+// close before then).
+export const worktreePins = pgTable(
+  "worktree_pins",
+  {
+    id: text("id").primaryKey(),
+    ownerRepo: text("owner_repo").notNull(),
+    branch: text("branch").notNull(),
+    hostId: text("host_id")
+      .notNull()
+      .references(() => agentHosts.id, { onDelete: "cascade" }),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    repoBranchUq: uniqueIndex("worktree_pins_repo_branch_uq").on(t.ownerRepo, t.branch),
+    lastRunAtIdx: index("worktree_pins_last_run_at_idx").on(t.lastRunAt),
   }),
 );
 

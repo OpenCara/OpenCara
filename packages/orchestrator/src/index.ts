@@ -51,7 +51,13 @@ const flowEngine = githubApp
 if (githubApp) {
   app.route(
     "/webhooks/github",
-    appWebhookRoutes({ db, pg, app: githubApp, flowEngine: flowEngine ?? undefined }),
+    appWebhookRoutes({
+      db,
+      pg,
+      app: githubApp,
+      dispatcher,
+      flowEngine: flowEngine ?? undefined,
+    }),
   );
   console.log("[orchestrator] GitHub App webhook handler mounted at /webhooks/github");
 } else {
