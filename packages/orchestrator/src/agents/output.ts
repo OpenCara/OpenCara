@@ -32,6 +32,14 @@ export function extractAgentResultText(raw: string): string {
   // has a string `result` field. The first character check is cheap and
   // saves us parsing JSONL-shaped streams as a single document (which would
   // succeed for line 1 only and silently produce wrong results).
+  //
+  // `is_error: true` envelopes are deliberately NOT unwrapped. In that
+  // case `.result` is whatever Claude generated before the error (often
+  // a partial response or "Maximum tool use limit reached"-style text);
+  // posting it as a clean review body would mask the failure. Falling
+  // through to verbatim keeps the full envelope (including `is_error`,
+  // `subtype`, `duration_ms`) visible to whatever surface receives the
+  // output. PR #34 review raised this; locked in with a unit test.
   if (trimmed.startsWith("{")) {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
@@ -40,7 +48,8 @@ export function extractAgentResultText(raw: string): string {
         typeof parsed === "object" &&
         !Array.isArray(parsed) &&
         "result" in parsed &&
-        typeof (parsed as { result: unknown }).result === "string"
+        typeof (parsed as { result: unknown }).result === "string" &&
+        (parsed as { is_error?: unknown }).is_error !== true
       ) {
         return (parsed as { result: string }).result;
       }
@@ -49,10 +58,11 @@ export function extractAgentResultText(raw: string): string {
     }
   }
 
-  // TODO(#3X): handle JSONL outputs (codex / pi / opencode) by walking
-  // event frames and concatenating `agent_message` text. Out of scope for
-  // the targeted fix that surfaces this — only Claude is wired to a flow
-  // node that posts to GitHub today.
+  // TODO: handle JSONL outputs (codex / pi / opencode) by walking event
+  // frames and concatenating `agent_message` text. Out of scope for the
+  // targeted fix that surfaces this — only Claude is wired to a flow
+  // node that posts to GitHub today. File a follow-up issue once a
+  // non-Claude agent gets wired to a posting node.
 
   return raw;
 }

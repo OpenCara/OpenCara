@@ -66,4 +66,29 @@ describe("extractAgentResultText", () => {
     assert.equal(extractAgentResultText(""), "");
     assert.equal(extractAgentResultText("   "), "");
   });
+
+  it("does NOT unwrap envelopes with is_error: true", () => {
+    // When Claude exits with an error, `.result` is the partial/error
+    // text — posting it as a clean review body would hide the failure.
+    // Falling through to verbatim keeps the envelope (with `is_error`,
+    // `subtype`, `duration_ms`) visible to operators.
+    const raw = JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      is_error: true,
+      duration_ms: 32100,
+      result: "I ran out of tool calls before finishing the review.",
+    });
+    assert.equal(extractAgentResultText(raw), raw);
+  });
+
+  it("unwraps when is_error is explicitly false (the canonical success shape)", () => {
+    const raw = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "## Verdict\nCOMMENT",
+    });
+    assert.equal(extractAgentResultText(raw), "## Verdict\nCOMMENT");
+  });
 });
