@@ -182,20 +182,17 @@ function handleClaudeEvent(
   const msg = raw as Record<string, unknown>;
   const type = typeof msg["type"] === "string" ? (msg["type"] as string) : "";
   if (type === "assistant") {
-    const message = msg["message"] as { content?: Array<{ type?: string; text?: string }> } | undefined;
-    const blocks = message?.content ?? [];
-    for (const block of blocks) {
-      if (block?.type !== "text") continue;
-      const text = typeof block.text === "string" ? block.text : "";
-      if (text.length === 0) continue;
-      notify("session/update", {
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text },
-        },
-      });
-    }
+    // With `--include-partial-messages`, the `assistant` frame carries
+    // the CUMULATIVE final message — claude already streamed every
+    // delta via `stream_event content_block_delta` frames before this.
+    // Forwarding both produces the user-visible "reply repeated twice"
+    // bug we hit on first opencara@0.104.0 run. Drop this frame; the
+    // streaming chunks already covered the full text.
+    //
+    // If a future claude version stops emitting deltas (e.g. user
+    // disables --include-partial-messages), this branch becomes the
+    // fallback — but the spawn always passes that flag, so today the
+    // assistant frame is purely redundant.
     return;
   }
   if (type === "stream_event") {
