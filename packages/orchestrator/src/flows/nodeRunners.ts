@@ -445,10 +445,20 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
         `agent.worktree.branchName template '${node.config.worktree.branchName}' rendered empty — fill in the template variables`,
       );
     }
-    const fromBranch =
+    const fromBranchRaw =
       node.config.worktree.fromBranch && node.config.worktree.fromBranch.length > 0
         ? node.config.worktree.fromBranch
         : ctx.project.defaultBranch ?? "";
+    // Render templates so flows like `pr-review-fix` can pin
+    // `fromBranch: "{{OPENCARA_PR_HEAD_REF}}"`. The happy path
+    // (existing checkout) ignores --from-branch, but a fresh-device /
+    // fallback allocation passes it straight to `git clone --branch`,
+    // where an unrendered `{{...}}` literal would fail.
+    const fromBranch = renderTemplate(
+      fromBranchRaw,
+      tplVars,
+      "agent.worktree.fromBranch",
+    );
     const ownerRepo = `${ctx.project.owner}/${ctx.project.name}`;
     // Stable per-(repo, branch) slug. The implement flow's first run
     // and any later review-fix iteration on the same PR compute the
@@ -469,6 +479,18 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
         where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
       });
       if (existing) pinnedHostId = existing.hostId;
+    }
+    // Graceful degrade: if the operator-pinned OR the per-(repo,branch)
+    // pinned device is currently offline, fall back to pickIdle by
+    // dropping the hostId. The agent will start a fresh conversation
+    // in a fresh checkout on whichever device picks up the run, and
+    // the upsert below will re-pin to that new device.
+    if (pinnedHostId && !ctx.dispatcher.isConnected(pinnedHostId)) {
+      console.warn(
+        "[flows] worktree pinned host offline; falling back to pickIdle",
+        { ownerRepo, branchName, pinnedHostId },
+      );
+      pinnedHostId = null;
     }
 
     // Sub-dispatch: opencara internal worktree create. Idempotent —
