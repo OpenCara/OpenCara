@@ -1,0 +1,161 @@
+// MCP tool definitions for opencara mutations.
+//
+// Three tools mirror the existing `agent-call` allowlist (the per-page
+// mutations the chat skills hand to agents):
+//   - opencara_issue_body_set
+//   - opencara_flow_node_config_set
+//   - opencara_template_node_config_set
+//
+// Naming: MCP tool names must be a single identifier (the protocol
+// recommends `^[a-zA-Z0-9_-]+$`). The wire `kind` strings keep their
+// dot-notation (`issue.body.set`) so the orchestrator's allowlist and
+// switch in `dispatch/devices.ts:applyAgentCall` don't change. The
+// tool name → kind mapping is captured here in one place so both ends
+// stay in lockstep.
+//
+// Schemas: input shapes are extracted from the existing zod schemas in
+// @opencara/shared by stripping the envelope fields (`type`, `runId`,
+// `callId`, `kind`). The MCP SDK accepts ZodRawShape objects; we keep
+// each shape as a plain `{key: ZodSchema}` map so the SDK can derive
+// JSON Schema for the agent's tool list.
+//
+// Handlers delegate to a `ToolCallRouter` injected at registration time.
+// The router proxies the call back to the orchestrator (over the device
+// WS in production, over a mock channel in tests) and returns the
+// result. Production wiring lives in the opencara-mcp binary.
+
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  IssueBodySetCallSchema,
+  FlowNodeConfigSetCallSchema,
+  TemplateNodeConfigSetCallSchema,
+} from "@opencara/shared";
+
+/**
+ * Result returned by the orchestrator for an applied (or rejected)
+ * mutation. Mirrors `AgentCallResult` in
+ * `packages/orchestrator/src/agent-calls/index.ts`.
+ */
+export type ToolCallResult =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+/**
+ * Injected at registration time so unit tests can drive the server with a
+ * deterministic in-memory router (no IPC / WS in the loop). The production
+ * router (in opencara-mcp) forwards calls over the IPC socket to the
+ * running CLI device.
+ *
+ * Implementations MUST NOT throw on a domain-level rejection (unknown
+ * issue, scope violation, etc.) — surface those as `{ ok: false }`.
+ * `throw` is reserved for transport-level failure (IPC dropped, etc.).
+ */
+export interface ToolCallRouter {
+  call(kind: string, args: Record<string, unknown>): Promise<ToolCallResult>;
+}
+
+// ─── Tool definitions ──────────────────────────────────────────────
+
+interface ToolDef<Shape extends z.ZodRawShape> {
+  name: string;
+  kind: string;
+  title: string;
+  description: string;
+  inputShape: Shape;
+}
+
+// Strip envelope fields (`type`, `runId`, `callId`, `kind`) from each
+// shared schema and lift the remaining ZodObject's `.shape` so we can
+// pass it as the SDK's ZodRawShape.
+const issueBodySetShape = IssueBodySetCallSchema.omit({
+  type: true,
+  runId: true,
+  callId: true,
+  kind: true,
+}).shape;
+
+const flowNodeConfigSetShape = FlowNodeConfigSetCallSchema.omit({
+  type: true,
+  runId: true,
+  callId: true,
+  kind: true,
+}).shape;
+
+const templateNodeConfigSetShape = TemplateNodeConfigSetCallSchema.omit({
+  type: true,
+  runId: true,
+  callId: true,
+  kind: true,
+}).shape;
+
+export const TOOLS = [
+  {
+    name: "opencara_issue_body_set",
+    kind: "issue.body.set",
+    title: "Update an issue body draft",
+    description:
+      "Replace the draft Markdown body of an issue in the run's project. " +
+      "The change goes to the draft store — the user must publish to GitHub " +
+      "from the canvas. Reject with reason if the issue isn't in the run's " +
+      "project scope.",
+    inputShape: issueBodySetShape,
+  },
+  {
+    name: "opencara_flow_node_config_set",
+    kind: "flow.node.config.set",
+    title: "Update a flow node's config",
+    description:
+      "Replace the config blob of a node in the named flow within the run's " +
+      "project. Reject with reason if the flow or node doesn't exist or is " +
+      "out of scope.",
+    inputShape: flowNodeConfigSetShape,
+  },
+  {
+    name: "opencara_template_node_config_set",
+    kind: "template.node.config.set",
+    title: "Update a flow-template draft node's config",
+    description:
+      "Replace the config blob of a node in the user's draft of the named " +
+      "flow template. Per-user scope, not per-project. Reject with reason " +
+      "if the template draft isn't owned by the run's user.",
+    inputShape: templateNodeConfigSetShape,
+  },
+] as const satisfies ReadonlyArray<ToolDef<z.ZodRawShape>>;
+
+// ─── Registration ──────────────────────────────────────────────────
+
+/**
+ * Register all opencara mutation tools on the given MCP server. Each
+ * handler captures `router` and forwards the call. The MCP SDK validates
+ * input args against `inputShape` before invoking the handler, so the
+ * orchestrator-side schema check (in `dispatch/devices.ts`) is a defense
+ * in depth, not the primary gate.
+ */
+export function registerOpencaraTools(server: McpServer, router: ToolCallRouter): void {
+  for (const tool of TOOLS) {
+    server.registerTool(
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputShape,
+      },
+      async (args: Record<string, unknown>) => {
+        const result = await router.call(tool.kind, args);
+        if (result.ok) {
+          return {
+            content: [{ type: "text" as const, text: "ok" }],
+          };
+        }
+        return {
+          content: [{ type: "text" as const, text: `rejected: ${result.reason}` }],
+          isError: true,
+        };
+      },
+    );
+  }
+}
+
+/** Test/spike helper: list of (name, kind) pairs for assertions. */
+export const TOOL_NAMES = TOOLS.map((t) => ({ name: t.name, kind: t.kind }));

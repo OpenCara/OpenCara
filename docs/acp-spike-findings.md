@@ -59,112 +59,162 @@ observe", say so explicitly — silence is ambiguous.
 
 ### 1. Gemini's actual ACP invocation
 
-What command + flag actually puts Gemini CLI into ACP mode on your machine?
+`gemini --acp` (the registry-default `--experimental-acp` is now deprecated
+in `@google/gemini-cli@0.41.2`). The spike harness's default has been
+updated; #28 also pulled `smoke.ts` in line with this.
 
-> _TODO: paste the working command from the spike run, including version of
-> Gemini CLI tested. If `--experimental-acp` is wrong, log the correct flag._
+If you don't have `gemini` installed globally, `npx --yes
+@google/gemini-cli --acp` works as a drop-in via:
+
+```
+OPENCARA_ACP_COMMAND=npx OPENCARA_ACP_ARGS='--yes @google/gemini-cli --acp' \
+  pnpm --filter opencara acp:spike "<prompt>"
+```
 
 ### 2. `initialize` round-trip
 
-Paste both directions of the frame.
-
 ```jsonc
 // out:
+{"jsonrpc":"2.0","id":1,"method":"initialize",
+ "params":{"protocolVersion":1,"clientCapabilities":{}}}
+
 // in:
+{"jsonrpc":"2.0","id":1,"result":{
+  "protocolVersion":1,
+  "agentInfo":{"name":"gemini-cli","title":"Gemini CLI","version":"0.41.2"},
+  "agentCapabilities":{
+    "loadSession":true,
+    "promptCapabilities":{"image":true,"audio":true,"embeddedContext":true},
+    "mcpCapabilities":{"http":true,"sse":true}
+  },
+  "authMethods":[
+    {"id":"oauth-personal","name":"Log in with Google","description":"Log in with your Google account"},
+    {"id":"gemini-api-key","name":"Gemini API key","description":"Use an API key with Gemini Developer API"},
+    {"id":"vertex-ai","name":"Vertex AI","description":"Use an API key with Vertex AI GenAI API"},
+    {"id":"gateway","name":"AI API Gateway","description":"Use a custom AI API Gateway"}
+  ]
+}}
 ```
 
-What does Gemini advertise in `agentCapabilities`? Specifically: `loadSession`,
-`mcpCapabilities`, `promptCapabilities`?
-
-> _TODO_
-
-Does Gemini return any `authMethods` in the response?
-
-> _TODO_
+Notable:
+- `loadSession: true` — Gemini supports `session/load`. We can persist a
+  Gemini sessionId and resume on subsequent turns (matches the legacy
+  `--resume <uuid>` model).
+- `mcpCapabilities.http` and `.sse` are advertised, but stdio is what
+  Gemini actually expects in `mcpServers` — confirmed against #28's smoke.
+- `authMethods` is informational. Setting `GEMINI_API_KEY` in env is
+  sufficient; we did not call `authenticate` at all.
 
 ### 3. `session/new` round-trip
 
-Paste both directions.
-
 ```jsonc
 // out:
+{"jsonrpc":"2.0","id":2,"method":"session/new",
+ "params":{"cwd":"/path","mcpServers":[/* see #28 host.acpServerEntry() */]}}
+
 // in:
+{"jsonrpc":"2.0","id":2,"result":{
+  "sessionId":"<uuid>",
+  "modes":{"availableModes":[
+    {"id":"default","name":"Default","description":"Prompts for approval"},
+    {"id":"autoEdit","name":"Auto Edit","description":"Auto-approves edit tools"},
+    {"id":"yolo","name":"YOLO","description":"Auto-approves all tools"},
+    {"id":"plan","name":"Plan","description":"Read-only mode"}
+  ],"currentModeId":"default"},
+  "models":{"availableModels":[/* gemini-3.x, gemini-2.5 variants */],
+            "currentModelId":"auto-gemini-3"}
+}}
 ```
 
-Did `session/new` return a `sessionId` immediately, or did the agent emit
-side-channel updates first? (Affects how the chat route persists run state
-in #29.)
-
-> _TODO_
+`sessionId` lands in the response immediately — no side-channel updates
+first.
 
 ### 4. `session/prompt` and the streamed updates
 
-Paste the request frame, then a representative sequence of incoming
-`session/update` notifications until the prompt response arrives.
-
-```jsonc
-// out (prompt):
-// in (update 1):
-// in (update 2):
-// …
-// in (prompt response):
-```
-
-Which `sessionUpdate` discriminators did Gemini actually emit? List each
-one observed and how often.
-
-> _TODO_
+`session/update` discriminators observed in real runs:
+- `available_commands_update` — fires immediately after `session/prompt`.
+  Lists agent slash commands (`memory`, `extensions`, `init`, etc.). Our
+  client logs this as `(unmodeled)`; not load-bearing for the cutover.
+- `agent_thought_chunk` — Gemini emits its planning prose here.
+- `tool_call` (status: `in_progress`) and `tool_call_update` (status:
+  `completed` / `failed`) for both internal "think" tools and our MCP
+  tools.
 
 ### 5. Turn-end signal
 
-How does the agent signal "turn over"? Confirm: it's the `session/prompt`
-response with `stopReason`, not a sentinel `session/update` notification?
-
-> _TODO_
+The `session/prompt` response with `stopReason` is the canonical end-of-turn
+signal. Not directly observed in our smoke (Gemini turns hung mid-flight on
+the dev key — likely API-side rate limiting), but matches the spec.
 
 ### 6. Tool calls in the wild
 
-Run the spike with a prompt that should make Gemini use a tool (e.g. "list
-files in this directory"). Paste a `tool_call` and its `tool_call_update`
-sequence.
+**Critical finding:** Gemini issues `session/request_permission` for every
+MCP tool call, regardless of advertised client capabilities. If the client
+returns method-not-found, Gemini marks the tool call `failed` and surfaces
+`[object Object]` to the user.
 
 ```jsonc
-// in (tool_call):
-// in (tool_call_update progress):
-// in (tool_call_update completed):
+// in (request from agent → client, expects a response):
+{"jsonrpc":"2.0","id":N,"method":"session/request_permission",
+ "params":{
+   "sessionId":"…",
+   "toolCall":{"toolCallId":"…"},
+   "options":[
+     {"kind":"reject_once","name":"…","optionId":"…"},
+     {"kind":"allow_once","name":"…","optionId":"…"},
+     {"kind":"allow_always","name":"…","optionId":"…"}
+   ]
+ }}
+
+// out (auto-allow, matches today's --dangerously-skip-permissions):
+{"jsonrpc":"2.0","id":N,"result":{
+   "outcome":{"outcome":"selected","optionId":"<allow_once option id>"}
+}}
 ```
 
-Did Gemini run the tool autonomously, or did it issue a
-`session/request_permission` to the client? (We advertised no client
-capabilities — observe how Gemini handles that.)
-
-> _TODO_
+The auto-allow handler is implemented in `AcpConnection.dispatch` in PR
+#32 (the `session_request_permission` branch). Real permission UI is
+out of scope until #29 has a chat-side permission flow to route to.
 
 ### 7. Agent→client requests we didn't expect
 
-Did the agent attempt to call any client method (e.g. `fs/read_text_file`)?
-The spike replies method-not-found by default; check the dump for
-`out` direction frames carrying an error response.
-
-> _TODO_
+Only `session/request_permission` (covered above). `fs/read_text_file`,
+`fs/write_text_file`, and the `terminal/*` family were NOT requested even
+though Gemini has the capability — presumably because we advertised
+`clientCapabilities: {}`.
 
 ### 8. Stderr usage
 
-Did the agent write anything to stderr during the run? If so, what?
-
-> _TODO_
+Empty modulo npm warnings (when launched via `npx`). Gemini doesn't write
+anything diagnostic to stderr that we'd want to surface to operators.
 
 ## Decisions captured for #28/#29
 
-These follow from the empirical findings — do not commit to them until the
-sections above are populated.
-
-- **Adapter package(s) we'll pin:** _TODO (e.g. `@zed-industries/claude-agent-acp@0.16.x`)._
-- **MCP server transport posture:** stdio-local vs. orchestrator-hosted. _TODO once we've seen how Gemini surfaces tool calls and request_permission._
-- **Tool-call-result wire path:** options are (a) extend the device WS with request/response pairs, or (b) make the CLI device run the MCP server itself and skip the round-trip. Pick after #28's spike.
-- **Permission flow stance:** if all agents in our stack run tools without `request_permission` round-trips when client capabilities are empty, we keep parity with today's `--dangerously-skip-permissions` posture and don't model permissions in #29. Otherwise, surface a no-op auto-approve in the client.
+- **MCP server transport posture:** stdio-local. Gemini accepts the
+  `{type:"stdio", command, args, env}` shape directly; the device hosts an
+  IPC socket that opencara-mcp dials back to (per #28's `McpHost`).
+- **Tool-call-result wire path:** Option A (extend device WS with
+  `agent-call-request` / `agent-call-result`). Implemented in #28.
+- **Permission flow stance:** Auto-allow client-side, matching today's
+  `--dangerously-skip-permissions`. The handler is small enough to keep
+  inline in `AcpConnection`. When the chat path lands a permission UI in
+  a later milestone, swap the handler for one that routes to the user.
+- **Adapter package(s) to pin:** Defer until #29 — Claude/Codex adapters
+  haven't been smoke-tested yet.
 
 ## Risks observed during the spike
 
-> _TODO_ — append anything that surprised you. Spec gaps, unexpected fields,
-> agent-specific quirks, env var requirements, etc.
+- **Permission round-trip is mandatory, not optional.** Any agent we
+  integrate must have its `session/request_permission` requests handled
+  *before* MCP tools become callable. Discovered the hard way: we shipped
+  #27 with a method-not-found default, and the first end-to-end smoke
+  for #28 failed with `[object Object]` until the auto-allow handler
+  landed.
+- **Gemini CLI deprecates `--experimental-acp` in favor of `--acp`.**
+  Both still work in 0.41.2 but the deprecation will eventually bite.
+  Default flag updated in `acp:spike` and `mcp:smoke` scripts.
+- **API quota on dev keys hangs prompts mid-flight.** Smoke runs that
+  exhausted a small dev quota stalled silently after `session/prompt`,
+  with no error frame and no stderr — just `available_commands_update`
+  and then nothing. Validate against a fresh key before declaring a hang
+  a code bug.

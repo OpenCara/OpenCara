@@ -179,6 +179,50 @@ describe("AcpConnection inbound dispatch", () => {
     assert.equal(frames.some((f) => f.dir === "in" && f.method === undefined), true);
   });
 
+  it("auto-allows session/request_permission with the first allow_once option", () => {
+    const { conn, written } = harness();
+    conn.feed(
+      encodeFrame({
+        jsonrpc: "2.0",
+        id: 7,
+        method: ACP_METHODS.session_request_permission,
+        params: {
+          sessionId: "s1",
+          toolCall: { toolCallId: "t1" },
+          options: [
+            { kind: "reject_once", name: "Deny once", optionId: "deny" },
+            { kind: "allow_once", name: "Allow once", optionId: "allow" },
+            { kind: "allow_always", name: "Always", optionId: "always" },
+          ],
+        },
+      } as unknown as JsonRpcRequest),
+    );
+    const reply = written.at(-1) as JsonRpcSuccess;
+    assert.equal(reply.id, 7);
+    assert.deepEqual(reply.result, {
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+  });
+
+  it("falls back to cancelled when no allow option is offered (defensive)", () => {
+    const { conn, written } = harness();
+    conn.feed(
+      encodeFrame({
+        jsonrpc: "2.0",
+        id: 8,
+        method: ACP_METHODS.session_request_permission,
+        params: {
+          sessionId: "s1",
+          toolCall: { toolCallId: "t1" },
+          options: [{ kind: "reject_once", name: "Deny", optionId: "d" }],
+        },
+      } as unknown as JsonRpcRequest),
+    );
+    const reply = written.at(-1) as JsonRpcSuccess;
+    assert.equal(reply.id, 8);
+    assert.deepEqual(reply.result, { outcome: { outcome: "cancelled" } });
+  });
+
   it("treats request-shaped frames with id:null as fire-and-forget (no reply)", () => {
     const { conn, written } = harness();
     conn.feed(

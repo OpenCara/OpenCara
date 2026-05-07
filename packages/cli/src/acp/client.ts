@@ -213,9 +213,24 @@ export class AcpConnection {
       return;
     }
 
-    // Request from agent → client. We advertised no client capabilities, so
-    // we don't expect any — but a misconfigured agent might call one anyway.
-    // Reply method-not-found rather than letting the agent hang.
+    // Request from agent → client.
+    //
+    // session/request_permission: Gemini (and likely other agents) issues
+    // this for every MCP tool call regardless of advertised client
+    // capabilities. Refusing it makes all MCP tools fail with
+    // `[object Object]` in the agent's UI. To match today's
+    // `--dangerously-skip-permissions` posture we auto-select the first
+    // `allow_*` option the agent offers. Real permission UI is out of
+    // scope until ACP integration lands a permission flow we can route
+    // to the user (#29 risk note).
+    if (msg.method === ACP_METHODS.session_request_permission) {
+      this.send(buildAutoAllowResponse(msg.id, msg.params));
+      return;
+    }
+
+    // We advertised no client capabilities, so we don't expect any other
+    // agent → client requests. Reply method-not-found rather than letting
+    // the agent hang.
     const reply: JsonRpcResponse = {
       jsonrpc: "2.0",
       id: msg.id,
@@ -226,6 +241,35 @@ export class AcpConnection {
     };
     this.send(reply);
   }
+}
+
+/**
+ * Pick an `allow_*` option from the agent's offered list and return a
+ * `selected` outcome for the response. Falls back to `cancelled` if no
+ * allow option is offered (defensive — agents in practice always include
+ * at least `allow_once`).
+ */
+function buildAutoAllowResponse(id: JsonRpcId, params: unknown): JsonRpcResponse {
+  const options =
+    params && typeof params === "object" && "options" in params
+      ? ((params as { options: unknown }).options as Array<{
+          kind?: string;
+          optionId?: string;
+        }>)
+      : [];
+  const allow = options.find((o) => o?.kind === "allow_once") ?? options.find((o) => o?.kind === "allow_always");
+  if (allow?.optionId) {
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: { outcome: { outcome: "selected", optionId: allow.optionId } },
+    };
+  }
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: { outcome: { outcome: "cancelled" } },
+  };
 }
 
 /**

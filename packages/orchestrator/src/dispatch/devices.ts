@@ -2,6 +2,8 @@ import { ulid } from "ulid";
 import type { WSContext } from "hono/ws";
 import { eq } from "drizzle-orm";
 import {
+  type AgentCall,
+  type AgentCallRequest,
   type AgentRun,
   type AgentSpec,
   type DeviceToServerMessage,
@@ -153,15 +155,12 @@ export class DevicePool {
       return;
     }
     if (msg.type === "agent-call") {
-      // Fire-and-forget. The CLI parsed an opencara-call fenced block and
-      // proxied it here using its device-level WS auth. We gate on:
-      //   1. The runId belongs to a pending dispatch we issued.
-      //   2. The dispatch went to THIS device (cross-check agentHostId).
-      // The per-kind helpers in `applyAgentCall` enforce their own scope
-      // requirements (projectId for issue/flow, userId for template) —
-      // we do NOT broad-gate on projectId here, because template edits
-      // come from `/flows/:slug` which is user-scoped, not project-scoped.
-      // Anything else is a silent ignore — same shape as log/done miss.
+      // Legacy fire-and-forget path. The CLI parsed an opencara-call fenced
+      // block and proxied it here using its device-level WS auth. The
+      // result is logged but never returned to the agent — that's the
+      // limitation #28 fixes via `agent-call-request` below. Both paths
+      // share the per-kind apply helpers; only the response wiring differs.
+      // Kept until #30 deletes the fenced-block path entirely.
       const p = this.pending.get(msg.runId);
       if (!p) return;
       if (p.agentHostId !== agentHostId) {
@@ -172,14 +171,82 @@ export class DevicePool {
         });
         return;
       }
-      void this.applyAgentCall(p.projectId, p.userId, msg).catch((err) => {
-        console.error("[device-pool] agent-call apply failed", {
-          runId: msg.runId,
-          callId: msg.callId,
-          kind: msg.kind,
-          err,
+      void this.applyAgentCall(p.projectId, p.userId, msg)
+        .then((result) => {
+          if (!result.ok) {
+            console.warn("[device-pool] agent-call rejected", {
+              runId: msg.runId,
+              callId: msg.callId,
+              kind: msg.kind,
+              reason: result.reason,
+            });
+          }
+        })
+        .catch((err) => {
+          console.error("[device-pool] agent-call apply failed", {
+            runId: msg.runId,
+            callId: msg.callId,
+            kind: msg.kind,
+            err,
+          });
         });
-      });
+      return;
+    }
+    if (msg.type === "agent-call-request") {
+      // Request/response path used by the ACP/MCP cutover. Same scope
+      // checks and apply helpers as the legacy `agent-call`, but we send
+      // an `agent-call-result` back over the WS so the CLI device can
+      // forward it (via IPC) to opencara-mcp, which returns it as the
+      // tool result to the agent.
+      const p = this.pending.get(msg.runId);
+      if (!p) {
+        // No pending dispatch — likely a late frame after the run ended.
+        // Drop silently; no one is listening for the result.
+        return;
+      }
+      if (p.agentHostId !== agentHostId) {
+        console.warn("[device-pool] agent-call-request hostId mismatch", {
+          runId: msg.runId,
+          expected: p.agentHostId,
+          got: agentHostId,
+        });
+        return;
+      }
+      const dev = this.devices.get(agentHostId);
+      void this.applyAgentCall(p.projectId, p.userId, msg)
+        .then((result) => {
+          if (!dev) return; // device disconnected mid-call.
+          this.send(dev, {
+            type: "agent-call-result",
+            runId: msg.runId,
+            callId: msg.callId,
+            result,
+          });
+          if (!result.ok) {
+            console.warn("[device-pool] agent-call-request rejected", {
+              runId: msg.runId,
+              callId: msg.callId,
+              kind: msg.kind,
+              reason: result.reason,
+            });
+          }
+        })
+        .catch((err) => {
+          console.error("[device-pool] agent-call-request apply failed", {
+            runId: msg.runId,
+            callId: msg.callId,
+            kind: msg.kind,
+            err,
+          });
+          if (!dev) return;
+          const reason = err instanceof Error ? err.message : String(err);
+          this.send(dev, {
+            type: "agent-call-result",
+            runId: msg.runId,
+            callId: msg.callId,
+            result: { ok: false, reason: `internal error: ${reason}` },
+          });
+        });
       return;
     }
     // hello / pong handled inline by the WS endpoint
@@ -190,57 +257,46 @@ export class DevicePool {
   // file; the discriminated union forces exhaustiveness at compile time.
   // Each handler enforces its own scope: project-scoped kinds reject
   // when projectId is null; user-scoped kinds reject when userId is null.
+  //
+  // Accepts either the legacy `AgentCall` or the new `AgentCallRequest`
+  // — they share all kind-specific fields and only differ in the `type`
+  // discriminator the helper doesn't read.
   private async applyAgentCall(
     projectId: string | null,
     userId: string | null,
-    msg: Extract<DeviceToServerMessage, { type: "agent-call" }>,
-  ): Promise<void> {
-    let result: AgentCallResult;
+    msg: AgentCall | AgentCallRequest,
+  ): Promise<AgentCallResult> {
     switch (msg.kind) {
       case "issue.body.set":
         if (!projectId) {
-          result = {
+          return {
             ok: false,
             reason: "issue mutations require a project-scoped run",
           };
-          break;
         }
-        result = await applyIssueBodySet(this.db, projectId, msg);
-        break;
+        return applyIssueBodySet(this.db, projectId, msg);
       case "flow.node.config.set":
         if (!projectId) {
-          result = {
+          return {
             ok: false,
             reason: "flow mutations require a project-scoped run",
           };
-          break;
         }
-        result = await applyFlowNodeConfigSet(this.db, projectId, msg);
-        break;
+        return applyFlowNodeConfigSet(this.db, projectId, msg);
       case "template.node.config.set":
         if (!userId) {
-          result = {
+          return {
             ok: false,
             reason: "template mutations require a user-scoped run",
           };
-          break;
         }
-        result = await applyTemplateNodeConfigSet(this.db, userId, msg);
-        break;
+        return applyTemplateNodeConfigSet(this.db, userId, msg);
       default: {
         // Discriminated union: TS ensures exhaustiveness when more kinds arrive.
         const exhaustive: never = msg;
         void exhaustive;
-        return;
+        return { ok: false, reason: "unknown kind" };
       }
-    }
-    if (!result.ok) {
-      console.warn("[device-pool] agent-call rejected", {
-        runId: msg.runId,
-        callId: msg.callId,
-        kind: msg.kind,
-        reason: result.reason,
-      });
     }
   }
 

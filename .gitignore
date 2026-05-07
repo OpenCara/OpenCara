@@ -32,3 +32,7 @@ coverage/
 
 # drizzle
 drizzle/migrations/meta/_journal.json.bak
+
+# ACP/MCP dev-run dumps (per-run JSONL frames + sockets, see docs/acp-*.md)
+.opencara-acp-spike/
+.opencara-mcp-smoke/
