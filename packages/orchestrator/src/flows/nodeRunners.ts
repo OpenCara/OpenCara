@@ -23,6 +23,7 @@ import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
 import { adapterFor, type AgentKind } from "../agents/kinds.js";
+import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
 
 export class SkipFlowError extends Error {
@@ -801,7 +802,14 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
     pull_request?: { number: number; head: { sha: string } };
     issue?: { number: number };
   };
-  const body = ctx.previousOutput?.trim() ?? "";
+  // `previousOutput` is the upstream node's captured stdout. For agent nodes
+  // run with `claude --output-format json` (see agents/kinds.ts), that
+  // stdout is the Claude Code result envelope — a JSON document whose
+  // human-readable markdown lives in `.result`. Posting the envelope as a
+  // GitHub review body produces the bot-review-format-bug surfaced on
+  // PR #33. `extractAgentResultText` parses the envelope; falls through
+  // verbatim for plain-text outputs (echo-reviewer.mjs and friends).
+  const body = extractAgentResultText(ctx.previousOutput ?? "").trim();
 
   // Most actions act on the existing PR/issue from the trigger event; only
   // github.create_pull_request opens a new one. Compute issueNumber lazily
