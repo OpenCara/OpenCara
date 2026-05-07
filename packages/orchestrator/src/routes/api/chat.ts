@@ -176,7 +176,14 @@ export function chatRoutes(deps: ChatRoutesDeps) {
               "You are an opencara chat agent. Respond to the user's message about the current page.",
             userPromptMd: message,
             history: normalizeHistory(history),
-            pageContextJson: JSON.stringify(pageContext),
+            // Skip the JSON serialization when there's nothing meaningful
+            // to convey — `pageContext` is defaulted to `{}` upstream so a
+            // raw `JSON.stringify` would emit a useless `# Page context
+            // (JSON)\n\n{}` block in the prompt (PR #33 review finding #2).
+            pageContextJson:
+              Object.keys(pageContext).length > 0
+                ? JSON.stringify(pageContext)
+                : undefined,
           },
         }
       : {

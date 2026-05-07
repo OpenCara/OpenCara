@@ -142,17 +142,19 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       return result;
     } finally {
       // Best-effort teardown. Each step bounded so a misbehaving child
-      // doesn't pin the event loop. Errors swallowed; we already have a
-      // result (or an exception above) to return.
+      // doesn't pin the event loop. Errors swallowed at the per-promise
+      // level — chaining `.catch` on the race itself only silences the
+      // arm that resolves, leaving the slow loser as an unhandledRejection
+      // when it later throws (PR #33 review finding #1).
       bridge.shutdown("acp run ended");
       await Promise.race([
-        host.stop(),
+        host.stop().catch(() => undefined),
         new Promise<void>((r) => setTimeout(r, 3000)),
-      ]).catch(() => undefined);
+      ]);
       await Promise.race([
-        client.close(/* graceMs */ 1000),
+        client.close(/* graceMs */ 1000).catch(() => undefined),
         new Promise<void>((r) => setTimeout(r, 5000)),
-      ]).catch(() => undefined);
+      ]);
     }
   })();
 
