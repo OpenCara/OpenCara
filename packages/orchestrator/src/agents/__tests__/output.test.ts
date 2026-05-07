@@ -91,4 +91,60 @@ describe("extractAgentResultText", () => {
     });
     assert.equal(extractAgentResultText(raw), "## Verdict\nCOMMENT");
   });
+
+  // ─── codex --json (JSONL) ─────────────────────────────────────────
+
+  it("extracts agent_message from codex JSONL stream, dropping reasoning + commands", () => {
+    // Real-world shape from codex@latest. Without filtering, this would
+    // pass through as 1MB+ of tool-use traces and overflow downstream
+    // synthesizer context (opencara.com flow-run 01KR1CE7AYPHE8VKFA0N7H7ETE).
+    const raw = [
+      '{"type":"thread.started","thread_id":"019e02c7-2a3e-7203-9bc6-60d10e9ff3c8"}',
+      '{"type":"turn.started"}',
+      '{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Evaluating code review process** ... lots of chain-of-thought text ..."}}',
+      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"## Verdict\\n\\nCOMMENT\\n\\n## Summary\\n\\nThe diff replaces -a never with the new flag."}}',
+      '{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"git diff main...HEAD","aggregated_output":"","exit_code":null,"status":"in_progress"}}',
+      '{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"git diff main...HEAD","aggregated_output":"... 200KB of diff ...","exit_code":0,"status":"completed"}}',
+      '{"type":"turn.completed"}',
+      "",
+    ].join("\n");
+    assert.equal(
+      extractAgentResultText(raw),
+      "## Verdict\n\nCOMMENT\n\n## Summary\n\nThe diff replaces -a never with the new flag.",
+    );
+  });
+
+  it("concatenates multiple agent_message frames from a single codex run", () => {
+    const raw = [
+      '{"type":"thread.started","thread_id":"abc"}',
+      '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"first thought"}}',
+      '{"type":"item.completed","item":{"id":"i2","type":"reasoning","text":"middle reasoning"}}',
+      '{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"second thought"}}',
+      '{"type":"turn.completed"}',
+      "",
+    ].join("\n");
+    assert.equal(extractAgentResultText(raw), "first thought\n\nsecond thought");
+  });
+
+  it("falls through to verbatim when codex run produced no agent_message frames", () => {
+    // Agent crashed mid-reasoning before emitting an answer. We don't
+    // want to silently swallow the failure — return raw so operators
+    // can see what went wrong.
+    const raw = [
+      '{"type":"thread.started","thread_id":"abc"}',
+      '{"type":"item.completed","item":{"id":"i1","type":"reasoning","text":"thinking..."}}',
+      '{"type":"turn.aborted","reason":"out_of_context"}',
+      "",
+    ].join("\n");
+    assert.equal(extractAgentResultText(raw), raw);
+  });
+
+  it("is idempotent on already-extracted text (safe to apply twice)", () => {
+    // engine.ts extracts before storing in `outputs`; nodeRunners.ts's
+    // actionRunner also extracts before posting to GitHub. Both layers
+    // calling extract is fine — plain markdown falls through verbatim.
+    const clean = "## Verdict\n\nCOMMENT\n\nLooks good.";
+    assert.equal(extractAgentResultText(clean), clean);
+    assert.equal(extractAgentResultText(extractAgentResultText(clean)), clean);
+  });
 });
