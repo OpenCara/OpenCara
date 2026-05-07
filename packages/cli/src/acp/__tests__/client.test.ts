@@ -7,7 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { AcpConnection } from "../client.js";
+import { AcpClient, AcpConnection } from "../client.js";
 import {
   encodeFrame,
 } from "../framing.js";
@@ -177,5 +177,47 @@ describe("AcpConnection inbound dispatch", () => {
 
     assert.equal(frames.some((f) => f.dir === "out" && f.method === ACP_METHODS.initialize), true);
     assert.equal(frames.some((f) => f.dir === "in" && f.method === undefined), true);
+  });
+
+  it("treats request-shaped frames with id:null as fire-and-forget (no reply)", () => {
+    const { conn, written } = harness();
+    conn.feed(
+      encodeFrame({
+        jsonrpc: "2.0",
+        // Some agents may send request-shaped frames with id:null for
+        // notification-like behavior. JSON-RPC forbids null ids on real
+        // requests; we don't send a reply that would have id:null either.
+        id: null,
+        method: "weird/notify",
+        params: {},
+      } as unknown as JsonRpcRequest),
+    );
+    assert.equal(written.length, 0);
+  });
+});
+
+describe("AcpClient pre-start listener registration", () => {
+  // Regression for the spike harness order: register listeners → call
+  // start(). Before this fix, those registrations threw because the
+  // connection didn't exist yet.
+  it("buffers onSessionUpdate / onFrame / onMalformed before start()", () => {
+    const client = new AcpClient({ command: "echo", args: ["unused"] });
+    // None of these may throw — start() is never called in this test, so
+    // the queued listeners simply sit until GC. We verify the registration
+    // path is safe pre-start; the post-start delivery path is exercised
+    // end-to-end by the spike harness against a real binary.
+    assert.doesNotThrow(() => client.onSessionUpdate(() => undefined));
+    assert.doesNotThrow(() => client.onFrame(() => undefined));
+    assert.doesNotThrow(() => client.onMalformed(() => undefined));
+    assert.doesNotThrow(() => client.onStderr(() => undefined));
+  });
+
+  // close() before start() should be a clean no-op so callers don't have to
+  // track lifecycle defensively (e.g. error during arg parsing).
+  it("close() before start() resolves without throwing", async () => {
+    const client = new AcpClient({ command: "echo" });
+    const exit = await client.close();
+    assert.equal(exit.code, null);
+    assert.equal(exit.signal, null);
   });
 });

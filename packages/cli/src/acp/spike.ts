@@ -131,11 +131,13 @@ async function main(): Promise<void> {
     const e = err instanceof Error ? err.message : String(err);
     stderr.write(`[spike] fatal: ${e}\n`);
     await client.close().catch(() => undefined);
-    dump.end();
+    // dump.end() is async — await the flush so the last frames don't get
+    // lost when we exit immediately after.
+    await new Promise<void>((resolve) => dump.end(resolve));
     exit(1);
   }
 
-  dump.end();
+  await new Promise<void>((resolve) => dump.end(resolve));
   log(`[spike] done — frames written to ${dumpPath}`);
 }
 

@@ -142,6 +142,10 @@ export class AcpConnection {
   /**
    * Reject all pending requests. Called when the underlying transport closes
    * (child process exit, stream error, manual disposal). Safe to call twice.
+   *
+   * User listeners are deliberately NOT cleared. Diagnostic events (frame
+   * trace, malformed lines) can still fire during the close sequence, and
+   * GC reclaims them when the consumer drops the connection.
    */
   shutdown(reason: string): void {
     if (this.closed) return;
@@ -149,7 +153,6 @@ export class AcpConnection {
     const err = new Error(`acp connection closed: ${reason}`);
     for (const p of this.pending.values()) p.reject(err);
     this.pending.clear();
-    this.emitter.removeAllListeners();
   }
 
   // ─── internals ───────────────────────────────────────────────────
@@ -199,9 +202,12 @@ export class AcpConnection {
       return;
     }
 
-    if (!("id" in msg)) {
-      // Notification.
-      if (msg.method === ACP_METHODS.session_update) {
+    if (!("id" in msg) || msg.id == null) {
+      // Notification (no id), or a request-shaped frame with null id. The
+      // JSON-RPC spec forbids null id on requests, and replying with id:null
+      // helps no one — treat both cases as fire-and-forget. Notification
+      // dispatch still applies if the method is known.
+      if ("method" in msg && msg.method === ACP_METHODS.session_update) {
         this.emitter.emit("sessionUpdate", msg.params as SessionNotificationParams);
       }
       return;
@@ -239,6 +245,15 @@ export class AcpClient {
   private exitPromise: Promise<AcpExitInfo> | null = null;
   private readonly stderrListeners = new Set<(chunk: string) => void>();
 
+  // Pre-start listener queues. Registering listeners before `start()` is the
+  // natural order in the spike (and any consumer that wants to capture the
+  // very first frame). We hold them here and attach to the live connection
+  // inside `start()`. Once started, registrations bypass the queue and go
+  // straight to the connection.
+  private readonly preStartSessionUpdate: Array<(p: SessionNotificationParams) => void> = [];
+  private readonly preStartFrame: Array<(d: TraceDirection, m: JsonRpcMessage) => void> = [];
+  private readonly preStartMalformed: Array<(l: string) => void> = [];
+
   constructor(private readonly opts: AcpClientOptions) {}
 
   start(): void {
@@ -256,6 +271,16 @@ export class AcpClient {
       { write: (chunk) => child.stdin.write(chunk) },
       this.opts.trace ?? false,
     );
+
+    // Attach buffered listeners BEFORE wiring stdout, so the very first frame
+    // the agent sends after spawn is delivered to consumers that registered
+    // in the order spike.ts uses (listeners → start).
+    for (const fn of this.preStartSessionUpdate) conn.onSessionUpdate(fn);
+    for (const fn of this.preStartFrame) conn.onFrame(fn);
+    for (const fn of this.preStartMalformed) conn.onMalformed(fn);
+    this.preStartSessionUpdate.length = 0;
+    this.preStartFrame.length = 0;
+    this.preStartMalformed.length = 0;
 
     child.stdout.on("data", (chunk: string) => conn.feed(chunk));
     child.stderr.on("data", (chunk: string) => {
@@ -296,15 +321,18 @@ export class AcpClient {
   }
 
   onSessionUpdate(fn: (params: SessionNotificationParams) => void): void {
-    this.must().onSessionUpdate(fn);
+    if (this.connection) this.connection.onSessionUpdate(fn);
+    else this.preStartSessionUpdate.push(fn);
   }
 
   onFrame(fn: (direction: TraceDirection, msg: JsonRpcMessage) => void): void {
-    this.must().onFrame(fn);
+    if (this.connection) this.connection.onFrame(fn);
+    else this.preStartFrame.push(fn);
   }
 
   onMalformed(fn: (line: string) => void): void {
-    this.must().onMalformed(fn);
+    if (this.connection) this.connection.onMalformed(fn);
+    else this.preStartMalformed.push(fn);
   }
 
   onStderr(fn: (chunk: string) => void): void {
@@ -313,7 +341,8 @@ export class AcpClient {
 
   /**
    * Close stdin and wait for the child to exit. If the child is still
-   * running after `graceMs`, send SIGTERM. Always resolves.
+   * running after `graceMs`, send SIGTERM; if it's still alive after
+   * `2 * graceMs`, send SIGKILL. Always resolves.
    */
   async close(graceMs = 2000): Promise<AcpExitInfo> {
     const child = this.child;
@@ -323,17 +352,25 @@ export class AcpClient {
     } catch {
       // stdin already closed; fine.
     }
-    const timer = setTimeout(() => {
+    const term = setTimeout(() => {
       try {
         child.kill("SIGTERM");
       } catch {
         // already dead; fine.
       }
     }, graceMs);
+    const kill = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already dead; fine.
+      }
+    }, graceMs * 2);
     try {
       return await this.exitPromise;
     } finally {
-      clearTimeout(timer);
+      clearTimeout(term);
+      clearTimeout(kill);
     }
   }
 
