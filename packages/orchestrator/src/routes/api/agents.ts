@@ -7,6 +7,8 @@ import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js"
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { isAgentKind, type AgentKind } from "../../agents/kinds.js";
+import { buildAcpSpec, checkAcpEligibility } from "../../agents/acp-gate.js";
+import type { AgentSpec } from "@opencara/shared";
 
 interface AgentRoutesDeps {
   db: Db;
@@ -224,13 +226,31 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       ...agent.env,
       OPENCARA_TEST: "1",
     };
-    const spec = {
-      kind: agent.name,
-      command: agent.command,
-      args: agent.args,
-      env,
-      cwd: agent.cwd ?? undefined,
-    };
+
+    // ACP cutover gate. Mirrors chat.ts so the dashboard's "Test agent"
+    // button exercises the same path users actually hit. Without this,
+    // testing v0.103.0's ACP work via the test button is silently
+    // legacy-only.
+    const eligibility = checkAcpEligibility(agent.kind);
+    if (eligibility.refuseReason) {
+      return c.json({ error: eligibility.refuseReason }, 400);
+    }
+    const spec: AgentSpec = eligibility.useAcp
+      ? buildAcpSpec({
+          agent,
+          env,
+          systemPromptMd:
+            "You are an opencara chat agent being exercised via the dashboard's Test button. " +
+            "Respond to the user's prompt directly.",
+          userPromptMd: prompt,
+        })
+      : {
+          kind: agent.name,
+          command: agent.command,
+          args: agent.args,
+          env,
+          cwd: agent.cwd ?? undefined,
+        };
 
     const agentRunId = ulid();
     await deps.db.insert(agentRuns).values({
@@ -261,7 +281,10 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
-          stdinJson: { message: prompt },
+          // ACP path doesn't read stdinJson — spec.acp carries the
+          // prompt. Pass undefined to make the dispatcher pick the
+          // right runner branch on the device side.
+          stdinJson: eligibility.useAcp ? undefined : { message: prompt },
           onLog,
           hostId,
         });
