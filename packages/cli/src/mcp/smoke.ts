@@ -128,7 +128,14 @@ async function main(): Promise<void> {
       prompt: [{ type: "text", text: cli.prompt }],
     });
     log(`[smoke] stopReason=${result.stopReason}`);
-    await client.close();
+    // Cap the post-turn shutdown wait. gemini-cli's --acp mode sometimes
+    // sits on stdin after stopReason fires, and its mcpServers subprocesses
+    // (our opencara-mcp included) survive the parent's stdin EOF until
+    // SIGTERM. Stop racing the kernel and walk away after a short grace.
+    await Promise.race([
+      client.close(/* graceMs */ 1000),
+      new Promise<void>((r) => setTimeout(r, 5000)),
+    ]);
   } catch (err) {
     const e = err instanceof Error ? err.message : String(err);
     stderr.write(`[smoke] fatal: ${e}\n`);
@@ -138,9 +145,13 @@ async function main(): Promise<void> {
     exit(1);
   }
 
-  await host.stop();
+  await Promise.race([host.stop(), new Promise<void>((r) => setTimeout(r, 3000))]);
   await new Promise<void>((r) => dump.end(r));
   log(`[smoke] done — frames written to ${dumpPath}`);
+  // Force exit. stragglers (orphan gemini-cli child, an unclosed npx
+  // wrapper) sometimes keep the event loop alive after we've done all
+  // the work we care about.
+  exit(0);
 }
 
 function summarizeUpdate(p: SessionNotificationParams, log: (s: string) => void): void {
