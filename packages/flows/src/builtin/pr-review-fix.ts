@@ -34,6 +34,11 @@ export const prReviewFixFlow: FlowDefinition = {
         // reviews don't need a fix iteration; dismissed don't either.
         // Operators can broaden / narrow this in the trigger panel.
         reviewStates: ["commented", "changes_requested"],
+        // Default whitelist = the App's bot identity, so pr-review-fix
+        // wakes up on reviews posted by `pr-review` / `pr-review-multi`
+        // (the closed AI review→fix loop). Add human logins or `*`
+        // here to also fire on human reviews.
+        users: ["opencara[bot]"],
       },
     },
     {

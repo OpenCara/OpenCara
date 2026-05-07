@@ -45,6 +45,14 @@ export const GithubPullRequestReviewTriggerSchema = z.object({
     reviewStates: z
       .array(z.enum(["approved", "changes_requested", "commented", "dismissed"]))
       .default(["commented", "changes_requested"]),
+    // Whitelist of reviewer logins (glob-matched: `*` is "any
+    // username", `opencara*` matches `opencara[bot]` etc.). Empty
+    // array = match any user. The default `opencara[bot]` lets
+    // pr-review-fix run as the second half of an automated
+    // review→fix loop together with `pr-review` / `pr-review-multi`
+    // (which post reviews as the App's bot identity); add human
+    // logins here to opt them in too.
+    users: z.array(z.string()).default(["opencara[bot]"]),
   }),
 });
 export type GithubPullRequestReviewTrigger = z.infer<

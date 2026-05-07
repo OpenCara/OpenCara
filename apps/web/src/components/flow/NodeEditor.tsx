@@ -757,23 +757,32 @@ interface PRReviewTriggerPanelProps {
 }
 
 function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTriggerPanelProps) {
-  const cfg = (node.config ?? {}) as { reviewStates?: ReviewState[] };
-  const initial = useMemo<ReviewState[]>(
+  const cfg = (node.config ?? {}) as {
+    reviewStates?: ReviewState[];
+    users?: string[];
+  };
+  const initialStates = useMemo<ReviewState[]>(
     () => cfg.reviewStates ?? ["commented", "changes_requested"],
     [cfg.reviewStates],
   );
-  const [states, setStates] = useState<ReviewState[]>(initial);
+  const initialUsers = useMemo(() => (cfg.users ?? ["opencara[bot]"]).join(", "), [cfg.users]);
+  const [states, setStates] = useState<ReviewState[]>(initialStates);
+  const [users, setUsers] = useState(initialUsers);
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
-    setStates(initial);
-  }, [initial]);
+    setStates(initialStates);
+    setUsers(initialUsers);
+  }, [initialStates, initialUsers]);
 
   const toggle = (s: ReviewState) =>
     setStates((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
 
   const save = () => {
-    set.mutate({ nodeId: node.id, config: { reviewStates: states } });
+    set.mutate({
+      nodeId: node.id,
+      config: { reviewStates: states, users: parseList(users) },
+    });
   };
 
   return (
@@ -821,6 +830,14 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
             dismissed reviews don't need a fix iteration.
           </p>
         </div>
+
+        <ChipField
+          label="Users (whitelist)"
+          placeholder="opencara[bot], opencara*, alice"
+          help="Reviewer logins that may fire this trigger. Globs work (`*` matches anything, `opencara*` matches `opencara[bot]` etc.). Empty = match any user. Default `opencara[bot]` lets pr-review-fix run as the second half of an automated review→fix loop with `pr-review` / `pr-review-multi` — add human logins to opt them in."
+          value={users}
+          onChange={setUsers}
+        />
 
         {set.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">

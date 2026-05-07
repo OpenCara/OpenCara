@@ -176,7 +176,7 @@ async function pullRequestReviewTrigger(
   }
   const payload = ctx.event.payload as {
     action?: string;
-    review?: { state?: string };
+    review?: { state?: string; user?: { login?: string } };
   };
   if (payload.action !== "submitted") {
     throw new SkipFlowError(
@@ -190,7 +190,19 @@ async function pullRequestReviewTrigger(
   ) {
     throw new SkipFlowError(`review state '${state}' not in reviewStates filter`);
   }
-  return { output: { matched: true, reviewState: state } };
+  // Whitelist of reviewer logins (glob: `*`, `opencara*`, …). Empty
+  // = match any user. Default `["opencara[bot]"]` keeps pr-review-fix
+  // wired to the bot's reviews from pr-review / pr-review-multi —
+  // i.e. enables the closed-loop review→fix model on purpose;
+  // breaking the loop is the operator's choice (cap iterations,
+  // disable the flow, etc.).
+  const reviewer = payload.review?.user?.login ?? "";
+  if (node.config.users.length > 0 && !matchesAnyGlob(reviewer, node.config.users)) {
+    throw new SkipFlowError(
+      `reviewer '${reviewer}' not in users filter [${node.config.users.join(", ")}]`,
+    );
+  }
+  return { output: { matched: true, reviewState: state, reviewer } };
 }
 
 async function projectsV2ItemTrigger(
