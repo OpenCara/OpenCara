@@ -22,7 +22,8 @@ import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatch
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
-import { adapterFor, type AgentKind } from "../agents/kinds.js";
+import type { AgentKind } from "../agents/kinds.js";
+import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
 
@@ -625,101 +626,89 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       }
     : undefined;
 
-  // For named-kind agents (claude/codex/opencode/pi), the per-kind
-  // adapter builds the invocation — including the resume flag when
-  // a prior session id is reachable on the device. For kind=custom,
-  // the agent row's command/args are used as-is (legacy behaviour).
-  const agentKind: AgentKind = agent.kind;
-  let invCommand = agent.command;
-  let invArgs = agent.args;
-  let preassignedSessionId: string | undefined;
-  if (agentKind !== "custom") {
-    const adapter = adapterFor(agentKind);
-    // Resume only when the prior session was started by the SAME
-    // kind. A switch (e.g. claude → codex) starts fresh; the resume
-    // id wouldn't parse with the new CLI's session format.
-    const resumeSessionId =
-      worktree?.priorSession?.kind === agentKind ? worktree.priorSession.id : null;
-    const inv = adapter.buildInvocation({
-      prompt: linkedPromptBody ?? "",
-      cwd: worktree?.workdir ?? agent.cwd ?? "",
-      sessionDir: worktree?.sessionDir ?? "",
-      resumeSessionId,
-      extraArgs: agent.args,
-    });
-    invCommand = inv.command;
-    invArgs = inv.args;
-    preassignedSessionId = inv.preassignedSessionId;
-    if (inv.extraEnv) Object.assign(env, inv.extraEnv);
-
-    // Operator can override the binary that runs the kind via
-    // `agent.command`. The default is the kind label (e.g. "claude")
-    // — which already matches `inv.command`, so the override is a
-    // no-op. Setting it to e.g. "npx @anthropic-ai/claude-code@latest"
-    // re-tokenizes here: the first token replaces inv.command, the
-    // rest are spliced BEFORE the adapter's args (so subcommands like
-    // codex's "exec" still come AFTER the override).
-    const overrideTokens = tokenizeShellLike(agent.command);
-    if (overrideTokens.length > 0 && overrideTokens[0] !== inv.command) {
-      invCommand = overrideTokens[0]!;
-      invArgs = [...overrideTokens.slice(1), ...inv.args];
-    }
+  // ACP cutover (#30): all flow-driven agent dispatch goes through the
+  // device's `runAcpJob` path. The per-kind adapter machinery in the
+  // legacy `kindsAdapter` (claude --resume, codex exec resume, etc.)
+  // is gone; per-kind specifics now live inside the per-kind ACP
+  // adapter binaries (claude-acp, codex-acp, opencode acp, pi-acp).
+  //
+  // What we lose vs the pre-#30 path:
+  //   - Worktree session resume across iterations. The legacy adapter
+  //     parsed Claude/codex session ids out of stdout and wrote them
+  //     to `worktree.sessionDir/agent-session.json`; the next
+  //     iteration on the same branch passed --resume <id>. ACP shims
+  //     today don't expose `session/load`, so we drop the write-back
+  //     entirely. PR-review-fix loops on the same branch will start
+  //     fresh each iteration. Restoring this is a follow-up via
+  //     ACP `session/load` — see #29's risks doc.
+  //
+  // What we keep:
+  //   - Worktree allocation (the per-(repo, branch) checkout on a
+  //     pinned device — the `dispatchAgentRun` for `worktree-allocate`
+  //     above is unchanged; that's an internal CLI subcommand, not
+  //     an ACP agent).
+  //   - Linked-prompt + skill envelope; both fold into systemPromptMd.
+  //   - Upstream `previousOutput` chaining; goes into userPromptMd.
+  //   - PR / issue context-injection; surfaced via pageContextJson.
+  const eligibility = checkAcpEligibility(agent.kind);
+  if (eligibility.refuseReason) {
+    throw new Error(eligibility.refuseReason);
   }
+
+  const systemPromptParts: string[] = [];
+  if (linkedPromptBody && linkedPromptBody.trim().length > 0) {
+    systemPromptParts.push(linkedPromptBody.trim());
+  }
+  if (skill) {
+    systemPromptParts.push(skill.instructions);
+  }
+  const systemPromptMd =
+    systemPromptParts.length > 0
+      ? systemPromptParts.join("\n\n---\n\n")
+      : "You are an opencara flow agent. Process the input below.";
+
+  // userPromptMd is the upstream node's stdoutCaptured (already cleaned
+  // of agent-envelope/JSONL noise by `extractAgentResultText` in
+  // engine.ts:outputs.set). Triggers / first-step agents have no
+  // upstream output; surface a sentinel so ACP doesn't reject the
+  // empty prompt.
+  const upstream = ctx.previousOutput?.trim() ?? "";
+  const userPromptMd =
+    upstream.length > 0
+      ? upstream
+      : "(no upstream output — proceed using the system prompt and any page context above.)";
+
+  // Flow-time pageContext = whatever stdin payloads the legacy path
+  // would have stuffed into stdinJson. The agent gets the same data;
+  // it just lives inside the prompt content block instead of an
+  // out-of-band stdin envelope.
+  const pageContext: Record<string, unknown> = {};
+  if (ctx.prContext) Object.assign(pageContext, ctx.prContext.stdin);
+  if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
+
+  const acpSpec = buildAcpSpec({
+    agent: {
+      kind: agent.kind,
+      name: agent.name,
+      cwd: worktree?.workdir ?? agent.cwd ?? null,
+    },
+    env,
+    systemPromptMd,
+    userPromptMd,
+    pageContext,
+  });
 
   const result = await dispatchAgentRun(ctx, {
     agentRunId,
     kind: agent.name,
-    command: invCommand,
-    args: invArgs,
+    command: acpSpec.command,
+    args: [...acpSpec.args],
     env,
-    cwd: worktree?.workdir ?? agent.cwd ?? undefined,
-    stdinJson,
+    cwd: acpSpec.cwd,
+    acp: acpSpec.acp,
     hostId: worktree?.hostId ?? agent.hostId ?? null,
     triggerEventId: ctx.event.id,
   });
-
-  // Best-effort post-run session write-back. Only for named-kind
-  // agents that actually ran in a worktree — without a sessionDir
-  // there's nowhere to put the file. Failures are logged + swallowed:
-  // worst case, the next iteration starts fresh (no resume).
-  if (agentKind !== "custom" && worktree?.sessionDir && result.stdoutCaptured.length > 0) {
-    const adapter = adapterFor(agentKind);
-    const newId = adapter.parseSessionId(result.stdoutCaptured, preassignedSessionId);
-    const priorId = worktree.priorSession?.id;
-    if (newId && newId !== priorId) {
-      try {
-        await ctx.dispatcher.run(
-          {
-            kind: "internal:worktree-write-session",
-            command: "opencara",
-            args: [
-              "internal",
-              "worktree",
-              "write-session",
-              "--session-dir",
-              worktree.sessionDir,
-              "--kind",
-              agentKind,
-              "--id",
-              newId,
-            ],
-            env: {},
-          },
-          {
-            onLog: () => undefined,
-            hostId: result.agentHostId,
-            projectId: ctx.projectId,
-          },
-        );
-      } catch (err) {
-        console.error("[flows] worktree-write-session failed", {
-          flowRunId: ctx.flowRunId,
-          hostId: result.agentHostId,
-          err,
-        });
-      }
-    }
-  }
 
   if (result.exitCode !== 0) {
     throw new Error(`agent exited with code ${result.exitCode}`);
@@ -871,6 +860,12 @@ interface DispatchAgentRunOpts {
   env: Record<string, string>;
   cwd?: string;
   stdinJson?: unknown;
+  /** When set, the dispatched spec carries an `acp` payload so the
+   *  device's `runAcpJob` runner picks up the prompt/skill plumbing
+   *  instead of the legacy stdin-JSON envelope. Required for agent
+   *  nodes after the #30 cutover; left unset for internal CLI
+   *  subcommands like worktree-allocate that aren't ACP agents. */
+  acp?: import("@opencara/shared").AcpSpec;
   hostId?: string | null;
   /** triggerEventId on the agent_runs row. Pass null for synthetic flow-
    *  cleanup runs that aren't tied to the originating event. */
@@ -913,6 +908,7 @@ async function dispatchAgentRun(
     args: opts.args,
     env: opts.env,
     cwd: opts.cwd,
+    ...(opts.acp ? { acp: opts.acp } : {}),
   };
 
   const stepId = opts.flowRunStepId === undefined ? ctx.flowRunStepId : opts.flowRunStepId;

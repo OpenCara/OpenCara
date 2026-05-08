@@ -45,8 +45,13 @@ export const flowStepStatusEnum = pgEnum("flow_step_status", [
 ]);
 
 // Supported agent kinds. `custom` is the escape hatch for arbitrary
-// command/args; only the four named kinds get per-run conversation
-// resume via the adapter library in `src/agents/kinds.ts`.
+// Each kind maps to an ACP adapter in `src/agents/acp-gate.ts`. The
+// `custom` value is retained in the Postgres enum for backward
+// compatibility with rows from before the #30 cutover, but the
+// TypeScript layer's `AgentKind` no longer includes it; any row with
+// kind=custom will fail the `isAgentKind` validation at dispatch time
+// with a clear conversion message. Operators should re-save those
+// agents with a registered kind via the dashboard.
 export const agentKindEnum = pgEnum("agent_kind", [
   "claude",
   "codex",
@@ -343,7 +348,7 @@ export const agents = pgTable(
     // for kind-specific extras like `--model X --provider Y` that the
     // adapter passes through). `kind = 'custom'` keeps the legacy
     // opaque-subprocess behaviour and disables conversation resume.
-    kind: agentKindEnum("kind").notNull().default("custom"),
+    kind: agentKindEnum("kind").notNull().default("claude"),
     command: text("command").notNull(),
     args: jsonb("args").$type<string[]>().notNull().default([]),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),

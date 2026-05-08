@@ -1,21 +1,11 @@
-// Centralized feature flag + spec builder for the ACP+MCP cutover (#29).
-// Both the chat route (per-page chat) and the agent-test endpoint (the
-// dashboard's "Test agent" button) consult this module so they make the
-// same dispatch decision — otherwise it's possible to hit the legacy
-// path through one endpoint while the other has already cut over,
-// which surfaced during testing v0.103.0 (#33 review note).
-//
-// #30 widens the allowlist and eventually deletes this file along with
-// the legacy spec branch.
+// Centralized adapter registry + spec builder for the ACP+MCP path.
+// Started life as a feature-flagged cutover (#29) gating chat-only
+// dispatch; #30 widened to all agent kinds, all dispatch paths (chat
+// + test endpoint + flow nodes), and deleted the legacy stdin-JSON
+// envelope, the fenced `opencara-call` parser, and the per-kind
+// `kindsAdapter` machinery. ACP is now the only path.
 
 import type { AcpHistoryTurn, AcpSpec, AgentSpec } from "@opencara/shared";
-
-/**
- * Process-wide flag. Read once at module-load (chat/test routes call
- * `isAcpEnabled()` per-request, but the boolean itself is captured at
- * import time so a deploy-with-flag-toggle requires a restart).
- */
-const ACP_ENABLED = process.env["OPENCARA_ACP"] === "1";
 
 /**
  * Per-kind ACP adapter invocation. Adding a new kind is a one-line
@@ -30,6 +20,10 @@ const ACP_ENABLED = process.env["OPENCARA_ACP"] === "1";
  *   fidelity (CLAUDE.md, settings.json, MCP servers, OAuth auth) by
  *   delegating to the actual binary. The bin ships in opencara@latest
  *   so paired devices have it on PATH after `npm i -g opencara`.
+ * - opencode: `npx opencode-ai@latest acp` — native ACP via the
+ *   official `opencode` CLI's `acp` subcommand.
+ * - pi: `npx pi-acp@latest` — community ACP adapter for the pi coding
+ *   agent.
  */
 const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] }>([
   [
@@ -37,37 +31,38 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
     { command: "npx", args: ["--yes", "@zed-industries/codex-acp"] },
   ],
   ["claude", { command: "claude-acp", args: [] }],
+  [
+    "opencode",
+    { command: "npx", args: ["--yes", "opencode-ai@latest", "acp"] },
+  ],
+  ["pi", { command: "npx", args: ["--yes", "pi-acp@latest"] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */
 const ACP_KIND_ALLOWLIST = new Set(ACP_ADAPTERS.keys());
 
-export function isAcpEnabled(): boolean {
-  return ACP_ENABLED;
-}
-
 export interface AcpEligibility {
-  /** True iff this run should dispatch through ACP+MCP. */
+  /** True iff the agent kind has an ACP adapter mapping. */
   useAcp: boolean;
   /**
-   * When `ACP_ENABLED` is on but the agent's kind is outside the
-   * cutover allowlist, callers must refuse rather than silently fall
-   * back. Surfaced as a 400 response so operators know the flag
-   * isn't doing what they think.
+   * Human-readable refusal reason when the kind isn't in the
+   * allowlist. Callers surface as a 400 / dispatch error so operators
+   * see what went wrong (vs silent fallthrough to a non-existent path).
    */
   refuseReason: string | null;
 }
 
 export function checkAcpEligibility(agentKind: string): AcpEligibility {
-  if (!ACP_ENABLED) return { useAcp: false, refuseReason: null };
   const allowed = ACP_KIND_ALLOWLIST.has(agentKind.toLowerCase());
   if (!allowed) {
     const supported = [...ACP_KIND_ALLOWLIST].join(", ");
     return {
       useAcp: false,
       refuseReason:
-        `OPENCARA_ACP is set but agent kind "${agentKind}" is not in the ACP cutover allowlist. ` +
-        `Supported: ${supported}. Disable the flag or switch the agent to a supported kind.`,
+        `Agent kind "${agentKind}" is not supported. ` +
+        `Supported: ${supported}. ` +
+        `(The "custom" kind was removed in the v0.30 cutover; convert to a ` +
+        `registered kind via the dashboard.)`,
     };
   }
   return { useAcp: true, refuseReason: null };

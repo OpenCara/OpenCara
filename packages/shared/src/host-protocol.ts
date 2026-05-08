@@ -117,19 +117,13 @@ export const PingSchema = z.object({ type: z.literal("ping") });
 export const PongSchema = z.object({ type: z.literal("pong") });
 
 /**
- * Device → server: an agent subprocess emitted a fenced ```opencara-call```
- * block on stdout, and the CLI is proxying the call back over the
- * already-authed WS. Fire-and-forget — there's no response message, the
- * mutation is applied transparently.
- *
- * The CLI scopes/validates nothing beyond "this looked like a parseable
- * opencara-call block from the running agent". Authorization (does this
- * runId match the calling device? does the issue/flow/template belong to
- * the run's project/user?) is enforced server-side.
- *
- * `kind` is the allowlist gate. New kinds are additions to the
- * discriminated union below; the dispatcher's `applyAgentCall` switch is
- * compile-time-checked exhaustive against this union.
+ * Per-mutation payload schemas. Pre-#30 these were also the wire shapes
+ * for the fire-and-forget `agent-call` WS variant (the fenced-stdout-
+ * block protocol the CLI parsed via `agentCallParser.ts`); that
+ * variant was removed in #30 along with the parser. The schemas stay
+ * because they're the input to `applyIssue/Flow/TemplateBodySet` in
+ * `agent-calls/index.ts`, and they're parameterized as
+ * `AgentCallRequest` below for the ACP request/response path.
  */
 const AgentCallEnvelope = {
   type: z.literal("agent-call"),
@@ -173,17 +167,11 @@ export const AgentCallSchema = z.discriminatedUnion("kind", [
 export type AgentCall = z.infer<typeof AgentCallSchema>;
 
 /**
- * Device → server: request semantics for `agent-call`. Same payload as the
- * fire-and-forget `AgentCall` above, but the device awaits an
- * `agent-call-result` keyed by the same `callId`.
- *
- * Introduced for the ACP/MCP path (#28): MCP tools have return values, so
- * we need to surface success/failure back to the agent. The legacy
- * `agent-call` (no response) stays in the union until #30 deletes it.
- *
- * Wire-compatibility note: a fenced-block parser in the legacy CLI never
- * emits `agent-call-request`, only `agent-call`, so existing devices keep
- * working. New ACP-driven devices emit `agent-call-request` exclusively.
+ * Device → server: ACP-mode tool-call request. Same payload as
+ * `AgentCall` above but with `agent-call-request` discriminator —
+ * the device awaits an `agent-call-result` keyed by the same
+ * `callId`. Introduced in #28 alongside the MCP tool surface; the
+ * legacy fire-and-forget `agent-call` variant was removed in #30.
  */
 const AgentCallRequestEnvelope = {
   type: z.literal("agent-call-request"),
@@ -252,12 +240,16 @@ export type ServerToDeviceMessage = z.infer<typeof ServerToDeviceMessageSchema>;
 // literal discriminator). z.union still discriminates correctly at runtime;
 // the only loss is slightly less precise error messages on a malformed
 // agent-call envelope.
+// `AgentCallSchema` (the legacy fire-and-forget `agent-call` variant)
+// was removed from the wire protocol in the #30 cutover — only the
+// ACP request/response pair survives. The schema itself is still
+// exported above because it's the input shape for `applyAgentCall`
+// in the orchestrator's `agent-calls/`.
 export const DeviceToServerMessageSchema = z.union([
   HelloMessageSchema,
   LogFrameSchema,
   RunDoneSchema,
   PongSchema,
-  AgentCallSchema,
   AgentCallRequestSchema,
 ]);
 export type DeviceToServerMessage = z.infer<typeof DeviceToServerMessageSchema>;

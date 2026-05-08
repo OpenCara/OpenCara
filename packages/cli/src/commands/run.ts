@@ -13,8 +13,7 @@ import { statfsSync } from "node:fs";
 import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
-import { runAcpJob, runJob, type AcpRunController } from "../runner/spawn.js";
-import { AgentCallParser } from "../runner/agentCallParser.js";
+import { runAcpJob, type AcpRunController } from "../runner/spawn.js";
 import type {
   AgentSpec,
   JobAssignment,
@@ -60,12 +59,11 @@ export async function run(opts: RunOpts = {}): Promise<void> {
         type: "hello",
         platform: platform(),
         version: PKG_VERSION,
-        // Advertise the new opencara-call stdout protocol so the
-        // server can later gate the skill prompt to capable CLIs.
-        // Older CLIs without this capability would still be sent the
-        // skill markdown today (it doesn't crash; the fenced block
-        // just shows up in stdout unparsed).
-        capabilities: ["agent-call"],
+        // Advertise ACP transport support. Pre-v0.30 devices reported
+        // "agent-call" (the fenced-stdout-block protocol); since the
+        // legacy path was removed, this version reports "acp" so the
+        // orchestrator knows the device can handle `spec.acp` jobs.
+        capabilities: ["acp"],
         systemInfo: collectSystemInfo(),
       });
     },
@@ -134,84 +132,33 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
     flushTimer = setTimeout(flush, LOG_FLUSH_MS);
   };
 
-  // ACP+MCP path (#29). Spec carries an `acp` payload when the
-  // orchestrator's chat-route feature flag is on for this kind. The
-  // legacy stdin-JSON envelope is bypassed entirely — opencara-mcp
-  // exposes the mutation tools to the agent over MCP instead.
-  if (job.spec.acp) {
-    const handle = runAcpJob({
-      runId,
-      spec: job.spec as AgentSpec,
-      handlers: {
-        onLog: (stream, chunk) => {
-          pending[stream] += chunk;
-          scheduleFlush();
-        },
-        sendAgentCall: (req) => client.send(req),
-      },
-    });
-    acpControllers.set(runId, handle.controller);
-    try {
-      const result = await handle.promise;
-      flush();
-      client.send({
-        type: "done",
-        runId,
-        status: result.exitCode === 0 ? "succeeded" : "failed",
-        exitCode: result.exitCode,
-      });
-      console.log(
-        `[opencara] job ${runId.slice(-8)} (acp) → ${result.stopReason} exit=${result.exitCode}`,
-      );
-    } catch (err) {
-      flush();
-      const message = err instanceof Error ? err.message : String(err);
-      client.send({ type: "done", runId, status: "failed", errorMessage: message });
-      console.error(`[opencara] job ${runId.slice(-8)} (acp) failed`, message);
-    } finally {
-      acpControllers.delete(runId);
-    }
+  // ACP+MCP is the only dispatch path post-#30. Specs without `acp`
+  // are an orchestrator bug (or a stale device config); fail loudly
+  // instead of silently running a no-op.
+  if (!job.spec.acp) {
+    flush();
+    const message =
+      `legacy stdin-JSON dispatch removed in v0.30 — orchestrator must send spec.acp. ` +
+      `Got command: ${job.spec.command}.`;
+    client.send({ type: "done", runId, status: "failed", errorMessage: message });
+    console.error(`[opencara] job ${runId.slice(-8)} rejected: ${message}`);
     return;
   }
 
-  // Legacy stdin-JSON path. Parses ```opencara-call\n…\n``` fenced
-  // blocks out of the agent's stdout and forwards them to the
-  // orchestrator over the same WS we got the job over. Fire-and-forget:
-  // there is no response message — the mutation is applied transparently
-  // and the user sees the result on their canvas page. The fenced block
-  // IS still streamed back as a normal log frame in the same callback,
-  // so the user sees what the agent asked for in the chat reply.
-  const callParser = new AgentCallParser((call) => {
-    // The discriminated union forces a switch — TS won't narrow a spread
-    // alone. Each arm forwards the parsed payload verbatim; validation
-    // already happened in the parser. The `never` exhaustiveness arm
-    // ensures a future kind added to AgentCallSchema lights this file up
-    // at compile time instead of silently dropping the call.
-    switch (call.kind) {
-      case "issue.body.set":
-        client.send({ type: "agent-call", runId, ...call });
-        return;
-      case "flow.node.config.set":
-        client.send({ type: "agent-call", runId, ...call });
-        return;
-      case "template.node.config.set":
-        client.send({ type: "agent-call", runId, ...call });
-        return;
-      default: {
-        const exhaustive: never = call;
-        void exhaustive;
-      }
-    }
-  });
-
-  try {
-    const result = await runJob(job.spec as AgentSpec, job.stdinJson, {
+  const handle = runAcpJob({
+    runId,
+    spec: job.spec as AgentSpec,
+    handlers: {
       onLog: (stream, chunk) => {
         pending[stream] += chunk;
         scheduleFlush();
-        if (stream === "stdout") callParser.feed(chunk);
       },
-    });
+      sendAgentCall: (req) => client.send(req),
+    },
+  });
+  acpControllers.set(runId, handle.controller);
+  try {
+    const result = await handle.promise;
     flush();
     client.send({
       type: "done",
@@ -219,12 +166,16 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
       status: result.exitCode === 0 ? "succeeded" : "failed",
       exitCode: result.exitCode,
     });
-    console.log(`[opencara] job ${runId.slice(-8)} → exit ${result.exitCode}`);
+    console.log(
+      `[opencara] job ${runId.slice(-8)} (acp) → ${result.stopReason} exit=${result.exitCode}`,
+    );
   } catch (err) {
     flush();
     const message = err instanceof Error ? err.message : String(err);
     client.send({ type: "done", runId, status: "failed", errorMessage: message });
-    console.error(`[opencara] job ${runId.slice(-8)} failed`, message);
+    console.error(`[opencara] job ${runId.slice(-8)} (acp) failed`, message);
+  } finally {
+    acpControllers.delete(runId);
   }
 }
 

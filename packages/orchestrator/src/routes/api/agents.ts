@@ -35,36 +35,29 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const body = await c.req.json().catch(() => ({}));
     const name = String(body.name ?? "").trim();
 
-    // `kind` selects per-kind adapter (claude/codex/opencode/pi) or
-    // falls back to legacy opaque-subprocess (`custom`). Older clients
-    // that don't send the field default to `custom`.
-    const kind: AgentKind = isAgentKind(body.kind) ? body.kind : "custom";
-
-    // For kind=custom, we tokenize a free-form Command field as before.
-    // For named kinds, the adapter builds the invocation at dispatch
-    // time — the row's `command` is an OPTIONAL binary override (empty
-    // = use the adapter's default like "claude"; populated with e.g.
-    // "npx @anthropic-ai/claude-code@latest" replaces the binary at
-    // dispatch — see `tokenizeShellLike` in flows/nodeRunners.ts).
-    // `args` carries operator extras (e.g. `--provider X --model Y`
-    // for pi). The UI sends `extraArgs` as a free-form string that we
-    // tokenize the same way as a Command.
-    let command: string;
-    let args: string[];
-    if (kind === "custom") {
-      const rawCommand = String(body.command ?? "").trim();
-      if (!name || !rawCommand) {
-        return c.json({ error: "name and command required for kind=custom" }, 400);
-      }
-      ({ command, args } = tokenizeCommand(rawCommand));
-    } else {
-      if (!name) return c.json({ error: "name required" }, 400);
-      const rawOverride = typeof body.command === "string" ? body.command.trim() : "";
-      // Empty / kind label = no override (dispatch uses adapter default).
-      // Anything else gets stored verbatim and tokenized at dispatch.
-      command = rawOverride.length > 0 ? rawOverride : kind;
-      args = parseExtraArgs(body);
+    // `kind` must be one of the supported ACP kinds. Pre-#30 the
+    // dashboard accepted `custom` as an opaque-subprocess escape
+    // hatch; the cutover removed that path. Reject unknown / missing
+    // kind explicitly with a clear conversion hint.
+    if (!isAgentKind(body.kind)) {
+      return c.json(
+        {
+          error:
+            'kind required and must be one of "claude", "codex", "opencode", "pi". ' +
+            'The "custom" kind was removed in the v0.30 cutover.',
+        },
+        400,
+      );
     }
+    const kind: AgentKind = body.kind;
+
+    if (!name) return c.json({ error: "name required" }, 400);
+    // The agent row's `command` and `args` are now retained for legacy
+    // diagnostics only — the ACP adapter is selected by kind in
+    // `acp-gate.ts`. Operators don't need to fill these in; we accept
+    // whatever the dashboard sends and persist it untouched.
+    const command = typeof body.command === "string" ? body.command.trim() : kind;
+    const args = parseExtraArgs(body);
 
     const env =
       body.env && typeof body.env === "object" && !Array.isArray(body.env)
@@ -132,36 +125,23 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
     if (typeof body.name === "string") updates.name = body.name.trim();
 
-    // Determine the effective kind for this update. If the body is
-    // changing kind, use the new value; otherwise read the existing
-    // row to know how to interpret command/extraArgs.
-    let effectiveKind: AgentKind | undefined;
+    // Kind must be a registered ACP kind. If the body changes it,
+    // validate; pre-#30 `custom` rows survive in the DB (the Postgres
+    // enum still has the value) but can't be saved/created/dispatched
+    // anymore. Operators should pick a registered kind.
     if (body.kind !== undefined) {
       if (!isAgentKind(body.kind)) return c.json({ error: "invalid kind" }, 400);
       updates.kind = body.kind;
-      effectiveKind = body.kind;
     }
-    if (effectiveKind === undefined && (body.command !== undefined || body.extraArgs !== undefined)) {
-      const existing = await deps.db.query.agents.findFirst({
-        where: and(eq(agents.id, id), eq(agents.userId, user.id)),
-      });
-      effectiveKind = existing?.kind;
+    // command + args are retained on the row for legacy diagnostics
+    // only — dispatch ignores them in favour of the per-kind ACP
+    // adapter. We persist whatever the dashboard sends.
+    if (typeof body.command === "string") {
+      const trimmed = body.command.trim();
+      updates.command = trimmed.length > 0 ? trimmed : (updates.kind ?? "");
     }
-
-    if (effectiveKind === "custom" && typeof body.command === "string") {
-      const { command, args } = tokenizeCommand(body.command.trim());
-      updates.command = command;
-      updates.args = args;
-    } else if (effectiveKind && effectiveKind !== "custom") {
-      // Named kind: body.command is the binary override (empty = kind
-      // default). Stored verbatim; nodeRunners tokenizes at dispatch.
-      if (typeof body.command === "string") {
-        const trimmed = body.command.trim();
-        updates.command = trimmed.length > 0 ? trimmed : effectiveKind;
-      }
-      if (body.extraArgs !== undefined) {
-        updates.args = parseExtraArgs(body);
-      }
+    if (body.extraArgs !== undefined) {
+      updates.args = parseExtraArgs(body);
     }
     if (body.env && typeof body.env === "object" && !Array.isArray(body.env)) {
       updates.env = Object.fromEntries(
@@ -227,30 +207,20 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       OPENCARA_TEST: "1",
     };
 
-    // ACP cutover gate. Mirrors chat.ts so the dashboard's "Test agent"
-    // button exercises the same path users actually hit. Without this,
-    // testing v0.103.0's ACP work via the test button is silently
-    // legacy-only.
+    // ACP eligibility — same gate as chat.ts. Unsupported kinds get
+    // a 400 with a conversion hint; everything else dispatches via ACP.
     const eligibility = checkAcpEligibility(agent.kind);
     if (eligibility.refuseReason) {
       return c.json({ error: eligibility.refuseReason }, 400);
     }
-    const spec: AgentSpec = eligibility.useAcp
-      ? buildAcpSpec({
-          agent,
-          env,
-          systemPromptMd:
-            "You are an opencara chat agent being exercised via the dashboard's Test button. " +
-            "Respond to the user's prompt directly.",
-          userPromptMd: prompt,
-        })
-      : {
-          kind: agent.name,
-          command: agent.command,
-          args: agent.args,
-          env,
-          cwd: agent.cwd ?? undefined,
-        };
+    const spec: AgentSpec = buildAcpSpec({
+      agent,
+      env,
+      systemPromptMd:
+        "You are an opencara chat agent being exercised via the dashboard's Test button. " +
+        "Respond to the user's prompt directly.",
+      userPromptMd: prompt,
+    });
 
     const agentRunId = ulid();
     await deps.db.insert(agentRuns).values({
@@ -281,10 +251,6 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
-          // ACP path doesn't read stdinJson — spec.acp carries the
-          // prompt. Pass undefined to make the dispatcher pick the
-          // right runner branch on the device side.
-          stdinJson: eligibility.useAcp ? undefined : { message: prompt },
           onLog,
           hostId,
         });

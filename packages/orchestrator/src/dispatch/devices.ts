@@ -154,44 +154,6 @@ export class DevicePool {
       });
       return;
     }
-    if (msg.type === "agent-call") {
-      // Legacy fire-and-forget path. The CLI parsed an opencara-call fenced
-      // block and proxied it here using its device-level WS auth. The
-      // result is logged but never returned to the agent — that's the
-      // limitation #28 fixes via `agent-call-request` below. Both paths
-      // share the per-kind apply helpers; only the response wiring differs.
-      // Kept until #30 deletes the fenced-block path entirely.
-      const p = this.pending.get(msg.runId);
-      if (!p) return;
-      if (p.agentHostId !== agentHostId) {
-        console.warn("[device-pool] agent-call hostId mismatch", {
-          runId: msg.runId,
-          expected: p.agentHostId,
-          got: agentHostId,
-        });
-        return;
-      }
-      void this.applyAgentCall(p.projectId, p.userId, msg)
-        .then((result) => {
-          if (!result.ok) {
-            console.warn("[device-pool] agent-call rejected", {
-              runId: msg.runId,
-              callId: msg.callId,
-              kind: msg.kind,
-              reason: result.reason,
-            });
-          }
-        })
-        .catch((err) => {
-          console.error("[device-pool] agent-call apply failed", {
-            runId: msg.runId,
-            callId: msg.callId,
-            kind: msg.kind,
-            err,
-          });
-        });
-      return;
-    }
     if (msg.type === "agent-call-request") {
       // Request/response path used by the ACP/MCP cutover. Same scope
       // checks and apply helpers as the legacy `agent-call`, but we send
