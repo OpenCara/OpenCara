@@ -22,17 +22,6 @@ interface ChatRoutesDeps {
 
 type PageContext = PageContextLike;
 
-/** Stdin keys the chat route owns. Builders MUST NOT return any of these
- * in their `hydrated` map — a collision would silently change what the
- * agent sees and break protocol contracts.
- */
-const RESERVED_STDIN_KEYS = new Set([
-  "message",
-  "pageContext",
-  "history",
-  "skill",
-]);
-
 /**
  * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
  * the existing dispatcher; stdin carries `{ message, pageContext, history? }`,
@@ -109,41 +98,25 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       OPENCARA_AGENT_RUN_ID: agentRunId,
     };
 
-    // Decide between the ACP+MCP path and the legacy stdin-JSON path.
-    //
-    // ACP path: feature flag on AND agent.kind is in the cutover
-    // allowlist. We override `command`/`args` with the codex-acp adapter
-    // and attach an `acp` payload; the device's `runAcpJob` path picks
-    // it up.
-    //
-    // Legacy path: anything else. Mirrors today's behaviour bit for bit.
-    //
-    // If the flag is on but the kind is NOT supported, error rather than
-    // silently fall back — the operator probably meant something else.
+    // ACP eligibility — every supported kind dispatches via ACP. An
+    // unsupported kind (e.g. legacy `custom` rows from before #30) gets
+    // a 400 with a clear conversion hint, rather than the stale legacy
+    // path's silent fallthrough.
     const eligibility = checkAcpEligibility(agent.kind);
     if (eligibility.refuseReason) {
       return c.json({ error: eligibility.refuseReason }, 400);
     }
-    const useAcp = eligibility.useAcp;
 
-    const spec: AgentSpec = useAcp
-      ? buildAcpSpec({
-          agent,
-          env,
-          systemPromptMd:
-            skillResult?.skill.instructions ??
-            "You are an opencara chat agent. Respond to the user's message about the current page.",
-          userPromptMd: message,
-          history: normalizeHistory(history),
-          pageContext: pageContext as Record<string, unknown>,
-        })
-      : {
-          kind: agent.name,
-          command: agent.command,
-          args: agent.args,
-          env,
-          cwd: agent.cwd ?? undefined,
-        };
+    const spec: AgentSpec = buildAcpSpec({
+      agent,
+      env,
+      systemPromptMd:
+        skillResult?.skill.instructions ??
+        "You are an opencara chat agent. Respond to the user's message about the current page.",
+      userPromptMd: message,
+      history: normalizeHistory(history),
+      pageContext: pageContext as Record<string, unknown>,
+    });
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
       spec,
@@ -165,42 +138,10 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         });
     };
 
-    // Build stdin: base envelope + the active builder's skill envelope and
-    // hydrated keys (issue body for canvas, flow graph for project flow,
-    // etc.). Pages with no registered builder send the bare envelope —
-    // back-compat with today's pathname-only behaviour.
-    //
-    // Reserved-key guard: a builder must not shadow the base envelope or
-    // skill key — that would silently change what the agent sees on
-    // stdin. Surfaced as a 500 because it's a builder bug, not user
-    // input.
-    //
-    // ACP path skips this entirely — `spec.acp` carries everything the
-    // device runner needs, and `stdinJson` is left undefined.
-    let stdinJson: Record<string, unknown> | undefined;
-    if (!useAcp) {
-      const json: Record<string, unknown> = { message, pageContext, history };
-      if (skillResult) {
-        json["skill"] = skillResult.skill;
-        for (const [key, value] of Object.entries(skillResult.hydrated)) {
-          if (RESERVED_STDIN_KEYS.has(key)) {
-            console.error("[chat] builder hydrated reserved stdin key", {
-              page: pageContext.page,
-              key,
-            });
-            return c.json({ error: `builder hydrated reserved key: ${key}` }, 500);
-          }
-          json[key] = value;
-        }
-      }
-      stdinJson = json;
-    }
-
     // Fire-and-forget the dispatcher; the SSE stream is the client's only view.
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
-          stdinJson,
           onLog,
           hostId: agent.hostId,
           projectId,
