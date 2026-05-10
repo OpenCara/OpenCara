@@ -23,6 +23,8 @@ import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import { linkPrToIssueAndCopyAgentLabel } from "../github/pulls.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
+import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
+import { parseReviewVerdict } from "../agents/verdict.js";
 import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -51,6 +53,12 @@ export interface NodeRunCtx {
   previousOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
+  /** True when this node's downstream graph contains a `github.post_review`
+   *  action node. The agent runner uses this to auto-inject the verdict-line
+   *  contract skill so the post-review parser can populate the GitHub
+   *  review's `event` enum from the agent body. Computed by the engine via
+   *  `computeDownstreamSet`. */
+  hasDownstreamPostReview?: boolean;
 }
 
 export interface NodeRunResult {
@@ -666,6 +674,19 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   if (skill) {
     systemPromptParts.push(skill.instructions);
   }
+  // Auto-injected when this agent's downstream graph contains a
+  // `github.post_review` node. Mandates the `verdict: <token>` first-line
+  // contract that the post-review parser reads to populate GitHub's
+  // review `event` enum. Active for both standalone reviewers
+  // (pr-review) and every agent in fan-in chains (pr-review-multi
+  // reviewers + synthesizer).
+  if (ctx.hasDownstreamPostReview) {
+    const verdictSkill = buildPrReviewVerdictSkill({
+      baseUrl: ctx.publicBaseUrl,
+      runId: agentRunId,
+    });
+    systemPromptParts.push(verdictSkill.instructions);
+  }
   const systemPromptMd =
     systemPromptParts.length > 0
       ? systemPromptParts.join("\n\n---\n\n")
@@ -905,14 +926,25 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
   switch (node.kind) {
     case "github.post_review": {
       if (!prPayload.pull_request) throw new Error("post_review requires a pull_request event");
+      // Parse the agent-emitted `verdict: <token>` line off the top of
+      // the body (contract enforced upstream by the verdict skill in
+      // skills/prReviewVerdict.ts). When present, it drives GitHub's
+      // review `event` enum and the line is stripped from the body so
+      // it doesn't double-render alongside the colored badge. When
+      // absent or malformed, fall back to `node.config.event` and
+      // post the body verbatim — operator-visible signal that the
+      // agent didn't honor the contract.
+      const parsed = parseReviewVerdict(body);
+      const event = parsed?.verdict ?? node.config.event;
+      const reviewBody = parsed?.bodyWithoutVerdict ?? body;
       const res = await oct.request(
         "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
         {
           owner,
           repo,
           pull_number: requireIssueNumber("post_review"),
-          body: body || "_(no review body)_",
-          event: node.config.event,
+          body: reviewBody || "_(no review body)_",
+          event,
           commit_id: prPayload.pull_request.head.sha,
         },
       );
