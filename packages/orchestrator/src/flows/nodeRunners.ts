@@ -20,6 +20,7 @@ import {
 } from "../db/schema.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
+import { linkPrToIssueAndCopyAgentLabel } from "../github/pulls.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
 import type { AgentKind } from "../agents/kinds.js";
@@ -773,6 +774,35 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
         "[flows] worktree write-session dispatch failed (resume disabled for next run)",
         err,
       );
+    }
+  }
+
+  // Post-step: when an issue-implement-shaped run succeeds (issue
+  // context present, worktree allocated), link the PR the agent just
+  // opened back to its source issue (Closes #N in body → populates
+  // GitHub's Development panel) and copy the issue's agent:<name>
+  // label onto the PR so pr-review-fix's label-based agent routing
+  // finds the same agent on the next iteration. Idempotent; failures
+  // are logged but do not change this flow's outcome (the agent has
+  // already succeeded by this point).
+  if (
+    ctx.issueContext?.stdin.issue?.number &&
+    worktree?.branch
+  ) {
+    try {
+      const octokit = await ctx.app.forInstallation(
+        ctx.installation.githubInstallationId,
+      );
+      await linkPrToIssueAndCopyAgentLabel({
+        octokit,
+        owner: ctx.project.owner,
+        repo: ctx.project.name,
+        branchName: worktree.branch,
+        issueNumber: ctx.issueContext.stdin.issue.number,
+        issueLabels: ctx.issueContext.stdin.issue.labels ?? [],
+      });
+    } catch (err) {
+      console.error("[flows] link-pr-to-issue post-step failed", err);
     }
   }
 

@@ -184,8 +184,8 @@ export async function pushIssueBodyToGithub(
  *
  * Returns the refreshed issue row from our DB.
  */
-const AGENT_LABEL_COLOR = "5856d6";
-const AGENT_LABEL_PREFIX = "agent:";
+export const AGENT_LABEL_COLOR = "5856d6";
+export const AGENT_LABEL_PREFIX = "agent:";
 
 export async function setIssueAgentLabel(
   app: GithubAppClient,
