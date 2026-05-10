@@ -478,9 +478,24 @@ export class FlowEngine {
     skipped: boolean;
     skipReason?: string;
   }> {
-    void def;
     const { flowRunId, flowId, project, installation } = prepared;
     const { node, idx, previousOutput } = job;
+
+    // Reviewer-agent verdict contract: when this node's outputs flow
+    // (transitively) into a `github.post_review` action, the agent
+    // runner auto-injects the verdict-line skill so the post-review
+    // parser can drive GitHub's review `event` enum from the agent
+    // body. See agents/verdict.ts + skills/prReviewVerdict.ts.
+    const downstreamIds = computeDownstreamSet(def, node.id);
+    let hasDownstreamPostReview = false;
+    for (const id of downstreamIds) {
+      if (id === node.id) continue;
+      const n = def.nodes.find((x) => x.id === id);
+      if (n?.kind === "github.post_review") {
+        hasDownstreamPostReview = true;
+        break;
+      }
+    }
 
     const stepId = ulid();
     await this.deps.db.insert(flowRunSteps).values({
@@ -524,6 +539,7 @@ export class FlowEngine {
       issueContext,
       previousOutput,
       publicBaseUrl: this.deps.publicBaseUrl,
+      hasDownstreamPostReview,
     };
 
     try {
