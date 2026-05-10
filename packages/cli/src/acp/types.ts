@@ -115,9 +115,13 @@ export interface LoadSessionRequest {
   mcpServers: McpServer[];
 }
 
-// Per spec the response is an empty object. Modeled as a record so
-// future extension fields flow through without breaking callers.
-export type LoadSessionResponse = Record<string, never>;
+// Per spec the response is an empty object today. Modeled as an open
+// interface so future extension fields flow through without breaking
+// callers (Record<string, never> would be the opposite — it forbids all
+// property access and any added field would be a compile error).
+export interface LoadSessionResponse {
+  [k: string]: unknown;
+}
 
 // ─── session/prompt ────────────────────────────────────────────────
 //

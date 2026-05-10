@@ -736,7 +736,13 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   if (worktree?.sessionDir && result.acpSessionId) {
     const writeRunId = ulid();
     try {
-      await dispatchAgentRun(ctx, {
+      // dispatchAgentRun returns RunResult and only throws on transport
+      // errors (device disconnect, mint-token failure, etc.) — a non-zero
+      // exitCode from the CLI itself comes back via the returned value,
+      // so we have to check it explicitly. Otherwise a failed
+      // write-session (disk full, permissions on sessionDir) would
+      // silently disable resume next iteration with no diagnostic.
+      const writeResult = await dispatchAgentRun(ctx, {
         agentRunId: writeRunId,
         kind: "internal:worktree-write-session",
         command: "opencara",
@@ -756,9 +762,15 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
         triggerEventId: ctx.event.id,
         flowRunStepId: null,
       });
+      if (writeResult.exitCode !== 0) {
+        console.error(
+          `[flows] worktree write-session exited ${writeResult.exitCode} ` +
+            `(resume disabled for next run on ${ctx.project.owner}/${ctx.project.name}@${worktree.branch})`,
+        );
+      }
     } catch (err) {
       console.error(
-        "[flows] worktree write-session failed (resume disabled for next run)",
+        "[flows] worktree write-session dispatch failed (resume disabled for next run)",
         err,
       );
     }

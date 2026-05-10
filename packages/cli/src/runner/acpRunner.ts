@@ -144,7 +144,7 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       await host.start();
       client.start();
 
-      await client.initialize({
+      const initResult = await client.initialize({
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: {},
       });
@@ -154,10 +154,16 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       // the underlying CLI's resume mechanism (claude-acp passes it
       // straight to `claude --session-id`). On a fresh start we mint
       // a new session and surface the assigned id back up.
+      //
+      // Defense-in-depth: only call session/load when the shim
+      // advertised `loadSession: true`. Otherwise fall through to
+      // session/new — losing context for this iteration is preferable
+      // to a method-not-found error that fails the whole flow.
       const cwd = spec.cwd ?? process.cwd();
       const mcpServers = [host.acpServerEntry()];
+      const shimSupportsLoad = initResult.agentCapabilities?.loadSession === true;
       let sessionId: string;
-      if (acpSpec.priorSessionId) {
+      if (acpSpec.priorSessionId && shimSupportsLoad) {
         await client.loadSession({
           sessionId: acpSpec.priorSessionId,
           cwd,
