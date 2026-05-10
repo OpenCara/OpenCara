@@ -165,6 +165,7 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
       runId,
       status: result.exitCode === 0 ? "succeeded" : "failed",
       exitCode: result.exitCode,
+      acpSessionId: result.sessionId || null,
     });
     console.log(
       `[opencara] job ${runId.slice(-8)} (acp) → ${result.stopReason} exit=${result.exitCode}`,

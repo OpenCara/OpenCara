@@ -22,10 +22,18 @@
 //       * `{type:"result", subtype, is_error, ...}`
 //          → resolves the prompt request with `stopReason`
 //     Everything else is dropped silently (no harm, just no surfacing).
-//   - `--session-id <uuid>` keeps Claude's own session continuity
-//     across turns within an ACP session — same model the legacy
-//     `claudeAdapter` used. Resume across ACP sessions via
-//     `session/load` is a follow-up.
+//   - `--session-id <uuid>` is Claude's own resume mechanism. The ACP
+//     `sessionId` IS the value we pass to `--session-id`, so resume
+//     across processes works: the orchestrator persists the id between
+//     iterations, calls `session/load` next time, and Claude CLI
+//     replays its conversation JSONL from
+//     `~/.claude/projects/<cwd-hash>/<id>.jsonl` internally. If that
+//     file is missing (claude pruned it, or this is a different
+//     device), Claude silently starts fresh under the same id —
+//     conversation context is lost but the run still succeeds.
+//   - `session/load` does NOT replay history via `session/update`
+//     notifications. The Claude CLI handles replay internally; the
+//     ACP client (orchestrator) doesn't need a synthesized stream.
 //
 // Loaded by the device when an ACP-mode chat picks up a `claude`
 // agent kind (via `acp-gate.ts:ACP_ADAPTERS`).
@@ -68,14 +76,16 @@ function notify(method: string, params: unknown): void {
 // ─── State ─────────────────────────────────────────────────────────
 
 interface SessionState {
-  /** Stable across all turns of this ACP session — passed to every
-   *  `claude --session-id` invocation so Claude maintains its own
-   *  conversation memory. */
-  claudeSessionId: string;
+  /** ACP `sessionId` doubles as Claude's `--session-id`. Carrying just
+   *  the cwd here is enough — the id is the map key. Single UUID for
+   *  both layers means resume across processes works: the orchestrator
+   *  passes the same id back via `session/load` next iteration and
+   *  Claude CLI replays from
+   *  `~/.claude/projects/<cwd-hash>/<id>.jsonl`. */
   cwd: string;
 }
 
-const sessions = new Map<string, SessionState>();
+export const sessions = new Map<string, SessionState>();
 
 // ─── Claude launcher ───────────────────────────────────────────────
 
@@ -105,7 +115,7 @@ async function runClaudeTurn(
       "--include-partial-messages",
       "--verbose",
       "--session-id",
-      state.claudeSessionId,
+      sessionId,
       // Headless: no human in the loop to approve tool use. Matches the
       // legacy `claudeAdapter` posture in agents/kinds.ts.
       "--dangerously-skip-permissions",
@@ -260,7 +270,7 @@ interface InitializeParams {
   clientCapabilities?: unknown;
 }
 
-function handleInitialize(_params: InitializeParams): unknown {
+export function handleInitialize(_params: InitializeParams): unknown {
   return {
     protocolVersion: 1,
     agentInfo: {
@@ -269,10 +279,12 @@ function handleInitialize(_params: InitializeParams): unknown {
       version: "0.0.1",
     },
     agentCapabilities: {
-      // No session resume yet (follow-up). MCP via stdio works because
-      // the `claude` CLI itself supports `mcpServers` in settings.json
-      // but we don't propagate ACP's mcpServers config in this MVP.
-      loadSession: false,
+      // Session resume works by passing the ACP sessionId back as
+      // `claude --session-id <uuid>` on the next prompt — Claude CLI
+      // replays its own JSONL internally. MCP via stdio is not yet
+      // propagated from ACP's mcpServers config (the `claude` CLI uses
+      // settings.json for that today; bridging is a separate change).
+      loadSession: true,
       mcpCapabilities: {},
       promptCapabilities: { embeddedContext: false, image: false, audio: false },
     },
@@ -285,16 +297,32 @@ interface NewSessionParams {
   mcpServers?: unknown[];
 }
 
-function handleNewSession(params: NewSessionParams): unknown {
+export function handleNewSession(params: NewSessionParams): unknown {
   const sessionId = randomUUID();
-  // Claude's own session id — distinct from the ACP sessionId so we can
-  // remap if Claude rejects the id format. Today they're both UUIDs,
-  // but keeping them separate is cheap insurance.
-  sessions.set(sessionId, {
-    claudeSessionId: randomUUID(),
-    cwd: params.cwd ?? process.cwd(),
-  });
+  sessions.set(sessionId, { cwd: params.cwd ?? process.cwd() });
   return { sessionId };
+}
+
+interface LoadSessionParams {
+  sessionId: string;
+  cwd: string;
+  mcpServers?: unknown[];
+}
+
+export function handleLoadSession(params: LoadSessionParams): unknown {
+  // The orchestrator persists the (kind, id) pair after each successful
+  // run and replays it here on the next iteration. We register the id
+  // in our in-memory map; Claude CLI handles the actual conversation
+  // replay on the next `--session-id <id>` invocation by reading
+  // `~/.claude/projects/<cwd-hash>/<id>.jsonl`. If that file is missing
+  // (pruned, or this is a different device than ran the prior turn),
+  // Claude silently starts a new conversation under the same id — the
+  // operator sees a fresh response with no error.
+  if (typeof params.sessionId !== "string" || params.sessionId.length === 0) {
+    throw new Error("session/load: sessionId required");
+  }
+  sessions.set(params.sessionId, { cwd: params.cwd ?? process.cwd() });
+  return {};
 }
 
 interface PromptParams {
@@ -323,19 +351,30 @@ async function handlePrompt(params: PromptParams): Promise<unknown> {
 
 // ─── stdio main loop ───────────────────────────────────────────────
 
-const decoder = new FrameDecoder();
+// Guard the side effects so the module is importable from unit tests
+// without attaching to the real stdin or installing process exit
+// handlers. The bin entry (`opencara claude-acp`) sets argv[1] to this
+// file's path; tests import the module directly.
+const isMainModule =
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith("claude-acp.ts") === true ||
+  process.argv[1]?.endsWith("claude-acp.js") === true;
 
-stdin.setEncoding("utf8");
-stdin.on("data", (chunk: string) => {
-  const { messages, malformed } = decoder.feed(chunk);
-  for (const line of malformed) {
-    stderr.write(`[claude-acp] malformed inbound: ${line}\n`);
-  }
-  for (const msg of messages) void dispatch(msg);
-});
-stdin.on("end", () => {
-  exit(0);
-});
+if (isMainModule) {
+  const decoder = new FrameDecoder();
+
+  stdin.setEncoding("utf8");
+  stdin.on("data", (chunk: string) => {
+    const { messages, malformed } = decoder.feed(chunk);
+    for (const line of malformed) {
+      stderr.write(`[claude-acp] malformed inbound: ${line}\n`);
+    }
+    for (const msg of messages) void dispatch(msg);
+  });
+  stdin.on("end", () => {
+    exit(0);
+  });
+}
 
 async function dispatch(msg: JsonRpcMessage): Promise<void> {
   // Notification (no id) — clients send `session/cancel` etc. We don't
@@ -354,6 +393,9 @@ async function dispatch(msg: JsonRpcMessage): Promise<void> {
       case "session/new":
         reply(req.id, handleNewSession(req.params as NewSessionParams));
         return;
+      case "session/load":
+        reply(req.id, handleLoadSession(req.params as LoadSessionParams));
+        return;
       case "session/prompt": {
         const result = await handlePrompt(req.params as PromptParams);
         reply(req.id, result);
@@ -368,11 +410,12 @@ async function dispatch(msg: JsonRpcMessage): Promise<void> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const isParamsError =
+      err instanceof Error &&
+      (message.startsWith("session/prompt:") || message.startsWith("session/load:"));
     replyError(
       req.id,
-      err instanceof Error && message.startsWith("session/prompt:")
-        ? JSON_RPC_ERROR_INVALID_PARAMS
-        : JSON_RPC_ERROR_INTERNAL,
+      isParamsError ? JSON_RPC_ERROR_INVALID_PARAMS : JSON_RPC_ERROR_INTERNAL,
       message,
     );
   }

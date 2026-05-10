@@ -41,6 +41,14 @@ export interface RunResult {
    * execute on the SAME device.
    */
   agentHostId: string;
+  /**
+   * ACP session id the run executed under, surfaced from the device's
+   * `done` frame. Used by the flow engine to persist per-(repo, branch)
+   * session continuity via `worktree write-session` so the next
+   * iteration resumes via `session/load`. Null for non-ACP runs
+   * (worktree-allocate, write-session itself, etc.).
+   */
+  acpSessionId: string | null;
 }
 
 export interface AgentDispatcher {

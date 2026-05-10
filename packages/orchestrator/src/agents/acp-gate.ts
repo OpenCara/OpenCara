@@ -75,6 +75,16 @@ export interface BuildAcpSpecOpts {
   userPromptMd: string;
   history?: AcpHistoryTurn[];
   pageContext?: Record<string, unknown>;
+  /**
+   * When set, the device runs `session/load` with this id instead of
+   * `session/new`. The orchestrator derives this from
+   * `<sessionDir>/agent-session.json` (written after the prior run on
+   * the same (repo, branch)) and only sets it when the persisted kind
+   * matches the current agent's kind. The shim (e.g. claude-acp) is
+   * responsible for mapping it onto the underlying CLI's resume
+   * mechanism.
+   */
+  priorSessionId?: string;
 }
 
 /**
@@ -99,6 +109,7 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     pageContextJson: hasMeaningfulContext(opts.pageContext)
       ? JSON.stringify(opts.pageContext)
       : undefined,
+    ...(opts.priorSessionId ? { priorSessionId: opts.priorSessionId } : {}),
   };
   return {
     kind: opts.agent.name,

@@ -16,11 +16,16 @@
 //   6. Tear down: bridge → host → client. Bounded waits so a misbehaving
 //      child doesn't pin the device's event loop.
 //
-// Session continuity: each turn is a fresh ACP session for #29 MVP.
-// Codex-acp advertises `loadSession: true`, so a follow-up can persist
-// `sessionId` per chat session and use `session/load`. Today we replay
-// `acp.history` into the prompt content as a single text block so the
-// agent has at least the recent turns.
+// Session continuity: when `acp.priorSessionId` is set on the spec, the
+// runner calls `session/load` to resume the prior conversation. Used by
+// the per-(repo, branch) flow loops (issue-implement → pr-review-fix)
+// so the agent retains context across iterations on the same worktree.
+// First-iteration runs (no prior id) take the `session/new` path. The
+// resulting sessionId — fresh or echoed — flows back to the orchestrator
+// in the device's `done` frame so it can be persisted for next time.
+//
+// Chat-route runs without per-(repo, branch) state still pass
+// `acp.history` as a prompt-prefix block; that fallback is unchanged.
 
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -62,6 +67,12 @@ export interface AcpRunResult {
   /** 0 for `end_turn`, non-zero otherwise. Surfaced to `done` frame. */
   exitCode: number;
   stopReason: string;
+  /** ACP sessionId the run executed under. New from `session/new` on
+   *  first-iteration runs, echoed from `session/load` on resume.
+   *  Surfaced in the device's `done` frame so the orchestrator can
+   *  persist it for the next iteration to resume from. Empty string
+   *  if the run failed before a session was established. */
+  sessionId: string;
 }
 
 export interface AcpRunController {
@@ -128,7 +139,7 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   };
 
   const promise = (async (): Promise<AcpRunResult> => {
-    let result: AcpRunResult = { exitCode: 1, stopReason: "uninitialized" };
+    let result: AcpRunResult = { exitCode: 1, stopReason: "uninitialized", sessionId: "" };
     try {
       await host.start();
       client.start();
@@ -137,18 +148,32 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: {},
       });
-      const session = await client.newSession({
-        cwd: spec.cwd ?? process.cwd(),
-        mcpServers: [host.acpServerEntry()],
-      });
+      // Resume vs. fresh: the orchestrator sets `priorSessionId` when
+      // a prior agent-session.json exists for this (repo, branch) on
+      // the pinned device. The shim is responsible for mapping it onto
+      // the underlying CLI's resume mechanism (claude-acp passes it
+      // straight to `claude --session-id`). On a fresh start we mint
+      // a new session and surface the assigned id back up.
+      const cwd = spec.cwd ?? process.cwd();
+      const mcpServers = [host.acpServerEntry()];
+      let sessionId: string;
+      if (acpSpec.priorSessionId) {
+        await client.loadSession({
+          sessionId: acpSpec.priorSessionId,
+          cwd,
+          mcpServers,
+        });
+        sessionId = acpSpec.priorSessionId;
+      } else {
+        const session = await client.newSession({ cwd, mcpServers });
+        sessionId = session.sessionId;
+      }
       const prompt = buildPromptContent(acpSpec);
-      const promptResult = await client.prompt({
-        sessionId: session.sessionId,
-        prompt,
-      });
+      const promptResult = await client.prompt({ sessionId, prompt });
       result = {
         exitCode: promptResult.stopReason === "end_turn" ? 0 : 1,
         stopReason: promptResult.stopReason,
+        sessionId,
       };
       return result;
     } finally {

@@ -85,6 +85,22 @@ describe("AcpConnection.request", () => {
     assert.deepEqual(ids, [1, 2, 3]);
   });
 
+  it("loadSession writes a session/load request and resolves empty", async () => {
+    const { conn, written } = harness();
+    const promise = conn.loadSession({
+      sessionId: "abc-123",
+      cwd: "/tmp",
+      mcpServers: [],
+    });
+    const req = written.at(-1) as JsonRpcRequest;
+    assert.equal(req.method, ACP_METHODS.session_load);
+    assert.deepEqual(req.params, { sessionId: "abc-123", cwd: "/tmp", mcpServers: [] });
+    const reply: JsonRpcSuccess = { jsonrpc: "2.0", id: req.id, result: {} };
+    conn.feed(encodeFrame(reply));
+    const result = await promise;
+    assert.deepEqual(result, {});
+  });
+
   it("rejects pending requests on shutdown", async () => {
     const { conn } = harness();
     const p = conn.initialize({ protocolVersion: ACP_PROTOCOL_VERSION });

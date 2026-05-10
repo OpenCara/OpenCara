@@ -151,6 +151,7 @@ export class DevicePool {
         exitCode,
         stdoutCaptured: p.stdoutCaptured.join(""),
         agentHostId: p.agentHostId,
+        acpSessionId: msg.acpSessionId ?? null,
       });
       return;
     }

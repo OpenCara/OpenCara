@@ -32,6 +32,8 @@ import {
   ACP_PROTOCOL_VERSION,
   type InitializeRequest,
   type InitializeResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
   type NewSessionRequest,
   type NewSessionResponse,
   type PromptRequest,
@@ -119,6 +121,10 @@ export class AcpConnection {
 
   newSession(req: NewSessionRequest): Promise<NewSessionResponse> {
     return this.request(ACP_METHODS.session_new, req) as Promise<NewSessionResponse>;
+  }
+
+  loadSession(req: LoadSessionRequest): Promise<LoadSessionResponse> {
+    return this.request(ACP_METHODS.session_load, req) as Promise<LoadSessionResponse>;
   }
 
   prompt(req: PromptRequest): Promise<PromptResponse> {
@@ -354,6 +360,10 @@ export class AcpClient {
 
   newSession(req: NewSessionRequest): Promise<NewSessionResponse> {
     return this.must().newSession(req);
+  }
+
+  loadSession(req: LoadSessionRequest): Promise<LoadSessionResponse> {
+    return this.must().loadSession(req);
   }
 
   prompt(req: PromptRequest): Promise<PromptResponse> {

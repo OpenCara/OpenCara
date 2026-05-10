@@ -100,6 +100,11 @@ export const RunDoneSchema = z.object({
   status: z.enum(["succeeded", "failed", "cancelled"]),
   exitCode: z.number().int().nullable().optional(),
   errorMessage: z.string().optional(),
+  /** ACP session id the agent ran under (fresh from session/new, or
+   *  echoed from session/load). The orchestrator persists this per
+   *  (repo, branch) so the next iteration can resume via session/load.
+   *  Null/absent for non-ACP runs (worktree-allocate, write-session). */
+  acpSessionId: z.string().nullable().optional(),
 });
 export type RunDone = z.infer<typeof RunDoneSchema>;
 

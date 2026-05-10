@@ -97,6 +97,28 @@ export interface NewSessionResponse {
   sessionId: string;
 }
 
+// ─── session/load ──────────────────────────────────────────────────
+//
+// Reference: https://agentclientprotocol.com/protocol/session-setup
+//
+// Asks an agent that advertised `loadSession: true` to resume a
+// previously created session by id. The shape mirrors `session/new`
+// but supplies the id directly. Per spec, the agent MAY emit
+// `session/update` notifications during the load to replay history;
+// the spike client doesn't depend on that, and our claude-acp shim
+// doesn't emit them — the underlying CLI replays internally on the
+// next `session/prompt`.
+
+export interface LoadSessionRequest {
+  sessionId: string;
+  cwd: string;
+  mcpServers: McpServer[];
+}
+
+// Per spec the response is an empty object. Modeled as a record so
+// future extension fields flow through without breaking callers.
+export type LoadSessionResponse = Record<string, never>;
+
 // ─── session/prompt ────────────────────────────────────────────────
 //
 // Reference: https://agentclientprotocol.com/protocol/prompt-turn
