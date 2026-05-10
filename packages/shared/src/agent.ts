@@ -34,16 +34,23 @@ export type AcpHistoryTurn = z.infer<typeof AcpHistoryTurnSchema>;
  * - `userPromptMd` becomes the `session/prompt` content — just the
  *   user's message for this turn.
  * - `history` (optional) lets the device replay prior turns when the
- *   agent doesn't support `session/load`. Resume is a follow-up; for
- *   now the orchestrator always sends history if non-empty.
+ *   agent doesn't support `session/load` — fallback path for shims
+ *   without resume. The orchestrator sends history if non-empty.
  * - `pageContextJson` mirrors what the legacy path put on stdin — the
  *   agent uses it to ground its responses without re-fetching.
+ * - `priorSessionId` (optional) tells the device to call `session/load`
+ *   instead of `session/new`, passing this id to the ACP shim. The shim
+ *   remaps it onto the underlying CLI's resume mechanism (e.g.
+ *   claude-acp passes it as `--session-id <uuid>`). Unset → fresh
+ *   session. Used by per-(repo, branch) flow loops to keep the agent's
+ *   conversation across iterations.
  */
 export const AcpSpecSchema = z.object({
   systemPromptMd: z.string(),
   userPromptMd: z.string(),
   history: z.array(AcpHistoryTurnSchema).default([]),
   pageContextJson: z.string().optional(),
+  priorSessionId: z.string().optional(),
 });
 export type AcpSpec = z.infer<typeof AcpSpecSchema>;
 
