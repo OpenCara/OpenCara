@@ -146,6 +146,18 @@ export class DevicePool {
       const dev = this.devices.get(p.agentHostId);
       if (dev) dev.inflight.delete(msg.runId);
       this.pending.delete(msg.runId);
+      // Surface device-side failures (spawn errors, unhandled throws
+      // inside runAcpJob, etc.) as a synthetic stderr line so they
+      // land in agent_run_logs alongside real agent output. Without
+      // this, a `done` carrying `errorMessage` resolves the run with
+      // exit_code=1 and zero log rows — operators only see the generic
+      // "agent exited with code 1" with nothing to follow.
+      if (msg.errorMessage && msg.status !== "succeeded") {
+        const line = msg.errorMessage.endsWith("\n")
+          ? `[device] ${msg.errorMessage}`
+          : `[device] ${msg.errorMessage}\n`;
+        p.onLog("stderr", line);
+      }
       const exitCode = msg.exitCode ?? (msg.status === "succeeded" ? 0 : 1);
       p.resolve({
         exitCode,

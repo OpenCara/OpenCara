@@ -14,8 +14,11 @@
 // Wire model:
 //   - Speaks ACP on its own stdio (we are the agent in this layer).
 //   - Per `session/prompt`, spawns `claude -p --output-format stream-json
-//     --session-id <uuid> --dangerously-skip-permissions <prompt>` and
-//     pipes its JSONL stdout through the translator.
+//     --session-id <uuid> --dangerously-skip-permissions`, writes the
+//     prompt text to claude's stdin, and pipes its JSONL stdout
+//     through the translator. Stdin (not argv) carries the prompt so
+//     large flow-injected contexts don't trip Linux's per-string
+//     execve cap (MAX_ARG_STRLEN, 128 KiB on a 4 KiB-page host).
 //   - Translates exactly two Claude events:
 //       * `{type:"assistant", message:{content:[{type:"text",text}]}}`
 //          → `session/update` `agent_message_chunk` (text)
@@ -119,13 +122,25 @@ async function runClaudeTurn(
       // Headless: no human in the loop to approve tool use. Matches the
       // legacy `claudeAdapter` posture in agents/kinds.ts.
       "--dangerously-skip-permissions",
-      promptText,
     ];
+    // Prompt goes on stdin, not argv. Linux's execve caps a single
+    // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
+    // common 4 KiB-page kernel), and flow runs that inject the full
+    // GitHub PR JSON into pageContextJson routinely exceed that —
+    // node's `spawn` then throws `E2BIG` synchronously before claude
+    // is exec'd, so the shim died in <1s with zero stderr and the
+    // operator just saw "agent exited with code 1". Stdin has no
+    // such per-string limit.
     const child = spawn("claude", args, {
       cwd: state.cwd,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    // EPIPE if claude exits before we finish writing — the exit is
+    // already observable on `close`, so we don't need to surface the
+    // write failure twice.
+    child.stdin.on("error", () => {});
+    child.stdin.end(promptText);
 
     const decoder = new FrameDecoder();
     let resolved = false;
@@ -335,9 +350,10 @@ async function handlePrompt(params: PromptParams): Promise<unknown> {
   if (!state) {
     throw new Error(`unknown sessionId: ${params.sessionId}`);
   }
-  // Concatenate all text content blocks into Claude's CLI prompt arg.
-  // Image / embedded-context / audio aren't supported here yet — a
-  // future PR threads them through `--input-format stream-json`.
+  // Concatenate all text content blocks into the text we pipe to
+  // claude on stdin. Image / embedded-context / audio aren't supported
+  // here yet — a future PR threads them through `--input-format
+  // stream-json`.
   const promptText = params.prompt
     .filter((b) => b.type === "text")
     .map((b) => (typeof b.text === "string" ? b.text : ""))
