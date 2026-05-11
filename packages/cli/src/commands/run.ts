@@ -10,12 +10,14 @@ import {
   uptime,
 } from "node:os";
 import { statfsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
 import { runAcpJob, type AcpRunController } from "../runner/spawn.js";
 import type {
   AgentSpec,
+  DeviceToServerMessage,
   JobAssignment,
   ServerToDeviceMessage,
   SystemInfo,
@@ -132,9 +134,25 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
     flushTimer = setTimeout(flush, LOG_FLUSH_MS);
   };
 
-  // ACP+MCP is the only dispatch path post-#30. Specs without `acp`
-  // are an orchestrator bug (or a stale device config); fail loudly
-  // instead of silently running a no-op.
+  // `opencara internal …` jobs are CLI infrastructure (worktree
+  // allocate / write-session / remove), not agent runs — they have no
+  // prompt, no model, no tool-use surface. Route them through a
+  // non-ACP fast-path that re-invokes this same node + bundled bin.js
+  // and streams stdout/stderr back as log frames. Pre-PR-#41 these
+  // rode the legacy stdin-JSON path; that path got deleted on the
+  // device, but the orchestrator still dispatches them as legacy-
+  // shape jobs (nodeRunners.ts worktree create / write-session,
+  // worktrees/cleanup.ts remove) — which is fine: those jobs aren't
+  // and shouldn't be ACP, so the device just needs to handle them.
+  if (isInternalCommand(job.spec)) {
+    flush();
+    await runInternalCommand(job, client);
+    return;
+  }
+
+  // ACP+MCP is the only AGENT dispatch path post-#30. Non-internal
+  // specs without `acp` are an orchestrator bug (or a stale device
+  // config); fail loudly instead of silently running a no-op.
   if (!job.spec.acp) {
     flush();
     const message =
@@ -178,6 +196,100 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
   } finally {
     acpControllers.delete(runId);
   }
+}
+
+/**
+ * Minimal sender surface needed by `runInternalCommand` so tests can
+ * substitute a no-op recorder instead of standing up a real WS.
+ */
+export interface InternalJobSender {
+  send(msg: DeviceToServerMessage): void;
+}
+
+export function isInternalCommand(spec: AgentSpec): boolean {
+  return (
+    spec.command === "opencara" &&
+    Array.isArray(spec.args) &&
+    spec.args[0] === "internal"
+  );
+}
+
+/**
+ * Run an `opencara internal …` job by re-invoking this same node
+ * binary against the bundled bin.js (or src/bin.ts under tsx in dev).
+ * Streams stdout/stderr back as `log` frames and emits a `done`
+ * frame with the child's exit code. No ACP, no MCP, no agent
+ * machinery — these jobs are git/fs plumbing dispatched by the flow
+ * engine.
+ *
+ * `opts.binPath` / `opts.nodePath` exist for tests to point at a
+ * fake binary; in production both fall through to `process.argv[1]`
+ * (the entry point that started THIS process) and `process.execPath`.
+ */
+export async function runInternalCommand(
+  job: JobAssignment,
+  client: InternalJobSender,
+  opts: { binPath?: string; nodePath?: string } = {},
+): Promise<void> {
+  const runId = job.run.id;
+  const args = job.spec.args ?? [];
+  const binPath = opts.binPath ?? process.argv[1];
+  const nodePath = opts.nodePath ?? process.execPath;
+  if (!binPath) {
+    client.send({
+      type: "done",
+      runId,
+      status: "failed",
+      errorMessage: "internal: process.argv[1] missing — cannot re-invoke bin",
+    });
+    return;
+  }
+
+  let seq = 0;
+  const emit = (stream: "stdout" | "stderr", chunk: string): void => {
+    let remaining = chunk;
+    while (remaining.length > 0) {
+      const take = remaining.slice(0, MAX_CHUNK_SIZE);
+      client.send({ type: "log", runId, seq: seq++, stream, chunk: take });
+      remaining = remaining.slice(MAX_CHUNK_SIZE);
+    }
+  };
+
+  const child = spawn(nodePath, [binPath, ...args], {
+    cwd: job.spec.cwd,
+    env: job.spec.env ? { ...process.env, ...job.spec.env } : process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (c: string) => emit("stdout", c));
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (c: string) => emit("stderr", c));
+
+  const { exitCode, errorMessage } = await new Promise<{
+    exitCode: number;
+    errorMessage?: string;
+  }>((resolve) => {
+    let done = false;
+    child.on("error", (err) => {
+      if (done) return;
+      done = true;
+      resolve({ exitCode: 1, errorMessage: `internal spawn error: ${err.message}` });
+    });
+    child.on("close", (code, signal) => {
+      if (done) return;
+      done = true;
+      resolve({ exitCode: code ?? (signal ? 1 : 0) });
+    });
+  });
+
+  client.send({
+    type: "done",
+    runId,
+    status: exitCode === 0 ? "succeeded" : "failed",
+    exitCode,
+    ...(errorMessage ? { errorMessage } : {}),
+  });
+  console.log(`[opencara] job ${runId.slice(-8)} (internal) → exit=${exitCode}`);
 }
 
 /**
