@@ -106,11 +106,28 @@ function worktreeCreate(args: string[]): void {
   // pull_request.closed handler dispatches `worktree remove`.
   if (existsSync(join(checkoutDir, ".git"))) {
     git(checkoutDir, ["fetch", "origin"]);
-    // Check out the requested branch. If it doesn't exist locally yet
-    // (e.g. the implement flow created it on a different iteration
-    // and we're a review-fix flow on a refreshed clone), pull it from
-    // origin. Use `-B` to switch even if currently on a different ref.
-    git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`]);
+    // Three cases:
+    //   1. `origin/<branch>` exists — reset our local copy to track it.
+    //      Used by review-fix flows re-allocating on a refreshed clone.
+    //   2. Local `<branch>` exists but origin doesn't — a prior run on
+    //      this same checkout created the branch and never pushed (e.g.
+    //      a synthesizer that writes locally and is then re-run). Just
+    //      switch to it. Pre-fix this path blindly did `checkout -B
+    //      <branch> origin/<branch>` and exploded on the missing remote.
+    //   3. Neither — fall back to `--from-branch` (or fail loud) so we
+    //      don't silently corrupt state by checking out HEAD as the
+    //      new branch.
+    if (refExists(checkoutDir, `refs/remotes/origin/${branch}`)) {
+      git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`]);
+    } else if (refExists(checkoutDir, `refs/heads/${branch}`)) {
+      git(checkoutDir, ["checkout", branch]);
+    } else if (fromBranch) {
+      git(checkoutDir, ["checkout", "-B", branch, `origin/${fromBranch}`]);
+    } else {
+      fail(
+        `worktree create: '${branch}' missing locally and on origin/, no --from-branch to fall back to`,
+      );
+    }
   } else {
     mkdirSync(checkoutDir, { recursive: true });
     const cloneArgs = ["-c", `credential.helper=${HELPER_SNIPPET}`, "clone"];
@@ -243,6 +260,24 @@ function git(cwd: string, args: string[]): void {
   // Inherit stderr so git's own error lines reach the agent_runs log,
   // making 401/404/branch-not-found easy to diagnose.
   execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "inherit"] });
+}
+
+/**
+ * Check whether a ref (branch, tag, remote-tracking ref) resolves in
+ * `cwd`. Returns false on any non-zero exit — `git rev-parse --verify`
+ * also fails for malformed refs, which is the same "not present" answer
+ * the caller wants.
+ */
+function refExists(cwd: string, ref: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], {
+      cwd,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function pickFlag(argv: string[], name: string): string | undefined {
