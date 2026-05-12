@@ -373,6 +373,18 @@ interface AgentPromptInput {
   injectedSkills?: Array<{ name: string; instructions: string }>;
 }
 
+// Single source of truth for which keys on flow_run_steps.inputJson
+// describe the agent's prompt (vs. node config / previousOutput /
+// eventType, which stay in the raw JSON dump). Both the AgentPromptPanel
+// parser and the stripPromptFields helper iterate this — adding a fifth
+// prompt field is one edit, not two.
+const PROMPT_FIELD_KEYS = [
+  "agentName",
+  "agentKind",
+  "systemPromptMd",
+  "injectedSkills",
+] as const;
+
 function parseAgentPrompt(inputJson: unknown): AgentPromptInput | null {
   if (!inputJson || typeof inputJson !== "object") return null;
   const o = inputJson as Record<string, unknown>;
@@ -390,28 +402,16 @@ function parseAgentPrompt(inputJson: unknown): AgentPromptInput | null {
       })
       .filter((s): s is { name: string; instructions: string } => s !== null);
   }
-  if (
-    out.agentName === undefined &&
-    out.agentKind === undefined &&
-    out.systemPromptMd === undefined &&
-    out.injectedSkills === undefined
-  ) {
+  if (PROMPT_FIELD_KEYS.every((k) => out[k as keyof AgentPromptInput] === undefined)) {
     return null;
   }
   return out;
 }
 
-// The raw input panel below still renders nodeKind / nodeConfig /
-// previousOutput / eventType — but we lift the prompt fields out so
-// they get dedicated UI (and don't bloat the JSON dump with multi-KB
-// of markdown). Keep this list in sync with parseAgentPrompt above.
 function stripPromptFields(inputJson: unknown): unknown {
   if (!inputJson || typeof inputJson !== "object") return inputJson;
   const o = { ...(inputJson as Record<string, unknown>) };
-  delete o.agentName;
-  delete o.agentKind;
-  delete o.systemPromptMd;
-  delete o.injectedSkills;
+  for (const k of PROMPT_FIELD_KEYS) delete o[k];
   return o;
 }
 

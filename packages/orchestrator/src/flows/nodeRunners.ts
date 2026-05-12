@@ -622,6 +622,12 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // the agent edited a file, ran typecheck, then stopped without
   // shipping anything. Other shapes (pr-review etc.) don't carry an
   // issue context so this short-circuits to null.
+  //
+  // Stamp OPENCARA_ISSUE_NUMBER here (in addition to whatever the
+  // node's contextInjection.env lists) so the env var the skill names
+  // is always present — otherwise an operator-customized flow that
+  // dropped it from contextInjection.env would silently break the
+  // shell snippets in the skill prose.
   const implementSkill =
     worktree?.branch &&
     ctx.issueContext?.stdin.issue?.number
@@ -633,6 +639,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
           defaultBranch: ctx.project.defaultBranch ?? "main",
         })
       : null;
+  if (implementSkill && ctx.issueContext?.stdin.issue?.number) {
+    env["OPENCARA_ISSUE_NUMBER"] = String(ctx.issueContext.stdin.issue.number);
+  }
 
   const stdinJson = node.config.contextInjection.stdinJson
     ? {
