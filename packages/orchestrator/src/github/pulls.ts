@@ -25,19 +25,33 @@ export interface LinkPrToIssueArgs {
   issueLabels: ReadonlyArray<IssueLabel>;
 }
 
-// Best-effort: idempotently link the implement PR to its source issue
-// (via "Closes #<N>" in the PR body — the only programmatic path
-// GitHub supports for the issue's Development panel) and copy the
-// issue's `agent:<name>` label onto the PR so `pr-review-fix`'s
-// label-based agent routing finds the same agent on the next
-// iteration.
+/** Outcome of `linkPrToIssueAndCopyAgentLabel`:
+ *  - `linked`: a PR existed and the body / label work ran (idempotently).
+ *  - `no-pr`: the PR list call succeeded but no open PR exists on the
+ *    branch. The implement agent likely skipped `gh pr create`; caller
+ *    should fail the flow run loudly.
+ *  - `transient-failure`: the list call itself failed (network / 5xx).
+ *    Caller should keep the flow's outcome as-is — this isn't evidence
+ *    of agent misbehavior. */
+export type LinkPrToIssueResult =
+  | { kind: "linked"; prNumber: number }
+  | { kind: "no-pr" }
+  | { kind: "transient-failure"; reason: string };
+
+// Idempotently link the implement PR to its source issue (via
+// "Closes #<N>" in the PR body — the only programmatic path GitHub
+// supports for the issue's Development panel) and copy the issue's
+// `agent:<name>` label onto the PR so `pr-review-fix`'s label-based
+// agent routing finds the same agent on the next iteration.
 //
-// Errors are caught and logged; the agent has already succeeded by
-// the time this runs, and a flaky GitHub call here must not change
-// the flow's outcome.
+// Returns the outcome so the caller can decide whether a missing PR
+// should fail the flow (it should) versus a flaky GitHub call (it
+// shouldn't). Body / label POST failures inside an otherwise-linked
+// run are still logged and swallowed — those don't change agent
+// behavior.
 export async function linkPrToIssueAndCopyAgentLabel(
   args: LinkPrToIssueArgs,
-): Promise<void> {
+): Promise<LinkPrToIssueResult> {
   const { octokit, owner, repo, branchName, issueNumber, issueLabels } = args;
 
   let pr: { number: number; body: string | null } | null = null;
@@ -54,17 +68,18 @@ export async function linkPrToIssueAndCopyAgentLabel(
       pr = { number: list[0]!.number, body: list[0]!.body ?? null };
     }
   } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
     console.error(
       `[github.pulls] list-prs failed for ${owner}/${repo}@${branchName}`,
       err,
     );
-    return;
+    return { kind: "transient-failure", reason };
   }
   if (!pr) {
     console.warn(
       `[github.pulls] no open PR for ${owner}/${repo}@${branchName} — agent may not have opened one`,
     );
-    return;
+    return { kind: "no-pr" };
   }
 
   const body = pr.body ?? "";
@@ -111,6 +126,7 @@ export async function linkPrToIssueAndCopyAgentLabel(
       }
     }
   }
+  return { kind: "linked", prNumber: pr.number };
 }
 
 function pickAgentLabel(labels: ReadonlyArray<IssueLabel>): string | null {

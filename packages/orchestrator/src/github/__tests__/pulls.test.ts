@@ -191,12 +191,12 @@ describe("linkPrToIssueAndCopyAgentLabel", () => {
     assert.equal(labelCalls.length, 0);
   });
 
-  it("returns silently when no open PR is found for the branch (no writes, no throw)", async () => {
+  it("returns kind:'no-pr' when no open PR is found for the branch (no writes, no throw)", async () => {
     const { octokit, calls } = makeOctokit({
       "GET /repos/{owner}/{repo}/pulls": () => ({ status: 200, data: [] }),
     });
 
-    await linkPrToIssueAndCopyAgentLabel({
+    const result = await linkPrToIssueAndCopyAgentLabel({
       ...baseArgs,
       octokit: octokit as never,
       issueLabels: [{ name: "agent:claude-impl" }],
@@ -204,6 +204,7 @@ describe("linkPrToIssueAndCopyAgentLabel", () => {
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0]!.route, "GET /repos/{owner}/{repo}/pulls");
+    assert.equal(result.kind, "no-pr");
   });
 
   it("auto-creates the agent: label when missing on the repo, then adds it to the PR", async () => {
@@ -267,18 +268,37 @@ describe("linkPrToIssueAndCopyAgentLabel", () => {
     );
   });
 
-  it("returns silently when the initial pulls list call fails (network error)", async () => {
+  it("returns kind:'transient-failure' when the initial pulls list call fails (network error)", async () => {
     const { octokit, calls } = makeOctokit({
       "GET /repos/{owner}/{repo}/pulls": () => ({ status: 503, data: {} }),
     });
 
-    await assert.doesNotReject(
-      linkPrToIssueAndCopyAgentLabel({
-        ...baseArgs,
-        octokit: octokit as never,
-        issueLabels: [{ name: "agent:codex" }],
-      }),
-    );
+    const result = await linkPrToIssueAndCopyAgentLabel({
+      ...baseArgs,
+      octokit: octokit as never,
+      issueLabels: [{ name: "agent:codex" }],
+    });
     assert.equal(calls.length, 1);
+    assert.equal(result.kind, "transient-failure");
+  });
+
+  it("returns kind:'linked' with prNumber when the PR is found and linked", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls": () => ({
+        status: 200,
+        data: [{ number: 17, body: "Closes #42" }],
+      }),
+    });
+
+    const result = await linkPrToIssueAndCopyAgentLabel({
+      ...baseArgs,
+      octokit: octokit as never,
+      issueLabels: [],
+    });
+    assert.equal(result.kind, "linked");
+    assert.equal(
+      (result as { kind: "linked"; prNumber: number }).prNumber,
+      17,
+    );
   });
 });
