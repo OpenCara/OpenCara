@@ -60,11 +60,41 @@ describe("parseReviewVerdict", () => {
     assert.equal(result?.bodyWithoutVerdict, "body");
   });
 
-  it("returns null when the verdict is preceded by non-blank content (preamble)", () => {
+  it("finds the verdict line even when preceded by reasoning preamble", () => {
+    // Regression: codex synthesizer emits chatter ("Let me independently
+    // inspect…") before honoring the verdict contract. The strict-first
+    // rule used to demote these to the static fallback (COMMENT) —
+    // surfaced on flow_run_id=01KRDJSG99079G72EB0T76B9A3. The parser now
+    // scans, but preserves the preamble in the posted body so the
+    // operator sees what the agent actually wrote.
     const result = parseReviewVerdict(
       "I reviewed the diff carefully.\n\nverdict: approve\n\nbody",
     );
-    assert.equal(result, null);
+    assert.equal(result?.verdict, "APPROVE");
+    assert.equal(
+      result?.bodyWithoutVerdict,
+      "I reviewed the diff carefully.\n\n\nbody",
+    );
+  });
+
+  it("handles the codex-preamble shape from the original repro", () => {
+    const input =
+      "Let me independently inspect the diff. I have all the context I need.\n\n" +
+      "verdict: approve\n\n" +
+      "## Summary\n\nClean PR.";
+    const result = parseReviewVerdict(input);
+    assert.equal(result?.verdict, "APPROVE");
+    // Preamble is preserved; only the verdict line itself is removed.
+    assert.match(result?.bodyWithoutVerdict ?? "", /Let me independently inspect/);
+    assert.match(result?.bodyWithoutVerdict ?? "", /## Summary/);
+    assert.doesNotMatch(result?.bodyWithoutVerdict ?? "", /verdict:\s*approve/);
+  });
+
+  it("first matching verdict line wins when multiple are present", () => {
+    const result = parseReviewVerdict(
+      "verdict: approve\n\nNote: not request_changes.\n\nverdict: comment\n",
+    );
+    assert.equal(result?.verdict, "APPROVE");
   });
 
   it("returns null for unknown tokens", () => {
