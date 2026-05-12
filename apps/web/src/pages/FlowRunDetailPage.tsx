@@ -241,7 +241,7 @@ function StepPanel({
             <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
               Input
             </div>
-            <pre className="max-h-60 overflow-auto rounded-md bg-muted/30 p-3 text-xs">
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 text-xs">
               {JSON.stringify(step.inputJson, null, 2)}
             </pre>
           </div>
@@ -251,7 +251,7 @@ function StepPanel({
             <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
               Output
             </div>
-            <pre className="max-h-60 overflow-auto rounded-md bg-muted/30 p-3 text-xs">
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 text-xs">
               {JSON.stringify(step.outputJson, null, 2)}
             </pre>
           </div>
@@ -281,7 +281,7 @@ function AgentLogPanel({ agentRunId }: { agentRunId: string }) {
         <span>Agent logs</span>
         <span>{ended ? "ended" : error ? `error: ${error}` : "live"}</span>
       </div>
-      <pre className="max-h-72 overflow-auto rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
         {events.length === 0
           ? "(no output)"
           : events.map((e) => (
