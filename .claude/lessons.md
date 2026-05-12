@@ -45,6 +45,13 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Cache path: `~/.npm/_npx/35cf602f65bb4257/node_modules/opencara/dist/bin.js`.
 - After publish, force a refresh: `rm -rf ~/.npm/_npx/35cf602f65bb4257 && npm exec opencara@latest`. The cache won't re-download otherwise (see user-wide lesson on `npm exec @latest` caching).
 
+## ACP runner
+
+### [hits: 1] `agent_thought_chunk` is a token-level delta, not a whole-thought event
+- ACP shims stream reasoning as model-token deltas — opencode's adapter literally calls `sessionUpdate({ content: { text: props.delta } })` per delta (`sst/opencode` → `packages/opencode/src/acp/agent.ts`). Codex emits coarser, message-sized thought events, which is why per-chunk prefixing went unnoticed until opencode landed.
+- Don't prefix per chunk in `translateUpdate`-style code; the device concatenates chunks into a stream buffer and you get `[think] I[think]  need[think]  to…` ("opencode replies with a lot of [think]" symptom).
+- Pattern: stateful translator that fences boundaries (`createUpdateTranslator` in `packages/cli/src/runner/acpRunner.ts`) — `\n[think]\n` on entering a thought run, `\n[/think]\n` on leaving (or on `flush()` at run end so cancel/error paths still close cleanly).
+
 ## API access
 
 ### [hits: 1] Session cookie name is ocara_sid
