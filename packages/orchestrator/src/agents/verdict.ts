@@ -1,24 +1,29 @@
 // Reviewer-agent verdict contract: when an agent's output flows into a
 // `github.post_review` action node, the orchestrator injects a skill
-// envelope (see flows/skills/prReviewVerdict.ts) that requires the agent
-// to begin its reply with a single line of the form:
+// envelope (see flows/skills/prReviewVerdict.ts) that asks the agent
+// to emit a single line of the form:
 //
 //   verdict: approve
 //   verdict: request_changes
 //   verdict: comment
 //
 // The action runner calls the parser below to map that line onto the
-// GitHub Reviews API's `event` enum (uppercased). The line is stripped
-// from the body before posting, so the rendered review reads as plain
-// markdown without the contract noise.
+// GitHub Reviews API's `event` enum (uppercased). The matched line is
+// stripped from the body before posting so the contract marker doesn't
+// double-render alongside the colored review badge.
 //
-// On any deviation (line not first non-blank, missing colon, unknown
-// token, empty input), the parser returns `null` and the runner falls
-// back to the action node's static `config.event`. We deliberately do
-// NOT coerce mixed-case or whitespace-y tokens (e.g. `Verdict: maybe`,
-// `verdict: request changes`) — leaving them in the body and posting as
-// the static fallback makes the malformed agent output visible to the
-// operator instead of silently picking a wrong event.
+// Position rule: the contract still asks agents to put the verdict line
+// first, but the parser accepts it anywhere — Codex and other
+// reasoning-heavy agents routinely emit a preamble ("Let me check
+// X...") before honoring the contract, and the previous strict-first
+// rule silently demoted those reviews to COMMENT via the static
+// fallback. Surprised flow_run_id=01KRDJSG99079G72EB0T76B9A3.
+//
+// Token rule stays strict: missing colon, unknown token (`maybe`,
+// `lgtm`), or whitespace-tokens (`request changes` with a space) still
+// return `null` and the runner falls back to `node.config.event`. Only
+// the position rule is relaxed; we still want malformed tokens to be
+// operator-visible rather than silently coerced.
 export type ReviewVerdict = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
 
 const VERDICT_LINE_RE = /^verdict:\s*(approve|request_changes|comment)\s*$/i;
@@ -35,26 +40,34 @@ export function parseReviewVerdict(body: string): ParsedReviewVerdict | null {
   const normalized = body.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
 
-  let firstNonBlankIdx = -1;
+  // Scan every line for a standalone `verdict: <token>` match. First
+  // match wins — a reviewer that quotes another verdict mid-paragraph
+  // would tag the wrong event, but that's been observed exactly never;
+  // the common case is a single contract line, preceded or not by
+  // preamble.
+  let verdictIdx = -1;
+  let token: ReviewVerdict | null = null;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i]!.trim().length > 0) {
-      firstNonBlankIdx = i;
+    const m = VERDICT_LINE_RE.exec(lines[i]!.trim());
+    if (m) {
+      verdictIdx = i;
+      // The regex group is constrained to the three canonical tokens;
+      // the cast stays exhaustive as long as the alternation matches
+      // the ReviewVerdict union.
+      token = m[1]!.toUpperCase() as ReviewVerdict;
       break;
     }
   }
-  if (firstNonBlankIdx === -1) return null;
+  if (verdictIdx === -1 || !token) return null;
 
-  const match = VERDICT_LINE_RE.exec(lines[firstNonBlankIdx]!.trim());
-  if (!match) return null;
-
-  const token = match[1]!.toUpperCase();
-  // The regex group is constrained to the three canonical tokens; the
-  // cast is exhaustive as long as the alternation above stays in sync
-  // with the ReviewVerdict union.
-  const verdict = token as ReviewVerdict;
-
-  const remainingLines = lines.slice(firstNonBlankIdx + 1);
+  // Strip only the matched line. Preamble and post-amble both stay in
+  // the body so the operator sees what the agent actually wrote, minus
+  // the contract marker that GitHub's UI already renders as a badge.
+  const remainingLines = [
+    ...lines.slice(0, verdictIdx),
+    ...lines.slice(verdictIdx + 1),
+  ];
   const bodyWithoutVerdict = remainingLines.join("\n").trim();
 
-  return { verdict, bodyWithoutVerdict };
+  return { verdict: token, bodyWithoutVerdict };
 }
