@@ -236,13 +236,14 @@ function StepPanel({
             {step.error}
           </div>
         )}
+        <AgentPromptPanel inputJson={step.inputJson} />
         {step.inputJson != null && (
           <div>
             <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
               Input
             </div>
             <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 text-xs">
-              {JSON.stringify(step.inputJson, null, 2)}
+              {JSON.stringify(stripPromptFields(step.inputJson), null, 2)}
             </pre>
           </div>
         )}
@@ -363,6 +364,117 @@ function parseReused(
     return null;
   }
   return { runId: o.reusedFromRunId, stepId: o.reusedFromStepId };
+}
+
+interface AgentPromptInput {
+  agentName?: string;
+  agentKind?: string;
+  systemPromptMd?: string;
+  injectedSkills?: Array<{ name: string; instructions: string }>;
+}
+
+function parseAgentPrompt(inputJson: unknown): AgentPromptInput | null {
+  if (!inputJson || typeof inputJson !== "object") return null;
+  const o = inputJson as Record<string, unknown>;
+  const out: AgentPromptInput = {};
+  if (typeof o.agentName === "string") out.agentName = o.agentName;
+  if (typeof o.agentKind === "string") out.agentKind = o.agentKind;
+  if (typeof o.systemPromptMd === "string") out.systemPromptMd = o.systemPromptMd;
+  if (Array.isArray(o.injectedSkills)) {
+    out.injectedSkills = o.injectedSkills
+      .map((s) => {
+        if (!s || typeof s !== "object") return null;
+        const rec = s as { name?: unknown; instructions?: unknown };
+        if (typeof rec.name !== "string" || typeof rec.instructions !== "string") return null;
+        return { name: rec.name, instructions: rec.instructions };
+      })
+      .filter((s): s is { name: string; instructions: string } => s !== null);
+  }
+  if (
+    out.agentName === undefined &&
+    out.agentKind === undefined &&
+    out.systemPromptMd === undefined &&
+    out.injectedSkills === undefined
+  ) {
+    return null;
+  }
+  return out;
+}
+
+// The raw input panel below still renders nodeKind / nodeConfig /
+// previousOutput / eventType — but we lift the prompt fields out so
+// they get dedicated UI (and don't bloat the JSON dump with multi-KB
+// of markdown). Keep this list in sync with parseAgentPrompt above.
+function stripPromptFields(inputJson: unknown): unknown {
+  if (!inputJson || typeof inputJson !== "object") return inputJson;
+  const o = { ...(inputJson as Record<string, unknown>) };
+  delete o.agentName;
+  delete o.agentKind;
+  delete o.systemPromptMd;
+  delete o.injectedSkills;
+  return o;
+}
+
+function AgentPromptPanel({ inputJson }: { inputJson: unknown }) {
+  const prompt = parseAgentPrompt(inputJson);
+  if (!prompt) return null;
+  const skills = prompt.injectedSkills ?? [];
+  return (
+    <div className="space-y-3">
+      {(prompt.agentName || prompt.agentKind) && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="uppercase tracking-wide text-muted-foreground">
+            Agent
+          </span>
+          {prompt.agentName && (
+            <span className="font-medium text-foreground">{prompt.agentName}</span>
+          )}
+          {prompt.agentKind && (
+            <Badge variant="outline" className="font-mono">
+              {prompt.agentKind}
+            </Badge>
+          )}
+        </div>
+      )}
+      {skills.length > 0 && (
+        <div>
+          <div className="mb-1 flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+            <span>Injected skills</span>
+            {skills.map((s) => (
+              <Badge key={s.name} variant="secondary" className="font-mono normal-case">
+                {s.name}
+              </Badge>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {skills.map((s) => (
+              <details
+                key={s.name}
+                className="rounded-md border border-border/60 bg-muted/20 p-2 text-xs"
+              >
+                <summary className="cursor-pointer select-none font-mono text-foreground">
+                  {s.name}
+                </summary>
+                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 p-2 leading-relaxed">
+                  {s.instructions}
+                </pre>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
+      {prompt.systemPromptMd && (
+        <details className="rounded-md border border-border/60 bg-muted/20 p-2 text-xs">
+          <summary className="cursor-pointer select-none uppercase tracking-wide text-muted-foreground">
+            System prompt ({prompt.systemPromptMd.length.toLocaleString()} chars)
+          </summary>
+          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 p-2 leading-relaxed">
+            {prompt.systemPromptMd}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {

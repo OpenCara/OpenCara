@@ -15,6 +15,7 @@ import {
   agentRuns,
   agents,
   flowNodeSettings,
+  flowRunSteps as flowRunStepsTable,
   projects,
   prompts,
 } from "../db/schema.js";
@@ -22,7 +23,7 @@ import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatch
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import { linkPrToIssueAndCopyAgentLabel } from "../github/pulls.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
-import { buildIssueCanvasEnvelope } from "./skills/issueCanvas.js";
+import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
 import type { AgentKind } from "../agents/kinds.js";
@@ -613,15 +614,23 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     if (worktree.sessionDir) env["OPENCARA_SESSION_DIR"] = worktree.sessionDir;
   }
 
-  // Inject the issue-edit skill if this run has issue context (Projects v2
-  // status-change trigger). Other trigger types don't get the skill — body
-  // editing only makes sense in an issue context.
-  const skill =
-    ctx.issueContext?.stdin.issue && ctx.issueContext.stdin.issue.number
-      ? buildIssueCanvasEnvelope({
+  // Inject the issue-implement contract skill when this run is shaped
+  // like one: a worktree was allocated AND the trigger carries issue
+  // context. The skill tells the agent it must commit/push and run
+  // `gh pr create` before exiting — the missing-PR mode this contract
+  // closes was visible on flow run 01KRDW75RV2Y6YN9BSTPP2JVE5, where
+  // the agent edited a file, ran typecheck, then stopped without
+  // shipping anything. Other shapes (pr-review etc.) don't carry an
+  // issue context so this short-circuits to null.
+  const implementSkill =
+    worktree?.branch &&
+    ctx.issueContext?.stdin.issue?.number
+      ? buildIssueImplementContractSkill({
           baseUrl: ctx.publicBaseUrl,
-          issueNumber: ctx.issueContext.stdin.issue.number,
           runId: agentRunId,
+          branchName: worktree.branch,
+          issueNumber: ctx.issueContext.stdin.issue.number,
+          defaultBranch: ctx.project.defaultBranch ?? "main",
         })
       : null;
 
@@ -631,7 +640,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
         ...(ctx.issueContext?.stdin ?? {}),
         previousOutput: ctx.previousOutput,
         prompt: linkedPromptBody ?? undefined,
-        ...(skill ? { skill } : {}),
       }
     : undefined;
 
@@ -668,11 +676,16 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   }
 
   const systemPromptParts: string[] = [];
+  const injectedSkills: Array<{ name: string; instructions: string }> = [];
   if (linkedPromptBody && linkedPromptBody.trim().length > 0) {
     systemPromptParts.push(linkedPromptBody.trim());
   }
-  if (skill) {
-    systemPromptParts.push(skill.instructions);
+  if (implementSkill) {
+    systemPromptParts.push(implementSkill.instructions);
+    injectedSkills.push({
+      name: implementSkill.name,
+      instructions: implementSkill.instructions,
+    });
   }
   // Auto-injected when this agent's downstream graph contains a
   // `github.post_review` node. Mandates the `verdict: <token>` first-line
@@ -686,11 +699,44 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       runId: agentRunId,
     });
     systemPromptParts.push(verdictSkill.instructions);
+    injectedSkills.push({
+      name: verdictSkill.name,
+      instructions: verdictSkill.instructions,
+    });
   }
   const systemPromptMd =
     systemPromptParts.length > 0
       ? systemPromptParts.join("\n\n---\n\n")
       : "You are an opencara flow agent. Process the input below.";
+
+  // Persist the assembled system prompt + skill list to the step row
+  // BEFORE dispatching, so the flow-run detail UI can show what the
+  // agent actually saw while the run is in flight (and even when it
+  // fails mid-run). Merge into the existing inputJson rather than
+  // overwriting it — the engine wrote node config / previousOutput at
+  // step creation. Best-effort: a write failure here just means the
+  // UI loses the system-prompt panel; it must not break the run.
+  try {
+    const existing = await ctx.db.query.flowRunSteps.findFirst({
+      where: eq(flowRunStepsTable.id, ctx.flowRunStepId),
+    });
+    const existingInput = (existing?.inputJson ?? {}) as Record<string, unknown>;
+    await ctx.db
+      .update(flowRunStepsTable)
+      .set({
+        inputJson: {
+          ...existingInput,
+          agentName: agent.name,
+          agentKind: agent.kind,
+          systemPromptMd,
+          injectedSkills,
+        },
+      })
+      .where(eq(flowRunStepsTable.id, ctx.flowRunStepId));
+    await ctx.pg.notify("flow_run_steps", ctx.flowRunId);
+  } catch (err) {
+    console.error("[flows] failed to persist system prompt to step row", err);
+  }
 
   // userPromptMd is the upstream node's stdoutCaptured (already cleaned
   // of agent-envelope/JSONL noise by `extractAgentResultText` in
@@ -803,18 +849,26 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // opened back to its source issue (Closes #N in body → populates
   // GitHub's Development panel) and copy the issue's agent:<name>
   // label onto the PR so pr-review-fix's label-based agent routing
-  // finds the same agent on the next iteration. Idempotent; failures
-  // are logged but do not change this flow's outcome (the agent has
-  // already succeeded by this point).
+  // finds the same agent on the next iteration.
+  //
+  // Two failure modes are distinguished:
+  //   - `no-pr` → the agent skipped `gh pr create`. This is the bug
+  //     the implement-contract skill exists to prevent; surface it
+  //     loudly so the flow run is marked failed instead of silently
+  //     "succeeded".
+  //   - `transient-failure` (network / 5xx on the list call) → log
+  //     and continue; the agent's work is unaffected and the PR may
+  //     well exist.
   if (
     ctx.issueContext?.stdin.issue?.number &&
     worktree?.branch
   ) {
+    let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
     try {
       const octokit = await ctx.app.forInstallation(
         ctx.installation.githubInstallationId,
       );
-      await linkPrToIssueAndCopyAgentLabel({
+      linkResult = await linkPrToIssueAndCopyAgentLabel({
         octokit,
         owner: ctx.project.owner,
         repo: ctx.project.name,
@@ -824,6 +878,13 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       });
     } catch (err) {
       console.error("[flows] link-pr-to-issue post-step failed", err);
+    }
+    if (linkResult?.kind === "no-pr") {
+      throw new Error(
+        `agent ran successfully but did not open a pull request on ${ctx.project.owner}/${ctx.project.name}@${worktree.branch}. ` +
+          `The issue-implement flow requires the agent to commit, push the branch, and run \`gh pr create\` before exiting. ` +
+          `Check the agent's logs above; the orchestrator now injects the opencara-issue-implement-contract skill to spell out this contract.`,
+      );
     }
   }
 
