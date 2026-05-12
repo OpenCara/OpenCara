@@ -9,9 +9,12 @@
 //      `npx @zed-industries/codex-acp`).
 //   3. ACP handshake: initialize → session/new (with mcpServers from
 //      the host) → session/prompt with the assembled message content.
-//   4. Stream `session/update` events through `translateUpdate` so they
-//      land on the existing log-frame pipeline. The chat panel SSE tail
-//      is unchanged.
+//   4. Stream `session/update` events through `createUpdateTranslator`
+//      so they land on the existing log-frame pipeline. The translator
+//      is stateful — it fences runs of `agent_thought_chunk` deltas
+//      between `[think]` / `[/think]` markers (see the function doc
+//      for the opencode-stream-of-deltas motivation). The chat panel
+//      SSE tail is unchanged.
 //   5. Resolve when the prompt response arrives with `stopReason`.
 //   6. Tear down: bridge → host → client. Bounded waits so a misbehaving
 //      child doesn't pin the device's event loop.
@@ -129,7 +132,12 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
     env: spec.env,
     cwd: spec.cwd,
   });
-  client.onSessionUpdate((p) => translateUpdate(p.update, handlers.onLog));
+  // Stateful: tracks open thought fences across token-level deltas
+  // (see createUpdateTranslator). Lives for the run; flushed in the
+  // finally below so any trailing [/think] reaches the chat panel
+  // even when the prompt resolves with `cancelled` or throws.
+  const translator = createUpdateTranslator(handlers.onLog);
+  client.onSessionUpdate((p) => translator.handle(p.update));
   client.onStderr((chunk) => handlers.onLog("stderr", chunk));
 
   const controller: AcpRunController = {
@@ -183,6 +191,9 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       };
       return result;
     } finally {
+      // Close any still-open thought fence before teardown so the
+      // chat panel sees a clean [/think] even on cancel/error paths.
+      translator.flush();
       // Best-effort teardown. Each step bounded so a misbehaving child
       // doesn't pin the event loop. Errors swallowed at the per-promise
       // level — chaining `.catch` on the race itself only silences the
@@ -236,48 +247,97 @@ export function buildPromptContent(acp: {
   return [{ type: "text", text: parts.join("\n\n---\n\n") }];
 }
 
+export type LogSink = (stream: "stdout" | "stderr", chunk: string) => void;
+
+export interface UpdateTranslator {
+  /** Route one session/update onto the log-frame pipeline. */
+  handle(update: SessionUpdate): void;
+  /** Close any open thought fence. Call at run end before teardown. */
+  flush(): void;
+}
+
 /**
- * Translate one `session/update` notification onto the existing log-frame
- * shape (stream + text chunk). Conservative — only well-known variants
- * are surfaced; unknown ones are noted on stderr so operators can find
- * them in debug logs without polluting the chat panel.
+ * Build a stateful translator for `session/update` notifications.
+ *
+ * Why stateful: agents stream `agent_thought_chunk` as model token
+ * deltas (one event per token — opencode's adapter literally calls
+ * `sessionUpdate({ ..., content: { text: props.delta } })` per delta).
+ * The earlier stateless version prepended `[think] ` to every chunk,
+ * which turned a streamed thought paragraph into
+ * `[think] I[think]  need[think]  to…` once the device concatenated
+ * chunks into a stream buffer. Codex tolerated it because it emitted
+ * coarse, message-sized thought events; opencode does not.
+ *
+ * Fix: fence the boundary instead of prefixing each chunk. Emit
+ * `\n[think]\n` on the first thought chunk after any non-thought
+ * event, and `\n[/think]\n` on the first non-thought event after a
+ * thought chunk. Consecutive thought deltas concatenate naturally
+ * inside the fence — same shape as plain message chunks.
+ *
+ * Unknown variants still flow to stderr so operators can find them
+ * without polluting the chat.
  */
-export function translateUpdate(
-  update: SessionUpdate,
-  onLog: (stream: "stdout" | "stderr", chunk: string) => void,
-): void {
-  if (isMessageChunk(update)) {
-    if (update.sessionUpdate === "user_message_chunk") {
-      // Echo of our own input — the chat panel already shows it.
-      return;
+export function createUpdateTranslator(onLog: LogSink): UpdateTranslator {
+  let inThought = false;
+
+  const enterThought = () => {
+    if (!inThought) {
+      onLog("stdout", "\n[think]\n");
+      inThought = true;
     }
-    const text = textOfContent(update.content);
-    if (!text) return;
-    if (update.sessionUpdate === "agent_thought_chunk") {
-      // Surface as a labeled prefix so the chat panel can distinguish
-      // thinking from final answer. Codex emits these for tool prep.
-      onLog("stdout", `[think] ${text}`);
-      return;
+  };
+  const leaveThought = () => {
+    if (inThought) {
+      onLog("stdout", "\n[/think]\n");
+      inThought = false;
     }
-    // agent_message_chunk
-    onLog("stdout", text);
-    return;
-  }
-  if (isToolCallStart(update)) {
-    const status = update.status ?? "?";
-    onLog("stdout", `\n[tool] ${update.title} (${status})\n`);
-    return;
-  }
-  if (isToolCallProgress(update)) {
-    const status = update.status ?? "?";
-    const title = update.title ?? "(tool)";
-    onLog("stdout", `\n[tool] ${title} → ${status}\n`);
-    return;
-  }
-  // Unknown variant — log to stderr so it shows up in the device
-  // console without spamming the user's chat. Likely candidates:
-  // available_commands_update, usage_update, plan, current_mode_update.
-  onLog("stderr", `[acp] unmodeled update: ${update.sessionUpdate}\n`);
+  };
+
+  return {
+    handle(update) {
+      if (isMessageChunk(update)) {
+        if (update.sessionUpdate === "user_message_chunk") {
+          // Echo of our own input — the chat panel already shows it.
+          // Doesn't affect fence state (it's neither thought nor
+          // visible agent output).
+          return;
+        }
+        const text = textOfContent(update.content);
+        if (!text) return;
+        if (update.sessionUpdate === "agent_thought_chunk") {
+          enterThought();
+          onLog("stdout", text);
+          return;
+        }
+        // agent_message_chunk
+        leaveThought();
+        onLog("stdout", text);
+        return;
+      }
+      if (isToolCallStart(update)) {
+        leaveThought();
+        const status = update.status ?? "?";
+        onLog("stdout", `\n[tool] ${update.title} (${status})\n`);
+        return;
+      }
+      if (isToolCallProgress(update)) {
+        leaveThought();
+        const status = update.status ?? "?";
+        const title = update.title ?? "(tool)";
+        onLog("stdout", `\n[tool] ${title} → ${status}\n`);
+        return;
+      }
+      // Unknown variant — log to stderr so it shows up in the device
+      // console without spamming the user's chat. Likely candidates:
+      // available_commands_update, usage_update, plan, current_mode_update.
+      // Doesn't close the fence: stderr is a separate stream, and the
+      // thought block on stdout is still open from the agent's POV.
+      onLog("stderr", `[acp] unmodeled update: ${update.sessionUpdate}\n`);
+    },
+    flush() {
+      leaveThought();
+    },
+  };
 }
 
 function textOfContent(content: ContentBlock): string {
