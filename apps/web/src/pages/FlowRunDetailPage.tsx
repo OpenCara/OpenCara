@@ -273,6 +273,7 @@ function AgentLogPanel({ agentRunId }: { agentRunId: string }) {
     `/api/runs/${agentRunId}/logs/stream`,
     {
       parse: (e) => (e.event === "log" ? (JSON.parse(e.data) as LogLine) : null),
+      dedupeKey: (row) => row.seq,
     },
   );
 
