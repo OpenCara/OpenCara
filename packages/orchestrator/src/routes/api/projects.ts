@@ -11,6 +11,7 @@ import {
   projects,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedProject } from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
 import {
   backfillIssues,
@@ -28,6 +29,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.use("*", requireUser());
 
   r.get("/", async (c) => {
+    const user = c.get("user")!;
     const rows = await deps.db
       .select({
         id: projects.id,
@@ -57,11 +59,13 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         githubInstallations,
         eq(projects.installationId, githubInstallations.id),
       )
+      .where(eq(projects.addedByUserId, user.id))
       .orderBy(desc(projects.addedAt));
     return c.json({ projects: rows });
   });
 
   r.post("/", async (c) => {
+    const user = c.get("user")!;
     const body = (await c.req.json()) as { githubRepoId?: number };
     const repoId = body.githubRepoId;
     if (!repoId || typeof repoId !== "number") {
@@ -70,6 +74,14 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const existing = await deps.db.query.projects.findFirst({
       where: eq(projects.githubRepoId, repoId),
     });
+    // Foreign-owned existing project: same 404 as "no row" — never confirm
+    // that a repo is already attached to someone else's account.
+    if (existing && existing.addedByUserId !== user.id) {
+      return c.json(
+        { error: "repository not found in any installation; install the App on its owner first" },
+        404,
+      );
+    }
     if (existing && !existing.removedAt) {
       return c.json({ project: existing });
     }
@@ -88,6 +100,9 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
 
   r.get("/:id", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const row = await deps.db
       .select()
       .from(projects)
@@ -103,12 +118,18 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
 
   r.delete("/:id", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     await deps.db.update(projects).set({ removedAt: new Date() }).where(eq(projects.id, id));
     return c.body(null, 204);
   });
 
   r.get("/:id/events", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const limit = clampLimit(c.req.query("limit"));
     const before = c.req.query("before");
     const where = before
@@ -131,6 +152,9 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
 
   r.get("/:id/issues", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const limit = clampLimit(c.req.query("limit"));
     const before = c.req.query("before");
     const stateFilter = c.req.query("state"); // "open" | "closed" | undefined (all)
@@ -176,10 +200,13 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   // reads.
   r.get("/:id/issues/:number", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
     const number = Number.parseInt(c.req.param("number"), 10);
     if (!Number.isFinite(number)) {
       return c.json({ error: "invalid issue number" }, 400);
     }
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "issue not found" }, 404);
     const row = await deps.db.query.issues.findFirst({
       where: (i, { and, eq, isNull }) =>
         and(eq(i.projectId, id), eq(i.number, number), isNull(i.removedAt)),
@@ -197,15 +224,14 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.patch("/:id/issues/:number/body", async (c) => {
     if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
+    const user = c.get("user")!;
     const number = Number.parseInt(c.req.param("number"), 10);
     if (!Number.isFinite(number)) {
       return c.json({ error: "invalid issue number" }, 400);
     }
     const reqBody = (await c.req.json().catch(() => null)) as { bodyMd?: unknown } | null;
 
-    const project = await deps.db.query.projects.findFirst({
-      where: eq(projects.id, id),
-    });
+    const project = await loadOwnedProject(deps.db, id, user.id);
     if (!project) return c.json({ error: "project not found" }, 404);
 
     // Resolve the body to push: explicit request body wins (caller guards
@@ -260,6 +286,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   // bodyMd: null to discard the draft.
   r.patch("/:id/issues/:number/draft", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
     const number = Number.parseInt(c.req.param("number"), 10);
     if (!Number.isFinite(number)) {
       return c.json({ error: "invalid issue number" }, 400);
@@ -271,6 +298,8 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     ) {
       return c.json({ error: "bodyMd (string or null) required" }, 400);
     }
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "issue not found" }, 404);
     const existing = await deps.db.query.issues.findFirst({
       where: (i, { and, eq, isNull }) =>
         and(eq(i.projectId, id), eq(i.number, number), isNull(i.removedAt)),
@@ -315,16 +344,10 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     }
     const agentIdRaw = reqBody.agentId;
 
-    const project = await deps.db.query.projects.findFirst({
-      where: eq(projects.id, id),
-    });
-    // Hide existence of foreign projects: a 404 here covers both the
-    // missing-project case and the not-yours case. Without this check,
-    // any authenticated user who learned a project id could write
-    // `agent:*` labels into another project's GitHub repo. The wider
-    // codebase still has this gap on other PATCH routes (body, draft) —
-    // tracked separately; tightening on this new route at minimum.
-    if (!project || project.addedByUserId !== user.id) {
+    const project = await loadOwnedProject(deps.db, id, user.id);
+    // 404 hides existence — both "no row" and "not yours" funnel to the
+    // same response so a curious client cannot probe for project ids.
+    if (!project) {
       return c.json({ error: "project not found" }, 404);
     }
 
@@ -371,9 +394,8 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.post("/:id/issues/sync", async (c) => {
     if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
-    const project = await deps.db.query.projects.findFirst({
-      where: eq(projects.id, id),
-    });
+    const user = c.get("user")!;
+    const project = await loadOwnedProject(deps.db, id, user.id);
     if (!project) return c.json({ error: "project not found" }, 404);
     try {
       const stats = await backfillIssues(
@@ -403,6 +425,9 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
 
   r.get("/:id/runs", async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const limit = clampLimit(c.req.query("limit"));
     const before = c.req.query("before");
     const where = before

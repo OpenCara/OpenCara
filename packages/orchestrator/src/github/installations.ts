@@ -14,9 +14,18 @@ export interface InstallationLike {
   suspended_at?: string | null;
 }
 
+export interface UpsertInstallationOptions {
+  // Set when an authenticated user round-trips through /auth/github/setup
+  // after installing the app. We persist it on INSERT only — webhook-driven
+  // updates carry no user context and must not clobber an existing
+  // attribution. A NULL row is claimed later by the first project-add.
+  addedByUserId?: string | null;
+}
+
 export async function upsertInstallation(
   db: Db,
   payload: InstallationLike,
+  options: UpsertInstallationOptions = {},
 ): Promise<{ id: string; githubInstallationId: number }> {
   const accountType = (payload.account?.type ?? payload.target_type ?? "Organization") as
     | "User"
@@ -38,6 +47,12 @@ export async function upsertInstallation(
         permissions: payload.permissions ?? {},
         events: payload.events ?? [],
         suspendedAt: payload.suspended_at ? new Date(payload.suspended_at) : null,
+        // Claim an unattributed row when we have a user; never overwrite
+        // a row that's already attributed (different user round-tripping
+        // through /auth/github/setup must not steal it).
+        ...(options.addedByUserId && existing.addedByUserId == null
+          ? { addedByUserId: options.addedByUserId }
+          : {}),
         updatedAt: new Date(),
       })
       .where(eq(githubInstallations.id, existing.id));
@@ -55,6 +70,7 @@ export async function upsertInstallation(
     permissions: payload.permissions ?? {},
     events: payload.events ?? [],
     suspendedAt: payload.suspended_at ? new Date(payload.suspended_at) : null,
+    addedByUserId: options.addedByUserId ?? null,
   });
   return { id, githubInstallationId: payload.id };
 }

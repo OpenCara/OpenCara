@@ -14,6 +14,7 @@ import {
 } from "../../db/schema.js";
 import { FlowDefinitionSchema } from "@opencara/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedProject } from "../../auth/ownership.js";
 import type { FlowEngine } from "../../flows/engine.js";
 
 interface FlowRoutesDeps {
@@ -31,6 +32,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   // List flows for a project
   r.get("/projects/:id/flows", auth, async (c) => {
     const projectId = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const rows = await deps.db.query.flows.findMany({
       where: eq(flows.projectId, projectId),
     });
@@ -41,6 +45,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   r.get("/projects/:id/flows/:slug", auth, async (c) => {
     const projectId = c.req.param("id");
     const slug = c.req.param("slug");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const flow = await deps.db.query.flows.findFirst({
       where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
     });
@@ -68,10 +75,13 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   r.patch("/projects/:id/flows/:slug", auth, async (c) => {
     const projectId = c.req.param("id");
     const slug = c.req.param("slug");
+    const user = c.get("user")!;
     const body = await c.req.json().catch(() => ({}));
     if (typeof body.enabled !== "boolean") {
       return c.json({ error: "enabled (boolean) required" }, 400);
     }
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const flow = await deps.db.query.flows.findFirst({
       where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
     });
@@ -85,10 +95,6 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Sets customizedAt so the seeder doesn't clobber the edit on next start.
-  // No project-ownership gate — `projects` has no userId column today, so
-  // flow routes share the same trust boundary (any authenticated user can
-  // edit any flow they know the ids of). When a real per-user model lands,
-  // every route in this file needs the same gate.
   r.patch(
     "/projects/:projectId/flows/:flowId/nodes/:nodeId/config",
     auth,
@@ -96,11 +102,14 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       const projectId = c.req.param("projectId");
       const flowId = c.req.param("flowId");
       const nodeId = c.req.param("nodeId");
+      const user = c.get("user")!;
       const body = await c.req.json().catch(() => ({}));
       if (!body.config || typeof body.config !== "object") {
         return c.json({ error: "config (object) required" }, 400);
       }
 
+      const owned = await loadOwnedProject(deps.db, projectId, user.id);
+      if (!owned) return c.json({ error: "flow not found in project" }, 404);
       const flow = await deps.db.query.flows.findFirst({
         where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
       });
@@ -158,6 +167,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   r.post("/projects/:projectId/flows/:flowId/reviewers", auth, async (c) => {
     const projectId = c.req.param("projectId");
     const flowId = c.req.param("flowId");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "flow not found in project" }, 404);
     const flow = await deps.db.query.flows.findFirst({
       where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
     });
@@ -233,6 +245,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       const projectId = c.req.param("projectId");
       const flowId = c.req.param("flowId");
       const nodeId = c.req.param("nodeId");
+      const user = c.get("user")!;
+      const owned = await loadOwnedProject(deps.db, projectId, user.id);
+      if (!owned) return c.json({ error: "flow not found in project" }, 404);
       const flow = await deps.db.query.flows.findFirst({
         where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
       });
@@ -302,6 +317,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     }
     const projectId = c.req.param("id");
     const slug = c.req.param("slug");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const flow = await deps.db.query.flows.findFirst({
       where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
     });
@@ -334,6 +352,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   // Recent flow runs across the project
   r.get("/projects/:id/flow-runs", auth, async (c) => {
     const projectId = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const limit = clampLimit(c.req.query("limit"));
     // Hide trigger-skip rows by default; ?includeSkipped=true shows them.
     const includeSkipped = c.req.query("includeSkipped") === "true";
@@ -361,6 +382,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       return c.json({ error: "flow engine not configured" }, 503);
     }
     const id = c.req.param("id");
+    const user = c.get("user")!;
     const body = await c.req.json().catch(() => ({}));
     const fromStepIdRaw = body.fromStepId;
     const fromStepId =
@@ -371,6 +393,10 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       where: eq(flowRuns.id, id),
     });
     if (!original) return c.json({ error: "flow run not found" }, 404);
+    // Foreign-project flow runs return the same 404 as "no row" so the
+    // existence of the id can't be probed cross-account.
+    const owned = await loadOwnedProject(deps.db, original.projectId, user.id);
+    if (!owned) return c.json({ error: "flow run not found" }, 404);
     try {
       const { flowRunId } = await deps.flowEngine.rerunFlow(id, { fromStepId });
       return c.json({ flowRunId });
@@ -382,6 +408,14 @@ export function flowRoutes(deps: FlowRoutesDeps) {
 
   r.get("/flow-runs/:id", auth, async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const run = await deps.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, id),
+      columns: { id: true, projectId: true },
+    });
+    if (!run) return c.json({ error: "not found" }, 404);
+    const owned = await loadOwnedProject(deps.db, run.projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     const snapshot = await loadFlowRunSnapshot(deps.db, id);
     if (!snapshot) return c.json({ error: "not found" }, 404);
     return c.json(snapshot);
@@ -389,8 +423,18 @@ export function flowRoutes(deps: FlowRoutesDeps) {
 
   // SSE: live snapshot of a flow run + its steps + agent runs.
   // Initial "snapshot" event followed by "step" events on every status change.
-  r.get("/flow-runs/:id/events/stream", auth, (c) => {
+  r.get("/flow-runs/:id/events/stream", auth, async (c) => {
     const runId = c.req.param("id");
+    const user = c.get("user")!;
+    // Verify ownership BEFORE opening the SSE stream so a foreign id
+    // returns a normal 404 instead of an indefinitely-open empty stream.
+    const run = await deps.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, runId),
+      columns: { id: true, projectId: true },
+    });
+    if (!run) return c.json({ error: "not found" }, 404);
+    const owned = await loadOwnedProject(deps.db, run.projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
     return streamSSE(c, async (sse) => {
       const writeSnapshot = async (eventName: "snapshot" | "step") => {
         const snap = await loadFlowRunSnapshot(deps.db, runId);

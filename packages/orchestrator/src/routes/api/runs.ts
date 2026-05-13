@@ -5,6 +5,7 @@ import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import { agentRunLogs, agentRuns } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedProject } from "../../auth/ownership.js";
 
 interface RunRoutesDeps {
   db: Db;
@@ -17,9 +18,28 @@ export function runRoutes(deps: RunRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
 
+  // Treat any run that isn't pinned to a project owned by this user as
+  // non-existent. agent_runs.project_id is nullable (ON DELETE SET NULL
+  // when the project is removed); an orphan-projectId run is also a 404
+  // here — we don't have a per-user view on system runs, so leaking them
+  // would re-introduce the cross-account read.
+  const runIsAccessible = async (runId: string, userId: string) => {
+    const run = await deps.db.query.agentRuns.findFirst({
+      where: eq(agentRuns.id, runId),
+      columns: { id: true, projectId: true },
+    });
+    if (!run || !run.projectId) return false;
+    const owned = await loadOwnedProject(deps.db, run.projectId, userId);
+    return !!owned;
+  };
+
   // One-shot snapshot of logs.
   r.get("/runs/:id/logs", auth, async (c) => {
     const runId = c.req.param("id");
+    const user = c.get("user")!;
+    if (!(await runIsAccessible(runId, user.id))) {
+      return c.json({ error: "not found" }, 404);
+    }
     const since = Number.parseInt(c.req.query("since") ?? "-1", 10);
     const rows = await deps.db
       .select()
@@ -34,8 +54,14 @@ export function runRoutes(deps: RunRoutesDeps) {
   });
 
   // SSE stream: replays existing logs then tails via pg LISTEN/NOTIFY.
-  r.get("/runs/:id/logs/stream", auth, (c) => {
+  r.get("/runs/:id/logs/stream", auth, async (c) => {
     const runId = c.req.param("id");
+    const user = c.get("user")!;
+    // Gate before streamSSE — otherwise an unowned id keeps an empty
+    // stream open and signals "this id exists".
+    if (!(await runIsAccessible(runId, user.id))) {
+      return c.json({ error: "not found" }, 404);
+    }
     return streamSSE(c, async (sse) => {
       let lastSeq = -1;
 

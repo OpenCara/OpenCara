@@ -7,6 +7,7 @@ import type { Db } from "../../db/client.js";
 import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedProject } from "../../auth/ownership.js";
 import { resolvePageSkill, type PageContextLike } from "../../flows/skills.js";
 import {
   buildAcpSpec,
@@ -82,8 +83,17 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // Project scope for agent-call gating. Builders that support
     // mutations return projectScope explicitly; other paths fall back
     // to the page's projectId (or null for legacy pages without one).
-    const projectId =
+    // Re-verify ownership here — resolvePageSkill may authorize the
+    // builder, but a stale pageContext.projectId from a foreign tab
+    // would otherwise sneak through and tag this run with someone
+    // else's project.
+    const projectIdCandidate =
       skillResult?.projectScope ?? pageContext.projectId ?? null;
+    const projectId = projectIdCandidate
+      ? (await loadOwnedProject(deps.db, projectIdCandidate, user.id))
+          ? projectIdCandidate
+          : null
+      : null;
 
     // Build the full env + spec BEFORE the agent_runs insert so the
     // persisted spec includes everything the agent will actually see.
@@ -199,13 +209,21 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     if (resolved.authError) {
       return c.json({ error: resolved.authError }, 403);
     }
+    // Strip the project scope if the caller doesn't actually own the
+    // project — keeps the panel from rendering "we know about project X"
+    // for a foreign project id that snuck through pageContext.
+    const projectScope = resolved.projectScope
+      ? (await loadOwnedProject(deps.db, resolved.projectScope, user.id))
+          ? resolved.projectScope
+          : null
+      : null;
     return c.json({
       skill: {
         name: resolved.skill.name,
         instructions: resolved.skill.instructions,
       },
       hydratedKeys: Object.keys(resolved.hydrated),
-      projectScope: resolved.projectScope ?? null,
+      projectScope,
     });
   });
 
