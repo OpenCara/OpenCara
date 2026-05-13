@@ -23,9 +23,9 @@
 //       to a flow node that consumes the output today; extend the parser
 //       when they are.
 //
-// When this helper can't recognise the shape it returns the input verbatim.
-// That preserves today's behaviour for stub agents (echo-reviewer.mjs, ad-hoc
-// `node`-driven scripts) which already write plain markdown to stdout.
+// When this helper can't recognise the shape it returns the input verbatim,
+// so agents that emit plain markdown (no JSON envelope) flow through
+// unchanged.
 //
 // Why this is in `agents/` and not `flows/`: it's an agent-output concern,
 // not a flow-execution concern. Flow runners delegate to it.

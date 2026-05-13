@@ -443,11 +443,10 @@ interface AgentWorktreeSectionProps {
 function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   // The worktree option lives on agent.config.worktree. node.config
   // is whatever's stored in graph_json — we read existing values
-  // and on Save send the FULL config (preserving label, spec,
+  // and on Save send the FULL config (preserving label,
   // contextInjection) so we don't clobber unrelated keys.
   const cfg = (node.config ?? {}) as {
     label?: string;
-    spec?: unknown;
     contextInjection?: unknown;
     worktree?: {
       fromBranch?: string | null;
@@ -485,12 +484,11 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   ]);
 
   const save = () => {
-    // Preserve label/spec/contextInjection (not mutated here) and
-    // write the worktree subfield. Pass the entire object back; the
-    // server replaces node.config wholesale.
+    // Preserve label/contextInjection (not mutated here) and write
+    // the worktree subfield. Pass the entire object back; the server
+    // replaces node.config wholesale.
     const nextConfig: Record<string, unknown> = {
       label: cfg.label,
-      spec: cfg.spec,
       contextInjection: cfg.contextInjection,
     };
     if (enabled) {

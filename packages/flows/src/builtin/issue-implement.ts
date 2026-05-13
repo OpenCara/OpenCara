@@ -1,10 +1,4 @@
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import type { FlowDefinition } from "../types.js";
-
-const here = dirname(fileURLToPath(import.meta.url));
-// dist/builtin/issue-implement.js → ../../examples/echo-implementer.mjs
-const echoImplementerPath = resolve(here, "../../examples/echo-implementer.mjs");
 
 export const issueImplementFlow: FlowDefinition = {
   slug: "issue-implement",
@@ -30,16 +24,6 @@ export const issueImplementFlow: FlowDefinition = {
       position: { x: 320, y: 0 },
       config: {
         label: "Implement agent",
-        spec: {
-          kind: "issue-implement",
-          // Stub: emits a canned plan markdown so the pipeline can be
-          // exercised end-to-end without an LLM. Link a real agent
-          // (kind=claude/codex/opencode/pi, with `gh pr create` in
-          // its prompt) via the flow node settings to replace this.
-          command: "node",
-          args: [echoImplementerPath],
-          env: {},
-        },
         contextInjection: {
           env: [
             "OPENCARA_REPO",

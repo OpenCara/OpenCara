@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { AgentSpecSchema } from "@opencara/shared";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
@@ -99,13 +98,18 @@ export function isTriggerKind(kind: string): boolean {
   return (TRIGGER_KINDS as readonly string[]).includes(kind);
 }
 
+// Agent flow nodes carry no in-graph subprocess `spec` — the dispatched
+// AgentSpec (command/args/env/cwd) is built at dispatch time from the
+// linked agent's `kind` via `buildAcpSpec` (orchestrator's
+// `agents/acp-gate.ts`). Per-node knobs that DO affect dispatch live on
+// `config` directly: `contextInjection` (which env keys + stdin payload
+// reach the agent) and optional `worktree` (per-PR-branch checkout).
 export const AgentNodeSchema = z.object({
   id: z.string(),
   kind: z.literal("agent"),
   position: Position,
   config: z.object({
     label: z.string(),
-    spec: AgentSpecSchema,
     contextInjection: z.object({
       env: z.array(z.string()).default([]),
       stdinJson: z.boolean().default(true),

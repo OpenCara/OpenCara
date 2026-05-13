@@ -369,8 +369,10 @@ function globToRegex(glob: string): RegExp {
 }
 
 export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
-  // Resolve the linked agent — required since the flow's in-graph spec is
-  // ignored in favour of the user's per-node agent linkage.
+  // Resolve the linked agent — required because agent flow nodes carry
+  // no in-graph subprocess spec. The dispatched AgentSpec (command,
+  // args, env, cwd) is built from the linked agent's `kind` via
+  // `buildAcpSpec` below.
   const setting = await ctx.db.query.flowNodeSettings.findFirst({
     where: and(
       eq(flowNodeSettings.flowId, ctx.flowId),
@@ -987,7 +989,7 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
   // human-readable markdown lives in `.result`. Posting the envelope as a
   // GitHub review body produces the bot-review-format-bug surfaced on
   // PR #33. `extractAgentResultText` parses the envelope; falls through
-  // verbatim for plain-text outputs (echo-reviewer.mjs and friends).
+  // verbatim for plain-text outputs.
   const body = extractAgentResultText(ctx.previousOutput ?? "").trim();
 
   // Most actions act on the existing PR/issue from the trigger event; only
