@@ -130,6 +130,14 @@ export function promptRoutes(deps: PromptRoutesDeps) {
     const flowId = c.req.param("flowId");
     const owned = await loadOwnedProject(deps.db, projectId, user.id);
     if (!owned) return c.json({ error: "flow not found in project" }, 404);
+    // Mirror the PUT route's pairing check — flowNodeSettings is keyed by
+    // flowId alone, so without verifying flow.projectId === projectId a
+    // caller can pair their own (owned) projectId with a foreign flowId
+    // and read that flow's prompt/agent bindings.
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+    });
+    if (!flow) return c.json({ error: "flow not found in project" }, 404);
     const rows = await deps.db
       .select()
       .from(flowNodeSettings)

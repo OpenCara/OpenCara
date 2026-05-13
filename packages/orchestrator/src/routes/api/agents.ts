@@ -228,6 +228,10 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       spec,
       status: "running",
       flowRunStepId: null,
+      // Test runs have no project, so the run-log gate falls back to
+      // direct attribution. Without this the "Test" button dispatches
+      // successfully but its log stream returns 404.
+      addedByUserId: user.id,
       startedAt: new Date(),
     });
 

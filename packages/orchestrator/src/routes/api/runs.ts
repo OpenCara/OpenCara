@@ -18,17 +18,21 @@ export function runRoutes(deps: RunRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
 
-  // Treat any run that isn't pinned to a project owned by this user as
-  // non-existent. agent_runs.project_id is nullable (ON DELETE SET NULL
-  // when the project is removed); an orphan-projectId run is also a 404
-  // here — we don't have a per-user view on system runs, so leaking them
-  // would re-introduce the cross-account read.
+  // Authorise a run by either: (a) direct attribution via addedByUserId
+  // (set by /api/agents/:id/test and /api/chat/messages — these runs have
+  // no project, so this is their only path to readability), or (b) the
+  // run's project is owned by the caller. agent_runs.project_id is
+  // nullable; a null-project run with no addedByUserId (e.g. internal
+  // worktree-cleanup) stays 404 here — not user-initiated, not
+  // user-readable.
   const runIsAccessible = async (runId: string, userId: string) => {
     const run = await deps.db.query.agentRuns.findFirst({
       where: eq(agentRuns.id, runId),
-      columns: { id: true, projectId: true },
+      columns: { id: true, projectId: true, addedByUserId: true },
     });
-    if (!run || !run.projectId) return false;
+    if (!run) return false;
+    if (run.addedByUserId === userId) return true;
+    if (!run.projectId) return false;
     const owned = await loadOwnedProject(deps.db, run.projectId, userId);
     return !!owned;
   };

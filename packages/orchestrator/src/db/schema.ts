@@ -502,6 +502,14 @@ export const agentRuns = pgTable(
     flowRunStepId: text("flow_run_step_id").references(() => flowRunSteps.id, {
       onDelete: "set null",
     }),
+    // Direct attribution for runs that aren't pinned to a project (agent
+    // Test button, chat panels on non-project pages). The /api/runs/:id
+    // gate authorises on this when projectId is null. Set on the
+    // /api/agents/:id/test and /api/chat/messages inserts; flow-engine
+    // runs leave it null and stay project-gated.
+    addedByUserId: text("added_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -513,6 +521,7 @@ export const agentRuns = pgTable(
       t.createdAt.desc(),
     ),
     flowRunStepIdx: index("agent_runs_flow_run_step_id_idx").on(t.flowRunStepId),
+    addedByUserIdIdx: index("agent_runs_added_by_user_id_idx").on(t.addedByUserId),
   }),
 );
 

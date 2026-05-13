@@ -94,8 +94,14 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
     // first time anyone adds a project under it. After this point the row
     // is locked in (`upsertInstallation` refuses to overwrite a non-NULL
     // addedByUserId, and the gate above refuses foreign-attributed rows).
+    //
+    // The UPDATE's `WHERE addedByUserId IS NULL` makes the claim atomic
+    // against concurrent first-adds, but if a racing claim wins, the
+    // 0-row result would otherwise be silently ignored — and we'd proceed
+    // to insert a project under an installation that's now owned by
+    // someone else. Use RETURNING + a re-check on miss to refuse cleanly.
     if (inst.addedByUserId == null) {
-      await deps.db
+      const claimed = await deps.db
         .update(githubInstallations)
         .set({ addedByUserId: user.id })
         .where(
@@ -103,7 +109,16 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
             eq(githubInstallations.id, id),
             isNull(githubInstallations.addedByUserId),
           ),
-        );
+        )
+        .returning({ id: githubInstallations.id });
+      if (claimed.length === 0) {
+        const refreshed = await deps.db.query.githubInstallations.findFirst({
+          where: eq(githubInstallations.id, id),
+        });
+        if (!refreshed || refreshed.addedByUserId !== user.id) {
+          return c.json({ error: "installation not found" }, 404);
+        }
+      }
     }
     const newId = ulid();
     await deps.db.insert(projects).values({

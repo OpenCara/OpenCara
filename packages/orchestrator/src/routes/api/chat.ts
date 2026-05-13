@@ -87,6 +87,13 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // builder, but a stale pageContext.projectId from a foreign tab
     // would otherwise sneak through and tag this run with someone
     // else's project.
+    //
+    // Foreign or stale scopes drop to null rather than 403'ing: the chat
+    // panel is reachable from non-project pages with no scope at all, so
+    // null is already a supported mode. The run is logged unscoped, the
+    // creator can still SSE-tail it (addedByUserId fallback in runs.ts),
+    // and agent-call gating refuses cross-project mutations because the
+    // run carries no projectId for the call site to check against.
     const projectIdCandidate =
       skillResult?.projectScope ?? pageContext.projectId ?? null;
     const projectId = projectIdCandidate
@@ -133,6 +140,11 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       status: "running",
       projectId,
       flowRunStepId: null,
+      // Direct attribution: chat panels on non-project pages persist with
+      // projectId=null, and the run-log gate would otherwise 404 the
+      // SSE stream the panel is tailing. With addedByUserId set, the
+      // creator can read their own run regardless of project scope.
+      addedByUserId: user.id,
       startedAt: new Date(),
     });
 

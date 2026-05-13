@@ -101,19 +101,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.get("/:id", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
-    const owned = await loadOwnedProject(deps.db, id, user.id);
-    if (!owned) return c.json({ error: "not found" }, 404);
-    const row = await deps.db
-      .select()
-      .from(projects)
-      .where(eq(projects.id, id))
-      .innerJoin(
-        githubInstallations,
-        eq(projects.installationId, githubInstallations.id),
-      )
-      .limit(1);
-    if (row.length === 0) return c.json({ error: "not found" }, 404);
-    return c.json({ project: row[0]!.projects, installation: row[0]!.github_installations });
+    const project = await loadOwnedProject(deps.db, id, user.id);
+    if (!project) return c.json({ error: "not found" }, 404);
+    const installation = await deps.db.query.githubInstallations.findFirst({
+      where: eq(githubInstallations.id, project.installationId),
+    });
+    return c.json({ project, installation });
   });
 
   r.delete("/:id", async (c) => {
