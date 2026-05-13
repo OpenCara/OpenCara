@@ -95,17 +95,23 @@ function worktreeCreate(args: string[]): void {
 
   // Optional shared object cache. `--cache-repo` enables; `--lfs`
   // additionally pulls LFS blobs into the cache and shares them with
-  // checkouts via a symlink. When `--lfs` is OFF we set
-  // GIT_LFS_SKIP_SMUDGE=1 on every git invocation so clones/fetches
-  // don't pay the LFS-blob download cost.
+  // checkouts via a symlink. When caching is ON and LFS is OFF we set
+  // GIT_LFS_SKIP_SMUDGE=1 so clones/fetches don't pay the LFS-blob
+  // download cost. When caching is OFF we leave the env alone — that
+  // preserves pre-cache behaviour for every flow that doesn't opt in
+  // (so an LFS repo on a non-cached flow still smudges normally).
   const useCache = hasFlag(args, "--cache-repo");
   const useLfs = hasFlag(args, "--lfs");
+  if (useLfs && !useCache) {
+    fail("--lfs requires --cache-repo");
+  }
   // safeKey takes "owner/name" → "owner/name" (segments sanitized),
   // which is the natural cache layout.
   const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo)) : null;
-  const gitEnv: NodeJS.ProcessEnv | undefined = useLfs
-    ? undefined
-    : { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
+  const gitEnv: NodeJS.ProcessEnv | undefined =
+    useCache && !useLfs
+      ? { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
+      : undefined;
 
   // The credential helper is a single-quoted shell snippet that git
   // execs via /bin/sh on auth challenge. It references $GH_TOKEN by
@@ -139,7 +145,17 @@ function worktreeCreate(args: string[]): void {
         git(cacheDir, ["config", "credential.helper", HELPER_SNIPPET]);
       } catch (err) {
         try {
-          rmSync(cacheDir, { recursive: true, force: true });
+          // TOCTOU guard: a concurrent `worktree create` for a
+          // different branch of the same repo can also have decided
+          // the cache was missing and started cloning into the same
+          // dir. If `.git/HEAD` exists, *some* clone reached enough
+          // state to be useful — don't nuke it from under the other
+          // process. Plain `existsSync(.git)` isn't enough because
+          // `git clone` creates `.git/` early but populates it
+          // incrementally; HEAD lands near the end of init.
+          if (!existsSync(join(cacheDir, ".git", "HEAD"))) {
+            rmSync(cacheDir, { recursive: true, force: true });
+          }
         } catch {
           /* ignore */
         }
@@ -148,8 +164,11 @@ function worktreeCreate(args: string[]): void {
     }
     if (useLfs) {
       // Populate cacheDir/.git/lfs/objects so per-key checkouts can
-      // share blobs via the symlink below.
+      // share blobs via the symlink below. `git lfs fetch` no-ops
+      // (and doesn't create the dir) when the repo has zero LFS
+      // history, so mkdirSync ourselves before the symlink lands.
       git(cacheDir, ["lfs", "fetch", "--all"], gitEnv);
+      mkdirSync(join(cacheDir, ".git", "lfs", "objects"), { recursive: true });
     }
   }
 
