@@ -1,16 +1,4 @@
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import type { FlowDefinition } from "../types.js";
-
-const here = dirname(fileURLToPath(import.meta.url));
-const echoReviewerPath = resolve(here, "../../examples/echo-reviewer.mjs");
-
-const reviewerSpec = (kind: string) => ({
-  kind,
-  command: "node",
-  args: [echoReviewerPath],
-  env: {},
-});
 
 const reviewerContext = {
   env: [
@@ -49,7 +37,6 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 280, y: 0 },
       config: {
         label: "Correctness reviewer",
-        spec: reviewerSpec("pr-reviewer-correctness"),
         contextInjection: reviewerContext,
 
       },
@@ -60,7 +47,6 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 280, y: 160 },
       config: {
         label: "Performance reviewer",
-        spec: reviewerSpec("pr-reviewer-performance"),
         contextInjection: reviewerContext,
 
       },
@@ -71,7 +57,6 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 280, y: 320 },
       config: {
         label: "Style reviewer",
-        spec: reviewerSpec("pr-reviewer-style"),
         contextInjection: reviewerContext,
 
       },
@@ -82,7 +67,6 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 560, y: 160 },
       config: {
         label: "Review synthesizer",
-        spec: reviewerSpec("pr-review-synthesizer"),
         contextInjection: {
           // Synthesizer doesn't need PR env extras — its input is the
           // concatenated reviewer outputs delivered via stdin.

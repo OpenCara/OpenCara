@@ -1,10 +1,4 @@
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import type { FlowDefinition } from "../types.js";
-
-const here = dirname(fileURLToPath(import.meta.url));
-// dist/builtin/pr-review.js → ../../examples/echo-reviewer.mjs
-const echoReviewerPath = resolve(here, "../../examples/echo-reviewer.mjs");
 
 export const prReviewFlow: FlowDefinition = {
   slug: "pr-review",
@@ -33,15 +27,6 @@ export const prReviewFlow: FlowDefinition = {
       position: { x: 280, y: 0 },
       config: {
         label: "Reviewer agent",
-        spec: {
-          kind: "pr-reviewer",
-          // v1 stub agent: emits a canned review markdown so the rest of the
-          // pipeline can be exercised without an LLM call. Swap to `claude`
-          // (or any other command) by editing this node config.
-          command: "node",
-          args: [echoReviewerPath],
-          env: {},
-        },
         contextInjection: {
           env: [
             "OPENCARA_REPO",

@@ -1,24 +1,17 @@
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import type { FlowDefinition } from "../types.js";
-
-const here = dirname(fileURLToPath(import.meta.url));
-// dist/builtin/pr-review-fix.js → ../../examples/echo-implementer.mjs
-const echoImplementerPath = resolve(here, "../../examples/echo-implementer.mjs");
 
 // Wakes the implementer agent up when a reviewer leaves a review on
 // a PR opened by the issue-implement flow. The agent runs in the
 // SAME worktree (same device, same checkout) as the implementer —
 // `worktree create` is idempotent and `worktree_pins(repo, branch)`
-// keeps the device pinned. With kind != "custom", the per-kind
-// adapter resumes the conversation from `agent-session.json` left
-// behind by the implementer, applies the feedback, and pushes more
-// commits to the same branch. GitHub's review/push cycle is the
-// "loop"; no engine-side iteration cap.
+// keeps the device pinned. The per-kind ACP adapter resumes the
+// conversation from `agent-session.json` left behind by the
+// implementer, applies the feedback, and pushes more commits to the
+// same branch. GitHub's review/push cycle is the "loop"; no
+// engine-side iteration cap.
 //
 // Pair this flow with kind=claude/codex/opencode/pi so the adapter
-// can wire `--resume <id>`. kind=custom starts a fresh conversation
-// each iteration (no resume).
+// can wire ACP `session/load`.
 export const prReviewFixFlow: FlowDefinition = {
   slug: "pr-review-fix",
   name: "PR review → Fix (resume)",
@@ -47,14 +40,6 @@ export const prReviewFixFlow: FlowDefinition = {
       position: { x: 320, y: 0 },
       config: {
         label: "Fix agent",
-        spec: {
-          kind: "review-fix",
-          // Stub. Link a kind={claude|codex|opencode|pi} agent on the
-          // node detail page to enable conversation resume.
-          command: "node",
-          args: [echoImplementerPath],
-          env: {},
-        },
         contextInjection: {
           env: [
             "OPENCARA_REPO",

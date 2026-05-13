@@ -402,8 +402,34 @@ function AgentNodePanel({
         </div>
 
         <AgentWorktreeSection scope={scope} node={node} />
+
+        <AgentNodeInspector node={node} />
       </CardContent>
     </Card>
+  );
+}
+
+/* ─── Raw-config inspector ──────────────────────────────────────── */
+
+// Read-only pretty-printed JSON of the agent node's stored config.
+// The form above only renders fields it knows about, so optional
+// blocks (worktree.cacheRepo, etc.) can be
+// hard to verify saved correctly without poking the DB. This panel
+// is that check, in the editor itself.
+function AgentNodeInspector({ node }: { node: NodeEditorNode }) {
+  const json = JSON.stringify(node.config ?? {}, null, 2);
+  return (
+    <details className="rounded-md border bg-muted/10">
+      <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium">
+        Raw config
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
+          (read-only)
+        </span>
+      </summary>
+      <pre className="max-h-96 overflow-auto whitespace-pre border-t bg-muted/30 p-3 font-mono text-xs">
+        {json}
+      </pre>
+    </details>
   );
 }
 
@@ -417,11 +443,10 @@ interface AgentWorktreeSectionProps {
 function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   // The worktree option lives on agent.config.worktree. node.config
   // is whatever's stored in graph_json — we read existing values
-  // and on Save send the FULL config (preserving label, spec,
+  // and on Save send the FULL config (preserving label,
   // contextInjection) so we don't clobber unrelated keys.
   const cfg = (node.config ?? {}) as {
     label?: string;
-    spec?: unknown;
     contextInjection?: unknown;
     worktree?: {
       fromBranch?: string | null;
@@ -459,12 +484,11 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   ]);
 
   const save = () => {
-    // Preserve label/spec/contextInjection (not mutated here) and
-    // write the worktree subfield. Pass the entire object back; the
-    // server replaces node.config wholesale.
+    // Preserve label/contextInjection (not mutated here) and write
+    // the worktree subfield. Pass the entire object back; the server
+    // replaces node.config wholesale.
     const nextConfig: Record<string, unknown> = {
       label: cfg.label,
-      spec: cfg.spec,
       contextInjection: cfg.contextInjection,
     };
     if (enabled) {
