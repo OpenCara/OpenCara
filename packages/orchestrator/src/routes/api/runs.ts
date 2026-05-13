@@ -36,8 +36,13 @@ export function runRoutes(deps: RunRoutesDeps) {
   // SSE stream: replays existing logs then tails via pg LISTEN/NOTIFY.
   r.get("/runs/:id/logs/stream", auth, (c) => {
     const runId = c.req.param("id");
+    // Resume from the browser's Last-Event-ID on EventSource auto-reconnect.
+    // Without this, every transient blip replays the whole backlog and the
+    // UI shows the log repeated.
+    const resumeHeader = c.req.header("Last-Event-ID") ?? c.req.header("last-event-id");
+    const resumeSeq = resumeHeader != null ? Number.parseInt(resumeHeader, 10) : Number.NaN;
     return streamSSE(c, async (sse) => {
-      let lastSeq = -1;
+      let lastSeq = Number.isFinite(resumeSeq) ? resumeSeq : -1;
 
       const flush = async () => {
         const rows = await deps.db
@@ -48,6 +53,7 @@ export function runRoutes(deps: RunRoutesDeps) {
         for (const row of rows) {
           await sse.writeSSE({
             event: "log",
+            id: String(row.seq),
             data: JSON.stringify({
               seq: row.seq,
               stream: row.stream,
