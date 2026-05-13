@@ -428,14 +428,25 @@ export function flowRoutes(deps: FlowRoutesDeps) {
         sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
       }, 15_000);
 
+      // The on-NOTIFY handler above ships snapshot updates; this poll is
+      // only a fallback to detect terminal status and close the stream
+      // if a NOTIFY is missed, so we must NOT refetch the snapshot here —
+      // doing so re-ships every agent_run.spec (incl. multi-hundred-kB ACP
+      // payloads) every 2s for the life of the stream.
       const terminalCheck = setInterval(async () => {
-        const snap = await loadFlowRunSnapshot(deps.db, runId);
-        if (snap && TERMINAL.has(snap.run.status)) {
-          await sse.writeSSE({ event: "step", data: JSON.stringify(snap) });
-          await sse.writeSSE({
-            event: "end",
-            data: JSON.stringify({ status: snap.run.status }),
-          });
+        const r2 = await deps.db.query.flowRuns.findFirst({
+          where: eq(flowRuns.id, runId),
+          columns: { status: true },
+        });
+        if (r2 && TERMINAL.has(r2.status)) {
+          const snap = await loadFlowRunSnapshot(deps.db, runId);
+          if (snap) {
+            await sse.writeSSE({ event: "step", data: JSON.stringify(snap) });
+            await sse.writeSSE({
+              event: "end",
+              data: JSON.stringify({ status: snap.run.status }),
+            });
+          }
           clearInterval(heartbeat);
           clearInterval(terminalCheck);
           await stepSub.unlisten();
@@ -465,12 +476,25 @@ async function loadFlowRunSnapshot(db: Db, id: string) {
     orderBy: [flowRunSteps.idx],
   });
   const stepIds = steps.map((s) => s.id);
+  // Project only the fields the snapshot consumer needs. Excluding `spec`
+  // is load-bearing: the ACP payload it carries can be hundreds of kB per
+  // row, and this function is called on every snapshot refetch.
   const agentRunsList = stepIds.length
     ? await db.query.agentRuns.findMany({
         where: and(
           isNotNull(agentRuns.flowRunStepId),
           inArray(agentRuns.flowRunStepId, stepIds),
         ),
+        columns: {
+          id: true,
+          status: true,
+          hostId: true,
+          flowRunStepId: true,
+          createdAt: true,
+          startedAt: true,
+          finishedAt: true,
+          exitCode: true,
+        },
       })
     : [];
   return { run, steps, agentRuns: agentRunsList };

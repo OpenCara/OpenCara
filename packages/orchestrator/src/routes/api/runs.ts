@@ -61,8 +61,11 @@ export function runRoutes(deps: RunRoutesDeps) {
 
       await flush();
 
+      // Status-only projection: `spec` can carry a hundreds-of-kB ACP
+      // payload and we only need the status to decide whether to close.
       const run = await deps.db.query.agentRuns.findFirst({
         where: eq(agentRuns.id, runId),
+        columns: { id: true, status: true },
       });
       if (run && TERMINAL.has(run.status)) {
         await sse.writeSSE({ event: "end", data: JSON.stringify({ status: run.status }) });
@@ -82,9 +85,11 @@ export function runRoutes(deps: RunRoutesDeps) {
       }, 15_000);
 
       // Poll terminal state every 2s; close stream when run finishes.
+      // Status-only projection — see the initial check above.
       const terminalCheck = setInterval(async () => {
         const r2 = await deps.db.query.agentRuns.findFirst({
           where: eq(agentRuns.id, runId),
+          columns: { id: true, status: true },
         });
         if (r2 && TERMINAL.has(r2.status)) {
           await flush();
