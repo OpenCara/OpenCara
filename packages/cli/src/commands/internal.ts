@@ -14,6 +14,7 @@ import {
   realpathSync,
   writeFileSync,
   renameSync,
+  symlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
@@ -24,6 +25,11 @@ const OPENCARA_ROOT = join(homedir(), ".opencara");
 // handler dispatches `worktree remove` to wipe both for that key.
 const WORK_ROOT = join(OPENCARA_ROOT, "work");
 const SESSION_ROOT = join(OPENCARA_ROOT, "sessions");
+// Opt-in shared-object cache. One clone per repo (NOT per branch),
+// reused across every per-PR-branch checkout via `git clone
+// --reference`. Lives outside WORK_ROOT so `worktree remove` (which
+// is keyed per-branch) leaves it intact across PR closes.
+const CACHE_ROOT = join(OPENCARA_ROOT, "cache");
 
 export async function internal(argv: string[]): Promise<void> {
   const sub = argv[0];
@@ -87,6 +93,20 @@ function worktreeCreate(args: string[]): void {
   const sessionDir = join(SESSION_ROOT, key);
   const checkoutDir = join(WORK_ROOT, key, "checkout");
 
+  // Optional shared object cache. `--cache-repo` enables; `--lfs`
+  // additionally pulls LFS blobs into the cache and shares them with
+  // checkouts via a symlink. When `--lfs` is OFF we set
+  // GIT_LFS_SKIP_SMUDGE=1 on every git invocation so clones/fetches
+  // don't pay the LFS-blob download cost.
+  const useCache = hasFlag(args, "--cache-repo");
+  const useLfs = hasFlag(args, "--lfs");
+  // safeKey takes "owner/name" → "owner/name" (segments sanitized),
+  // which is the natural cache layout.
+  const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo)) : null;
+  const gitEnv: NodeJS.ProcessEnv | undefined = useLfs
+    ? undefined
+    : { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
+
   // The credential helper is a single-quoted shell snippet that git
   // execs via /bin/sh on auth challenge. It references $GH_TOKEN by
   // NAME — the token value never enters argv (process listings) or
@@ -99,13 +119,47 @@ function worktreeCreate(args: string[]): void {
 
   mkdirSync(sessionDir, { recursive: true });
 
+  // Refresh the shared cache first (if enabled) so the per-key
+  // checkout's `--reference` clone borrows up-to-date packs. Without
+  // this, the cache could serve stale objects and the per-key fetch
+  // would have to download anything newer over the network anyway.
+  if (cacheDir) {
+    if (existsSync(join(cacheDir, ".git"))) {
+      git(cacheDir, ["fetch", "--all", "--prune"], gitEnv);
+    } else {
+      mkdirSync(cacheDir, { recursive: true });
+      try {
+        // No --branch: cache holds all refs so any PR branch can be
+        // borrowed from it.
+        git(
+          cacheDir,
+          ["-c", `credential.helper=${HELPER_SNIPPET}`, "clone", cleanUrl, "."],
+          gitEnv,
+        );
+        git(cacheDir, ["config", "credential.helper", HELPER_SNIPPET]);
+      } catch (err) {
+        try {
+          rmSync(cacheDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+        throw err;
+      }
+    }
+    if (useLfs) {
+      // Populate cacheDir/.git/lfs/objects so per-key checkouts can
+      // share blobs via the symlink below.
+      git(cacheDir, ["lfs", "fetch", "--all"], gitEnv);
+    }
+  }
+
   // Idempotent allocation. The implement flow on first run does the
   // clone; every subsequent flow run on the same (repo, branch) finds
   // the .git/ already there, skips the clone, fetches latest, and
   // checks out the branch. Removed only when the orchestrator's
   // pull_request.closed handler dispatches `worktree remove`.
   if (existsSync(join(checkoutDir, ".git"))) {
-    git(checkoutDir, ["fetch", "origin"]);
+    git(checkoutDir, ["fetch", "origin"], gitEnv);
     // Three cases:
     //   1. `origin/<branch>` exists — reset our local copy to track it.
     //      Used by review-fix flows re-allocating on a refreshed clone.
@@ -118,11 +172,11 @@ function worktreeCreate(args: string[]): void {
     //      don't silently corrupt state by checking out HEAD as the
     //      new branch.
     if (refExists(checkoutDir, `refs/remotes/origin/${branch}`)) {
-      git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`]);
+      git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`], gitEnv);
     } else if (refExists(checkoutDir, `refs/heads/${branch}`)) {
-      git(checkoutDir, ["checkout", branch]);
+      git(checkoutDir, ["checkout", branch], gitEnv);
     } else if (fromBranch) {
-      git(checkoutDir, ["checkout", "-B", branch, `origin/${fromBranch}`]);
+      git(checkoutDir, ["checkout", "-B", branch, `origin/${fromBranch}`], gitEnv);
     } else {
       fail(
         `worktree create: '${branch}' missing locally and on origin/, no --from-branch to fall back to`,
@@ -131,22 +185,42 @@ function worktreeCreate(args: string[]): void {
   } else {
     mkdirSync(checkoutDir, { recursive: true });
     const cloneArgs = ["-c", `credential.helper=${HELPER_SNIPPET}`, "clone"];
+    if (cacheDir) {
+      // `--no-checkout` so we can install the LFS objects symlink
+      // BEFORE the working tree is materialized — otherwise the
+      // initial checkout's smudge filter would miss the shared
+      // blobs and re-download them.
+      cloneArgs.push("--no-checkout", "--reference", cacheDir);
+    }
     if (fromBranch) {
       cloneArgs.push("--branch", fromBranch);
     }
     cloneArgs.push(cleanUrl, ".");
     try {
-      git(checkoutDir, cloneArgs);
+      git(checkoutDir, cloneArgs, gitEnv);
+      if (cacheDir && useLfs) {
+        // Share the cache's LFS object store with this checkout. Plain
+        // --reference covers git objects but NOT LFS blobs (which live
+        // under .git/lfs, not .git/objects). Symlinking the directory
+        // means a subsequent `git lfs pull` here is a no-op for any
+        // blob the cache already has.
+        const checkoutLfsDir = join(checkoutDir, ".git", "lfs");
+        mkdirSync(checkoutLfsDir, { recursive: true });
+        symlinkSync(
+          join(cacheDir, ".git", "lfs", "objects"),
+          join(checkoutLfsDir, "objects"),
+        );
+      }
       // If branch == fromBranch (review-fix cloning the existing PR
       // branch), the just-cloned ref already IS that branch — `-b`
       // would error. Otherwise create the new branch off whatever
       // ref clone landed on (= fromBranch or repo default).
       if (fromBranch && branch === fromBranch) {
-        git(checkoutDir, ["checkout", branch]);
+        git(checkoutDir, ["checkout", branch], gitEnv);
       } else {
-        git(checkoutDir, ["checkout", "-b", branch]);
+        git(checkoutDir, ["checkout", "-b", branch], gitEnv);
       }
-      git(checkoutDir, ["config", "credential.helper", HELPER_SNIPPET]);
+      git(checkoutDir, ["config", "credential.helper", HELPER_SNIPPET], gitEnv);
     } catch (err) {
       // Best-effort cleanup of the half-built dir before bubbling.
       try {
@@ -256,10 +330,14 @@ function worktreeRemove(args: string[]): void {
   }
 }
 
-function git(cwd: string, args: string[]): void {
+function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): void {
   // Inherit stderr so git's own error lines reach the agent_runs log,
   // making 401/404/branch-not-found easy to diagnose.
-  execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "inherit"] });
+  execFileSync("git", args, {
+    cwd,
+    stdio: ["ignore", "ignore", "inherit"],
+    env: env ?? process.env,
+  });
 }
 
 /**
@@ -284,6 +362,10 @@ function pickFlag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
   if (i === -1) return undefined;
   return argv[i + 1];
+}
+
+function hasFlag(argv: string[], name: string): boolean {
+  return argv.indexOf(name) !== -1;
 }
 
 function fail(msg: string): never {

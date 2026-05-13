@@ -131,6 +131,18 @@ export const AgentNodeSchema = z.object({
         branchName: z.string(),
         // Optional pin. null = let worktree_pins / pickIdle decide.
         hostId: z.string().nullable().default(null),
+        // Opt-in shared object cache. When enabled, the device keeps a
+        // single full clone at ~/.opencara/cache/<owner>/<repo>/ and
+        // every per-PR-branch checkout is cloned with `--reference`
+        // against it, sharing pack files. `lfs` controls whether LFS
+        // blobs are fetched into the cache (and shared into checkouts
+        // via a symlink) or skipped entirely (GIT_LFS_SKIP_SMUDGE=1).
+        cacheRepo: z
+          .object({
+            enabled: z.boolean().default(false),
+            lfs: z.boolean().default(false),
+          })
+          .optional(),
       })
       .optional(),
   }),
