@@ -423,7 +423,12 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
     label?: string;
     spec?: unknown;
     contextInjection?: unknown;
-    worktree?: { fromBranch?: string | null; branchName?: string; hostId?: string | null };
+    worktree?: {
+      fromBranch?: string | null;
+      branchName?: string;
+      hostId?: string | null;
+      cacheRepo?: { enabled?: boolean; lfs?: boolean };
+    };
   };
   const wt = cfg.worktree;
   const [enabled, setEnabled] = useState(Boolean(wt));
@@ -432,6 +437,8 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
     wt?.branchName ?? "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
   );
   const [hostId, setHostId] = useState(wt?.hostId ?? "");
+  const [cacheRepo, setCacheRepo] = useState(Boolean(wt?.cacheRepo?.enabled));
+  const [cacheLfs, setCacheLfs] = useState(Boolean(wt?.cacheRepo?.lfs));
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
@@ -439,7 +446,17 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
     setFromBranch(wt?.fromBranch ?? "");
     setBranchName(wt?.branchName ?? "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}");
     setHostId(wt?.hostId ?? "");
-  }, [node.id, wt?.fromBranch, wt?.branchName, wt?.hostId, wt]);
+    setCacheRepo(Boolean(wt?.cacheRepo?.enabled));
+    setCacheLfs(Boolean(wt?.cacheRepo?.lfs));
+  }, [
+    node.id,
+    wt?.fromBranch,
+    wt?.branchName,
+    wt?.hostId,
+    wt?.cacheRepo?.enabled,
+    wt?.cacheRepo?.lfs,
+    wt,
+  ]);
 
   const save = () => {
     // Preserve label/spec/contextInjection (not mutated here) and
@@ -452,11 +469,17 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
     };
     if (enabled) {
       if (!branchName.trim()) return;
-      nextConfig.worktree = {
+      const wtNext: Record<string, unknown> = {
         fromBranch: fromBranch.trim().length > 0 ? fromBranch.trim() : null,
         branchName: branchName.trim(),
         hostId: hostId.trim().length > 0 ? hostId.trim() : null,
       };
+      if (cacheRepo) {
+        // Omit the field entirely when disabled so saved JSON stays
+        // minimal and matches the schema's "optional" shape.
+        wtNext.cacheRepo = { enabled: true, lfs: cacheLfs };
+      }
+      nextConfig.worktree = wtNext;
     }
     // (When enabled = false, we omit the field; node.config.worktree
     // is optional in the schema.)
@@ -513,6 +536,46 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
               placeholder="(any idle device or persisted pin)"
               className="mt-1 font-mono text-xs"
             />
+          </div>
+          <div className="space-y-2 border-t pt-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={cacheRepo}
+                onChange={(e) => setCacheRepo(e.target.checked)}
+                className="size-4 rounded border-input"
+              />
+              <span>Cache repo on host</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Keeps a single full clone at{" "}
+              <code className="font-mono">~/.opencara/cache/&lt;owner&gt;/&lt;repo&gt;</code>{" "}
+              and clones each per-PR-branch checkout with{" "}
+              <code className="font-mono">--reference</code>, sharing pack files.
+              Persists across PR closes.
+            </p>
+            <label
+              className={`flex items-center gap-2 text-sm font-medium ${
+                cacheRepo ? "" : "opacity-50"
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={cacheLfs}
+                disabled={!cacheRepo}
+                onChange={(e) => setCacheLfs(e.target.checked)}
+                className="size-4 rounded border-input"
+              />
+              <span>Include Git LFS</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              When off, sets{" "}
+              <code className="font-mono">GIT_LFS_SKIP_SMUDGE=1</code> on every
+              git op (pointers only). When on, the cache fetches all LFS blobs
+              and each checkout symlinks{" "}
+              <code className="font-mono">.git/lfs/objects</code> at the cache so
+              smudge resolves locally.
+            </p>
           </div>
         </div>
       )}

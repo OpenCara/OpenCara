@@ -515,23 +515,29 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       OPENCARA_AGENT_RUN_ID: allocateRunId,
       OPENCARA_REPO: ownerRepo,
     };
+    const allocateArgs = [
+      "internal",
+      "worktree",
+      "create",
+      "--repo",
+      ownerRepo,
+      "--branch",
+      branchName,
+      "--from-branch",
+      fromBranch,
+      "--key",
+      key,
+    ];
+    const cacheRepo = node.config.worktree.cacheRepo;
+    if (cacheRepo?.enabled) {
+      allocateArgs.push("--cache-repo");
+      if (cacheRepo.lfs) allocateArgs.push("--lfs");
+    }
     const allocateResult = await dispatchAgentRun(ctx, {
       agentRunId: allocateRunId,
       kind: "internal:worktree-allocate",
       command: "opencara",
-      args: [
-        "internal",
-        "worktree",
-        "create",
-        "--repo",
-        ownerRepo,
-        "--branch",
-        branchName,
-        "--from-branch",
-        fromBranch,
-        "--key",
-        key,
-      ],
+      args: allocateArgs,
       env: allocateEnv,
       hostId: pinnedHostId,
       triggerEventId: ctx.event.id,
