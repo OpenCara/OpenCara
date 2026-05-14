@@ -18,6 +18,12 @@ interface Options<T> {
   events?: string[];
   /** SSE event names that should terminate the stream. Default: ["end"]. */
   endEvents?: string[];
+  /**
+   * Extract a monotonic dedupe key from a parsed item. When provided, items
+   * whose key has already been seen are dropped — guards against backend
+   * replays on EventSource auto-reconnect.
+   */
+  dedupeKey?: (item: T) => string | number | null | undefined;
 }
 
 /**
@@ -39,6 +45,7 @@ export function useEventSource<T>(url: string | null, opts: Options<T>): UseEven
     const es = new EventSource(url, { withCredentials: true });
     const endNames = optsRef.current.endEvents ?? ["end"];
     const eventNames = optsRef.current.events ?? ["log"];
+    const seen = new Set<string | number>();
 
     const handleNamed = (name: string) => (e: MessageEvent) => {
       if (endNames.includes(name)) {
@@ -47,7 +54,16 @@ export function useEventSource<T>(url: string | null, opts: Options<T>): UseEven
         return;
       }
       const item = optsRef.current.parse({ event: name, data: e.data });
-      if (item != null) setEvents((prev) => [...prev, item]);
+      if (item == null) return;
+      const keyFn = optsRef.current.dedupeKey;
+      if (keyFn) {
+        const k = keyFn(item);
+        if (k != null) {
+          if (seen.has(k)) return;
+          seen.add(k);
+        }
+      }
+      setEvents((prev) => [...prev, item]);
     };
 
     for (const name of eventNames) {
