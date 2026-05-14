@@ -59,7 +59,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         githubInstallations,
         eq(projects.installationId, githubInstallations.id),
       )
-      .where(eq(projects.addedByUserId, user.id))
+      .where(and(eq(projects.addedByUserId, user.id), isNull(projects.removedAt)))
       .orderBy(desc(projects.addedAt));
     return c.json({ projects: rows });
   });
@@ -114,7 +114,11 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const user = c.get("user")!;
     const owned = await loadOwnedProject(deps.db, id, user.id);
     if (!owned) return c.json({ error: "not found" }, 404);
-    await deps.db.update(projects).set({ removedAt: new Date() }).where(eq(projects.id, id));
+    // Hard delete: FK cascade drops issues, flows, flow runs, flow node
+    // settings, and projectV2 links; platform_events and agent_runs are
+    // ON DELETE SET NULL, so their rows survive as an orphaned audit
+    // trail without the project link.
+    await deps.db.delete(projects).where(eq(projects.id, id));
     return c.body(null, 204);
   });
 

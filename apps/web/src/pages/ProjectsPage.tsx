@@ -81,7 +81,6 @@ export function ProjectsPage() {
 
 function ProjectRow({ project }: { project: ProjectListItem }) {
   const remove = useRemoveProject();
-  const isRemoved = !!project.removedAt;
   return (
     <TableRow>
       <TableCell className="font-medium">
@@ -105,32 +104,29 @@ function ProjectRow({ project }: { project: ProjectListItem }) {
         <StatusBadge project={project} />
       </TableCell>
       <TableCell className="text-right">
-        {!isRemoved && (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={remove.isPending}
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Remove project "${project.owner}/${project.name}"? OpenCara will stop watching this repo.`,
-                )
-              ) {
-                remove.mutate(project.id);
-              }
-            }}
-            aria-label="Remove project"
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={remove.isPending}
+          onClick={() => {
+            if (
+              window.confirm(
+                `Remove project "${project.owner}/${project.name}"? This permanently deletes its issues, flows, and flow-run history.`,
+              )
+            ) {
+              remove.mutate(project.id);
+            }
+          }}
+          aria-label="Remove project"
+        >
+          <Trash2 className="size-4" />
+        </Button>
       </TableCell>
     </TableRow>
   );
 }
 
 function StatusBadge({ project }: { project: ProjectListItem }) {
-  if (project.removedAt) return <Badge variant="outline">removed</Badge>;
   if (project.installationSuspendedAt) return <Badge variant="destructive">suspended</Badge>;
   return <Badge>active</Badge>;
 }
