@@ -336,6 +336,15 @@ async function handleMetaEvent(
         .update(projects)
         .set({ removedAt: new Date() })
         .where(eq(projects.installationId, row.id));
+      // Mark the installation row itself so it stops surfacing in the
+      // /api/installations list. The row stays in the DB (FK from
+      // platform_events is NO ACTION), but suspended_at hides it from the
+      // UI. Reinstall creates a new installation id, not a revival of this
+      // one, so we don't need a separate `deleted_at` column.
+      await db
+        .update(githubInstallations)
+        .set({ suspendedAt: new Date(), updatedAt: new Date() })
+        .where(eq(githubInstallations.id, row.id));
     } else if (payload.action === "suspend") {
       await db
         .update(githubInstallations)
