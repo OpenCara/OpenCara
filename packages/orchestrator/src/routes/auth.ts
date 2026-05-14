@@ -83,10 +83,17 @@ export function authRoutes(deps: AuthRouteDeps) {
     const installationId = Number.parseInt(installationIdParam, 10);
     if (Number.isFinite(installationId)) {
       try {
-        const octokit = await deps.app.forInstallation(installationId);
-        const res = await octokit.request("GET /app/installations/{installation_id}", {
-          installation_id: installationId,
-        });
+        // GET /app/installations/{id} is an App-level endpoint — it must
+        // be authenticated with the App JWT, not an installation token.
+        // `deps.app.app` carries the createAppAuth strategy which picks
+        // the right credential per endpoint; `forInstallation()` would
+        // attach a `ghs_...` token and GitHub would reject it with
+        // "A JSON web token could not be decoded", silently aborting the
+        // claim of the addedByUserId row.
+        const res = await deps.app.app.request(
+          "GET /app/installations/{installation_id}",
+          { installation_id: installationId },
+        );
         // The currentUser middleware runs ahead of this route, so the
         // cookie session (if any) is already loaded. Attribute the
         // installation to the user who just round-tripped through GitHub's

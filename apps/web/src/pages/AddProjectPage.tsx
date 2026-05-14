@@ -100,9 +100,13 @@ function RepoPicker({ installation }: { installation: InstallationSummary }) {
         {repos.isLoading ? (
           <Skeleton className="h-20 w-full" />
         ) : repos.isError ? (
-          <div className="py-8 text-center text-sm text-destructive">
-            Failed to load repos: {formatReposError(repos.error)}
-          </div>
+          isInstallationGone(repos.error) ? (
+            <InstallationGoneNotice />
+          ) : (
+            <div className="py-8 text-center text-sm text-destructive">
+              Failed to load repos: {formatReposError(repos.error)}
+            </div>
+          )
         ) : !repos.data || repos.data.available.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
             No repos available — they may all be added already, or this installation has no
@@ -132,6 +136,36 @@ function RepoPicker({ installation }: { installation: InstallationSummary }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function isInstallationGone(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    typeof err.body === "object" &&
+    err.body !== null &&
+    (err.body as { code?: unknown }).code === "installation_gone"
+  );
+}
+
+function InstallationGoneNotice() {
+  return (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm">
+      <div className="font-medium">GitHub App installation no longer exists</div>
+      <p className="mt-1 text-muted-foreground">
+        The OpenCara GitHub App installation behind this row is gone — usually
+        because it was uninstalled, or its account was renamed/deleted.
+        Reinstall the App on the same account, then reload this page.
+      </p>
+      <a
+        href={APP_INSTALL_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 inline-flex items-center gap-1 text-foreground underline underline-offset-2 hover:no-underline"
+      >
+        Reinstall the OpenCara App <ExternalLink className="size-3.5" />
+      </a>
+    </div>
   );
 }
 

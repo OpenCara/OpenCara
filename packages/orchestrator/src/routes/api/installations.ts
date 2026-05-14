@@ -7,6 +7,10 @@ import { loadOwnedInstallation } from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
 import { syncInstallationRepos, upsertInstallation } from "../../github/installations.js";
 import { backfillIssues } from "../../github/issues.js";
+import {
+  INSTALLATION_GONE_BODY,
+  isInstallationGoneError,
+} from "../../github/errors.js";
 import { ulid } from "ulid";
 import { ensureBuiltinFlowsForProject } from "../../flows/builtin.js";
 
@@ -21,10 +25,19 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
 
   r.get("/", async (c) => {
     const user = c.get("user")!;
+    // Hide rows that webhook-marked as suspended/gone — they can't mint a
+    // token, so any UI built on them (available-repos, project add) would
+    // just 502. Unsuspend webhook clears suspended_at, so a recovered
+    // installation reappears here automatically.
     const rows = await deps.db
       .select()
       .from(githubInstallations)
-      .where(eq(githubInstallations.addedByUserId, user.id));
+      .where(
+        and(
+          eq(githubInstallations.addedByUserId, user.id),
+          isNull(githubInstallations.suspendedAt),
+        ),
+      );
     return c.json({ installations: rows });
   });
 
@@ -35,16 +48,41 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
     const inst = await loadOwnedInstallation(deps.db, id, user.id);
     if (!inst) return c.json({ error: "installation not found" }, 404);
 
-    const repos = await syncInstallationRepos(deps.app, inst.githubInstallationId);
-    const managed = await deps.db
-      .select({ githubRepoId: projects.githubRepoId, removedAt: projects.removedAt })
-      .from(projects)
-      .where(eq(projects.installationId, id));
-    const managedActive = new Set(
-      managed.filter((m) => !m.removedAt).map((m) => m.githubRepoId),
-    );
-    const available = repos.filter((repo) => !managedActive.has(repo.id));
-    return c.json({ available });
+    try {
+      const repos = await syncInstallationRepos(deps.app, inst.githubInstallationId);
+      const managed = await deps.db
+        .select({ githubRepoId: projects.githubRepoId, removedAt: projects.removedAt })
+        .from(projects)
+        .where(eq(projects.installationId, id));
+      const managedActive = new Set(
+        managed.filter((m) => !m.removedAt).map((m) => m.githubRepoId),
+      );
+      const available = repos.filter((repo) => !managedActive.has(repo.id));
+      return c.json({ available });
+    } catch (err) {
+      // Self-heal a row whose GitHub installation has been deleted: mark
+      // suspended_at so the list endpoint hides it on next load. Mirrors
+      // the kanban route's installation_gone surface, and complements the
+      // installation.deleted webhook (which also sets suspended_at — this
+      // covers the case where the webhook never landed).
+      if (isInstallationGoneError(err)) {
+        await deps.db
+          .update(githubInstallations)
+          .set({ suspendedAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(githubInstallations.id, id),
+              isNull(githubInstallations.suspendedAt),
+            ),
+          );
+        return c.json(INSTALLATION_GONE_BODY, 502);
+      }
+      console.error("[installations] available-repos failed", { id, err });
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        500,
+      );
+    }
   });
 
   r.post("/:id/projects", async (c) => {
