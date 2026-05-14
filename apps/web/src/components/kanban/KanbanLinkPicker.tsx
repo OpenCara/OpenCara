@@ -10,11 +10,44 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ApiError } from "@/lib/api";
 import {
   kanbanProjectsQuery,
   useLinkKanban,
   type DiscoveredProjectV2,
 } from "@/lib/queries";
+
+const APP_INSTALL_URL = "https://github.com/apps/opencara/installations/new";
+
+function isInstallationGone(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    typeof err.body === "object" &&
+    err.body !== null &&
+    (err.body as { code?: unknown }).code === "installation_gone"
+  );
+}
+
+function InstallationGoneNotice() {
+  return (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm">
+      <div className="font-medium">GitHub App installation no longer exists</div>
+      <p className="mt-1 text-muted-foreground">
+        The OpenCara GitHub App installation that owns this project is gone —
+        usually because it was uninstalled, or its account was renamed/deleted.
+        Reinstall the App on the same account, then reload this page.
+      </p>
+      <a
+        href={APP_INSTALL_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 inline-flex items-center gap-1 text-foreground underline underline-offset-2 hover:no-underline"
+      >
+        Reinstall the OpenCara App <ExternalLink className="size-3.5" />
+      </a>
+    </div>
+  );
+}
 
 export function KanbanLinkPicker({ projectId }: { projectId: string }) {
   const q = useQuery(kanbanProjectsQuery(projectId));
@@ -34,10 +67,14 @@ export function KanbanLinkPicker({ projectId }: { projectId: string }) {
         {q.isLoading ? (
           <Skeleton className="h-24 w-full" />
         ) : q.error ? (
-          <div className="text-sm text-destructive">
-            Failed to load projects:{" "}
-            {q.error instanceof Error ? q.error.message : String(q.error)}
-          </div>
+          isInstallationGone(q.error) ? (
+            <InstallationGoneNotice />
+          ) : (
+            <div className="text-sm text-destructive">
+              Failed to load projects:{" "}
+              {q.error instanceof Error ? q.error.message : String(q.error)}
+            </div>
+          )
         ) : !q.data || q.data.projects.length === 0 ? (
           <div className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
             No Projects v2 boards visible to this installation. Create one on
@@ -58,13 +95,18 @@ export function KanbanLinkPicker({ projectId }: { projectId: string }) {
           </div>
         )}
         <div className="flex items-center justify-between gap-2">
-          {link.error && (
-            <div className="text-xs text-destructive">
-              {link.error instanceof Error
-                ? link.error.message
-                : String(link.error)}
-            </div>
-          )}
+          {link.error &&
+            (isInstallationGone(link.error) ? (
+              <div className="text-xs text-destructive">
+                GitHub App installation is gone — reinstall and reload.
+              </div>
+            ) : (
+              <div className="text-xs text-destructive">
+                {link.error instanceof Error
+                  ? link.error.message
+                  : String(link.error)}
+              </div>
+            ))}
           <div className="ml-auto">
             <Button
               size="sm"

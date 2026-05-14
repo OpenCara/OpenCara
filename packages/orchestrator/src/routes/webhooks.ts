@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../db/client.js";
 import {
@@ -301,7 +301,37 @@ async function handleMetaEvent(
     });
     if (!row) return;
 
-    if (payload.action === "deleted") {
+    if (payload.action === "created") {
+      // Reinstall self-heal. If the user uninstalled the App and reinstalled
+      // it (same account, new installation id), their existing projects are
+      // still bound to the OLD installation row — whose github_installation_id
+      // now returns 404 from POST /app/installations/{id}/access_tokens.
+      // Every kanban / issue / token-mint call against that dead id fails
+      // opaquely, and the user has no in-app remedy.
+      //
+      // Match by repo id (stable, unique) rather than account_login: some
+      // pre-existing rows carry account_login='unknown' because they were
+      // first seen via a non-installation webhook (whose payload omits
+      // installation.account), and login-based matching misses them.
+      //
+      // Don't touch removedAt — the same column is also used by the user's
+      // own "remove project" UI action, so blindly clearing it on reinstall
+      // would resurrect projects the user had explicitly removed. The
+      // existing Add Project flow already restores soft-removed rows on
+      // demand.
+      const repoIds = (payload.repositories ?? []).map((r) => r.id);
+      if (repoIds.length > 0) {
+        await db
+          .update(projects)
+          .set({ installationId: row.id })
+          .where(
+            and(
+              inArray(projects.githubRepoId, repoIds),
+              ne(projects.installationId, row.id),
+            ),
+          );
+      }
+    } else if (payload.action === "deleted") {
       await db
         .update(projects)
         .set({ removedAt: new Date() })
