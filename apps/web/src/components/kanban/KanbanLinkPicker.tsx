@@ -77,10 +77,11 @@ export function KanbanLinkPicker({ projectId }: { projectId: string }) {
           )
         ) : !q.data || q.data.projects.length === 0 ? (
           <div className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
-            No Projects v2 boards visible to this installation. Create one on
-            GitHub (or attach an existing board to this repo), then refresh.
-            Org-level boards require the App to be installed at the org level
-            with <span className="font-mono">Projects: Read &amp; Write</span>.
+            No Projects v2 boards to link. Create one on GitHub (or attach an
+            existing board to this repo), then refresh. Org-level boards
+            require the App to be installed at the org with{" "}
+            <span className="font-mono">Projects: Read &amp; Write</span>;
+            user-owned boards surface via your GitHub login.
           </div>
         ) : (
           <div className="space-y-2">

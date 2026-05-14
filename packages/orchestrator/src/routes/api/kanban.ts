@@ -18,7 +18,9 @@
 // linkId rotates.
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
+import { Octokit } from "@octokit/rest";
 import { ulid } from "ulid";
 import { and, asc, eq } from "drizzle-orm";
 import type { Sql } from "postgres";
@@ -31,6 +33,8 @@ import {
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { GithubAppClient } from "../../github/app.js";
+import { getFreshUserToken, type TokenCipher } from "../../auth/session.js";
+import type { GithubOAuth } from "../../github/oauth.js";
 import {
   backfillBoard,
   fetchProjectSnapshot,
@@ -47,6 +51,8 @@ interface KanbanRoutesDeps {
   db: Db;
   pg: Sql;
   app?: GithubAppClient;
+  cipher?: TokenCipher;
+  oauth?: GithubOAuth;
 }
 
 const KANBAN_NOTIFY_CHANNEL = "kanban_link";
@@ -107,16 +113,112 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     return row[0]!;
   };
 
+  /**
+   * Build an Octokit authed as the *requesting user*, not the App installation.
+   * Needed because GitHub App installation tokens cannot read user-owned
+   * Projects v2 boards (no "Account permissions → Projects" exists on App
+   * registrations); the user-to-server OAuth token already issued at login
+   * does see them. Refresh-on-expiry is handled inside getFreshUserToken.
+   *
+   * Returns null when the session is missing, has no refresh token, or
+   * refresh fails — callers respond 401 so the user re-logs in rather than
+   * silently falling back to a token that can't see the board.
+   */
+  const userOctokit = async (
+    c: Context<AuthEnv>,
+  ): Promise<Octokit | null> => {
+    if (!deps.cipher || !deps.oauth) return null;
+    const session = c.get("session");
+    if (!session) return null;
+    try {
+      const token = await getFreshUserToken(
+        deps.db,
+        deps.cipher,
+        deps.oauth,
+        session.id,
+      );
+      if (!token) return null;
+      return new Octokit({ auth: token });
+    } catch (err) {
+      console.error("[kanban] user oauth refresh failed", {
+        sessionId: session.id,
+        err,
+      });
+      return null;
+    }
+  };
+
+  /**
+   * Fetch a board snapshot with a user-token-first, installation-token-fallback
+   * strategy. The user token sees both user-owned boards and boards in orgs
+   * the user belongs to; falling back covers org boards in installations the
+   * user has but isn't a member of (rare but real). Throws if neither path
+   * works; caller maps to 5xx.
+   */
+  const snapshotWithFallback = async (
+    c: Context<AuthEnv>,
+    projectNodeId: string,
+    githubInstallationId: number,
+  ) => {
+    const userOcto = await userOctokit(c);
+    if (userOcto) {
+      try {
+        return await fetchProjectSnapshot(userOcto, projectNodeId);
+      } catch (err) {
+        if (!deps.app) throw err;
+        // Fall through to installation token. We deliberately swallow the
+        // user-token error here — most failure modes (board not found via
+        // user, permission missing) are exactly the ones the installation
+        // path is meant to cover.
+        console.warn("[kanban] user-token snapshot failed, falling back", {
+          projectNodeId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (!deps.app) {
+      throw new Error("github app not configured and no user token available");
+    }
+    const installOcto = await deps.app.forInstallation(githubInstallationId);
+    return fetchProjectSnapshot(installOcto, projectNodeId);
+  };
+
+  /**
+   * Pick the right Octokit for a *known* board owner: user token for
+   * User-owned boards (installation tokens can't see them), installation
+   * token for Organization-owned boards (preserves the pre-existing path
+   * + permission model). Used by refresh and drag, where the link row
+   * already records the owner type.
+   */
+  const octokitForBoard = async (
+    c: Context<AuthEnv>,
+    ownerType: "User" | "Organization",
+    githubInstallationId: number,
+  ): Promise<Octokit | null> => {
+    if (ownerType === "User") {
+      return userOctokit(c);
+    }
+    if (!deps.app) return null;
+    return deps.app.forInstallation(githubInstallationId);
+  };
+
   r.get("/projects/:id/kanban/projects", auth, async (c) => {
-    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
     const user = c.get("user")!;
     const ctx = await loadProject(id, user.id);
     if (!ctx) return c.json({ error: "project not found" }, 404);
-    try {
-      const octokit = await deps.app.forInstallation(
-        ctx.installation.githubInstallationId,
+    // Discovery uses the user OAuth token rather than the installation
+    // token: user-owned Projects v2 boards are invisible to installation
+    // tokens, and the user-to-server token sees both their own boards AND
+    // boards in orgs they belong to — strictly more relevant for picker UX.
+    const octokit = await userOctokit(c);
+    if (!octokit) {
+      return c.json(
+        { error: "user oauth token unavailable; sign in again" },
+        401,
       );
+    }
+    try {
       const list = await listAvailableProjects(
         octokit,
         ctx.project.owner,
@@ -125,9 +227,6 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       return c.json({ projects: list });
     } catch (err) {
       console.error("[kanban] list projects failed", { id, err });
-      if (isInstallationGoneError(err)) {
-        return c.json(INSTALLATION_GONE_BODY, 502);
-      }
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
         500,
@@ -148,7 +247,6 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   });
 
   r.put("/projects/:id/kanban/link", auth, async (c) => {
-    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
     const body = (await c.req.json().catch(() => ({}))) as {
       projectNodeId?: unknown;
@@ -163,15 +261,16 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     if (!ctx) return c.json({ error: "project not found" }, 404);
 
     try {
-      const octokit = await deps.app.forInstallation(
+      // Snapshot path: try the user OAuth token first (the only token that
+      // can see user-owned Projects v2), then fall back to the App
+      // installation token for org-owned boards the user isn't a member
+      // of. The two-step keeps both common shapes working without forcing
+      // the caller to pre-declare the owner type.
+      const snapshot = await snapshotWithFallback(
+        c,
+        projectNodeId,
         ctx.installation.githubInstallationId,
       );
-
-      // Validate the new board BEFORE touching the existing link. If the
-      // GraphQL fetch fails (board removed, no Status field, perms missing,
-      // etc.), the user keeps whatever link they had — we do not strand
-      // the project unlinked just because the new candidate didn't pan out.
-      const snapshot = await fetchProjectSnapshot(octokit, projectNodeId);
 
       const linkId = ulid();
       // Replace + populate now that we trust the snapshot. If the DB ops
@@ -271,7 +370,6 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   // Last-writer-wins: a webhook arriving after our update is authoritative,
   // so we don't bother locking the local row.
   r.patch("/projects/:id/kanban/items/:itemNodeId", auth, async (c) => {
-    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
     const itemNodeId = c.req.param("itemNodeId");
     if (!itemNodeId) return c.json({ error: "itemNodeId required" }, 400);
@@ -321,10 +419,25 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     });
     if (!itemRow) return c.json({ error: "item not in this board" }, 404);
 
-    try {
-      const octokit = await deps.app.forInstallation(
-        ctx.installation.githubInstallationId,
+    const ownerType: "User" | "Organization" =
+      link.githubProjectOwnerType === "User" ? "User" : "Organization";
+    const octokit = await octokitForBoard(
+      c,
+      ownerType,
+      ctx.installation.githubInstallationId,
+    );
+    if (!octokit) {
+      return c.json(
+        {
+          error:
+            ownerType === "User"
+              ? "user oauth token unavailable; sign in again"
+              : "github app not configured",
+        },
+        ownerType === "User" ? 401 : 503,
       );
+    }
+    try {
       await setItemStatus(
         octokit,
         {
@@ -484,7 +597,6 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   });
 
   r.post("/projects/:id/kanban/refresh", auth, async (c) => {
-    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
     const user = c.get("user")!;
     const ctx = await loadProject(id, user.id);
@@ -493,10 +605,25 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       where: eq(projectV2Links.projectId, id),
     });
     if (!link) return c.json({ error: "not linked" }, 404);
-    try {
-      const octokit = await deps.app.forInstallation(
-        ctx.installation.githubInstallationId,
+    const ownerType: "User" | "Organization" =
+      link.githubProjectOwnerType === "User" ? "User" : "Organization";
+    const octokit = await octokitForBoard(
+      c,
+      ownerType,
+      ctx.installation.githubInstallationId,
+    );
+    if (!octokit) {
+      return c.json(
+        {
+          error:
+            ownerType === "User"
+              ? "user oauth token unavailable; sign in again"
+              : "github app not configured",
+        },
+        ownerType === "User" ? 401 : 503,
       );
+    }
+    try {
       const result = await backfillBoard(
         deps.db,
         { id: link.id, githubProjectNodeId: link.githubProjectNodeId },
