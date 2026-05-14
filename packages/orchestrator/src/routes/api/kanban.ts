@@ -154,6 +154,17 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
    * the user belongs to; falling back covers org boards in installations the
    * user has but isn't a member of (rare but real). Throws if neither path
    * works; caller maps to 5xx.
+   *
+   * **Consistency guard for Org-owned boards:** every subsequent Refresh /
+   * Drag call dispatches Organization-owned boards through the installation
+   * token (see octokitForBoard). If we accept a user-token snapshot for an
+   * Org board and the installation cannot actually reach it, the link
+   * persists but every future write 5xxs. So when the user-token snapshot
+   * says "Organization," we re-fetch via the installation as the
+   * authoritative path before returning. Either both can read the board
+   * (consistent) or the link is refused at create-time (no stranded row).
+   * User-owned boards skip this — installation tokens are blind to them
+   * by design, and User-owned writes go through the user token anyway.
    */
   const snapshotWithFallback = async (
     c: Context<AuthEnv>,
@@ -161,9 +172,10 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     githubInstallationId: number,
   ) => {
     const userOcto = await userOctokit(c);
+    let userSnap: Awaited<ReturnType<typeof fetchProjectSnapshot>> | null = null;
     if (userOcto) {
       try {
-        return await fetchProjectSnapshot(userOcto, projectNodeId);
+        userSnap = await fetchProjectSnapshot(userOcto, projectNodeId);
       } catch (err) {
         if (!deps.app) throw err;
         // Fall through to installation token. We deliberately swallow the
@@ -175,6 +187,15 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
           err: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    if (userSnap) {
+      if (userSnap.ownerType === "User" || !deps.app) return userSnap;
+      // Org-owned via user token: re-fetch through the installation so the
+      // snapshot we persist matches the auth path Refresh/Drag will use.
+      // If the installation can't reach the board, this throws and the
+      // link PUT route surfaces the error without ever writing a row.
+      const installOcto = await deps.app.forInstallation(githubInstallationId);
+      return fetchProjectSnapshot(installOcto, projectNodeId);
     }
     if (!deps.app) {
       throw new Error("github app not configured and no user token available");
