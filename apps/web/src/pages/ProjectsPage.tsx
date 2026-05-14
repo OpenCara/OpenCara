@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
+import { Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -12,7 +13,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { projectsQuery, type ProjectListItem } from "@/lib/queries";
+import {
+  projectsQuery,
+  useRemoveProject,
+  type ProjectListItem,
+} from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 
 export function ProjectsPage() {
@@ -58,6 +63,7 @@ export function ProjectsPage() {
                   <TableHead>Last event</TableHead>
                   <TableHead>Runs (7d)</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-0" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -74,6 +80,8 @@ export function ProjectsPage() {
 }
 
 function ProjectRow({ project }: { project: ProjectListItem }) {
+  const remove = useRemoveProject();
+  const isRemoved = !!project.removedAt;
   return (
     <TableRow>
       <TableCell className="font-medium">
@@ -95,6 +103,27 @@ function ProjectRow({ project }: { project: ProjectListItem }) {
       <TableCell className="text-sm">{project.recentRunsCount}</TableCell>
       <TableCell>
         <StatusBadge project={project} />
+      </TableCell>
+      <TableCell className="text-right">
+        {!isRemoved && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={remove.isPending}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Remove project "${project.owner}/${project.name}"? OpenCara will stop watching this repo.`,
+                )
+              ) {
+                remove.mutate(project.id);
+              }
+            }}
+            aria-label="Remove project"
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        )}
       </TableCell>
     </TableRow>
   );
