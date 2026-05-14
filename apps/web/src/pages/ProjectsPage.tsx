@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
+import { Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -12,7 +13,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { projectsQuery, type ProjectListItem } from "@/lib/queries";
+import {
+  projectsQuery,
+  useRemoveProject,
+  type ProjectListItem,
+} from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 
 export function ProjectsPage() {
@@ -58,6 +63,7 @@ export function ProjectsPage() {
                   <TableHead>Last event</TableHead>
                   <TableHead>Runs (7d)</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-0" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -74,6 +80,7 @@ export function ProjectsPage() {
 }
 
 function ProjectRow({ project }: { project: ProjectListItem }) {
+  const remove = useRemoveProject();
   return (
     <TableRow>
       <TableCell className="font-medium">
@@ -96,12 +103,30 @@ function ProjectRow({ project }: { project: ProjectListItem }) {
       <TableCell>
         <StatusBadge project={project} />
       </TableCell>
+      <TableCell className="text-right">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={remove.isPending}
+          onClick={() => {
+            if (
+              window.confirm(
+                `Remove project "${project.owner}/${project.name}"? This permanently deletes its issues, flows, and flow-run history.`,
+              )
+            ) {
+              remove.mutate(project.id);
+            }
+          }}
+          aria-label="Remove project"
+        >
+          <Trash2 className="size-4" />
+        </Button>
+      </TableCell>
     </TableRow>
   );
 }
 
 function StatusBadge({ project }: { project: ProjectListItem }) {
-  if (project.removedAt) return <Badge variant="outline">removed</Badge>;
   if (project.installationSuspendedAt) return <Badge variant="destructive">suspended</Badge>;
   return <Badge>active</Badge>;
 }
