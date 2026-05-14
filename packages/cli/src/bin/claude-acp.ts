@@ -14,26 +14,28 @@
 // Wire model:
 //   - Speaks ACP on its own stdio (we are the agent in this layer).
 //   - Per `session/prompt`, spawns `claude -p --output-format stream-json
-//     --session-id <uuid> --dangerously-skip-permissions`, writes the
-//     prompt text to claude's stdin, and pipes its JSONL stdout
-//     through the translator. Stdin (not argv) carries the prompt so
-//     large flow-injected contexts don't trip Linux's per-string
-//     execve cap (MAX_ARG_STRLEN, 128 KiB on a 4 KiB-page host).
+//     <id-flag> --dangerously-skip-permissions`, writes the prompt text
+//     to claude's stdin, and pipes its JSONL stdout through the
+//     translator. Stdin (not argv) carries the prompt so large
+//     flow-injected contexts don't trip Linux's per-string execve cap
+//     (MAX_ARG_STRLEN, 128 KiB on a 4 KiB-page host).
 //   - Translates exactly two Claude events:
 //       * `{type:"assistant", message:{content:[{type:"text",text}]}}`
 //          → `session/update` `agent_message_chunk` (text)
 //       * `{type:"result", subtype, is_error, ...}`
 //          → resolves the prompt request with `stopReason`
 //     Everything else is dropped silently (no harm, just no surfacing).
-//   - `--session-id <uuid>` is Claude's own resume mechanism. The ACP
-//     `sessionId` IS the value we pass to `--session-id`, so resume
-//     across processes works: the orchestrator persists the id between
-//     iterations, calls `session/load` next time, and Claude CLI
-//     replays its conversation JSONL from
-//     `~/.claude/projects/<cwd-hash>/<id>.jsonl` internally. If that
-//     file is missing (claude pruned it, or this is a different
-//     device), Claude silently starts fresh under the same id —
-//     conversation context is lost but the run still succeeds.
+//   - The ACP `sessionId` IS the Claude CLI session UUID. Choice of
+//     id-flag depends on whether the JSONL already exists on disk:
+//       * `session/new` → first prompt uses `--session-id <uuid>`
+//         (creates a fresh session under that id). After that prompt
+//         the JSONL exists, so the in-process state flips and any
+//         later prompt on the same session uses `--resume <uuid>`.
+//       * `session/load` → every prompt uses `--resume <uuid>`. The
+//         orchestrator only calls `session/load` after a prior run
+//         persisted the id, so the JSONL is expected to exist; using
+//         `--session-id` on an existing JSONL fails with "Session ID
+//         is already in use" and exits 1.
 //   - `session/load` does NOT replay history via `session/update`
 //     notifications. The Claude CLI handles replay internally; the
 //     ACP client (orchestrator) doesn't need a synthesized stream.
@@ -79,13 +81,21 @@ function notify(method: string, params: unknown): void {
 // ─── State ─────────────────────────────────────────────────────────
 
 interface SessionState {
-  /** ACP `sessionId` doubles as Claude's `--session-id`. Carrying just
+  /** ACP `sessionId` doubles as Claude's session UUID. Carrying just
    *  the cwd here is enough — the id is the map key. Single UUID for
    *  both layers means resume across processes works: the orchestrator
    *  passes the same id back via `session/load` next iteration and
    *  Claude CLI replays from
    *  `~/.claude/projects/<cwd-hash>/<id>.jsonl`. */
   cwd: string;
+  /** Whether the next prompt should resume an existing Claude session
+   *  (`--resume <uuid>`) instead of creating a new one
+   *  (`--session-id <uuid>`). `session/load` sets this true; a
+   *  `session/new` followed by a successful first prompt flips this
+   *  true so subsequent in-process turns also resume. Required
+   *  because Claude rejects `--session-id` against an existing JSONL
+   *  with "Session ID is already in use" (exit 1). */
+  resume: boolean;
 }
 
 export const sessions = new Map<string, SessionState>();
@@ -108,6 +118,10 @@ async function runClaudeTurn(
   promptText: string,
 ): Promise<ClaudePromptResult> {
   return new Promise<ClaudePromptResult>((resolve, reject) => {
+    // `--session-id` *creates* a session under the given UUID and
+    // errors if the JSONL already exists; `--resume` attaches to an
+    // existing one. See SessionState.resume for why we track this.
+    const idFlag = state.resume ? "--resume" : "--session-id";
     const args = [
       "-p",
       "--output-format",
@@ -117,7 +131,7 @@ async function runClaudeTurn(
       // sense only when stdin can be partial too.
       "--include-partial-messages",
       "--verbose",
-      "--session-id",
+      idFlag,
       sessionId,
       // Headless: no human in the loop to approve tool use. Matches the
       // legacy `claudeAdapter` posture in agents/kinds.ts.
@@ -314,7 +328,7 @@ interface NewSessionParams {
 
 export function handleNewSession(params: NewSessionParams): unknown {
   const sessionId = randomUUID();
-  sessions.set(sessionId, { cwd: params.cwd ?? process.cwd() });
+  sessions.set(sessionId, { cwd: params.cwd ?? process.cwd(), resume: false });
   return { sessionId };
 }
 
@@ -327,16 +341,15 @@ interface LoadSessionParams {
 export function handleLoadSession(params: LoadSessionParams): unknown {
   // The orchestrator persists the (kind, id) pair after each successful
   // run and replays it here on the next iteration. We register the id
-  // in our in-memory map; Claude CLI handles the actual conversation
-  // replay on the next `--session-id <id>` invocation by reading
-  // `~/.claude/projects/<cwd-hash>/<id>.jsonl`. If that file is missing
-  // (pruned, or this is a different device than ran the prior turn),
-  // Claude silently starts a new conversation under the same id — the
-  // operator sees a fresh response with no error.
+  // in our in-memory map and mark it for resume; Claude CLI handles the
+  // actual conversation replay on the next `--resume <id>` invocation
+  // by reading `~/.claude/projects/<cwd-hash>/<id>.jsonl`. If that file
+  // has been pruned, `claude --resume` will surface its own error,
+  // which propagates to the operator instead of being papered over.
   if (typeof params.sessionId !== "string" || params.sessionId.length === 0) {
     throw new Error("session/load: sessionId required");
   }
-  sessions.set(params.sessionId, { cwd: params.cwd ?? process.cwd() });
+  sessions.set(params.sessionId, { cwd: params.cwd ?? process.cwd(), resume: true });
   return {};
 }
 
@@ -362,6 +375,12 @@ async function handlePrompt(params: PromptParams): Promise<unknown> {
     throw new Error("session/prompt: no text content blocks");
   }
   const result = await runClaudeTurn(params.sessionId, state, promptText);
+  // After a successful first turn, Claude has written the JSONL under
+  // this id — subsequent turns on the same session must `--resume`, or
+  // Claude will reject `--session-id` with "already in use". We flip
+  // unconditionally on completion: even if the turn ended in refusal,
+  // claude still creates the session file before failing.
+  state.resume = true;
   return { stopReason: result.stopReason };
 }
 

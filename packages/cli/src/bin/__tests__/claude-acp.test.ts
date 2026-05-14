@@ -34,6 +34,11 @@ describe("handleNewSession", () => {
     const r = handleNewSession({} as { cwd: string }) as { sessionId: string };
     assert.equal(sessions.get(r.sessionId)?.cwd, process.cwd());
   });
+
+  it("starts in non-resume mode so the first turn uses --session-id", () => {
+    const r = handleNewSession({ cwd: "/tmp" }) as { sessionId: string };
+    assert.equal(sessions.get(r.sessionId)?.resume, false);
+  });
 });
 
 describe("handleLoadSession", () => {
@@ -43,6 +48,12 @@ describe("handleLoadSession", () => {
     assert.deepEqual(r, {});
     assert.ok(sessions.has(id));
     assert.equal(sessions.get(id)?.cwd, "/wt/branch");
+  });
+
+  it("marks the session for resume so the next turn uses --resume, not --session-id", () => {
+    const id = "11111111-2222-3333-4444-555555555555";
+    handleLoadSession({ sessionId: id, cwd: "/wt/branch" });
+    assert.equal(sessions.get(id)?.resume, true);
   });
 
   it("rejects an empty sessionId so callers fail loud, not silently", () => {
