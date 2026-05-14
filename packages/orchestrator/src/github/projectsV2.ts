@@ -76,14 +76,27 @@ interface ListProjectsResponse {
   organization: {
     projectsV2: { nodes: RawDiscoveredProject[] | null };
   } | null;
+  user: {
+    projectsV2: { nodes: RawDiscoveredProject[] | null };
+  } | null;
 }
 
 /**
- * Discover Projects v2 the installation can see for a given repo. Merges the
- * repo's attached projects with the org's projects (a repo can be attached to
- * org-level boards), de-duplicating by node id. User-level projects are not
- * enumerable via GraphQL without the `read:project` user scope, so user-owned
- * repos see only repo-attached boards.
+ * Discover Projects v2 visible to the caller for a given repo. Merges three
+ * arms — boards attached to the repo, boards owned by the org (if owner is
+ * an Org), and boards owned by the user (if owner is a User) — and dedupes
+ * by node id.
+ *
+ * The `organization` and `user` arms each return NOT_FOUND when the owner
+ * isn't of that type; we swallow exactly that failure mode and keep the
+ * partial data so a single GraphQL round-trip handles both owner shapes
+ * regardless of which one this caller is. Any other GraphQL error
+ * (auth, rate limit, schema) propagates.
+ *
+ * Reach is bounded by the caller's token. With a GitHub App installation
+ * token, user-owned Projects v2 are filtered out by GitHub even when
+ * repo-attached — kanban callers pass a user OAuth token instead so user
+ * boards surface. (See packages/orchestrator/src/routes/api/kanban.ts.)
  */
 export async function listAvailableProjects(
   octokit: Octokit,
@@ -121,6 +134,20 @@ export async function listAvailableProjects(
           }
         }
       }
+      user(login: $owner) {
+        projectsV2(first: 50) {
+          nodes {
+            id
+            number
+            title
+            owner {
+              __typename
+              ... on Organization { login }
+              ... on User { login }
+            }
+          }
+        }
+      }
     }
   `;
 
@@ -128,25 +155,25 @@ export async function listAvailableProjects(
   try {
     res = await octokit.graphql<ListProjectsResponse>(query, { owner, repo });
   } catch (err) {
-    // The `organization(login:...)` selection fails (NOT_FOUND) when the
-    // owner is a User account, not an Org. Octokit surfaces partial data
-    // alongside the error. Only swallow that specific failure mode — any
-    // other GraphQL error (auth, rate limit, network, schema mismatch)
-    // should propagate so the caller surfaces it.
+    // The `organization(login:...)` arm 404s when the owner is a User, and
+    // the `user(login:...)` arm 404s when the owner is an Org. Octokit
+    // surfaces partial data alongside the error. Swallow ONLY that pair of
+    // failure modes — any other GraphQL error (auth, rate limit, network,
+    // schema mismatch) should propagate so the caller surfaces it.
     const errs = (err as {
       errors?: Array<{ type?: string; path?: Array<string | number> }>;
     }).errors;
     const partial = (err as { data?: ListProjectsResponse }).data;
-    const onlyOrgLookupFailed =
+    const onlyOwnerLookupFailed =
       Array.isArray(errs) &&
       errs.length > 0 &&
       errs.every(
         (e) =>
           e.type === "NOT_FOUND" &&
           Array.isArray(e.path) &&
-          e.path[0] === "organization",
+          (e.path[0] === "organization" || e.path[0] === "user"),
       );
-    if (!partial || !onlyOrgLookupFailed) throw err;
+    if (!partial || !onlyOwnerLookupFailed) throw err;
     res = partial;
   }
 
@@ -165,6 +192,7 @@ export async function listAvailableProjects(
   };
   for (const n of res.repository?.projectsV2.nodes ?? []) push(n);
   for (const n of res.organization?.projectsV2.nodes ?? []) push(n);
+  for (const n of res.user?.projectsV2.nodes ?? []) push(n);
   return Array.from(out.values()).sort((a, b) => a.number - b.number);
 }
 

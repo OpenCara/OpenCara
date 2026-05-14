@@ -3,7 +3,7 @@ import { ulid } from "ulid";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { sessions, users } from "../db/schema.js";
-import type { UserTokens, ViewerProfile } from "../github/oauth.js";
+import type { GithubOAuth, UserTokens, ViewerProfile } from "../github/oauth.js";
 
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12;
@@ -155,4 +155,50 @@ export async function getDecryptedAccessToken(
   const row = await db.query.sessions.findFirst({ where: eq(sessions.id, sessionId) });
   if (!row) return null;
   return cipher.decrypt(row.githubAccessTokenEnc);
+}
+
+// Refresh the GitHub user-to-server OAuth token if it's at or near expiry,
+// persist the rotated tokens back to the session row, and return the live
+// access token. Used by routes that need to make calls as the user (e.g.
+// kanban discovery on user-owned Projects v2, which the App installation
+// token cannot see). Returns null on session/user-token miss; throws if the
+// refresh itself fails (caller surfaces a 401/502 — re-login is the fix).
+//
+// Skew: GitHub's user tokens last ~8h; refreshing a minute early keeps us
+// out of the half-second race where we decide "still valid" then GitHub
+// expires it mid-request.
+const REFRESH_SKEW_MS = 60 * 1000;
+
+export async function getFreshUserToken(
+  db: Db,
+  cipher: TokenCipher,
+  oauth: GithubOAuth,
+  sessionId: string,
+): Promise<string | null> {
+  const row = await db.query.sessions.findFirst({ where: eq(sessions.id, sessionId) });
+  if (!row) return null;
+  const now = Date.now();
+  const exp = row.githubTokenExpiresAt?.getTime();
+  if (exp && exp - REFRESH_SKEW_MS > now) {
+    return cipher.decrypt(row.githubAccessTokenEnc);
+  }
+  // Past skew OR no expiry recorded. The no-expiry case can happen for
+  // legacy sessions written before user-token refresh was wired up — treat
+  // them as "refresh if we can," fall back to the stored token if we can't.
+  if (!row.githubRefreshTokenEnc) {
+    return exp && exp <= now ? null : cipher.decrypt(row.githubAccessTokenEnc);
+  }
+  const refresh = cipher.decrypt(row.githubRefreshTokenEnc);
+  const next = await oauth.refreshUserToken(refresh);
+  await db
+    .update(sessions)
+    .set({
+      githubAccessTokenEnc: cipher.encrypt(next.accessToken),
+      githubRefreshTokenEnc: next.refreshToken
+        ? cipher.encrypt(next.refreshToken)
+        : row.githubRefreshTokenEnc,
+      githubTokenExpiresAt: next.expiresAt ?? null,
+    })
+    .where(eq(sessions.id, sessionId));
+  return next.accessToken;
 }
