@@ -73,6 +73,26 @@ export function notifyKanbanLink(
   );
 }
 
+/**
+ * Detect "this installation no longer exists on GitHub" — Octokit's
+ * createAppAuth surfaces it as a 404 from POST
+ * /app/installations/{id}/access_tokens when we try to mint a token.
+ * Distinct from a "board not found" 404 (which comes from a GraphQL call),
+ * so we match the request URL too.
+ */
+function isInstallationGoneError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { status?: unknown; request?: { url?: unknown } };
+  if (e.status !== 404) return false;
+  const url = e.request?.url;
+  return typeof url === "string" && url.includes("/access_tokens");
+}
+
+const INSTALLATION_GONE_BODY = {
+  error: "GitHub App installation no longer exists on GitHub",
+  code: "installation_gone" as const,
+};
+
 export function kanbanRoutes(deps: KanbanRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
@@ -121,6 +141,9 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       return c.json({ projects: list });
     } catch (err) {
       console.error("[kanban] list projects failed", { id, err });
+      if (isInstallationGoneError(err)) {
+        return c.json(INSTALLATION_GONE_BODY, 502);
+      }
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
         500,
@@ -197,6 +220,9 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       return c.json({ link: fresh });
     } catch (err) {
       console.error("[kanban] link failed", { id, projectNodeId, err });
+      if (isInstallationGoneError(err)) {
+        return c.json(INSTALLATION_GONE_BODY, 502);
+      }
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
         500,
