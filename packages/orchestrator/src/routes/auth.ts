@@ -87,23 +87,34 @@ export function authRoutes(deps: AuthRouteDeps) {
         const res = await octokit.request("GET /app/installations/{installation_id}", {
           installation_id: installationId,
         });
-        await upsertInstallation(deps.db, {
-          id: res.data.id,
-          account: res.data.account
-            ? {
-                id: (res.data.account as { id: number }).id,
-                login: (res.data.account as { login?: string; slug?: string }).login ??
-                  (res.data.account as { slug?: string }).slug ??
-                  "unknown",
-                type: (res.data.account as { type?: string }).type,
-              }
-            : undefined,
-          target_type: res.data.target_type,
-          repository_selection: res.data.repository_selection,
-          permissions: res.data.permissions as Record<string, string>,
-          events: res.data.events,
-          suspended_at: res.data.suspended_at ?? null,
-        });
+        // The currentUser middleware runs ahead of this route, so the
+        // cookie session (if any) is already loaded. Attribute the
+        // installation to the user who just round-tripped through GitHub's
+        // setup screen — this is the only point in the flow where we
+        // reliably know who initiated the install. upsertInstallation
+        // refuses to overwrite a row that's already attributed.
+        const sessionUser = c.get("user");
+        await upsertInstallation(
+          deps.db,
+          {
+            id: res.data.id,
+            account: res.data.account
+              ? {
+                  id: (res.data.account as { id: number }).id,
+                  login: (res.data.account as { login?: string; slug?: string }).login ??
+                    (res.data.account as { slug?: string }).slug ??
+                    "unknown",
+                  type: (res.data.account as { type?: string }).type,
+                }
+              : undefined,
+            target_type: res.data.target_type,
+            repository_selection: res.data.repository_selection,
+            permissions: res.data.permissions as Record<string, string>,
+            events: res.data.events,
+            suspended_at: res.data.suspended_at ?? null,
+          },
+          { addedByUserId: sessionUser?.id ?? null },
+        );
       } catch (err) {
         console.error("[auth] setup sync error", err);
       }

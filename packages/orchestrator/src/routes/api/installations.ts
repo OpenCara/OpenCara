@@ -1,8 +1,9 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { githubInstallations, projects } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedInstallation } from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
 import { syncInstallationRepos, upsertInstallation } from "../../github/installations.js";
 import { backfillIssues } from "../../github/issues.js";
@@ -19,16 +20,19 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
   r.use("*", requireUser());
 
   r.get("/", async (c) => {
-    const rows = await deps.db.select().from(githubInstallations);
+    const user = c.get("user")!;
+    const rows = await deps.db
+      .select()
+      .from(githubInstallations)
+      .where(eq(githubInstallations.addedByUserId, user.id));
     return c.json({ installations: rows });
   });
 
   r.get("/:id/available-repos", async (c) => {
     if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
-    const inst = await deps.db.query.githubInstallations.findFirst({
-      where: eq(githubInstallations.id, id),
-    });
+    const user = c.get("user")!;
+    const inst = await loadOwnedInstallation(deps.db, id, user.id);
     if (!inst) return c.json({ error: "installation not found" }, 404);
 
     const repos = await syncInstallationRepos(deps.app, inst.githubInstallationId);
@@ -51,10 +55,18 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
     const repoId = body.githubRepoId;
     if (!repoId) return c.json({ error: "githubRepoId required" }, 400);
 
+    // Accept the installation if it's already attributed to this user OR
+    // if it's an unattributed row (NULL) — in the second case we claim it
+    // for this user below, alongside the project insert. This is the
+    // self-heal path for installations created by webhook before the
+    // adder column existed.
     const inst = await deps.db.query.githubInstallations.findFirst({
       where: eq(githubInstallations.id, id),
     });
     if (!inst) return c.json({ error: "installation not found" }, 404);
+    if (inst.addedByUserId != null && inst.addedByUserId !== user.id) {
+      return c.json({ error: "installation not found" }, 404);
+    }
 
     const repos = await syncInstallationRepos(deps.app, inst.githubInstallationId);
     const repo = repos.find((r) => r.id === repoId);
@@ -64,6 +76,12 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
       where: eq(projects.githubRepoId, repoId),
     });
     if (existing) {
+      // Don't reveal someone else's project by repoId. The same repo can
+      // only be attached to one opencara project at a time, so a foreign
+      // owner here is a hard 404 — not "reattach as yours".
+      if (existing.addedByUserId !== user.id) {
+        return c.json({ error: "installation not found" }, 404);
+      }
       if (existing.removedAt) {
         await deps.db
           .update(projects)
@@ -71,6 +89,36 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
           .where(eq(projects.id, existing.id));
       }
       return c.json({ project: { ...existing, removedAt: null } }, 200);
+    }
+    // Self-heal: claim an unattributed installation row for this user the
+    // first time anyone adds a project under it. After this point the row
+    // is locked in (`upsertInstallation` refuses to overwrite a non-NULL
+    // addedByUserId, and the gate above refuses foreign-attributed rows).
+    //
+    // The UPDATE's `WHERE addedByUserId IS NULL` makes the claim atomic
+    // against concurrent first-adds, but if a racing claim wins, the
+    // 0-row result would otherwise be silently ignored — and we'd proceed
+    // to insert a project under an installation that's now owned by
+    // someone else. Use RETURNING + a re-check on miss to refuse cleanly.
+    if (inst.addedByUserId == null) {
+      const claimed = await deps.db
+        .update(githubInstallations)
+        .set({ addedByUserId: user.id })
+        .where(
+          and(
+            eq(githubInstallations.id, id),
+            isNull(githubInstallations.addedByUserId),
+          ),
+        )
+        .returning({ id: githubInstallations.id });
+      if (claimed.length === 0) {
+        const refreshed = await deps.db.query.githubInstallations.findFirst({
+          where: eq(githubInstallations.id, id),
+        });
+        if (!refreshed || refreshed.addedByUserId !== user.id) {
+          return c.json({ error: "installation not found" }, 404);
+        }
+      }
     }
     const newId = ulid();
     await deps.db.insert(projects).values({

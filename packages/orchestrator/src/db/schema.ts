@@ -109,6 +109,13 @@ export const githubInstallations = pgTable(
     permissions: jsonb("permissions").$type<Record<string, string>>().notNull().default({}),
     events: jsonb("events").$type<string[]>().notNull().default([]),
     suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    // Who first attributed this installation via /auth/github/setup or by
+    // adding the first project under it. Used as the ACL key for listing
+    // and per-installation routes — webhook upserts leave this NULL until
+    // the next attribution event claims the row.
+    addedByUserId: text("added_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     installedAt: timestamp("installed_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -117,6 +124,7 @@ export const githubInstallations = pgTable(
       t.githubInstallationId,
     ),
     accountLoginIdx: index("github_installations_account_login_idx").on(t.accountLogin),
+    addedByUserIdIdx: index("github_installations_added_by_user_id_idx").on(t.addedByUserId),
   }),
 );
 
@@ -494,6 +502,14 @@ export const agentRuns = pgTable(
     flowRunStepId: text("flow_run_step_id").references(() => flowRunSteps.id, {
       onDelete: "set null",
     }),
+    // Direct attribution for runs that aren't pinned to a project (agent
+    // Test button, chat panels on non-project pages). The /api/runs/:id
+    // gate authorises on this when projectId is null. Set on the
+    // /api/agents/:id/test and /api/chat/messages inserts; flow-engine
+    // runs leave it null and stay project-gated.
+    addedByUserId: text("added_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -505,6 +521,7 @@ export const agentRuns = pgTable(
       t.createdAt.desc(),
     ),
     flowRunStepIdx: index("agent_runs_flow_run_step_id_idx").on(t.flowRunStepId),
+    addedByUserIdIdx: index("agent_runs_added_by_user_id_idx").on(t.addedByUserId),
   }),
 );
 

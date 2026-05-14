@@ -78,17 +78,22 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   const auth = requireUser();
 
   /**
-   * Resolve a project + its installation by opencara project id, or return a
-   * Hono error response. Centralised so each route stays short.
+   * Resolve a project + its installation, gated by ownership. Returns null
+   * for both "no row" and "not yours" so callers respond with the same 404.
    */
-  const loadProject = async (projectId: string) => {
+  const loadProject = async (projectId: string, userId: string) => {
     const row = await deps.db
       .select({
         project: projects,
         installation: githubInstallations,
       })
       .from(projects)
-      .where(eq(projects.id, projectId))
+      .where(
+        and(
+          eq(projects.id, projectId),
+          eq(projects.addedByUserId, userId),
+        ),
+      )
       .innerJoin(
         githubInstallations,
         eq(projects.installationId, githubInstallations.id),
@@ -101,7 +106,8 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   r.get("/projects/:id/kanban/projects", auth, async (c) => {
     if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
-    const ctx = await loadProject(id);
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
     if (!ctx) return c.json({ error: "project not found" }, 404);
     try {
       const octokit = await deps.app.forInstallation(
@@ -124,6 +130,9 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
 
   r.get("/projects/:id/kanban/link", auth, async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
+    if (!ctx) return c.json({ error: "not linked" }, 404);
     const link = await deps.db.query.projectV2Links.findFirst({
       where: eq(projectV2Links.projectId, id),
     });
@@ -142,7 +151,8 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     if (!projectNodeId) {
       return c.json({ error: "projectNodeId required" }, 400);
     }
-    const ctx = await loadProject(id);
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
     if (!ctx) return c.json({ error: "project not found" }, 404);
 
     try {
@@ -196,6 +206,9 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
 
   r.delete("/projects/:id/kanban/link", auth, async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
+    if (!ctx) return c.json({ error: "project not found" }, 404);
     const existing = await deps.db.query.projectV2Links.findFirst({
       where: eq(projectV2Links.projectId, id),
     });
@@ -209,17 +222,16 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
 
   r.get("/projects/:id/kanban", auth, async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
+    if (!ctx) return c.json({ error: "project not found" }, 404);
     // Carry project repo identity so the UI can decide whether an item
     // (which on a multi-repo Projects v2 board can come from any repo)
     // belongs to *this* project's repo. Used to gate the in-app Edit
     // pencil — sending users to /projects/:id/issues/:n on a foreign
     // repo's issue would route to the wrong record.
-    const project = await deps.db.query.projects.findFirst({
-      where: eq(projects.id, id),
-    });
-    const projectRepo = project
-      ? { owner: project.owner, name: project.name }
-      : null;
+    const project = ctx.project;
+    const projectRepo = { owner: project.owner, name: project.name };
 
     const link = await deps.db.query.projectV2Links.findFirst({
       where: eq(projectV2Links.projectId, id),
@@ -269,7 +281,8 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       );
     }
 
-    const ctx = await loadProject(id);
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
     if (!ctx) return c.json({ error: "project not found" }, 404);
     const link = await deps.db.query.projectV2Links.findFirst({
       where: eq(projectV2Links.projectId, id),
@@ -375,16 +388,16 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   //      writeSnapshot() calls can finish out of order; the client just
   //      replaces cache with whichever lands last. The chain ensures
   //      arrival order on the wire matches notify order.
-  r.get("/projects/:id/kanban/stream", auth, (c) => {
+  r.get("/projects/:id/kanban/stream", auth, async (c) => {
     const id = c.req.param("id");
+    const user = c.get("user")!;
+    // Gate the SSE handshake — a foreign id must return a normal 404, not
+    // an indefinitely-open empty stream that leaks "this id exists".
+    const ctx = await loadProject(id, user.id);
+    if (!ctx) return c.json({ error: "project not found" }, 404);
+    const projectRepo = { owner: ctx.project.owner, name: ctx.project.name };
     return streamSSE(c, async (sse) => {
       const loadSnapshot = async () => {
-        const project = await deps.db.query.projects.findFirst({
-          where: eq(projects.id, id),
-        });
-        const projectRepo = project
-          ? { owner: project.owner, name: project.name }
-          : null;
 
         const link = await deps.db.query.projectV2Links.findFirst({
           where: eq(projectV2Links.projectId, id),
@@ -463,7 +476,8 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
   r.post("/projects/:id/kanban/refresh", auth, async (c) => {
     if (!deps.app) return c.json({ error: "github app not configured" }, 503);
     const id = c.req.param("id");
-    const ctx = await loadProject(id);
+    const user = c.get("user")!;
+    const ctx = await loadProject(id, user.id);
     if (!ctx) return c.json({ error: "project not found" }, 404);
     const link = await deps.db.query.projectV2Links.findFirst({
       where: eq(projectV2Links.projectId, id),

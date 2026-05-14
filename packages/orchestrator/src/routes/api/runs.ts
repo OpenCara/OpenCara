@@ -5,6 +5,7 @@ import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import { agentRunLogs, agentRuns } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedProject } from "../../auth/ownership.js";
 
 interface RunRoutesDeps {
   db: Db;
@@ -17,9 +18,32 @@ export function runRoutes(deps: RunRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
 
+  // Authorise a run by either: (a) direct attribution via addedByUserId
+  // (set by /api/agents/:id/test and /api/chat/messages — these runs have
+  // no project, so this is their only path to readability), or (b) the
+  // run's project is owned by the caller. agent_runs.project_id is
+  // nullable; a null-project run with no addedByUserId (e.g. internal
+  // worktree-cleanup) stays 404 here — not user-initiated, not
+  // user-readable.
+  const runIsAccessible = async (runId: string, userId: string) => {
+    const run = await deps.db.query.agentRuns.findFirst({
+      where: eq(agentRuns.id, runId),
+      columns: { id: true, projectId: true, addedByUserId: true },
+    });
+    if (!run) return false;
+    if (run.addedByUserId === userId) return true;
+    if (!run.projectId) return false;
+    const owned = await loadOwnedProject(deps.db, run.projectId, userId);
+    return !!owned;
+  };
+
   // One-shot snapshot of logs.
   r.get("/runs/:id/logs", auth, async (c) => {
     const runId = c.req.param("id");
+    const user = c.get("user")!;
+    if (!(await runIsAccessible(runId, user.id))) {
+      return c.json({ error: "not found" }, 404);
+    }
     const since = Number.parseInt(c.req.query("since") ?? "-1", 10);
     const rows = await deps.db
       .select()
@@ -34,8 +58,14 @@ export function runRoutes(deps: RunRoutesDeps) {
   });
 
   // SSE stream: replays existing logs then tails via pg LISTEN/NOTIFY.
-  r.get("/runs/:id/logs/stream", auth, (c) => {
+  r.get("/runs/:id/logs/stream", auth, async (c) => {
     const runId = c.req.param("id");
+    const user = c.get("user")!;
+    // Gate before streamSSE — otherwise an unowned id keeps an empty
+    // stream open and signals "this id exists".
+    if (!(await runIsAccessible(runId, user.id))) {
+      return c.json({ error: "not found" }, 404);
+    }
     // Resume from the browser's Last-Event-ID on EventSource auto-reconnect.
     // Without this, every transient blip replays the whole backlog and the
     // UI shows the log repeated.

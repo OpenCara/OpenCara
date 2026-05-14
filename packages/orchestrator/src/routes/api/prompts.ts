@@ -9,6 +9,7 @@ import {
   prompts,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
+import { loadOwnedProject } from "../../auth/ownership.js";
 
 interface PromptRoutesDeps {
   db: Db;
@@ -124,7 +125,19 @@ export function promptRoutes(deps: PromptRoutesDeps) {
   // ─── Flow node settings (linkage) ───────────────────────────
 
   r.get("/projects/:projectId/flows/:flowId/node-settings", auth, async (c) => {
+    const user = c.get("user")!;
+    const projectId = c.req.param("projectId");
     const flowId = c.req.param("flowId");
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "flow not found in project" }, 404);
+    // Mirror the PUT route's pairing check — flowNodeSettings is keyed by
+    // flowId alone, so without verifying flow.projectId === projectId a
+    // caller can pair their own (owned) projectId with a foreign flowId
+    // and read that flow's prompt/agent bindings.
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+    });
+    if (!flow) return c.json({ error: "flow not found in project" }, 404);
     const rows = await deps.db
       .select()
       .from(flowNodeSettings)
@@ -163,9 +176,11 @@ export function promptRoutes(deps: PromptRoutesDeps) {
             ? null
             : String(labelRaw).trim() || null;
 
-      // Flow must belong to the project; prompt + agent must belong to the
-      // current user (cross-project allowed since both libraries are user-
-      // scoped now).
+      // Project must belong to the caller; flow must belong to the project;
+      // prompt + agent must belong to the current user (cross-project allowed
+      // since both libraries are user-scoped now).
+      const owned = await loadOwnedProject(deps.db, projectId, user.id);
+      if (!owned) return c.json({ error: "flow not found in project" }, 404);
       const flow = await deps.db.query.flows.findFirst({
         where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
       });
