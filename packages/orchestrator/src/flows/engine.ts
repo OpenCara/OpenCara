@@ -1,7 +1,12 @@
 import { ulid } from "ulid";
 import { eq, type InferSelectModel } from "drizzle-orm";
 import type { Sql } from "postgres";
-import { FlowDefinitionSchema, type FlowDefinition, type FlowNode } from "@opencara/flows";
+import {
+  FlowDefinitionSchema,
+  isTriggerKind,
+  type FlowDefinition,
+  type FlowNode,
+} from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import {
   agentRunLogs,
@@ -544,8 +549,8 @@ export class FlowEngine {
 
     try {
       let result;
-      if (node.kind === "github.pull_request" || node.kind === "github.projects_v2_item") {
-        result = await triggerRunner(baseCtx, node);
+      if (isTriggerKind(node.kind)) {
+        result = await triggerRunner(baseCtx, node as never);
       } else if (node.kind === "agent") {
         result = await agentRunner(baseCtx, node);
       } else {
