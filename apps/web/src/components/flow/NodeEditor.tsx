@@ -420,6 +420,7 @@ interface AgentDraftPrToggleProps {
 function AgentDraftPrToggle({ scope, node }: AgentDraftPrToggleProps) {
   const cfg = (node.config ?? {}) as {
     draftPr?: boolean;
+    worktree?: unknown;
   };
   const [enabled, setEnabled] = useState(Boolean(cfg.draftPr));
   const set = useSetNodeConfig(scope);
@@ -427,6 +428,8 @@ function AgentDraftPrToggle({ scope, node }: AgentDraftPrToggleProps) {
   useEffect(() => {
     setEnabled(Boolean(cfg.draftPr));
   }, [node.id, cfg.draftPr]);
+
+  if (!cfg.worktree) return null;
 
   const save = () => {
     set.mutate({

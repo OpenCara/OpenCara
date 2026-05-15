@@ -695,7 +695,10 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     env["OPENCARA_WORKTREE_BRANCH"] = worktree.branch;
     if (worktree.sessionDir) env["OPENCARA_SESSION_DIR"] = worktree.sessionDir;
   }
-  if (node.config.draftPr) {
+  const issueImplementRun = Boolean(
+    worktree?.branch && ctx.issueContext?.stdin.issue?.number,
+  );
+  if (node.config.draftPr && issueImplementRun) {
     env["OPENCARA_PR_DRAFT"] = "1";
   }
 
@@ -714,8 +717,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // dropped it from contextInjection.env would silently break the
   // shell snippets in the skill prose.
   const implementSkill =
-    worktree?.branch &&
-    ctx.issueContext?.stdin.issue?.number
+    issueImplementRun && ctx.issueContext?.stdin.issue?.number && worktree?.branch
       ? buildIssueImplementContractSkill({
           baseUrl: ctx.publicBaseUrl,
           runId: agentRunId,
@@ -953,10 +955,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   //   - `transient-failure` (network / 5xx on the list call) → log
   //     and continue; the agent's work is unaffected and the PR may
   //     well exist.
-  if (
-    ctx.issueContext?.stdin.issue?.number &&
-    worktree?.branch
-  ) {
+  if (issueImplementRun && ctx.issueContext?.stdin.issue?.number && worktree?.branch) {
     let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
     try {
       const octokit = await ctx.app.forInstallation(
@@ -982,7 +981,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     }
   }
 
-  if (node.config.draftPr && worktree?.branch) {
+  if (node.config.draftPr && issueImplementRun && worktree?.branch) {
     try {
       const octokit = await ctx.app.forInstallation(
         ctx.installation.githubInstallationId,
@@ -995,7 +994,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       });
     } catch (err) {
       console.error("[flows] mark-draft-pr-ready post-step failed", err);
-      throw err;
     }
   }
 
