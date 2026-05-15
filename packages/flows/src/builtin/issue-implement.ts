@@ -4,7 +4,7 @@ export const issueImplementFlow: FlowDefinition = {
   slug: "issue-implement",
   name: "Issue → Implement",
   description:
-    "When a Projects v2 issue moves to Ready, dispatch the implement agent inside a per-PR-branch worktree. The agent reads the issue (title/body/labels/assignees on stdin) and is expected to: make changes, commit, push the branch, and run `gh pr create` to open the PR itself. The worktree persists across flow runs (so `pr-review-fix` reuses it) and is removed on `pull_request.closed`. Add an `agent:<name>` label to the issue (e.g. `agent:claude-impl`) to pick a specific agent per-issue; without that label, the agent linked on this node runs as the default.",
+    "When a Projects v2 issue moves to Ready, dispatch the implement agent inside a per-PR-branch worktree. The agent reads the issue (title/body/labels/assignees on stdin) and is expected to: make changes, commit, push the branch, and run `gh pr create` to open the PR itself. Enable Create draft PR to have the agent open a draft first and the engine mark it ready after a successful run. The worktree persists across flow runs (so `pr-review-fix` reuses it) and is removed on `pull_request.closed`. Add an `agent:<name>` label to the issue (e.g. `agent:claude-impl`) to pick a specific agent per-issue; without that label, the agent linked on this node runs as the default.",
   nodes: [
     {
       id: "t1",
@@ -24,6 +24,7 @@ export const issueImplementFlow: FlowDefinition = {
       position: { x: 320, y: 0 },
       config: {
         label: "Implement agent",
+        draftPr: false,
         contextInjection: {
           env: [
             "OPENCARA_REPO",
@@ -34,6 +35,7 @@ export const issueImplementFlow: FlowDefinition = {
             "OPENCARA_WORKTREE_DIR",
             "OPENCARA_WORKTREE_BRANCH",
             "OPENCARA_SESSION_DIR",
+            "OPENCARA_PR_DRAFT",
           ],
           stdinJson: true,
         },

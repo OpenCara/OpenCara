@@ -28,6 +28,7 @@ export const prReviewFlow: FlowDefinition = {
       position: { x: 280, y: 0 },
       config: {
         label: "Reviewer agent",
+        draftPr: false,
         contextInjection: {
           env: [
             "OPENCARA_REPO",

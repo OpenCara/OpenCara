@@ -117,7 +117,9 @@ export function isTriggerKind(kind: string): boolean {
 // linked agent's `kind` via `buildAcpSpec` (orchestrator's
 // `agents/acp-gate.ts`). Per-node knobs that DO affect dispatch live on
 // `config` directly: `contextInjection` (which env keys + stdin payload
-// reach the agent) and optional `worktree` (per-PR-branch checkout).
+// reach the agent), `draftPr` (agent opens a draft PR that the engine
+// marks ready after success), and optional `worktree` (per-PR-branch
+// checkout).
 export const AgentNodeSchema = z.object({
   id: z.string(),
   kind: z.literal("agent"),
@@ -128,6 +130,7 @@ export const AgentNodeSchema = z.object({
       env: z.array(z.string()).default([]),
       stdinJson: z.boolean().default(true),
     }),
+    draftPr: z.boolean().default(false),
     // When set, the engine allocates (or reuses) a stable per-PR-branch
     // worktree on a paired device before dispatching the agent. The
     // worktree persists across flow runs (so a review-fix iteration
@@ -171,7 +174,9 @@ export type AgentNode = z.infer<typeof AgentNodeSchema>;
 // nodes. A worktree is now an option on the agent node itself
 // (`agent.config.worktree`) and PR creation is the agent's
 // responsibility — the agent has GH_TOKEN injected (PR #22) and uses
-// `gh pr create` from inside its worktree. This keeps the engine's
+// `gh pr create` from inside its worktree. When `agent.config.draftPr`
+// is true, the agent opens the PR as a draft and the engine marks it
+// ready after the successful agent step. This keeps the engine's
 // surface to "trigger → agent → optional GitHub side-effect actions".
 export const ActionNodeSchema = z.discriminatedUnion("kind", [
   z.object({

@@ -401,11 +401,70 @@ function AgentNodePanel({
           </Link>
         </div>
 
+        <AgentDraftPrToggle scope={scope} node={node} />
         <AgentWorktreeSection scope={scope} node={node} />
 
         <AgentNodeInspector node={node} />
       </CardContent>
     </Card>
+  );
+}
+
+/* ─── Draft PR toggle on the agent panel ───────────────────────── */
+
+interface AgentDraftPrToggleProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+}
+
+function AgentDraftPrToggle({ scope, node }: AgentDraftPrToggleProps) {
+  const cfg = (node.config ?? {}) as {
+    draftPr?: boolean;
+  };
+  const [enabled, setEnabled] = useState(Boolean(cfg.draftPr));
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setEnabled(Boolean(cfg.draftPr));
+  }, [node.id, cfg.draftPr]);
+
+  const save = () => {
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        ...(node.config ?? {}),
+        draftPr: enabled,
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/10 p-3">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          className="size-4 rounded border-input"
+        />
+        <span>Create draft PR</span>
+      </label>
+      <p className="text-xs text-muted-foreground">
+        Sets <code className="font-mono">OPENCARA_PR_DRAFT=1</code> for the
+        agent. After a successful run, the engine marks the branch's open draft
+        PR ready for review.
+      </p>
+      {set.error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {(set.error as Error).message ?? "Save failed"}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button size="sm" disabled={set.isPending} onClick={save}>
+          {set.isPending ? "Saving…" : "Save draft PR"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -447,6 +506,7 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   // contextInjection) so we don't clobber unrelated keys.
   const cfg = (node.config ?? {}) as {
     label?: string;
+    draftPr?: boolean;
     contextInjection?: unknown;
     worktree?: {
       fromBranch?: string | null;
@@ -488,7 +548,9 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
     // the worktree subfield. Pass the entire object back; the server
     // replaces node.config wholesale.
     const nextConfig: Record<string, unknown> = {
+      ...(node.config ?? {}),
       label: cfg.label,
+      draftPr: Boolean(cfg.draftPr),
       contextInjection: cfg.contextInjection,
     };
     if (enabled) {

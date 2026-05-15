@@ -25,6 +25,7 @@ import { linkPrToIssueAndCopyAgentLabel } from "../github/pulls.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
+import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
 import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
@@ -694,6 +695,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     env["OPENCARA_WORKTREE_BRANCH"] = worktree.branch;
     if (worktree.sessionDir) env["OPENCARA_SESSION_DIR"] = worktree.sessionDir;
   }
+  if (node.config.draftPr) {
+    env["OPENCARA_PR_DRAFT"] = "1";
+  }
 
   // Inject the issue-implement contract skill when this run is shaped
   // like one: a worktree was allocated AND the trigger carries issue
@@ -975,6 +979,23 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
           `The issue-implement flow requires the agent to commit, push the branch, and run \`gh pr create\` before exiting. ` +
           `Check the agent's logs above; the orchestrator now injects the opencara-issue-implement-contract skill to spell out this contract.`,
       );
+    }
+  }
+
+  if (node.config.draftPr && worktree?.branch) {
+    try {
+      const octokit = await ctx.app.forInstallation(
+        ctx.installation.githubInstallationId,
+      );
+      await markDraftPrReadyByHead({
+        octokit,
+        owner: ctx.project.owner,
+        repo: ctx.project.name,
+        headBranch: worktree.branch,
+      });
+    } catch (err) {
+      console.error("[flows] mark-draft-pr-ready post-step failed", err);
+      throw err;
     }
   }
 

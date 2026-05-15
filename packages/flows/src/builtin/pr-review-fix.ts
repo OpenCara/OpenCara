@@ -44,6 +44,7 @@ export const prReviewFixFlow: FlowDefinition = {
       position: { x: 320, y: 0 },
       config: {
         label: "Fix agent",
+        draftPr: false,
         contextInjection: {
           env: [
             "OPENCARA_REPO",

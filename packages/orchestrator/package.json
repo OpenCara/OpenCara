@@ -9,7 +9,7 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "start": "node --env-file=.env dist/index.js",
     "typecheck": "tsc -b",
-    "test": "node --import tsx --test --test-reporter=spec src/agents/__tests__/*.test.ts src/github/__tests__/*.test.ts",
+    "test": "node --import tsx --test --test-reporter=spec src/agents/__tests__/*.test.ts src/github/__tests__/*.test.ts src/flows/__tests__/*.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "clean": "rm -rf dist *.tsbuildinfo"
