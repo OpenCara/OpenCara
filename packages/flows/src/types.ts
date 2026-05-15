@@ -2,18 +2,21 @@ import { z } from "zod";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
-// Mirrors GitHub Actions' on.pull_request filter set. PR-review
-// events are a SEPARATE trigger kind (see
-// GithubPullRequestReviewTriggerSchema) — splitting them keeps the
-// pull_request trigger's filters (branches/paths/labels/drafts)
-// from leaking into the review-fix flow's narrower config surface.
+// Mirrors GitHub Actions' on.pull_request filter set, plus a fifth
+// "commented" action that wakes the flow on an `issue_comment.created`
+// webhook when the comment body contains `commentPhrase` (default
+// `@opencara review`). The comment path bypasses branches/paths/labels/
+// drafts filters — only the phrase match gates it. PR-review events
+// remain a SEPARATE trigger kind (see GithubPullRequestReviewTriggerSchema).
 export const GithubPullRequestTriggerSchema = z.object({
   id: z.string(),
   kind: z.literal("github.pull_request"),
   position: Position,
   config: z.object({
     actions: z
-      .array(z.enum(["opened", "synchronize", "reopened", "ready_for_review"]))
+      .array(
+        z.enum(["opened", "synchronize", "reopened", "ready_for_review", "commented"]),
+      )
       .min(1),
     branches: z.array(z.string()).default([]),
     branchesIgnore: z.array(z.string()).default([]),
@@ -22,6 +25,10 @@ export const GithubPullRequestTriggerSchema = z.object({
     labels: z.array(z.string()).default([]),
     labelsIgnore: z.array(z.string()).default([]),
     ignoreDrafts: z.boolean().default(false),
+    // Substring (case-insensitive) matched against `issue_comment.created`
+    // comment.body when "commented" is in actions. Empty string matches
+    // any comment.
+    commentPhrase: z.string().default("@opencara review"),
   }),
 });
 export type GithubPullRequestTrigger = z.infer<typeof GithubPullRequestTriggerSchema>;

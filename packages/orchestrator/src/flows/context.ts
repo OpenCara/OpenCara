@@ -13,6 +13,17 @@ export interface PullRequestContext {
      *  Surfaced to the agent so the review-fix flow can read it as
      *  the next instruction without scraping env vars. */
     review?: { state?: string; body?: string | null; user?: { login?: string } };
+    /** Set on `issue_comment.created` events on a PR — the comment that
+     *  woke the flow (e.g. via the "@opencara review" mention path).
+     *  Surfaced so downstream agents can read the operator's request
+     *  without scraping env vars. */
+    comment?: {
+      id?: number;
+      body?: string;
+      user?: { login?: string };
+      html_url?: string;
+      created_at?: string;
+    };
   };
 }
 
@@ -46,7 +57,9 @@ interface ProjectLike {
 }
 
 interface PullRequestPayload {
-  pull_request: {
+  // Present on `pull_request` and `pull_request_review` webhooks. Absent
+  // on `issue_comment` (the PR has to be fetched by issue.number).
+  pull_request?: {
     number: number;
     head: { sha: string; ref?: string };
     base: { sha: string };
@@ -60,6 +73,21 @@ interface PullRequestPayload {
     body?: string | null;
     user?: { login?: string };
   };
+  // Present on `issue_comment.created` events that fire the PR trigger's
+  // "commented" action. `issue.pull_request` is the URL-bag GitHub uses
+  // to signal "this issue is a PR"; without it the trigger has already
+  // rejected the event upstream.
+  issue?: {
+    number: number;
+    pull_request?: unknown;
+  };
+  comment?: {
+    id?: number;
+    body?: string;
+    user?: { login?: string };
+    html_url?: string;
+    created_at?: string;
+  };
 }
 
 export async function buildPullRequestContext(
@@ -69,7 +97,30 @@ export async function buildPullRequestContext(
   payload: PullRequestPayload,
 ): Promise<PullRequestContext> {
   const oct = await app.forInstallation(installation.githubInstallationId);
-  const prNumber = payload.pull_request.number;
+
+  // PR-lifecycle / PR-review webhooks carry pull_request inline.
+  // issue_comment-on-PR doesn't — fetch the PR object first.
+  let prObject: {
+    number: number;
+    head: { sha: string; ref?: string };
+    base: { sha: string };
+  };
+  if (payload.pull_request) {
+    prObject = payload.pull_request;
+  } else if (payload.issue?.pull_request && typeof payload.issue.number === "number") {
+    const prRes = await oct.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+      owner: project.owner,
+      repo: project.name,
+      pull_number: payload.issue.number,
+    });
+    prObject = prRes.data as typeof prObject;
+  } else {
+    throw new Error(
+      "buildPullRequestContext: payload has neither pull_request nor issue.pull_request",
+    );
+  }
+
+  const prNumber = prObject.number;
 
   const diffRes = await oct.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
     owner: project.owner,
@@ -82,11 +133,11 @@ export async function buildPullRequestContext(
   const envExtras: Record<string, string> = {
     OPENCARA_REPO: payload.repository.full_name,
     OPENCARA_PR_NUMBER: String(prNumber),
-    OPENCARA_PR_HEAD_SHA: payload.pull_request.head.sha,
-    OPENCARA_PR_BASE_SHA: payload.pull_request.base.sha,
+    OPENCARA_PR_HEAD_SHA: prObject.head.sha,
+    OPENCARA_PR_BASE_SHA: prObject.base.sha,
   };
-  if (payload.pull_request.head.ref) {
-    envExtras["OPENCARA_PR_HEAD_REF"] = payload.pull_request.head.ref;
+  if (prObject.head.ref) {
+    envExtras["OPENCARA_PR_HEAD_REF"] = prObject.head.ref;
   }
   if (payload.review) {
     if (payload.review.state) envExtras["OPENCARA_REVIEW_STATE"] = payload.review.state;
@@ -94,10 +145,24 @@ export async function buildPullRequestContext(
     if (payload.review.user?.login)
       envExtras["OPENCARA_REVIEW_AUTHOR"] = payload.review.user.login;
   }
+  if (payload.comment) {
+    if (payload.comment.body) envExtras["OPENCARA_COMMENT_BODY"] = payload.comment.body;
+    if (payload.comment.user?.login)
+      envExtras["OPENCARA_COMMENT_AUTHOR"] = payload.comment.user.login;
+    if (typeof payload.comment.id === "number")
+      envExtras["OPENCARA_COMMENT_ID"] = String(payload.comment.id);
+    if (payload.comment.html_url)
+      envExtras["OPENCARA_COMMENT_HTML_URL"] = payload.comment.html_url;
+  }
 
   return {
     envExtras,
-    stdin: { pr: payload.pull_request, diff, review: payload.review },
+    stdin: {
+      pr: prObject,
+      diff,
+      review: payload.review,
+      comment: payload.comment,
+    },
   };
 }
 
