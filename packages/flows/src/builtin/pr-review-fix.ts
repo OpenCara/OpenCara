@@ -32,6 +32,10 @@ export const prReviewFixFlow: FlowDefinition = {
         // (the closed AI review→fix loop). Add human logins or `*`
         // here to also fire on human reviews.
         users: ["opencara[bot]"],
+        // Also fire on an `@opencara fix` PR comment so operators can
+        // wake the fix agent on demand without submitting a full
+        // review. Empty string would disable comment-triggering.
+        commentPhrase: "@opencara fix",
       },
     },
     {
@@ -50,6 +54,9 @@ export const prReviewFixFlow: FlowDefinition = {
             "OPENCARA_REVIEW_STATE",
             "OPENCARA_REVIEW_BODY",
             "OPENCARA_REVIEW_AUTHOR",
+            "OPENCARA_COMMENT_BODY",
+            "OPENCARA_COMMENT_AUTHOR",
+            "OPENCARA_COMMENT_HTML_URL",
             "OPENCARA_WORKTREE_DIR",
             "OPENCARA_WORKTREE_BRANCH",
             "OPENCARA_SESSION_DIR",
