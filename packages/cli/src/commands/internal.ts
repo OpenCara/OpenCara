@@ -105,6 +105,16 @@ function worktreeCreate(args: string[]): void {
   if (useLfs && !useCache) {
     fail("--lfs requires --cache-repo");
   }
+  if (useLfs && !hasGitLfs()) {
+    // Pre-flight so the operator-facing error names the missing tool
+    // and the host, instead of the cryptic stderr from a downstream
+    // `git lfs fetch` (which prints "git: 'lfs' is not a git command").
+    fail(
+      "--lfs is set but git-lfs is not installed on this host — " +
+        "install it (e.g. `apt install git-lfs && git lfs install`) " +
+        "or disable LFS on the agent.worktree.cacheRepo config",
+    );
+  }
   // safeKey takes "owner/name" → "owner/name" (segments sanitized),
   // which is the natural cache layout.
   const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo)) : null;
@@ -369,6 +379,17 @@ function refExists(cwd: string, ref: string): boolean {
   try {
     execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], {
       cwd,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasGitLfs(): boolean {
+  try {
+    execFileSync("git", ["lfs", "version"], {
       stdio: ["ignore", "ignore", "ignore"],
     });
     return true;

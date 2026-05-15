@@ -619,7 +619,15 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       flowRunStepId: null,
     });
     if (allocateResult.exitCode !== 0) {
-      throw new Error(`worktree allocation exited with code ${allocateResult.exitCode}`);
+      // Surface the real cause into flow_run_steps.error so operators
+      // don't have to drill into agent_run_logs for a one-line problem
+      // like "git-lfs not installed" or "branch not found on origin".
+      const tail = allocateResult.stderrTail.trim();
+      const host = allocateResult.agentHostId;
+      const detail = tail.length > 0 ? `: ${tail}` : "";
+      throw new Error(
+        `worktree allocation on host ${host} exited with code ${allocateResult.exitCode}${detail}`,
+      );
     }
 
     // Parse {workdir, branch, sessionDir, priorSession} from the CLI's
@@ -1179,7 +1187,7 @@ interface DispatchAgentRunOpts {
 async function dispatchAgentRun(
   ctx: NodeRunCtx,
   opts: DispatchAgentRunOpts,
-): Promise<RunResult> {
+): Promise<RunResult & { stderrTail: string }> {
   // Token markers go into the persisted spec.env so the audit row shows
   // injection happened — the real token is overwritten onto the live env
   // AFTER insert (see below) and never reaches the DB. GIT_*_NAME/EMAIL
@@ -1236,8 +1244,23 @@ async function dispatchAgentRun(
     delete opts.env["GITHUB_TOKEN"];
   }
 
+  // Bounded stderr ring buffer so non-zero exits can carry the real
+  // cause into the thrown Error / flow_run_steps.error column. The full
+  // log is still in agent_run_logs; this is just what we surface up the
+  // engine stack so operators don't have to dig.
+  const STDERR_TAIL_BYTES = 4000;
+  const stderrChunks: string[] = [];
+  let stderrBytes = 0;
   let seq = 0;
   const onLog = (stream: LogStream, chunk: string) => {
+    if (stream === "stderr") {
+      stderrChunks.push(chunk);
+      stderrBytes += chunk.length;
+      while (stderrBytes > STDERR_TAIL_BYTES && stderrChunks.length > 1) {
+        stderrBytes -= stderrChunks[0]!.length;
+        stderrChunks.shift();
+      }
+    }
     const mySeq = seq++;
     void ctx.db
       .insert(agentRunLogs)
@@ -1263,7 +1286,7 @@ async function dispatchAgentRun(
         finishedAt: new Date(),
       })
       .where(eq(agentRuns.id, opts.agentRunId));
-    return result;
+    return { ...result, stderrTail: stderrChunks.join("") };
   } catch (err) {
     await ctx.db
       .update(agentRuns)
