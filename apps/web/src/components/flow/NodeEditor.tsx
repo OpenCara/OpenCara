@@ -630,8 +630,11 @@ const TRIGGER_ACTIONS = [
   "synchronize",
   "reopened",
   "ready_for_review",
+  "commented",
 ] as const;
 type TriggerAction = (typeof TRIGGER_ACTIONS)[number];
+
+const DEFAULT_COMMENT_PHRASE = "@opencara review";
 
 interface TriggerCfg {
   actions: TriggerAction[];
@@ -642,6 +645,7 @@ interface TriggerCfg {
   labels: string[];
   labelsIgnore: string[];
   ignoreDrafts: boolean;
+  commentPhrase: string;
 }
 
 function readStringArray(o: Record<string, unknown>, key: string): string[] {
@@ -665,6 +669,8 @@ function readTriggerConfig(raw: unknown): TriggerCfg {
     labels: readStringArray(o, "labels"),
     labelsIgnore: readStringArray(o, "labelsIgnore"),
     ignoreDrafts: o.ignoreDrafts === true,
+    commentPhrase:
+      typeof o.commentPhrase === "string" ? o.commentPhrase : DEFAULT_COMMENT_PHRASE,
   };
 }
 
@@ -678,6 +684,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   const [labels, setLabels] = useState(initial.labels.join(", "));
   const [labelsIgnore, setLabelsIgnore] = useState(initial.labelsIgnore.join(", "));
   const [ignoreDrafts, setIgnoreDrafts] = useState(initial.ignoreDrafts);
+  const [commentPhrase, setCommentPhrase] = useState(initial.commentPhrase);
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
@@ -689,6 +696,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
     setLabels(initial.labels.join(", "));
     setLabelsIgnore(initial.labelsIgnore.join(", "));
     setIgnoreDrafts(initial.ignoreDrafts);
+    setCommentPhrase(initial.commentPhrase);
   }, [initial]);
 
   const toggleAction = (action: TriggerAction) => {
@@ -710,6 +718,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
         labels: parseList(labels),
         labelsIgnore: parseList(labelsIgnore),
         ignoreDrafts,
+        commentPhrase: commentPhrase.trim() || DEFAULT_COMMENT_PHRASE,
       },
     });
   };
@@ -757,6 +766,23 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
             <p className="text-xs text-destructive">Pick at least one action type.</p>
           )}
         </div>
+
+        {actions.includes("commented") && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Comment phrase</div>
+            <Input
+              value={commentPhrase}
+              placeholder={DEFAULT_COMMENT_PHRASE}
+              onChange={(e) => setCommentPhrase(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Fires on <code className="font-mono">issue_comment.created</code> when the
+              comment body contains this text (case-insensitive). Branches / paths /
+              labels / drafts filters are skipped on this path. Empty saves as{" "}
+              <code className="font-mono">{DEFAULT_COMMENT_PHRASE}</code>.
+            </p>
+          </div>
+        )}
 
         <label className="flex items-center gap-2 text-sm">
           <input

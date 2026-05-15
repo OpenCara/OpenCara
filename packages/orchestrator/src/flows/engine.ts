@@ -295,8 +295,21 @@ export class FlowEngine {
     // pull_request_review events use the same context shape — both carry a
     // `pull_request` field and the buildPullRequestContext helper extracts
     // review.state / review.body into envExtras when present.
+    // issue_comment events get the same context only when the comment is on
+    // a PR (issue.pull_request set) — buildPullRequestContext fetches the
+    // PR object by issue.number on that path. Plain-issue comments fall
+    // through and never pay a PR fetch.
     let prContext: PullRequestContext | undefined;
-    if (event.type === "pull_request" || event.type === "pull_request_review") {
+    const isCommentOnPr =
+      event.type === "issue_comment" &&
+      Boolean(
+        (event.payload as { issue?: { pull_request?: unknown } }).issue?.pull_request,
+      );
+    if (
+      event.type === "pull_request" ||
+      event.type === "pull_request_review" ||
+      isCommentOnPr
+    ) {
       try {
         prContext = await buildPullRequestContext(
           this.deps.app,

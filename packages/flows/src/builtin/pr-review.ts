@@ -19,6 +19,7 @@ export const prReviewFlow: FlowDefinition = {
         labels: [],
         labelsIgnore: [],
         ignoreDrafts: false,
+        commentPhrase: "@opencara review",
       },
     },
     {

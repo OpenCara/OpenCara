@@ -88,8 +88,46 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (node.kind !== "github.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${(node as { kind: string }).kind}`);
   }
+  const cfg = node.config;
+
+  // issue_comment.created on a PR — the "commented" virtual action.
+  // Bypasses every PR-shape filter (branches/paths/labels/drafts); only
+  // the phrase match gates it. Edits / deletes don't fire (matches the
+  // pull_request_review "submitted-only" stance: re-firing on a typo
+  // correction would surprise operators).
+  if (ctx.event.type === "issue_comment") {
+    if (!(cfg.actions as readonly string[]).includes("commented")) {
+      throw new SkipFlowError("commented action not enabled on this trigger");
+    }
+    const commentPayload = ctx.event.payload as {
+      action?: string;
+      issue?: { pull_request?: unknown };
+      comment?: { body?: string; user?: { login?: string } };
+    };
+    if (commentPayload.action !== "created") {
+      throw new SkipFlowError(
+        `issue_comment action '${commentPayload.action ?? ""}' is not 'created'`,
+      );
+    }
+    if (!commentPayload.issue?.pull_request) {
+      throw new SkipFlowError("issue_comment is on a plain issue, not a PR");
+    }
+    const body = commentPayload.comment?.body ?? "";
+    const phrase = cfg.commentPhrase ?? "";
+    if (phrase.length > 0 && !body.toLowerCase().includes(phrase.toLowerCase())) {
+      throw new SkipFlowError(`comment body does not contain '${phrase}'`);
+    }
+    return {
+      output: {
+        matched: true,
+        comment: true,
+        commenter: commentPayload.comment?.user?.login ?? null,
+      },
+    };
+  }
+
   if (ctx.event.type !== "pull_request") {
-    throw new SkipFlowError("not a pull_request event");
+    throw new SkipFlowError("not a pull_request or issue_comment event");
   }
   const payload = ctx.event.payload as {
     action?: string;
@@ -104,8 +142,6 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (!node.config.actions.includes(action as never)) {
     throw new SkipFlowError(`pull_request action '${action}' not in trigger filter`);
   }
-
-  const cfg = node.config;
 
   if (cfg.ignoreDrafts && payload.pull_request?.draft === true) {
     throw new SkipFlowError("PR is a draft");
