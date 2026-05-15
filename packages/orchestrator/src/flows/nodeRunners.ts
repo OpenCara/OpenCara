@@ -1039,7 +1039,22 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
 
   switch (node.kind) {
     case "github.post_review": {
-      if (!prPayload.pull_request) throw new Error("post_review requires a pull_request event");
+      // PR object resolution: the lifecycle / pull_request_review webhooks
+      // carry `pull_request` inline on the event payload, but the comment
+      // path (issue_comment on a PR) doesn't — the orchestrator fetches
+      // the PR object in `buildPullRequestContext` and parks it under
+      // `ctx.prContext.stdin.pr`. Read both so a comment-triggered review
+      // flow can still post its review.
+      const pr =
+        prPayload.pull_request ??
+        (ctx.prContext?.stdin.pr as
+          | { number: number; head: { sha: string } }
+          | undefined);
+      if (!pr) {
+        throw new Error(
+          "post_review requires a pull_request event or a comment-on-PR trigger",
+        );
+      }
       // Parse the agent-emitted `verdict: <token>` line off the top of
       // the body (contract enforced upstream by the verdict skill in
       // skills/prReviewVerdict.ts). When present, it drives GitHub's
@@ -1056,10 +1071,10 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
         {
           owner,
           repo,
-          pull_number: requireIssueNumber("post_review"),
+          pull_number: pr.number,
           body: reviewBody || "_(no review body)_",
           event,
-          commit_id: prPayload.pull_request.head.sha,
+          commit_id: pr.head.sha,
         },
       );
       return { output: { reviewId: res.data.id, htmlUrl: res.data.html_url } };
