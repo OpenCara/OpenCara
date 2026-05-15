@@ -219,8 +219,45 @@ async function pullRequestReviewTrigger(
   if (node.kind !== "github.pull_request_review") {
     throw new SkipFlowError(`expected pull_request_review trigger, got ${node.kind}`);
   }
+
+  // issue_comment.created on a PR — the comment-phrase opt-in path.
+  // Bypasses the reviewStates / users filters (those gate reviews, not
+  // comments). Edits / deletes don't fire (same "submitted-only"
+  // stance as the review path: re-firing on a typo correction would
+  // surprise operators).
+  if (ctx.event.type === "issue_comment") {
+    const phrase = node.config.commentPhrase ?? "";
+    if (phrase.length === 0) {
+      throw new SkipFlowError("comment trigger not enabled (commentPhrase is empty)");
+    }
+    const commentPayload = ctx.event.payload as {
+      action?: string;
+      issue?: { pull_request?: unknown };
+      comment?: { body?: string; user?: { login?: string } };
+    };
+    if (commentPayload.action !== "created") {
+      throw new SkipFlowError(
+        `issue_comment action '${commentPayload.action ?? ""}' is not 'created'`,
+      );
+    }
+    if (!commentPayload.issue?.pull_request) {
+      throw new SkipFlowError("issue_comment is on a plain issue, not a PR");
+    }
+    const body = commentPayload.comment?.body ?? "";
+    if (!body.toLowerCase().includes(phrase.toLowerCase())) {
+      throw new SkipFlowError(`comment body does not contain '${phrase}'`);
+    }
+    return {
+      output: {
+        matched: true,
+        comment: true,
+        commenter: commentPayload.comment?.user?.login ?? null,
+      },
+    };
+  }
+
   if (ctx.event.type !== "pull_request_review") {
-    throw new SkipFlowError("not a pull_request_review event");
+    throw new SkipFlowError("not a pull_request_review or issue_comment event");
   }
   const payload = ctx.event.payload as {
     action?: string;

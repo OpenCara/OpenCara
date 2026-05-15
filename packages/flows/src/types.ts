@@ -59,6 +59,13 @@ export const GithubPullRequestReviewTriggerSchema = z.object({
     // (which post reviews as the App's bot identity); add human
     // logins here to opt them in too.
     users: z.array(z.string()).default(["opencara[bot]"]),
+    // Substring (case-insensitive) matched against an
+    // `issue_comment.created` comment.body when present and non-empty.
+    // Empty string = comment-trigger disabled (preserves the original
+    // "only fire on pull_request_review submissions" behavior). When
+    // non-empty, a matching comment fires the flow and bypasses the
+    // reviewStates / users filters (those gate reviews, not comments).
+    commentPhrase: z.string().default(""),
   }),
 });
 export type GithubPullRequestReviewTrigger = z.infer<

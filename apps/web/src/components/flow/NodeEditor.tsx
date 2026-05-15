@@ -877,20 +877,27 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
   const cfg = (node.config ?? {}) as {
     reviewStates?: ReviewState[];
     users?: string[];
+    commentPhrase?: string;
   };
   const initialStates = useMemo<ReviewState[]>(
     () => cfg.reviewStates ?? ["commented", "changes_requested"],
     [cfg.reviewStates],
   );
   const initialUsers = useMemo(() => (cfg.users ?? ["opencara[bot]"]).join(", "), [cfg.users]);
+  const initialCommentPhrase = useMemo(
+    () => (typeof cfg.commentPhrase === "string" ? cfg.commentPhrase : ""),
+    [cfg.commentPhrase],
+  );
   const [states, setStates] = useState<ReviewState[]>(initialStates);
   const [users, setUsers] = useState(initialUsers);
+  const [commentPhrase, setCommentPhrase] = useState(initialCommentPhrase);
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
     setStates(initialStates);
     setUsers(initialUsers);
-  }, [initialStates, initialUsers]);
+    setCommentPhrase(initialCommentPhrase);
+  }, [initialStates, initialUsers, initialCommentPhrase]);
 
   const toggle = (s: ReviewState) =>
     setStates((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
@@ -898,7 +905,11 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
   const save = () => {
     set.mutate({
       nodeId: node.id,
-      config: { reviewStates: states, users: parseList(users) },
+      config: {
+        reviewStates: states,
+        users: parseList(users),
+        commentPhrase: commentPhrase.trim(),
+      },
     });
   };
 
@@ -955,6 +966,21 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
           value={users}
           onChange={setUsers}
         />
+
+        <div className="space-y-1">
+          <div className="text-sm font-medium">Comment phrase</div>
+          <Input
+            value={commentPhrase}
+            placeholder="@opencara fix"
+            onChange={(e) => setCommentPhrase(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Also fires on <code className="font-mono">issue_comment.created</code> when
+            the comment body contains this text (case-insensitive). Review-state /
+            users filters are skipped on the comment path. <strong>Leave empty</strong>{" "}
+            to disable comment-triggering.
+          </p>
+        </div>
 
         {set.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
