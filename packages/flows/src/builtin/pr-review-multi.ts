@@ -38,6 +38,7 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 280, y: 0 },
       config: {
         label: "Correctness reviewer",
+        draftPr: false,
         contextInjection: reviewerContext,
 
       },
@@ -48,6 +49,7 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 280, y: 160 },
       config: {
         label: "Performance reviewer",
+        draftPr: false,
         contextInjection: reviewerContext,
 
       },
@@ -58,6 +60,7 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 280, y: 320 },
       config: {
         label: "Style reviewer",
+        draftPr: false,
         contextInjection: reviewerContext,
 
       },
@@ -68,6 +71,7 @@ export const prReviewMultiFlow: FlowDefinition = {
       position: { x: 560, y: 160 },
       config: {
         label: "Review synthesizer",
+        draftPr: false,
         contextInjection: {
           // Synthesizer doesn't need PR env extras — its input is the
           // concatenated reviewer outputs delivered via stdin.

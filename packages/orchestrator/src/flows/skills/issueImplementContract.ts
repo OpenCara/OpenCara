@@ -40,7 +40,7 @@ steps before exiting, in order:
 3. \`git push -u origin "$OPENCARA_WORKTREE_BRANCH"\` to publish the
    branch. The orchestrator authenticated \`gh\` / \`git\` for you via
    \`GH_TOKEN\` — no extra credentials needed.
-4. \`gh pr create --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"\`
+4. \`gh pr create \$([ "\$OPENCARA_PR_DRAFT" = 1 ] && echo --draft) --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"\`
    to open the PR. Include the literal line \`Closes #${opts.issueNumber}\`
    in the body so GitHub links the PR to the source issue.
 
@@ -59,6 +59,8 @@ and re-open the PR.
 - \`OPENCARA_REPO\` — \`<owner>/<repo>\`. \`gh\` already infers this
   from the worktree's remote; you do not normally need to pass
   \`--repo\`.
+- \`OPENCARA_PR_DRAFT\` — \`1\` when this flow should open the PR as a
+  draft. Omitted otherwise.
 
 ## What NOT to do
 
