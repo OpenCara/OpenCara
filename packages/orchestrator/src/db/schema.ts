@@ -610,6 +610,46 @@ export const projectV2Items = pgTable(
   }),
 );
 
+// ─── PM Agent Tables ─────────────────────────────────────────────────────────
+
+// One row per opencara project. Persists the ongoing PM conversation thread
+// (threadKey = stable sessionId for --resume) and the user's last PM agent pick.
+export const pmSessions = pgTable("pm_sessions", {
+  projectId: text("project_id").primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  threadKey: text("thread_key").notNull(),     // stable sessionId for chat
+  agentId: text("agent_id"),                   // user's last PM agent pick
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Batch dispatch records. One wave = one PM turn that dispatches N issues.
+export const pmWaves = pgTable(
+  "pm_waves",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    threadKey: text("thread_key").notNull(),     // which PM conversation
+    flowSlug: text("flow_slug").notNull(),
+    status: text("status").notNull(),            // running | done | cancelled
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    projectStatusIdx: index("pm_waves_project_status_idx").on(t.projectId, t.status),
+  }),
+);
+
+// Individual issue dispatch items within a wave.
+export const pmWaveItems = pgTable("pm_wave_items", {
+  id: text("id").primaryKey(),
+  waveId: text("wave_id").notNull()
+    .references(() => pmWaves.id, { onDelete: "cascade" }),
+  issueNumber: integer("issue_number").notNull(),
+  flowRunId: text("flow_run_id"),              // null until triggered
+  status: text("status").notNull(),            // pending|running|succeeded|failed|cancelled
+});
+
 export const agentRunLogs = pgTable(
   "agent_run_logs",
   {

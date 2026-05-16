@@ -162,6 +162,13 @@
       "when": 1777430000000,
       "tag": "0022_agent_runs_added_by_user",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1747440000000,
+      "tag": "0023_pm_tables",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
+import { Bot, ExternalLink, RefreshCw, Unlink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   DndContext,
@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   kanbanQuery,
+  pmWavesQuery,
   useKanbanStream,
   useRefreshKanban,
   useSetItemStatus,
@@ -25,6 +26,7 @@ import {
   type KanbanItem,
   type KanbanStatusOption,
 } from "@/lib/queries";
+import { PmChatPanel } from "./PmChatPanel";
 import { formatRelative } from "@/lib/format";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanLinkPicker } from "./KanbanLinkPicker";
@@ -65,6 +67,8 @@ function LinkedBoard({
   const unlink = useUnlinkKanban(projectId);
   const setStatus = useSetItemStatus(projectId);
   const link = data.link!;
+  const [pmOpen, setPmOpen] = useState(false);
+  const wavesQ = useQuery(pmWavesQuery(projectId));
 
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
@@ -149,6 +153,26 @@ function LinkedBoard({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Wave status chip — shown when waves are in flight */}
+          {(() => {
+            const runningWaves = (wavesQ.data?.waves ?? []).filter((w) => w.status === "running");
+            const runningItems = runningWaves.flatMap((w) => w.items).filter((i) => i.status === "running").length;
+            if (runningWaves.length === 0) return null;
+            return (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                {runningWaves.length} wave{runningWaves.length !== 1 ? "s" : ""} · {runningItems} running
+              </span>
+            );
+          })()}
+          <Button
+            variant={pmOpen ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setPmOpen((o) => !o)}
+            title="Open PM agent"
+          >
+            <Bot className="mr-1 size-3.5" />
+            PM
+          </Button>
           <a
             href={githubBoardUrl}
             target="_blank"
@@ -260,6 +284,12 @@ function LinkedBoard({
           </div>
         </DndContext>
       )}
+
+      <PmChatPanel
+        open={pmOpen}
+        onClose={() => setPmOpen(false)}
+        projectId={projectId}
+      />
     </div>
   );
 }

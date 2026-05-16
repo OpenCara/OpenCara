@@ -897,4 +897,65 @@ export function useLogout() {
   });
 }
 
+// ---- PM agent (kanban) ----
+
+export interface PmSession {
+  projectId: string;
+  threadKey: string;
+  agentId: string | null;
+  updatedAt: string;
+}
+
+export interface PmWaveItem {
+  id: string;
+  waveId: string;
+  issueNumber: number;
+  flowRunId: string | null;
+  status: string;
+}
+
+export interface PmWave {
+  id: string;
+  projectId: string;
+  threadKey: string;
+  flowSlug: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  items: PmWaveItem[];
+}
+
+export const pmSessionQuery = (projectId: string) => ({
+  queryKey: ["pm", projectId, "session"] as const,
+  queryFn: () => api.get<{ session: PmSession }>(`/api/projects/${projectId}/pm/session`),
+});
+
+export const pmWavesQuery = (projectId: string) => ({
+  queryKey: ["pm", projectId, "waves"] as const,
+  queryFn: () => api.get<{ waves: PmWave[] }>(`/api/projects/${projectId}/pm/waves`),
+  refetchInterval: 5000,
+});
+
+export function usePmSessionAgentMutation(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId }: { agentId: string | null }) =>
+      api.post<{ session: PmSession }>(`/api/projects/${projectId}/pm/session`, { agentId }),
+    onSuccess: (data) => {
+      qc.setQueryData(["pm", projectId, "session"] as const, data);
+    },
+  });
+}
+
+export function useCancelPmWave(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (waveId: string) =>
+      api.post<{ ok: boolean }>(`/api/projects/${projectId}/pm/waves/${waveId}/cancel`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pm", projectId, "waves"] });
+    },
+  });
+}
+
 export { useQuery, useMutation };

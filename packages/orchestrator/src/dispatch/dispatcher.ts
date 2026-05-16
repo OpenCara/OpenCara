@@ -27,6 +27,12 @@ export interface RunContext {
    * for runs that only mutate project-scoped resources.
    */
   userId?: string | null;
+  /**
+   * Chat session id. Threaded into pm_waves.thread_key so the PM panel
+   * can surface active waves from its own conversation thread.
+   * Optional; null for non-chat dispatch paths.
+   */
+  sessionId?: string | null;
 }
 
 export interface RunResult {

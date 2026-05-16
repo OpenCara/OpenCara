@@ -54,12 +54,15 @@ const tailNav: NavEntry[] = [
 export function AppShell() {
   const user = useUser();
   const logout = useLogout();
+  const location = useLocation();
   const projectsQ = useQuery(projectsQuery());
   const templatesQ = useQuery(flowTemplatesQuery());
   const agentsQ = useQuery(agentsQuery());
   const devicesQ = useQuery(devicesQuery());
   const promptsQ = useQuery(promptsQuery());
   const [chatOpen, setChatOpen] = useState(false);
+  // Hide the global chat button on the kanban tab — the PM panel is the chat surface there.
+  const isKanbanRoute = /^\/projects\/[^/]+\/kanban$/.test(location.pathname);
   const projects = projectsQ.data?.projects ?? [];
   const templates = templatesQ.data?.templates ?? [];
   const agents = agentsQ.data?.agents ?? [];
@@ -186,15 +189,17 @@ export function AppShell() {
 
       <div className="flex flex-1 flex-col">
         <header className="flex h-14 items-center justify-end gap-3 border-b bg-card px-4">
-          <Button
-            size="sm"
-            variant={chatOpen ? "secondary" : "ghost"}
-            onClick={() => setChatOpen((o) => !o)}
-            title="Open chat assistant"
-          >
-            <MessageCircle className="size-4" />
-            <span className="hidden md:inline">Chat</span>
-          </Button>
+          {!isKanbanRoute && (
+            <Button
+              size="sm"
+              variant={chatOpen ? "secondary" : "ghost"}
+              onClick={() => setChatOpen((o) => !o)}
+              title="Open chat assistant"
+            >
+              <MessageCircle className="size-4" />
+              <span className="hidden md:inline">Chat</span>
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger className="outline-none">
               <Avatar className="size-8 cursor-pointer">

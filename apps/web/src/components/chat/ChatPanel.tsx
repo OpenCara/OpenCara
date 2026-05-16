@@ -56,6 +56,24 @@ interface Props {
    * "embedded" = sized to parent column, no transition, no close button. */
   variant?: "floating" | "embedded";
   canvas?: CanvasContext;
+  /**
+   * When set, use this page id instead of deriving it from the URL.
+   * Lets the PM panel force "project-pm" on the kanban route without
+   * conflicting with AppShell's global ChatPanel on the same URL.
+   */
+  forcePageId?: string;
+  /**
+   * When set, use this session id instead of the per-panel-open random one.
+   * Makes the PM thread persistent across panel opens.
+   */
+  sessionIdOverride?: string;
+  /**
+   * Called when the user picks a different agent in this panel.
+   * Lets the wrapper persist the selection back to the PM session.
+   */
+  onAgentChange?: (agentId: string) => void;
+  /** Initial agent id to pre-select (controlled by the PM wrapper). */
+  initialAgentId?: string | null;
 }
 
 interface Message {
@@ -102,6 +120,8 @@ const PAGE_PATTERNS: { pattern: RegExp; page: string }[] = [
   { pattern: /^\/projects\/[^/]+\/flow-runs\/[^/]+$/, page: "flow-run-detail" },
   { pattern: /^\/projects\/[^/]+\/flows\/[^/]+$/, page: "project-flow-detail" },
   { pattern: /^\/flows\/[^/]+$/, page: "flow-template-detail" },
+  // Kanban PM panel — must be before project-detail catch-all.
+  { pattern: /^\/projects\/[^/]+\/kanban$/, page: "project-pm" },
   // Project-detail covers `/projects/:id` AND `/projects/:id/:tab` — kept
   // last so the more-specific patterns above win first.
   { pattern: /^\/projects\/[^/]+(?:\/[^/]+)?$/, page: "project-detail" },
@@ -118,23 +138,30 @@ function pageForLocation(
   return null;
 }
 
-export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props) {
+export function ChatPanel({ open, onClose, variant = "floating", canvas, forcePageId, sessionIdOverride, onAgentChange, initialAgentId }: Props) {
   const location = useLocation();
   const params = useParams();
   const agentsQ = useQuery(agentsQuery());
-  const [agentId, setAgentId] = useState<string | null>(null);
+  const [agentId, setAgentId] = useState<string | null>(initialAgentId ?? null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
 
   // Stable per-panel-open session id so the agent can use --resume / --continue.
+  // When sessionIdOverride is set (PM panel), use that for persistence.
   const sessionIdRef = useRef<string>("");
   if (sessionIdRef.current === "") {
-    sessionIdRef.current = `chat_${crypto.randomUUID()}`;
+    sessionIdRef.current = sessionIdOverride ?? `chat_${crypto.randomUUID()}`;
   }
+  // Keep in sync if override changes (e.g. PM session loads after mount).
+  useEffect(() => {
+    if (sessionIdOverride && sessionIdRef.current !== sessionIdOverride) {
+      sessionIdRef.current = sessionIdOverride;
+    }
+  }, [sessionIdOverride]);
 
-  // Default-pick the first agent once they load.
+  // Default-pick the first agent once they load (only when no initial/controlled id).
   useEffect(() => {
     if (!agentId && agentsQ.data?.agents.length) {
       setAgentId(agentsQ.data.agents[0]!.id);
@@ -143,13 +170,14 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
 
   const pageContext: PageContext = useMemo(
     () => ({
-      page: pageForLocation(location.pathname, !!canvas),
+      page: forcePageId ?? pageForLocation(location.pathname, !!canvas),
       pathname: location.pathname,
       projectId: params.id ?? params.projectId,
       flowSlug: params.slug,
       flowRunId: params.runId,
     }),
     [
+      forcePageId,
       location.pathname,
       params.id,
       params.projectId,
@@ -253,7 +281,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         <div className="ml-auto flex items-center gap-2">
           <Select
             value={agentId ?? ""}
-            onValueChange={(v) => setAgentId(v)}
+            onValueChange={(v) => { setAgentId(v); onAgentChange?.(v); }}
             disabled={!agentsQ.data?.agents.length}
           >
             <SelectTrigger className="h-8 w-44">
@@ -518,6 +546,7 @@ const CHAT_INVALIDATABLE_ROOTS: ReadonlySet<string> = new Set([
   "devices",
   "activity",
   "runs",
+  "pm",
 ]);
 
 function useStreamedAssistant(message: Message): { text: string } {
