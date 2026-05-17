@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseReviewVerdict } from "../verdict.js";
+import {
+  parseReviewVerdict,
+  resolveReviewStateFromBody,
+  VERDICT_TO_REVIEW_STATE,
+} from "../verdict.js";
 
 describe("parseReviewVerdict", () => {
   it("parses APPROVE from the top and strips the line", () => {
@@ -135,5 +139,45 @@ describe("parseReviewVerdict", () => {
       "verdict: comment\n\n\n\n## Notes\nfoo\n\n",
     );
     assert.equal(result?.bodyWithoutVerdict, "## Notes\nfoo");
+  });
+});
+
+describe("VERDICT_TO_REVIEW_STATE", () => {
+  it("maps each verdict token to the GitHub review.state string", () => {
+    assert.equal(VERDICT_TO_REVIEW_STATE.APPROVE, "approved");
+    assert.equal(VERDICT_TO_REVIEW_STATE.REQUEST_CHANGES, "changes_requested");
+    assert.equal(VERDICT_TO_REVIEW_STATE.COMMENT, "commented");
+  });
+});
+
+describe("resolveReviewStateFromBody", () => {
+  it("returns null when the body carries no verdict line", () => {
+    assert.equal(resolveReviewStateFromBody("## Notes\n\nNothing here."), null);
+    assert.equal(resolveReviewStateFromBody(""), null);
+    assert.equal(resolveReviewStateFromBody(null), null);
+    assert.equal(resolveReviewStateFromBody(undefined), null);
+  });
+
+  it("recovers the intended state when a downgraded COMMENT review hides a request_changes verdict", () => {
+    // Mirrors the body shape post_review writes when it falls back from
+    // REQUEST_CHANGES → COMMENT on a self-PR: the verdict line stays in
+    // the body so pr-review-fix can still see the intent.
+    const body =
+      '_Downgraded to "Commented" — GitHub forbids "Request changes" on a PR you opened._\n\n' +
+      "verdict: request_changes\n\n" +
+      "The migration is missing a NOT NULL guard.";
+    const resolved = resolveReviewStateFromBody(body);
+    assert.equal(resolved?.state, "changes_requested");
+    assert.equal(resolved?.verdict, "REQUEST_CHANGES");
+    assert.match(resolved?.body ?? "", /NOT NULL guard/);
+    assert.doesNotMatch(resolved?.body ?? "", /verdict:\s*request_changes/);
+  });
+
+  it("strips the verdict line from the returned body", () => {
+    const resolved = resolveReviewStateFromBody(
+      "verdict: approve\n\n## Summary\nShip it.",
+    );
+    assert.equal(resolved?.state, "approved");
+    assert.equal(resolved?.body, "## Summary\nShip it.");
   });
 });
