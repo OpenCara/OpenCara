@@ -233,6 +233,25 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   }, [wantPersistence, sessionQ.data, agentsQ.data, agentId]);
 
   const onAgentPick = (v: string) => {
+    if (v === agentId) return;
+    // Switching agent invalidates the resumable ACP session for this
+    // thread (the new shim has no JSONL under the prior UUID). Warn
+    // before throwing away an in-progress conversation — the server
+    // will clear acpSessionId on the next agent POST anyway, so the
+    // next turn starts fresh either way; the dialog just protects the
+    // user from doing it accidentally.
+    if (messages.length > 0) {
+      const prior = agentsQ.data?.agents.find((a) => a.id === agentId)?.name;
+      const next = agentsQ.data?.agents.find((a) => a.id === v)?.name ?? v;
+      const proceed = window.confirm(
+        `Switch to "${next}"?\n\n` +
+          `This starts a new conversation — ${prior ?? "the current agent"}'s ` +
+          `session can't be resumed by a different agent, so the prior turns ` +
+          `won't be in context anymore.`,
+      );
+      if (!proceed) return;
+      setMessages([]);
+    }
     setAgentId(v);
     if (wantPersistence) updateAgent.mutate({ agentId: v });
   };

@@ -173,9 +173,22 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
       });
     }
 
+    // Agent switch invalidates the cached ACP session: the new shim
+    // hasn't created the prior session's JSONL on any device, so a
+    // `--resume <prior-uuid>` would just error. Clear both columns
+    // alongside the agentId write so the next turn starts fresh.
+    // Unchanged agentId picks (e.g. POST replays the same value) skip
+    // the clear so an in-flight resume doesn't get wiped under it.
+    const agentChanged = existing.agentId !== agentId;
     await deps.db
       .update(chatSessions)
-      .set({ agentId, updatedAt: now })
+      .set({
+        agentId,
+        updatedAt: now,
+        ...(agentChanged
+          ? { acpSessionId: null, acpSessionHostId: null }
+          : {}),
+      })
       .where(
         and(
           eq(chatSessions.userId, user.id),

@@ -624,6 +624,15 @@ export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
 // session id) and the user's last agent pick for that scope. The kanban PM
 // thread is one such row with scope_kind='project'. scope_id='' is reserved
 // for scope_kind='user' (user-global threads); other kinds carry a real id.
+//
+// `acpSessionId` is the UUID the device's ACP shim minted on the first turn
+// (`session/new` → claude-acp's `randomUUID()` → `claude --session-id <uuid>`).
+// Subsequent turns pass it back as `priorSessionId`, the shim flips to
+// `session/load`, and `claude --resume <uuid>` replays the on-disk JSONL.
+// `acpSessionHostId` pins those subsequent turns to the same device — the
+// JSONL lives under that machine's `~/.claude/projects/`, so routing
+// elsewhere would surface as a `--resume` failure. Both are cleared the
+// moment the user switches the agent pick on this row.
 export const chatSessions = pgTable(
   "chat_sessions",
   {
@@ -633,6 +642,8 @@ export const chatSessions = pgTable(
     scopeId: text("scope_id").notNull().default(""),
     threadKey: text("thread_key").notNull(),
     agentId: text("agent_id"),
+    acpSessionId: text("acp_session_id"),
+    acpSessionHostId: text("acp_session_host_id"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
