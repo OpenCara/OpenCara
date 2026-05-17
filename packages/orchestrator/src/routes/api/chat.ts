@@ -217,21 +217,34 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         // the user switched agent mid-flight (chatSessions.ts cleared
         // acpSessionId on the POST), respect their choice instead of
         // silently re-pinning the row to the now-superseded agent.
+        //
+        // Inner try/catch isolates this best-effort side-effect from
+        // the outer dispatcher catch. Without it, a transient DB error
+        // here would fall through and flip the already-persisted
+        // "succeeded" agentRuns row to "failed" — the user would see
+        // the full streamed reply but the run log would lie about it.
         if (result.exitCode === 0 && result.acpSessionId) {
-          await deps.db
-            .update(chatSessions)
-            .set({
-              acpSessionId: result.acpSessionId,
-              acpSessionHostId: result.agentHostId,
-              updatedAt: new Date(),
-            })
-            .where(
-              and(
-                eq(chatSessions.userId, user.id),
-                eq(chatSessions.threadKey, sessionId),
-                eq(chatSessions.agentId, agentId),
-              ),
-            );
+          try {
+            await deps.db
+              .update(chatSessions)
+              .set({
+                acpSessionId: result.acpSessionId,
+                acpSessionHostId: result.agentHostId,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(chatSessions.userId, user.id),
+                  eq(chatSessions.threadKey, sessionId),
+                  eq(chatSessions.agentId, agentId),
+                ),
+              );
+          } catch (persistErr) {
+            // Log and move on. Worst case: next turn starts a fresh
+            // session (no resume) — same behaviour as turn 1, not a
+            // regression. The successful run stays successful.
+            console.error("[chat] resume-persist failed", persistErr);
+          }
         }
       } catch (err) {
         console.error("[chat] dispatcher run failed", err);

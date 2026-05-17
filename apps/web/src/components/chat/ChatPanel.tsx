@@ -239,9 +239,18 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     }
     if (!agentId && agentsQ.data?.agents.length) {
       hydratedAgentRef.current = true;
-      setAgentId(agentsQ.data.agents[0]!.id);
+      const first = agentsQ.data.agents[0]!.id;
+      setAgentId(first);
+      // Persist the auto-pick so the chat_sessions row has a non-null
+      // agentId. chat.ts post-dispatch writes `acp_session_id` under
+      // `where agentId = $requestAgentId`, which silently matches zero
+      // rows when the persisted agent is still NULL — i.e. the
+      // most-common golden path (first-ever chat on a scope, server
+      // creates the row with agentId=null, client auto-picks the first
+      // agent without POSTing it) never gets resume continuity.
+      if (wantPersistence) updateAgent.mutate({ agentId: first });
     }
-  }, [wantPersistence, sessionQ.data, agentsQ.data, agentId]);
+  }, [wantPersistence, sessionQ.data, agentsQ.data, agentId, updateAgent]);
 
   const onAgentPick = (v: string) => {
     if (v === agentId) return;
