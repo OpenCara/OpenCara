@@ -27,6 +27,7 @@ import { buildIssueImplementContractSkill } from "./skills/issueImplementContrac
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
+import { isSelfReviewError } from "../github/errors.js";
 import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -1164,15 +1165,8 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
         // reviewer — fall back to a COMMENT-typed review and embed the
         // original verdict line in the body so downstream pr-review-fix
         // can still read intent (see flows/context.ts
-        // resolveReviewStateFromBody). COMMENT itself can't trip 422,
-        // so this branch only fires for APPROVE / REQUEST_CHANGES.
-        const status = (err as { status?: number }).status;
-        const msg = String((err as Error).message ?? "");
-        const isSelfReview =
-          status === 422 &&
-          /can not (request changes|approve) (on your )?own pull request/i.test(msg) &&
-          (event === "REQUEST_CHANGES" || event === "APPROVE");
-        if (!isSelfReview) throw err;
+        // resolveReviewStateFromBody).
+        if (!isSelfReviewError(err, event)) throw err;
         const verdictLabel =
           event === "REQUEST_CHANGES" ? "Request changes" : "Approve";
         const verdictToken =
@@ -1186,7 +1180,19 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
         ]
           .join("\n")
           .trim();
-        res = await postReview("COMMENT", downgradedBody);
+        try {
+          res = await postReview("COMMENT", downgradedBody);
+        } catch (retryErr) {
+          // Surface both errors so operators don't lose the original
+          // 422 context when the retry fails for an unrelated reason
+          // (transient 5xx, PR closed mid-run, etc.).
+          throw new Error(
+            `post_review fallback to COMMENT failed after ${event} self-review 422: ${String(
+              (retryErr as Error).message ?? retryErr,
+            )} (original error: ${String((err as Error).message ?? err)})`,
+            { cause: retryErr },
+          );
+        }
         downgradedFrom = event;
         console.warn(
           `[post_review] self-review on ${owner}/${repo}#${pr.number} downgraded ${event} -> COMMENT`,
