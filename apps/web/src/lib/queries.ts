@@ -897,4 +897,89 @@ export function useLogout() {
   });
 }
 
+// ---- PM agent waves (kanban) ----
+
+export interface PmWaveItem {
+  id: string;
+  waveId: string;
+  issueNumber: number;
+  flowRunId: string | null;
+  status: string;
+}
+
+export interface PmWave {
+  id: string;
+  projectId: string;
+  threadKey: string;
+  flowSlug: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  items: PmWaveItem[];
+}
+
+export const pmWavesQuery = (projectId: string) => ({
+  queryKey: ["pm", projectId, "waves"] as const,
+  queryFn: () => api.get<{ waves: PmWave[] }>(`/api/projects/${projectId}/pm/waves`),
+  refetchInterval: 5000,
+});
+
+// ---- Chat sessions (generic per-(user, scope) persistence) ----
+//
+// scopeKind/scopeId match the orchestrator's chat_sessions PK:
+//   'project'  + projectId      — every project-scoped page
+//   'template' + templateSlug   — /flows/:slug
+//   'user'     + ''             — user-global / unregistered pages
+export type ChatSessionScopeKind = "project" | "template" | "user";
+
+export interface ChatSession {
+  scopeKind: ChatSessionScopeKind;
+  scopeId: string;
+  threadKey: string;
+  agentId: string | null;
+  updatedAt: string;
+}
+
+export interface ChatSessionScope {
+  scopeKind: ChatSessionScopeKind;
+  scopeId: string;
+}
+
+export const chatSessionQuery = (scope: ChatSessionScope) => ({
+  queryKey: ["chat-session", scope.scopeKind, scope.scopeId] as const,
+  queryFn: () =>
+    api.get<{ session: ChatSession }>(
+      `/api/chat/sessions?scopeKind=${encodeURIComponent(scope.scopeKind)}&scopeId=${encodeURIComponent(scope.scopeId)}`,
+    ),
+});
+
+export function useChatSessionAgentMutation(scope: ChatSessionScope) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId }: { agentId: string | null }) =>
+      api.post<{ session: ChatSession }>("/api/chat/sessions", {
+        scopeKind: scope.scopeKind,
+        scopeId: scope.scopeId,
+        agentId,
+      }),
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["chat-session", scope.scopeKind, scope.scopeId] as const,
+        data,
+      );
+    },
+  });
+}
+
+export function useCancelPmWave(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (waveId: string) =>
+      api.post<{ ok: boolean }>(`/api/projects/${projectId}/pm/waves/${waveId}/cancel`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pm", projectId, "waves"] });
+    },
+  });
+}
+
 export { useQuery, useMutation };

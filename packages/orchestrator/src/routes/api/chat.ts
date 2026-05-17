@@ -168,6 +168,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           hostId: agent.hostId,
           projectId,
           userId: user.id,
+          sessionId,
         });
         await deps.db
           .update(agentRuns)

@@ -15,9 +15,13 @@ import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
 import {
   applyFlowNodeConfigSet,
   applyIssueBodySet,
+  applyIssueSubissueCreate,
+  applyKanbanWaveDispatch,
   applyTemplateNodeConfigSet,
   type AgentCallResult,
 } from "../agent-calls/index.js";
+import type { FlowEngine } from "../flows/engine.js";
+import type { GithubAppClient } from "../github/app.js";
 
 export interface ConnectedDevice {
   agentHostId: string;
@@ -51,15 +55,34 @@ interface PendingJob {
    * this; agent-calls touching those resources require a non-null value.
    */
   userId: string | null;
+  /**
+   * Chat session id. Threaded into pm_waves.thread_key so the PM panel
+   * can surface active waves from its own conversation thread.
+   */
+  sessionId: string | null;
 }
 
 export class DevicePool {
   private devices = new Map<string, ConnectedDevice>();
   private pending = new Map<string, PendingJob>();
   private db: Db;
+  private flowEngine: FlowEngine | null;
+  private githubApp: GithubAppClient | null;
 
   constructor(db: Db) {
     this.db = db;
+    this.flowEngine = null;
+    this.githubApp = null;
+  }
+
+  /** Wire in the flow engine after construction (avoids circular dependency). */
+  setFlowEngine(engine: FlowEngine): void {
+    this.flowEngine = engine;
+  }
+
+  /** Wire in the GitHub App client after construction. */
+  setGithubApp(app: GithubAppClient): void {
+    this.githubApp = app;
   }
 
   register(d: ConnectedDevice): void {
@@ -188,7 +211,7 @@ export class DevicePool {
         return;
       }
       const dev = this.devices.get(agentHostId);
-      void this.applyAgentCall(p.projectId, p.userId, msg)
+      void this.applyAgentCall(p.projectId, p.userId, p.sessionId, msg)
         .then((result) => {
           if (!dev) return; // device disconnected mid-call.
           this.send(dev, {
@@ -239,6 +262,7 @@ export class DevicePool {
   private async applyAgentCall(
     projectId: string | null,
     userId: string | null,
+    sessionId: string | null,
     msg: AgentCall | AgentCallRequest,
   ): Promise<AgentCallResult> {
     switch (msg.kind) {
@@ -266,6 +290,36 @@ export class DevicePool {
           };
         }
         return applyTemplateNodeConfigSet(this.db, userId, msg);
+      case "kanban.wave.dispatch": {
+        if (!projectId) {
+          return {
+            ok: false,
+            reason: "kanban.wave.dispatch requires a project-scoped run",
+          };
+        }
+        if (!this.flowEngine) {
+          return { ok: false, reason: "flow engine not available" };
+        }
+        return applyKanbanWaveDispatch(
+          this.db,
+          projectId,
+          this.flowEngine,
+          sessionId ?? msg.runId,
+          msg,
+        );
+      }
+      case "issue.subissue.create": {
+        if (!projectId) {
+          return {
+            ok: false,
+            reason: "issue.subissue.create requires a project-scoped run",
+          };
+        }
+        if (!this.githubApp) {
+          return { ok: false, reason: "GitHub App not configured" };
+        }
+        return applyIssueSubissueCreate(this.db, projectId, this.githubApp, msg);
+      }
       default: {
         // Discriminated union: TS ensures exhaustiveness when more kinds arrive.
         const exhaustive: never = msg;
@@ -289,6 +343,7 @@ export class DevicePool {
     onLog: RunContext["onLog"],
     projectId: string | null,
     userId: string | null,
+    sessionId: string | null,
   ): Promise<RunResult> {
     return new Promise<RunResult>((resolve, reject) => {
       this.pending.set(runId, {
@@ -299,6 +354,7 @@ export class DevicePool {
         agentHostId,
         projectId,
         userId,
+        sessionId,
       });
     });
   }
@@ -349,6 +405,7 @@ export class WebSocketDispatcher implements AgentDispatcher {
       ctx.onLog,
       ctx.projectId ?? null,
       ctx.userId ?? null,
+      ctx.sessionId ?? null,
     );
     this.pool.send(dev, { type: "job", run, spec, stdinJson: ctx.stdinJson });
     return promise;

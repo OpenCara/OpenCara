@@ -21,7 +21,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { agentsQuery, type AgentRow } from "@/lib/queries";
+import {
+  agentsQuery,
+  chatSessionQuery,
+  useChatSessionAgentMutation,
+  type AgentRow,
+  type ChatSessionScope,
+} from "@/lib/queries";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useChatActions } from "@/lib/chatActions";
@@ -102,6 +108,8 @@ const PAGE_PATTERNS: { pattern: RegExp; page: string }[] = [
   { pattern: /^\/projects\/[^/]+\/flow-runs\/[^/]+$/, page: "flow-run-detail" },
   { pattern: /^\/projects\/[^/]+\/flows\/[^/]+$/, page: "project-flow-detail" },
   { pattern: /^\/flows\/[^/]+$/, page: "flow-template-detail" },
+  // Kanban PM panel — must be before project-detail catch-all.
+  { pattern: /^\/projects\/[^/]+\/kanban$/, page: "project-pm" },
   // Project-detail covers `/projects/:id` AND `/projects/:id/:tab` — kept
   // last so the more-specific patterns above win first.
   { pattern: /^\/projects\/[^/]+(?:\/[^/]+)?$/, page: "project-detail" },
@@ -118,6 +126,36 @@ function pageForLocation(
   return null;
 }
 
+/**
+ * Map a (pageId, params) pair to the `chat_sessions` scope that should
+ * back this panel's conversation thread. Returns null when the page has
+ * no scope to persist against (unregistered routes, or scoped pages
+ * whose URL params haven't resolved yet) — caller falls back to a
+ * per-panel-open ephemeral session id.
+ *
+ * The mapping intentionally collapses every project-scoped page onto a
+ * single `(user, 'project', projectId)` thread so navigating between
+ * kanban / flow detail / issue canvas inside one project picks up the
+ * same conversation; the per-page skill injection handles "what is
+ * the agent looking at right now."
+ */
+function scopeForPage(
+  pageId: string | null,
+  params: Readonly<Record<string, string | undefined>>,
+  canvas: CanvasContext | undefined,
+): ChatSessionScope | null {
+  if (!pageId) return null;
+  if (pageId === "flow-template-detail") {
+    const slug = params.slug;
+    return slug ? { scopeKind: "template", scopeId: slug } : null;
+  }
+  // Every other registered page is project-scoped.
+  const projectId = canvas?.projectId ?? params.id ?? params.projectId;
+  return projectId ? { scopeKind: "project", scopeId: projectId } : null;
+}
+
+const NO_SCOPE: ChatSessionScope = { scopeKind: "user", scopeId: "" };
+
 export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props) {
   const location = useLocation();
   const params = useParams();
@@ -127,19 +165,6 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
-
-  // Stable per-panel-open session id so the agent can use --resume / --continue.
-  const sessionIdRef = useRef<string>("");
-  if (sessionIdRef.current === "") {
-    sessionIdRef.current = `chat_${crypto.randomUUID()}`;
-  }
-
-  // Default-pick the first agent once they load.
-  useEffect(() => {
-    if (!agentId && agentsQ.data?.agents.length) {
-      setAgentId(agentsQ.data.agents[0]!.id);
-    }
-  }, [agentId, agentsQ.data]);
 
   const pageContext: PageContext = useMemo(
     () => ({
@@ -159,9 +184,73 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     ],
   );
 
+  // Auto-load (or lazy-create) the chat_sessions row for this scope.
+  // `wantPersistence` gates both the network call and the Send button: if
+  // the user fires a message before the session resolves, it would land
+  // on a random sentinel id and break thread continuity. When the page
+  // has no scope (unregistered route), skip persistence entirely and
+  // fall back to a per-panel-open ephemeral session id.
+  const scope = useMemo(
+    () => scopeForPage(pageContext.page, params, canvas),
+    [pageContext.page, params, canvas],
+  );
+  const wantPersistence = scope !== null;
+  const sessionQ = useQuery({
+    ...chatSessionQuery(scope ?? NO_SCOPE),
+    enabled: wantPersistence,
+  });
+  const updateAgent = useChatSessionAgentMutation(scope ?? NO_SCOPE);
+
+  // Per-panel-open ephemeral session id for pages without a scope.
+  // Lazily generated on first render and never updated — only consulted
+  // when wantPersistence is false.
+  const ephemeralSessionIdRef = useRef<string>("");
+  if (ephemeralSessionIdRef.current === "") {
+    ephemeralSessionIdRef.current = `chat_${crypto.randomUUID()}`;
+  }
+  const effectiveSessionId = wantPersistence
+    ? sessionQ.data?.session.threadKey ?? null
+    : ephemeralSessionIdRef.current;
+
+  // Initialize the agent pick from the persisted session once it loads.
+  // Falls back to the first available agent for ephemeral / fresh sessions.
+  //
+  // `hydratedAgentRef` is reset whenever `scope` changes so navigating from
+  // project A to project B (same mounted ChatPanel, different scope object)
+  // re-runs the hydration with the new project's persisted agent. Without the
+  // reset, the ref stays `true` from the previous scope and the effect
+  // short-circuits on every render — the new project's agent is never applied.
+  const hydratedAgentRef = useRef(false);
+  const prevScopeRef = useRef(scope);
+  if (prevScopeRef.current !== scope) {
+    prevScopeRef.current = scope;
+    hydratedAgentRef.current = false;
+  }
+  useEffect(() => {
+    if (hydratedAgentRef.current) return;
+    if (wantPersistence) {
+      if (!sessionQ.data) return;
+      hydratedAgentRef.current = true;
+      const stored = sessionQ.data.session.agentId;
+      if (stored) {
+        setAgentId(stored);
+        return;
+      }
+    }
+    if (!agentId && agentsQ.data?.agents.length) {
+      hydratedAgentRef.current = true;
+      setAgentId(agentsQ.data.agents[0]!.id);
+    }
+  }, [wantPersistence, sessionQ.data, agentsQ.data, agentId]);
+
+  const onAgentPick = (v: string) => {
+    setAgentId(v);
+    if (wantPersistence) updateAgent.mutate({ agentId: v });
+  };
+
   const send = async () => {
     const text = input.trim();
-    if (!text || !agentId || sending) return;
+    if (!text || !agentId || sending || !effectiveSessionId) return;
     setSending(true);
     setInput("");
 
@@ -207,7 +296,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         "/api/chat/messages",
         {
           agentId,
-          sessionId: sessionIdRef.current,
+          sessionId: effectiveSessionId,
           turnIndex,
           message: text,
           pageContext: ctxForRequest,
@@ -253,7 +342,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         <div className="ml-auto flex items-center gap-2">
           <Select
             value={agentId ?? ""}
-            onValueChange={(v) => setAgentId(v)}
+            onValueChange={onAgentPick}
             disabled={!agentsQ.data?.agents.length}
           >
             <SelectTrigger className="h-8 w-44">
@@ -350,20 +439,22 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
             }
           }}
           placeholder={
-            agentId
-              ? canvas?.selection
-                ? "How should this be rewritten? (⌘/Ctrl+Enter)"
-                : "Ask for help with this page… (⌘/Ctrl+Enter to send)"
-              : "Pick an agent above to start chatting"
+            !effectiveSessionId
+              ? "Loading session…"
+              : agentId
+                ? canvas?.selection
+                  ? "How should this be rewritten? (⌘/Ctrl+Enter)"
+                  : "Ask for help with this page… (⌘/Ctrl+Enter to send)"
+                : "Pick an agent above to start chatting"
           }
           className="min-h-20 resize-none text-sm"
-          disabled={!agentId}
+          disabled={!agentId || !effectiveSessionId}
         />
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
           <span>{canvas ? "canvas mode" : `page: ${shortPath(pageContext.pathname)}`}</span>
           <Button
             size="sm"
-            disabled={!agentId || !input.trim() || sending}
+            disabled={!agentId || !input.trim() || sending || !effectiveSessionId}
             onClick={() => void send()}
           >
             <Send className="size-3.5" />
@@ -518,6 +609,7 @@ const CHAT_INVALIDATABLE_ROOTS: ReadonlySet<string> = new Set([
   "devices",
   "activity",
   "runs",
+  "pm",
 ]);
 
 function useStreamedAssistant(message: Message): { text: string } {

@@ -164,10 +164,32 @@ export const TemplateNodeConfigSetCallSchema = z.object({
 });
 export type TemplateNodeConfigSetCall = z.infer<typeof TemplateNodeConfigSetCallSchema>;
 
+/** Dispatch a batch of issues to an existing project flow (project-scoped). */
+export const KanbanWaveDispatchCallSchema = z.object({
+  ...AgentCallEnvelope,
+  kind: z.literal("kanban.wave.dispatch"),
+  flowSlug: z.string().min(1),
+  issueNumbers: z.array(z.number().int()).min(1).max(10),
+});
+export type KanbanWaveDispatchCall = z.infer<typeof KanbanWaveDispatchCallSchema>;
+
+/** Create a real GitHub sub-issue linked to a parent (project-scoped). */
+export const IssueSubissueCreateCallSchema = z.object({
+  ...AgentCallEnvelope,
+  kind: z.literal("issue.subissue.create"),
+  parentIssueNumber: z.number().int(),
+  title: z.string().min(1),
+  bodyMd: z.string(),
+  labels: z.array(z.string()).optional(),
+});
+export type IssueSubissueCreateCall = z.infer<typeof IssueSubissueCreateCallSchema>;
+
 export const AgentCallSchema = z.discriminatedUnion("kind", [
   IssueBodySetCallSchema,
   FlowNodeConfigSetCallSchema,
   TemplateNodeConfigSetCallSchema,
+  KanbanWaveDispatchCallSchema,
+  IssueSubissueCreateCallSchema,
 ]);
 export type AgentCall = z.infer<typeof AgentCallSchema>;
 
@@ -207,10 +229,28 @@ export const TemplateNodeConfigSetCallRequestSchema = z.object({
   config: z.record(z.string(), z.unknown()),
 });
 
+export const KanbanWaveDispatchCallRequestSchema = z.object({
+  ...AgentCallRequestEnvelope,
+  kind: z.literal("kanban.wave.dispatch"),
+  flowSlug: z.string().min(1),
+  issueNumbers: z.array(z.number().int()).min(1).max(10),
+});
+
+export const IssueSubissueCreateCallRequestSchema = z.object({
+  ...AgentCallRequestEnvelope,
+  kind: z.literal("issue.subissue.create"),
+  parentIssueNumber: z.number().int(),
+  title: z.string().min(1),
+  bodyMd: z.string(),
+  labels: z.array(z.string()).optional(),
+});
+
 export const AgentCallRequestSchema = z.discriminatedUnion("kind", [
   IssueBodySetCallRequestSchema,
   FlowNodeConfigSetCallRequestSchema,
   TemplateNodeConfigSetCallRequestSchema,
+  KanbanWaveDispatchCallRequestSchema,
+  IssueSubissueCreateCallRequestSchema,
 ]);
 export type AgentCallRequest = z.infer<typeof AgentCallRequestSchema>;
 

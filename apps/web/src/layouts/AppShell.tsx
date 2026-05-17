@@ -54,6 +54,7 @@ const tailNav: NavEntry[] = [
 export function AppShell() {
   const user = useUser();
   const logout = useLogout();
+  const location = useLocation();
   const projectsQ = useQuery(projectsQuery());
   const templatesQ = useQuery(flowTemplatesQuery());
   const agentsQ = useQuery(agentsQuery());

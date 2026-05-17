@@ -30,6 +30,8 @@ import {
   IssueBodySetCallSchema,
   FlowNodeConfigSetCallSchema,
   TemplateNodeConfigSetCallSchema,
+  KanbanWaveDispatchCallSchema,
+  IssueSubissueCreateCallSchema,
 } from "@opencara/shared";
 
 /**
@@ -89,6 +91,20 @@ const templateNodeConfigSetShape = TemplateNodeConfigSetCallSchema.omit({
   kind: true,
 }).shape;
 
+const kanbanWaveDispatchShape = KanbanWaveDispatchCallSchema.omit({
+  type: true,
+  runId: true,
+  callId: true,
+  kind: true,
+}).shape;
+
+const issueSubissueCreateShape = IssueSubissueCreateCallSchema.omit({
+  type: true,
+  runId: true,
+  callId: true,
+  kind: true,
+}).shape;
+
 export const TOOLS = [
   {
     name: "opencara_issue_body_set",
@@ -120,6 +136,26 @@ export const TOOLS = [
       "flow template. Per-user scope, not per-project. Reject with reason " +
       "if the template draft isn't owned by the run's user.",
     inputShape: templateNodeConfigSetShape,
+  },
+  {
+    name: "opencara_kanban_wave_dispatch",
+    kind: "kanban.wave.dispatch",
+    title: "Dispatch a batch of issues to a flow",
+    description:
+      "Dispatch up to 10 issues in parallel to the named project flow. " +
+      "Requires project scope. Reject if the flow does not exist, is disabled, " +
+      "or any of the issue numbers are not in the project. Returns the wave id.",
+    inputShape: kanbanWaveDispatchShape,
+  },
+  {
+    name: "opencara_issue_subissue_create",
+    kind: "issue.subissue.create",
+    title: "Create a GitHub sub-issue under a parent",
+    description:
+      "Create a new GitHub issue and link it as a child of the given parent issue " +
+      "via the GraphQL addSubIssue mutation. Requires project scope. Reject if the " +
+      "parent issue is not in the project.",
+    inputShape: issueSubissueCreateShape,
   },
 ] as const satisfies ReadonlyArray<ToolDef<z.ZodRawShape>>;
 

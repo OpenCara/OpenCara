@@ -23,6 +23,7 @@ import { projectDetailBuilder } from "./skills/projectDetail.js";
 import { projectFlowDetailBuilder } from "./skills/projectFlowDetail.js";
 import { flowTemplateDetailBuilder } from "./skills/flowTemplateDetail.js";
 import { flowRunDetailBuilder } from "./skills/flowRunDetail.js";
+import { projectPmBuilder } from "./skills/projectPm.js";
 
 export interface SkillEnvelope {
   /** Stable identifier the agent author can match on. */
@@ -95,6 +96,7 @@ const REGISTRY: Record<string, PageSkillBuilder> = {
   "project-flow-detail": projectFlowDetailBuilder,
   "flow-template-detail": flowTemplateDetailBuilder,
   "flow-run-detail": flowRunDetailBuilder,
+  "project-pm": projectPmBuilder,
 };
 
 /**

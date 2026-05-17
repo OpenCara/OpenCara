@@ -17,9 +17,11 @@ import {
   flows,
   githubInstallations,
   platformEvents,
+  pmWaveItems,
+  pmWaves,
   projects,
 } from "../db/schema.js";
-import { and, asc } from "drizzle-orm";
+import { and, asc, not } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
@@ -457,10 +459,11 @@ export class FlowEngine {
     // pull_request.closed webhook handler. See
     // routes/webhooks.ts + worktrees/cleanup.ts.
 
+    const flowStatus = failed ? "failed" : skipped ? "cancelled" : "succeeded";
     await this.deps.db
       .update(flowRuns)
       .set({
-        status: failed ? "failed" : skipped ? "cancelled" : "succeeded",
+        status: flowStatus,
         finishedAt: new Date(),
         error: errorMsg,
         // skipped → trigger_skip so the Flow runs page can hide these by
@@ -470,6 +473,51 @@ export class FlowEngine {
       })
       .where(eq(flowRuns.id, flowRunId));
     await this.deps.pg.notify("flow_runs", flowRunId);
+
+    await this.settleWaveItem(flowRunId, flowStatus);
+  }
+
+  /**
+   * Mirror a flow run's terminal state onto the pm_wave_items row that
+   * dispatched it (if any), then collapse the parent pm_waves row to
+   * `done` once every item has settled. Without this, kanban dispatch
+   * waves never leave `running` — the wave chip in the UI sticks
+   * forever and the PM skill's `activeWaves` hydration treats every
+   * past dispatch as in-flight. PM tables are coupled here (rather
+   * than going through a pg.notify("flow_runs") listener) because the
+   * settlement has to be transactional with the flow_runs state
+   * transition for the UI to stay honest.
+   */
+  private async settleWaveItem(
+    flowRunId: string,
+    flowStatus: "failed" | "cancelled" | "succeeded",
+  ): Promise<void> {
+    const item = await this.deps.db.query.pmWaveItems.findFirst({
+      where: eq(pmWaveItems.flowRunId, flowRunId),
+    });
+    if (!item) return;
+
+    // Guard: don't overwrite a "cancelled" item — the cancel endpoint wins.
+    // A user-cancelled wave whose underlying flow run then finishes should
+    // remain cancelled, not flip to "succeeded".
+    await this.deps.db
+      .update(pmWaveItems)
+      .set({ status: flowStatus })
+      .where(and(eq(pmWaveItems.id, item.id), not(eq(pmWaveItems.status, "cancelled"))));
+
+    const siblings = await this.deps.db.query.pmWaveItems.findMany({
+      where: eq(pmWaveItems.waveId, item.waveId),
+    });
+    const allDone = siblings.every(
+      (s) => s.status !== "pending" && s.status !== "running",
+    );
+    if (allDone) {
+      // Guard: don't overwrite a "cancelled" wave — the cancel endpoint wins.
+      await this.deps.db
+        .update(pmWaves)
+        .set({ status: "done", finishedAt: new Date() })
+        .where(and(eq(pmWaves.id, item.waveId), not(eq(pmWaves.status, "cancelled"))));
+    }
   }
 
   /**

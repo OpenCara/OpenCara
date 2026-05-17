@@ -19,3 +19,5 @@ export type AgentCallResult = AgentCallOk | AgentCallErr;
 export { applyIssueBodySet } from "./issueBodySet.js";
 export { applyFlowNodeConfigSet } from "./flowNodeConfigSet.js";
 export { applyTemplateNodeConfigSet } from "./templateNodeConfigSet.js";
+export { applyKanbanWaveDispatch } from "./kanbanWaveDispatch.js";
+export { applyIssueSubissueCreate } from "./issueSubissueCreate.js";

@@ -19,8 +19,10 @@ import { deviceRoutes } from "./routes/api/devices.js";
 import { promptRoutes } from "./routes/api/prompts.js";
 import { agentRoutes } from "./routes/api/agents.js";
 import { chatRoutes } from "./routes/api/chat.js";
+import { chatSessionsRoutes } from "./routes/api/chatSessions.js";
 import { flowTemplateRoutes } from "./routes/api/flowTemplates.js";
 import { kanbanRoutes } from "./routes/api/kanban.js";
+import { pmRoutes } from "./routes/api/pm.js";
 import { deviceWsHandler } from "./routes/api/devices/ws.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
@@ -47,6 +49,11 @@ const githubApp = config.github
 const flowEngine = githubApp
   ? new FlowEngine({ db, pg, app: githubApp, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL })
   : null;
+
+// Wire flowEngine and githubApp into the device pool after construction
+// to break the circular dependency (pool → engine, engine → dispatcher → pool).
+if (flowEngine) devicePool.setFlowEngine(flowEngine);
+if (githubApp) devicePool.setGithubApp(githubApp);
 
 if (githubApp) {
   app.route(
@@ -118,11 +125,13 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
   apiHono.route("/", chatRoutes({ db, pg, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL }));
+  apiHono.route("/", chatSessionsRoutes({ db }));
   apiHono.route("/", flowTemplateRoutes({ db }));
   apiHono.route(
     "/",
     kanbanRoutes({ db, pg, app: githubApp ?? undefined, cipher, oauth }),
   );
+  apiHono.route("/", pmRoutes({ db, flowEngine: flowEngine ?? undefined }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the

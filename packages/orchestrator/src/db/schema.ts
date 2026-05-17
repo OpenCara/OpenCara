@@ -9,6 +9,7 @@ import {
   jsonb,
   pgEnum,
   index,
+  primaryKey,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -609,6 +610,63 @@ export const projectV2Items = pgTable(
     ),
   }),
 );
+
+// ─── Chat sessions (per-user, per-scope) ─────────────────────────────────────
+
+// Allowed values for `chat_sessions.scope_kind`. Stored as text rather than
+// a pg enum so adding a new scope (e.g. 'flow' for per-flow threads) is a
+// code-only change. Validated at the route boundary.
+export const CHAT_SESSION_SCOPE_KINDS = ["project", "template", "user"] as const;
+export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
+
+// One row per (user, scope) — e.g. (alice, 'project', proj_123). Persists the
+// stable conversation threadKey (used as agent `--resume`/`--continue`
+// session id) and the user's last agent pick for that scope. The kanban PM
+// thread is one such row with scope_kind='project'. scope_id='' is reserved
+// for scope_kind='user' (user-global threads); other kinds carry a real id.
+export const chatSessions = pgTable(
+  "chat_sessions",
+  {
+    userId: text("user_id").notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scopeKind: text("scope_kind").notNull(),
+    scopeId: text("scope_id").notNull().default(""),
+    threadKey: text("thread_key").notNull(),
+    agentId: text("agent_id"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.scopeKind, t.scopeId] }),
+  }),
+);
+
+// Batch dispatch records. One wave = one PM turn that dispatches N issues.
+export const pmWaves = pgTable(
+  "pm_waves",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    threadKey: text("thread_key").notNull(),     // which PM conversation
+    flowSlug: text("flow_slug").notNull(),
+    status: text("status").notNull(),            // running | done | cancelled
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    projectStatusIdx: index("pm_waves_project_status_idx").on(t.projectId, t.status),
+  }),
+);
+
+// Individual issue dispatch items within a wave.
+export const pmWaveItems = pgTable("pm_wave_items", {
+  id: text("id").primaryKey(),
+  waveId: text("wave_id").notNull()
+    .references(() => pmWaves.id, { onDelete: "cascade" }),
+  issueNumber: integer("issue_number").notNull(),
+  flowRunId: text("flow_run_id"),              // null until triggered
+  status: text("status").notNull(),            // pending|running|succeeded|failed|cancelled
+});
 
 export const agentRunLogs = pgTable(
   "agent_run_logs",
