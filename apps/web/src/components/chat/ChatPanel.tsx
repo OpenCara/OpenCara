@@ -239,11 +239,39 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     }
     if (!agentId && agentsQ.data?.agents.length) {
       hydratedAgentRef.current = true;
-      setAgentId(agentsQ.data.agents[0]!.id);
+      const first = agentsQ.data.agents[0]!.id;
+      setAgentId(first);
+      // Persist the auto-pick so the chat_sessions row has a non-null
+      // agentId. chat.ts post-dispatch writes `acp_session_id` under
+      // `where agentId = $requestAgentId`, which silently matches zero
+      // rows when the persisted agent is still NULL — i.e. the
+      // most-common golden path (first-ever chat on a scope, server
+      // creates the row with agentId=null, client auto-picks the first
+      // agent without POSTing it) never gets resume continuity.
+      if (wantPersistence) updateAgent.mutate({ agentId: first });
     }
-  }, [wantPersistence, sessionQ.data, agentsQ.data, agentId]);
+  }, [wantPersistence, sessionQ.data, agentsQ.data, agentId, updateAgent]);
 
   const onAgentPick = (v: string) => {
+    if (v === agentId) return;
+    // Switching agent invalidates the resumable ACP session for this
+    // thread (the new shim has no JSONL under the prior UUID). Warn
+    // before throwing away an in-progress conversation — the server
+    // will clear acpSessionId on the next agent POST anyway, so the
+    // next turn starts fresh either way; the dialog just protects the
+    // user from doing it accidentally.
+    if (messages.length > 0) {
+      const prior = agentsQ.data?.agents.find((a) => a.id === agentId)?.name;
+      const next = agentsQ.data?.agents.find((a) => a.id === v)?.name ?? v;
+      const proceed = window.confirm(
+        `Switch to "${next}"?\n\n` +
+          `This starts a new conversation — ${prior ?? "the current agent"}'s ` +
+          `session can't be resumed by a different agent, so the prior turns ` +
+          `won't be in context anymore.`,
+      );
+      if (!proceed) return;
+      setMessages([]);
+    }
     setAgentId(v);
     if (wantPersistence) updateAgent.mutate({ agentId: v });
   };
