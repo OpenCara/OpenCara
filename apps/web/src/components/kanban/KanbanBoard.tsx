@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, ExternalLink, RefreshCw, Unlink } from "lucide-react";
+import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   DndContext,
@@ -26,7 +26,6 @@ import {
   type KanbanItem,
   type KanbanStatusOption,
 } from "@/lib/queries";
-import { ChatPanel } from "@/components/chat/ChatPanel";
 import { formatRelative } from "@/lib/format";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanLinkPicker } from "./KanbanLinkPicker";
@@ -67,7 +66,6 @@ function LinkedBoard({
   const unlink = useUnlinkKanban(projectId);
   const setStatus = useSetItemStatus(projectId);
   const link = data.link!;
-  const [pmOpen, setPmOpen] = useState(false);
   const wavesQ = useQuery(pmWavesQuery(projectId));
 
   const [showArchived, setShowArchived] = useState(false);
@@ -164,15 +162,6 @@ function LinkedBoard({
               </span>
             );
           })()}
-          <Button
-            variant={pmOpen ? "secondary" : "outline"}
-            size="sm"
-            onClick={() => setPmOpen((o) => !o)}
-            title="Open PM agent"
-          >
-            <Bot className="mr-1 size-3.5" />
-            PM
-          </Button>
           <a
             href={githubBoardUrl}
             target="_blank"
@@ -285,11 +274,6 @@ function LinkedBoard({
         </DndContext>
       )}
 
-      <ChatPanel
-        open={pmOpen}
-        onClose={() => setPmOpen(false)}
-        variant="floating"
-      />
     </div>
   );
 }
