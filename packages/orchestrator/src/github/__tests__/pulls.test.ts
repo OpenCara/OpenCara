@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { linkPrToIssueAndCopyAgentLabel } from "../pulls.js";
+import { autoMergePullRequest, linkPrToIssueAndCopyAgentLabel } from "../pulls.js";
 
 // Hand-rolled octokit stub. We don't depend on @octokit/rest's runtime
 // behavior — just on the `request(route, params)` shape — so a minimal
@@ -300,5 +300,166 @@ describe("linkPrToIssueAndCopyAgentLabel", () => {
       (result as { kind: "linked"; prNumber: number }).prNumber,
       17,
     );
+  });
+});
+
+describe("autoMergePullRequest", () => {
+  const autoMergeArgs = {
+    owner: "octo-org",
+    repo: "octo-repo",
+    pullNumber: 7,
+    method: "squash" as const,
+    requireChecks: true,
+    requireApproval: false,
+    maxMergeableAttempts: 1,
+    mergeableDelayMs: 0,
+  };
+
+  it("merges when mergeable, checks pass, and no changes_requested review is outstanding", async () => {
+    const { octokit, calls } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [{ state: "APPROVED", user: { login: "reviewer" } }],
+      }),
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": () => ({
+        status: 200,
+        data: { sha: "merge-sha", message: "merged" },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, { kind: "merged", sha: "merge-sha", message: "merged" });
+    const merge = calls.find(
+      (c) => c.route === "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+    );
+    assert.equal(merge?.params.merge_method, "squash");
+  });
+
+  it("skips while GitHub mergeability remains null", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: null, head: { sha: "b" } },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+    });
+
+    assert.equal(result.kind, "skipped");
+    assert.match((result as { reason: string }).reason, /still computing mergeability/);
+  });
+
+  it("skips when the fix agent did not push a new head commit", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "same" } },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "same",
+    });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "fix agent did not push a new HEAD commit; skipping auto-merge",
+    });
+  });
+
+  it("skips when required checks are pending", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "pending", statuses: [] },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, { kind: "skipped", reason: "required checks are pending" });
+  });
+
+  it("skips on outstanding changes_requested reviews", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [{ state: "CHANGES_REQUESTED", user: { login: "reviewer" } }],
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "PR has outstanding changes_requested reviews",
+    });
+  });
+
+  it("skips with GitHub's merge API message on 405/409", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [],
+      }),
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": () => ({
+        status: 409,
+        data: {},
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, { kind: "skipped", reason: "HTTP 409" });
   });
 });

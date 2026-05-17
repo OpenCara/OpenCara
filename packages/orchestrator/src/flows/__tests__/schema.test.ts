@@ -57,3 +57,50 @@ describe("FlowDefinitionSchema agent draftPr", () => {
     assert.equal(agent?.config.draftPr, false);
   });
 });
+
+describe("FlowDefinitionSchema agent review-fix options", () => {
+  it("round-trips autoMerge and maxIterations config", () => {
+    const parsed = FlowDefinitionSchema.parse({
+      ...baseFlow,
+      nodes: [
+        baseFlow.nodes[0],
+        {
+          ...baseFlow.nodes[1],
+          config: {
+            ...baseFlow.nodes[1]!.config,
+            autoMerge: {
+              enabled: true,
+              method: "rebase",
+              requireChecks: false,
+              requireApproval: true,
+            },
+            maxIterations: {
+              enabled: true,
+              limit: 5,
+              commentOnSkip: true,
+            },
+          },
+        },
+      ],
+    });
+    const agent = parsed.nodes.find((node) => node.kind === "agent");
+    assert.deepEqual(agent?.config.autoMerge, {
+      enabled: true,
+      method: "rebase",
+      requireChecks: false,
+      requireApproval: true,
+    });
+    assert.deepEqual(agent?.config.maxIterations, {
+      enabled: true,
+      limit: 5,
+      commentOnSkip: true,
+    });
+  });
+
+  it("leaves autoMerge and maxIterations absent by default", () => {
+    const parsed = FlowDefinitionSchema.parse(baseFlow);
+    const agent = parsed.nodes.find((node) => node.kind === "agent");
+    assert.equal(agent?.config.autoMerge, undefined);
+    assert.equal(agent?.config.maxIterations, undefined);
+  });
+});

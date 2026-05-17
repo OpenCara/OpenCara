@@ -153,7 +153,7 @@ export class FlowEngine {
     if (!prepared) throw new Error("project/installation missing");
 
     setImmediate(() => {
-      this.executeFlow(prepared, def, event, preloaded).catch((err) => {
+      this.executeFlow(prepared, def, event, preloaded, { rerun: true }).catch((err) => {
         console.error("[flow-engine] rerunFlow failed", {
           flowId: flowRow.id,
           err,
@@ -289,6 +289,7 @@ export class FlowEngine {
     def: FlowDefinition,
     event: PlatformEventInput,
     preloaded?: PreloadedRun,
+    opts: { rerun?: boolean } = {},
   ): Promise<void> {
     const { flowRunId, flowId, project, installation } = prepared;
 
@@ -420,7 +421,7 @@ export class FlowEngine {
 
       const results = await Promise.allSettled(
         layerJobs.map((job) =>
-          this.runNodeStep(prepared, def, job, event, prContext, issueContext),
+          this.runNodeStep(prepared, def, job, event, prContext, issueContext, opts),
         ),
       );
 
@@ -539,6 +540,7 @@ export class FlowEngine {
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
     issueContext: IssueStatusContext | undefined,
+    opts: { rerun?: boolean },
   ): Promise<{
     stdoutCaptured?: string;
     skipped: boolean;
@@ -606,6 +608,7 @@ export class FlowEngine {
       previousOutput,
       publicBaseUrl: this.deps.publicBaseUrl,
       hasDownstreamPostReview,
+      rerun: opts.rerun ?? false,
     };
 
     try {

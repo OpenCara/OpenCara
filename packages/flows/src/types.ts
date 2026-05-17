@@ -26,8 +26,8 @@ export const GithubPullRequestTriggerSchema = z.object({
     labelsIgnore: z.array(z.string()).default([]),
     ignoreDrafts: z.boolean().default(false),
     // Substring (case-insensitive) matched against `issue_comment.created`
-    // comment.body when "commented" is in actions. Empty string matches
-    // any comment.
+    // comment.body when "commented" is in actions. Empty string disables
+    // comment-triggering.
     commentPhrase: z.string().default("@opencara review"),
   }),
 });
@@ -131,6 +131,21 @@ export const AgentNodeSchema = z.object({
       stdinJson: z.boolean().default(true),
     }),
     draftPr: z.boolean().default(false),
+    autoMerge: z
+      .object({
+        enabled: z.boolean().default(false),
+        method: z.enum(["squash", "merge", "rebase"]).default("squash"),
+        requireChecks: z.boolean().default(true),
+        requireApproval: z.boolean().default(false),
+      })
+      .optional(),
+    maxIterations: z
+      .object({
+        enabled: z.boolean().default(false),
+        limit: z.number().int().nonnegative().nullable().default(null),
+        commentOnSkip: z.boolean().default(false),
+      })
+      .optional(),
     // When set, the engine allocates (or reuses) a stable per-PR-branch
     // worktree on a paired device before dispatching the agent. The
     // worktree persists across flow runs (so a review-fix iteration
