@@ -241,6 +241,7 @@ export async function autoMergePullRequest(
         repo,
         pull_number: pullNumber,
         merge_method: method,
+        sha: pr.head.sha,
       },
     );
     const data = res.data as { sha?: string | null; message?: string };

@@ -346,6 +346,7 @@ describe("autoMergePullRequest", () => {
       (c) => c.route === "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
     );
     assert.equal(merge?.params.merge_method, "squash");
+    assert.equal(merge?.params.sha, "b");
   });
 
   it("skips while GitHub mergeability remains null", async () => {

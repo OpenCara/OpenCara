@@ -1177,7 +1177,11 @@ async function maybeAutoMergeAfterFix(
     priorHeadSha: getPrHeadSha(ctx),
   });
   if (result.kind === "skipped") {
-    throw new Error(`autoMerge skipped: ${result.reason}`);
+    console.warn(`[flows] autoMerge skipped: ${result.reason}`);
+    return {
+      merged: false,
+      reason: result.reason,
+    };
   }
 
   const headRef = getPrHeadRef(ctx);
