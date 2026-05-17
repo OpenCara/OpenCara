@@ -1,16 +1,15 @@
-// PM agent REST endpoints.
+// PM agent REST endpoints (kanban-scoped wave dispatch + cancellation).
+// The session lookup that used to live here moved into chatSessionsRoutes
+// when sessions were generalized to (userId, scopeKind, scopeId).
 //
 // Routes (all under /api):
-//   GET  /projects/:id/pm/session         — get (or lazy-create) PM session
-//   POST /projects/:id/pm/session         — update agentId
-//   GET  /projects/:id/pm/waves           — recent waves with items
+//   GET  /projects/:id/pm/waves            — recent waves with items
 //   POST /projects/:id/pm/waves/:wid/cancel — cancel a wave
 
 import { Hono } from "hono";
-import { ulid } from "ulid";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
-import { flowRuns, pmSessions, pmWaveItems, pmWaves } from "../../db/schema.js";
+import { flowRuns, pmWaveItems, pmWaves } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import type { FlowEngine } from "../../flows/engine.js";
@@ -25,67 +24,6 @@ const WAVE_LIMIT = 20;
 export function pmRoutes(deps: PmRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
-
-  // GET /projects/:id/pm/session — lazy-creates the session row if missing.
-  r.get("/projects/:id/pm/session", auth, async (c) => {
-    const projectId = c.req.param("id");
-    const user = c.get("user")!;
-    const owned = await loadOwnedProject(deps.db, projectId, user.id);
-    if (!owned) return c.json({ error: "not found" }, 404);
-
-    let session = await deps.db.query.pmSessions.findFirst({
-      where: eq(pmSessions.projectId, projectId),
-    });
-
-    if (!session) {
-      const threadKey = `pm_${ulid()}`;
-      await deps.db.insert(pmSessions).values({
-        projectId,
-        threadKey,
-        agentId: null,
-        updatedAt: new Date(),
-      });
-      session = { projectId, threadKey, agentId: null, updatedAt: new Date() };
-    }
-
-    return c.json({ session });
-  });
-
-  // POST /projects/:id/pm/session — update agentId.
-  r.post("/projects/:id/pm/session", auth, async (c) => {
-    const projectId = c.req.param("id");
-    const user = c.get("user")!;
-    const owned = await loadOwnedProject(deps.db, projectId, user.id);
-    if (!owned) return c.json({ error: "not found" }, 404);
-
-    const body = await c.req.json().catch(() => ({})) as { agentId?: string | null };
-    const agentId = body.agentId ?? null;
-
-    // Upsert: create session if needed, always update agentId.
-    const existing = await deps.db.query.pmSessions.findFirst({
-      where: eq(pmSessions.projectId, projectId),
-    });
-
-    if (!existing) {
-      const threadKey = `pm_${ulid()}`;
-      await deps.db.insert(pmSessions).values({
-        projectId,
-        threadKey,
-        agentId,
-        updatedAt: new Date(),
-      });
-      return c.json({ session: { projectId, threadKey, agentId, updatedAt: new Date() } });
-    }
-
-    await deps.db
-      .update(pmSessions)
-      .set({ agentId, updatedAt: new Date() })
-      .where(eq(pmSessions.projectId, projectId));
-
-    return c.json({
-      session: { ...existing, agentId, updatedAt: new Date() },
-    });
-  });
 
   // GET /projects/:id/pm/waves — recent waves with their items.
   r.get("/projects/:id/pm/waves", auth, async (c) => {
@@ -151,7 +89,7 @@ export function pmRoutes(deps: PmRoutesDeps) {
             and(
               eq(flowRuns.id, item.flowRunId),
               eq(flowRuns.projectId, projectId),
-              inArray(flowRuns.status, ["pending", "running", "queued"]),
+              inArray(flowRuns.status, ["pending", "running"]),
             ),
           );
       } catch (err) {

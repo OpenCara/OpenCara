@@ -9,6 +9,7 @@ import {
   jsonb,
   pgEnum,
   index,
+  primaryKey,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -610,17 +611,34 @@ export const projectV2Items = pgTable(
   }),
 );
 
-// ─── PM Agent Tables ─────────────────────────────────────────────────────────
+// ─── Chat sessions (per-user, per-scope) ─────────────────────────────────────
 
-// One row per opencara project. Persists the ongoing PM conversation thread
-// (threadKey = stable sessionId for --resume) and the user's last PM agent pick.
-export const pmSessions = pgTable("pm_sessions", {
-  projectId: text("project_id").primaryKey()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  threadKey: text("thread_key").notNull(),     // stable sessionId for chat
-  agentId: text("agent_id"),                   // user's last PM agent pick
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+// Allowed values for `chat_sessions.scope_kind`. Stored as text rather than
+// a pg enum so adding a new scope (e.g. 'flow' for per-flow threads) is a
+// code-only change. Validated at the route boundary.
+export const CHAT_SESSION_SCOPE_KINDS = ["project", "template", "user"] as const;
+export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
+
+// One row per (user, scope) — e.g. (alice, 'project', proj_123). Persists the
+// stable conversation threadKey (used as agent `--resume`/`--continue`
+// session id) and the user's last agent pick for that scope. The kanban PM
+// thread is one such row with scope_kind='project'. scope_id='' is reserved
+// for scope_kind='user' (user-global threads); other kinds carry a real id.
+export const chatSessions = pgTable(
+  "chat_sessions",
+  {
+    userId: text("user_id").notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scopeKind: text("scope_kind").notNull(),
+    scopeId: text("scope_id").notNull().default(""),
+    threadKey: text("thread_key").notNull(),
+    agentId: text("agent_id"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.scopeKind, t.scopeId] }),
+  }),
+);
 
 // Batch dispatch records. One wave = one PM turn that dispatches N issues.
 export const pmWaves = pgTable(

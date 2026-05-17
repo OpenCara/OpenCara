@@ -26,7 +26,7 @@ import {
   type KanbanItem,
   type KanbanStatusOption,
 } from "@/lib/queries";
-import { PmChatPanel } from "./PmChatPanel";
+import { ChatPanel } from "@/components/chat/ChatPanel";
 import { formatRelative } from "@/lib/format";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanLinkPicker } from "./KanbanLinkPicker";
@@ -285,10 +285,10 @@ function LinkedBoard({
         </DndContext>
       )}
 
-      <PmChatPanel
+      <ChatPanel
         open={pmOpen}
         onClose={() => setPmOpen(false)}
-        projectId={projectId}
+        variant="floating"
       />
     </div>
   );

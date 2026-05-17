@@ -169,6 +169,13 @@
       "when": 1777440000000,
       "tag": "0023_pm_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1777450000000,
+      "tag": "0024_chat_sessions",
+      "breakpoints": true
     }
   ]
 }

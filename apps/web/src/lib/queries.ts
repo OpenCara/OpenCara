@@ -897,14 +897,7 @@ export function useLogout() {
   });
 }
 
-// ---- PM agent (kanban) ----
-
-export interface PmSession {
-  projectId: string;
-  threadKey: string;
-  agentId: string | null;
-  updatedAt: string;
-}
+// ---- PM agent waves (kanban) ----
 
 export interface PmWaveItem {
   id: string;
@@ -925,24 +918,55 @@ export interface PmWave {
   items: PmWaveItem[];
 }
 
-export const pmSessionQuery = (projectId: string) => ({
-  queryKey: ["pm", projectId, "session"] as const,
-  queryFn: () => api.get<{ session: PmSession }>(`/api/projects/${projectId}/pm/session`),
-});
-
 export const pmWavesQuery = (projectId: string) => ({
   queryKey: ["pm", projectId, "waves"] as const,
   queryFn: () => api.get<{ waves: PmWave[] }>(`/api/projects/${projectId}/pm/waves`),
   refetchInterval: 5000,
 });
 
-export function usePmSessionAgentMutation(projectId: string) {
+// ---- Chat sessions (generic per-(user, scope) persistence) ----
+//
+// scopeKind/scopeId match the orchestrator's chat_sessions PK:
+//   'project'  + projectId      — every project-scoped page
+//   'template' + templateSlug   — /flows/:slug
+//   'user'     + ''             — user-global / unregistered pages
+export type ChatSessionScopeKind = "project" | "template" | "user";
+
+export interface ChatSession {
+  scopeKind: ChatSessionScopeKind;
+  scopeId: string;
+  threadKey: string;
+  agentId: string | null;
+  updatedAt: string;
+}
+
+export interface ChatSessionScope {
+  scopeKind: ChatSessionScopeKind;
+  scopeId: string;
+}
+
+export const chatSessionQuery = (scope: ChatSessionScope) => ({
+  queryKey: ["chat-session", scope.scopeKind, scope.scopeId] as const,
+  queryFn: () =>
+    api.get<{ session: ChatSession }>(
+      `/api/chat/sessions?scopeKind=${encodeURIComponent(scope.scopeKind)}&scopeId=${encodeURIComponent(scope.scopeId)}`,
+    ),
+});
+
+export function useChatSessionAgentMutation(scope: ChatSessionScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ agentId }: { agentId: string | null }) =>
-      api.post<{ session: PmSession }>(`/api/projects/${projectId}/pm/session`, { agentId }),
+      api.post<{ session: ChatSession }>("/api/chat/sessions", {
+        scopeKind: scope.scopeKind,
+        scopeId: scope.scopeId,
+        agentId,
+      }),
     onSuccess: (data) => {
-      qc.setQueryData(["pm", projectId, "session"] as const, data);
+      qc.setQueryData(
+        ["chat-session", scope.scopeKind, scope.scopeId] as const,
+        data,
+      );
     },
   });
 }

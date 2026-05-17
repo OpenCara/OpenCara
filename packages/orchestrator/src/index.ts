@@ -19,6 +19,7 @@ import { deviceRoutes } from "./routes/api/devices.js";
 import { promptRoutes } from "./routes/api/prompts.js";
 import { agentRoutes } from "./routes/api/agents.js";
 import { chatRoutes } from "./routes/api/chat.js";
+import { chatSessionsRoutes } from "./routes/api/chatSessions.js";
 import { flowTemplateRoutes } from "./routes/api/flowTemplates.js";
 import { kanbanRoutes } from "./routes/api/kanban.js";
 import { pmRoutes } from "./routes/api/pm.js";
@@ -124,6 +125,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
   apiHono.route("/", chatRoutes({ db, pg, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL }));
+  apiHono.route("/", chatSessionsRoutes({ db }));
   apiHono.route("/", flowTemplateRoutes({ db }));
   apiHono.route(
     "/",
