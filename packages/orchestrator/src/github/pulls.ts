@@ -51,6 +51,8 @@ export interface AutoMergePullRequestArgs {
   priorHeadSha?: string | null;
   maxMergeableAttempts?: number;
   mergeableDelayMs?: number;
+  maxCheckAttempts?: number;
+  checkDelayMs?: number;
 }
 
 export type AutoMergePullRequestResult =
@@ -170,6 +172,8 @@ export async function autoMergePullRequest(
   } = args;
   const maxAttempts = Math.max(1, args.maxMergeableAttempts ?? 5);
   const delayMs = Math.max(0, args.mergeableDelayMs ?? 2000);
+  const maxCheckAttempts = Math.max(1, args.maxCheckAttempts ?? 30);
+  const checkDelayMs = Math.max(0, args.checkDelayMs ?? 10000);
 
   let pr: AutoMergePr | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -203,11 +207,13 @@ export async function autoMergePullRequest(
   }
 
   if (requireChecks) {
-    const checks = await getRequiredCheckState({
+    const checks = await waitForRequiredCheckState({
       octokit,
       owner,
       repo,
       ref: pr.head.sha,
+      maxAttempts: maxCheckAttempts,
+      delayMs: checkDelayMs,
     });
     if (checks.kind === "blocked") {
       return { kind: "skipped", reason: checks.reason };
@@ -259,12 +265,38 @@ export async function autoMergePullRequest(
   }
 }
 
+async function waitForRequiredCheckState(args: {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  ref: string;
+  maxAttempts: number;
+  delayMs: number;
+}): Promise<{ kind: "passing" } | { kind: "blocked"; reason: string }> {
+  const { maxAttempts, delayMs, ...checkArgs } = args;
+  let lastPendingReason = "required checks are pending";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const checks = await getRequiredCheckState(checkArgs);
+    if (checks.kind === "passing") return checks;
+    if (checks.state === "failing") return { kind: "blocked", reason: checks.reason };
+    lastPendingReason = checks.reason;
+    if (attempt < maxAttempts) await sleep(delayMs);
+  }
+  return {
+    kind: "blocked",
+    reason: `${lastPendingReason} after ${maxAttempts} attempts`,
+  };
+}
+
 async function getRequiredCheckState(args: {
   octokit: Octokit;
   owner: string;
   repo: string;
   ref: string;
-}): Promise<{ kind: "passing" } | { kind: "blocked"; reason: string }> {
+}): Promise<
+  | { kind: "passing" }
+  | { kind: "blocked"; state: "pending" | "failing"; reason: string }
+> {
   const { octokit, owner, repo, ref } = args;
   const res = await octokit.request(
     "GET /repos/{owner}/{repo}/commits/{ref}/status",
@@ -277,12 +309,14 @@ async function getRequiredCheckState(args: {
   if (status.state === "failure" || status.state === "error") {
     return {
       kind: "blocked",
+      state: "failing",
       reason: "required checks are failing",
     };
   }
   if (status.state === "pending") {
     return {
       kind: "blocked",
+      state: "pending",
       reason: "required checks are pending",
     };
   }

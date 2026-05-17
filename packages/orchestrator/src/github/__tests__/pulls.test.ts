@@ -313,6 +313,8 @@ describe("autoMergePullRequest", () => {
     requireApproval: false,
     maxMergeableAttempts: 1,
     mergeableDelayMs: 0,
+    maxCheckAttempts: 1,
+    checkDelayMs: 0,
   };
 
   it("merges when mergeable, checks pass, and no changes_requested review is outstanding", async () => {
@@ -386,7 +388,42 @@ describe("autoMergePullRequest", () => {
     });
   });
 
-  it("skips when required checks are pending", async () => {
+  it("waits for pending required checks before merging", async () => {
+    let statusCalls = 0;
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => {
+        statusCalls++;
+        return {
+          status: 200,
+          data: { state: statusCalls < 3 ? "pending" : "success", statuses: [] },
+        };
+      },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [],
+      }),
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": () => ({
+        status: 200,
+        data: { sha: "merge-sha", message: "merged" },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+      maxCheckAttempts: 3,
+    });
+
+    assert.equal(statusCalls, 3);
+    assert.deepEqual(result, { kind: "merged", sha: "merge-sha", message: "merged" });
+  });
+
+  it("skips when required checks are still pending after the wait budget", async () => {
     const { octokit } = makeOctokit({
       "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
         status: 200,
@@ -404,7 +441,10 @@ describe("autoMergePullRequest", () => {
       priorHeadSha: "a",
     });
 
-    assert.deepEqual(result, { kind: "skipped", reason: "required checks are pending" });
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "required checks are pending after 1 attempts",
+    });
   });
 
   it("skips on outstanding changes_requested reviews", async () => {
