@@ -60,7 +60,7 @@ export function ProjectDetailPage() {
   const activeTab = tab ?? "overview";
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -93,6 +93,7 @@ export function ProjectDetailPage() {
         onValueChange={(v) =>
           navigate(`/projects/${id}${v === "overview" ? "" : `/${v}`}`)
         }
+        className="min-w-0"
       >
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -134,7 +135,7 @@ export function ProjectDetailPage() {
           <IssuesTab id={id!} />
         </TabsContent>
 
-        <TabsContent value="kanban">
+        <TabsContent value="kanban" className="min-w-0">
           <KanbanTab projectId={id!} />
         </TabsContent>
 
