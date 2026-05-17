@@ -96,34 +96,33 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     const gate = await gateScope(deps, user.id, kind, scopeId);
     if (!gate.ok) return c.json({ error: gate.error }, gate.status);
 
-    const existing = await deps.db.query.chatSessions.findFirst({
+    // Insert-then-read instead of read-then-insert: two concurrent requests
+    // for a new (userId, scopeKind, scopeId) both attempt the INSERT; the
+    // second one hits the PK constraint. onConflictDoNothing() makes that
+    // a no-op rather than a 500, and the subsequent findFirst returns the
+    // winning row regardless of which request created it.
+    const threadKey = `chat_${ulid()}`;
+    const now = new Date();
+    await deps.db
+      .insert(chatSessions)
+      .values({
+        userId: user.id,
+        scopeKind: kind,
+        scopeId,
+        threadKey,
+        agentId: null,
+        updatedAt: now,
+      })
+      .onConflictDoNothing();
+
+    const row = await deps.db.query.chatSessions.findFirst({
       where: and(
         eq(chatSessions.userId, user.id),
         eq(chatSessions.scopeKind, kind),
         eq(chatSessions.scopeId, scopeId),
       ),
     });
-    if (existing) return c.json({ session: toResponse(existing) });
-
-    const threadKey = `chat_${ulid()}`;
-    const now = new Date();
-    await deps.db.insert(chatSessions).values({
-      userId: user.id,
-      scopeKind: kind,
-      scopeId,
-      threadKey,
-      agentId: null,
-      updatedAt: now,
-    });
-    return c.json({
-      session: {
-        scopeKind: kind,
-        scopeId,
-        threadKey,
-        agentId: null,
-        updatedAt: now.toISOString(),
-      } satisfies SessionResponse,
-    });
+    return c.json({ session: toResponse(row!) });
   });
 
   // POST /chat/sessions — upsert the agent pick for the (user, scope).

@@ -214,7 +214,18 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
 
   // Initialize the agent pick from the persisted session once it loads.
   // Falls back to the first available agent for ephemeral / fresh sessions.
+  //
+  // `hydratedAgentRef` is reset whenever `scope` changes so navigating from
+  // project A to project B (same mounted ChatPanel, different scope object)
+  // re-runs the hydration with the new project's persisted agent. Without the
+  // reset, the ref stays `true` from the previous scope and the effect
+  // short-circuits on every render — the new project's agent is never applied.
   const hydratedAgentRef = useRef(false);
+  const prevScopeRef = useRef(scope);
+  if (prevScopeRef.current !== scope) {
+    prevScopeRef.current = scope;
+    hydratedAgentRef.current = false;
+  }
   useEffect(() => {
     if (hydratedAgentRef.current) return;
     if (wantPersistence) {
