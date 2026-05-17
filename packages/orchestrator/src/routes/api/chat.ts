@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { AcpHistoryTurn, AgentSpec } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
-import { agentRunLogs, agentRuns, agents } from "../../db/schema.js";
+import { agentRunLogs, agentRuns, agents, chatSessions } from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
@@ -60,6 +60,36 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
     });
     if (!agent) return c.json({ error: "agent not found" }, 404);
+
+    // Resume continuity: a prior turn on this thread (same user, same
+    // threadKey) wrote `acpSessionId` + `acpSessionHostId` after a
+    // successful dispatch. If the user hasn't switched agent since, we
+    // pass that id as `priorSessionId` so the shim runs `session/load`
+    // (claude `--resume <uuid>`) and the model sees its prior turns
+    // straight from the on-disk JSONL — no history bake-in needed.
+    //
+    // Mismatched agentId means the user picked a different agent
+    // (chatSessions.ts POST clears acpSessionId when that happens, but
+    // races between the agent-pick PATCH and an in-flight message are
+    // possible). Drop priorSessionId rather than feed a foreign UUID
+    // into the new shim.
+    const chatRow = await deps.db.query.chatSessions.findFirst({
+      where: and(
+        eq(chatSessions.userId, user.id),
+        eq(chatSessions.threadKey, sessionId),
+      ),
+    });
+    const priorSessionId =
+      chatRow?.acpSessionId &&
+      chatRow.agentId === agentId &&
+      chatRow.acpSessionId.length > 0
+        ? chatRow.acpSessionId
+        : undefined;
+    // Pin to the device that holds this session's JSONL. Falls back to
+    // the agent's own hostId (and then to any idle host) when this is
+    // turn 1 or the prior host record was cleared.
+    const dispatchHostId =
+      (priorSessionId ? chatRow?.acpSessionHostId : null) ?? agent.hostId;
 
     const agentRunId = ulid();
 
@@ -133,6 +163,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       userPromptMd: message,
       history: normalizeHistory(history),
       pageContext: pageContext as Record<string, unknown>,
+      priorSessionId,
     });
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
@@ -165,7 +196,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       try {
         const result = await deps.dispatcher.run(spec, {
           onLog,
-          hostId: agent.hostId,
+          hostId: dispatchHostId,
           projectId,
           userId: user.id,
           sessionId,
@@ -178,6 +209,30 @@ export function chatRoutes(deps: ChatRoutesDeps) {
             finishedAt: new Date(),
           })
           .where(eq(agentRuns.id, agentRunId));
+        // Persist the session id the shim ran under, so the next turn
+        // can resume via `priorSessionId`. Gated on (a) the run actually
+        // succeeded — a failed run may have left the JSONL in a state
+        // that --resume can't recover from cleanly, and (b) the chat
+        // row still points at the SAME agent that ran this turn. If
+        // the user switched agent mid-flight (chatSessions.ts cleared
+        // acpSessionId on the POST), respect their choice instead of
+        // silently re-pinning the row to the now-superseded agent.
+        if (result.exitCode === 0 && result.acpSessionId) {
+          await deps.db
+            .update(chatSessions)
+            .set({
+              acpSessionId: result.acpSessionId,
+              acpSessionHostId: result.agentHostId,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(chatSessions.userId, user.id),
+                eq(chatSessions.threadKey, sessionId),
+                eq(chatSessions.agentId, agentId),
+              ),
+            );
+        }
       } catch (err) {
         console.error("[chat] dispatcher run failed", err);
         await deps.db
