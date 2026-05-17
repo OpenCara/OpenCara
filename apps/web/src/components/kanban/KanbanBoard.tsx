@@ -1,4 +1,4 @@
-import { useMemo, useState, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -67,6 +67,7 @@ function LinkedBoard({
   const setStatus = useSetItemStatus(projectId);
   const link = data.link!;
   const wavesQ = useQuery(pmWavesQuery(projectId));
+  const columnPanelRef = useRef<HTMLDivElement>(null);
 
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
@@ -105,24 +106,31 @@ function LinkedBoard({
     setStatus.mutate({ itemNodeId, statusOptionId: nextStatusOptionId });
   };
 
-  const handleColumnWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) {
-      return;
-    }
+  useEffect(() => {
+    const panel = columnPanelRef.current;
+    if (!panel) return;
 
-    const panel = event.currentTarget;
-    const maxScrollLeft = panel.scrollWidth - panel.clientWidth;
-    if (maxScrollLeft <= 0) return;
+    const handleColumnWheel = (event: globalThis.WheelEvent) => {
+      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) {
+        return;
+      }
 
-    const nextScrollLeft = panel.scrollLeft + event.deltaY;
-    const canScrollLeft = event.deltaY < 0 && panel.scrollLeft > 0;
-    const canScrollRight =
-      event.deltaY > 0 && panel.scrollLeft < maxScrollLeft;
+      const maxScrollLeft = panel.scrollWidth - panel.clientWidth;
+      if (maxScrollLeft <= 0) return;
 
-    if (!canScrollLeft && !canScrollRight) return;
-    event.preventDefault();
-    panel.scrollLeft = Math.max(0, Math.min(maxScrollLeft, nextScrollLeft));
-  };
+      const nextScrollLeft = panel.scrollLeft + event.deltaY;
+      const canScrollLeft = event.deltaY < 0 && panel.scrollLeft > 0;
+      const canScrollRight =
+        event.deltaY > 0 && panel.scrollLeft < maxScrollLeft;
+
+      if (!canScrollLeft && !canScrollRight) return;
+      event.preventDefault();
+      panel.scrollLeft = Math.max(0, Math.min(maxScrollLeft, nextScrollLeft));
+    };
+
+    panel.addEventListener("wheel", handleColumnWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", handleColumnWheel);
+  });
 
   // Group items by status_option_id. Items with a null/unknown option go into
   // a synthetic "No status" column so they're still visible — Projects v2
@@ -267,9 +275,9 @@ function LinkedBoard({
       ) : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <div
+            ref={columnPanelRef}
             className="max-w-full overflow-x-auto overscroll-x-contain pb-3"
             aria-label="Kanban columns"
-            onWheel={handleColumnWheel}
             role="region"
           >
             <div className="flex w-max gap-3">
