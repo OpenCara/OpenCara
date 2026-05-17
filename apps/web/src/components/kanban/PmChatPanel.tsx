@@ -27,20 +27,23 @@ export function PmChatPanel({ open, onClose, projectId }: PmChatPanelProps) {
 
   const session = sessionQ.data?.session;
 
-  // Gate `open` on session loading so ChatPanel never mounts with
-  // sessionIdOverride=undefined and falls back to its random-uuid sentinel.
-  // Without this, a fast sender lands their first message on an ephemeral
-  // session id (the ref is initialized on first render); the later useEffect
-  // that swaps in the real threadKey arrives too late and silently breaks
-  // PM thread continuity.
+  // Until the session loads, render a closed shell so ChatPanel's useState
+  // never runs with initialAgentId=null.  Once session is available we mount
+  // the real instance with the correct initialAgentId — useState captures the
+  // right value on the very first render and the auto-pick effect can't race
+  // ahead of it.
+  if (!session) {
+    return <ChatPanel open={false} onClose={onClose} variant="floating" />;
+  }
+
   return (
     <ChatPanel
-      open={open && !!session?.threadKey}
+      open={open}
       onClose={onClose}
       variant="floating"
       forcePageId="project-pm"
-      sessionIdOverride={session?.threadKey}
-      initialAgentId={session?.agentId ?? null}
+      sessionIdOverride={session.threadKey}
+      initialAgentId={session.agentId ?? null}
       onAgentChange={(agentId) => updateAgent.mutate({ agentId })}
     />
   );
