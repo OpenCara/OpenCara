@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -67,6 +67,7 @@ function LinkedBoard({
   const setStatus = useSetItemStatus(projectId);
   const link = data.link!;
   const wavesQ = useQuery(pmWavesQuery(projectId));
+  const columnPanelRef = useRef<HTMLDivElement>(null);
 
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
@@ -105,6 +106,32 @@ function LinkedBoard({
     setStatus.mutate({ itemNodeId, statusOptionId: nextStatusOptionId });
   };
 
+  useEffect(() => {
+    const panel = columnPanelRef.current;
+    if (!panel) return;
+
+    const handleColumnWheel = (event: globalThis.WheelEvent) => {
+      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) {
+        return;
+      }
+
+      const maxScrollLeft = panel.scrollWidth - panel.clientWidth;
+      if (maxScrollLeft <= 0) return;
+
+      const nextScrollLeft = panel.scrollLeft + event.deltaY;
+      const canScrollLeft = event.deltaY < 0 && panel.scrollLeft > 0;
+      const canScrollRight =
+        event.deltaY > 0 && panel.scrollLeft < maxScrollLeft;
+
+      if (!canScrollLeft && !canScrollRight) return;
+      event.preventDefault();
+      panel.scrollLeft = Math.max(0, Math.min(maxScrollLeft, nextScrollLeft));
+    };
+
+    panel.addEventListener("wheel", handleColumnWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", handleColumnWheel);
+  });
+
   // Group items by status_option_id. Items with a null/unknown option go into
   // a synthetic "No status" column so they're still visible — Projects v2
   // happily lets items have no Status set.
@@ -139,7 +166,7 @@ function LinkedBoard({
       : `https://github.com/orgs/${link.githubProjectOwner}/projects/${link.githubProjectNumber}`;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <div className="text-base font-medium">{link.githubProjectTitle}</div>
@@ -247,29 +274,36 @@ function LinkedBoard({
         </div>
       ) : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-          <div className="flex gap-3 overflow-x-auto pb-2">
-            {orderedColumns.map((col) => (
+          <div
+            ref={columnPanelRef}
+            className="max-w-full overflow-x-auto overscroll-x-contain pb-3"
+            aria-label="Kanban columns"
+            role="region"
+          >
+            <div className="flex w-max gap-3">
+              {orderedColumns.map((col) => (
+                <Column
+                  key={col.optionId}
+                  projectId={projectId}
+                  projectRepo={data.projectRepo}
+                  option={col}
+                  items={grouped.get(col.optionId) ?? []}
+                />
+              ))}
+              {/* Always rendered — it's a valid drop target for "clear Status",
+                  even when no items are sitting there. */}
               <Column
-                key={col.optionId}
                 projectId={projectId}
                 projectRepo={data.projectRepo}
-                option={col}
-                items={grouped.get(col.optionId) ?? []}
+                option={{
+                  optionId: NO_STATUS_COLUMN_ID,
+                  name: "No status",
+                  color: "GRAY",
+                  position: 999,
+                }}
+                items={noStatusItems}
               />
-            ))}
-            {/* Always rendered — it's a valid drop target for "clear Status",
-                even when no items are sitting there. */}
-            <Column
-              projectId={projectId}
-              projectRepo={data.projectRepo}
-              option={{
-                optionId: NO_STATUS_COLUMN_ID,
-                name: "No status",
-                color: "GRAY",
-                position: 999,
-              }}
-              items={noStatusItems}
-            />
+            </div>
           </div>
         </DndContext>
       )}

@@ -185,7 +185,7 @@ export function AppShell() {
         </nav>
       </aside>
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-end gap-3 border-b bg-card px-4">
           <Button
             size="sm"
@@ -227,7 +227,7 @@ export function AppShell() {
           </DropdownMenu>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto p-6">
           <Outlet />
         </main>
       </div>
