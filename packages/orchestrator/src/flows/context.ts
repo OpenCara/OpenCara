@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { issues } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
+import { resolveReviewStateFromBody } from "../agents/verdict.js";
 
 export interface PullRequestContext {
   envExtras: Record<string, string>;
@@ -139,11 +140,32 @@ export async function buildPullRequestContext(
   if (prObject.head.ref) {
     envExtras["OPENCARA_PR_HEAD_REF"] = prObject.head.ref;
   }
+  // When the review body carries a `verdict: <token>` contract line, prefer
+  // the verdict's intended state over GitHub's raw `review.state`. The
+  // mismatch shows up for reviews posted by `github.post_review` against a
+  // PR opened by the same App identity: GitHub forbids APPROVE /
+  // REQUEST_CHANGES on a self-PR (422), so post_review falls back to a
+  // COMMENT-typed review and leaves the verdict line in the body. Without
+  // this resolution the pr-review-fix loop would either skip the event
+  // (operator narrowed `reviewStates` to `changes_requested`) or read
+  // `OPENCARA_REVIEW_STATE=commented` and lose the agent's true intent.
+  let effectiveReview = payload.review;
   if (payload.review) {
-    if (payload.review.state) envExtras["OPENCARA_REVIEW_STATE"] = payload.review.state;
-    if (payload.review.body) envExtras["OPENCARA_REVIEW_BODY"] = payload.review.body;
-    if (payload.review.user?.login)
-      envExtras["OPENCARA_REVIEW_AUTHOR"] = payload.review.user.login;
+    const resolved = resolveReviewStateFromBody(payload.review.body);
+    if (resolved) {
+      effectiveReview = {
+        ...payload.review,
+        state: resolved.state,
+        body: resolved.body,
+      };
+      envExtras["OPENCARA_REVIEW_VERDICT"] = resolved.verdict.toLowerCase();
+    }
+    if (effectiveReview?.state)
+      envExtras["OPENCARA_REVIEW_STATE"] = effectiveReview.state;
+    if (effectiveReview?.body)
+      envExtras["OPENCARA_REVIEW_BODY"] = effectiveReview.body;
+    if (effectiveReview?.user?.login)
+      envExtras["OPENCARA_REVIEW_AUTHOR"] = effectiveReview.user.login;
   }
   if (payload.comment) {
     if (payload.comment.body) envExtras["OPENCARA_COMMENT_BODY"] = payload.comment.body;
@@ -160,7 +182,7 @@ export async function buildPullRequestContext(
     stdin: {
       pr: prObject,
       diff,
-      review: payload.review,
+      review: effectiveReview,
       comment: payload.comment,
     },
   };

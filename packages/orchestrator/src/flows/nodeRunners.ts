@@ -27,6 +27,7 @@ import { buildIssueImplementContractSkill } from "./skills/issueImplementContrac
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
+import { isSelfReviewError } from "../github/errors.js";
 import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -269,7 +270,15 @@ async function pullRequestReviewTrigger(
       `pull_request_review action '${payload.action ?? ""}' is not 'submitted'`,
     );
   }
-  const state = payload.review?.state ?? "";
+  // Prefer the verdict-resolved state from prContext over the raw GitHub
+  // state. This lets operators filter on intent (`changes_requested`)
+  // and still match reviews that post_review had to downgrade to a
+  // COMMENT-typed review on a self-PR. See flows/context.ts
+  // resolveReviewStateFromBody for the override path.
+  const state =
+    (ctx.prContext?.stdin.review as { state?: string } | undefined)?.state ??
+    payload.review?.state ??
+    "";
   if (
     node.config.reviewStates.length > 0 &&
     !(node.config.reviewStates as string[]).includes(state)
@@ -1130,18 +1139,72 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       const parsed = parseReviewVerdict(body);
       const event = parsed?.verdict ?? node.config.event;
       const reviewBody = parsed?.bodyWithoutVerdict ?? body;
-      const res = await oct.request(
-        "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-        {
-          owner,
-          repo,
-          pull_number: pr.number,
-          body: reviewBody || "_(no review body)_",
-          event,
-          commit_id: pr.head.sha,
+      type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+      const postReview = (postEvent: ReviewEvent, postBody: string) =>
+        oct.request(
+          "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+          {
+            owner,
+            repo,
+            pull_number: pr.number,
+            body: postBody || "_(no review body)_",
+            event: postEvent,
+            commit_id: pr.head.sha,
+          },
+        );
+
+      let res;
+      let downgradedFrom: string | null = null;
+      try {
+        res = await postReview(event, reviewBody);
+      } catch (err) {
+        // GitHub forbids APPROVE / REQUEST_CHANGES on a PR opened by the
+        // same identity (HTTP 422). When the App installation backing
+        // post_review also opened the PR — common in single-account
+        // setups where opencara is both the implementer and the
+        // reviewer — fall back to a COMMENT-typed review and embed the
+        // original verdict line in the body so downstream pr-review-fix
+        // can still read intent (see flows/context.ts
+        // resolveReviewStateFromBody).
+        if (!isSelfReviewError(err, event)) throw err;
+        const verdictLabel =
+          event === "REQUEST_CHANGES" ? "Request changes" : "Approve";
+        const verdictToken =
+          event === "REQUEST_CHANGES" ? "request_changes" : "approve";
+        const downgradedBody = [
+          `_Downgraded to "Commented" — GitHub forbids "${verdictLabel}" on a PR you opened. Verdict preserved below for review-fix flows._`,
+          "",
+          `verdict: ${verdictToken}`,
+          "",
+          reviewBody,
+        ]
+          .join("\n")
+          .trim();
+        try {
+          res = await postReview("COMMENT", downgradedBody);
+        } catch (retryErr) {
+          // Surface both errors so operators don't lose the original
+          // 422 context when the retry fails for an unrelated reason
+          // (transient 5xx, PR closed mid-run, etc.).
+          throw new Error(
+            `post_review fallback to COMMENT failed after ${event} self-review 422: ${String(
+              (retryErr as Error).message ?? retryErr,
+            )} (original error: ${String((err as Error).message ?? err)})`,
+            { cause: retryErr },
+          );
+        }
+        downgradedFrom = event;
+        console.warn(
+          `[post_review] self-review on ${owner}/${repo}#${pr.number} downgraded ${event} -> COMMENT`,
+        );
+      }
+      return {
+        output: {
+          reviewId: res.data.id,
+          htmlUrl: res.data.html_url,
+          ...(downgradedFrom ? { downgradedFrom } : {}),
         },
-      );
-      return { output: { reviewId: res.data.id, htmlUrl: res.data.html_url } };
+      };
     }
     case "github.add_comment": {
       const res = await oct.request(

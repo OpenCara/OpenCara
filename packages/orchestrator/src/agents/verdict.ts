@@ -71,3 +71,44 @@ export function parseReviewVerdict(body: string): ParsedReviewVerdict | null {
 
   return { verdict: token, bodyWithoutVerdict };
 }
+
+// Maps an agent's verdict token onto the value GitHub's
+// `pull_request_review.review.state` carries when the review is rendered as
+// that verdict. Used in two places that need to recover intent from a posted
+// review body:
+//   - `buildPullRequestContext` overrides OPENCARA_REVIEW_STATE so the
+//     pr-review-fix agent sees "changes_requested" even when the actual
+//     posted review was downgraded to COMMENT (see self-review fallback
+//     in flows/nodeRunners.ts `github.post_review`).
+//   - `pullRequestReviewTrigger` uses the resolved state for its
+//     `reviewStates` gate, so operators filter on intent rather than on
+//     GitHub's badge.
+export const VERDICT_TO_REVIEW_STATE: Record<ReviewVerdict, string> = {
+  APPROVE: "approved",
+  REQUEST_CHANGES: "changes_requested",
+  COMMENT: "commented",
+};
+
+export interface ResolvedReviewState {
+  state: string;
+  verdict: ReviewVerdict;
+  body: string;
+}
+
+/**
+ * Inspect a review body for a `verdict: <token>` line. When present, return
+ * the effective review state (verdict → GitHub state string) and the body
+ * stripped of the contract marker. When absent, return null — callers
+ * should fall back to GitHub's raw `review.state` and the verbatim body.
+ */
+export function resolveReviewStateFromBody(
+  body: string | null | undefined,
+): ResolvedReviewState | null {
+  const parsed = parseReviewVerdict(body ?? "");
+  if (!parsed) return null;
+  return {
+    state: VERDICT_TO_REVIEW_STATE[parsed.verdict],
+    verdict: parsed.verdict,
+    body: parsed.bodyWithoutVerdict,
+  };
+}
