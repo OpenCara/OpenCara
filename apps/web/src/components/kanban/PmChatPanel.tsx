@@ -36,8 +36,14 @@ export function PmChatPanel({ open, onClose, projectId }: PmChatPanelProps) {
     return <ChatPanel open={false} onClose={onClose} variant="floating" />;
   }
 
+  // key={session.threadKey} ensures React unmounts the loading shell and
+  // mounts a fresh ChatPanel instance once the real threadKey is known.
+  // Without it, React reuses the same component instance (same tree position,
+  // same type) and useState(initialAgentId) keeps the null it captured on
+  // the shell's first render — the persisted agent is silently ignored.
   return (
     <ChatPanel
+      key={session.threadKey}
       open={open}
       onClose={onClose}
       variant="floating"

@@ -137,8 +137,13 @@ export function pmRoutes(deps: PmRoutesDeps) {
 
     for (const item of items) {
       if (!item.flowRunId) continue;
+      // Skip items that already settled — overwriting a succeeded/failed
+      // flow run's status with "cancelled" corrupts historical run records.
+      if (item.status !== "pending" && item.status !== "running") continue;
       try {
         // Best-effort: mark the flow run cancelled via a direct DB write.
+        // The status predicate here mirrors the item-status guard above so
+        // a run that finished between the item fetch and this write is safe.
         await deps.db
           .update(flowRuns)
           .set({ status: "cancelled", cancelReason: "pm-wave-cancel", finishedAt: new Date() })
@@ -146,6 +151,7 @@ export function pmRoutes(deps: PmRoutesDeps) {
             and(
               eq(flowRuns.id, item.flowRunId),
               eq(flowRuns.projectId, projectId),
+              inArray(flowRuns.status, ["pending", "running", "queued"]),
             ),
           );
       } catch (err) {

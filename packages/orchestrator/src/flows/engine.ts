@@ -21,7 +21,7 @@ import {
   pmWaves,
   projects,
 } from "../db/schema.js";
-import { and, asc } from "drizzle-orm";
+import { and, asc, not } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
@@ -497,10 +497,13 @@ export class FlowEngine {
     });
     if (!item) return;
 
+    // Guard: don't overwrite a "cancelled" item — the cancel endpoint wins.
+    // A user-cancelled wave whose underlying flow run then finishes should
+    // remain cancelled, not flip to "succeeded".
     await this.deps.db
       .update(pmWaveItems)
       .set({ status: flowStatus })
-      .where(eq(pmWaveItems.id, item.id));
+      .where(and(eq(pmWaveItems.id, item.id), not(eq(pmWaveItems.status, "cancelled"))));
 
     const siblings = await this.deps.db.query.pmWaveItems.findMany({
       where: eq(pmWaveItems.waveId, item.waveId),
@@ -509,10 +512,11 @@ export class FlowEngine {
       (s) => s.status !== "pending" && s.status !== "running",
     );
     if (allDone) {
+      // Guard: don't overwrite a "cancelled" wave — the cancel endpoint wins.
       await this.deps.db
         .update(pmWaves)
         .set({ status: "done", finishedAt: new Date() })
-        .where(eq(pmWaves.id, item.waveId));
+        .where(and(eq(pmWaves.id, item.waveId), not(eq(pmWaves.status, "cancelled"))));
     }
   }
 
