@@ -8,7 +8,7 @@
 
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { flowRuns, pmSessions, pmWaveItems, pmWaves } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
@@ -137,7 +137,6 @@ export function pmRoutes(deps: PmRoutesDeps) {
 
     for (const item of items) {
       if (!item.flowRunId) continue;
-      if (!deps.flowEngine) continue;
       try {
         // Best-effort: mark the flow run cancelled via a direct DB write.
         await deps.db
@@ -154,10 +153,19 @@ export function pmRoutes(deps: PmRoutesDeps) {
       }
     }
 
+    // Only touch items that haven't already settled. Without the status
+    // filter, a wave where some items finished before the cancel arrived
+    // loses its succeeded/failed history — every row gets overwritten as
+    // "cancelled" and post-cancellation forensics become impossible.
     await deps.db
       .update(pmWaveItems)
       .set({ status: "cancelled" })
-      .where(eq(pmWaveItems.waveId, waveId));
+      .where(
+        and(
+          eq(pmWaveItems.waveId, waveId),
+          inArray(pmWaveItems.status, ["pending", "running"]),
+        ),
+      );
 
     await deps.db
       .update(pmWaves)

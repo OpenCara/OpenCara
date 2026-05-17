@@ -27,9 +27,15 @@ export function PmChatPanel({ open, onClose, projectId }: PmChatPanelProps) {
 
   const session = sessionQ.data?.session;
 
+  // Gate `open` on session loading so ChatPanel never mounts with
+  // sessionIdOverride=undefined and falls back to its random-uuid sentinel.
+  // Without this, a fast sender lands their first message on an ephemeral
+  // session id (the ref is initialized on first render); the later useEffect
+  // that swaps in the real threadKey arrives too late and silently breaks
+  // PM thread continuity.
   return (
     <ChatPanel
-      open={open}
+      open={open && !!session?.threadKey}
       onClose={onClose}
       variant="floating"
       forcePageId="project-pm"

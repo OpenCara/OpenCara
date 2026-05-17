@@ -71,12 +71,14 @@ export async function applyKanbanWaveDispatch(
   }));
   await db.insert(pmWaveItems).values(itemRows);
 
-  // 4. Trigger a flow run for each issue.
-  const triggeredCount = { ok: 0, failed: 0 };
-  for (const item of itemRows) {
-    const eventId = ulid();
-    try {
-      // Synthesise a manual platform_event.
+  // 4. Trigger a flow run for each issue, in parallel. The MCP tool
+  //    description ("Dispatch up to 10 issues in parallel") was a lie
+  //    for as long as this was a sequential for-await loop — a 10-item
+  //    wave then took ~10× the per-flow latency. Fire every triggerFlow
+  //    concurrently and fold the results in a second pass.
+  const triggered = await Promise.allSettled(
+    itemRows.map(async (item) => {
+      const eventId = ulid();
       await db.insert(platformEvents).values({
         id: eventId,
         platform: "github",
@@ -85,26 +87,31 @@ export async function applyKanbanWaveDispatch(
         projectId,
         deliveryId: eventId,
       });
-
       const { flowRunId } = await flowEngine.triggerFlow(flow.id, {
         id: eventId,
         type: "manual",
         projectId,
         payload: { issueNumber: item.issueNumber, source: "pm-wave" },
       });
+      return { item, flowRunId };
+    }),
+  );
 
-      // Write back flowRunId.
+  const triggeredCount = { ok: 0, failed: 0 };
+  for (let i = 0; i < triggered.length; i++) {
+    const res = triggered[i]!;
+    const item = itemRows[i]!;
+    if (res.status === "fulfilled") {
       await db
         .update(pmWaveItems)
-        .set({ flowRunId, status: "running" })
+        .set({ flowRunId: res.value.flowRunId, status: "running" })
         .where(eq(pmWaveItems.id, item.id));
-
       triggeredCount.ok++;
-    } catch (err) {
+    } else {
       console.error("[kanban-wave-dispatch] triggerFlow failed", {
         waveId,
         issueNumber: item.issueNumber,
-        err,
+        err: res.reason,
       });
       await db
         .update(pmWaveItems)
