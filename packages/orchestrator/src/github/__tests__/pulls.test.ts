@@ -475,6 +475,97 @@ describe("autoMergePullRequest", () => {
     });
   });
 
+  it("merges with same HEAD when mergeWithoutChanges is true", async () => {
+    const { octokit, calls } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "same" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [],
+      }),
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": () => ({
+        status: 200,
+        data: { sha: "merge-sha", message: "merged" },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "same",
+      mergeWithoutChanges: true,
+    });
+
+    assert.deepEqual(result, { kind: "merged", sha: "merge-sha", message: "merged" });
+    const merge = calls.find(
+      (c) => c.route === "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+    );
+    assert.ok(merge, "merge PUT should have been called");
+  });
+
+  it("still respects requireApproval when mergeWithoutChanges is true and same HEAD", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "same" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [],
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "same",
+      mergeWithoutChanges: true,
+      requireApproval: true,
+    });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "PR has no current approving review",
+    });
+  });
+
+  it("still respects requireChecks when mergeWithoutChanges is true and same HEAD", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "same" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "failure", statuses: [{ state: "failure", context: "ci" }] },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "same",
+      mergeWithoutChanges: true,
+      requireChecks: true,
+    });
+
+    assert.equal(result.kind, "skipped");
+    assert.match(
+      (result as { reason: string }).reason,
+      /required checks|failing/i,
+    );
+  });
+
   it("skips with GitHub's merge API message on 405/409", async () => {
     const { octokit } = makeOctokit({
       "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({

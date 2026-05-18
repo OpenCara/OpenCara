@@ -48,6 +48,7 @@ export interface AutoMergePullRequestArgs {
   method: AutoMergeMethod;
   requireChecks: boolean;
   requireApproval: boolean;
+  mergeWithoutChanges?: boolean;
   priorHeadSha?: string | null;
   maxMergeableAttempts?: number;
   mergeableDelayMs?: number;
@@ -168,6 +169,7 @@ export async function autoMergePullRequest(
     method,
     requireChecks,
     requireApproval,
+    mergeWithoutChanges,
     priorHeadSha,
   } = args;
   const maxAttempts = Math.max(1, args.maxMergeableAttempts ?? 5);
@@ -199,7 +201,7 @@ export async function autoMergePullRequest(
       reason: `PR #${pullNumber} is not mergeable (${pr.mergeable_state ?? "unknown"})`,
     };
   }
-  if (priorHeadSha && pr.head.sha === priorHeadSha) {
+  if (priorHeadSha && pr.head.sha === priorHeadSha && !mergeWithoutChanges) {
     return {
       kind: "skipped",
       reason: "fix agent did not push a new HEAD commit; skipping auto-merge",
