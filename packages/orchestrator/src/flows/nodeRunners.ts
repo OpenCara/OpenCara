@@ -1,5 +1,5 @@
 import { ulid } from "ulid";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type {
   ActionNode,
@@ -21,7 +21,10 @@ import {
 } from "../db/schema.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
-import { linkPrToIssueAndCopyAgentLabel } from "../github/pulls.js";
+import {
+  autoMergePullRequest,
+  linkPrToIssueAndCopyAgentLabel,
+} from "../github/pulls.js";
 import type { IssueStatusContext, PullRequestContext } from "./context.js";
 import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
@@ -32,6 +35,7 @@ import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
+import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
 
 export class SkipFlowError extends Error {
   constructor(reason: string) {
@@ -62,6 +66,8 @@ export interface NodeRunCtx {
    *  review's `event` enum from the agent body. Computed by the engine via
    *  `computeDownstreamSet`. */
   hasDownstreamPostReview?: boolean;
+  /** True for an operator-triggered rerun from the flow detail page. */
+  rerun?: boolean;
 }
 
 export interface NodeRunResult {
@@ -116,7 +122,10 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
     }
     const body = commentPayload.comment?.body ?? "";
     const phrase = cfg.commentPhrase ?? "";
-    if (phrase.length > 0 && !body.toLowerCase().includes(phrase.toLowerCase())) {
+    if (phrase.length === 0) {
+      throw new SkipFlowError("comment trigger not enabled (commentPhrase is empty)");
+    }
+    if (!body.toLowerCase().includes(phrase.toLowerCase())) {
       throw new SkipFlowError(`comment body does not contain '${phrase}'`);
     }
     return {
@@ -452,6 +461,8 @@ function globToRegex(glob: string): RegExp {
 }
 
 export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
+  await enforceMaxIterations(ctx, node);
+
   // Resolve the linked agent — required because agent flow nodes carry
   // no in-graph subprocess spec. The dispatched AgentSpec (command,
   // args, env, cwd) is built from the linked agent's `kind` via
@@ -486,6 +497,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   }
 
   const env: Record<string, string> = { ...agent.env };
+  if (ctx.rerun) {
+    env["OPENCARA_RERUN"] = "1";
+  }
   if (ctx.prContext) {
     for (const key of node.config.contextInjection.env) {
       const v = ctx.prContext.envExtras[key];
@@ -1014,8 +1028,180 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     }
   }
 
-  return { output: { exitCode: result.exitCode }, stdoutCaptured: result.stdoutCaptured };
+  const autoMergeOutput = await maybeAutoMergeAfterFix(ctx, node);
+
+  return {
+    output: { exitCode: result.exitCode, ...(autoMergeOutput ? { autoMerge: autoMergeOutput } : {}) },
+    stdoutCaptured: result.stdoutCaptured,
+  };
 };
+
+async function enforceMaxIterations(ctx: NodeRunCtx, node: AgentNode): Promise<void> {
+  const cfg = node.config.maxIterations;
+  const limit = cfg?.limit ?? 0;
+  if (!cfg?.enabled || limit <= 0) return;
+  if (ctx.event.type === "manual" || ctx.rerun) return;
+  if (!isPrReviewFixContext(ctx)) return;
+
+  const prNumber = getPrNumber(ctx);
+  const headRef = getPrHeadRef(ctx);
+  if (!prNumber && !headRef) return;
+
+  const completed = await countCompletedFixRuns(ctx, { prNumber, headRef });
+  if (completed < limit) return;
+
+  const reason = `opencara: reached maxIterations=${limit} on this PR; further @opencara fix / review comments will not dispatch until the count resets`;
+  if (cfg.commentOnSkip && prNumber) {
+    await postMaxIterationsCommentOnce(ctx, prNumber, reason);
+  }
+  throw new SkipFlowError(reason);
+}
+
+function isPrReviewFixContext(ctx: NodeRunCtx): boolean {
+  return ctx.event.type === "pull_request_review" || ctx.event.type === "issue_comment";
+}
+
+function getPrNumber(ctx: NodeRunCtx): number | null {
+  const payload = ctx.event.payload as {
+    pull_request?: { number?: number };
+    issue?: { number?: number };
+  };
+  const fromPayload = payload.pull_request?.number ?? payload.issue?.number;
+  if (typeof fromPayload === "number") return fromPayload;
+  const pr = ctx.prContext?.stdin.pr as { number?: unknown } | undefined;
+  return typeof pr?.number === "number" ? pr.number : null;
+}
+
+function getPrHeadRef(ctx: NodeRunCtx): string | null {
+  const payload = ctx.event.payload as {
+    pull_request?: { head?: { ref?: string } };
+  };
+  const fromPayload = payload.pull_request?.head?.ref;
+  if (fromPayload) return fromPayload;
+  const pr = ctx.prContext?.stdin.pr as { head?: { ref?: unknown } } | undefined;
+  return typeof pr?.head?.ref === "string" ? pr.head.ref : null;
+}
+
+function getPrHeadSha(ctx: NodeRunCtx): string | null {
+  const payload = ctx.event.payload as {
+    pull_request?: { head?: { sha?: string } };
+  };
+  const fromPayload = payload.pull_request?.head?.sha;
+  if (fromPayload) return fromPayload;
+  const pr = ctx.prContext?.stdin.pr as { head?: { sha?: unknown } } | undefined;
+  return typeof pr?.head?.sha === "string" ? pr.head.sha : null;
+}
+
+async function countCompletedFixRuns(
+  ctx: NodeRunCtx,
+  pr: { prNumber: number | null; headRef: string | null },
+): Promise<number> {
+  const rows = await ctx.db.execute(sql`
+    select count(*)::int as count
+    from flow_runs fr
+    join platform_events pe on pe.id = fr.trigger_event_id
+    where fr.flow_id = ${ctx.flowId}
+      and fr.status = 'succeeded'
+      and (
+        (
+          ${pr.prNumber}::int is not null
+          and (
+          (pe.payload->'pull_request'->>'number')::int = ${pr.prNumber}
+          or (pe.payload->'issue'->>'number')::int = ${pr.prNumber}
+          )
+        )
+        or (
+          ${pr.prNumber}::int is null
+          and ${pr.headRef}::text is not null
+          and pe.payload->'pull_request'->'head'->>'ref' = ${pr.headRef}
+        )
+      )
+  `);
+  const first = Array.isArray(rows) ? rows[0] : (rows as { rows?: unknown[] }).rows?.[0];
+  const value = (first as { count?: unknown } | undefined)?.count;
+  return typeof value === "number" ? value : Number(value ?? 0);
+}
+
+async function postMaxIterationsCommentOnce(
+  ctx: NodeRunCtx,
+  prNumber: number,
+  body: string,
+): Promise<void> {
+  try {
+    const octokit = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
+    const comments = await octokit.request(
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      {
+        owner: ctx.project.owner,
+        repo: ctx.project.name,
+        issue_number: prNumber,
+        per_page: 100,
+      },
+    );
+    const alreadyPosted = (comments.data as Array<{ body?: string | null }>).some(
+      (comment) => comment.body === body,
+    );
+    if (alreadyPosted) return;
+    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+      owner: ctx.project.owner,
+      repo: ctx.project.name,
+      issue_number: prNumber,
+      body,
+    });
+  } catch (err) {
+    console.error("[flows] maxIterations skip comment failed", err);
+  }
+}
+
+async function maybeAutoMergeAfterFix(
+  ctx: NodeRunCtx,
+  node: AgentNode,
+): Promise<Record<string, unknown> | null> {
+  const cfg = node.config.autoMerge;
+  if (!cfg?.enabled) return null;
+  if (!isPrReviewFixContext(ctx)) return null;
+  const prNumber = getPrNumber(ctx);
+  if (!prNumber) {
+    throw new Error("autoMerge enabled but PR number is unavailable");
+  }
+
+  const octokit = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
+  const result = await autoMergePullRequest({
+    octokit,
+    owner: ctx.project.owner,
+    repo: ctx.project.name,
+    pullNumber: prNumber,
+    method: cfg.method,
+    requireChecks: cfg.requireChecks,
+    requireApproval: cfg.requireApproval,
+    priorHeadSha: getPrHeadSha(ctx),
+  });
+  if (result.kind === "skipped") {
+    console.warn(`[flows] autoMerge skipped: ${result.reason}`);
+    return {
+      merged: false,
+      reason: result.reason,
+    };
+  }
+
+  const headRef = getPrHeadRef(ctx);
+  if (headRef) {
+    await cleanupClosedPrWorktree(
+      { db: ctx.db, pg: ctx.pg, dispatcher: ctx.dispatcher },
+      `${ctx.project.owner}/${ctx.project.name}`,
+      headRef,
+      ctx.projectId,
+    );
+  }
+
+  return {
+    merged: true,
+    method: cfg.method,
+    sha: result.sha,
+    message: result.message,
+    cleanedUp: Boolean(headRef),
+  };
+}
 
 // Inspect the triggering artifact's labels for an `agent:<name>` marker
 // and look that agent up by (name, project_owner_user_id). Returns null

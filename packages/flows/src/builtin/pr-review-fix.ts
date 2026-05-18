@@ -45,6 +45,17 @@ export const prReviewFixFlow: FlowDefinition = {
       config: {
         label: "Fix agent",
         draftPr: false,
+        autoMerge: {
+          enabled: false,
+          method: "squash",
+          requireChecks: true,
+          requireApproval: false,
+        },
+        maxIterations: {
+          enabled: false,
+          limit: null,
+          commentOnSkip: false,
+        },
         contextInjection: {
           env: [
             "OPENCARA_REPO",

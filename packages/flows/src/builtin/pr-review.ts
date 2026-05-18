@@ -11,7 +11,7 @@ export const prReviewFlow: FlowDefinition = {
       kind: "github.pull_request",
       position: { x: 0, y: 0 },
       config: {
-        actions: ["opened", "synchronize", "reopened"],
+        actions: ["opened", "synchronize", "reopened", "commented"],
         branches: [],
         branchesIgnore: [],
         paths: [],

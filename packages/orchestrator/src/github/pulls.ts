@@ -38,6 +38,34 @@ export type LinkPrToIssueResult =
   | { kind: "no-pr" }
   | { kind: "transient-failure"; reason: string };
 
+export type AutoMergeMethod = "squash" | "merge" | "rebase";
+
+export interface AutoMergePullRequestArgs {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  method: AutoMergeMethod;
+  requireChecks: boolean;
+  requireApproval: boolean;
+  priorHeadSha?: string | null;
+  maxMergeableAttempts?: number;
+  mergeableDelayMs?: number;
+  maxCheckAttempts?: number;
+  checkDelayMs?: number;
+}
+
+export type AutoMergePullRequestResult =
+  | { kind: "merged"; sha: string | null; message: string }
+  | { kind: "skipped"; reason: string };
+
+interface AutoMergePr {
+  number: number;
+  mergeable: boolean | null;
+  mergeable_state?: string | null;
+  head: { sha: string };
+}
+
 // Idempotently link the implement PR to its source issue (via
 // "Closes #<N>" in the PR body — the only programmatic path GitHub
 // supports for the issue's Development panel) and copy the issue's
@@ -127,6 +155,211 @@ export async function linkPrToIssueAndCopyAgentLabel(
     }
   }
   return { kind: "linked", prNumber: pr.number };
+}
+
+export async function autoMergePullRequest(
+  args: AutoMergePullRequestArgs,
+): Promise<AutoMergePullRequestResult> {
+  const {
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    method,
+    requireChecks,
+    requireApproval,
+    priorHeadSha,
+  } = args;
+  const maxAttempts = Math.max(1, args.maxMergeableAttempts ?? 5);
+  const delayMs = Math.max(0, args.mergeableDelayMs ?? 2000);
+  const maxCheckAttempts = Math.max(1, args.maxCheckAttempts ?? 30);
+  const checkDelayMs = Math.max(0, args.checkDelayMs ?? 10000);
+
+  let pr: AutoMergePr | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+    });
+    pr = res.data as AutoMergePr;
+    if (pr?.mergeable !== null) break;
+    if (attempt < maxAttempts) await sleep(delayMs);
+  }
+  if (!pr) return { kind: "skipped", reason: `pull request #${pullNumber} not found` };
+  if (pr.mergeable === null) {
+    return {
+      kind: "skipped",
+      reason: `GitHub is still computing mergeability for PR #${pullNumber} after ${maxAttempts} attempts`,
+    };
+  }
+  if (pr.mergeable === false) {
+    return {
+      kind: "skipped",
+      reason: `PR #${pullNumber} is not mergeable (${pr.mergeable_state ?? "unknown"})`,
+    };
+  }
+  if (priorHeadSha && pr.head.sha === priorHeadSha) {
+    return {
+      kind: "skipped",
+      reason: "fix agent did not push a new HEAD commit; skipping auto-merge",
+    };
+  }
+
+  if (requireChecks) {
+    const checks = await waitForRequiredCheckState({
+      octokit,
+      owner,
+      repo,
+      ref: pr.head.sha,
+      maxAttempts: maxCheckAttempts,
+      delayMs: checkDelayMs,
+    });
+    if (checks.kind === "blocked") {
+      return { kind: "skipped", reason: checks.reason };
+    }
+  }
+
+  const reviewState = await getReviewGateState({
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+  });
+  if (reviewState.changesRequested) {
+    return {
+      kind: "skipped",
+      reason: "PR has outstanding changes_requested reviews",
+    };
+  }
+  if (requireApproval && !reviewState.approved) {
+    return {
+      kind: "skipped",
+      reason: "PR has no current approving review",
+    };
+  }
+
+  try {
+    const res = await octokit.request(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      {
+        owner,
+        repo,
+        pull_number: pullNumber,
+        merge_method: method,
+        sha: pr.head.sha,
+      },
+    );
+    const data = res.data as { sha?: string | null; message?: string };
+    return {
+      kind: "merged",
+      sha: data.sha ?? null,
+      message: data.message ?? "Pull Request successfully merged",
+    };
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 405 || status === 409) {
+      return { kind: "skipped", reason: errorMessage(err) };
+    }
+    throw err;
+  }
+}
+
+async function waitForRequiredCheckState(args: {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  ref: string;
+  maxAttempts: number;
+  delayMs: number;
+}): Promise<{ kind: "passing" } | { kind: "blocked"; reason: string }> {
+  const { maxAttempts, delayMs, ...checkArgs } = args;
+  let lastPendingReason = "required checks are pending";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const checks = await getRequiredCheckState(checkArgs);
+    if (checks.kind === "passing") return checks;
+    if (checks.state === "failing") return { kind: "blocked", reason: checks.reason };
+    lastPendingReason = checks.reason;
+    if (attempt < maxAttempts) await sleep(delayMs);
+  }
+  return {
+    kind: "blocked",
+    reason: `${lastPendingReason} after ${maxAttempts} attempts`,
+  };
+}
+
+async function getRequiredCheckState(args: {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  ref: string;
+}): Promise<
+  | { kind: "passing" }
+  | { kind: "blocked"; state: "pending" | "failing"; reason: string }
+> {
+  const { octokit, owner, repo, ref } = args;
+  const res = await octokit.request(
+    "GET /repos/{owner}/{repo}/commits/{ref}/status",
+    { owner, repo, ref },
+  );
+  const status = res.data as {
+    state?: string;
+    statuses?: Array<{ context?: string; state?: string }>;
+  };
+  if (status.state === "failure" || status.state === "error") {
+    return {
+      kind: "blocked",
+      state: "failing",
+      reason: "required checks are failing",
+    };
+  }
+  if (status.state === "pending") {
+    return {
+      kind: "blocked",
+      state: "pending",
+      reason: "required checks are pending",
+    };
+  }
+  return { kind: "passing" };
+}
+
+async function getReviewGateState(args: {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  pullNumber: number;
+}): Promise<{ approved: boolean; changesRequested: boolean }> {
+  const { octokit, owner, repo, pullNumber } = args;
+  const res = await octokit.request(
+    "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+    { owner, repo, pull_number: pullNumber, per_page: 100 },
+  );
+  const latestByUser = new Map<string, string>();
+  for (const review of res.data as Array<{
+    state?: string;
+    user?: { login?: string };
+  }>) {
+    const login = review.user?.login;
+    if (!login || !review.state) continue;
+    latestByUser.set(login, review.state.toUpperCase());
+  }
+  let approved = false;
+  let changesRequested = false;
+  for (const state of latestByUser.values()) {
+    if (state === "APPROVED") approved = true;
+    if (state === "CHANGES_REQUESTED") changesRequested = true;
+  }
+  return { approved, changesRequested };
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return String(err);
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function pickAgentLabel(labels: ReadonlyArray<IssueLabel>): string | null {
