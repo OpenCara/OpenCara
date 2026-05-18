@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js";
@@ -255,10 +255,14 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
+          runId: agentRunId,
           onLog,
           hostId,
         });
         await Promise.allSettled(logWrites);
+        // First terminal write wins — see the matching guard in chat.ts.
+        // Test runs are cancellable via the same /chat/messages/:runId/
+        // cancel route, so the same overwrite race applies here.
         await deps.db
           .update(agentRuns)
           .set({
@@ -266,14 +270,24 @@ export function agentRoutes(deps: AgentRoutesDeps) {
             exitCode: result.exitCode,
             finishedAt: new Date(),
           })
-          .where(eq(agentRuns.id, agentRunId));
+          .where(
+            and(
+              eq(agentRuns.id, agentRunId),
+              inArray(agentRuns.status, ["running", "queued", "assigned"]),
+            ),
+          );
       } catch (err) {
         console.error("[agent-test] dispatcher run failed", err);
         await Promise.allSettled(logWrites);
         await deps.db
           .update(agentRuns)
           .set({ status: "failed", finishedAt: new Date() })
-          .where(eq(agentRuns.id, agentRunId));
+          .where(
+            and(
+              eq(agentRuns.id, agentRunId),
+              inArray(agentRuns.status, ["running", "queued", "assigned"]),
+            ),
+          );
       }
       // Final notify so the SSE stream sees the terminal state.
       void deps.pg.notify("agent_run_logs", agentRunId);

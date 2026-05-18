@@ -9,7 +9,6 @@ import {
   jsonb,
   pgEnum,
   index,
-  primaryKey,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -515,6 +514,10 @@ export const agentRuns = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     exitCode: integer("exit_code"),
+    // Free-text reason set whenever status flips to 'cancelled'. Today's
+    // writers: chat Stop button ("user_stopped"), PM-wave cancel
+    // ("wave_cancelled"), reaper boot-time orphan cleanup ("reaper").
+    cancelReason: text("cancel_reason"),
   },
   (t) => ({
     projectCreatedAtIdx: index("agent_runs_project_id_created_at_idx").on(
@@ -619,11 +622,23 @@ export const projectV2Items = pgTable(
 export const CHAT_SESSION_SCOPE_KINDS = ["project", "template", "user"] as const;
 export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
 
-// One row per (user, scope) — e.g. (alice, 'project', proj_123). Persists the
-// stable conversation threadKey (used as agent `--resume`/`--continue`
-// session id) and the user's last agent pick for that scope. The kanban PM
-// thread is one such row with scope_kind='project'. scope_id='' is reserved
-// for scope_kind='user' (user-global threads); other kinds carry a real id.
+// N rows per (user, scope) — e.g. (alice, 'project', proj_123) may hold
+// multiple chat threads, with the most-recent-non-archived row being the
+// "active" one the panel resumes by default. "New chat" archives the
+// current active row (sets `archived_at`) and inserts a fresh row; the
+// History popover lists all rows in the scope so the user can switch
+// back. scope_id='' is reserved for scope_kind='user' (user-global
+// threads); other kinds carry a real id.
+//
+// Identity: a per-row ULID `id` is the PK. The composite
+// (user_id, scope_kind, scope_id) was the PK in #0024 — that prevented
+// having more than one thread per scope. It's now an index, used for the
+// scope-listing query.
+//
+// `threadKey` stays as the stable agent-facing session id (used by
+// chat.ts's resume lookup to find the row whose `acpSessionId` should be
+// passed as `priorSessionId`). It remains unique-per-row; new rows get
+// a fresh ULID for both `id` and `threadKey`.
 //
 // `acpSessionId` is the UUID the device's ACP shim minted on the first turn
 // (`session/new` → claude-acp's `randomUUID()` → `claude --session-id <uuid>`).
@@ -633,9 +648,18 @@ export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
 // JSONL lives under that machine's `~/.claude/projects/`, so routing
 // elsewhere would surface as a `--resume` failure. Both are cleared the
 // moment the user switches the agent pick on this row.
+//
+// `title` is the human-facing label for the History popover. Auto-set from
+// the first user message (slice of 60 chars) on the first POST to /chat/
+// messages for a session whose title is NULL. PATCH /chat/sessions/:id
+// can override.
+//
+// `archivedAt` is the soft-delete / archive marker. The active session
+// query filters on `archived_at IS NULL ORDER BY updated_at DESC LIMIT 1`.
 export const chatSessions = pgTable(
   "chat_sessions",
   {
+    id: text("id").primaryKey(),
     userId: text("user_id").notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     scopeKind: text("scope_kind").notNull(),
@@ -644,10 +668,17 @@ export const chatSessions = pgTable(
     agentId: text("agent_id"),
     acpSessionId: text("acp_session_id"),
     acpSessionHostId: text("acp_session_host_id"),
+    title: text("title"),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.userId, t.scopeKind, t.scopeId] }),
+    userScopeIdx: index("chat_sessions_user_scope_idx").on(
+      t.userId,
+      t.scopeKind,
+      t.scopeId,
+      t.updatedAt.desc(),
+    ),
   }),
 );
 

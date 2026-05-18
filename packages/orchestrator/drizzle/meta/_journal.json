@@ -183,6 +183,13 @@
       "when": 1777460000000,
       "tag": "0025_chat_session_acp_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1777470000000,
+      "tag": "0026_chat_sessions_multi_and_cancel_reason",
+      "breakpoints": true
     }
   ]
 }

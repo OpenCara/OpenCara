@@ -22,6 +22,26 @@ export const AcpHistoryTurnSchema = z.object({
 export type AcpHistoryTurn = z.infer<typeof AcpHistoryTurnSchema>;
 
 /**
+ * Permission modes accepted by the claude CLI (`--permission-mode`).
+ * `plan` is the most useful from the chat panel — the agent drafts an
+ * approach but refuses to mutate the workspace. `acceptEdits` /
+ * `bypassPermissions` are progressively more permissive. `default`
+ * mirrors omitting the flag entirely.
+ *
+ * Other ACP adapters (codex, opencode) ignore this field today. The
+ * device runner logs a debug line on ignore rather than failing the
+ * job so per-turn knobs in the panel never break with the wrong
+ * adapter selected.
+ */
+export const AcpPermissionModeSchema = z.enum([
+  "default",
+  "acceptEdits",
+  "plan",
+  "bypassPermissions",
+]);
+export type AcpPermissionMode = z.infer<typeof AcpPermissionModeSchema>;
+
+/**
  * Optional ACP-mode portion of an AgentSpec. When present, the device
  * routes the job through the ACP+MCP path (`packages/cli/src/runner/
  * acpRunner.ts`) instead of the legacy stdin-JSON path. The orchestrator
@@ -44,6 +64,11 @@ export type AcpHistoryTurn = z.infer<typeof AcpHistoryTurnSchema>;
  *   claude-acp passes it as `--session-id <uuid>`). Unset → fresh
  *   session. Used by per-(repo, branch) flow loops to keep the agent's
  *   conversation across iterations.
+ * - `permissionMode` (optional) is the per-turn `--permission-mode`
+ *   value forwarded to claude-acp. The chat panel exposes this as a
+ *   toolbar select + "Plan mode" toggle (which is just a shortcut for
+ *   `permissionMode: "plan"`). Unset = the agent's baked-in default,
+ *   preserving prior behaviour for flows that haven't opted in.
  */
 export const AcpSpecSchema = z.object({
   systemPromptMd: z.string(),
@@ -51,6 +76,7 @@ export const AcpSpecSchema = z.object({
   history: z.array(AcpHistoryTurnSchema).default([]),
   pageContextJson: z.string().optional(),
   priorSessionId: z.string().optional(),
+  permissionMode: AcpPermissionModeSchema.optional(),
 });
 export type AcpSpec = z.infer<typeof AcpSpecSchema>;
 

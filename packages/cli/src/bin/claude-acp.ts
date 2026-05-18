@@ -96,6 +96,12 @@ interface SessionState {
    *  because Claude rejects `--session-id` against an existing JSONL
    *  with "Session ID is already in use" (exit 1). */
   resume: boolean;
+  /** Reference to the in-flight `claude` child for this session, if
+   *  any. `session/cancel` SIGTERMs this so the orchestrator's Stop
+   *  button surfaces an immediate teardown instead of waiting on the
+   *  shim's 2s force-close grace. Cleared in `runClaudeTurn`'s close
+   *  handler. */
+  activeChild?: ReturnType<typeof spawn> | null;
 }
 
 export const sessions = new Map<string, SessionState>();
@@ -116,6 +122,7 @@ async function runClaudeTurn(
   sessionId: string,
   state: SessionState,
   promptText: string,
+  permissionMode: PromptParams["permissionMode"],
 ): Promise<ClaudePromptResult> {
   return new Promise<ClaudePromptResult>((resolve, reject) => {
     // `--session-id` *creates* a session under the given UUID and
@@ -133,10 +140,19 @@ async function runClaudeTurn(
       "--verbose",
       idFlag,
       sessionId,
+    ];
+    // Per-turn permission knob from the chat panel toolbar. The two
+    // modes are mutually exclusive with `--dangerously-skip-permissions`
+    // — passing both makes claude exit immediately with an arg-parse
+    // error, so we keep the headless default ONLY when the orchestrator
+    // didn't explicitly opt into a mode for this turn.
+    if (permissionMode && permissionMode !== "default") {
+      args.push("--permission-mode", permissionMode);
+    } else {
       // Headless: no human in the loop to approve tool use. Matches the
       // legacy `claudeAdapter` posture in agents/kinds.ts.
-      "--dangerously-skip-permissions",
-    ];
+      args.push("--dangerously-skip-permissions");
+    }
     // Prompt goes on stdin, not argv. Linux's execve caps a single
     // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
     // common 4 KiB-page kernel), and flow runs that inject the full
@@ -150,6 +166,7 @@ async function runClaudeTurn(
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    state.activeChild = child;
     // EPIPE if claude exits before we finish writing — the exit is
     // already observable on `close`, so we don't need to surface the
     // write failure twice.
@@ -190,12 +207,20 @@ async function runClaudeTurn(
         reject(err);
       }
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      state.activeChild = null;
       if (!resolved) {
+        resolved = true;
+        // SIGTERM almost always means session/cancel killed us — surface
+        // as cancelled so the orchestrator's `done` carries stopReason
+        // "cancelled" instead of looking like an unrelated crash.
+        if (signal === "SIGTERM" || signal === "SIGINT") {
+          resolve({ stopReason: "cancelled" });
+          return;
+        }
         // No `result` event — claude died unexpectedly. Surface as a
         // refusal so the orchestrator marks the run failed (vs a clean
         // end_turn which looks like a successful empty response).
-        resolved = true;
         if (code !== 0) {
           stderr.write(`[claude-acp] claude exited code=${code} without result event\n`);
           resolve({ stopReason: "refusal" });
@@ -356,6 +381,8 @@ export function handleLoadSession(params: LoadSessionParams): unknown {
 interface PromptParams {
   sessionId: string;
   prompt: Array<{ type: string; text?: string }>;
+  /** Opencara extension — see PromptRequest in packages/cli/src/acp/types.ts. */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
 }
 
 async function handlePrompt(params: PromptParams): Promise<unknown> {
@@ -374,7 +401,12 @@ async function handlePrompt(params: PromptParams): Promise<unknown> {
   if (promptText.length === 0) {
     throw new Error("session/prompt: no text content blocks");
   }
-  const result = await runClaudeTurn(params.sessionId, state, promptText);
+  const result = await runClaudeTurn(
+    params.sessionId,
+    state,
+    promptText,
+    params.permissionMode,
+  );
   // After a successful first turn, Claude has written the JSONL under
   // this id — subsequent turns on the same session must `--resume`, or
   // Claude will reject `--session-id` with "already in use". We flip
@@ -382,6 +414,24 @@ async function handlePrompt(params: PromptParams): Promise<unknown> {
   // claude still creates the session file before failing.
   state.resume = true;
   return { stopReason: result.stopReason };
+}
+
+interface CancelParams {
+  sessionId: string;
+}
+
+function handleCancel(params: CancelParams): void {
+  const state = sessions.get(params.sessionId);
+  if (!state) return;
+  const child = state.activeChild;
+  if (!child) return;
+  try {
+    child.kill("SIGTERM");
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] session/cancel kill failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
 }
 
 // ─── stdio main loop ───────────────────────────────────────────────
@@ -412,9 +462,20 @@ if (isMainModule) {
 }
 
 async function dispatch(msg: JsonRpcMessage): Promise<void> {
-  // Notification (no id) — clients send `session/cancel` etc. We don't
-  // implement cancellation in MVP; drop silently.
-  if (!("id" in msg) || msg.id == null) return;
+  // Notification (no id). We handle `session/cancel` (kills the
+  // active claude child for the session, surfacing the Stop button
+  // through to the underlying process); any other notification we
+  // don't recognise is dropped silently.
+  if (!("id" in msg) || msg.id == null) {
+    const notification = msg as { method?: string; params?: unknown };
+    if (notification.method === "session/cancel") {
+      const params = notification.params as CancelParams | undefined;
+      if (params && typeof params.sessionId === "string") {
+        handleCancel(params);
+      }
+    }
+    return;
+  }
   // Response from a client request to us — we don't make any
   // client→agent requests in this MVP, so any response is unexpected.
   if ("result" in msg || "error" in msg) return;
