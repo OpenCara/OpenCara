@@ -9,7 +9,6 @@ import {
   ArchiveRestore,
   Bot,
   Brain,
-  ClipboardList,
   History,
   Info,
   Loader2,
@@ -478,9 +477,11 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     >
       <div className="flex items-center gap-2 border-b px-4 py-3">
         <Bot className="size-4 text-muted-foreground" />
-        <span className="text-sm font-semibold tracking-tight">
-          {canvas ? "Edit with agent" : "Chat with agent"}
-        </span>
+        {canvas && (
+          <span className="text-sm font-semibold tracking-tight">
+            Edit with agent
+          </span>
+        )}
         {isStreaming && (
           <span
             className="ml-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
@@ -632,22 +633,6 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
 
       <div className="border-t p-3">
         <div className="mb-2 flex items-center gap-2 text-xs">
-          <Button
-            size="sm"
-            variant={permissionMode === "plan" ? "default" : "outline"}
-            className="h-7 gap-1 px-2 text-xs"
-            onClick={() =>
-              setPermissionMode((m) => (m === "plan" ? "default" : "plan"))
-            }
-            title={
-              permissionMode === "plan"
-                ? "Plan mode on — agent drafts an approach but cannot write files this turn"
-                : "Enable plan mode for the next turn (agent drafts but cannot write)"
-            }
-          >
-            <ClipboardList className="size-3.5" />
-            Plan
-          </Button>
           <Select
             value={permissionMode}
             onValueChange={(v) => setPermissionMode(v as PermissionMode)}
