@@ -402,6 +402,8 @@ function AgentNodePanel({
         </div>
 
         <AgentDraftPrToggle scope={scope} node={node} />
+        <AgentAutoMergeSection scope={scope} node={node} />
+        <AgentMaxIterationsSection scope={scope} node={node} />
         <AgentWorktreeSection scope={scope} node={node} />
 
         <AgentNodeInspector node={node} />
@@ -465,6 +467,259 @@ function AgentDraftPrToggle({ scope, node }: AgentDraftPrToggleProps) {
       <div className="flex justify-end">
         <Button size="sm" disabled={set.isPending} onClick={save}>
           {set.isPending ? "Saving…" : "Save draft PR"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Auto-merge section on the agent panel ───────────────────── */
+
+interface AgentAutoMergeSectionProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+}
+
+function AgentAutoMergeSection({ scope, node }: AgentAutoMergeSectionProps) {
+  const cfg = (node.config ?? {}) as {
+    autoMerge?: {
+      enabled?: boolean;
+      method?: "squash" | "merge" | "rebase";
+      requireChecks?: boolean;
+      requireApproval?: boolean;
+      mergeWithoutChanges?: boolean;
+    };
+  };
+  const am = cfg.autoMerge;
+  if (!am) return null;
+
+  const [enabled, setEnabled] = useState(Boolean(am.enabled));
+  const [method, setMethod] = useState<"squash" | "merge" | "rebase">(
+    am.method ?? "squash",
+  );
+  const [requireChecks, setRequireChecks] = useState(
+    am.requireChecks ?? true,
+  );
+  const [requireApproval, setRequireApproval] = useState(
+    Boolean(am.requireApproval),
+  );
+  const [mergeWithoutChanges, setMergeWithoutChanges] = useState(
+    Boolean(am.mergeWithoutChanges),
+  );
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setEnabled(Boolean(am.enabled));
+    setMethod(am.method ?? "squash");
+    setRequireChecks(am.requireChecks ?? true);
+    setRequireApproval(Boolean(am.requireApproval));
+    setMergeWithoutChanges(Boolean(am.mergeWithoutChanges));
+  }, [
+    node.id,
+    am.enabled,
+    am.method,
+    am.requireChecks,
+    am.requireApproval,
+    am.mergeWithoutChanges,
+  ]);
+
+  const save = () => {
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        ...(node.config ?? {}),
+        autoMerge: {
+          enabled,
+          method,
+          requireChecks,
+          requireApproval,
+          mergeWithoutChanges,
+        },
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/10 p-3">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          className="size-4 rounded border-input"
+        />
+        <span>Auto-merge after fix</span>
+      </label>
+      <p className="text-xs text-muted-foreground">
+        When the fix agent exits successfully, attempt to merge the PR
+        automatically. All other merge gates (mergeable state, checks, reviews)
+        still apply.
+      </p>
+      {enabled && (
+        <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+          <div>
+            <Label>Merge method</Label>
+            <Select value={method} onValueChange={(v) => setMethod(v as typeof method)}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="squash">Squash</SelectItem>
+                <SelectItem value="merge">Merge commit</SelectItem>
+                <SelectItem value="rebase">Rebase</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={requireChecks}
+              onChange={(e) => setRequireChecks(e.target.checked)}
+              className="size-4 rounded border-input"
+            />
+            <span>Require passing checks</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={requireApproval}
+              onChange={(e) => setRequireApproval(e.target.checked)}
+              className="size-4 rounded border-input"
+            />
+            <span>Require approving review</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={mergeWithoutChanges}
+              onChange={(e) => setMergeWithoutChanges(e.target.checked)}
+              className="size-4 rounded border-input"
+            />
+            <span>Merge even without new commits</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            When enabled, bypasses the &ldquo;no new HEAD commit&rdquo; check.
+            Useful when the reviewer loop ends with &ldquo;nothing to
+            fix&rdquo; and you want to merge the PR as-is.
+          </p>
+        </div>
+      )}
+      {set.error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {(set.error as Error).message ?? "Save failed"}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button size="sm" disabled={set.isPending} onClick={save}>
+          {set.isPending ? "Saving…" : "Save auto-merge"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Max iterations section on the agent panel ───────────────── */
+
+interface AgentMaxIterationsSectionProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+}
+
+function AgentMaxIterationsSection({ scope, node }: AgentMaxIterationsSectionProps) {
+  const cfg = (node.config ?? {}) as {
+    maxIterations?: {
+      enabled?: boolean;
+      limit?: number | null;
+      commentOnSkip?: boolean;
+    };
+  };
+  const mi = cfg.maxIterations;
+  if (!mi) return null;
+
+  const [enabled, setEnabled] = useState(Boolean(mi.enabled));
+  const [limit, setLimit] = useState<string>(
+    mi.limit != null ? String(mi.limit) : "",
+  );
+  const [commentOnSkip, setCommentOnSkip] = useState(
+    Boolean(mi.commentOnSkip),
+  );
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setEnabled(Boolean(mi.enabled));
+    setLimit(mi.limit != null ? String(mi.limit) : "");
+    setCommentOnSkip(Boolean(mi.commentOnSkip));
+  }, [node.id, mi.enabled, mi.limit, mi.commentOnSkip]);
+
+  const save = () => {
+    const parsedLimit = limit.trim() === "" ? null : parseInt(limit, 10);
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        ...(node.config ?? {}),
+        maxIterations: {
+          enabled,
+          limit: parsedLimit != null && !isNaN(parsedLimit) ? parsedLimit : null,
+          commentOnSkip,
+        },
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/10 p-3">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          className="size-4 rounded border-input"
+        />
+        <span>Limit review-fix iterations</span>
+      </label>
+      <p className="text-xs text-muted-foreground">
+        Cap the number of automated fix runs per PR. Once the limit is reached,
+        further review comments will not dispatch until the count resets.
+      </p>
+      {enabled && (
+        <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+          <div>
+            <Label>Max iterations</Label>
+            <Input
+              type="number"
+              min={0}
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              placeholder="(unlimited)"
+              className="mt-1 w-32 font-mono text-xs"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Leave empty for unlimited.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={commentOnSkip}
+              onChange={(e) => setCommentOnSkip(e.target.checked)}
+              className="size-4 rounded border-input"
+            />
+            <span>Post comment when skipping</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            When the limit is hit, post a comment on the PR explaining why
+            further fix runs were skipped.
+          </p>
+        </div>
+      )}
+      {set.error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {(set.error as Error).message ?? "Save failed"}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button size="sm" disabled={set.isPending} onClick={save}>
+          {set.isPending ? "Saving…" : "Save max iterations"}
         </Button>
       </div>
     </div>

@@ -73,6 +73,7 @@ describe("FlowDefinitionSchema agent review-fix options", () => {
               method: "rebase",
               requireChecks: false,
               requireApproval: true,
+              mergeWithoutChanges: true,
             },
             maxIterations: {
               enabled: true,
@@ -89,6 +90,7 @@ describe("FlowDefinitionSchema agent review-fix options", () => {
       method: "rebase",
       requireChecks: false,
       requireApproval: true,
+      mergeWithoutChanges: true,
     });
     assert.deepEqual(agent?.config.maxIterations, {
       enabled: true,

@@ -137,6 +137,7 @@ export const AgentNodeSchema = z.object({
         method: z.enum(["squash", "merge", "rebase"]).default("squash"),
         requireChecks: z.boolean().default(true),
         requireApproval: z.boolean().default(false),
+        mergeWithoutChanges: z.boolean().default(false),
       })
       .optional(),
     maxIterations: z
