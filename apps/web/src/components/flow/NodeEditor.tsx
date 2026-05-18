@@ -491,37 +491,37 @@ function AgentAutoMergeSection({ scope, node }: AgentAutoMergeSectionProps) {
     };
   };
   const am = cfg.autoMerge;
-  if (!am) return null;
-
-  const [enabled, setEnabled] = useState(Boolean(am.enabled));
+  const [enabled, setEnabled] = useState(Boolean(am?.enabled));
   const [method, setMethod] = useState<"squash" | "merge" | "rebase">(
-    am.method ?? "squash",
+    am?.method ?? "squash",
   );
   const [requireChecks, setRequireChecks] = useState(
-    am.requireChecks ?? true,
+    am?.requireChecks ?? true,
   );
   const [requireApproval, setRequireApproval] = useState(
-    Boolean(am.requireApproval),
+    Boolean(am?.requireApproval),
   );
   const [mergeWithoutChanges, setMergeWithoutChanges] = useState(
-    Boolean(am.mergeWithoutChanges),
+    Boolean(am?.mergeWithoutChanges),
   );
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
-    setEnabled(Boolean(am.enabled));
-    setMethod(am.method ?? "squash");
-    setRequireChecks(am.requireChecks ?? true);
-    setRequireApproval(Boolean(am.requireApproval));
-    setMergeWithoutChanges(Boolean(am.mergeWithoutChanges));
+    setEnabled(Boolean(am?.enabled));
+    setMethod(am?.method ?? "squash");
+    setRequireChecks(am?.requireChecks ?? true);
+    setRequireApproval(Boolean(am?.requireApproval));
+    setMergeWithoutChanges(Boolean(am?.mergeWithoutChanges));
   }, [
     node.id,
-    am.enabled,
-    am.method,
-    am.requireChecks,
-    am.requireApproval,
-    am.mergeWithoutChanges,
+    am?.enabled,
+    am?.method,
+    am?.requireChecks,
+    am?.requireApproval,
+    am?.mergeWithoutChanges,
   ]);
+
+  if (!am) return null;
 
   const save = () => {
     set.mutate({
@@ -634,22 +634,22 @@ function AgentMaxIterationsSection({ scope, node }: AgentMaxIterationsSectionPro
     };
   };
   const mi = cfg.maxIterations;
-  if (!mi) return null;
-
-  const [enabled, setEnabled] = useState(Boolean(mi.enabled));
+  const [enabled, setEnabled] = useState(Boolean(mi?.enabled));
   const [limit, setLimit] = useState<string>(
-    mi.limit != null ? String(mi.limit) : "",
+    mi?.limit != null ? String(mi.limit) : "",
   );
   const [commentOnSkip, setCommentOnSkip] = useState(
-    Boolean(mi.commentOnSkip),
+    Boolean(mi?.commentOnSkip),
   );
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
-    setEnabled(Boolean(mi.enabled));
-    setLimit(mi.limit != null ? String(mi.limit) : "");
-    setCommentOnSkip(Boolean(mi.commentOnSkip));
-  }, [node.id, mi.enabled, mi.limit, mi.commentOnSkip]);
+    setEnabled(Boolean(mi?.enabled));
+    setLimit(mi?.limit != null ? String(mi.limit) : "");
+    setCommentOnSkip(Boolean(mi?.commentOnSkip));
+  }, [node.id, mi?.enabled, mi?.limit, mi?.commentOnSkip]);
+
+  if (!mi) return null;
 
   const save = () => {
     const parsedLimit = limit.trim() === "" ? null : parseInt(limit, 10);
