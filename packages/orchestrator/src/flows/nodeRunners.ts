@@ -577,14 +577,13 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     // session-id file on the same pinned device.
     const key = `${ownerRepo}/branch-${branchName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 
-    // Pin lookup: prefer the device that allocated the worktree on a
-    // previous iteration of this branch. Fall back to pickIdle() if
-    // no pin exists OR the pinned device is currently disconnected
-    // (the dispatcher will throw "pinned device <id> is not
-    // connected" otherwise; pickIdle gives a graceful degrade — the
-    // agent starts a fresh conversation in a fresh checkout, which
-    // is the right behaviour even if it loses resume).
-    let pinnedHostId: string | null = node.config.worktree.hostId ?? null;
+    // Pin lookup: prefer explicit operator pins (node-level first,
+    // linked-agent second), then reuse the device that allocated the
+    // worktree on a previous iteration of this branch. Fall back to
+    // pickIdle() if no pin exists OR the pinned device is currently
+    // disconnected (the dispatcher will throw "pinned device <id> is
+    // not connected" otherwise; pickIdle gives a graceful degrade).
+    let pinnedHostId: string | null = node.config.worktree.hostId ?? agent.hostId ?? null;
     if (!pinnedHostId) {
       const existing = await ctx.db.query.worktreePins.findFirst({
         where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
@@ -1550,6 +1549,7 @@ async function dispatchAgentRun(
       .update(agentRuns)
       .set({
         status: result.exitCode === 0 ? "succeeded" : "failed",
+        hostId: result.agentHostId,
         exitCode: result.exitCode,
         finishedAt: new Date(),
       })
