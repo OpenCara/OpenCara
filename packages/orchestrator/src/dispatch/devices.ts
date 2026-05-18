@@ -358,6 +358,17 @@ export class DevicePool {
       });
     });
   }
+
+  /**
+   * The host currently running `runId`, or null if the run is not in
+   * the pending map. Used by the cancel path so callers don't have to
+   * thread the hostId via the DB (where it's set only by the `done`
+   * handler — a cancel arriving before `done` would otherwise have to
+   * either guess or no-op).
+   */
+  hostForRun(runId: string): string | null {
+    return this.pending.get(runId)?.agentHostId ?? null;
+  }
 }
 
 export class WebSocketDispatcher implements AgentDispatcher {
@@ -418,9 +429,15 @@ export class WebSocketDispatcher implements AgentDispatcher {
 
   cancel(
     runId: string,
-    hostId: string,
     reason: "user_stopped" | "wave_cancelled",
   ): boolean {
+    // Resolve the device from the in-memory pending map rather than
+    // the DB. `agent_runs.host_id` is written by the device pool's
+    // `done` handler (i.e. only after the run finishes), so a cancel
+    // arriving while the run is still in flight would always read
+    // NULL there. The pending map IS the in-flight state.
+    const hostId = this.pool.hostForRun(runId);
+    if (!hostId) return false;
     const dev = this.pool.byId(hostId);
     if (!dev) return false;
     // Best-effort: the device may have already moved past the cancellable

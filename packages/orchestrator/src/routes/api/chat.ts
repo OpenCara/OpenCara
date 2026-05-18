@@ -330,7 +330,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       columns: {
         id: true,
         status: true,
-        hostId: true,
         addedByUserId: true,
         projectId: true,
       },
@@ -363,10 +362,12 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         ),
       );
 
-    let signalled = false;
-    if (run.hostId) {
-      signalled = deps.dispatcher.cancel(runId, run.hostId, "user_stopped");
-    }
+    // Dispatcher resolves the device from its own in-memory pending
+    // map — we used to read `agent_runs.host_id` here, but that column
+    // is set only by the `done` handler (i.e. after the run finishes),
+    // so reading it during a still-in-flight cancel always saw NULL
+    // and silently no-op'd the WS signal. The agent kept running.
+    const signalled = deps.dispatcher.cancel(runId, "user_stopped");
 
     // Wake up the SSE tail so the panel exits "streaming" without
     // waiting up to 2s for the next poll tick.

@@ -1165,6 +1165,27 @@ function HistoryDialog({
 }) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  // Pressing Enter on the rename input fires commitRename, and the
+  // synchronous unmount that follows ALSO fires onBlur on the input —
+  // which would call commitRename again and fire a duplicate PATCH.
+  // Track the last id we committed on this rename so the second call
+  // short-circuits. Reset whenever a new rename starts.
+  const committedIdRef = useRef<string | null>(null);
+  const commitRenameOnce = (s: ChatSession) => {
+    if (committedIdRef.current === s.id) return;
+    committedIdRef.current = s.id;
+    onRename(s.id, draftTitle.trim() || null);
+    setRenamingId(null);
+  };
+  const startRenameAndReset = (s: ChatSession) => {
+    committedIdRef.current = null;
+    setRenamingId(s.id);
+    setDraftTitle(s.title ?? "");
+  };
+  const cancelRenameAndReset = () => {
+    committedIdRef.current = null;
+    setRenamingId(null);
+  };
   const active = sessions.filter((s) => !s.archivedAt);
   const archived = sessions.filter((s) => !!s.archivedAt);
   return (
@@ -1208,15 +1229,9 @@ function HistoryDialog({
               renamingId={renamingId}
               draftTitle={draftTitle}
               setDraftTitle={setDraftTitle}
-              startRename={(s) => {
-                setRenamingId(s.id);
-                setDraftTitle(s.title ?? "");
-              }}
-              commitRename={(s) => {
-                onRename(s.id, draftTitle.trim() || null);
-                setRenamingId(null);
-              }}
-              cancelRename={() => setRenamingId(null)}
+              startRename={startRenameAndReset}
+              commitRename={commitRenameOnce}
+              cancelRename={cancelRenameAndReset}
               onPick={onPick}
               onDelete={onDelete}
               onRestore={onRestore}
@@ -1230,15 +1245,9 @@ function HistoryDialog({
               renamingId={renamingId}
               draftTitle={draftTitle}
               setDraftTitle={setDraftTitle}
-              startRename={(s) => {
-                setRenamingId(s.id);
-                setDraftTitle(s.title ?? "");
-              }}
-              commitRename={(s) => {
-                onRename(s.id, draftTitle.trim() || null);
-                setRenamingId(null);
-              }}
-              cancelRename={() => setRenamingId(null)}
+              startRename={startRenameAndReset}
+              commitRename={commitRenameOnce}
+              cancelRename={cancelRenameAndReset}
               onPick={onPick}
               onDelete={onDelete}
               onRestore={onRestore}

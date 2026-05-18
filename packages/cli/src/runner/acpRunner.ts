@@ -237,16 +237,20 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         sessionId = session.sessionId;
       }
       activeSessionId = sessionId;
-      // Late cancel (between controller.cancel() and now reaching this
-      // line): the controller call set cancelRequested but had no
-      // sessionId to target. Forward the notification now so the agent
-      // sees a session/cancel before it ever processes prompt.
+      // Cancel arrived before the session was minted. Forward the
+      // notification so the agent's bookkeeping records a cancel, then
+      // skip session/prompt outright — without this, we'd spawn the
+      // claude child for one turn and rely on the 2s force-close to
+      // kill it, which means the agent runs (and can mutate the
+      // workspace) for up to 2 seconds after the user clicked Stop.
       if (cancelRequested) {
         try {
           client.cancel(sessionId);
         } catch {
           // Already scheduled a force-close; nothing more to do.
         }
+        result = { exitCode: 1, stopReason: "cancelled", sessionId };
+        return result;
       }
       const prompt = buildPromptContent(acpSpec);
       const promptResult = await client.prompt({
