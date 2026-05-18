@@ -933,10 +933,13 @@ export const pmWavesQuery = (projectId: string) => ({
 export type ChatSessionScopeKind = "project" | "template" | "user";
 
 export interface ChatSession {
+  id: string;
   scopeKind: ChatSessionScopeKind;
   scopeId: string;
   threadKey: string;
   agentId: string | null;
+  title: string | null;
+  archivedAt: string | null;
   updatedAt: string;
 }
 
@@ -950,6 +953,17 @@ export const chatSessionQuery = (scope: ChatSessionScope) => ({
   queryFn: () =>
     api.get<{ session: ChatSession }>(
       `/api/chat/sessions?scopeKind=${encodeURIComponent(scope.scopeKind)}&scopeId=${encodeURIComponent(scope.scopeId)}`,
+    ),
+});
+
+// Multi-session list for the History popover. Includes archived rows so
+// the user can restore / hard-delete them; the panel sorts them visually
+// into Active and Archived sections.
+export const chatSessionListQuery = (scope: ChatSessionScope) => ({
+  queryKey: ["chat-sessions", scope.scopeKind, scope.scopeId, "list"] as const,
+  queryFn: () =>
+    api.get<{ sessions: ChatSession[] }>(
+      `/api/chat/sessions/list?scopeKind=${encodeURIComponent(scope.scopeKind)}&scopeId=${encodeURIComponent(scope.scopeId)}`,
     ),
 });
 
@@ -967,6 +981,67 @@ export function useChatSessionAgentMutation(scope: ChatSessionScope) {
         ["chat-session", scope.scopeKind, scope.scopeId] as const,
         data,
       );
+      // The list query caches by scope; agent flip bumps updatedAt so
+      // the cached list ordering is stale until invalidated.
+      void qc.invalidateQueries({
+        queryKey: ["chat-sessions", scope.scopeKind, scope.scopeId, "list"],
+      });
+    },
+  });
+}
+
+// "New chat" — archive the current active row and start fresh. Returns
+// the newly-created session so the caller can pivot the panel onto it
+// without an extra fetch.
+export function useNewChatSession(scope: ChatSessionScope) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId }: { agentId: string | null }) =>
+      api.post<{ session: ChatSession }>("/api/chat/sessions/new", {
+        scopeKind: scope.scopeKind,
+        scopeId: scope.scopeId,
+        agentId,
+      }),
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["chat-session", scope.scopeKind, scope.scopeId] as const,
+        data,
+      );
+      void qc.invalidateQueries({
+        queryKey: ["chat-sessions", scope.scopeKind, scope.scopeId, "list"],
+      });
+    },
+  });
+}
+
+export function useRenameChatSession(scope: ChatSessionScope) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string | null }) =>
+      api.patch<{ session: ChatSession }>(`/api/chat/sessions/${id}`, { title }),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: ["chat-sessions", scope.scopeKind, scope.scopeId, "list"],
+      });
+    },
+  });
+}
+
+// Soft-delete the row (archived_at set). The active-session query will
+// pick a different row on the next fetch; the History popover keeps
+// showing this one under "Archived".
+export function useDeleteChatSession(scope: ChatSessionScope) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, hard }: { id: string; hard?: boolean }) =>
+      api.delete<{ ok: boolean }>(`/api/chat/sessions/${id}${hard ? "?hard=1" : ""}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: ["chat-session", scope.scopeKind, scope.scopeId],
+      });
+      void qc.invalidateQueries({
+        queryKey: ["chat-sessions", scope.scopeKind, scope.scopeId, "list"],
+      });
     },
   });
 }

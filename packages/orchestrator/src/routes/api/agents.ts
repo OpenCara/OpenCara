@@ -255,6 +255,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
+          runId: agentRunId,
           onLog,
           hostId,
         });

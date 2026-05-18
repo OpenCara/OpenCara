@@ -4,7 +4,22 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { diffWordsWithSpace } from "diff";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bot, Info, Send, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Bot,
+  Brain,
+  ClipboardList,
+  History,
+  Info,
+  Loader2,
+  Plus,
+  Send,
+  Square,
+  Trash2,
+  Wrench,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -23,14 +38,20 @@ import {
 } from "@/components/ui/select";
 import {
   agentsQuery,
+  chatSessionListQuery,
   chatSessionQuery,
   useChatSessionAgentMutation,
+  useDeleteChatSession,
+  useNewChatSession,
+  useRenameChatSession,
   type AgentRow,
+  type ChatSession,
   type ChatSessionScope,
 } from "@/lib/queries";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useChatActions } from "@/lib/chatActions";
+import { useShowThinking } from "./preferences";
 
 export interface CanvasContext {
   /** Project ID, threaded into pageContext.canvas.projectId on every send. */
@@ -71,6 +92,11 @@ interface Message {
   agentRunId?: string;
   /** True while the assistant message is still streaming. */
   pending?: boolean;
+  /** Non-success terminal status (`failed` | `cancelled`) surfaced from
+   * the run's SSE end event. Drives a small tag on the bubble so a
+   * cancelled or errored turn is visually distinct from a clean answer.
+   * Unset for in-flight or successful runs. */
+  endStatus?: string;
   /** Snapshot of the canvas selection at the moment THIS turn was sent.
    * Used to render an Apply button on the matching assistant reply. */
   attachedSelection?: string;
@@ -156,6 +182,17 @@ function scopeForPage(
 
 const NO_SCOPE: ChatSessionScope = { scopeKind: "user", scopeId: "" };
 
+// Per-turn permission knob forwarded to the agent runner. "default" =
+// omit the field (agent's baked-in behaviour wins). "plan" is the most
+// frequently used non-default value, hence the dedicated toggle button.
+type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
+const PERMISSION_MODE_OPTIONS: { value: PermissionMode; label: string }[] = [
+  { value: "default", label: "Default" },
+  { value: "acceptEdits", label: "Accept edits" },
+  { value: "plan", label: "Plan" },
+  { value: "bypassPermissions", label: "Bypass" },
+];
+
 export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props) {
   const location = useLocation();
   const params = useParams();
@@ -165,6 +202,17 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
+  const [showThinking, setShowThinking] = useShowThinking();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // When the user picks a session from the History dialog, the panel
+  // pivots onto that row instead of the "active" (most-recent-non-
+  // archived) one the GET /chat/sessions resolver returns. Cleared
+  // when the scope changes; otherwise sticks until the user picks a
+  // different row or starts a new chat.
+  const [overrideSession, setOverrideSession] = useState<ChatSession | null>(
+    null,
+  );
 
   const pageContext: PageContext = useMemo(
     () => ({
@@ -200,6 +248,13 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     enabled: wantPersistence,
   });
   const updateAgent = useChatSessionAgentMutation(scope ?? NO_SCOPE);
+  const newSessionMut = useNewChatSession(scope ?? NO_SCOPE);
+  const renameSessionMut = useRenameChatSession(scope ?? NO_SCOPE);
+  const deleteSessionMut = useDeleteChatSession(scope ?? NO_SCOPE);
+  const listQ = useQuery({
+    ...chatSessionListQuery(scope ?? NO_SCOPE),
+    enabled: wantPersistence && historyOpen,
+  });
 
   // Per-panel-open ephemeral session id for pages without a scope.
   // Lazily generated on first render and never updated — only consulted
@@ -208,8 +263,12 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   if (ephemeralSessionIdRef.current === "") {
     ephemeralSessionIdRef.current = `chat_${crypto.randomUUID()}`;
   }
+  // The session id the panel actually dispatches against. Override wins
+  // when the user explicitly picked one from History; otherwise the
+  // server-resolved active session for the scope; otherwise a per-mount
+  // ephemeral id for pages without persistence.
   const effectiveSessionId = wantPersistence
-    ? sessionQ.data?.session.threadKey ?? null
+    ? overrideSession?.threadKey ?? sessionQ.data?.session.threadKey ?? null
     : ephemeralSessionIdRef.current;
 
   // Initialize the agent pick from the persisted session once it loads.
@@ -225,6 +284,11 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   if (prevScopeRef.current !== scope) {
     prevScopeRef.current = scope;
     hydratedAgentRef.current = false;
+    // Drop the manual session override on scope change — overrides are
+    // a within-scope pivot; navigating to a different project should
+    // pick that project's natural active session, not stay pinned to
+    // some unrelated thread the user clicked earlier.
+    setOverrideSession(null);
   }
   useEffect(() => {
     if (hydratedAgentRef.current) return;
@@ -274,6 +338,48 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     }
     setAgentId(v);
     if (wantPersistence) updateAgent.mutate({ agentId: v });
+  };
+
+  // The pending assistant turn currently streaming, if any. Stop is
+  // only meaningful while a run is in flight; the streaming pill in
+  // the header derives from the same value.
+  const streamingMessage = useMemo(
+    () => [...messages].reverse().find(
+      (m) => m.role === "assistant" && m.pending && m.agentRunId,
+    ),
+    [messages],
+  );
+  const streamingRunId = streamingMessage?.agentRunId ?? null;
+  const isStreaming = streamingRunId !== null;
+
+  // Flip pending=false on the matching message once its SSE end event
+  // arrives. The status is informational (succeeded / failed / cancelled)
+  // — we surface a tag on the bubble for non-success outcomes so the
+  // user can tell apart "agent answered" from "agent was stopped".
+  const handleStreamEnd = (id: string, status: string) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              pending: false,
+              ...(status !== "succeeded" ? { endStatus: status } : {}),
+            }
+          : m,
+      ),
+    );
+  };
+
+  const stop = async () => {
+    if (!streamingRunId) return;
+    try {
+      await api.post(`/api/chat/messages/${streamingRunId}/cancel`, {});
+    } catch (err) {
+      // Non-fatal: the run may have ended in the same instant the
+      // user clicked Stop, in which case the server returns 409. The
+      // SSE end event still settles the bubble either way.
+      console.warn("[chat] cancel failed", err);
+    }
   };
 
   const send = async () => {
@@ -328,6 +434,11 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
           turnIndex,
           message: text,
           pageContext: ctxForRequest,
+          // Only send when explicitly non-default — the orchestrator
+          // already treats omitted/default identically, but keeping
+          // the request body minimal makes the dev console easier to
+          // skim during troubleshooting.
+          ...(permissionMode !== "default" ? { permissionMode } : {}),
         },
       );
       setMessages((prev) =>
@@ -367,6 +478,15 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         <span className="text-sm font-semibold tracking-tight">
           {canvas ? "Edit with agent" : "Chat with agent"}
         </span>
+        {isStreaming && (
+          <span
+            className="ml-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+            title="The agent is generating a response"
+          >
+            <Loader2 className="size-3 animate-spin" />
+            Streaming
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <Select
             value={agentId ?? ""}
@@ -384,6 +504,28 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
               ))}
             </SelectContent>
           </Select>
+          {wantPersistence && (
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Chat history"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <History className="size-4" />
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={showThinking ? "default" : "ghost"}
+            title={
+              showThinking
+                ? "Hide agent thinking blocks (collapsed by default)"
+                : "Expand all agent thinking blocks"
+            }
+            onClick={() => setShowThinking(!showThinking)}
+          >
+            <Brain className="size-4" />
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -418,6 +560,33 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         }
       />
 
+      <HistoryDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        sessions={listQ.data?.sessions ?? []}
+        activeSessionId={
+          overrideSession?.id ?? sessionQ.data?.session.id ?? null
+        }
+        loading={listQ.isLoading}
+        onNewChat={async () => {
+          const result = await newSessionMut.mutateAsync({ agentId });
+          setOverrideSession(result.session);
+          setMessages([]);
+          setHistoryOpen(false);
+        }}
+        onPick={(s) => {
+          setOverrideSession(s);
+          setMessages([]);
+          // Picking from history hydrates the agent dropdown to whatever
+          // that session was last run with — so the panel doesn't dispatch
+          // the user's current agent into someone else's prior ACP thread.
+          if (s.agentId) setAgentId(s.agentId);
+          setHistoryOpen(false);
+        }}
+        onRename={(id, title) => renameSessionMut.mutate({ id, title })}
+        onDelete={(id) => deleteSessionMut.mutate({ id })}
+      />
+
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 ? (
           <EmptyState
@@ -432,6 +601,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
                 key={m.id}
                 message={m}
                 onApplyRewrite={canvas?.onApplyRewrite}
+                onStreamEnd={handleStreamEnd}
               />
             ))}
           </div>
@@ -457,6 +627,44 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
       )}
 
       <div className="border-t p-3">
+        <div className="mb-2 flex items-center gap-2 text-xs">
+          <Button
+            size="sm"
+            variant={permissionMode === "plan" ? "default" : "outline"}
+            className="h-7 gap-1 px-2 text-xs"
+            onClick={() =>
+              setPermissionMode((m) => (m === "plan" ? "default" : "plan"))
+            }
+            title={
+              permissionMode === "plan"
+                ? "Plan mode on — agent drafts an approach but cannot write files this turn"
+                : "Enable plan mode for the next turn (agent drafts but cannot write)"
+            }
+          >
+            <ClipboardList className="size-3.5" />
+            Plan
+          </Button>
+          <Select
+            value={permissionMode}
+            onValueChange={(v) => setPermissionMode(v as PermissionMode)}
+          >
+            <SelectTrigger className="h-7 w-32 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {PERMISSION_MODE_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {permissionMode !== "default" && (
+            <span className="text-muted-foreground">
+              applies to the next turn
+            </span>
+          )}
+        </div>
         <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -480,14 +688,26 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         />
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
           <span>{canvas ? "canvas mode" : `page: ${shortPath(pageContext.pathname)}`}</span>
-          <Button
-            size="sm"
-            disabled={!agentId || !input.trim() || sending || !effectiveSessionId}
-            onClick={() => void send()}
-          >
-            <Send className="size-3.5" />
-            Send
-          </Button>
+          {isStreaming ? (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => void stop()}
+              title="Stop the agent (kills the underlying process)"
+            >
+              <Square className="size-3.5" />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={!agentId || !input.trim() || sending || !effectiveSessionId}
+              onClick={() => void send()}
+            >
+              <Send className="size-3.5" />
+              Send
+            </Button>
+          )}
         </div>
       </div>
     </Wrapper>
@@ -497,9 +717,11 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
 function MessageBubble({
   message,
   onApplyRewrite,
+  onStreamEnd,
 }: {
   message: Message;
   onApplyRewrite?: (original: string, replacement: string) => void;
+  onStreamEnd?: (id: string, status: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -516,18 +738,27 @@ function MessageBubble({
       </div>
     );
   }
-  return <AssistantBubble message={message} onApplyRewrite={onApplyRewrite} />;
+  return (
+    <AssistantBubble
+      message={message}
+      onApplyRewrite={onApplyRewrite}
+      onStreamEnd={onStreamEnd}
+    />
+  );
 }
 
 function AssistantBubble({
   message,
   onApplyRewrite,
+  onStreamEnd,
 }: {
   message: Message;
   onApplyRewrite?: (original: string, replacement: string) => void;
+  onStreamEnd?: (id: string, status: string) => void;
 }) {
-  const { text } = useStreamedAssistant(message);
+  const { text } = useStreamedAssistant(message, onStreamEnd);
   const blocks = useMemo(() => parseBlocks(text), [text]);
+  const [showThinking] = useShowThinking();
   // The "rewrite candidate" is only meaningful when this turn had a selection
   // attached. We strip fenced blocks from the rewrite text since the user's
   // selection was almost certainly plain prose; including code fences would
@@ -543,17 +774,43 @@ function AssistantBubble({
   return (
     <div className="mr-6 space-y-2">
       <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm leading-relaxed">
-        {blocks.map((b, i) =>
-          b.kind === "text" ? (
-            <p key={i} className="whitespace-pre-wrap break-words">
-              {b.text || (message.pending ? "…" : "")}
-            </p>
-          ) : (
-            <FencedBlock key={i} type={b.type} content={b.content} />
-          ),
-        )}
+        {blocks.map((b, i) => {
+          if (b.kind === "text") {
+            return (
+              <p key={i} className="whitespace-pre-wrap break-words">
+                {b.text || (message.pending ? "" : "")}
+              </p>
+            );
+          }
+          if (b.kind === "thinking") {
+            return (
+              <ThinkingBlock
+                key={i}
+                content={b.content}
+                streaming={b.open}
+                forceOpen={showThinking}
+              />
+            );
+          }
+          if (b.kind === "tool") {
+            return <ToolChip key={i} text={b.text} />;
+          }
+          return <FencedBlock key={i} type={b.type} content={b.content} />;
+        })}
         {message.pending && text === "" && (
-          <p className="text-xs text-muted-foreground">…</p>
+          <TypingDots />
+        )}
+        {message.endStatus && (
+          <p
+            className={cn(
+              "mt-1 inline-block rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+              message.endStatus === "cancelled"
+                ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                : "bg-red-500/15 text-red-700 dark:text-red-300",
+            )}
+          >
+            {message.endStatus}
+          </p>
         )}
       </div>
       {!message.pending &&
@@ -640,10 +897,19 @@ const CHAT_INVALIDATABLE_ROOTS: ReadonlySet<string> = new Set([
   "pm",
 ]);
 
-function useStreamedAssistant(message: Message): { text: string } {
+function useStreamedAssistant(
+  message: Message,
+  onEnd?: (id: string, status: string) => void,
+): { text: string } {
   const [chunks, setChunks] = useState<string>("");
   const lastRunRef = useRef<string | null>(null);
   const qc = useQueryClient();
+  // The latest end-callback the caller passed. Captured in a ref so we
+  // don't tear down + recreate the EventSource when the parent re-renders
+  // with a new closure (every keystroke in the textarea would otherwise
+  // reset the stream).
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
 
   useEffect(() => {
     setChunks("");
@@ -664,8 +930,16 @@ function useStreamedAssistant(message: Message): { text: string } {
         // ignore
       }
     });
-    es.addEventListener("end", () => {
+    es.addEventListener("end", (e: MessageEvent) => {
       es.close();
+      let status = "succeeded";
+      try {
+        const data = JSON.parse(e.data) as { status?: string };
+        if (typeof data.status === "string") status = data.status;
+      } catch {
+        // ignore
+      }
+      onEndRef.current?.(message.id, status);
       void qc.invalidateQueries({
         predicate: (q) =>
           typeof q.queryKey[0] === "string" &&
@@ -678,7 +952,7 @@ function useStreamedAssistant(message: Message): { text: string } {
     return () => {
       es.close();
     };
-  }, [message.agentRunId, qc]);
+  }, [message.agentRunId, message.id, qc]);
 
   return { text: message.text || chunks };
 }
@@ -692,28 +966,404 @@ interface TextBlockType {
   kind: "text";
   text: string;
 }
-type Block = FencedBlockType | TextBlockType;
+interface ThinkingBlockType {
+  kind: "thinking";
+  /** Raw thought content (may include markdown / code fences inside). */
+  content: string;
+  /** True while the closing [/think] hasn't arrived yet — drives the
+   *  pulsing "thinking…" indicator. */
+  open: boolean;
+}
+interface ToolBlockType {
+  kind: "tool";
+  /** "[tool] <title> (status)" — the device translator emits one line
+   *  per tool start/progress event; we display them as a small chip
+   *  group rather than a full collapsed section. */
+  text: string;
+}
+type Block =
+  | FencedBlockType
+  | TextBlockType
+  | ThinkingBlockType
+  | ToolBlockType;
 
-/**
- * Parse a markdown-ish reply into alternating text and fenced-code blocks.
- * The fence's "info string" (after ```) becomes the action type.
- */
+// ─── Block parsing ──────────────────────────────────────────────────
+//
+// The device's update translator (packages/cli/src/runner/acpRunner.ts)
+// fences thought-chunk deltas between `\n[think]\n` / `\n[/think]\n`
+// markers and emits `\n[tool] <title> (<status>)\n` lines for tool
+// call lifecycle events. Everything else flows through verbatim as
+// markdown text — including the agent's own ```code``` fences.
+//
+// Why two distinct block formats (not "everything is a fence"): a
+// model can produce ```backtick fences``` inside its reasoning, which
+// would close a single-flavoured ` ```thinking ` fence prematurely.
+// `[think]` markers carry zero collision risk in practice — the model
+// would have to emit the literal three-character bracket-think-bracket
+// sequence at the start of its own line, which doesn't happen in
+// natural prose.
+//
+// Streaming: a half-arrived thinking section (`[think]` present,
+// `[/think]` not yet) renders as an open thinking block. Once the
+// closing marker arrives the block flips to `open: false`.
+const THINK_OPEN_RE = /\n?\[think\]\n/;
+const THINK_CLOSE_RE = /\n\[\/think\]\n?/;
+const TOOL_LINE_RE = /\n\[tool\] [^\n]*\n/;
+const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)```/;
+
 function parseBlocks(text: string): Block[] {
   const out: Block[] = [];
-  const re = /```([^\n`]*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) {
-      out.push({ kind: "text", text: text.slice(last, m.index) });
+  let cursor = 0;
+  while (cursor < text.length) {
+    const rest = text.slice(cursor);
+    // Find the earliest of: [think], [tool], ```fence. Greedy on
+    // whichever shows up first; everything before it is plain text.
+    const thinkOpen = THINK_OPEN_RE.exec(rest);
+    const toolLine = TOOL_LINE_RE.exec(rest);
+    const fence = FENCE_RE.exec(rest);
+    const candidates: { idx: number; kind: "think" | "tool" | "fence"; match: RegExpExecArray }[] = [];
+    if (thinkOpen) candidates.push({ idx: thinkOpen.index, kind: "think", match: thinkOpen });
+    if (toolLine) candidates.push({ idx: toolLine.index, kind: "tool", match: toolLine });
+    if (fence) candidates.push({ idx: fence.index, kind: "fence", match: fence });
+    if (candidates.length === 0) {
+      out.push({ kind: "text", text: rest });
+      break;
     }
-    out.push({ kind: "code", type: m[1]!.trim() || "text", content: m[2]! });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) {
-    out.push({ kind: "text", text: text.slice(last) });
+    candidates.sort((a, b) => a.idx - b.idx);
+    const first = candidates[0]!;
+    if (first.idx > 0) {
+      out.push({ kind: "text", text: rest.slice(0, first.idx) });
+    }
+    if (first.kind === "think") {
+      const afterOpen = first.idx + first.match[0].length;
+      const tail = rest.slice(afterOpen);
+      const close = THINK_CLOSE_RE.exec(tail);
+      if (close) {
+        out.push({
+          kind: "thinking",
+          content: tail.slice(0, close.index),
+          open: false,
+        });
+        cursor += afterOpen + close.index + close[0].length;
+      } else {
+        // Still streaming — show what we have so far as an open block.
+        out.push({ kind: "thinking", content: tail, open: true });
+        cursor = text.length;
+      }
+      continue;
+    }
+    if (first.kind === "tool") {
+      out.push({
+        kind: "tool",
+        text: first.match[0].trim().replace(/^\[tool\]\s*/, ""),
+      });
+      cursor += first.idx + first.match[0].length;
+      continue;
+    }
+    // Fenced code block.
+    out.push({
+      kind: "code",
+      type: first.match[1]!.trim() || "text",
+      content: first.match[2]!,
+    });
+    cursor += first.idx + first.match[0].length;
   }
   return out;
+}
+
+function ThinkingBlock({
+  content,
+  streaming,
+  forceOpen,
+}: {
+  content: string;
+  streaming: boolean;
+  forceOpen: boolean;
+}) {
+  // `key` on the <details> forces a remount whenever the global toggle
+  // changes, which lets the `open` prop reflect the new force value
+  // without leaving stale user-driven open/close state lingering. Per-
+  // block expand/collapse on the chip itself still works between
+  // global toggles.
+  return (
+    <details
+      key={forceOpen ? "open" : "collapsed"}
+      open={forceOpen}
+      className="my-2 rounded-md border border-dashed border-muted-foreground/30 bg-muted/20"
+    >
+      <summary
+        className={cn(
+          "flex cursor-pointer select-none items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground",
+          streaming && "animate-pulse",
+        )}
+      >
+        <Brain className="size-3" />
+        <span className="font-medium uppercase tracking-wide">
+          {streaming ? "Thinking…" : "Thinking"}
+        </span>
+        <span className="text-[10px] opacity-60">
+          {streaming ? "(streaming)" : `(${content.trim().length} chars)`}
+        </span>
+      </summary>
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-dashed border-muted-foreground/20 bg-background/40 p-2 text-xs leading-relaxed">
+        {content.trim()}
+      </pre>
+    </details>
+  );
+}
+
+function ToolChip({ text }: { text: string }) {
+  return (
+    <div className="my-1 inline-flex items-center gap-1 rounded-md border bg-background/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+      <Wrench className="size-3" />
+      <span className="font-mono">{text}</span>
+    </div>
+  );
+}
+
+function TypingDots() {
+  // Three staggered dots — same idiom as iMessage / Slack so it reads
+  // as "the agent is generating" without needing a label.
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 text-muted-foreground"
+      aria-label="agent is typing"
+    >
+      <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.3s]" />
+      <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.15s]" />
+      <span className="size-1.5 animate-bounce rounded-full bg-current" />
+    </span>
+  );
+}
+
+function HistoryDialog({
+  open,
+  onOpenChange,
+  sessions,
+  activeSessionId,
+  loading,
+  onNewChat,
+  onPick,
+  onRename,
+  onDelete,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  sessions: ChatSession[];
+  activeSessionId: string | null;
+  loading: boolean;
+  onNewChat: () => Promise<void> | void;
+  onPick: (s: ChatSession) => void;
+  onRename: (id: string, title: string | null) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const active = sessions.filter((s) => !s.archivedAt);
+  const archived = sessions.filter((s) => !!s.archivedAt);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Chat history</DialogTitle>
+          <DialogDescription>
+            Pick an older conversation to continue, or start a new one.
+            "New chat" archives the current thread; archived threads can be
+            restored.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            onClick={() => {
+              void onNewChat();
+            }}
+          >
+            <Plus className="size-3.5" />
+            New chat
+          </Button>
+        </div>
+
+        <div className="-mr-2 max-h-96 overflow-auto pr-2">
+          {loading && (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          )}
+          {!loading && sessions.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              No prior conversations for this page.
+            </p>
+          )}
+          {active.length > 0 && (
+            <HistorySection
+              label="Active"
+              sessions={active}
+              activeSessionId={activeSessionId}
+              renamingId={renamingId}
+              draftTitle={draftTitle}
+              setDraftTitle={setDraftTitle}
+              startRename={(s) => {
+                setRenamingId(s.id);
+                setDraftTitle(s.title ?? "");
+              }}
+              commitRename={(s) => {
+                onRename(s.id, draftTitle.trim() || null);
+                setRenamingId(null);
+              }}
+              cancelRename={() => setRenamingId(null)}
+              onPick={onPick}
+              onDelete={onDelete}
+            />
+          )}
+          {archived.length > 0 && (
+            <HistorySection
+              label="Archived"
+              sessions={archived}
+              activeSessionId={activeSessionId}
+              renamingId={renamingId}
+              draftTitle={draftTitle}
+              setDraftTitle={setDraftTitle}
+              startRename={(s) => {
+                setRenamingId(s.id);
+                setDraftTitle(s.title ?? "");
+              }}
+              commitRename={(s) => {
+                onRename(s.id, draftTitle.trim() || null);
+                setRenamingId(null);
+              }}
+              cancelRename={() => setRenamingId(null)}
+              onPick={onPick}
+              onDelete={onDelete}
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function HistorySection({
+  label,
+  sessions,
+  activeSessionId,
+  renamingId,
+  draftTitle,
+  setDraftTitle,
+  startRename,
+  commitRename,
+  cancelRename,
+  onPick,
+  onDelete,
+}: {
+  label: string;
+  sessions: ChatSession[];
+  activeSessionId: string | null;
+  renamingId: string | null;
+  draftTitle: string;
+  setDraftTitle: (v: string) => void;
+  startRename: (s: ChatSession) => void;
+  commitRename: (s: ChatSession) => void;
+  cancelRename: () => void;
+  onPick: (s: ChatSession) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="mt-3">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <ul className="space-y-1">
+        {sessions.map((s) => {
+          const isActive = s.id === activeSessionId;
+          const isRenaming = s.id === renamingId;
+          return (
+            <li
+              key={s.id}
+              className={cn(
+                "group flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs",
+                isActive
+                  ? "border-primary/60 bg-primary/5"
+                  : "border-border hover:bg-muted/40",
+              )}
+            >
+              {isRenaming ? (
+                <input
+                  autoFocus
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename(s);
+                    if (e.key === "Escape") cancelRename();
+                  }}
+                  onBlur={() => commitRename(s)}
+                  className="flex-1 rounded border bg-background px-1 text-xs"
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="flex-1 truncate text-left"
+                  onClick={() => onPick(s)}
+                  title="Switch to this conversation"
+                >
+                  <span className="font-medium">
+                    {s.title || "(untitled)"}
+                  </span>
+                  {isActive && (
+                    <span className="ml-2 rounded bg-primary/15 px-1 text-[10px] uppercase text-primary">
+                      active
+                    </span>
+                  )}
+                </button>
+              )}
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {formatRelative(s.updatedAt)}
+              </span>
+              {!isRenaming && (
+                <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-1"
+                    title="Rename"
+                    onClick={() => startRename(s)}
+                  >
+                    <span className="text-[10px]">Rename</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-1"
+                    title={s.archivedAt ? "Already archived" : "Archive"}
+                    onClick={() => onDelete(s.id)}
+                    disabled={!!s.archivedAt}
+                  >
+                    {s.archivedAt ? (
+                      <ArchiveRestore className="size-3" />
+                    ) : (
+                      <Archive className="size-3" />
+                    )}
+                  </Button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// Rough relative-time formatter — enough for the History list. Not a
+// general utility; we don't need full intl precision for "x minutes
+// ago" timestamps in a sidebar.
+function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  const diffSec = Math.max(0, (Date.now() - then) / 1000);
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 function FencedBlock({ type, content }: { type: string; content: string }) {

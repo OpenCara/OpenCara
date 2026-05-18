@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Sql } from "postgres";
-import type { AcpHistoryTurn, AgentSpec } from "@opencara/shared";
+import type { AcpHistoryTurn, AcpPermissionMode, AgentSpec } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
 import { agentRunLogs, agentRuns, agents, chatSessions } from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
@@ -48,6 +48,12 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         ? (body.pageContext as PageContext)
         : {};
     const history = Array.isArray(body.history) ? body.history : [];
+    // Per-turn knobs from the chat panel's toolbar. Plan mode is just
+    // a shortcut for permissionMode='plan' — the panel renders both
+    // controls but only the resolved mode crosses the wire. Unknown
+    // values fall back to undefined (preserves agent default) rather
+    // than 400'ing so a stale client doesn't break sending.
+    const permissionMode = parsePermissionMode(body.permissionMode);
 
     if (!agentId || !sessionId || !message.trim() || !Number.isFinite(turnIndex)) {
       return c.json(
@@ -164,6 +170,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       history: normalizeHistory(history),
       pageContext: pageContext as Record<string, unknown>,
       priorSessionId,
+      ...(permissionMode ? { permissionMode } : {}),
     });
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
@@ -178,6 +185,30 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       addedByUserId: user.id,
       startedAt: new Date(),
     });
+
+    // Auto-title: if the chat row has no title yet, derive one from this
+    // turn's user message so the History popover has something better
+    // than "(untitled)" to render. Capped at 60 chars on the trimmed
+    // body. Only fires when title is still NULL — once the user (or a
+    // PATCH /chat/sessions/:id) sets it explicitly, we leave it alone.
+    if (chatRow && chatRow.title === null) {
+      const derived = message.trim().slice(0, 60);
+      if (derived.length > 0) {
+        try {
+          await deps.db
+            .update(chatSessions)
+            .set({ title: derived })
+            .where(
+              and(
+                eq(chatSessions.userId, user.id),
+                eq(chatSessions.threadKey, sessionId),
+              ),
+            );
+        } catch (err) {
+          console.error("[chat] auto-title persist failed", err);
+        }
+      }
+    }
 
     let seq = 0;
     const onLog = (stream: LogStream, chunk: string) => {
@@ -195,6 +226,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
+          runId: agentRunId,
           onLog,
           hostId: dispatchHostId,
           projectId,
@@ -258,6 +290,77 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     })();
 
     return c.json({ agentRunId, sessionId, turnIndex });
+  });
+
+  /**
+   * Stop the in-flight chat turn whose dispatched runId is `:runId`.
+   *
+   * Flow: flip the agent_runs row to "cancelled" (with cancel_reason for
+   * traceability), then ask the dispatcher to forward a `cancel` frame to
+   * the device. The device's AcpRunController calls ACP `session/cancel`
+   * and force-closes the child after a short grace.
+   *
+   * The DB-side write is the load-bearing step — the SSE poll picks up
+   * "cancelled" within 2s and the panel exits the streaming state. The
+   * WS frame is best-effort; on a disconnected device the run still
+   * appears cancelled in the UI, the orphan child gets cleaned by the
+   * reaper on next orchestrator restart.
+   *
+   * Ownership gate is the same as runs.ts: addedByUserId match OR
+   * project ownership.
+   */
+  r.post("/chat/messages/:runId/cancel", auth, async (c) => {
+    const user = c.get("user")!;
+    const runId = c.req.param("runId");
+
+    const run = await deps.db.query.agentRuns.findFirst({
+      where: eq(agentRuns.id, runId),
+      columns: {
+        id: true,
+        status: true,
+        hostId: true,
+        addedByUserId: true,
+        projectId: true,
+      },
+    });
+    if (!run) return c.json({ error: "not found" }, 404);
+    // Ownership: direct attribution wins. Project gate is a follow-up
+    // when chat runs grow non-creator readers — today the creator is
+    // the only legitimate canceller.
+    if (run.addedByUserId !== user.id) {
+      return c.json({ error: "not found" }, 404);
+    }
+    if (run.status !== "running" && run.status !== "queued" && run.status !== "assigned") {
+      return c.json({ error: "already terminal" }, 409);
+    }
+
+    // Guarded UPDATE: only flip if still non-terminal, so a `done`
+    // arriving between the read above and this write doesn't get
+    // clobbered into "cancelled" with the agent's real exit code lost.
+    await deps.db
+      .update(agentRuns)
+      .set({
+        status: "cancelled",
+        cancelReason: "user_stopped",
+        finishedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(agentRuns.id, runId),
+          inArray(agentRuns.status, ["running", "queued", "assigned"]),
+        ),
+      );
+
+    let signalled = false;
+    if (run.hostId) {
+      signalled = deps.dispatcher.cancel(runId, run.hostId, "user_stopped");
+    }
+
+    // Wake up the SSE tail so the panel exits "streaming" without
+    // waiting up to 2s for the next poll tick.
+    void deps.pg.notify("agent_run_logs", runId);
+
+    return c.json({ ok: true, signalled });
   });
 
   /**
@@ -327,4 +430,18 @@ function normalizeHistory(history: unknown[]): AcpHistoryTurn[] {
     out.push({ role: r.role, text: r.text });
   }
   return out;
+}
+
+const PERMISSION_MODES = new Set<AcpPermissionMode>([
+  "default",
+  "acceptEdits",
+  "plan",
+  "bypassPermissions",
+]);
+
+function parsePermissionMode(raw: unknown): AcpPermissionMode | undefined {
+  if (typeof raw !== "string") return undefined;
+  return PERMISSION_MODES.has(raw as AcpPermissionMode)
+    ? (raw as AcpPermissionMode)
+    : undefined;
 }

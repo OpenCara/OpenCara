@@ -116,6 +116,25 @@ export const HelloAckSchema = z.object({
 });
 export type HelloAck = z.infer<typeof HelloAckSchema>;
 
+/**
+ * Server → device: cancel an in-flight job. The device looks up its
+ * AcpRunController for `runId` and calls `controller.cancel()`, which
+ * forwards an ACP `session/cancel` notification to the agent and force-
+ * closes the spawned child after a short grace if the agent doesn't
+ * honour the cancel.
+ *
+ * `reason` lets the device (and any future inspection of the protocol
+ * trace) tell apart user-triggered Stops from PM-wave / flow cancels;
+ * the orchestrator persists the same string on `agent_runs.cancel_reason`
+ * so the chain is traceable end-to-end.
+ */
+export const CancelJobSchema = z.object({
+  type: z.literal("cancel"),
+  runId: z.string(),
+  reason: z.enum(["user_stopped", "wave_cancelled"]),
+});
+export type CancelJob = z.infer<typeof CancelJobSchema>;
+
 /** Server → device: heartbeat ping. */
 export const PingSchema = z.object({ type: z.literal("ping") });
 /** Device → server: pong. */
@@ -277,6 +296,7 @@ export const ServerToDeviceMessageSchema = z.discriminatedUnion("type", [
   HelloAckSchema,
   PingSchema,
   AgentCallResultSchema,
+  CancelJobSchema,
 ]);
 export type ServerToDeviceMessage = z.infer<typeof ServerToDeviceMessageSchema>;
 

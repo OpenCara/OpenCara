@@ -387,8 +387,13 @@ export class WebSocketDispatcher implements AgentDispatcher {
       if (!dev) throw new Error("no device connected");
     }
 
+    // Prefer caller-supplied runId so chat / agent-test / worktree-cleanup
+    // can keep the WS-frame id, the DB id, the log table id, and any
+    // future cancel target all in lockstep. Callers that don't care still
+    // get the prior auto-ulid behaviour.
+    const runId = ctx.runId ?? ulid();
     const run: AgentRun = {
-      id: ulid(),
+      id: runId,
       spec,
       status: "assigned",
       hostId: dev.agentHostId,
@@ -409,5 +414,21 @@ export class WebSocketDispatcher implements AgentDispatcher {
     );
     this.pool.send(dev, { type: "job", run, spec, stdinJson: ctx.stdinJson });
     return promise;
+  }
+
+  cancel(
+    runId: string,
+    hostId: string,
+    reason: "user_stopped" | "wave_cancelled",
+  ): boolean {
+    const dev = this.pool.byId(hostId);
+    if (!dev) return false;
+    // Best-effort: the device may have already moved past the cancellable
+    // window (e.g. the agent's prompt() resolved and we're about to send
+    // `done`). The orchestrator's pending-map lookup on the eventual
+    // `done` frame stays valid regardless, so a late cancel that misses
+    // is harmless. The DB-side status flip happens in the caller.
+    this.pool.send(dev, { type: "cancel", runId, reason });
+    return true;
   }
 }

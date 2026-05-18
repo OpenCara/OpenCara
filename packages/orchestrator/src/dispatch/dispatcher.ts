@@ -3,6 +3,16 @@ import type { AgentSpec } from "@opencara/shared";
 export type LogStream = "stdout" | "stderr";
 
 export interface RunContext {
+  /**
+   * Optional caller-supplied id for this run. When set, the dispatcher
+   * uses it as both the WS-frame correlation key AND surfaces it back
+   * as `RunResult.runId`. Callers (chat / agent-test / worktree-cleanup)
+   * generate their `agent_runs.id` up front so they can return it to
+   * the client before the dispatcher resolves; passing it in here keeps
+   * the WS frame, the DB row, the log table rows, and any future cancel
+   * lookup all keyed on the same string. Unset → dispatcher mints a ULID.
+   */
+  runId?: string;
   /** Optional structured payload to write to the agent's stdin (closed after). */
   stdinJson?: unknown;
   /** Called for every chunk of stdout/stderr the agent emits. */
@@ -67,4 +77,19 @@ export interface AgentDispatcher {
    * pinned one is gone).
    */
   isConnected(hostId: string): boolean;
+  /**
+   * Signal the device to terminate an in-flight run. Returns true iff
+   * a `cancel` frame was actually delivered to a connected device.
+   * Callers should still flip the DB status to "cancelled" regardless —
+   * if the device is offline, the DB write is the only thing the
+   * client SSE can observe.
+   *
+   * `reason` is forwarded over the wire and ends up on
+   * `agent_runs.cancel_reason` (set by the caller, not by this method).
+   */
+  cancel(
+    runId: string,
+    hostId: string,
+    reason: "user_stopped" | "wave_cancelled",
+  ): boolean;
 }

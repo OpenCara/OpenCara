@@ -5,7 +5,12 @@
 // envelope, the fenced `opencara-call` parser, and the per-kind
 // `kindsAdapter` machinery. ACP is now the only path.
 
-import type { AcpHistoryTurn, AcpSpec, AgentSpec } from "@opencara/shared";
+import type {
+  AcpHistoryTurn,
+  AcpPermissionMode,
+  AcpSpec,
+  AgentSpec,
+} from "@opencara/shared";
 
 /**
  * Per-kind ACP adapter invocation. Adding a new kind is a one-line
@@ -85,6 +90,14 @@ export interface BuildAcpSpecOpts {
    * mechanism.
    */
   priorSessionId?: string;
+  /**
+   * Per-turn `--permission-mode` value forwarded to claude-acp (and any
+   * future adapter that honours the same flag). Unset = the agent's
+   * baked-in default — preserves prior behaviour for flow runs that
+   * don't opt in. The chat panel surfaces this as a toolbar select +
+   * "Plan mode" toggle.
+   */
+  permissionMode?: AcpPermissionMode;
 }
 
 /**
@@ -110,6 +123,7 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
       ? JSON.stringify(opts.pageContext)
       : undefined,
     ...(opts.priorSessionId ? { priorSessionId: opts.priorSessionId } : {}),
+    ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
   };
   return {
     kind: opts.agent.name,

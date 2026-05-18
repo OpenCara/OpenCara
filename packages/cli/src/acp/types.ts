@@ -153,6 +153,14 @@ export type ContentBlock =
 export interface PromptRequest {
   sessionId: string;
   prompt: ContentBlock[];
+  /**
+   * Opencara extension to the standard ACP `session/prompt` payload:
+   * forwards the per-turn `--permission-mode` claude-acp should apply
+   * to the underlying `claude` invocation. Other ACP shims that don't
+   * understand the field ignore it (standard JSON-RPC extra-field
+   * tolerance). Omitted = preserve shim default.
+   */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
 }
 
 export type StopReason =

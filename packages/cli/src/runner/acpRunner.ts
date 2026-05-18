@@ -85,6 +85,20 @@ export interface AcpRunController {
    * tool call.
    */
   onAgentCallResult(msg: AgentCallResultMessage): void;
+  /**
+   * Cancel an in-flight run. Sends ACP `session/cancel` if the session
+   * has been minted; either way schedules a force-close on the child
+   * after `forceCloseAfterMs` if the agent hasn't already torn down on
+   * its own. Idempotent: extra calls after the first are no-ops.
+   *
+   * Safe to call from any thread/turn — does not throw. Resolves the
+   * pending `prompt()` either via the agent returning
+   * `stopReason: "cancelled"` (preferred path) or, on misbehaving
+   * shims, via the child exiting which closes the JSON-RPC connection
+   * and rejects the pending request. Either way the outer
+   * `runAcpJob.promise` settles and the device sends `done`.
+   */
+  cancel(): void;
 }
 
 export interface RunAcpJobOpts {
@@ -140,9 +154,49 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   client.onSessionUpdate((p) => translator.handle(p.update));
   client.onStderr((chunk) => handlers.onLog("stderr", chunk));
 
+  // Mutable handle the cancel() method reads. We can't capture the
+  // sessionId at controller-construction time because it isn't known
+  // until session/new (or session/load) returns inside the async block
+  // below. A `cancel()` call before that point still triggers a forced
+  // child close — `cancelRequested` short-circuits the prompt path so
+  // the loop tears down without firing an unnecessary `session/prompt`.
+  let activeSessionId: string | null = null;
+  let cancelRequested = false;
+  let forceCloseScheduled = false;
+
+  const scheduleForceClose = () => {
+    if (forceCloseScheduled) return;
+    forceCloseScheduled = true;
+    // Grace window for the agent to honour `session/cancel` and reply
+    // with stopReason="cancelled". Shims that swallow the cancel get
+    // a SIGTERM after the grace — close(graceMs=0) means "ask the
+    // child to exit now, escalate to SIGTERM/SIGKILL on schedule".
+    setTimeout(() => {
+      client.close(0).catch(() => undefined);
+    }, 2000);
+  };
+
   const controller: AcpRunController = {
     onAgentCallResult(msg) {
       bridge.onResult(msg);
+    },
+    cancel() {
+      if (cancelRequested) return;
+      cancelRequested = true;
+      if (activeSessionId) {
+        try {
+          client.cancel(activeSessionId);
+        } catch (err) {
+          // Cancel is a fire-and-forget notification; throwing here
+          // would be unusual (closed connection). Either way the
+          // force-close handles teardown.
+          handlers.onLog(
+            "stderr",
+            `[opencara] cancel notify failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
+      }
+      scheduleForceClose();
     },
   };
 
@@ -182,8 +236,26 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         const session = await client.newSession({ cwd, mcpServers });
         sessionId = session.sessionId;
       }
+      activeSessionId = sessionId;
+      // Late cancel (between controller.cancel() and now reaching this
+      // line): the controller call set cancelRequested but had no
+      // sessionId to target. Forward the notification now so the agent
+      // sees a session/cancel before it ever processes prompt.
+      if (cancelRequested) {
+        try {
+          client.cancel(sessionId);
+        } catch {
+          // Already scheduled a force-close; nothing more to do.
+        }
+      }
       const prompt = buildPromptContent(acpSpec);
-      const promptResult = await client.prompt({ sessionId, prompt });
+      const promptResult = await client.prompt({
+        sessionId,
+        prompt,
+        ...(acpSpec.permissionMode
+          ? { permissionMode: acpSpec.permissionMode }
+          : {}),
+      });
       result = {
         exitCode: promptResult.stopReason === "end_turn" ? 0 : 1,
         stopReason: promptResult.stopReason,

@@ -105,6 +105,21 @@ function handleServerMessage(
     acpControllers.get(msg.runId)?.onAgentCallResult(msg);
     return;
   }
+  if (msg.type === "cancel") {
+    // Forward the orchestrator's stop signal to the in-flight ACP run.
+    // Late-arriving cancels (run already finished, controller removed
+    // in the finally block of executeJob) drop silently — same as
+    // agent-call-result above. The orchestrator has already flipped the
+    // agent_runs row to `cancelled` regardless.
+    const ctrl = acpControllers.get(msg.runId);
+    if (ctrl) {
+      console.log(
+        `[opencara] job ${msg.runId.slice(-8)} cancel requested (${msg.reason})`,
+      );
+      ctrl.cancel();
+    }
+    return;
+  }
 }
 
 async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {

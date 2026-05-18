@@ -86,6 +86,7 @@ export async function cleanupClosedPrWorktree(
         env: {},
       },
       {
+        runId,
         onLog,
         hostId: pin.hostId,
         projectId,
