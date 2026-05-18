@@ -44,6 +44,7 @@ import {
   useDeleteChatSession,
   useNewChatSession,
   useRenameChatSession,
+  useRestoreChatSession,
   type AgentRow,
   type ChatSession,
   type ChatSessionScope,
@@ -251,6 +252,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   const newSessionMut = useNewChatSession(scope ?? NO_SCOPE);
   const renameSessionMut = useRenameChatSession(scope ?? NO_SCOPE);
   const deleteSessionMut = useDeleteChatSession(scope ?? NO_SCOPE);
+  const restoreSessionMut = useRestoreChatSession(scope ?? NO_SCOPE);
   const listQ = useQuery({
     ...chatSessionListQuery(scope ?? NO_SCOPE),
     enabled: wantPersistence && historyOpen,
@@ -344,9 +346,10 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   // only meaningful while a run is in flight; the streaming pill in
   // the header derives from the same value.
   const streamingMessage = useMemo(
-    () => [...messages].reverse().find(
-      (m) => m.role === "assistant" && m.pending && m.agentRunId,
-    ),
+    () =>
+      messages.findLast(
+        (m) => m.role === "assistant" && m.pending && m.agentRunId,
+      ),
     [messages],
   );
   const streamingRunId = streamingMessage?.agentRunId ?? null;
@@ -585,6 +588,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         }}
         onRename={(id, title) => renameSessionMut.mutate({ id, title })}
         onDelete={(id) => deleteSessionMut.mutate({ id })}
+        onRestore={(id) => restoreSessionMut.mutate({ id })}
       />
 
       <div className="flex-1 overflow-y-auto p-4">
@@ -1146,6 +1150,7 @@ function HistoryDialog({
   onPick,
   onRename,
   onDelete,
+  onRestore,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -1156,6 +1161,7 @@ function HistoryDialog({
   onPick: (s: ChatSession) => void;
   onRename: (id: string, title: string | null) => void;
   onDelete: (id: string) => void;
+  onRestore: (id: string) => void;
 }) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -1213,6 +1219,7 @@ function HistoryDialog({
               cancelRename={() => setRenamingId(null)}
               onPick={onPick}
               onDelete={onDelete}
+              onRestore={onRestore}
             />
           )}
           {archived.length > 0 && (
@@ -1234,6 +1241,7 @@ function HistoryDialog({
               cancelRename={() => setRenamingId(null)}
               onPick={onPick}
               onDelete={onDelete}
+              onRestore={onRestore}
             />
           )}
         </div>
@@ -1254,6 +1262,7 @@ function HistorySection({
   cancelRename,
   onPick,
   onDelete,
+  onRestore,
 }: {
   label: string;
   sessions: ChatSession[];
@@ -1266,6 +1275,7 @@ function HistorySection({
   cancelRename: () => void;
   onPick: (s: ChatSession) => void;
   onDelete: (id: string) => void;
+  onRestore: (id: string) => void;
 }) {
   return (
     <div className="mt-3">
@@ -1329,20 +1339,27 @@ function HistorySection({
                   >
                     <span className="text-[10px]">Rename</span>
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-1"
-                    title={s.archivedAt ? "Already archived" : "Archive"}
-                    onClick={() => onDelete(s.id)}
-                    disabled={!!s.archivedAt}
-                  >
-                    {s.archivedAt ? (
+                  {s.archivedAt ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-1"
+                      title="Restore (un-archive)"
+                      onClick={() => onRestore(s.id)}
+                    >
                       <ArchiveRestore className="size-3" />
-                    ) : (
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-1"
+                      title="Archive"
+                      onClick={() => onDelete(s.id)}
+                    >
                       <Archive className="size-3" />
-                    )}
-                  </Button>
+                    </Button>
+                  )}
                 </div>
               )}
             </li>

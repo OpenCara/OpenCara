@@ -1027,6 +1027,29 @@ export function useRenameChatSession(scope: ChatSessionScope) {
   });
 }
 
+// Restore (un-archive) a previously archived session. Pairs with
+// useDeleteChatSession — the panel's History dialog uses these two as
+// the archive ↔ active toggle. PATCH /chat/sessions/:id accepts
+// archivedAt:null to clear the column; the active-session resolver
+// (most-recent-non-archived) then picks this row back up.
+export function useRestoreChatSession(scope: ChatSessionScope) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      api.patch<{ session: ChatSession }>(`/api/chat/sessions/${id}`, {
+        archivedAt: null,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: ["chat-session", scope.scopeKind, scope.scopeId],
+      });
+      void qc.invalidateQueries({
+        queryKey: ["chat-sessions", scope.scopeKind, scope.scopeId, "list"],
+      });
+    },
+  });
+}
+
 // Soft-delete the row (archived_at set). The active-session query will
 // pick a different row on the next fetch; the History popover keeps
 // showing this one under "Archived".

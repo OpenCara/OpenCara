@@ -10,7 +10,7 @@
 
 import { useSyncExternalStore } from "react";
 
-const STORAGE_KEY = "openkira.chat.showThinking";
+const STORAGE_KEY = "opencara.chat.showThinking";
 const listeners = new Set<() => void>();
 
 function readShowThinking(): boolean {

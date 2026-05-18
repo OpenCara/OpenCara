@@ -198,12 +198,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           await deps.db
             .update(chatSessions)
             .set({ title: derived })
-            .where(
-              and(
-                eq(chatSessions.userId, user.id),
-                eq(chatSessions.threadKey, sessionId),
-              ),
-            );
+            .where(eq(chatSessions.id, chatRow.id));
         } catch (err) {
           console.error("[chat] auto-title persist failed", err);
         }
@@ -233,6 +228,12 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           userId: user.id,
           sessionId,
         });
+        // First terminal write wins: when the user clicked Stop, the
+        // cancel endpoint already flipped this row to "cancelled" with
+        // cancel_reason="user_stopped". A late dispatcher resolve must
+        // not clobber that with "failed" — we'd lose the cancel_reason
+        // and the panel's SSE end event would carry the wrong status.
+        // Guard symmetrically with the cancel endpoint's UPDATE.
         await deps.db
           .update(agentRuns)
           .set({
@@ -240,7 +241,12 @@ export function chatRoutes(deps: ChatRoutesDeps) {
             exitCode: result.exitCode,
             finishedAt: new Date(),
           })
-          .where(eq(agentRuns.id, agentRunId));
+          .where(
+            and(
+              eq(agentRuns.id, agentRunId),
+              inArray(agentRuns.status, ["running", "queued", "assigned"]),
+            ),
+          );
         // Persist the session id the shim ran under, so the next turn
         // can resume via `priorSessionId`. Gated on (a) the run actually
         // succeeded — a failed run may have left the JSONL in a state
@@ -280,10 +286,16 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         }
       } catch (err) {
         console.error("[chat] dispatcher run failed", err);
+        // Same first-write-wins guard as the success branch.
         await deps.db
           .update(agentRuns)
           .set({ status: "failed", finishedAt: new Date() })
-          .where(eq(agentRuns.id, agentRunId));
+          .where(
+            and(
+              eq(agentRuns.id, agentRunId),
+              inArray(agentRuns.status, ["running", "queued", "assigned"]),
+            ),
+          );
       }
       // Trigger one final SSE flush so the panel sees terminal state.
       void deps.pg.notify("agent_run_logs", agentRunId);
