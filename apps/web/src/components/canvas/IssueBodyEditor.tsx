@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -8,51 +8,17 @@ import { cn } from "@/lib/utils";
 interface IssueBodyEditorProps {
   bodyMd: string;
   onChange: (next: string) => void;
-  // Only fired when the user actually selects something inside the rendered
-  // body (non-empty, anchored in our container). Empty / outside selections
-  // are suppressed — the parent's "clear" path is its own onClearSelection
-  // (wired to the chat panel's chip × button), not a callback from here.
-  onSelectionChange: (selection: string) => void;
 }
 
 // Renders the issue body as markdown by default; toggling to Edit swaps in a
 // plain textarea so the user can do small freeform edits without bothering an
-// agent. Selection-driven rewrites only fire from the rendered view — text
-// selection inside the textarea is the OS's built-in edit buffer and isn't
-// what we want to send to an agent anyway.
+// agent. Text selection for the agent chat is handled globally by the
+// SelectionToolbar in the AppShell.
 export function IssueBodyEditor({
   bodyMd,
   onChange,
-  onSelectionChange,
 }: IssueBodyEditorProps) {
   const [mode, setMode] = useState<"render" | "edit">("render");
-  const renderRef = useRef<HTMLDivElement | null>(null);
-
-  // Capture the selection within the rendered body. We only push *new*
-  // non-empty selections that landed inside our render container. An empty
-  // selection (e.g. the user clicked into the chat input and the browser
-  // collapsed the highlight) does NOT clear our captured state — they
-  // probably just shifted focus to type the instruction. Explicit clear is
-  // the × button on the chip, wired through onClearSelection in the parent.
-  useEffect(() => {
-    if (mode !== "render") return;
-    const onSelectionEvent = () => {
-      const sel = window.getSelection();
-      const text = sel?.toString() ?? "";
-      if (!text.trim() || !renderRef.current) return;
-      const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
-      if (!range) return;
-      const ancestor = range.commonAncestorContainer;
-      const inside =
-        renderRef.current === ancestor ||
-        renderRef.current.contains(
-          ancestor.nodeType === 1 ? (ancestor as Element) : ancestor.parentElement,
-        );
-      if (inside) onSelectionChange(text);
-    };
-    document.addEventListener("selectionchange", onSelectionEvent);
-    return () => document.removeEventListener("selectionchange", onSelectionEvent);
-  }, [mode, onSelectionChange]);
 
   return (
     <div className="space-y-2">
@@ -74,7 +40,6 @@ export function IssueBodyEditor({
       </div>
       {mode === "render" ? (
         <div
-          ref={renderRef}
           className={cn(
             "rounded-md border border-border/60 p-4 text-sm leading-relaxed",
             "[&_h1]:mb-3 [&_h1]:mt-4 [&_h1]:text-xl [&_h1]:font-semibold",

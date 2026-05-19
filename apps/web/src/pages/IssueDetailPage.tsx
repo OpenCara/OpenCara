@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { Link, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink } from "lucide-react";
@@ -12,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChatPanel } from "@/components/chat/ChatPanel";
 import { IssueBodyEditor } from "@/components/canvas/IssueBodyEditor";
 import {
   agentsQuery,
@@ -32,8 +31,6 @@ export function IssueDetailPage() {
     ...projectIssueDetailQuery(projectId, number),
     enabled: Number.isFinite(number),
   });
-
-  const [selection, setSelection] = useState<string | null>(null);
 
   const save = useSaveIssueBody(projectId, number);
   const setDraft = useSetIssueDraft(projectId, number);
@@ -95,25 +92,6 @@ export function IssueDetailPage() {
     [setDraft],
   );
 
-  const onClearSelection = useCallback(() => {
-    setSelection(null);
-    window.getSelection()?.removeAllRanges();
-  }, []);
-
-  const canvasCtx = useMemo(
-    () => ({
-      projectId,
-      issueNumber: number,
-      selection,
-      onClearSelection,
-      // No onApplyRewrite — the agent applies itself by PATCHing the draft
-      // via /api/agent/.../body. The chat panel hides its Apply button when
-      // this callback is omitted.
-      onApplyRewrite: undefined,
-    }),
-    [projectId, number, selection, onClearSelection],
-  );
-
   const onSave = () => {
     if (!dirty) return;
     // If the user has unsent typing in the local buffer, push that exact
@@ -157,38 +135,25 @@ export function IssueDetailPage() {
   }
 
   return (
-    <div className="grid h-[calc(100vh-6rem)] grid-cols-[1fr_28rem] gap-0">
-      <div className="flex flex-col overflow-hidden">
-        <Header
-          projectId={projectId}
-          issue={issue}
-          dirty={dirty}
-          saving={save.isPending}
-          discarding={setDraft.isPending}
-          onSave={onSave}
-          onDiscardDraft={onDiscardDraft}
-        />
-        {save.error && (
-          <div className="border-b bg-destructive/10 px-6 py-2 text-xs text-destructive">
-            Save failed: {save.error instanceof Error ? save.error.message : String(save.error)}
-          </div>
-        )}
-        <div className="flex-1 overflow-y-auto p-6">
-          <IssueBodyEditor
-            bodyMd={effectiveBody}
-            onChange={onBodyChange}
-            onSelectionChange={(sel) => setSelection(sel)}
-          />
+    <div className="flex flex-col">
+      <Header
+        projectId={projectId}
+        issue={issue}
+        dirty={dirty}
+        saving={save.isPending}
+        discarding={setDraft.isPending}
+        onSave={onSave}
+        onDiscardDraft={onDiscardDraft}
+      />
+      {save.error && (
+        <div className="border-b bg-destructive/10 px-6 py-2 text-xs text-destructive">
+          Save failed: {save.error instanceof Error ? save.error.message : String(save.error)}
         </div>
-      </div>
-      <div className="h-full">
-        <ChatPanel
-          open={true}
-          onClose={() => {
-            // unused in embedded variant
-          }}
-          variant="embedded"
-          canvas={canvasCtx}
+      )}
+      <div className="p-6">
+        <IssueBodyEditor
+          bodyMd={effectiveBody}
+          onChange={onBodyChange}
         />
       </div>
     </div>

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { diffWordsWithSpace } from "diff";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -53,36 +52,16 @@ import { cn } from "@/lib/utils";
 import { useChatActions } from "@/lib/chatActions";
 import { useShowThinking } from "./preferences";
 
-export interface CanvasContext {
-  /** Project ID, threaded into pageContext.canvas.projectId on every send. */
-  projectId: string;
-  /** Issue number for /api/projects/:id/issues/:n. */
-  issueNumber: number;
-  /**
-   * The text currently selected in the editor. Snapshotted onto each user
-   * message at send-time so a later "Apply" still uses the right original.
-   */
-  selection: string | null;
-  onClearSelection: () => void;
-  /**
-   * Optional. Called when the user accepts an agent rewrite. Receives the
-   * original snapshotted selection and the assistant's full response.
-   *
-   * When omitted (the new path), the agent applies its own rewrite by
-   * PATCHing the issue draft via /api/agent/.../body — there's no UI Apply
-   * button, the diff appears in the issue body itself once the run ends
-   * and the page refetches.
-   */
-  onApplyRewrite?: (original: string, replacement: string) => void;
-}
-
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** "floating" (default) = fixed-position sidebar with slide-in transition.
-   * "embedded" = sized to parent column, no transition, no close button. */
-  variant?: "floating" | "embedded";
-  canvas?: CanvasContext;
+  /**
+   * Text currently selected on the page. Snapshotted onto each user
+   * message at send-time so a later context reference uses the right
+   * original. Managed by the AppShell's SelectionToolbar.
+   */
+  selection?: string | null;
+  onClearSelection?: () => void;
 }
 
 interface Message {
@@ -105,15 +84,19 @@ interface Message {
 interface PageContext {
   /**
    * Stable page id the orchestrator's skill registry keys on (see
-   * packages/orchestrator/src/flows/skills.ts). Derived from the URL +
-   * any canvas prop. Pages without a registered skill leave this null
-   * and the chat falls back to today's pathname-only behaviour.
+   * packages/orchestrator/src/flows/skills.ts). Derived from the URL.
+   * Pages without a registered skill leave this null and the chat
+   * falls back to today's pathname-only behaviour.
    */
   page: string | null;
   pathname: string;
   projectId?: string;
+  issueNumber?: number;
   flowSlug?: string;
   flowRunId?: string;
+  /** Generic text selection from the page, sent on every page type. */
+  selection?: { text: string } | null;
+  /** Issue-specific canvas context; only populated on issue pages. */
   canvas?: {
     kind: "issue";
     projectId: string;
@@ -125,9 +108,7 @@ interface PageContext {
 /**
  * URL-pattern → page id table. Each pattern matches exactly one page in
  * apps/web/src/App.tsx; new pages with skills register a new entry here
- * + a builder server-side. The canvas prop short-circuits to
- * "issue-canvas" so IssueDetailPage's embedded panel works the same
- * way the AppShell's global panel would on that route.
+ * + a builder server-side.
  */
 const PAGE_PATTERNS: { pattern: RegExp; page: string }[] = [
   { pattern: /^\/projects\/[^/]+\/issues\/[^/]+$/, page: "issue-canvas" },
@@ -141,11 +122,7 @@ const PAGE_PATTERNS: { pattern: RegExp; page: string }[] = [
   { pattern: /^\/projects\/[^/]+(?:\/[^/]+)?$/, page: "project-detail" },
 ];
 
-function pageForLocation(
-  pathname: string,
-  hasCanvas: boolean,
-): string | null {
-  if (hasCanvas) return "issue-canvas";
+function pageForLocation(pathname: string): string | null {
   for (const { pattern, page } of PAGE_PATTERNS) {
     if (pattern.test(pathname)) return page;
   }
@@ -168,7 +145,6 @@ function pageForLocation(
 function scopeForPage(
   pageId: string | null,
   params: Readonly<Record<string, string | undefined>>,
-  canvas: CanvasContext | undefined,
 ): ChatSessionScope | null {
   if (!pageId) return null;
   if (pageId === "flow-template-detail") {
@@ -176,7 +152,7 @@ function scopeForPage(
     return slug ? { scopeKind: "template", scopeId: slug } : null;
   }
   // Every other registered page is project-scoped.
-  const projectId = canvas?.projectId ?? params.id ?? params.projectId;
+  const projectId = params.id ?? params.projectId;
   return projectId ? { scopeKind: "project", scopeId: projectId } : null;
 }
 
@@ -193,7 +169,7 @@ const PERMISSION_MODE_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "bypassPermissions", label: "Bypass" },
 ];
 
-export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props) {
+export function ChatPanel({ open, onClose, selection, onClearSelection }: Props) {
   const location = useLocation();
   const params = useParams();
   const agentsQ = useQuery(agentsQuery());
@@ -216,9 +192,12 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
 
   const pageContext: PageContext = useMemo(
     () => ({
-      page: pageForLocation(location.pathname, !!canvas),
+      page: pageForLocation(location.pathname),
       pathname: location.pathname,
       projectId: params.id ?? params.projectId,
+      issueNumber: params.number
+        ? Number.parseInt(params.number, 10)
+        : undefined,
       flowSlug: params.slug,
       flowRunId: params.runId,
     }),
@@ -226,9 +205,9 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
       location.pathname,
       params.id,
       params.projectId,
+      params.number,
       params.slug,
       params.runId,
-      canvas,
     ],
   );
 
@@ -239,8 +218,8 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
   // has no scope (unregistered route), skip persistence entirely and
   // fall back to a per-panel-open ephemeral session id.
   const scope = useMemo(
-    () => scopeForPage(pageContext.page, params, canvas),
-    [pageContext.page, params, canvas],
+    () => scopeForPage(pageContext.page, params),
+    [pageContext.page, params],
   );
   const wantPersistence = scope !== null;
   const sessionQ = useQuery({
@@ -390,16 +369,16 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     setSending(true);
     setInput("");
 
-    // Snapshot the canvas selection NOW (at send-time). The user can change
-    // their selection while the agent is responding; we want Apply to use
-    // the snippet they were looking at when they hit Send.
-    const canvasSelection = canvas?.selection?.trim() || null;
+    // Snapshot the selection NOW (at send-time). The user can change
+    // their selection while the agent is responding; we want the context
+    // to use the snippet they were looking at when they hit Send.
+    const selectionSnapshot = selection?.trim() || null;
 
     const userMsg: Message = {
       id: `u_${Date.now()}`,
       role: "user",
       text,
-      attachedSelection: canvasSelection ?? undefined,
+      attachedSelection: selectionSnapshot ?? undefined,
     };
     const assistantId = `a_${Date.now()}`;
     setMessages((prev) => [
@@ -410,22 +389,30 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         role: "assistant",
         text: "",
         pending: true,
-        attachedSelection: canvasSelection ?? undefined,
+        attachedSelection: selectionSnapshot ?? undefined,
       },
     ]);
 
     const turnIndex = messages.filter((m) => m.role === "user").length + 1;
-    const ctxForRequest: PageContext = canvas
-      ? {
-          ...pageContext,
-          canvas: {
-            kind: "issue",
-            projectId: canvas.projectId,
-            issueNumber: canvas.issueNumber,
-            selection: canvasSelection ? { text: canvasSelection } : null,
-          },
-        }
-      : pageContext;
+
+    // Always include the selection in the generic pageContext.selection
+    // field so the backend receives it on every page type. On issue
+    // pages, also attach the canvas context for issue-specific ops.
+    const isIssuePage = pageContext.page === "issue-canvas";
+    const selObj = selectionSnapshot ? { text: selectionSnapshot } : null;
+    const ctxForRequest: PageContext =
+      isIssuePage && pageContext.projectId && pageContext.issueNumber
+        ? {
+            ...pageContext,
+            selection: selObj,
+            canvas: {
+              kind: "issue",
+              projectId: pageContext.projectId,
+              issueNumber: pageContext.issueNumber,
+              selection: selObj,
+            },
+          }
+        : { ...pageContext, selection: selObj };
 
     try {
       const { agentRunId } = await api.post<{ agentRunId: string }>(
@@ -460,28 +447,16 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
     }
   };
 
-  const wrapperClasses =
-    variant === "floating"
-      ? cn(
-          "fixed right-0 top-0 z-40 flex h-screen w-[28rem] flex-col border-l bg-card shadow-xl transition-transform",
-          open ? "translate-x-0" : "translate-x-full",
-        )
-      : "flex h-full flex-col border-l bg-card";
-
-  const Wrapper = variant === "floating" ? "aside" : "div";
-
   return (
-    <Wrapper
-      className={wrapperClasses}
-      aria-hidden={variant === "floating" ? !open : undefined}
+    <aside
+      className={cn(
+        "fixed right-0 top-0 z-40 flex h-screen w-[28rem] flex-col border-l bg-card shadow-xl transition-transform",
+        open ? "translate-x-0" : "translate-x-full",
+      )}
+      aria-hidden={!open}
     >
       <div className="flex items-center gap-2 border-b px-4 py-3">
         <Bot className="size-4 text-muted-foreground" />
-        {canvas && (
-          <span className="text-sm font-semibold tracking-tight">
-            Edit with agent
-          </span>
-        )}
         {isStreaming && (
           <span
             className="ml-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
@@ -538,11 +513,9 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
           >
             <Info className="size-4" />
           </Button>
-          {variant === "floating" && (
-            <Button size="sm" variant="ghost" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          )}
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
         </div>
       </div>
 
@@ -550,13 +523,15 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         open={skillOpen}
         onOpenChange={setSkillOpen}
         pageContext={
-          canvas
+          pageContext.page === "issue-canvas" &&
+          pageContext.projectId &&
+          pageContext.issueNumber
             ? {
                 ...pageContext,
                 canvas: {
                   kind: "issue",
-                  projectId: canvas.projectId,
-                  issueNumber: canvas.issueNumber,
+                  projectId: pageContext.projectId,
+                  issueNumber: pageContext.issueNumber,
                   selection: null,
                 },
               }
@@ -597,7 +572,6 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
           <EmptyState
             agents={agentsQ.data?.agents ?? []}
             pageContext={pageContext}
-            canvas={canvas}
           />
         ) : (
           <div className="space-y-4">
@@ -605,7 +579,6 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
               <MessageBubble
                 key={m.id}
                 message={m}
-                onApplyRewrite={canvas?.onApplyRewrite}
                 onStreamEnd={handleStreamEnd}
               />
             ))}
@@ -613,20 +586,22 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
         )}
       </div>
 
-      {canvas?.selection && (
+      {selection && (
         <div className="border-t bg-secondary/40 px-3 py-2">
           <div className="flex items-start gap-2 text-xs">
             <span className="mt-0.5 text-muted-foreground">selection:</span>
-            <span className="flex-1 truncate font-mono">{canvas.selection}</span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={canvas.onClearSelection}
-              className="h-6 px-1"
-              title="Clear selection"
-            >
-              <X className="size-3" />
-            </Button>
+            <span className="flex-1 truncate font-mono">{selection}</span>
+            {onClearSelection && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onClearSelection}
+                className="h-6 px-1"
+                title="Clear selection"
+              >
+                <X className="size-3" />
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -667,8 +642,8 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
             !effectiveSessionId
               ? "Loading session…"
               : agentId
-                ? canvas?.selection
-                  ? "How should this be rewritten? (⌘/Ctrl+Enter)"
+                ? selection
+                  ? "Ask about the selected text… (⌘/Ctrl+Enter)"
                   : "Ask for help with this page… (⌘/Ctrl+Enter to send)"
                 : "Pick an agent above to start chatting"
           }
@@ -676,7 +651,7 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
           disabled={!agentId || !effectiveSessionId}
         />
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>{canvas ? "canvas mode" : `page: ${shortPath(pageContext.pathname)}`}</span>
+          <span>page: {shortPath(pageContext.pathname)}</span>
           {isStreaming ? (
             <Button
               size="sm"
@@ -699,17 +674,15 @@ export function ChatPanel({ open, onClose, variant = "floating", canvas }: Props
           )}
         </div>
       </div>
-    </Wrapper>
+    </aside>
   );
 }
 
 function MessageBubble({
   message,
-  onApplyRewrite,
   onStreamEnd,
 }: {
   message: Message;
-  onApplyRewrite?: (original: string, replacement: string) => void;
   onStreamEnd?: (id: string, status: string) => void;
 }) {
   if (message.role === "user") {
@@ -730,7 +703,6 @@ function MessageBubble({
   return (
     <AssistantBubble
       message={message}
-      onApplyRewrite={onApplyRewrite}
       onStreamEnd={onStreamEnd}
     />
   );
@@ -738,27 +710,14 @@ function MessageBubble({
 
 function AssistantBubble({
   message,
-  onApplyRewrite,
   onStreamEnd,
 }: {
   message: Message;
-  onApplyRewrite?: (original: string, replacement: string) => void;
   onStreamEnd?: (id: string, status: string) => void;
 }) {
   const { text } = useStreamedAssistant(message, onStreamEnd);
   const blocks = useMemo(() => parseBlocks(text), [text]);
   const [showThinking] = useShowThinking();
-  // The "rewrite candidate" is only meaningful when this turn had a selection
-  // attached. We strip fenced blocks from the rewrite text since the user's
-  // selection was almost certainly plain prose; including code fences would
-  // produce a ```-laden replacement.
-  const rewriteCandidate = useMemo(() => {
-    if (!message.attachedSelection) return null;
-    return blocks
-      .map((b) => (b.kind === "text" ? b.text : ""))
-      .join("")
-      .trim();
-  }, [blocks, message.attachedSelection]);
 
   return (
     <div className="mr-6 space-y-2">
@@ -801,59 +760,6 @@ function AssistantBubble({
             {message.endStatus}
           </p>
         )}
-      </div>
-      {!message.pending &&
-        message.attachedSelection &&
-        rewriteCandidate &&
-        onApplyRewrite && (
-          <RewritePreview
-            original={message.attachedSelection}
-            rewrite={rewriteCandidate}
-            onApply={() =>
-              onApplyRewrite(message.attachedSelection!, rewriteCandidate)
-            }
-          />
-        )}
-    </div>
-  );
-}
-
-function RewritePreview({
-  original,
-  rewrite,
-  onApply,
-}: {
-  original: string;
-  rewrite: string;
-  onApply: () => void;
-}) {
-  const [applied, setApplied] = useState(false);
-  const parts = useMemo(() => diffWordsWithSpace(original, rewrite), [
-    original,
-    rewrite,
-  ]);
-  return (
-    <div className="rounded-md border bg-background p-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Rewrite preview
-        </span>
-        <Button size="sm" disabled={applied} onClick={() => { onApply(); setApplied(true); }}>
-          {applied ? "Applied" : "Apply"}
-        </Button>
-      </div>
-      <div className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
-        {parts.map((part, i) => (
-          <span
-            key={i}
-            className={cn(
-              part.added && "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
-              part.removed && "bg-red-500/20 text-red-700 line-through dark:text-red-300",
-            )}
-          >
-            {part.value}
-          </span>
-        ))}
       </div>
     </div>
   );
@@ -1411,38 +1317,21 @@ function FencedBlock({ type, content }: { type: string; content: string }) {
 function EmptyState({
   agents,
   pageContext,
-  canvas,
 }: {
   agents: AgentRow[];
   pageContext: PageContext;
-  canvas?: CanvasContext;
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
       <Bot className="size-8 opacity-50" />
-      {canvas ? (
-        <>
-          <p>
-            Select text in the issue body, then ask the agent to rewrite it.
-            The full issue (title, body, labels, assignees) is sent along for
-            stylistic context.
-          </p>
-          <p className="text-xs">
-            {agents.length === 0 && "Define an agent first under /agents."}
-          </p>
-        </>
-      ) : (
-        <>
-          <p>
-            Chat with one of your agents. The page you're on is sent along so
-            the agent can offer setup suggestions.
-          </p>
-          <p className="text-xs">
-            Page: <span className="font-mono">{shortPath(pageContext.pathname)}</span>
-            {agents.length === 0 && " — define an agent first under /agents."}
-          </p>
-        </>
-      )}
+      <p>
+        Chat with one of your agents. Select text on any page and click
+        &ldquo;Chat about this&rdquo; to include it as context.
+      </p>
+      <p className="text-xs">
+        Page: <span className="font-mono">{shortPath(pageContext.pathname)}</span>
+        {agents.length === 0 && " — define an agent first under /agents."}
+      </p>
     </div>
   );
 }
