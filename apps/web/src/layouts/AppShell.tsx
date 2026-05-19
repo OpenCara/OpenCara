@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { SelectionToolbar } from "@/components/SelectionToolbar";
 import { ChatActionsProvider } from "@/lib/chatActions";
 
 interface NavEntry {
@@ -61,6 +62,21 @@ export function AppShell() {
   const devicesQ = useQuery(devicesQuery());
   const promptsQ = useQuery(promptsQuery());
   const [chatOpen, setChatOpen] = useState(false);
+  const [selection, setSelection] = useState<string | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+
+  const onChatWithSelection = useCallback(
+    (text: string) => {
+      setSelection(text);
+      if (!chatOpen) setChatOpen(true);
+    },
+    [chatOpen],
+  );
+
+  const onClearSelection = useCallback(() => {
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
   const projects = projectsQ.data?.projects ?? [];
   const templates = templatesQ.data?.templates ?? [];
   const agents = agentsQ.data?.agents ?? [];
@@ -227,12 +243,24 @@ export function AppShell() {
           </DropdownMenu>
         </header>
 
-        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+        <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-6">
           <Outlet />
         </main>
       </div>
 
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <SelectionToolbar
+        containerRef={mainRef}
+        onChatWithSelection={onChatWithSelection}
+      />
+      <ChatPanel
+        open={chatOpen}
+        onClose={() => {
+          setChatOpen(false);
+          setSelection(null);
+        }}
+        selection={selection}
+        onClearSelection={onClearSelection}
+      />
     </div>
     </ChatActionsProvider>
   );
