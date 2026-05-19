@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -65,18 +65,20 @@ export function AppShell() {
   const [selection, setSelection] = useState<string | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
 
-  const onChatWithSelection = useCallback(
-    (text: string) => {
-      setSelection(text);
-      if (!chatOpen) setChatOpen(true);
-    },
-    [chatOpen],
-  );
+  const onChatWithSelection = useCallback((text: string) => {
+    setSelection(text);
+    setChatOpen(true);
+  }, []);
 
   const onClearSelection = useCallback(() => {
     setSelection(null);
     window.getSelection()?.removeAllRanges();
   }, []);
+
+  // Clear stale selection when navigating to a different page.
+  useEffect(() => {
+    setSelection(null);
+  }, [location.pathname]);
   const projects = projectsQ.data?.projects ?? [];
   const templates = templatesQ.data?.templates ?? [];
   const agents = agentsQ.data?.agents ?? [];
@@ -206,7 +208,12 @@ export function AppShell() {
           <Button
             size="sm"
             variant={chatOpen ? "secondary" : "ghost"}
-            onClick={() => setChatOpen((o) => !o)}
+            onClick={() => {
+              setChatOpen((prev) => {
+                if (prev) setSelection(null);
+                return !prev;
+              });
+            }}
             title="Open chat assistant"
           >
             <MessageCircle className="size-4" />

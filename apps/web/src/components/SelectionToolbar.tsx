@@ -59,6 +59,9 @@ export function SelectionToolbar({ containerRef, onChatWithSelection }: Props) {
   }, [containerRef]);
 
   useEffect(() => {
+    // Snapshot the ref value so cleanup removes the same listener that
+    // setup attached — containerRef.current may be null by cleanup time.
+    const container = containerRef.current;
     let timer: ReturnType<typeof setTimeout>;
 
     // Desktop: evaluate after mouse release (selection finalized).
@@ -79,13 +82,13 @@ export function SelectionToolbar({ containerRef, onChatWithSelection }: Props) {
     document.addEventListener("mouseup", onMouseUp);
     document.addEventListener("selectionchange", onSelectionChange);
     window.addEventListener("resize", hide, { passive: true });
-    containerRef.current?.addEventListener("scroll", hide, { passive: true });
+    container?.addEventListener("scroll", hide, { passive: true });
 
     return () => {
       document.removeEventListener("mouseup", onMouseUp);
       document.removeEventListener("selectionchange", onSelectionChange);
       window.removeEventListener("resize", hide);
-      containerRef.current?.removeEventListener("scroll", hide);
+      container?.removeEventListener("scroll", hide);
       clearTimeout(timer);
     };
   }, [evaluate, containerRef]);

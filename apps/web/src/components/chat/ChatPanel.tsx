@@ -94,6 +94,9 @@ interface PageContext {
   issueNumber?: number;
   flowSlug?: string;
   flowRunId?: string;
+  /** Generic text selection from the page, sent on every page type. */
+  selection?: { text: string } | null;
+  /** Issue-specific canvas context; only populated on issue pages. */
   canvas?: {
     kind: "issue";
     projectId: string;
@@ -392,23 +395,24 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
 
     const turnIndex = messages.filter((m) => m.role === "user").length + 1;
 
-    // When on an issue page, attach the canvas context so the agent
-    // can perform issue-specific operations (body PATCH, etc.).
+    // Always include the selection in the generic pageContext.selection
+    // field so the backend receives it on every page type. On issue
+    // pages, also attach the canvas context for issue-specific ops.
     const isIssuePage = pageContext.page === "issue-canvas";
+    const selObj = selectionSnapshot ? { text: selectionSnapshot } : null;
     const ctxForRequest: PageContext =
       isIssuePage && pageContext.projectId && pageContext.issueNumber
         ? {
             ...pageContext,
+            selection: selObj,
             canvas: {
               kind: "issue",
               projectId: pageContext.projectId,
               issueNumber: pageContext.issueNumber,
-              selection: selectionSnapshot
-                ? { text: selectionSnapshot }
-                : null,
+              selection: selObj,
             },
           }
-        : pageContext;
+        : { ...pageContext, selection: selObj };
 
     try {
       const { agentRunId } = await api.post<{ agentRunId: string }>(
