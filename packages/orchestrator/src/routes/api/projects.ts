@@ -155,8 +155,9 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       .where(eq(projects.id, id));
 
     const project = await loadOwnedProject(deps.db, id, user.id);
+    if (!project) return c.json({ error: "not found" }, 404);
     const installation = await deps.db.query.githubInstallations.findFirst({
-      where: eq(githubInstallations.id, project!.installationId),
+      where: eq(githubInstallations.id, project.installationId),
     });
     return c.json({ project, installation });
   });

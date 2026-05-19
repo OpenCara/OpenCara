@@ -538,6 +538,9 @@ function DefaultImplementFlowCard({
   const flowsQ = useQuery(projectFlowsQuery(projectId));
   const setDefault = useSetProjectDefaultImplementFlow(projectId);
   const flows = flowsQ.data?.flows ?? [];
+  // Show the currently-selected flow even if it was later disabled, so the
+  // user sees it in the dropdown and can explicitly change or clear it.
+  const enabledOrCurrent = flows.filter((f) => f.enabled || f.id === currentFlowId);
   const value = currentFlowId ?? NO_FLOW_VALUE;
 
   const onSelect = (next: string) => {
@@ -567,11 +570,9 @@ function DefaultImplementFlowCard({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NO_FLOW_VALUE}>None</SelectItem>
-            {flows
-              .filter((f) => f.enabled)
-              .map((f) => (
+            {enabledOrCurrent.map((f) => (
                 <SelectItem key={f.id} value={f.id}>
-                  {f.name}
+                  {f.name}{!f.enabled ? " (disabled)" : ""}
                 </SelectItem>
               ))}
           </SelectContent>

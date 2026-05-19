@@ -205,19 +205,26 @@ function StartImplementButton({
       : "Start implement flow for this issue";
 
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      className="h-6 px-2 text-[10px]"
-      disabled={disabled}
-      title={title}
-      onClick={() => {
-        if (!flowSlug) return;
-        trigger.mutate({ slug: flowSlug, issueNumber });
-      }}
-    >
-      <Play className="mr-1 size-3" />
-      {trigger.isPending ? "Starting…" : "Start"}
-    </Button>
+    <span className="inline-flex items-center gap-1">
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-6 px-2 text-[10px]"
+        disabled={disabled}
+        title={title}
+        onClick={() => {
+          if (!flowSlug) return;
+          trigger.mutate({ slug: flowSlug, issueNumber });
+        }}
+      >
+        <Play className="mr-1 size-3" />
+        {trigger.isPending ? "Starting…" : "Start"}
+      </Button>
+      {trigger.error && (
+        <span className="text-[10px] text-destructive" title={trigger.error instanceof Error ? trigger.error.message : String(trigger.error)}>
+          failed
+        </span>
+      )}
+    </span>
   );
 }

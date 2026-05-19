@@ -330,7 +330,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
 
     const body = await c.req.json().catch(() => ({}));
     const issueNumber =
-      typeof body.issueNumber === "number" && Number.isFinite(body.issueNumber)
+      typeof body.issueNumber === "number" && Number.isFinite(body.issueNumber) && body.issueNumber > 0
         ? body.issueNumber
         : undefined;
 
