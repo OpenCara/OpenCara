@@ -17,8 +17,16 @@ export function buildIssueImplementContractSkill(opts: {
   branchName: string;
   issueNumber: number;
   defaultBranch: string;
+  draftPr: boolean;
 }): SkillEnvelope {
   const baseUrl = opts.baseUrl.replace(/\/$/, "");
+  const prCreateCmd = opts.draftPr
+    ? `gh pr create --draft --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"`
+    : `gh pr create --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"`;
+  const draftNote = opts.draftPr
+    ? `The PR MUST be opened as a draft (\`--draft\` flag included above);
+   the engine will mark it ready for review after this run succeeds.`
+    : `Do NOT pass \`--draft\` — this flow opens the PR ready for review.`;
   const instructions = `# Skill: opencara-issue-implement-contract
 
 You are running inside a per-PR-branch worktree to implement the issue
@@ -40,9 +48,10 @@ steps before exiting, in order:
 3. \`git push -u origin "$OPENCARA_WORKTREE_BRANCH"\` to publish the
    branch. The orchestrator authenticated \`gh\` / \`git\` for you via
    \`GH_TOKEN\` — no extra credentials needed.
-4. \`gh pr create \$([ "\$OPENCARA_PR_DRAFT" = 1 ] && echo --draft) --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"\`
-   to open the PR. Include the literal line \`Closes #${opts.issueNumber}\`
-   in the body so GitHub links the PR to the source issue.
+4. \`${prCreateCmd}\`
+   to open the PR. ${draftNote}
+   Include the literal line \`Closes #${opts.issueNumber}\` in the body so
+   GitHub links the PR to the source issue.
 
 If a PR for this branch already exists (a re-run of the same flow on
 the same issue), \`gh pr create\` will fail with "already exists" —
@@ -59,8 +68,6 @@ and re-open the PR.
 - \`OPENCARA_REPO\` — \`<owner>/<repo>\`. \`gh\` already infers this
   from the worktree's remote; you do not normally need to pass
   \`--repo\`.
-- \`OPENCARA_PR_DRAFT\` — \`1\` when this flow should open the PR as a
-  draft. Omitted otherwise.
 
 ## What NOT to do
 
