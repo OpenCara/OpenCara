@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 import {
   kanbanQuery,
   pmWavesQuery,
+  projectFlowsQuery,
+  projectQuery,
   useKanbanStream,
   useRefreshKanban,
   useSetItemStatus,
@@ -68,6 +70,16 @@ function LinkedBoard({
   const link = data.link!;
   const wavesQ = useQuery(pmWavesQuery(projectId));
   const columnPanelRef = useRef<HTMLDivElement>(null);
+
+  // Resolve the default implement flow slug for the Start button on cards.
+  const projQ = useQuery(projectQuery(projectId));
+  const flowsQ = useQuery(projectFlowsQuery(projectId));
+  const defaultImplementFlowSlug = useMemo(() => {
+    const flowId = projQ.data?.project.defaultImplementFlowId;
+    if (!flowId) return null;
+    const flow = (flowsQ.data?.flows ?? []).find((f) => f.id === flowId);
+    return flow?.slug ?? null;
+  }, [projQ.data, flowsQ.data]);
 
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
@@ -288,6 +300,7 @@ function LinkedBoard({
                   projectRepo={data.projectRepo}
                   option={col}
                   items={grouped.get(col.optionId) ?? []}
+                  defaultImplementFlowSlug={defaultImplementFlowSlug}
                 />
               ))}
               {/* Always rendered — it's a valid drop target for "clear Status",
@@ -302,6 +315,7 @@ function LinkedBoard({
                   position: 999,
                 }}
                 items={noStatusItems}
+                defaultImplementFlowSlug={defaultImplementFlowSlug}
               />
             </div>
           </div>
@@ -317,11 +331,13 @@ function Column({
   items,
   projectId,
   projectRepo,
+  defaultImplementFlowSlug,
 }: {
   option: KanbanStatusOption;
   items: KanbanItem[];
   projectId: string;
   projectRepo: { owner: string; name: string } | null;
+  defaultImplementFlowSlug: string | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: option.optionId });
   return (
@@ -355,6 +371,7 @@ function Column({
               item={it}
               projectId={projectId}
               projectRepo={projectRepo}
+              defaultImplementFlowSlug={defaultImplementFlowSlug}
             />
           ))
         )}

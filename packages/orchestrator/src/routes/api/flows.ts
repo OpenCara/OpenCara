@@ -311,6 +311,9 @@ export function flowRoutes(deps: FlowRoutesDeps) {
 
   // Manually trigger a flow run from the UI. Synthesises a platform_event of
   // type "manual" so triggerRunner can recognise it and bypass the PR filter.
+  // Accepts optional `{ issueNumber: number }` — when present, the engine
+  // seeds an issueContext so label-based agent routing fires for manual runs
+  // (used by the kanban Start button).
   r.post("/projects/:id/flows/:slug/trigger", auth, async (c) => {
     if (!deps.flowEngine) {
       return c.json({ error: "flow engine not configured" }, 503);
@@ -325,12 +328,21 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     });
     if (!flow) return c.json({ error: "not found" }, 404);
 
+    const body = await c.req.json().catch(() => ({}));
+    const issueNumber =
+      typeof body.issueNumber === "number" && Number.isFinite(body.issueNumber) && body.issueNumber > 0
+        ? body.issueNumber
+        : undefined;
+
+    const payload: Record<string, unknown> = {};
+    if (issueNumber !== undefined) payload.issueNumber = issueNumber;
+
     const eventId = ulid();
     await deps.db.insert(platformEvents).values({
       id: eventId,
       platform: "github",
       type: "manual",
-      payload: {},
+      payload,
       projectId,
       deliveryId: eventId,
     });
@@ -340,7 +352,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
         id: eventId,
         type: "manual",
         projectId,
-        payload: {},
+        payload,
       });
       return c.json({ flowRunId });
     } catch (err) {

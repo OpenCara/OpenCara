@@ -5,6 +5,7 @@ import type { Db } from "../../db/client.js";
 import {
   agentRuns,
   agents,
+  flows,
   githubInstallations,
   issues,
   platformEvents,
@@ -120,6 +121,45 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     // trail without the project link.
     await deps.db.delete(projects).where(eq(projects.id, id));
     return c.body(null, 204);
+  });
+
+  // Update project settings. Currently supports:
+  //   { defaultImplementFlowId: string | null }
+  // The flow must belong to the project and be enabled; null clears the setting.
+  r.patch("/:id", async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+
+    const body = await c.req.json().catch(() => ({}));
+    if (!("defaultImplementFlowId" in body)) {
+      return c.json({ error: "defaultImplementFlowId required" }, 400);
+    }
+    const flowId = body.defaultImplementFlowId;
+    if (flowId !== null && typeof flowId !== "string") {
+      return c.json({ error: "defaultImplementFlowId must be a string or null" }, 400);
+    }
+
+    if (typeof flowId === "string") {
+      const flow = await deps.db.query.flows.findFirst({
+        where: and(eq(flows.id, flowId), eq(flows.projectId, id)),
+      });
+      if (!flow) return c.json({ error: "flow not found in this project" }, 404);
+      if (!flow.enabled) return c.json({ error: "flow is disabled" }, 400);
+    }
+
+    await deps.db
+      .update(projects)
+      .set({ defaultImplementFlowId: flowId })
+      .where(eq(projects.id, id));
+
+    const project = await loadOwnedProject(deps.db, id, user.id);
+    if (!project) return c.json({ error: "not found" }, 404);
+    const installation = await deps.db.query.githubInstallations.findFirst({
+      where: eq(githubInstallations.id, project.installationId),
+    });
+    return c.json({ project, installation });
   });
 
   r.get("/:id/events", async (c) => {

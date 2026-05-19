@@ -188,6 +188,54 @@ export async function buildPullRequestContext(
   };
 }
 
+/**
+ * Build IssueStatusContext for a manually-triggered flow where the caller
+ * specified an issue number (kanban Start button). Resolves the issue row by
+ * (projectId, number) — same local-DB path as the webhook path — so the
+ * downstream agent gets full title + labels + assignees. Status transitions
+ * are absent (from/to both null) since there's no Projects v2 field change.
+ */
+export async function buildManualIssueContext(
+  db: Db,
+  project: ProjectLike,
+  issueNumber: number,
+): Promise<IssueStatusContext> {
+  const issueRow = await db.query.issues.findFirst({
+    where: and(eq(issues.projectId, project.id), eq(issues.number, issueNumber)),
+  });
+
+  const envExtras: Record<string, string> = {
+    OPENCARA_REPO: `${project.owner}/${project.name}`,
+    OPENCARA_STATUS_FROM: "",
+    OPENCARA_STATUS_TO: "",
+  };
+  if (issueRow) {
+    envExtras["OPENCARA_ISSUE_NUMBER"] = String(issueRow.number);
+    envExtras["OPENCARA_ISSUE_NODE_ID"] = issueRow.githubNodeId;
+  }
+
+  return {
+    envExtras,
+    stdin: {
+      issue: issueRow
+        ? {
+            id: issueRow.id,
+            number: issueRow.number,
+            title: issueRow.title,
+            bodyMd: issueRow.bodyMd,
+            state: issueRow.state,
+            labels: issueRow.labels,
+            assignees: issueRow.assignees,
+            htmlUrl: issueRow.htmlUrl,
+          }
+        : null,
+      status: { from: null, to: null },
+      project: { number: null, nodeId: null },
+      contentType: "Issue",
+    },
+  };
+}
+
 interface ProjectsV2ItemPayload {
   changes?: {
     field_value?: {

@@ -26,6 +26,7 @@ import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
   buildIssueStatusContext,
+  buildManualIssueContext,
   buildPullRequestContext,
   type IssueStatusContext,
   type PullRequestContext,
@@ -339,6 +340,24 @@ export class FlowEngine {
         );
       } catch (err) {
         console.error("[flow-engine] issue context fetch failed", err);
+      }
+    }
+
+    // Manual triggers with an issueNumber (kanban Start button): build the
+    // same IssueStatusContext the webhook path does so label-based agent
+    // routing and env-var injection work identically.
+    if (
+      event.type === "manual" &&
+      typeof (event.payload as { issueNumber?: unknown }).issueNumber === "number"
+    ) {
+      try {
+        issueContext = await buildManualIssueContext(
+          this.deps.db,
+          project,
+          (event.payload as { issueNumber: number }).issueNumber,
+        );
+      } catch (err) {
+        console.error("[flow-engine] manual issue context fetch failed", err);
       }
     }
 
