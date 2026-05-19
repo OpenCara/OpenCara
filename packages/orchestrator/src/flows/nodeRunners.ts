@@ -1173,6 +1173,7 @@ async function maybeAutoMergeAfterFix(
     method: cfg.method,
     requireChecks: cfg.requireChecks,
     requireApproval: cfg.requireApproval,
+    mergeWithoutChanges: cfg.mergeWithoutChanges ?? false,
     priorHeadSha: getPrHeadSha(ctx),
   });
   if (result.kind === "skipped") {

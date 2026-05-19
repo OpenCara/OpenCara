@@ -50,6 +50,7 @@ export const prReviewFixFlow: FlowDefinition = {
           method: "squash",
           requireChecks: true,
           requireApproval: false,
+          mergeWithoutChanges: false,
         },
         maxIterations: {
           enabled: false,
