@@ -35,7 +35,6 @@ export const issueImplementFlow: FlowDefinition = {
             "OPENCARA_WORKTREE_DIR",
             "OPENCARA_WORKTREE_BRANCH",
             "OPENCARA_SESSION_DIR",
-            "OPENCARA_PR_DRAFT",
           ],
           stdinJson: true,
         },

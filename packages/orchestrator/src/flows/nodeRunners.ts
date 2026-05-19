@@ -728,9 +728,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   const issueImplementRun = Boolean(
     worktree?.branch && ctx.issueContext?.stdin.issue?.number,
   );
-  if (node.config.draftPr && issueImplementRun) {
-    env["OPENCARA_PR_DRAFT"] = "1";
-  }
 
   // Inject the issue-implement contract skill when this run is shaped
   // like one: a worktree was allocated AND the trigger carries issue
@@ -754,6 +751,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
           branchName: worktree.branch,
           issueNumber: ctx.issueContext.stdin.issue.number,
           defaultBranch: ctx.project.defaultBranch ?? "main",
+          draftPr: Boolean(node.config.draftPr),
         })
       : null;
   if (implementSkill && ctx.issueContext?.stdin.issue?.number) {

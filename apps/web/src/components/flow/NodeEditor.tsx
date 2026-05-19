@@ -455,9 +455,9 @@ function AgentDraftPrToggle({ scope, node }: AgentDraftPrToggleProps) {
         <span>Create draft PR</span>
       </label>
       <p className="text-xs text-muted-foreground">
-        Sets <code className="font-mono">OPENCARA_PR_DRAFT=1</code> for the
-        agent. After a successful run, the engine marks the branch's open draft
-        PR ready for review.
+        Instructs the agent to open the PR with <code className="font-mono">--draft</code>.
+        After a successful run, the engine marks the branch's open draft PR
+        ready for review.
       </p>
       {set.error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
