@@ -34,6 +34,7 @@ import {
   projectFlowsQuery,
   projectIssuesQuery,
   projectRunsQuery,
+  useSetProjectDefaultImplementFlow,
   useSyncProjectIssues,
   type FlowRunSummary,
   type FlowSummary,
@@ -105,30 +106,33 @@ export function ProjectDetailPage() {
         </TabsList>
 
         <TabsContent value="overview">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base font-medium text-muted-foreground">
-                Repository
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-4 text-sm">
-              <Field label="Default branch" value={p.defaultBranch ?? "—"} />
-              <Field label="Visibility" value={p.private ? "Private" : "Public"} />
-              <Field label="Installation account" value={inst.accountLogin} />
-              <Field label="Account type" value={inst.accountType} />
-              <Field label="Added" value={formatRelative(p.addedAt)} />
-              <Field
-                label="Status"
-                value={
-                  p.removedAt
-                    ? "Removed"
-                    : inst.suspendedAt
-                      ? "Suspended"
-                      : "Active"
-                }
-              />
-            </CardContent>
-          </Card>
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base font-medium text-muted-foreground">
+                  Repository
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 gap-4 text-sm">
+                <Field label="Default branch" value={p.defaultBranch ?? "—"} />
+                <Field label="Visibility" value={p.private ? "Private" : "Public"} />
+                <Field label="Installation account" value={inst.accountLogin} />
+                <Field label="Account type" value={inst.accountType} />
+                <Field label="Added" value={formatRelative(p.addedAt)} />
+                <Field
+                  label="Status"
+                  value={
+                    p.removedAt
+                      ? "Removed"
+                      : inst.suspendedAt
+                        ? "Suspended"
+                        : "Active"
+                  }
+                />
+              </CardContent>
+            </Card>
+            <DefaultImplementFlowCard projectId={id!} currentFlowId={p.defaultImplementFlowId ?? null} />
+          </div>
         </TabsContent>
 
         <TabsContent value="issues">
@@ -519,6 +523,68 @@ function IssuesTab({ id }: { id: string }) {
         </Card>
       )}
     </div>
+  );
+}
+
+const NO_FLOW_VALUE = "__none";
+
+function DefaultImplementFlowCard({
+  projectId,
+  currentFlowId,
+}: {
+  projectId: string;
+  currentFlowId: string | null;
+}) {
+  const flowsQ = useQuery(projectFlowsQuery(projectId));
+  const setDefault = useSetProjectDefaultImplementFlow(projectId);
+  const flows = flowsQ.data?.flows ?? [];
+  const value = currentFlowId ?? NO_FLOW_VALUE;
+
+  const onSelect = (next: string) => {
+    if (next === value) return;
+    setDefault.mutate(next === NO_FLOW_VALUE ? null : next);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-medium text-muted-foreground">
+          Implement flow
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p className="text-xs text-muted-foreground">
+          Default flow triggered by the kanban card Start button. Only enabled
+          flows are listed.
+        </p>
+        <Select
+          value={value}
+          onValueChange={onSelect}
+          disabled={setDefault.isPending || flowsQ.isLoading}
+        >
+          <SelectTrigger className="h-8 w-64">
+            <SelectValue placeholder="None" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_FLOW_VALUE}>None</SelectItem>
+            {flows
+              .filter((f) => f.enabled)
+              .map((f) => (
+                <SelectItem key={f.id} value={f.id}>
+                  {f.name}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+        {setDefault.error && (
+          <div className="text-xs text-destructive">
+            {setDefault.error instanceof Error
+              ? setDefault.error.message
+              : String(setDefault.error)}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

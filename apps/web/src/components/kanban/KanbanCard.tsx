@@ -1,9 +1,11 @@
-import { ExternalLink, Pencil } from "lucide-react";
+import { ExternalLink, Pencil, Play } from "lucide-react";
 import { Link } from "react-router";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { Badge } from "@/components/ui/badge";
-import type { KanbanItem } from "@/lib/queries";
+import { Button } from "@/components/ui/button";
+import { AgentPicker } from "@/components/agent/AgentPicker";
+import { useTriggerImplementFlow, type KanbanItem } from "@/lib/queries";
 
 const STATE_VARIANT: Record<
   string,
@@ -33,18 +35,12 @@ export function KanbanCard({
   item,
   projectId,
   projectRepo,
+  defaultImplementFlowSlug,
 }: {
   item: KanbanItem;
   projectId: string;
-  /**
-   * Repo identity for this opencara project. Used to gate the in-app Edit
-   * pencil — Projects v2 boards can mix items from multiple repos, and
-   * /projects/:id/issues/:n routes to *this project's repo* by number, so
-   * sending users there from a foreign-repo card would land on the wrong
-   * issue (or 404). Null when the project lookup failed; we then hide the
-   * pencil universally.
-   */
   projectRepo: { owner: string; name: string } | null;
+  defaultImplementFlowSlug: string | null;
 }) {
   // Drag handle covers the whole card. The action icons (ExternalLink,
   // Pencil) stop pointerdown so they're clickable without starting a drag.
@@ -72,13 +68,18 @@ export function KanbanCard({
   const visibleAssignees = item.assignees.slice(0, 3);
   const extraAssigneeCount = item.assignees.length - visibleAssignees.length;
 
+  const showImplementControls =
+    item.kind === "issue" &&
+    item.contentNumber !== null &&
+    isOwnRepoIssue(item.contentUrl, projectRepo);
+
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...attributes}
       {...listeners}
-      className="touch-none rounded-md border bg-card p-3 shadow-sm transition-colors hover:bg-accent/40"
+      className="group touch-none rounded-md border bg-card p-3 shadow-sm transition-colors hover:bg-accent/40"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
@@ -159,6 +160,64 @@ export function KanbanCard({
           )}
         </div>
       </div>
+      {showImplementControls && (
+        <div
+          className="mt-2 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <AgentPicker
+            projectId={projectId}
+            issueNumber={item.contentNumber!}
+            labels={item.labels}
+            compact
+          />
+          <StartImplementButton
+            projectId={projectId}
+            issueNumber={item.contentNumber!}
+            labels={item.labels}
+            flowSlug={defaultImplementFlowSlug}
+          />
+        </div>
+      )}
     </div>
+  );
+}
+
+function StartImplementButton({
+  projectId,
+  issueNumber,
+  labels,
+  flowSlug,
+}: {
+  projectId: string;
+  issueNumber: number;
+  labels: { name: string; color: string }[];
+  flowSlug: string | null;
+}) {
+  const trigger = useTriggerImplementFlow(projectId);
+  const hasAgent = labels.some((l) => l.name.startsWith("agent:"));
+  const disabled = !flowSlug || !hasAgent || trigger.isPending;
+
+  const title = !flowSlug
+    ? "Set a default implement flow in project settings first"
+    : !hasAgent
+      ? "Pick an agent first"
+      : "Start implement flow for this issue";
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-6 px-2 text-[10px]"
+      disabled={disabled}
+      title={title}
+      onClick={() => {
+        if (!flowSlug) return;
+        trigger.mutate({ slug: flowSlug, issueNumber });
+      }}
+    >
+      <Play className="mr-1 size-3" />
+      {trigger.isPending ? "Starting…" : "Start"}
+    </Button>
   );
 }

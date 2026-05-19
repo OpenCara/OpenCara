@@ -141,6 +141,10 @@ export const projects = pgTable(
     defaultBranch: text("default_branch"),
     private: boolean("private").notNull().default(false),
     addedByUserId: text("added_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    // FK → flows.id (ON DELETE SET NULL) defined in migration 0028. Drizzle
+    // .references() is omitted to avoid a circular type reference between
+    // projects ↔ flows; the DB constraint handles referential integrity.
+    defaultImplementFlowId: text("default_implement_flow_id"),
     addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
     removedAt: timestamp("removed_at", { withTimezone: true }),
   },

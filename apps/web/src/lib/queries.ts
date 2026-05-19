@@ -140,7 +140,10 @@ export const projectQuery = (id: string) => ({
   queryKey: ["projects", id] as const,
   queryFn: () =>
     api.get<{
-      project: ProjectListItem & { removedAt: string | null };
+      project: ProjectListItem & {
+        removedAt: string | null;
+        defaultImplementFlowId: string | null;
+      };
       installation: InstallationSummary;
     }>(`/api/projects/${id}`),
 });
@@ -604,6 +607,38 @@ export function useTriggerFlow(projectId: string) {
       ),
     onSuccess: (_data, slug) => {
       qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+    },
+  });
+}
+
+/**
+ * Trigger the project's default implement flow for a specific issue. Used by
+ * the kanban card's Start button.
+ */
+export function useTriggerImplementFlow(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { slug: string; issueNumber: number }) =>
+      api.post<{ flowRunId: string }>(
+        `/api/projects/${projectId}/flows/${vars.slug}/trigger`,
+        { issueNumber: vars.issueNumber },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flow-runs"] });
+    },
+  });
+}
+
+/** Set or clear the default implement flow on a project. */
+export function useSetProjectDefaultImplementFlow(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string | null) =>
+      api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
+        defaultImplementFlowId: flowId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId] });
     },
   });
 }
