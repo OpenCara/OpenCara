@@ -127,6 +127,21 @@ function LinkedBoard({
         return;
       }
 
+      // If the wheel target is inside a column card list that can still scroll
+      // vertically in the wheel direction, let the browser handle it natively
+      // instead of hijacking it for horizontal scroll.
+      const target = event.target as HTMLElement | null;
+      const cardList = target?.closest<HTMLElement>("[data-kanban-card-list]");
+      if (cardList) {
+        const atTop = cardList.scrollTop <= 0;
+        const atBottom =
+          cardList.scrollTop + cardList.clientHeight >=
+          cardList.scrollHeight - 1;
+        const scrollingUp = event.deltaY < 0;
+        const scrollingDown = event.deltaY > 0;
+        if ((scrollingUp && !atTop) || (scrollingDown && !atBottom)) return;
+      }
+
       const maxScrollLeft = panel.scrollWidth - panel.clientWidth;
       if (maxScrollLeft <= 0) return;
 
@@ -344,7 +359,7 @@ function Column({
     <div
       ref={setNodeRef}
       className={cn(
-        "flex w-72 shrink-0 flex-col rounded-md border bg-muted/30 transition-colors",
+        "flex max-h-[calc(100vh-14rem)] w-72 shrink-0 flex-col rounded-md border bg-muted/30 transition-colors",
         isOver && "border-primary bg-accent/40",
       )}
     >
@@ -359,7 +374,10 @@ function Column({
         </div>
         <span className="text-xs text-muted-foreground">{items.length}</span>
       </div>
-      <div className="flex flex-col gap-2 p-2">
+      <div
+        data-kanban-card-list
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
+      >
         {items.length === 0 ? (
           <div className="px-1 py-6 text-center text-xs text-muted-foreground">
             {isOver ? "Drop here" : "Empty"}
