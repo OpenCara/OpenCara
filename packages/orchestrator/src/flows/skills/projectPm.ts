@@ -18,9 +18,10 @@ import type { PageSkillBuilder } from "../skills.js";
  *   - flows       — slug / name / enabled for each project flow
  *   - activeWaves — pm_waves rows with status=running and their items
  *
- * Exposes two MCP tools:
- *   - opencara_kanban_wave_dispatch    — dispatch N issues to a flow
+ * Exposes three MCP tools:
+ *   - opencara_issue_create            — create a top-level GitHub issue
  *   - opencara_issue_subissue_create   — create a real GitHub sub-issue under a parent
+ *   - opencara_kanban_wave_dispatch    — dispatch N issues to a flow
  */
 export const projectPmBuilder: PageSkillBuilder = async (ctx) => {
   const projectId = ctx.pageContext.projectId;
@@ -127,13 +128,14 @@ blocks (that legacy text channel was removed; emitting a fenced block
 here does nothing). Use your tool-calling interface to invoke the tools
 listed below.
 
-### 1. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow
+### 1. \`opencara_issue_create\` — create a top-level issue
 
 Args:
-- \`flowSlug\` (string, required — one of: ${flowSlugs || "— no flows configured yet —"})
-- \`issueNumbers\` (number[], required — 1 to 10 per wave)
+- \`title\` (string, required)
+- \`bodyMd\` (string, required)
+- \`labels\` (string[], optional)
 
-Triggers the named flow for each listed issue in parallel. Before calling this tool, **restate the issues you'll dispatch and to which flow, then wait for the user's confirmation turn**. Only call the tool after the user explicitly confirms.
+Creates a new GitHub issue with no parent link. Use this when the user asks to "create an issue" from the board without naming a parent. Use \`opencara_issue_subissue_create\` instead when the user wants the new issue tracked under an existing one.
 
 ### 2. \`opencara_issue_subissue_create\` — create a GitHub sub-issue
 
@@ -145,10 +147,18 @@ Args:
 
 Creates a real GitHub issue and links it as a child of the parent issue via the GitHub tracked-by API. The new issue will appear on the board after a kanban refresh.
 
+### 3. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow
+
+Args:
+- \`flowSlug\` (string, required — one of: ${flowSlugs || "— no flows configured yet —"})
+- \`issueNumbers\` (number[], required — 1 to 10 per wave)
+
+Triggers the named flow for each listed issue in parallel. Before calling this tool, **restate the issues you'll dispatch and to which flow, then wait for the user's confirmation turn**. Only call the tool after the user explicitly confirms.
+
 ## Operational guidance
 
 - **Before dispatching**, confirm: restate which issues go to which flow and wait for user acknowledgment.
-- **Before creating sub-issues**, describe the breakdown plan and wait for confirmation.
+- **Before creating issues or sub-issues**, restate the title, body, and labels you'll create and wait for confirmation.
 - Only dispatch to enabled flows. The enabled flows are: ${flowSlugs || "(none — all flows are disabled)"}.
 - Maximum 10 issues per wave call.
 - The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on failure — surface failures back to the user verbatim instead of claiming the dispatch succeeded.
