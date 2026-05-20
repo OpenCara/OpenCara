@@ -1,6 +1,6 @@
 // Verifies tool registration shape and kind↔name mapping. Doesn't bring up
 // a real MCP transport — the SDK is upstream-tested. We just confirm:
-//   1. TOOLS contains exactly the three kinds we ship in this PR.
+//   1. TOOLS covers the agent-call kinds we ship.
 //   2. registerOpencaraTools wires each tool's name + handler so the
 //      handler delegates to the injected router.
 //
@@ -21,22 +21,44 @@ import {
   type ToolCallRouter,
 } from "../tools.js";
 
+const EXPECTED_KINDS = [
+  "flow.node.config.set",
+  "issue.body.set",
+  "issue.comment.create",
+  "issue.create",
+  "issue.labels.set",
+  "issue.state.set",
+  "issue.subissue.create",
+  "kanban.wave.dispatch",
+  "template.node.config.set",
+] as const;
+
+const EXPECTED_NAMES = [
+  "opencara_flow_node_config_set",
+  "opencara_issue_body_set",
+  "opencara_issue_comment_create",
+  "opencara_issue_create",
+  "opencara_issue_labels_set",
+  "opencara_issue_state_set",
+  "opencara_issue_subissue_create",
+  "opencara_kanban_wave_dispatch",
+  "opencara_template_node_config_set",
+] as const;
+
 describe("TOOLS registry", () => {
-  it("ships exactly three tools matching the agent-call kinds", () => {
-    assert.equal(TOOLS.length, 3);
+  it("ships every agent-call kind we expose", () => {
+    assert.equal(TOOLS.length, EXPECTED_KINDS.length);
     const kinds = TOOLS.map((t) => t.kind).sort();
-    assert.deepEqual(kinds, [
-      "flow.node.config.set",
-      "issue.body.set",
-      "template.node.config.set",
-    ]);
+    assert.deepEqual(kinds, [...EXPECTED_KINDS]);
   });
 
   it("kind↔name mapping is symmetric and stable", () => {
     const map = new Map(TOOL_NAMES.map((t) => [t.kind, t.name]));
-    assert.equal(map.get("issue.body.set"), "opencara_issue_body_set");
-    assert.equal(map.get("flow.node.config.set"), "opencara_flow_node_config_set");
-    assert.equal(map.get("template.node.config.set"), "opencara_template_node_config_set");
+    for (const kind of EXPECTED_KINDS) {
+      const name = map.get(kind);
+      assert.ok(name, `missing tool name for kind ${kind}`);
+      assert.equal(name, `opencara_${kind.replaceAll(".", "_")}`);
+    }
   });
 
   it("MCP tool names match the protocol's identifier rules", () => {
@@ -68,7 +90,7 @@ describe("registerOpencaraTools", () => {
     return { server, calls, nextResult };
   }
 
-  it("registers all three tools on the server", () => {
+  it("registers every tool on the server", () => {
     const { server } = setup();
     // McpServer exposes the registered tool map as `_registeredTools`.
     // Best-effort introspection — if the SDK refactors this, we'll see
@@ -77,11 +99,7 @@ describe("registerOpencaraTools", () => {
       _registeredTools: Record<string, unknown>;
     };
     const names = Object.keys(internal._registeredTools).sort();
-    assert.deepEqual(names, [
-      "opencara_flow_node_config_set",
-      "opencara_issue_body_set",
-      "opencara_template_node_config_set",
-    ]);
+    assert.deepEqual(names, [...EXPECTED_NAMES]);
   });
 
   it("forwards a successful tool call to the router and returns ok content", async () => {
