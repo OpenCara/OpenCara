@@ -140,6 +140,85 @@ function buildAgentCallRequest(
         nodeId: String(args["nodeId"] ?? ""),
         config: (args["config"] as Record<string, unknown>) ?? {},
       };
+    case "kanban.wave.dispatch":
+      return {
+        type: "agent-call-request",
+        runId,
+        callId,
+        kind: "kanban.wave.dispatch",
+        flowSlug: String(args["flowSlug"] ?? ""),
+        issueNumbers: Array.isArray(args["issueNumbers"])
+          ? (args["issueNumbers"] as unknown[]).map((n) => Number(n))
+          : [],
+      };
+    case "issue.subissue.create": {
+      const labels = args["labels"];
+      return {
+        type: "agent-call-request",
+        runId,
+        callId,
+        kind: "issue.subissue.create",
+        parentIssueNumber: Number(args["parentIssueNumber"]),
+        title: String(args["title"] ?? ""),
+        bodyMd: String(args["bodyMd"] ?? ""),
+        ...(Array.isArray(labels)
+          ? { labels: labels.map((l) => String(l)) }
+          : {}),
+      };
+    }
+    case "issue.create": {
+      const labels = args["labels"];
+      return {
+        type: "agent-call-request",
+        runId,
+        callId,
+        kind: "issue.create",
+        title: String(args["title"] ?? ""),
+        bodyMd: String(args["bodyMd"] ?? ""),
+        ...(Array.isArray(labels)
+          ? { labels: labels.map((l) => String(l)) }
+          : {}),
+      };
+    }
+    case "issue.state.set": {
+      const reason = args["stateReason"];
+      return {
+        type: "agent-call-request",
+        runId,
+        callId,
+        kind: "issue.state.set",
+        issueNumber: Number(args["issueNumber"]),
+        state: args["state"] === "closed" ? "closed" : "open",
+        ...(reason === undefined
+          ? {}
+          : {
+              stateReason:
+                reason === null
+                  ? null
+                  : (String(reason) as "completed" | "not_planned" | "reopened"),
+            }),
+      };
+    }
+    case "issue.comment.create":
+      return {
+        type: "agent-call-request",
+        runId,
+        callId,
+        kind: "issue.comment.create",
+        issueNumber: Number(args["issueNumber"]),
+        bodyMd: String(args["bodyMd"] ?? ""),
+      };
+    case "issue.labels.set":
+      return {
+        type: "agent-call-request",
+        runId,
+        callId,
+        kind: "issue.labels.set",
+        issueNumber: Number(args["issueNumber"]),
+        labels: Array.isArray(args["labels"])
+          ? (args["labels"] as unknown[]).map((l) => String(l))
+          : [],
+      };
     default:
       return null;
   }
