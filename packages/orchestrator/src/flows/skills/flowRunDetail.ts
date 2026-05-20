@@ -43,7 +43,7 @@ export const flowRunDetailBuilder: PageSkillBuilder = async (ctx) => {
 
 You are looking at a single run of the flow \`${flow?.slug ?? "(unknown)"}\`
 (run id \`${run.id}\`, status \`${run.status}\`). This skill is **read-only**
-— it exposes no \`opencara-call\` kinds.
+— it exposes no opencara MCP tools.
 
 Hydrated stdin keys:
 
@@ -54,7 +54,7 @@ Hydrated stdin keys:
 - \`agentRuns\` — every agent_run linked to one of those steps.
 
 If the user wants to rerun or cancel, point them at the rerun button on
-this page; don't emit \`opencara-call\` blocks.
+this page; no opencara MCP tool is available from here.
 `;
 
   return {

@@ -8,7 +8,8 @@ import type { PageSkillBuilder } from "../skills.js";
  * Templates are global, but every edit lands in the user's own
  * `template_drafts` row — never on the published code template. The
  * builder hydrates the user's current draft (or the code template if no
- * draft exists yet) and exposes `template.node.config.set` for edits.
+ * draft exists yet) and exposes the `opencara_template_node_config_set`
+ * MCP tool for edits.
  */
 export const flowTemplateDetailBuilder: PageSkillBuilder = async (ctx) => {
   const slug = ctx.pageContext.flowSlug;
@@ -44,14 +45,15 @@ full graph is provided to you on stdin under \`template.graphJson\`.
 
 ## How to call it
 
-\`\`\`opencara-call
-{
-  "kind": "template.node.config.set",
-  "templateSlug": "${def.slug}",
-  "nodeId": "<one of template.graphJson.nodes[*].id>",
-  "config": { /* full new config object for that node */ }
-}
-\`\`\`
+Call the \`opencara_template_node_config_set\` MCP tool with these args:
+
+- \`templateSlug\` (string, required) — pass \`"${def.slug}"\`
+- \`nodeId\` (string, required) — one of \`template.graphJson.nodes[*].id\`
+- \`config\` (object, required) — the full new config object for that node
+
+Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+blocks (that legacy text channel was removed; emitting a fenced block
+here does nothing).
 
 ## Semantics
 
@@ -63,12 +65,15 @@ full graph is provided to you on stdin under \`template.graphJson\`.
   existing value from \`template.graphJson.nodes[i].config\` and merge.
 - The candidate graph is validated against \`FlowDefinitionSchema\`
   before it persists.
+- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on
+  failure — surface failures back to the user verbatim instead of
+  claiming the change succeeded.
 
 ## Out of scope
 
 Adding/removing reviewer nodes, editing per-node agent/prompt links —
-those still go through the UI. Don't emit calls with other \`kind\`
-values; they are silently ignored.
+those still go through the UI. The only mutation available from this
+skill is \`opencara_template_node_config_set\`.
 
 ## Hydrated stdin keys
 
