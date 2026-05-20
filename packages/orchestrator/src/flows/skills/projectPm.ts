@@ -18,9 +18,9 @@ import type { PageSkillBuilder } from "../skills.js";
  *   - flows       — slug / name / enabled for each project flow
  *   - activeWaves — pm_waves rows with status=running and their items
  *
- * Exposes two opencara-call kinds:
- *   - kanban.wave.dispatch    — dispatch N issues to a flow
- *   - issue.subissue.create   — create a real GitHub sub-issue under a parent
+ * Exposes two MCP tools:
+ *   - opencara_kanban_wave_dispatch    — dispatch N issues to a flow
+ *   - opencara_issue_subissue_create   — create a real GitHub sub-issue under a parent
  */
 export const projectPmBuilder: PageSkillBuilder = async (ctx) => {
   const projectId = ctx.pageContext.projectId;
@@ -120,27 +120,28 @@ You are the **PM agent** for the project \`${project.owner}/${project.name}\`, o
 - \`flows\`       — all project flows (slug, name, enabled)
 - \`activeWaves\` — currently running dispatch waves with their items
 
-## Available opencara-call kinds
+## Available MCP tools
 
-### 1. Dispatch issues to a flow
+Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+blocks (that legacy text channel was removed; emitting a fenced block
+here does nothing). Use your tool-calling interface to invoke the tools
+listed below.
 
-\`\`\`
-kind: kanban.wave.dispatch
-flowSlug: string          (one of: ${flowSlugs || "— no flows configured yet —"})
-issueNumbers: number[]    (max 10 per wave)
-\`\`\`
+### 1. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow
 
-Triggers the named flow for each listed issue in parallel. Before emitting this call, **restate the issues you'll dispatch and to which flow, then wait for the user's confirmation turn**. Only emit the call after the user explicitly confirms.
+Args:
+- \`flowSlug\` (string, required — one of: ${flowSlugs || "— no flows configured yet —"})
+- \`issueNumbers\` (number[], required — 1 to 10 per wave)
 
-### 2. Create a GitHub sub-issue
+Triggers the named flow for each listed issue in parallel. Before calling this tool, **restate the issues you'll dispatch and to which flow, then wait for the user's confirmation turn**. Only call the tool after the user explicitly confirms.
 
-\`\`\`
-kind: issue.subissue.create
-parentIssueNumber: number
-title: string
-bodyMd: string
-labels?: string[]
-\`\`\`
+### 2. \`opencara_issue_subissue_create\` — create a GitHub sub-issue
+
+Args:
+- \`parentIssueNumber\` (number, required)
+- \`title\` (string, required)
+- \`bodyMd\` (string, required)
+- \`labels\` (string[], optional)
 
 Creates a real GitHub issue and links it as a child of the parent issue via the GitHub tracked-by API. The new issue will appear on the board after a kanban refresh.
 
@@ -150,6 +151,7 @@ Creates a real GitHub issue and links it as a child of the parent issue via the 
 - **Before creating sub-issues**, describe the breakdown plan and wait for confirmation.
 - Only dispatch to enabled flows. The enabled flows are: ${flowSlugs || "(none — all flows are disabled)"}.
 - Maximum 10 issues per wave call.
+- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on failure — surface failures back to the user verbatim instead of claiming the dispatch succeeded.
 - If the user asks about something outside the board (e.g. "what's in the PR queue"), explain you only have kanban context and suggest navigating to the relevant page.
 `;
 

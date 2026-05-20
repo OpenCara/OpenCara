@@ -4,9 +4,9 @@ import type { PageSkillBuilder, SkillEnvelope } from "../skills.js";
 
 /**
  * Issue canvas page (apps/web/src/pages/IssueDetailPage.tsx). The chat
- * runs against the user's currently-visible issue body. The agent emits
- * ```opencara-call``` blocks with kind="issue.body.set" to update the
- * draft — published GitHub state is unchanged until the user clicks Save.
+ * runs against the user's currently-visible issue body. The agent calls
+ * the `opencara_issue_body_set` MCP tool to update the draft — published
+ * GitHub state is unchanged until the user clicks Save.
  *
  * Auth: the canvas object's projectId comes from the client; the builder
  * verifies it exists and isn't soft-deleted before any data leaves.
@@ -89,17 +89,15 @@ the canvas page; whatever you write here shows up immediately as a draft
 
 ## How to call it
 
-Emit a fenced JSON block on stdout — the CLI runner intercepts it and
-proxies the call back on your behalf. There is no HTTP request for you
-to make and no token for you to manage.
+Call the \`opencara_issue_body_set\` MCP tool with these args:
 
-\`\`\`opencara-call
-{
-  "kind": "issue.body.set",
-  "issueNumber": ${opts.issueNumber},
-  "bodyMd": "<full new markdown>"
-}
-\`\`\`
+- \`issueNumber\` (number, required) — pass \`${opts.issueNumber}\`
+- \`bodyMd\` (string, required) — the full new markdown body
+
+Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+blocks (that legacy text channel was removed; emitting a fenced block
+here does nothing). There is no HTTP request for you to make and no
+token for you to manage.
 
 ## Semantics
 
@@ -111,13 +109,14 @@ to make and no token for you to manage.
   what the user is actually looking at, not on the published version.
 - The published body on GitHub is unchanged until the user clicks
   "Save to GitHub" in the UI.
-- The block is also visible in your chat reply (it's just stdout).
-  That's fine — the user sees what you asked for.
+- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on
+  failure — surface failures back to the user verbatim instead of
+  claiming the change succeeded.
 
 ## Out of scope today
 
-Title, labels, assignees, state, comments. Don't emit calls with other
-\`kind\` values; they are silently ignored.
+Title, labels, assignees, state, comments. The only mutation available
+from this skill is \`opencara_issue_body_set\`.
 `;
   return {
     name: "opencara-issue-edit",

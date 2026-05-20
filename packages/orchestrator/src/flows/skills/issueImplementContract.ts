@@ -72,9 +72,8 @@ and re-open the PR.
 ## What NOT to do
 
 - Do not edit files outside \`$OPENCARA_WORKTREE_DIR\`.
-- Do not modify the issue body via \`opencara-call\` blocks here —
-  that channel belongs to the chat/canvas UI, not webhook-driven flow
-  runs.
+- Do not call the \`opencara_issue_body_set\` MCP tool here — that tool
+  belongs to the chat/canvas UI, not webhook-driven flow runs.
 - Do not stop after editing files. A clean diff with no commit / no
   push / no PR is the failure mode this contract exists to prevent;
   the orchestrator will mark the flow run failed when no PR is found

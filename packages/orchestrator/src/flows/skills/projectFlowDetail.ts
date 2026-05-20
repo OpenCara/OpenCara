@@ -4,9 +4,10 @@ import type { PageSkillBuilder } from "../skills.js";
 
 /**
  * Project flow detail page (apps/web/src/pages/ProjectFlowDetailPage.tsx).
- * The agent can edit a node's config via `flow.node.config.set` — it MUST
- * read the existing config out of the hydrated `flow.graphJson` and merge,
- * because the call replaces the whole config object.
+ * The agent can edit a node's config via the `opencara_flow_node_config_set`
+ * MCP tool — it MUST read the existing config out of the hydrated
+ * `flow.graphJson` and merge, because the call replaces the whole config
+ * object.
  */
 export const projectFlowDetailBuilder: PageSkillBuilder = async (ctx) => {
   const projectId = ctx.pageContext.projectId;
@@ -39,14 +40,15 @@ config) is provided to you on stdin under \`flow.graphJson\`.
 
 ## How to call it
 
-\`\`\`opencara-call
-{
-  "kind": "flow.node.config.set",
-  "flowSlug": "${flow.slug}",
-  "nodeId": "<one of flow.graphJson.nodes[*].id>",
-  "config": { /* full new config object for that node */ }
-}
-\`\`\`
+Call the \`opencara_flow_node_config_set\` MCP tool with these args:
+
+- \`flowSlug\` (string, required) — pass \`"${flow.slug}"\`
+- \`nodeId\` (string, required) — one of \`flow.graphJson.nodes[*].id\`
+- \`config\` (object, required) — the full new config object for that node
+
+Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+blocks (that legacy text channel was removed; emitting a fenced block
+here does nothing).
 
 ## Semantics
 
@@ -57,12 +59,15 @@ config) is provided to you on stdin under \`flow.graphJson\`.
   it persists; an invalid config is rejected and the call has no effect.
 - \`customizedAt\` is set so the seeder won't clobber your edit on the
   next orchestrator restart.
+- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on
+  failure — surface failures back to the user verbatim instead of
+  claiming the change succeeded.
 
 ## Out of scope
 
 Adding/removing nodes, adding reviewers, deleting reviewers, toggling
-\`enabled\` — those still go through the UI. Don't emit calls with other
-\`kind\` values; they are silently ignored.
+\`enabled\` — those still go through the UI. The only mutation available
+from this skill is \`opencara_flow_node_config_set\`.
 
 ## Hydrated stdin keys
 
