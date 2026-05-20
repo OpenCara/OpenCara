@@ -162,7 +162,7 @@ export function KanbanCard({
       </div>
       {showImplementControls && (
         <div
-          className="mt-2 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100"
+          className="mt-2 flex items-center gap-2"
           onPointerDown={(e) => e.stopPropagation()}
         >
           <AgentPicker
