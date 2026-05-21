@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { AcpHistoryTurn, AcpPermissionMode, AgentSpec } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
@@ -36,6 +36,75 @@ interface ChatRoutesDeps {
 }
 
 type PageContext = PageContextLike;
+
+/**
+ * Phrases the assistant emits when it has decided an opencara MCP tool is
+ * unusable. If a prior-turn stdout matches any of these, we force the next
+ * turn through `session/new` — otherwise `claude --resume` replays the
+ * poisoned transcript and the model keeps refusing to try the tool even
+ * after the wire has been fixed under it.
+ *
+ * Keep patterns specific enough to avoid resetting on benign mentions of
+ * "MCP" or "tool" in chitchat. Each one is anchored on "opencara" or
+ * "MCP <noun> isn't connected/available/running" together — both halves
+ * have to land for a match.
+ */
+export const MCP_POISON_PATTERNS: readonly RegExp[] = [
+  // "the `opencara_xyz` MCP tool isn't available" / "is not available"
+  /\bopencara_\w+\b[^\n]{0,80}\b(isn['']?t|wasn['']?t|is not|was not)\s+available\b/i,
+  // "opencara MCP server doesn't appear to be connected" / "MCP tools aren't
+  // connected" — anchored on opencara + MCP + a negation contraction
+  // (n't / don't / doesn't / isn't / aren't) within 80 chars of the
+  // "connected|running|available|configured" verb.
+  /\bopencara\s+MCP\b[^\n]{0,80}n['']?t\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
+  // "opencara MCP server is not connected" (un-contracted form)
+  /\bopencara\s+MCP\b[^\n]{0,80}\b(is not|are not|do(?:es)? not)\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
+  // Generic "MCP server / tool isn't connected" (no "opencara" prefix —
+  // catches phrasings where the assistant elides the qualifier)
+  /\bMCP\s+(server|tools?)\b[^\n]{0,40}\b(isn['']?t|aren['']?t|is not|are not)\s+connected\b/i,
+  // "MCP tools don't appear to be connected"
+  /\bMCP\s+tools?\b[^\n]{0,40}\b(don['']?t|doesn['']?t|do not|does not)\s+appear\s+to\s+be\s+connected\b/i,
+];
+
+/**
+ * Look at the most recent agent_run for this chat thread (matched by the
+ * `OPENCARA_CHAT_SESSION_ID` env baked into spec) and return whether its
+ * stdout contains a "this MCP tool isn't available" admission. Callers use
+ * this to decide whether to discard `priorSessionId` on the upcoming turn.
+ *
+ * Returns false on any DB error or if no prior run is found — fall back to
+ * normal resume rather than spuriously trashing context.
+ */
+async function priorTurnDeclaredMcpUnavailable(
+  db: Db,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const lastRun = await db.query.agentRuns.findFirst({
+      where: sql`${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID' = ${sessionId}`,
+      orderBy: [desc(agentRuns.createdAt)],
+    });
+    if (!lastRun) return false;
+    const logs = await db
+      .select({ chunk: agentRunLogs.chunk })
+      .from(agentRunLogs)
+      .where(
+        and(
+          eq(agentRunLogs.agentRunId, lastRun.id),
+          eq(agentRunLogs.stream, "stdout"),
+        ),
+      );
+    if (logs.length === 0) return false;
+    const stdout = logs.map((l) => l.chunk).join("");
+    return MCP_POISON_PATTERNS.some((p) => p.test(stdout));
+  } catch (err) {
+    console.warn("[chat] priorTurnDeclaredMcpUnavailable check failed", {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
 
 /**
  * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
@@ -99,12 +168,37 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         eq(chatSessions.threadKey, sessionId),
       ),
     });
-    const priorSessionId =
+    let priorSessionId: string | undefined;
+    if (
       chatRow?.acpSessionId &&
       chatRow.agentId === agentId &&
       chatRow.acpSessionId.length > 0
-        ? chatRow.acpSessionId
-        : undefined;
+    ) {
+      // Defensive de-poisoning: if the prior turn's stdout flagged an MCP
+      // tool as unavailable, resuming that session would just re-feed the
+      // model the same conclusion. Clear the persisted acpSessionId so
+      // this turn goes through session/new — fresh tool list, fresh
+      // transcript, no inherited "this tool doesn't work" memory.
+      const poisoned = await priorTurnDeclaredMcpUnavailable(
+        deps.db,
+        sessionId,
+      );
+      if (poisoned) {
+        console.warn(
+          "[chat] previous turn marked an MCP tool unavailable; forcing session/new",
+          {
+            chatSessionId: chatRow.id,
+            discardedAcpSessionId: chatRow.acpSessionId,
+          },
+        );
+        await deps.db
+          .update(chatSessions)
+          .set({ acpSessionId: null, acpSessionHostId: null })
+          .where(eq(chatSessions.id, chatRow.id));
+      } else {
+        priorSessionId = chatRow.acpSessionId;
+      }
+    }
     // Pin to the device that holds this session's JSONL. Falls back to
     // the agent's own hostId (and then to any idle host) when this is
     // turn 1 or the prior host record was cleared.
