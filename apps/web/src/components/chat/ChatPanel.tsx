@@ -177,6 +177,9 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [answeredOptionMessageIds, setAnsweredOptionMessageIds] = useState<
+    Set<string>
+  >(() => new Set());
   const [skillOpen, setSkillOpen] = useState(false);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [showThinking, setShowThinking] = useShowThinking();
@@ -315,6 +318,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       );
       if (!proceed) return;
       setMessages([]);
+      setAnsweredOptionMessageIds(new Set());
     }
     setAgentId(v);
     if (wantPersistence) updateAgent.mutate({ agentId: v });
@@ -447,6 +451,11 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     }
   };
 
+  const selectOption = (messageId: string, value: string) => {
+    setAnsweredOptionMessageIds((prev) => new Set(prev).add(messageId));
+    void send(value);
+  };
+
   return (
     <aside
       className={cn(
@@ -551,11 +560,13 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           const result = await newSessionMut.mutateAsync({ agentId });
           setOverrideSession(result.session);
           setMessages([]);
+          setAnsweredOptionMessageIds(new Set());
           setHistoryOpen(false);
         }}
         onPick={(s) => {
           setOverrideSession(s);
           setMessages([]);
+          setAnsweredOptionMessageIds(new Set());
           // Picking from history hydrates the agent dropdown to whatever
           // that session was last run with — so the panel doesn't dispatch
           // the user's current agent into someone else's prior ACP thread.
@@ -580,8 +591,10 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
                 key={m.id}
                 message={m}
                 onStreamEnd={handleStreamEnd}
-                onOptionSelect={(value) => void send(value)}
-                optionsDisabled={sending || isStreaming}
+                onOptionSelect={(value) => selectOption(m.id, value)}
+                optionsDisabled={
+                  sending || isStreaming || answeredOptionMessageIds.has(m.id)
+                }
               />
             ))}
           </div>
