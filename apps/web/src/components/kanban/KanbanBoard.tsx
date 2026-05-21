@@ -4,12 +4,14 @@ import { ExternalLink, RefreshCw, Unlink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
   useDroppable,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
@@ -29,7 +31,7 @@ import {
   type KanbanStatusOption,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
-import { KanbanCard } from "./KanbanCard";
+import { KanbanCard, KanbanCardOverlay } from "./KanbanCard";
 import { KanbanLinkPicker } from "./KanbanLinkPicker";
 
 // Sentinel column id for items that have no Status set. Mirrors the synthetic
@@ -81,6 +83,10 @@ function LinkedBoard({
     return flow?.slug ?? null;
   }, [projQ.data, flowsQ.data]);
 
+  // Track the item being dragged so the DragOverlay can render a portal clone
+  // that isn't clipped by column overflow boundaries.
+  const [activeItem, setActiveItem] = useState<KanbanItem | null>(null);
+
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
   const visibleItems = useMemo(() => {
@@ -105,7 +111,15 @@ function LinkedBoard({
     }),
   );
 
+  const handleDragStart = (event: DragStartEvent) => {
+    const itemNodeId = String(event.active.id);
+    setActiveItem(
+      data.items.find((it) => it.githubItemNodeId === itemNodeId) ?? null,
+    );
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
+    setActiveItem(null);
     const { active, over } = event;
     if (!over) return;
     const targetColumnId = String(over.id);
@@ -117,6 +131,8 @@ function LinkedBoard({
     if (item.statusOptionId === nextStatusOptionId) return;
     setStatus.mutate({ itemNodeId, statusOptionId: nextStatusOptionId });
   };
+
+  const handleDragCancel = () => setActiveItem(null);
 
   useEffect(() => {
     const panel = columnPanelRef.current;
@@ -309,7 +325,12 @@ function LinkedBoard({
           Refresh.
         </div>
       ) : (
-        <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
           <div
             ref={columnPanelRef}
             className="max-w-full overflow-x-auto overscroll-x-contain pb-3"
@@ -343,6 +364,9 @@ function LinkedBoard({
               />
             </div>
           </div>
+          <DragOverlay>
+            {activeItem && <KanbanCardOverlay item={activeItem} />}
+          </DragOverlay>
         </DndContext>
       )}
 

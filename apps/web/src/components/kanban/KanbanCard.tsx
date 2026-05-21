@@ -56,9 +56,12 @@ export function KanbanCard({
         : "—";
   const variant = state ? (STATE_VARIANT[state] ?? "secondary") : "outline";
 
+  // When dragging, the DragOverlay renders the visual card at the pointer.
+  // This element stays in place as a translucent placeholder so the column
+  // layout is preserved and no overflow clipping / column expansion occurs.
   const style = {
-    transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.4 : undefined,
+    transform: isDragging ? undefined : CSS.Translate.toString(transform),
+    opacity: isDragging ? 0.3 : undefined,
     cursor: isDragging ? "grabbing" : "grab",
   };
 
@@ -226,5 +229,64 @@ function StartImplementButton({
         </span>
       )}
     </span>
+  );
+}
+
+/** Presentational card rendered inside the DragOverlay portal. */
+export function KanbanCardOverlay({ item }: { item: KanbanItem }) {
+  const state = item.contentState?.toUpperCase() ?? null;
+  const stateLabel =
+    item.kind === "draft"
+      ? "draft"
+      : state
+        ? state.toLowerCase()
+        : "—";
+  const variant = state ? (STATE_VARIANT[state] ?? "secondary") : "outline";
+  const visibleLabels = item.labels.slice(0, 4);
+  const extraLabelCount = item.labels.length - visibleLabels.length;
+
+  // Width matches the Column card area: w-72 (288px) minus p-2 padding (16px).
+  return (
+    <div className="w-[272px] rounded-md border bg-card p-3 shadow-lg">
+      <div className="text-sm font-medium leading-snug">
+        {item.contentTitle}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {item.contentNumber !== null && <span>#{item.contentNumber}</span>}
+        <Badge variant={variant} className="text-[10px] uppercase">
+          {stateLabel}
+        </Badge>
+        {item.isArchived && (
+          <Badge
+            variant="outline"
+            className="text-[10px] uppercase text-muted-foreground"
+          >
+            archived
+          </Badge>
+        )}
+      </div>
+      {visibleLabels.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {visibleLabels.map((l) => (
+            <span
+              key={l.name}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+              style={{
+                backgroundColor: `#${l.color}33`,
+                color: `#${l.color}`,
+                border: `1px solid #${l.color}66`,
+              }}
+            >
+              {l.name}
+            </span>
+          ))}
+          {extraLabelCount > 0 && (
+            <span className="text-[10px] text-muted-foreground">
+              +{extraLabelCount}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
