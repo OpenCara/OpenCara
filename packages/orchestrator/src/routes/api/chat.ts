@@ -426,7 +426,12 @@ export function chatRoutes(deps: ChatRoutesDeps) {
                 and(
                   eq(chatSessions.userId, user.id),
                   eq(chatSessions.threadKey, sessionId),
-                  eq(chatSessions.agentId, agentId),
+                  // Match when the row's agentId equals the request's
+                  // agentId OR is still NULL (auto-pick POST hasn't
+                  // landed yet). Rejects a *different* agent (mid-flight
+                  // switch) so we don't re-pin a superseded agent's
+                  // session onto the new pick.
+                  sql`(${chatSessions.agentId} IS NULL OR ${chatSessions.agentId} = ${agentId})`,
                 ),
               );
           } catch (persistErr) {
