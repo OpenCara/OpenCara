@@ -245,6 +245,7 @@ export function KanbanCardOverlay({ item }: { item: KanbanItem }) {
   const visibleLabels = item.labels.slice(0, 4);
   const extraLabelCount = item.labels.length - visibleLabels.length;
 
+  // Width matches the Column card area: w-72 (288px) minus p-2 padding (16px).
   return (
     <div className="w-[272px] rounded-md border bg-card p-3 shadow-lg">
       <div className="text-sm font-medium leading-snug">
