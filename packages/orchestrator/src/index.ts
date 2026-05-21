@@ -124,7 +124,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   apiHono.route("/", runRoutes({ db, pg }));
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
-  apiHono.route("/", chatRoutes({ db, pg, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL }));
+  apiHono.route("/", chatRoutes({ db, pg, dispatcher, app: githubApp ?? undefined, publicBaseUrl: config.PUBLIC_BASE_URL }));
   apiHono.route("/", chatSessionsRoutes({ db }));
   apiHono.route("/", flowTemplateRoutes({ db }));
   apiHono.route(

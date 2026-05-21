@@ -192,72 +192,11 @@ export const KanbanWaveDispatchCallSchema = z.object({
 });
 export type KanbanWaveDispatchCall = z.infer<typeof KanbanWaveDispatchCallSchema>;
 
-/** Create a real GitHub sub-issue linked to a parent (project-scoped). */
-export const IssueSubissueCreateCallSchema = z.object({
-  ...AgentCallEnvelope,
-  kind: z.literal("issue.subissue.create"),
-  parentIssueNumber: z.number().int(),
-  title: z.string().min(1),
-  bodyMd: z.string(),
-  labels: z.array(z.string()).optional(),
-});
-export type IssueSubissueCreateCall = z.infer<typeof IssueSubissueCreateCallSchema>;
-
-/** Create a top-level GitHub issue (project-scoped). */
-export const IssueCreateCallSchema = z.object({
-  ...AgentCallEnvelope,
-  kind: z.literal("issue.create"),
-  title: z.string().min(1),
-  bodyMd: z.string(),
-  labels: z.array(z.string()).optional(),
-});
-export type IssueCreateCall = z.infer<typeof IssueCreateCallSchema>;
-
-/** Open / close an existing issue (project-scoped). */
-export const IssueStateSetCallSchema = z.object({
-  ...AgentCallEnvelope,
-  kind: z.literal("issue.state.set"),
-  issueNumber: z.number().int(),
-  state: z.enum(["open", "closed"]),
-  stateReason: z
-    .enum(["completed", "not_planned", "reopened"])
-    .nullable()
-    .optional(),
-});
-export type IssueStateSetCall = z.infer<typeof IssueStateSetCallSchema>;
-
-/** Post a comment on an existing issue (project-scoped). */
-export const IssueCommentCreateCallSchema = z.object({
-  ...AgentCallEnvelope,
-  kind: z.literal("issue.comment.create"),
-  issueNumber: z.number().int(),
-  bodyMd: z.string().min(1),
-});
-export type IssueCommentCreateCall = z.infer<typeof IssueCommentCreateCallSchema>;
-
-/**
- * Replace the full label set on an existing issue (project-scoped).
- * Empty array clears all labels. Replace semantics match GitHub REST
- * `setLabels` — callers must include any existing labels they want to keep.
- */
-export const IssueLabelsSetCallSchema = z.object({
-  ...AgentCallEnvelope,
-  kind: z.literal("issue.labels.set"),
-  issueNumber: z.number().int(),
-  labels: z.array(z.string()),
-});
-export type IssueLabelsSetCall = z.infer<typeof IssueLabelsSetCallSchema>;
-
 export const AgentCallSchema = z.discriminatedUnion("kind", [
   IssueBodySetCallSchema,
   FlowNodeConfigSetCallSchema,
   TemplateNodeConfigSetCallSchema,
   KanbanWaveDispatchCallSchema,
-  IssueSubissueCreateCallSchema,
-  IssueCreateCallSchema,
-  IssueStateSetCallSchema,
-  IssueCommentCreateCallSchema,
-  IssueLabelsSetCallSchema,
 ]);
 export type AgentCall = z.infer<typeof AgentCallSchema>;
 
@@ -304,58 +243,11 @@ export const KanbanWaveDispatchCallRequestSchema = z.object({
   issueNumbers: z.array(z.number().int()).min(1).max(10),
 });
 
-export const IssueSubissueCreateCallRequestSchema = z.object({
-  ...AgentCallRequestEnvelope,
-  kind: z.literal("issue.subissue.create"),
-  parentIssueNumber: z.number().int(),
-  title: z.string().min(1),
-  bodyMd: z.string(),
-  labels: z.array(z.string()).optional(),
-});
-
-export const IssueCreateCallRequestSchema = z.object({
-  ...AgentCallRequestEnvelope,
-  kind: z.literal("issue.create"),
-  title: z.string().min(1),
-  bodyMd: z.string(),
-  labels: z.array(z.string()).optional(),
-});
-
-export const IssueStateSetCallRequestSchema = z.object({
-  ...AgentCallRequestEnvelope,
-  kind: z.literal("issue.state.set"),
-  issueNumber: z.number().int(),
-  state: z.enum(["open", "closed"]),
-  stateReason: z
-    .enum(["completed", "not_planned", "reopened"])
-    .nullable()
-    .optional(),
-});
-
-export const IssueCommentCreateCallRequestSchema = z.object({
-  ...AgentCallRequestEnvelope,
-  kind: z.literal("issue.comment.create"),
-  issueNumber: z.number().int(),
-  bodyMd: z.string().min(1),
-});
-
-export const IssueLabelsSetCallRequestSchema = z.object({
-  ...AgentCallRequestEnvelope,
-  kind: z.literal("issue.labels.set"),
-  issueNumber: z.number().int(),
-  labels: z.array(z.string()),
-});
-
 export const AgentCallRequestSchema = z.discriminatedUnion("kind", [
   IssueBodySetCallRequestSchema,
   FlowNodeConfigSetCallRequestSchema,
   TemplateNodeConfigSetCallRequestSchema,
   KanbanWaveDispatchCallRequestSchema,
-  IssueSubissueCreateCallRequestSchema,
-  IssueCreateCallRequestSchema,
-  IssueStateSetCallRequestSchema,
-  IssueCommentCreateCallRequestSchema,
-  IssueLabelsSetCallRequestSchema,
 ]);
 export type AgentCallRequest = z.infer<typeof AgentCallRequestSchema>;
 

@@ -24,11 +24,6 @@ import {
 const EXPECTED_KINDS = [
   "flow.node.config.set",
   "issue.body.set",
-  "issue.comment.create",
-  "issue.create",
-  "issue.labels.set",
-  "issue.state.set",
-  "issue.subissue.create",
   "kanban.wave.dispatch",
   "template.node.config.set",
 ] as const;
@@ -36,11 +31,6 @@ const EXPECTED_KINDS = [
 const EXPECTED_NAMES = [
   "opencara_flow_node_config_set",
   "opencara_issue_body_set",
-  "opencara_issue_comment_create",
-  "opencara_issue_create",
-  "opencara_issue_labels_set",
-  "opencara_issue_state_set",
-  "opencara_issue_subissue_create",
   "opencara_kanban_wave_dispatch",
   "opencara_template_node_config_set",
 ] as const;
