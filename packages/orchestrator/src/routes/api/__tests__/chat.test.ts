@@ -26,6 +26,7 @@ describe("MCP_POISON_PATTERNS", () => {
       "the opencara MCP tools aren't connected",
       "opencara_issue_create MCP tool isn't available",
       "opencara_issue_body_set is not available in my current session",
+      "the opencara_issue_create MCP tool isn\u2019t available",
     ];
     for (const s of samples) {
       assert.ok(matchesAny(s), `should match: "${s}"`);

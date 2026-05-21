@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { AcpHistoryTurn, AcpPermissionMode, AgentSpec } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
@@ -51,19 +51,19 @@ type PageContext = PageContextLike;
  */
 export const MCP_POISON_PATTERNS: readonly RegExp[] = [
   // "the `opencara_xyz` MCP tool isn't available" / "is not available"
-  /\bopencara_\w+\b[^\n]{0,80}\b(isn['']?t|wasn['']?t|is not|was not)\s+available\b/i,
+  /\bopencara_\w+\b[^\n]{0,80}\b(isn['\u2018\u2019]?t|wasn['\u2018\u2019]?t|is not|was not)\s+available\b/i,
   // "opencara MCP server doesn't appear to be connected" / "MCP tools aren't
   // connected" — anchored on opencara + MCP + a negation contraction
   // (n't / don't / doesn't / isn't / aren't) within 80 chars of the
   // "connected|running|available|configured" verb.
-  /\bopencara\s+MCP\b[^\n]{0,80}n['']?t\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
+  /\bopencara\s+MCP\b[^\n]{0,80}n['\u2018\u2019]?t\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
   // "opencara MCP server is not connected" (un-contracted form)
   /\bopencara\s+MCP\b[^\n]{0,80}\b(is not|are not|do(?:es)? not)\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
   // Generic "MCP server / tool isn't connected" (no "opencara" prefix —
   // catches phrasings where the assistant elides the qualifier)
-  /\bMCP\s+(server|tools?)\b[^\n]{0,40}\b(isn['']?t|aren['']?t|is not|are not)\s+connected\b/i,
+  /\bMCP\s+(server|tools?)\b[^\n]{0,40}\b(isn['\u2018\u2019]?t|aren['\u2018\u2019]?t|is not|are not)\s+connected\b/i,
   // "MCP tools don't appear to be connected"
-  /\bMCP\s+tools?\b[^\n]{0,40}\b(don['']?t|doesn['']?t|do not|does not)\s+appear\s+to\s+be\s+connected\b/i,
+  /\bMCP\s+tools?\b[^\n]{0,40}\b(don['\u2018\u2019]?t|doesn['\u2018\u2019]?t|do not|does not)\s+appear\s+to\s+be\s+connected\b/i,
 ];
 
 /**
@@ -93,7 +93,8 @@ async function priorTurnDeclaredMcpUnavailable(
           eq(agentRunLogs.agentRunId, lastRun.id),
           eq(agentRunLogs.stream, "stdout"),
         ),
-      );
+      )
+      .orderBy(asc(agentRunLogs.seq));
     if (logs.length === 0) return false;
     const stdout = logs.map((l) => l.chunk).join("");
     return MCP_POISON_PATTERNS.some((p) => p.test(stdout));
