@@ -133,13 +133,22 @@ function LinkedBoard({
       const target = event.target as HTMLElement | null;
       const cardList = target?.closest<HTMLElement>("[data-kanban-card-list]");
       if (cardList) {
-        const atTop = cardList.scrollTop <= 0;
-        const atBottom =
-          cardList.scrollTop + cardList.clientHeight >=
-          cardList.scrollHeight - 1;
-        const scrollingUp = event.deltaY < 0;
-        const scrollingDown = event.deltaY > 0;
-        if ((scrollingUp && !atTop) || (scrollingDown && !atBottom)) return;
+        const canScrollVertically =
+          cardList.scrollHeight > cardList.clientHeight + 1;
+        if (canScrollVertically) {
+          const atTop = cardList.scrollTop <= 0;
+          const atBottom =
+            cardList.scrollTop + cardList.clientHeight >=
+            cardList.scrollHeight - 1;
+          const scrollingUp = event.deltaY < 0;
+          const scrollingDown = event.deltaY > 0;
+          if ((scrollingUp && !atTop) || (scrollingDown && !atBottom)) return;
+          // At scroll boundary — swallow the event so it doesn't convert
+          // into horizontal board scroll.
+          event.preventDefault();
+          return;
+        }
+        // Non-scrollable card list — fall through to horizontal scroll conversion
       }
 
       const maxScrollLeft = panel.scrollWidth - panel.clientWidth;
@@ -376,7 +385,7 @@ function Column({
       </div>
       <div
         data-kanban-card-list
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain p-2"
       >
         {items.length === 0 ? (
           <div className="px-1 py-6 text-center text-xs text-muted-foreground">
