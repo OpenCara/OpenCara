@@ -102,6 +102,67 @@ interface SessionState {
    *  shim's 2s force-close grace. Cleared in `runClaudeTurn`'s close
    *  handler. */
   activeChild?: ReturnType<typeof spawn> | null;
+  /** MCP servers from ACP `session/new` / `session/load` params. Claude
+   *  CLI doesn't read ACP-side mcpServers natively — we bridge them via
+   *  `--mcp-config <json>` + `--strict-mcp-config` on every turn so the
+   *  agent's tool list actually contains the opencara-mcp tools the
+   *  orchestrator advertised. Empty / absent → no bridge flags added. */
+  mcpServers?: AcpMcpServer[];
+}
+
+/** ACP `session/new` `mcpServers` array element. Mirrors the shape the
+ *  orchestrator builds in `packages/cli/src/mcp/host.ts:acpServerEntry`.
+ *  We accept it as `unknown[]` at the wire and narrow to this here. */
+interface AcpMcpServer {
+  type: "stdio";
+  name: string;
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string }>;
+}
+
+function normalizeMcpServers(raw: unknown): AcpMcpServer[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AcpMcpServer[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (e["type"] !== "stdio") continue; // only stdio servers today
+    if (typeof e["name"] !== "string" || typeof e["command"] !== "string") continue;
+    const args = Array.isArray(e["args"]) ? (e["args"] as unknown[]).map(String) : [];
+    const env: Array<{ name: string; value: string }> = [];
+    if (Array.isArray(e["env"])) {
+      for (const kv of e["env"] as unknown[]) {
+        if (!kv || typeof kv !== "object") continue;
+        const r = kv as Record<string, unknown>;
+        if (typeof r["name"] !== "string" || typeof r["value"] !== "string") continue;
+        env.push({ name: r["name"], value: r["value"] });
+      }
+    }
+    out.push({
+      type: "stdio",
+      name: e["name"] as string,
+      command: e["command"] as string,
+      args,
+      env,
+    });
+  }
+  return out;
+}
+
+/** Convert ACP-shape MCP servers into the JSON Claude CLI expects from
+ *  `--mcp-config`. Claude's shape (from its settings.json /
+ *  `--mcp-config` docs):
+ *    { "mcpServers": { "<name>": { command, args, env: {KEY: VAL} } } }
+ *  Returns a single-line JSON string suitable for passing on argv. */
+function buildClaudeMcpConfig(servers: AcpMcpServer[]): string {
+  const mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {};
+  for (const s of servers) {
+    const env: Record<string, string> = {};
+    for (const kv of s.env) env[kv.name] = kv.value;
+    mcpServers[s.name] = { command: s.command, args: s.args, env };
+  }
+  return JSON.stringify({ mcpServers });
 }
 
 export const sessions = new Map<string, SessionState>();
@@ -152,6 +213,20 @@ async function runClaudeTurn(
       // Headless: no human in the loop to approve tool use. Matches the
       // legacy `claudeAdapter` posture in agents/kinds.ts.
       args.push("--dangerously-skip-permissions");
+    }
+    // Bridge the ACP-side `mcpServers` from session/new+load through to
+    // Claude. Without this, Claude CLI relies on `~/.claude/settings.json`
+    // and never spawns opencara-mcp, so the agent's tool list is missing
+    // every opencara_* tool — the chat skill then describes tools the
+    // model genuinely can't reach. `--mcp-config` accepts an inline JSON
+    // string; `--strict-mcp-config` makes that file the *only* source so
+    // unrelated user-global MCP servers don't leak into chat runs.
+    if (state.mcpServers && state.mcpServers.length > 0) {
+      args.push(
+        "--mcp-config",
+        buildClaudeMcpConfig(state.mcpServers),
+        "--strict-mcp-config",
+      );
     }
     // Prompt goes on stdin, not argv. Linux's execve caps a single
     // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
@@ -335,9 +410,9 @@ export function handleInitialize(_params: InitializeParams): unknown {
     agentCapabilities: {
       // Session resume works by passing the ACP sessionId back as
       // `claude --session-id <uuid>` on the next prompt — Claude CLI
-      // replays its own JSONL internally. MCP via stdio is not yet
-      // propagated from ACP's mcpServers config (the `claude` CLI uses
-      // settings.json for that today; bridging is a separate change).
+      // replays its own JSONL internally. ACP's mcpServers are bridged
+      // to Claude via `--mcp-config <inline-json> --strict-mcp-config`
+      // on each turn (see SessionState.mcpServers / runClaudeTurn).
       loadSession: true,
       mcpCapabilities: {},
       promptCapabilities: { embeddedContext: false, image: false, audio: false },
@@ -353,7 +428,12 @@ interface NewSessionParams {
 
 export function handleNewSession(params: NewSessionParams): unknown {
   const sessionId = randomUUID();
-  sessions.set(sessionId, { cwd: params.cwd ?? process.cwd(), resume: false });
+  const mcpServers = normalizeMcpServers(params.mcpServers);
+  sessions.set(sessionId, {
+    cwd: params.cwd ?? process.cwd(),
+    resume: false,
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+  });
   return { sessionId };
 }
 
@@ -374,7 +454,12 @@ export function handleLoadSession(params: LoadSessionParams): unknown {
   if (typeof params.sessionId !== "string" || params.sessionId.length === 0) {
     throw new Error("session/load: sessionId required");
   }
-  sessions.set(params.sessionId, { cwd: params.cwd ?? process.cwd(), resume: true });
+  const mcpServers = normalizeMcpServers(params.mcpServers);
+  sessions.set(params.sessionId, {
+    cwd: params.cwd ?? process.cwd(),
+    resume: true,
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+  });
   return {};
 }
 
