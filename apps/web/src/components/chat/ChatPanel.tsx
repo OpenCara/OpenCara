@@ -337,12 +337,16 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   // arrives. The status is informational (succeeded / failed / cancelled)
   // — we surface a tag on the bubble for non-success outcomes so the
   // user can tell apart "agent answered" from "agent was stopped".
-  const handleStreamEnd = (id: string, status: string) => {
+  // Also captures the final streamed text so subsequent turns can send
+  // it as conversation history (fallback when session resume isn't
+  // available).
+  const handleStreamEnd = (id: string, status: string, finalText?: string) => {
     setMessages((prev) =>
       prev.map((m) =>
         m.id === id
           ? {
               ...m,
+              text: finalText || m.text,
               pending: false,
               ...(status !== "succeeded" ? { endStatus: status } : {}),
             }
@@ -414,6 +418,21 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           }
         : { ...pageContext, selection: selObj };
 
+    // Build history from completed turns so the backend can inject them
+    // as a fallback when session resume isn't available (e.g. MCP poison
+    // cleared the prior session, or the session JSONL is on another
+    // device). `messages` in this closure is the state BEFORE the new
+    // user message was appended, so it contains only prior turns.
+    // Capped to the last 20 turns to avoid unbounded POST bodies and
+    // pushing the prompt toward token limits on long conversations.
+    const allHistory = messages
+      .filter((m) => !m.pending && m.text.trim().length > 0)
+      .map((m) => ({
+        role: m.role,
+        text: m.role === "assistant" ? stripInternalMarkers(m.text) : m.text,
+      }));
+    const history = allHistory.slice(-20);
+
     try {
       const { agentRunId } = await api.post<{ agentRunId: string }>(
         "/api/chat/messages",
@@ -423,6 +442,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           turnIndex,
           message: text,
           pageContext: ctxForRequest,
+          history,
           // Only send when explicitly non-default — the orchestrator
           // already treats omitted/default identically, but keeping
           // the request body minimal makes the dev console easier to
@@ -794,10 +814,13 @@ const CHAT_INVALIDATABLE_ROOTS: ReadonlySet<string> = new Set([
 
 function useStreamedAssistant(
   message: Message,
-  onEnd?: (id: string, status: string) => void,
+  onEnd?: (id: string, status: string, finalText?: string) => void,
 ): { text: string } {
   const [chunks, setChunks] = useState<string>("");
   const lastRunRef = useRef<string | null>(null);
+  // Mirror of the latest `chunks` value, readable inside the SSE `end`
+  // handler without a stale closure. Updated in lockstep with setChunks.
+  const chunksRef = useRef<string>("");
   const qc = useQueryClient();
   // The latest end-callback the caller passed. Captured in a ref so we
   // don't tear down + recreate the EventSource when the parent re-renders
@@ -808,6 +831,7 @@ function useStreamedAssistant(
 
   useEffect(() => {
     setChunks("");
+    chunksRef.current = "";
     if (!message.agentRunId) return;
     if (lastRunRef.current === message.agentRunId) return;
     lastRunRef.current = message.agentRunId;
@@ -819,7 +843,11 @@ function useStreamedAssistant(
       try {
         const row = JSON.parse(e.data) as { stream: string; chunk: string };
         if (row.stream === "stdout") {
-          setChunks((prev) => prev + row.chunk);
+          setChunks((prev) => {
+            const next = prev + row.chunk;
+            chunksRef.current = next;
+            return next;
+          });
         }
       } catch {
         // ignore
@@ -834,7 +862,7 @@ function useStreamedAssistant(
       } catch {
         // ignore
       }
-      onEndRef.current?.(message.id, status);
+      onEndRef.current?.(message.id, status, chunksRef.current);
       void qc.invalidateQueries({
         predicate: (q) =>
           typeof q.queryKey[0] === "string" &&
@@ -1334,6 +1362,20 @@ function EmptyState({
       </p>
     </div>
   );
+}
+
+/**
+ * Strip `[think]…[/think]` blocks and `[tool]` lines from assistant
+ * text before sending it as conversation history. History is a fallback
+ * for when session resume isn't available — the model only needs the
+ * visible reply content, not internal reasoning or tool invocations
+ * that were already handled by the prior turn.
+ */
+function stripInternalMarkers(text: string): string {
+  return text
+    .replace(/\n?\[think\]\n[\s\S]*?\n\[\/think\]\n?/g, "")
+    .replace(/(?:^|\n)\[tool\] [^\n]*(?:\n|$)/g, "")
+    .trim();
 }
 
 function shortPath(p: string): string {

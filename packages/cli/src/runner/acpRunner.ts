@@ -225,6 +225,7 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       const mcpServers = [host.acpServerEntry()];
       const shimSupportsLoad = initResult.agentCapabilities?.loadSession === true;
       let sessionId: string;
+      let resumed = false;
       if (acpSpec.priorSessionId && shimSupportsLoad) {
         await client.loadSession({
           sessionId: acpSpec.priorSessionId,
@@ -232,6 +233,7 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
           mcpServers,
         });
         sessionId = acpSpec.priorSessionId;
+        resumed = true;
       } else {
         const session = await client.newSession({ cwd, mcpServers });
         sessionId = session.sessionId;
@@ -252,7 +254,14 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         result = { exitCode: 1, stopReason: "cancelled", sessionId };
         return result;
       }
-      const prompt = buildPromptContent(acpSpec);
+      // When resuming, the session JSONL already carries the full
+      // conversation — including history in the prompt would duplicate
+      // context and waste tokens. Only inject the history fallback on
+      // fresh sessions where the prior conversation isn't replayable.
+      const prompt = buildPromptContent({
+        ...acpSpec,
+        history: resumed ? [] : acpSpec.history,
+      });
       const promptResult = await client.prompt({
         sessionId,
         prompt,
