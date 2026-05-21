@@ -423,12 +423,15 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     // cleared the prior session, or the session JSONL is on another
     // device). `messages` in this closure is the state BEFORE the new
     // user message was appended, so it contains only prior turns.
-    const history = messages
+    // Capped to the last 20 turns to avoid unbounded POST bodies and
+    // pushing the prompt toward token limits on long conversations.
+    const allHistory = messages
       .filter((m) => !m.pending && m.text.trim().length > 0)
       .map((m) => ({
         role: m.role,
         text: m.role === "assistant" ? stripInternalMarkers(m.text) : m.text,
       }));
+    const history = allHistory.slice(-20);
 
     try {
       const { agentRunId } = await api.post<{ agentRunId: string }>(
@@ -1371,7 +1374,7 @@ function EmptyState({
 function stripInternalMarkers(text: string): string {
   return text
     .replace(/\n?\[think\]\n[\s\S]*?\n\[\/think\]\n?/g, "")
-    .replace(/\n\[tool\] [^\n]*\n/g, "")
+    .replace(/(?:^|\n)\[tool\] [^\n]*(?:\n|$)/g, "")
     .trim();
 }
 
