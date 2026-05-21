@@ -15,9 +15,10 @@ const RECENT_LIMIT = 25;
  * its tab variants (`/issues`, `/events`, `/flow-runs`, `/runs`) — all
  * routed to the same `project-detail` skill by ChatPanel.
  *
- * Exposes five issue-side MCP tools (opencara_issue_create / _state_set /
- * _comment_create / _labels_set / _subissue_create). Mutations on flows
- * or runs still live on their per-resource skills.
+ * Issue mutations happen via `gh` shell commands using `GH_TOKEN` injected
+ * by `routes/api/chat.ts` (per-turn installation token, scoped to this
+ * project's repo). MCP isn't used for github-only ops anymore — the wrapper
+ * tax wasn't earning the wire (see PR replacing them with gh).
  */
 export const projectDetailBuilder: PageSkillBuilder = async (ctx) => {
   const projectId = ctx.pageContext.projectId;
@@ -76,81 +77,98 @@ pages. From this skill you can manage the project's GitHub **issues**.
 - \`recentEvents\` — last ${RECENT_LIMIT} platform events (id, type, receivedAt).
 - \`recentIssues\` — last ${RECENT_LIMIT} issues by updatedAt (number, title, state, stateReason, labels, htmlUrl).
 
-## Available MCP tools
+## How to mutate issues
 
-Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
-blocks (that legacy text channel was removed; emitting a fenced block
-here does nothing). Use your tool-calling interface to invoke the tools
-listed below.
+Run \`gh\` shell commands. \`GH_TOKEN\` is pre-injected in your environment
+and scoped to this project's repo (\`${project.owner}/${project.name}\`)
+with \`issues: write\` — no auth setup needed. Always pass
+\`-R ${project.owner}/${project.name}\` so the command is unambiguous
+regardless of your shell's working directory.
 
-Before calling any of these, **restate what you'll do and wait for the
-user's confirmation turn**. Only call the tool after explicit acknowledgment.
+Before running any command below, **restate what you'll do and wait for
+the user's confirmation turn**. Only execute the shell command after
+explicit acknowledgment.
 
-### 1. \`opencara_issue_create\` — create a top-level issue
+### 1. Create a top-level issue
 
-Args:
-- \`title\` (string, required)
-- \`bodyMd\` (string, required)
-- \`labels\` (string[], optional)
+\`\`\`
+gh issue create -R ${project.owner}/${project.name} \\
+  --title "<title>" --body "<markdown body>" [--label "<label>" ...]
+\`\`\`
 
-Creates a new GitHub issue with no parent link. Use
-\`opencara_issue_subissue_create\` instead when the user wants the new
-issue tracked under an existing one.
+For multi-line bodies, write the body to a temp file and use \`--body-file\`
+instead of \`--body\` — shell quoting on newlines and backticks is fragile.
 
-### 2. \`opencara_issue_state_set\` — open or close an issue
+### 2. Open or close an existing issue
 
-Args:
-- \`issueNumber\` (number, required)
-- \`state\` (\`"open"\` | \`"closed"\`, required)
-- \`stateReason\` (\`"completed"\` | \`"not_planned"\` | \`"reopened"\` | null, optional)
+\`\`\`
+gh issue close <number> -R ${project.owner}/${project.name} [--reason completed|"not planned"]
+gh issue reopen <number> -R ${project.owner}/${project.name}
+\`\`\`
 
-Guidance on \`stateReason\`:
-- closing as done → \`"completed"\`
-- closing as won't-fix / not-planned → \`"not_planned"\`
-- reopening → \`"reopened"\` (or omit; GitHub will infer)
+Reason guidance:
+- closing as done → \`--reason completed\`
+- closing as won't-fix / not-planned → \`--reason "not planned"\`
+- reopening → no flag needed
 
-### 3. \`opencara_issue_comment_create\` — comment on an issue
+### 3. Post a comment on an issue
 
-Args:
-- \`issueNumber\` (number, required)
-- \`bodyMd\` (string, required)
+\`\`\`
+gh issue comment <number> -R ${project.owner}/${project.name} --body "<markdown>"
+\`\`\`
 
-Posts a comment on the named issue. Comments are not mirrored locally
-in opencara — visit the issue on GitHub or the canvas page to see them.
+Comments are not mirrored locally in opencara — they appear on GitHub
+and on the issue canvas page after the next webhook tick.
 
-### 4. \`opencara_issue_labels_set\` — replace the label set on an issue
+### 4. Set / replace labels on an issue
 
-Args:
-- \`issueNumber\` (number, required)
-- \`labels\` (string[], required)
+GitHub's REST treats label edits as add/remove, not full-replace. To
+replicate "set labels to exactly this list":
 
-**Replace semantics** — this call sets the issue's labels to *exactly* the
-listed names. Any label not in the list is removed. Empty array clears
-all labels. If the user says "add the \`bug\` label", look up the issue's
-current labels in \`recentIssues\` and include them in the call.
+\`\`\`
+# Look up the current label set first:
+gh issue view <number> -R ${project.owner}/${project.name} --json labels --jq '.labels[].name'
+# Then add the ones you want and remove the rest:
+gh issue edit <number> -R ${project.owner}/${project.name} \\
+  --add-label "<new>" --remove-label "<old>"
+\`\`\`
 
-### 5. \`opencara_issue_subissue_create\` — create a sub-issue under a parent
+If the user says "add the \`bug\` label", use only \`--add-label\` — don't
+strip existing labels.
 
-Args:
-- \`parentIssueNumber\` (number, required)
-- \`title\` (string, required)
-- \`bodyMd\` (string, required)
-- \`labels\` (string[], optional)
+### 5. Create a sub-issue linked to a parent
 
-Creates a real GitHub issue and links it as a child of the parent via
-the GitHub tracked-by API.
+Two-step: create the child, then link it via GraphQL.
+
+\`\`\`
+# 1. Look up the parent's GraphQL node id.
+PARENT_ID=$(gh issue view <parentNumber> -R ${project.owner}/${project.name} --json id --jq .id)
+
+# 2. Create the child and capture its GraphQL id.
+CHILD_URL=$(gh issue create -R ${project.owner}/${project.name} \\
+  --title "<title>" --body "<body>" [--label "..."])
+CHILD_NUMBER=$(basename "$CHILD_URL")
+CHILD_ID=$(gh issue view "$CHILD_NUMBER" -R ${project.owner}/${project.name} --json id --jq .id)
+
+# 3. Link the child as a sub-issue of the parent.
+gh api graphql -f query='
+  mutation(\$parent:ID!, \$child:ID!) {
+    addSubIssue(input: { issueId: \$parent, subIssueId: \$child }) {
+      issue { number }
+    }
+  }' -f parent="$PARENT_ID" -f child="$CHILD_ID"
+\`\`\`
 
 ## Operational guidance
 
 - Use \`recentIssues\` to resolve "this issue" / "that one" — match by title
-  fuzzy if the user is vague, then restate the match before mutating.
+  fuzzy if the user is vague, then restate the match before running the
+  command.
 - For requests outside the issue surface ("disable this flow", "rerun X"),
   point the user to the per-flow or per-run page.
-- Maximum one mutation per tool call. Chain multiple calls in separate
-  turns if the user asks for several at once.
-- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on
-  failure — surface failures back to the user verbatim instead of
-  claiming the change succeeded.
+- One mutation per command, run one command at a time.
+- On failure, surface gh's stderr verbatim to the user — don't paraphrase
+  or claim success when a non-zero exit happened.
 `;
 
   return {

@@ -18,10 +18,11 @@ import type { PageSkillBuilder } from "../skills.js";
  *   - flows       — slug / name / enabled for each project flow
  *   - activeWaves — pm_waves rows with status=running and their items
  *
- * Exposes three MCP tools:
- *   - opencara_issue_create            — create a top-level GitHub issue
- *   - opencara_issue_subissue_create   — create a real GitHub sub-issue under a parent
- *   - opencara_kanban_wave_dispatch    — dispatch N issues to a flow
+ * Mutation surface:
+ *   - issue create / sub-issue create → `gh` shell commands using GH_TOKEN
+ *     injected by routes/api/chat.ts (per-turn installation token)
+ *   - opencara_kanban_wave_dispatch    — MCP tool (genuine opencara, dispatches
+ *     a wave into the flow engine)
  */
 export const projectPmBuilder: PageSkillBuilder = async (ctx) => {
   const projectId = ctx.pageContext.projectId;
@@ -121,39 +122,65 @@ You are the **PM agent** for the project \`${project.owner}/${project.name}\`, o
 - \`flows\`       — all project flows (slug, name, enabled)
 - \`activeWaves\` — currently running dispatch waves with their items
 
-## Available MCP tools
+## How to mutate
 
-Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
-blocks (that legacy text channel was removed; emitting a fenced block
-here does nothing). Use your tool-calling interface to invoke the tools
-listed below.
+Issue creation runs through \`gh\` shell commands. \`GH_TOKEN\` is pre-injected
+in your environment, scoped to \`${project.owner}/${project.name}\` with
+\`issues: write\` — no auth setup needed. Always pass
+\`-R ${project.owner}/${project.name}\` so the command is unambiguous.
 
-### 1. \`opencara_issue_create\` — create a top-level issue
+Wave dispatch is the one operation that stays as an MCP tool — it triggers
+opencara's flow engine, not a GitHub call.
 
-Args:
-- \`title\` (string, required)
-- \`bodyMd\` (string, required)
-- \`labels\` (string[], optional)
+Before running anything below, **restate what you'll do and wait for the
+user's confirmation turn**. Only act after explicit acknowledgment.
 
-Creates a new GitHub issue with no parent link. Use this when the user asks to "create an issue" from the board without naming a parent. Use \`opencara_issue_subissue_create\` instead when the user wants the new issue tracked under an existing one.
+### 1. Create a top-level issue
 
-### 2. \`opencara_issue_subissue_create\` — create a GitHub sub-issue
+\`\`\`
+gh issue create -R ${project.owner}/${project.name} \\
+  --title "<title>" --body "<markdown>" [--label "<label>" ...]
+\`\`\`
 
-Args:
-- \`parentIssueNumber\` (number, required)
-- \`title\` (string, required)
-- \`bodyMd\` (string, required)
-- \`labels\` (string[], optional)
+Use \`--body-file\` instead of \`--body\` for multi-line bodies — shell
+quoting on newlines / backticks is fragile.
 
-Creates a real GitHub issue and links it as a child of the parent issue via the GitHub tracked-by API. The new issue will appear on the board after a kanban refresh.
+The new issue lands on the kanban after the GitHub webhook reconciles
+(usually ~1–5s; the board polls for refresh).
 
-### 3. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow
+### 2. Create a GitHub sub-issue under a parent
+
+Two-step: create the child, then link via GraphQL.
+
+\`\`\`
+PARENT_ID=$(gh issue view <parentNumber> -R ${project.owner}/${project.name} --json id --jq .id)
+
+CHILD_URL=$(gh issue create -R ${project.owner}/${project.name} \\
+  --title "<title>" --body "<body>" [--label "..."])
+CHILD_NUMBER=$(basename "$CHILD_URL")
+CHILD_ID=$(gh issue view "$CHILD_NUMBER" -R ${project.owner}/${project.name} --json id --jq .id)
+
+gh api graphql -f query='
+  mutation(\$parent:ID!, \$child:ID!) {
+    addSubIssue(input: { issueId: \$parent, subIssueId: \$child }) {
+      issue { number }
+    }
+  }' -f parent="$PARENT_ID" -f child="$CHILD_ID"
+\`\`\`
+
+### 3. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow (MCP tool)
+
+This stays as an MCP tool because it triggers opencara's flow engine,
+not a GitHub mutation. Call it through your tool-calling interface.
 
 Args:
 - \`flowSlug\` (string, required — one of: ${flowSlugs || "— no flows configured yet —"})
 - \`issueNumbers\` (number[], required — 1 to 10 per wave)
 
-Triggers the named flow for each listed issue in parallel. Before calling this tool, **restate the issues you'll dispatch and to which flow, then wait for the user's confirmation turn**. Only call the tool after the user explicitly confirms.
+Triggers the named flow for each listed issue in parallel. Before calling
+this tool, **restate the issues you'll dispatch and to which flow, then
+wait for the user's confirmation turn**. Only call the tool after the
+user explicitly confirms.
 
 ## Operational guidance
 
@@ -161,7 +188,8 @@ Triggers the named flow for each listed issue in parallel. Before calling this t
 - **Before creating issues or sub-issues**, restate the title, body, and labels you'll create and wait for confirmation.
 - Only dispatch to enabled flows. The enabled flows are: ${flowSlugs || "(none — all flows are disabled)"}.
 - Maximum 10 issues per wave call.
-- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on failure — surface failures back to the user verbatim instead of claiming the dispatch succeeded.
+- The MCP tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on failure — surface failures back to the user verbatim instead of claiming the dispatch succeeded.
+- For \`gh\` commands: on non-zero exit, surface gh's stderr verbatim — don't paraphrase or claim success.
 - If the user asks about something outside the board (e.g. "what's in the PR queue"), explain you only have kanban context and suggest navigating to the relevant page.
 `;
 

@@ -20,8 +20,3 @@ export { applyIssueBodySet } from "./issueBodySet.js";
 export { applyFlowNodeConfigSet } from "./flowNodeConfigSet.js";
 export { applyTemplateNodeConfigSet } from "./templateNodeConfigSet.js";
 export { applyKanbanWaveDispatch } from "./kanbanWaveDispatch.js";
-export { applyIssueSubissueCreate } from "./issueSubissueCreate.js";
-export { applyIssueCreate } from "./issueCreate.js";
-export { applyIssueStateSet } from "./issueStateSet.js";
-export { applyIssueCommentCreate } from "./issueCommentCreate.js";
-export { applyIssueLabelsSet } from "./issueLabelsSet.js";

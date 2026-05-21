@@ -31,11 +31,6 @@ import {
   FlowNodeConfigSetCallSchema,
   TemplateNodeConfigSetCallSchema,
   KanbanWaveDispatchCallSchema,
-  IssueSubissueCreateCallSchema,
-  IssueCreateCallSchema,
-  IssueStateSetCallSchema,
-  IssueCommentCreateCallSchema,
-  IssueLabelsSetCallSchema,
 } from "@opencara/shared";
 
 /**
@@ -102,41 +97,6 @@ const kanbanWaveDispatchShape = KanbanWaveDispatchCallSchema.omit({
   kind: true,
 }).shape;
 
-const issueSubissueCreateShape = IssueSubissueCreateCallSchema.omit({
-  type: true,
-  runId: true,
-  callId: true,
-  kind: true,
-}).shape;
-
-const issueCreateShape = IssueCreateCallSchema.omit({
-  type: true,
-  runId: true,
-  callId: true,
-  kind: true,
-}).shape;
-
-const issueStateSetShape = IssueStateSetCallSchema.omit({
-  type: true,
-  runId: true,
-  callId: true,
-  kind: true,
-}).shape;
-
-const issueCommentCreateShape = IssueCommentCreateCallSchema.omit({
-  type: true,
-  runId: true,
-  callId: true,
-  kind: true,
-}).shape;
-
-const issueLabelsSetShape = IssueLabelsSetCallSchema.omit({
-  type: true,
-  runId: true,
-  callId: true,
-  kind: true,
-}).shape;
-
 export const TOOLS = [
   {
     name: "opencara_issue_body_set",
@@ -178,55 +138,6 @@ export const TOOLS = [
       "Requires project scope. Reject if the flow does not exist, is disabled, " +
       "or any of the issue numbers are not in the project. Returns the wave id.",
     inputShape: kanbanWaveDispatchShape,
-  },
-  {
-    name: "opencara_issue_subissue_create",
-    kind: "issue.subissue.create",
-    title: "Create a GitHub sub-issue under a parent",
-    description:
-      "Create a new GitHub issue and link it as a child of the given parent issue " +
-      "via the GraphQL addSubIssue mutation. Requires project scope. Reject if the " +
-      "parent issue is not in the project.",
-    inputShape: issueSubissueCreateShape,
-  },
-  {
-    name: "opencara_issue_create",
-    kind: "issue.create",
-    title: "Create a top-level GitHub issue",
-    description:
-      "Create a new GitHub issue in the run's project with no parent link. " +
-      "Requires project scope. Returns the new issueNumber and nodeId.",
-    inputShape: issueCreateShape,
-  },
-  {
-    name: "opencara_issue_state_set",
-    kind: "issue.state.set",
-    title: "Open or close an existing issue",
-    description:
-      "Set an issue's state to open or closed. Optional stateReason: " +
-      "completed | not_planned | reopened. Requires project scope. " +
-      "Reject if the issue is not in the project.",
-    inputShape: issueStateSetShape,
-  },
-  {
-    name: "opencara_issue_comment_create",
-    kind: "issue.comment.create",
-    title: "Post a comment on an issue",
-    description:
-      "Post a Markdown comment on the named issue. Comments are not " +
-      "mirrored locally; the comment lives on GitHub. Requires project " +
-      "scope. Reject if the issue is not in the project.",
-    inputShape: issueCommentCreateShape,
-  },
-  {
-    name: "opencara_issue_labels_set",
-    kind: "issue.labels.set",
-    title: "Replace the label set on an issue",
-    description:
-      "Set the issue's labels to exactly the listed names (REST setLabels " +
-      "semantics). Any label not in the list is removed; empty array clears " +
-      "all labels. Requires project scope.",
-    inputShape: issueLabelsSetShape,
   },
 ] as const satisfies ReadonlyArray<ToolDef<z.ZodRawShape>>;
 

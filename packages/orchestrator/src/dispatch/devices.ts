@@ -15,11 +15,6 @@ import type { AgentDispatcher, RunContext, RunResult } from "./dispatcher.js";
 import {
   applyFlowNodeConfigSet,
   applyIssueBodySet,
-  applyIssueCommentCreate,
-  applyIssueCreate,
-  applyIssueLabelsSet,
-  applyIssueStateSet,
-  applyIssueSubissueCreate,
   applyKanbanWaveDispatch,
   applyTemplateNodeConfigSet,
   type AgentCallResult,
@@ -311,66 +306,6 @@ export class DevicePool {
           sessionId ?? msg.runId,
           msg,
         );
-      }
-      case "issue.subissue.create": {
-        if (!projectId) {
-          return {
-            ok: false,
-            reason: "issue.subissue.create requires a project-scoped run",
-          };
-        }
-        if (!this.githubApp) {
-          return { ok: false, reason: "GitHub App not configured" };
-        }
-        return applyIssueSubissueCreate(this.db, projectId, this.githubApp, msg);
-      }
-      case "issue.create": {
-        if (!projectId) {
-          return {
-            ok: false,
-            reason: "issue.create requires a project-scoped run",
-          };
-        }
-        if (!this.githubApp) {
-          return { ok: false, reason: "GitHub App not configured" };
-        }
-        return applyIssueCreate(this.db, projectId, this.githubApp, msg);
-      }
-      case "issue.state.set": {
-        if (!projectId) {
-          return {
-            ok: false,
-            reason: "issue.state.set requires a project-scoped run",
-          };
-        }
-        if (!this.githubApp) {
-          return { ok: false, reason: "GitHub App not configured" };
-        }
-        return applyIssueStateSet(this.db, projectId, this.githubApp, msg);
-      }
-      case "issue.comment.create": {
-        if (!projectId) {
-          return {
-            ok: false,
-            reason: "issue.comment.create requires a project-scoped run",
-          };
-        }
-        if (!this.githubApp) {
-          return { ok: false, reason: "GitHub App not configured" };
-        }
-        return applyIssueCommentCreate(this.db, projectId, this.githubApp, msg);
-      }
-      case "issue.labels.set": {
-        if (!projectId) {
-          return {
-            ok: false,
-            reason: "issue.labels.set requires a project-scoped run",
-          };
-        }
-        if (!this.githubApp) {
-          return { ok: false, reason: "GitHub App not configured" };
-        }
-        return applyIssueLabelsSet(this.db, projectId, this.githubApp, msg);
       }
       default: {
         // Discriminated union: TS ensures exhaustiveness when more kinds arrive.

@@ -1,10 +1,17 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { AcpHistoryTurn, AcpPermissionMode, AgentSpec } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
-import { agentRunLogs, agentRuns, agents, chatSessions } from "../../db/schema.js";
+import {
+  agentRunLogs,
+  agentRuns,
+  agents,
+  chatSessions,
+  githubInstallations,
+  projects,
+} from "../../db/schema.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
@@ -13,11 +20,18 @@ import {
   buildAcpSpec,
   checkAcpEligibility,
 } from "../../agents/acp-gate.js";
+import type { GithubAppClient } from "../../github/app.js";
 
 interface ChatRoutesDeps {
   db: Db;
   pg: Sql;
   dispatcher: AgentDispatcher;
+  /**
+   * GitHub App client, present when the orchestrator is configured with App
+   * credentials. Used here to mint per-turn installation tokens that the
+   * chat agent uses for `gh` shell commands (issue create/close/comment/labels).
+   */
+  app?: GithubAppClient;
   publicBaseUrl: string;
 }
 
@@ -138,6 +152,49 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           : null
       : null;
 
+    // Mint a per-turn installation token when the chat is project-scoped, so
+    // the agent's `gh` commands (issue create/close/comment/labels — moved
+    // off MCP) auth as the App against this project's repo. Scope is the
+    // single repo + `issues: write` / `pull_requests: read`; lifetime is 1h
+    // (way more than a single turn). On non-project pages, GH_TOKEN is
+    // simply absent — `gh` will fail with a clean auth error rather than
+    // silently doing the wrong thing.
+    let ghToken: string | null = null;
+    if (projectId && deps.app) {
+      const projectRow = await deps.db
+        .select({ project: projects, installation: githubInstallations })
+        .from(projects)
+        .where(and(eq(projects.id, projectId), isNull(projects.removedAt)))
+        .innerJoin(
+          githubInstallations,
+          eq(projects.installationId, githubInstallations.id),
+        )
+        .limit(1);
+      if (projectRow.length > 0) {
+        const { project, installation } = projectRow[0]!;
+        try {
+          const ephemeral = await deps.app.mintEphemeralToken({
+            installationId: installation.githubInstallationId,
+            repositoryIds: [project.githubRepoId],
+            permissions: {
+              issues: "write",
+              pull_requests: "read",
+              metadata: "read",
+            },
+          });
+          ghToken = ephemeral.token;
+        } catch (err) {
+          // Token mint failure is non-fatal — the chat still runs, just
+          // without `gh` privileges. The agent will surface a 401 from gh
+          // and the user can retry.
+          console.warn("[chat] mintEphemeralToken failed", {
+            projectId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
     // Build the full env + spec BEFORE the agent_runs insert so the
     // persisted spec includes everything the agent will actually see.
     // Earlier this stored env={} to avoid leaking the per-run token; that
@@ -149,6 +206,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       OPENCARA_CHAT_TURN_INDEX: String(turnIndex),
       OPENCARA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
       OPENCARA_AGENT_RUN_ID: agentRunId,
+      ...(ghToken ? { GH_TOKEN: ghToken } : {}),
     };
 
     // ACP eligibility — every supported kind dispatches via ACP. An
