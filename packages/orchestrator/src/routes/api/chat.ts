@@ -315,9 +315,10 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     const spec: AgentSpec = buildAcpSpec({
       agent,
       env,
-      systemPromptMd:
+      systemPromptMd: withChatResponseInstructions(
         skillResult?.skill.instructions ??
-        "You are an opencara chat agent. Respond to the user's message about the current page.",
+          "You are an opencara chat agent. Respond to the user's message about the current page.",
+      ),
       userPromptMd: message,
       history: normalizeHistory(history),
       pageContext: pageContext as Record<string, unknown>,
@@ -595,6 +596,27 @@ function normalizeHistory(history: unknown[]): AcpHistoryTurn[] {
     out.push({ role: r.role, text: r.text });
   }
   return out;
+}
+
+function withChatResponseInstructions(systemPromptMd: string): string {
+  return `${systemPromptMd.trim()}
+
+## Chat response options
+
+When the user should choose from predefined replies, include an options payload in your assistant response. Put any explanatory prose before it, or set \`text\` in the payload if the options are the whole response.
+
+\`\`\`json
+{
+  "type": "options",
+  "text": "Choose an option:",
+  "options": [
+    { "label": "Yes", "value": "Yes" },
+    { "label": "No", "value": "No" }
+  ]
+}
+\`\`\`
+
+The chat panel renders each option as a button. Clicking a button sends that option's \`value\` as the user's next message.`;
 }
 
 const PERMISSION_MODES = new Set<AcpPermissionMode>([

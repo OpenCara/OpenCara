@@ -363,11 +363,11 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     }
   };
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || !agentId || sending || !effectiveSessionId) return;
     setSending(true);
-    setInput("");
+    if (overrideText === undefined) setInput("");
 
     // Snapshot the selection NOW (at send-time). The user can change
     // their selection while the agent is responding; we want the context
@@ -580,6 +580,8 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
                 key={m.id}
                 message={m}
                 onStreamEnd={handleStreamEnd}
+                onOptionSelect={(value) => void send(value)}
+                optionsDisabled={sending || isStreaming}
               />
             ))}
           </div>
@@ -681,9 +683,13 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
 function MessageBubble({
   message,
   onStreamEnd,
+  onOptionSelect,
+  optionsDisabled,
 }: {
   message: Message;
   onStreamEnd?: (id: string, status: string) => void;
+  onOptionSelect?: (value: string) => void;
+  optionsDisabled?: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -704,6 +710,8 @@ function MessageBubble({
     <AssistantBubble
       message={message}
       onStreamEnd={onStreamEnd}
+      onOptionSelect={onOptionSelect}
+      optionsDisabled={optionsDisabled}
     />
   );
 }
@@ -711,9 +719,13 @@ function MessageBubble({
 function AssistantBubble({
   message,
   onStreamEnd,
+  onOptionSelect,
+  optionsDisabled,
 }: {
   message: Message;
   onStreamEnd?: (id: string, status: string) => void;
+  onOptionSelect?: (value: string) => void;
+  optionsDisabled?: boolean;
 }) {
   const { text } = useStreamedAssistant(message, onStreamEnd);
   const blocks = useMemo(() => parseBlocks(text), [text]);
@@ -742,6 +754,16 @@ function AssistantBubble({
           }
           if (b.kind === "tool") {
             return <ToolChip key={i} text={b.text} />;
+          }
+          if (b.kind === "options") {
+            return (
+              <OptionsBlock
+                key={i}
+                block={b}
+                disabled={optionsDisabled}
+                onSelect={onOptionSelect}
+              />
+            );
           }
           return <FencedBlock key={i} type={b.type} content={b.content} />;
         })}
@@ -876,11 +898,21 @@ interface ToolBlockType {
    *  group rather than a full collapsed section. */
   text: string;
 }
+interface OptionsBlockType {
+  kind: "options";
+  prompt?: string;
+  options: ChatOption[];
+}
+interface ChatOption {
+  label: string;
+  value: string;
+}
 type Block =
   | FencedBlockType
   | TextBlockType
   | ThinkingBlockType
-  | ToolBlockType;
+  | ToolBlockType
+  | OptionsBlockType;
 
 // ─── Block parsing ──────────────────────────────────────────────────
 //
@@ -907,6 +939,9 @@ const TOOL_LINE_RE = /\n\[tool\] [^\n]*\n/;
 const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)```/;
 
 function parseBlocks(text: string): Block[] {
+  const rawOptions = parseOptionsPayload("json", text);
+  if (rawOptions) return [rawOptions];
+
   const out: Block[] = [];
   let cursor = 0;
   while (cursor < text.length) {
@@ -955,15 +990,82 @@ function parseBlocks(text: string): Block[] {
       cursor += first.idx + first.match[0].length;
       continue;
     }
+    const fenceType = first.match[1]!.trim() || "text";
+    const fenceContent = first.match[2]!;
+    const optionsBlock = parseOptionsPayload(fenceType, fenceContent);
+    if (optionsBlock) {
+      out.push(optionsBlock);
+      cursor += first.idx + first.match[0].length;
+      continue;
+    }
+
     // Fenced code block.
     out.push({
       kind: "code",
-      type: first.match[1]!.trim() || "text",
-      content: first.match[2]!,
+      type: fenceType,
+      content: fenceContent,
     });
     cursor += first.idx + first.match[0].length;
   }
   return out;
+}
+
+function parseOptionsPayload(
+  fenceType: string,
+  content: string,
+): OptionsBlockType | null {
+  const normalizedType = fenceType.trim().toLowerCase();
+  if (normalizedType !== "json" && normalizedType !== "options") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const payload = parsed as Record<string, unknown>;
+  const responseType = payload.type ?? payload.responseType ?? payload.response_type;
+  if (responseType !== "options" && normalizedType !== "options") return null;
+  if (!Array.isArray(payload.options)) return null;
+
+  const options = payload.options
+    .map((raw) => normalizeChatOption(raw))
+    .filter((option): option is ChatOption => option !== null);
+  if (options.length === 0) return null;
+
+  const prompt =
+    stringValue(payload.text) ??
+    stringValue(payload.message) ??
+    stringValue(payload.prompt) ??
+    undefined;
+  return { kind: "options", prompt, options };
+}
+
+function normalizeChatOption(raw: unknown): ChatOption | null {
+  if (typeof raw === "string") {
+    const value = raw.trim();
+    return value ? { label: value, value } : null;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const option = raw as Record<string, unknown>;
+  const label =
+    stringValue(option.label) ??
+    stringValue(option.title) ??
+    stringValue(option.text) ??
+    stringValue(option.value);
+  const value =
+    stringValue(option.value) ??
+    stringValue(option.message) ??
+    stringValue(option.input) ??
+    label;
+  if (!label || !value) return null;
+  return { label, value };
+}
+
+function stringValue(raw: unknown): string | null {
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
 }
 
 function ThinkingBlock({
@@ -1012,6 +1114,40 @@ function ToolChip({ text }: { text: string }) {
     <div className="my-1 inline-flex items-center gap-1 rounded-md border bg-background/60 px-2 py-0.5 text-[11px] text-muted-foreground">
       <Wrench className="size-3" />
       <span className="font-mono">{text}</span>
+    </div>
+  );
+}
+
+function OptionsBlock({
+  block,
+  disabled,
+  onSelect,
+}: {
+  block: OptionsBlockType;
+  disabled?: boolean;
+  onSelect?: (value: string) => void;
+}) {
+  return (
+    <div className="my-2 space-y-2">
+      {block.prompt && (
+        <p className="whitespace-pre-wrap break-words">{block.prompt}</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {block.options.map((option, i) => (
+          <Button
+            key={`${option.value}-${i}`}
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-auto min-h-8 whitespace-normal text-left"
+            disabled={disabled || !onSelect}
+            onClick={() => onSelect?.(option.value)}
+            title={option.value !== option.label ? option.value : undefined}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }
