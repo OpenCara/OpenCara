@@ -300,29 +300,114 @@ async function getRequiredCheckState(args: {
   | { kind: "blocked"; state: "pending" | "failing"; reason: string }
 > {
   const { octokit, owner, repo, ref } = args;
-  const res = await octokit.request(
-    "GET /repos/{owner}/{repo}/commits/{ref}/status",
-    { owner, repo, ref },
-  );
-  const status = res.data as {
+
+  // Two endpoints; they cover disjoint signals. The legacy
+  // /commits/{ref}/status combines Statuses (Travis, Jenkins, anything
+  // posted via the Statuses API). /commits/{ref}/check-runs surfaces
+  // Check Runs (GitHub Actions, GitHub Apps). Branch protection can
+  // require either, and the PR UI's green-check is the AND of both —
+  // querying only Statuses left Actions-only repos waiting forever,
+  // because the combined-status wrapper reports `state: "pending"` with
+  // an empty list when nothing has posted a Status (see PR #109's fix
+  // agent skipping with "required checks are pending after 30 attempts"
+  // while `ci` was completed/success the whole time).
+  const [statusRes, checkRes] = await Promise.all([
+    octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/status", {
+      owner,
+      repo,
+      ref,
+    }),
+    octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
+      owner,
+      repo,
+      ref,
+      per_page: 100,
+    }),
+  ]);
+  const statusData = statusRes.data as {
     state?: string;
+    total_count?: number;
     statuses?: Array<{ context?: string; state?: string }>;
   };
-  if (status.state === "failure" || status.state === "error") {
+  const checkData = checkRes.data as {
+    total_count?: number;
+    check_runs?: Array<{
+      name?: string;
+      status?: string;
+      conclusion?: string | null;
+    }>;
+  };
+
+  let anyFailing = false;
+  let anyPending = false;
+  let anyPassing = false;
+
+  if (statusData.state === "failure" || statusData.state === "error") {
+    anyFailing = true;
+  } else if (statusData.state === "success") {
+    anyPassing = true;
+  } else if (statusData.state === "pending") {
+    // Don't treat the wrapper's default `pending` with zero registered
+    // Statuses as a real signal — that's just what the endpoint returns
+    // on a SHA where nothing has posted a Status (e.g. an Actions-only
+    // repo). Check Runs are the real signal in that case.
+    const count =
+      statusData.total_count ??
+      (Array.isArray(statusData.statuses) ? statusData.statuses.length : 0);
+    if (count > 0) anyPending = true;
+  }
+
+  for (const run of checkData.check_runs ?? []) {
+    if (run.status !== "completed") {
+      anyPending = true;
+      continue;
+    }
+    switch (run.conclusion) {
+      case "success":
+      case "neutral":
+      case "skipped":
+        anyPassing = true;
+        break;
+      case "failure":
+      case "cancelled":
+      case "timed_out":
+      case "action_required":
+      case "stale":
+      case "startup_failure":
+        anyFailing = true;
+        break;
+      default:
+        // Completed with an unrecognised conclusion (or null) — be
+        // conservative and treat as pending rather than passing.
+        anyPending = true;
+    }
+  }
+
+  if (anyFailing) {
     return {
       kind: "blocked",
       state: "failing",
       reason: "required checks are failing",
     };
   }
-  if (status.state === "pending") {
+  if (anyPending) {
     return {
       kind: "blocked",
       state: "pending",
       reason: "required checks are pending",
     };
   }
-  return { kind: "passing" };
+  if (anyPassing) {
+    return { kind: "passing" };
+  }
+  // Neither endpoint has anything to report on this SHA yet (no
+  // Statuses, no Check Runs). Preserve the legacy wait — checks
+  // sometimes register late after a push.
+  return {
+    kind: "blocked",
+    state: "pending",
+    reason: "required checks are pending",
+  };
 }
 
 async function getReviewGateState(args: {
