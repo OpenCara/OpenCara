@@ -313,6 +313,17 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       return c.json({ error: eligibility.refuseReason }, 400);
     }
 
+    // Merge the skill builder's hydrated server-side data (e.g. the full
+    // issue.bodyMd for the issue canvas) into the pageContext the agent
+    // sees. Without this the agent only gets what the frontend sent —
+    // notably `canvas.selection` without the surrounding body — and a
+    // selection-scoped edit request degenerates into "rewrite the whole
+    // body with just the selection", wiping the issue.
+    const agentPageContext: Record<string, unknown> = {
+      ...(pageContext as Record<string, unknown>),
+      ...(skillResult?.hydrated ?? {}),
+    };
+
     const spec: AgentSpec = buildAcpSpec({
       agent,
       env,
@@ -321,7 +332,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         "You are an opencara chat agent. Respond to the user's message about the current page.",
       userPromptMd: message,
       history: normalizeHistory(history),
-      pageContext: pageContext as Record<string, unknown>,
+      pageContext: agentPageContext,
       priorSessionId,
       ...(permissionMode ? { permissionMode } : {}),
     });

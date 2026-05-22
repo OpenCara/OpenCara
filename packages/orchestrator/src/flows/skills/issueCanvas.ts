@@ -101,12 +101,23 @@ token for you to manage.
 
 ## Semantics
 
-- **\`bodyMd\` is the WHOLE markdown.** To rewrite a snippet, take the
-  current body (provided as \`issue.bodyMd\` on stdin) and substitute
-  the targeted section into it. \`issue.bodyMd\` reflects the
-  CURRENTLY VISIBLE state — it's the unsaved draft if one exists, or
-  the GitHub-mirrored body otherwise. Always rebase your rewrite on
-  what the user is actually looking at, not on the published version.
+- **\`bodyMd\` is the WHOLE markdown — never a fragment.** The full
+  current body is provided to you as \`issue.bodyMd\` in the page
+  context JSON. To make any edit, start from that full body, apply
+  your change in place, and send the ENTIRE updated body back. If you
+  call \`opencara_issue_body_set\` with just a snippet, the rest of
+  the issue is erased — that is a bug, not a feature.
+- \`issue.bodyMd\` reflects the CURRENTLY VISIBLE state — the unsaved
+  draft if one exists, or the GitHub-mirrored body otherwise. Always
+  rebase your rewrite on what the user is actually looking at, not on
+  the published version.
+- **\`selection\` is a REFERENCE, not a payload.** When the user has
+  text selected, the page context carries it as
+  \`selection.text\` (also mirrored at \`canvas.selection.text\`).
+  Treat it as "the user is pointing at this passage in the body" —
+  use it to locate the region to edit inside \`issue.bodyMd\`. Do NOT
+  send the selection back as the new \`bodyMd\`; that would replace
+  the entire issue with the selected snippet.
 - The published body on GitHub is unchanged until the user clicks
   "Save to GitHub" in the UI.
 - The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on
