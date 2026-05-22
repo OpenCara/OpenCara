@@ -274,6 +274,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
               issues: "write",
               pull_requests: "read",
               metadata: "read",
+              checks: "read",
             },
           });
           ghToken = ephemeral.token;
