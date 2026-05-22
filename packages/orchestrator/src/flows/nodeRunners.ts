@@ -1497,7 +1497,7 @@ async function dispatchAgentRun(
     mintedToken = await ctx.app.mintEphemeralToken({
       installationId: ctx.installation.githubInstallationId,
       repositoryIds: [ctx.project.githubRepoId],
-      permissions: { contents: "write", issues: "write", pull_requests: "write" },
+      permissions: { contents: "write", issues: "write", pull_requests: "write", checks: "read" },
     });
     opts.env["GH_TOKEN"] = mintedToken.token;
     opts.env["GITHUB_TOKEN"] = mintedToken.token;

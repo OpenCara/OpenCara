@@ -327,6 +327,10 @@ describe("autoMergePullRequest", () => {
         status: 200,
         data: { state: "success", statuses: [] },
       }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
+      }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
         status: 200,
         data: [{ state: "APPROVED", user: { login: "reviewer" } }],
@@ -399,9 +403,19 @@ describe("autoMergePullRequest", () => {
         statusCalls++;
         return {
           status: 200,
-          data: { state: statusCalls < 3 ? "pending" : "success", statuses: [] },
+          data: {
+            state: statusCalls < 3 ? "pending" : "success",
+            total_count: 1,
+            statuses: [
+              { state: statusCalls < 3 ? "pending" : "success", context: "ci" },
+            ],
+          },
         };
       },
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
+      }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
         status: 200,
         data: [],
@@ -431,7 +445,15 @@ describe("autoMergePullRequest", () => {
       }),
       "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
         status: 200,
-        data: { state: "pending", statuses: [] },
+        data: {
+          state: "pending",
+          total_count: 1,
+          statuses: [{ state: "pending", context: "ci" }],
+        },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
       }),
     });
 
@@ -456,6 +478,10 @@ describe("autoMergePullRequest", () => {
       "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
         status: 200,
         data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
       }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
         status: 200,
@@ -484,6 +510,10 @@ describe("autoMergePullRequest", () => {
       "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
         status: 200,
         data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
       }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
         status: 200,
@@ -519,6 +549,10 @@ describe("autoMergePullRequest", () => {
         status: 200,
         data: { state: "success", statuses: [] },
       }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
+      }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
         status: 200,
         data: [],
@@ -547,7 +581,15 @@ describe("autoMergePullRequest", () => {
       }),
       "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
         status: 200,
-        data: { state: "failure", statuses: [{ state: "failure", context: "ci" }] },
+        data: {
+          state: "failure",
+          total_count: 1,
+          statuses: [{ state: "failure", context: "ci" }],
+        },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
       }),
     });
 
@@ -566,6 +608,198 @@ describe("autoMergePullRequest", () => {
     );
   });
 
+  it("merges when only Check Runs report passing (Actions-only repo)", async () => {
+    // PR #109 regression: GitHub Actions writes Check Runs, not legacy
+    // Statuses. The combined-status endpoint returns `pending` with
+    // total_count=0 on Actions-only repos even after CI is green. We
+    // need to consult check-runs to see the real signal.
+    const { octokit, calls } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "pending", total_count: 0, statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: {
+          total_count: 1,
+          check_runs: [{ name: "ci", status: "completed", conclusion: "success" }],
+        },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [],
+      }),
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": () => ({
+        status: 200,
+        data: { sha: "merge-sha", message: "merged" },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, { kind: "merged", sha: "merge-sha", message: "merged" });
+    const merge = calls.find(
+      (c) => c.route === "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+    );
+    assert.ok(merge, "merge PUT should have been called");
+  });
+
+  it("blocks when a Check Run reports a failing conclusion", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "pending", total_count: 0, statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: {
+          total_count: 2,
+          check_runs: [
+            { name: "lint", status: "completed", conclusion: "success" },
+            { name: "test", status: "completed", conclusion: "failure" },
+          ],
+        },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "required checks are failing",
+    });
+  });
+
+  it("waits when at least one Check Run is still in-progress", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "pending", total_count: 0, statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: {
+          total_count: 2,
+          check_runs: [
+            { name: "lint", status: "completed", conclusion: "success" },
+            { name: "test", status: "in_progress", conclusion: null },
+          ],
+        },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "required checks are pending after 1 attempts",
+    });
+  });
+
+  it("treats neutral / skipped Check Run conclusions as passing", async () => {
+    const { octokit, calls } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: { state: "pending", total_count: 0, statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: {
+          total_count: 3,
+          check_runs: [
+            { name: "ci", status: "completed", conclusion: "success" },
+            { name: "license", status: "completed", conclusion: "neutral" },
+            { name: "docs", status: "completed", conclusion: "skipped" },
+          ],
+        },
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
+        status: 200,
+        data: [],
+      }),
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": () => ({
+        status: 200,
+        data: { sha: "merge-sha", message: "merged" },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.equal(result.kind, "merged");
+    assert.ok(
+      calls.find(
+        (c) => c.route === "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      ),
+    );
+  });
+
+  it("blocks when a Status fails even if all Check Runs pass", async () => {
+    const { octokit } = makeOctokit({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+        status: 200,
+        data: { number: 7, mergeable: true, mergeable_state: "clean", head: { sha: "b" } },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        status: 200,
+        data: {
+          state: "failure",
+          total_count: 1,
+          statuses: [{ state: "failure", context: "deploy" }],
+        },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: {
+          total_count: 1,
+          check_runs: [{ name: "ci", status: "completed", conclusion: "success" }],
+        },
+      }),
+    });
+
+    const result = await autoMergePullRequest({
+      ...autoMergeArgs,
+      octokit: octokit as never,
+      priorHeadSha: "a",
+    });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "required checks are failing",
+    });
+  });
+
   it("skips with GitHub's merge API message on 405/409", async () => {
     const { octokit } = makeOctokit({
       "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
@@ -575,6 +809,10 @@ describe("autoMergePullRequest", () => {
       "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
         status: 200,
         data: { state: "success", statuses: [] },
+      }),
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        status: 200,
+        data: { total_count: 0, check_runs: [] },
       }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => ({
         status: 200,
