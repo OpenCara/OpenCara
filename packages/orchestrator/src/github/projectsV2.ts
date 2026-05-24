@@ -684,6 +684,10 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
     : [];
 
   // Extract linked PRs from the Issue's timeline cross-referenced events.
+  // Deduplicate by PR number — the same PR can generate multiple
+  // cross-reference events (e.g. from separate commits), and duplicates
+  // would waste the first:10 cap and clutter the card UI.
+  const seenPrNumbers = new Set<number>();
   const linkedPrs: LinkedPr[] = [];
   if (c?.__typename === "Issue" && c.timelineItems?.nodes) {
     for (const event of c.timelineItems.nodes) {
@@ -691,8 +695,10 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
       if (
         src?.__typename === "PullRequest" &&
         typeof src.number === "number" &&
-        typeof src.url === "string"
+        typeof src.url === "string" &&
+        !seenPrNumbers.has(src.number)
       ) {
+        seenPrNumbers.add(src.number);
         linkedPrs.push({
           number: src.number,
           title: src.title ?? `#${src.number}`,
