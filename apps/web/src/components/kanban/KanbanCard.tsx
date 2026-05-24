@@ -1,11 +1,15 @@
-import { ExternalLink, Pencil, Play } from "lucide-react";
+import { ExternalLink, GitPullRequest, Pencil, Play } from "lucide-react";
 import { Link } from "react-router";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AgentPicker } from "@/components/agent/AgentPicker";
-import { useTriggerImplementFlow, type KanbanItem } from "@/lib/queries";
+import {
+  useTriggerImplementFlow,
+  type KanbanItem,
+  type KanbanLinkedPr,
+} from "@/lib/queries";
 
 const STATE_VARIANT: Record<
   string,
@@ -14,6 +18,13 @@ const STATE_VARIANT: Record<
   OPEN: "default",
   CLOSED: "secondary",
   MERGED: "outline",
+};
+
+const PR_STATE_COLOR: Record<string, string> = {
+  OPEN: "text-green-600",
+  DRAFT: "text-muted-foreground",
+  CLOSED: "text-red-500",
+  MERGED: "text-purple-600",
 };
 
 /**
@@ -135,6 +146,13 @@ export function KanbanCard({
               )}
             </div>
           )}
+          {item.linkedPrs?.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1">
+              {item.linkedPrs.map((pr) => (
+                <LinkedPrBadge key={pr.number} pr={pr} />
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex flex-col items-center gap-1">
           {item.kind === "issue" &&
@@ -183,6 +201,24 @@ export function KanbanCard({
         </div>
       )}
     </div>
+  );
+}
+
+function LinkedPrBadge({ pr }: { pr: KanbanLinkedPr }) {
+  const colorClass = PR_STATE_COLOR[pr.state] ?? "text-muted-foreground";
+  return (
+    <a
+      href={pr.url}
+      target="_blank"
+      rel="noreferrer"
+      className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+      title={`${pr.title} (${pr.state.toLowerCase()})`}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <GitPullRequest className={`size-3 shrink-0 ${colorClass}`} />
+      <span className="truncate">#{pr.number}</span>
+      <span className={`uppercase ${colorClass}`}>{pr.state.toLowerCase()}</span>
+    </a>
   );
 }
 
@@ -285,6 +321,24 @@ export function KanbanCardOverlay({ item }: { item: KanbanItem }) {
               +{extraLabelCount}
             </span>
           )}
+        </div>
+      )}
+      {item.linkedPrs?.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1">
+          {item.linkedPrs.map((pr) => (
+            <div
+              key={pr.number}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground"
+            >
+              <GitPullRequest
+                className={`size-3 shrink-0 ${PR_STATE_COLOR[pr.state] ?? "text-muted-foreground"}`}
+              />
+              <span>#{pr.number}</span>
+              <span className={PR_STATE_COLOR[pr.state] ?? "text-muted-foreground"}>
+                {pr.state.toLowerCase()}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>

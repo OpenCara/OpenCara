@@ -750,6 +750,13 @@ export interface KanbanLink {
   updatedAt: string;
 }
 
+export interface KanbanLinkedPr {
+  number: number;
+  title: string;
+  url: string;
+  state: string; // 'OPEN' | 'CLOSED' | 'MERGED' | 'DRAFT'
+}
+
 export interface KanbanItem {
   id: string;
   projectV2LinkId: string;
@@ -764,6 +771,7 @@ export interface KanbanItem {
   isArchived: boolean;
   assignees: { login: string; id: number }[];
   labels: { name: string; color: string }[];
+  linkedPrs: KanbanLinkedPr[];
   updatedAt: string;
 }
 
