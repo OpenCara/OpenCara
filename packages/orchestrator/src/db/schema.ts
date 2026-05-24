@@ -604,6 +604,12 @@ export const projectV2Items = pgTable(
       .$type<{ name: string; color: string }[]>()
       .notNull()
       .default([]),
+    // Linked PRs for issue items. Populated from the Issue's timeline
+    // cross-referenced events. PRs and drafts always have [].
+    linkedPrs: jsonb("linked_prs")
+      .$type<{ number: number; title: string; url: string; state: string }[]>()
+      .notNull()
+      .default([]),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

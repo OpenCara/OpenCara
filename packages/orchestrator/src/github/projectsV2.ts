@@ -40,6 +40,13 @@ export interface ProjectV2Snapshot {
   items: ProjectV2ItemSnapshot[];
 }
 
+export interface LinkedPr {
+  number: number;
+  title: string;
+  url: string;
+  state: string; // 'OPEN' | 'CLOSED' | 'MERGED' | 'DRAFT'
+}
+
 export interface ProjectV2ItemSnapshot {
   itemNodeId: string;
   kind: "issue" | "pull_request" | "draft";
@@ -53,6 +60,9 @@ export interface ProjectV2ItemSnapshot {
   // Card detail caches. Drafts have neither — both stay [].
   assignees: { login: string; id: number }[];
   labels: { name: string; color: string }[];
+  // PRs that reference this issue (cross-referenced events). Only
+  // populated for issue items; PRs and drafts always have [].
+  linkedPrs: LinkedPr[];
   updatedAt: string | null;
 }
 
@@ -227,6 +237,21 @@ interface RawLabels {
   nodes: Array<{ name: string; color: string }> | null;
 }
 
+interface RawCrossReferencedEvent {
+  source?: {
+    __typename?: string;
+    number?: number;
+    title?: string;
+    url?: string;
+    state?: string;
+    isDraft?: boolean;
+  } | null;
+}
+
+interface RawTimelineItems {
+  nodes: RawCrossReferencedEvent[] | null;
+}
+
 interface RawItem {
   id: string;
   type: string; // "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE" | "REDACTED"
@@ -246,6 +271,7 @@ interface RawItem {
         state: string;
         assignees?: RawAssignees | null;
         labels?: RawLabels | null;
+        timelineItems?: RawTimelineItems | null;
       }
     | {
         __typename: "PullRequest";
@@ -351,6 +377,22 @@ export async function fetchProjectSnapshot(
                   state
                   assignees(first: 5) { nodes { login databaseId } }
                   labels(first: 10) { nodes { name color } }
+                  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], first: 10) {
+                    nodes {
+                      ... on CrossReferencedEvent {
+                        source {
+                          __typename
+                          ... on PullRequest {
+                            number
+                            title
+                            url
+                            state
+                            isDraft
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
                 ... on PullRequest {
                   id
@@ -435,6 +477,18 @@ export async function fetchItemSnapshot(
               id number title url state
               assignees(first: 5) { nodes { login databaseId } }
               labels(first: 10) { nodes { name color } }
+              timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], first: 10) {
+                nodes {
+                  ... on CrossReferencedEvent {
+                    source {
+                      __typename
+                      ... on PullRequest {
+                        number title url state isDraft
+                      }
+                    }
+                  }
+                }
+              }
             }
             ... on PullRequest {
               id number title url state
@@ -479,6 +533,7 @@ export async function upsertItem(
       isArchived: it.isArchived,
       assignees: it.assignees,
       labels: it.labels,
+      linkedPrs: it.linkedPrs,
       updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
     })
     .onConflictDoUpdate({
@@ -494,6 +549,7 @@ export async function upsertItem(
         isArchived: it.isArchived,
         assignees: it.assignees,
         labels: it.labels,
+        linkedPrs: it.linkedPrs,
         updatedAt: it.updatedAt ? new Date(it.updatedAt) : new Date(),
       },
     });
@@ -627,6 +683,32 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
         .map((l) => ({ name: l.name, color: l.color }))
     : [];
 
+  // Extract linked PRs from the Issue's timeline cross-referenced events.
+  // Deduplicate by PR number — the same PR can generate multiple
+  // cross-reference events (e.g. from separate commits), and duplicates
+  // would waste the first:10 cap and clutter the card UI.
+  const seenPrNumbers = new Set<number>();
+  const linkedPrs: LinkedPr[] = [];
+  if (c?.__typename === "Issue" && c.timelineItems?.nodes) {
+    for (const event of c.timelineItems.nodes) {
+      const src = event?.source;
+      if (
+        src?.__typename === "PullRequest" &&
+        typeof src.number === "number" &&
+        typeof src.url === "string" &&
+        !seenPrNumbers.has(src.number)
+      ) {
+        seenPrNumbers.add(src.number);
+        linkedPrs.push({
+          number: src.number,
+          title: src.title ?? `#${src.number}`,
+          url: src.url,
+          state: src.isDraft ? "DRAFT" : (src.state ?? "OPEN"),
+        });
+      }
+    }
+  }
+
   return {
     itemNodeId: raw.id,
     kind,
@@ -639,6 +721,7 @@ function itemSnapshotFromRaw(raw: RawItem): ProjectV2ItemSnapshot {
     isArchived: raw.isArchived,
     assignees,
     labels,
+    linkedPrs,
     updatedAt: raw.updatedAt,
   };
 }
