@@ -19,9 +19,17 @@
 //     translator. Stdin (not argv) carries the prompt so large
 //     flow-injected contexts don't trip Linux's per-string execve cap
 //     (MAX_ARG_STRLEN, 128 KiB on a 4 KiB-page host).
-//   - Translates exactly two Claude events:
-//       * `{type:"assistant", message:{content:[{type:"text",text}]}}`
+//   - Translates a small set of Claude events:
+//       * `{type:"stream_event", event:{type:"content_block_delta",
+//          delta:{type:"text_delta",text}}}`
 //          → `session/update` `agent_message_chunk` (text)
+//       * `{type:"assistant", message:{content:[{type:"tool_use",
+//          name:"AskUserQuestion", input:{...}}, ...]}}`
+//          → `session/update` `agent_message_chunk` carrying a
+//          ```json options fence per question, so the chat panel
+//          renders the AskUserQuestion options as clickable buttons.
+//          Text blocks inside assistant frames are dropped because the
+//          stream_event deltas above already covered them.
 //       * `{type:"result", subtype, is_error, ...}`
 //          → resolves the prompt request with `stopReason`
 //     Everything else is dropped silently (no harm, just no surfacing).
@@ -308,31 +316,54 @@ async function runClaudeTurn(
 }
 
 /**
- * Map one parsed Claude JSONL event to ACP `session/update` notifications.
- * Calls `done(stopReason)` exactly once, when the terminal `result`
- * frame arrives.
+ * Pure translator: maps one parsed Claude JSONL event to zero or more
+ * ACP `session/update` notifications plus an optional terminal stopReason.
+ *
+ * Kept side-effect-free so unit tests can assert the translated output
+ * directly without spying on stdout.
  */
-function handleClaudeEvent(
+export interface AcpUpdateNotification {
+  method: "session/update";
+  params: { sessionId: string; update: Record<string, unknown> };
+}
+
+export interface TranslatedEvent {
+  notifications: AcpUpdateNotification[];
+  stopReason?: ClaudePromptResult["stopReason"];
+}
+
+export function translateClaudeEvent(
   sessionId: string,
   raw: unknown,
-  done: (stopReason: ClaudePromptResult["stopReason"]) => void,
-): void {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+): TranslatedEvent {
+  const out: AcpUpdateNotification[] = [];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { notifications: out };
+  }
   const msg = raw as Record<string, unknown>;
   const type = typeof msg["type"] === "string" ? (msg["type"] as string) : "";
   if (type === "assistant") {
     // With `--include-partial-messages`, the `assistant` frame carries
     // the CUMULATIVE final message — claude already streamed every
-    // delta via `stream_event content_block_delta` frames before this.
-    // Forwarding both produces the user-visible "reply repeated twice"
-    // bug we hit on first opencara@0.104.0 run. Drop this frame; the
-    // streaming chunks already covered the full text.
+    // text delta via `stream_event content_block_delta` frames before
+    // this. Forwarding text twice produces the user-visible "reply
+    // repeated twice" bug we hit on first opencara@0.104.0 run.
     //
-    // If a future claude version stops emitting deltas (e.g. user
-    // disables --include-partial-messages), this branch becomes the
-    // fallback — but the spawn always passes that flag, so today the
-    // assistant frame is purely redundant.
-    return;
+    // We DO inspect this frame for `tool_use` blocks we want to surface
+    // to the chat panel (e.g. AskUserQuestion → option buttons), since
+    // tool_use isn't carried by the text-delta stream. Text blocks here
+    // are still skipped to avoid the dedup bug.
+    const message = msg["message"];
+    if (message && typeof message === "object" && !Array.isArray(message)) {
+      const content = (message as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          const translated = translateAssistantBlock(sessionId, block);
+          if (translated) out.push(...translated);
+        }
+      }
+    }
+    return { notifications: out };
   }
   if (type === "stream_event") {
     // Claude emits incremental delta events when --include-partial-messages
@@ -343,18 +374,21 @@ function handleClaudeEvent(
     const event = msg["event"] as
       | { type?: string; delta?: { type?: string; text?: string } }
       | undefined;
-    if (event?.type !== "content_block_delta") return;
-    if (event.delta?.type !== "text_delta") return;
+    if (event?.type !== "content_block_delta") return { notifications: out };
+    if (event.delta?.type !== "text_delta") return { notifications: out };
     const text = typeof event.delta.text === "string" ? event.delta.text : "";
-    if (text.length === 0) return;
-    notify("session/update", {
-      sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text },
+    if (text.length === 0) return { notifications: out };
+    out.push({
+      method: "session/update",
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
       },
     });
-    return;
+    return { notifications: out };
   }
   if (type === "result") {
     const subtype = typeof msg["subtype"] === "string" ? (msg["subtype"] as string) : "";
@@ -365,31 +399,130 @@ function handleClaudeEvent(
       // went wrong, then refusal-stop.
       const resultText = typeof msg["result"] === "string" ? (msg["result"] as string) : "";
       if (resultText.length > 0) {
-        notify("session/update", {
-          sessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: `\n\n[claude error: ${resultText}]` },
+        out.push({
+          method: "session/update",
+          params: {
+            sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `\n\n[claude error: ${resultText}]` },
+            },
           },
         });
       }
-      done("refusal");
-      return;
+      return { notifications: out, stopReason: "refusal" };
     }
-    // success_max_turns / success_max_tokens map onto ACP's enum.
     if (subtype === "error_max_turns") {
-      done("max_turn_requests");
-      return;
+      return { notifications: out, stopReason: "max_turn_requests" };
     }
     if (subtype === "error_max_tokens") {
-      done("max_tokens");
-      return;
+      return { notifications: out, stopReason: "max_tokens" };
     }
-    done("end_turn");
-    return;
+    return { notifications: out, stopReason: "end_turn" };
   }
-  // Other event types (system/init, system/status, tool_use, tool_result,
-  // user mid-turn echo, etc.) — drop silently. Extend as needed.
+  // Other event types (system/init, system/status, tool_result, user
+  // mid-turn echo, etc.) — drop silently. Extend as needed.
+  return { notifications: out };
+}
+
+/**
+ * Translate one block from an assistant message's `content` array into
+ * ACP notifications. Returns null for blocks we don't surface (notably
+ * `text` blocks, which the stream_event deltas already covered).
+ *
+ * Today we recognise `tool_use` blocks for `AskUserQuestion`: each
+ * question becomes a JSON `options` fence so the chat panel renders the
+ * choices as clickable buttons. Without this, the question text and
+ * options sit inside a `tool_use` frame that the panel never sees, and
+ * the model's surrounding prose tends to read like "I have N questions
+ * above" with no actual questions or buttons.
+ */
+function translateAssistantBlock(
+  sessionId: string,
+  block: unknown,
+): AcpUpdateNotification[] | null {
+  if (!block || typeof block !== "object" || Array.isArray(block)) return null;
+  const b = block as Record<string, unknown>;
+  if (b["type"] !== "tool_use") return null;
+  if (b["name"] !== "AskUserQuestion") return null;
+  const input = b["input"];
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const questions = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(questions)) return null;
+  const chunks: string[] = [];
+  for (const q of questions) {
+    const rendered = renderAskUserQuestionItem(q);
+    if (rendered) chunks.push(rendered);
+  }
+  if (chunks.length === 0) return null;
+  // Lead with a blank line so the fence parses cleanly even when the
+  // model's preceding text didn't end with a newline.
+  const text = `\n\n${chunks.join("\n\n")}\n`;
+  return [
+    {
+      method: "session/update",
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      },
+    },
+  ];
+}
+
+function renderAskUserQuestionItem(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const q = raw as Record<string, unknown>;
+  const question = typeof q["question"] === "string" ? q["question"].trim() : "";
+  if (!question) return null;
+  const header = typeof q["header"] === "string" ? q["header"].trim() : "";
+  const multiSelect = q["multiSelect"] === true;
+  const rawOptions = Array.isArray(q["options"]) ? q["options"] : [];
+  const options: { label: string; value: string }[] = [];
+  for (const opt of rawOptions) {
+    if (!opt || typeof opt !== "object" || Array.isArray(opt)) continue;
+    const o = opt as Record<string, unknown>;
+    const label = typeof o["label"] === "string" ? o["label"].trim() : "";
+    if (!label) continue;
+    // Encode the answer with the question header so multi-question
+    // turns stay disambiguated when the user's reply lands back in the
+    // model's context as plain text.
+    const value = header ? `${header}: ${label}` : label;
+    options.push({ label, value });
+  }
+  if (options.length === 0) return null;
+  const promptParts = [`**${question}**`];
+  if (multiSelect) {
+    promptParts.push(
+      "_(Multiple answers expected — click one, then type any others.)_",
+    );
+  } else {
+    promptParts.push(
+      "_(Pick an option, or type your own answer below.)_",
+    );
+  }
+  const payload = {
+    type: "options",
+    text: promptParts.join(" "),
+    options,
+  };
+  return "```json\n" + JSON.stringify(payload, null, 2) + "\n```";
+}
+
+/**
+ * Side-effecting wrapper: applies the pure translator's output to the
+ * stdout wire and to the prompt's done() resolver.
+ */
+function handleClaudeEvent(
+  sessionId: string,
+  raw: unknown,
+  done: (stopReason: ClaudePromptResult["stopReason"]) => void,
+): void {
+  const { notifications, stopReason } = translateClaudeEvent(sessionId, raw);
+  for (const n of notifications) notify(n.method, n.params);
+  if (stopReason) done(stopReason);
 }
 
 // ─── ACP request handlers ──────────────────────────────────────────
