@@ -187,31 +187,68 @@ function worktreeCreate(args: string[]): void {
   // the .git/ already there, skips the clone, fetches latest, and
   // checks out the branch. Removed only when the orchestrator's
   // pull_request.closed handler dispatches `worktree remove`.
+  //
+  // The checkout is an orchestrator-owned scratch space — between
+  // flow runs the working tree state is meaningless (we're about to
+  // fetch and switch branches), so we open with `reset --hard HEAD`
+  // and `clean -fdx` to recover from corruption that prior runs may
+  // have left behind. The specific case that motivated this: a prior
+  // run died with `.git/index` gone (manual recovery attempt after
+  // an agent crash), which made every subsequent `git checkout
+  // <branch>` refuse with "untracked working tree files would be
+  // overwritten" and poison the per-(repo, branch) key until someone
+  // `rm -rf`d it by hand. The reset rebuilds the index, the clean
+  // removes stale debris. If even those fail (broken HEAD or partial
+  // objects/), the outer catch nukes the dir and falls through to
+  // the fresh-clone path.
+  let reused = false;
   if (existsSync(join(checkoutDir, ".git"))) {
-    git(checkoutDir, ["fetch", "origin"], gitEnv);
-    // Three cases:
-    //   1. `origin/<branch>` exists — reset our local copy to track it.
-    //      Used by review-fix flows re-allocating on a refreshed clone.
-    //   2. Local `<branch>` exists but origin doesn't — a prior run on
-    //      this same checkout created the branch and never pushed (e.g.
-    //      a synthesizer that writes locally and is then re-run). Just
-    //      switch to it. Pre-fix this path blindly did `checkout -B
-    //      <branch> origin/<branch>` and exploded on the missing remote.
-    //   3. Neither — fall back to `--from-branch` (or fail loud) so we
-    //      don't silently corrupt state by checking out HEAD as the
-    //      new branch.
-    if (refExists(checkoutDir, `refs/remotes/origin/${branch}`)) {
-      git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`], gitEnv);
-    } else if (refExists(checkoutDir, `refs/heads/${branch}`)) {
-      git(checkoutDir, ["checkout", branch], gitEnv);
-    } else if (fromBranch) {
-      git(checkoutDir, ["checkout", "-B", branch, `origin/${fromBranch}`], gitEnv);
-    } else {
-      fail(
-        `worktree create: '${branch}' missing locally and on origin/, no --from-branch to fall back to`,
+    try {
+      git(checkoutDir, ["reset", "--hard", "HEAD"], gitEnv);
+      git(checkoutDir, ["clean", "-fdx"], gitEnv);
+      git(checkoutDir, ["fetch", "origin"], gitEnv);
+      // Three cases:
+      //   1. `origin/<branch>` exists — reset our local copy to track it.
+      //      Used by review-fix flows re-allocating on a refreshed clone.
+      //   2. Local `<branch>` exists but origin doesn't — a prior run on
+      //      this same checkout created the branch and never pushed (e.g.
+      //      a synthesizer that writes locally and is then re-run). Just
+      //      switch to it. Pre-fix this path blindly did `checkout -B
+      //      <branch> origin/<branch>` and exploded on the missing remote.
+      //   3. Neither — fall back to `--from-branch` (or fail loud) so we
+      //      don't silently corrupt state by checking out HEAD as the
+      //      new branch.
+      if (refExists(checkoutDir, `refs/remotes/origin/${branch}`)) {
+        git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`], gitEnv);
+      } else if (refExists(checkoutDir, `refs/heads/${branch}`)) {
+        git(checkoutDir, ["checkout", branch], gitEnv);
+      } else if (fromBranch) {
+        git(checkoutDir, ["checkout", "-B", branch, `origin/${fromBranch}`], gitEnv);
+      } else {
+        fail(
+          `worktree create: '${branch}' missing locally and on origin/, no --from-branch to fall back to`,
+        );
+      }
+      reused = true;
+    } catch (err) {
+      // Reuse + in-place repair both failed (irrecoverable: broken
+      // HEAD, partial objects/, etc). Nuke the dir and fall through
+      // to fresh clone so a bad iteration doesn't permanently poison
+      // this key. Worst case is a slower-than-usual run.
+      console.warn(
+        `[worktree] reuse of ${checkoutDir} failed (${
+          (err as Error).message
+        }); re-cloning`,
       );
+      rmSync(checkoutDir, { recursive: true, force: true });
     }
-  } else {
+  } else if (existsSync(checkoutDir)) {
+    // `.git/` is missing but the dir exists (a half-built clone from
+    // a crashed prior run) — wipe so the clone below doesn't trip
+    // on stale files.
+    rmSync(checkoutDir, { recursive: true, force: true });
+  }
+  if (!reused) {
     mkdirSync(checkoutDir, { recursive: true });
     const cloneArgs = ["-c", `credential.helper=${HELPER_SNIPPET}`, "clone"];
     if (cacheDir) {
