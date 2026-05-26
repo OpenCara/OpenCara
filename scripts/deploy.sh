@@ -18,6 +18,15 @@ echo "==> Building all packages"
 pnpm -r build
 
 echo "==> Applying drizzle migrations"
+# Source the orchestrator's .env so DATABASE_URL is in the environment for
+# drizzle-kit. drizzle-kit bundles dotenv and auto-loads .env from cwd, but
+# relying on that means a missing DATABASE_URL would silently fall through
+# to drizzle.config.ts's localhost:5433 fallback and pretend-migrate the
+# wrong DB. Explicit source closes that gap regardless of library behavior.
+set -a
+# shellcheck disable=SC1091
+source "$ROOT/packages/orchestrator/.env"
+set +a
 pnpm --filter @opencara/orchestrator db:migrate
 
 echo "==> Stopping current orchestrator on :$PORT (if any)"
