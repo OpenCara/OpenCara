@@ -3,6 +3,8 @@ import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import hljs from "highlight.js/lib/common";
+import { ChatMarkdown } from "./ChatMarkdown";
 import {
   Archive,
   ArchiveRestore,
@@ -735,7 +737,9 @@ function MessageBubble({
             </span>
           </div>
         )}
-        <div className="rounded-lg bg-secondary px-3 py-2 text-sm">{message.text}</div>
+        <div className="rounded-lg bg-secondary px-3 py-2 text-sm">
+          <ChatMarkdown>{message.text}</ChatMarkdown>
+        </div>
       </div>
     );
   }
@@ -769,11 +773,11 @@ function AssistantBubble({
       <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm leading-relaxed">
         {blocks.map((b, i) => {
           if (b.kind === "text") {
-            return (
-              <p key={i} className="whitespace-pre-wrap break-words">
-                {b.text || (message.pending ? "" : "")}
-              </p>
-            );
+            // Empty text blocks during streaming would render an empty
+            // <div> with vertical padding from the markdown wrapper —
+            // suppress them so the typing dots sit flush.
+            if (!b.text) return null;
+            return <ChatMarkdown key={i}>{b.text}</ChatMarkdown>;
           }
           if (b.kind === "thinking") {
             return (
@@ -1465,6 +1469,10 @@ function FencedBlock({ type, content }: { type: string; content: string }) {
   // version dependency forces a re-render when actions register/unregister.
   void version;
   const handler = resolve(type);
+  const highlighted = useMemo(
+    () => highlightCode(type, content),
+    [type, content],
+  );
   return (
     <div className="my-2 rounded-md border bg-background p-2">
       <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
@@ -1485,10 +1493,37 @@ function FencedBlock({ type, content }: { type: string; content: string }) {
         </div>
       </div>
       <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">
-        {content}
+        {highlighted ? (
+          <code
+            className={`hljs language-${type}`}
+            // highlight.js returns escaped HTML — innerHTML is safe here.
+            // The agent-supplied source text is *not* injected as HTML;
+            // only hljs's own classname spans (<span class="hljs-…">) are.
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
+        ) : (
+          content
+        )}
       </pre>
     </div>
   );
+}
+
+/**
+ * Run highlight.js over a fenced block's content, returning escaped HTML
+ * with hljs token spans, or null when the language tag isn't one hljs
+ * knows about (in which case the caller falls back to plain text — safer
+ * than letting hljs guess, which routinely mis-colours JSON as Lua etc).
+ */
+function highlightCode(type: string, content: string): string | null {
+  const language = type.trim().toLowerCase();
+  if (!language || language === "text" || language === "plain") return null;
+  if (!hljs.getLanguage(language)) return null;
+  try {
+    return hljs.highlight(content, { language, ignoreIllegals: true }).value;
+  } catch {
+    return null;
+  }
 }
 
 function EmptyState({
