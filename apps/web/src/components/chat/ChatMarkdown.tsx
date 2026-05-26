@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
@@ -61,14 +62,47 @@ const components: Components = {
       </a>
     );
   },
+  // Disarm markdown image syntax. A live `<img src=…>` from `![alt](url)`
+  // would fire arbitrary GETs from the user's browser on agent output —
+  // tracking-pixel + browser-side SSRF surface. Render the alt text (and
+  // a link to the source) instead; rehype-raw is not enabled so this is
+  // the only path that produces `<img>`.
+  img({ src, alt, title }) {
+    const label = alt?.trim() || title?.trim() || "image";
+    const href = typeof src === "string" ? src : undefined;
+    return (
+      <span className="inline-flex items-center gap-1 rounded border border-dashed border-muted-foreground/40 px-1.5 py-0.5 text-xs text-muted-foreground">
+        <span aria-hidden="true">🖼</span>
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+          >
+            {label}
+          </a>
+        ) : (
+          <span>{label}</span>
+        )}
+      </span>
+    );
+  },
 };
 
 /**
  * Markdown renderer for chat message content.
  *
- * Uses react-markdown's default HTML sanitization (no rehype-raw) so any
- * raw `<script>` / `<img onerror=...>` in agent output renders as plain
- * text rather than live HTML — the XSS guarantee called out in #121.
+ * Safety guarantees:
+ *   - No `rehype-raw` → raw `<script>` / `<img onerror=...>` in agent
+ *     output renders as plain text rather than live HTML.
+ *   - `img` component overridden so `![alt](url)` does not fire
+ *     arbitrary remote GETs from the user's browser.
+ *
+ * `remark-breaks` is enabled so single `\n` in source renders as `<br>`,
+ * matching the pre-markdown `whitespace-pre-wrap` behaviour the assistant
+ * bubble had before #121 — line-oriented tool output and stack traces in
+ * plain replies keep their line breaks.
  *
  * Fenced code blocks are NOT highlighted here. Both AssistantBubble's
  * parseBlocks and FencedBlock strip ``` fences out of the markdown
@@ -82,7 +116,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 }: Props) {
   return (
     <div className={cn(ROOT_CLASSES, className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={components}
+      >
         {children}
       </ReactMarkdown>
     </div>
