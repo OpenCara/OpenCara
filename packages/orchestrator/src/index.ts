@@ -1,6 +1,8 @@
+import path from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { DevicePool, WebSocketDispatcher } from "./dispatch/devices.js";
@@ -31,6 +33,17 @@ import { reapOrphanedRuns } from "./flows/reaper.js";
 
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
+
+// Drizzle tracks applied migrations in __drizzle_migrations, so this is a
+// no-op once the schema is current. Running it on every boot guarantees a
+// restart can never serve against a stale schema — the failure mode that
+// took kanban down when migration 0029 shipped without an explicit
+// db:migrate step. Failure is intentionally fatal: better a loud crash
+// than 500s on routes that touch the new column.
+await migrate(db, {
+  migrationsFolder: path.resolve(import.meta.dirname, "..", "drizzle"),
+});
+console.log("[orchestrator] migrations up to date");
 
 const devicePool = new DevicePool(db);
 const dispatcher = new WebSocketDispatcher(devicePool);
