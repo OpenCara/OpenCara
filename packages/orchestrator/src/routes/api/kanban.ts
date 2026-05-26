@@ -22,11 +22,14 @@ import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { Octokit } from "@octokit/rest";
 import { ulid } from "ulid";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
+  flowRuns,
+  flowRunSteps,
   githubInstallations,
+  platformEvents,
   projectV2Items,
   projectV2Links,
   projects,
@@ -81,6 +84,198 @@ export function notifyKanbanLink(
       console.error("[kanban] notify failed", { projectId, linkId, err });
     },
   );
+}
+
+/**
+ * One-line agent status shown on a kanban issue card while its implement flow
+ * is active (or recently terminated, so the user sees why nothing is moving).
+ *
+ * - `state` mirrors the flow_run lifecycle (succeeded is hidden — the linked
+ *   PR badge takes over).
+ * - `label` is the user-facing string ("Implementing…", "Failed", …).
+ * - `flowRunId` lets the UI route to the run page on click later.
+ * - `nodeKind` is the currently-running step's kind, if any (e.g. "agent",
+ *   "git.create_pr"). Carried so the front-end can refine the label without
+ *   another fetch if it wants step-aware copy in the future.
+ */
+export interface ImplementStatus {
+  state: "pending" | "running" | "failed" | "cancelled";
+  label: string;
+  flowRunId: string;
+  nodeKind: string | null;
+}
+
+/**
+ * For each issue on the board, find its most recent implement flow_run and
+ * shape a one-line status. Only "interesting" runs are included:
+ *   - pending/running: show "Queued"/"Implementing…"
+ *   - failed/cancelled in the last hour: show terminal state briefly so the
+ *     user notices the failure before re-triggering
+ * Succeeded runs are intentionally dropped — the linked-PR badge on the card
+ * already communicates "open, waiting for review".
+ *
+ * Issues are matched by either the trigger event's `issueNumber` (manual
+ * Start button) or its `projects_v2_item.content_node_id` (webhook on status
+ * change). We return one map keyed by `contentNumber` and another keyed by
+ * `contentNodeId` so the caller can pick whichever the item carries.
+ */
+async function loadImplementStatuses(
+  db: Db,
+  defaultImplementFlowId: string | null,
+): Promise<{
+  byNumber: Map<number, ImplementStatus>;
+  byNodeId: Map<string, ImplementStatus>;
+}> {
+  const empty = {
+    byNumber: new Map<number, ImplementStatus>(),
+    byNodeId: new Map<string, ImplementStatus>(),
+  };
+  if (!defaultImplementFlowId) return empty;
+
+  // One hour of look-back on terminal rows keeps the "Failed" line visible
+  // long enough for the user to notice it, without sticking around forever
+  // and obscuring the fact that the issue is now idle. Running/pending rows
+  // are always included regardless of age.
+  const runs = await db
+    .select({
+      runId: flowRuns.id,
+      status: flowRuns.status,
+      createdAt: flowRuns.createdAt,
+      eventPayload: platformEvents.payload,
+    })
+    .from(flowRuns)
+    .innerJoin(platformEvents, eq(flowRuns.triggerEventId, platformEvents.id))
+    .where(
+      and(
+        eq(flowRuns.flowId, defaultImplementFlowId),
+        or(
+          inArray(flowRuns.status, ["pending", "running"]),
+          and(
+            inArray(flowRuns.status, ["failed", "cancelled"]),
+            sql`${flowRuns.createdAt} > now() - interval '1 hour'`,
+          ),
+        ),
+      ),
+    )
+    .orderBy(desc(flowRuns.createdAt));
+
+  if (runs.length === 0) return empty;
+
+  // For each running run, also fetch the latest non-pending step so we can
+  // refine "Implementing…" → e.g. "Creating PR…" if the flow grows beyond
+  // a single agent node. Pending rows have no useful step yet.
+  const runningIds = runs
+    .filter((r) => r.status === "running")
+    .map((r) => r.runId);
+  const stepByRun = new Map<string, { nodeKind: string; status: string; idx: number }>();
+  if (runningIds.length > 0) {
+    const steps = await db
+      .select({
+        flowRunId: flowRunSteps.flowRunId,
+        nodeKind: flowRunSteps.nodeKind,
+        status: flowRunSteps.status,
+        idx: flowRunSteps.idx,
+      })
+      .from(flowRunSteps)
+      .where(inArray(flowRunSteps.flowRunId, runningIds))
+      .orderBy(desc(flowRunSteps.idx));
+    // Pick the first running step we encounter per run; fall back to the
+    // highest-idx step otherwise. Iteration is desc by idx so first hit is
+    // the most advanced step.
+    for (const s of steps) {
+      const prev = stepByRun.get(s.flowRunId);
+      if (!prev) stepByRun.set(s.flowRunId, s);
+      else if (prev.status !== "running" && s.status === "running") {
+        stepByRun.set(s.flowRunId, s);
+      }
+    }
+  }
+
+  const byNumber = new Map<number, ImplementStatus>();
+  const byNodeId = new Map<string, ImplementStatus>();
+  for (const r of runs) {
+    const payload = r.eventPayload as {
+      issueNumber?: unknown;
+      projects_v2_item?: { content_node_id?: unknown };
+    } | null;
+    const issueNumber =
+      typeof payload?.issueNumber === "number" ? payload.issueNumber : null;
+    const contentNodeId =
+      typeof payload?.projects_v2_item?.content_node_id === "string"
+        ? payload.projects_v2_item.content_node_id
+        : null;
+    if (issueNumber === null && contentNodeId === null) continue;
+
+    const step = stepByRun.get(r.runId);
+    const entry: ImplementStatus = {
+      state: r.status as ImplementStatus["state"],
+      label: labelForImplementStatus(r.status, step?.nodeKind ?? null),
+      flowRunId: r.runId,
+      nodeKind: step?.nodeKind ?? null,
+    };
+
+    // Keep only the first (most recent) row per issue. The query is already
+    // ordered DESC, so setIfAbsent semantics suffice.
+    if (issueNumber !== null && !byNumber.has(issueNumber)) {
+      byNumber.set(issueNumber, entry);
+    }
+    if (contentNodeId !== null && !byNodeId.has(contentNodeId)) {
+      byNodeId.set(contentNodeId, entry);
+    }
+  }
+  return { byNumber, byNodeId };
+}
+
+export function labelForImplementStatus(
+  runStatus: string,
+  runningNodeKind: string | null,
+): string {
+  if (runStatus === "pending") return "Queued";
+  if (runStatus === "failed") return "Failed";
+  if (runStatus === "cancelled") return "Cancelled";
+  // running: prefer step-aware copy if we recognise the kind, otherwise the
+  // generic verb. The current `issue-implement` flow only emits an `agent`
+  // step so this maps to "Implementing…" today; the other branches are here
+  // so future multi-step implement flows light up the UI without server
+  // changes on this side.
+  switch (runningNodeKind) {
+    case "agent":
+      return "Implementing…";
+    case "git.create_pr":
+      return "Creating PR…";
+    case "git.create_worktree":
+      return "Preparing worktree…";
+    case "github.post_review":
+      return "Posting review…";
+    case "github.add_comment":
+      return "Commenting…";
+    case "github.add_label":
+      return "Labelling…";
+    default:
+      return runningNodeKind ? "Working…" : "Starting…";
+  }
+}
+
+/**
+ * Pure helper: pick the implement status for one mirrored kanban item by
+ * looking it up in the per-issue maps. Exported for unit tests.
+ */
+export function pickImplementStatus(
+  item: { contentNumber: number | null; contentNodeId: string | null },
+  statuses: {
+    byNumber: Map<number, ImplementStatus>;
+    byNodeId: Map<string, ImplementStatus>;
+  },
+): ImplementStatus | null {
+  if (item.contentNumber !== null) {
+    const hit = statuses.byNumber.get(item.contentNumber);
+    if (hit) return hit;
+  }
+  if (item.contentNodeId !== null) {
+    const hit = statuses.byNodeId.get(item.contentNodeId);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 export function kanbanRoutes(deps: KanbanRoutesDeps) {
@@ -376,10 +571,19 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       .where(eq(projectV2Items.projectV2LinkId, link.id))
       .orderBy(asc(projectV2Items.updatedAt));
 
+    const statuses = await loadImplementStatuses(
+      deps.db,
+      project.defaultImplementFlowId,
+    );
+    const itemsWithStatus = items.map((it) => ({
+      ...it,
+      implementStatus: pickImplementStatus(it, statuses),
+    }));
+
     return c.json({
       link,
       columns: link.statusOptions,
-      items,
+      items: itemsWithStatus,
       projectRepo,
     });
   });
@@ -559,10 +763,26 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
           .from(projectV2Items)
           .where(eq(projectV2Items.projectV2LinkId, link.id))
           .orderBy(asc(projectV2Items.updatedAt));
+        // Re-read defaultImplementFlowId on every snapshot rather than
+        // closing over ctx.project — the user can change it from the
+        // settings page mid-stream and the SSE connection would otherwise
+        // keep serving stale statuses until reconnect.
+        const projectRow = await deps.db.query.projects.findFirst({
+          where: eq(projects.id, id),
+          columns: { defaultImplementFlowId: true },
+        });
+        const statuses = await loadImplementStatuses(
+          deps.db,
+          projectRow?.defaultImplementFlowId ?? null,
+        );
+        const itemsWithStatus = items.map((it) => ({
+          ...it,
+          implementStatus: pickImplementStatus(it, statuses),
+        }));
         return {
           link,
           columns: link.statusOptions,
-          items,
+          items: itemsWithStatus,
           projectRepo,
         } as const;
       };
@@ -596,23 +816,35 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         void enqueueSnapshot();
       };
 
+      // flow_runs notify carries a bare flowRunId (engine doesn't know which
+      // project SSE handlers care). Cheaper to always rebuild the snapshot
+      // than per-notify-look-up which flow it belonged to — these fire at
+      // most a handful of times per implement run.
+      const onFlowRunNotify = (_raw: string) => {
+        void enqueueSnapshot();
+      };
+
       const heartbeat = setInterval(() => {
         sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
       }, 15_000);
 
       let sub: { unlisten: () => Promise<void> } | null = null;
+      let flowSub: { unlisten: () => Promise<void> } | null = null;
       try {
         await enqueueSnapshot();
         sub = await deps.pg.listen(KANBAN_NOTIFY_CHANNEL, onNotify);
+        flowSub = await deps.pg.listen("flow_runs", onFlowRunNotify);
       } catch (err) {
         clearInterval(heartbeat);
         if (sub) await sub.unlisten().catch(() => undefined);
+        if (flowSub) await flowSub.unlisten().catch(() => undefined);
         throw err;
       }
 
       sse.onAbort(async () => {
         clearInterval(heartbeat);
         if (sub) await sub.unlisten().catch(() => undefined);
+        if (flowSub) await flowSub.unlisten().catch(() => undefined);
       });
     });
   });

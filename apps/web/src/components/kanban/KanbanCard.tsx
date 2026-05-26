@@ -1,4 +1,13 @@
-import { ExternalLink, GitPullRequest, Pencil, Play } from "lucide-react";
+import {
+  AlertCircle,
+  CircleSlash,
+  Clock,
+  ExternalLink,
+  GitPullRequest,
+  Loader2,
+  Pencil,
+  Play,
+} from "lucide-react";
 import { Link } from "react-router";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
@@ -7,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { AgentPicker } from "@/components/agent/AgentPicker";
 import {
   useTriggerImplementFlow,
+  type KanbanImplementStatus,
   type KanbanItem,
   type KanbanLinkedPr,
 } from "@/lib/queries";
@@ -146,6 +156,9 @@ export function KanbanCard({
               )}
             </div>
           )}
+          {item.implementStatus && (
+            <ImplementStatusLine status={item.implementStatus} />
+          )}
           {item.linkedPrs?.length > 0 && (
             <div className="mt-2 flex flex-col gap-1">
               {item.linkedPrs.map((pr) => (
@@ -203,6 +216,43 @@ export function KanbanCard({
     </div>
   );
 }
+
+/**
+ * One-line agent status surfaced on issue cards. Renders nothing for
+ * succeeded runs (those don't reach the client — the linked-PR badge
+ * communicates the same outcome) and uses a spinner for in-flight states
+ * so the at-a-glance signal is obvious without reading the text.
+ */
+function ImplementStatusLine({ status }: { status: KanbanImplementStatus }) {
+  const presentation = STATUS_PRESENTATION[status.state];
+  const Icon = presentation.icon;
+  return (
+    <div
+      className={`mt-2 flex items-center gap-1 text-[10px] ${presentation.color}`}
+      title={`Implement flow run ${status.flowRunId.slice(-8)} · ${status.state}`}
+    >
+      <Icon
+        className={`size-3 shrink-0 ${presentation.spin ? "animate-spin" : ""}`}
+      />
+      <span className="truncate">{status.label}</span>
+    </div>
+  );
+}
+
+const STATUS_PRESENTATION: Record<
+  KanbanImplementStatus["state"],
+  {
+    icon: typeof Loader2;
+    color: string;
+    /** Whether to apply the spin animation to the icon. */
+    spin: boolean;
+  }
+> = {
+  pending: { icon: Clock, color: "text-muted-foreground", spin: false },
+  running: { icon: Loader2, color: "text-blue-600", spin: true },
+  failed: { icon: AlertCircle, color: "text-destructive", spin: false },
+  cancelled: { icon: CircleSlash, color: "text-muted-foreground", spin: false },
+};
 
 function LinkedPrBadge({ pr }: { pr: KanbanLinkedPr }) {
   const colorClass = PR_STATE_COLOR[pr.state] ?? "text-muted-foreground";
@@ -322,6 +372,9 @@ export function KanbanCardOverlay({ item }: { item: KanbanItem }) {
             </span>
           )}
         </div>
+      )}
+      {item.implementStatus && (
+        <ImplementStatusLine status={item.implementStatus} />
       )}
       {item.linkedPrs?.length > 0 && (
         <div className="mt-2 flex flex-col gap-1">

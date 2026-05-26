@@ -757,6 +757,21 @@ export interface KanbanLinkedPr {
   state: string; // 'OPEN' | 'CLOSED' | 'MERGED' | 'DRAFT'
 }
 
+/**
+ * One-line agent status surfaced on the kanban card. Populated by the server
+ * for issue items that have an active (pending/running) implement flow run,
+ * or one that failed/cancelled in the last hour. Succeeded runs are dropped
+ * by the server because the linked-PR badge already represents that state.
+ */
+export interface KanbanImplementStatus {
+  state: "pending" | "running" | "failed" | "cancelled";
+  /** User-facing copy, e.g. "Implementing…", "Failed". */
+  label: string;
+  flowRunId: string;
+  /** Currently-running step's nodeKind, when known. */
+  nodeKind: string | null;
+}
+
 export interface KanbanItem {
   id: string;
   projectV2LinkId: string;
@@ -772,6 +787,8 @@ export interface KanbanItem {
   assignees: { login: string; id: number }[];
   labels: { name: string; color: string }[];
   linkedPrs: KanbanLinkedPr[];
+  /** Null when there's no active/recent implement run for this issue. */
+  implementStatus: KanbanImplementStatus | null;
   updatedAt: string;
 }
 
