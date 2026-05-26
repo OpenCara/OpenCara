@@ -29,6 +29,7 @@ import {
   flowRuns,
   flowRunSteps,
   githubInstallations,
+  issues,
   platformEvents,
   projectV2Items,
   projectV2Links,
@@ -114,22 +115,21 @@ export interface ImplementStatus {
  * Succeeded runs are intentionally dropped — the linked-PR badge on the card
  * already communicates "open, waiting for review".
  *
- * Issues are matched by either the trigger event's `issueNumber` (manual
- * Start button) or its `projects_v2_item.content_node_id` (webhook on status
- * change). We return one map keyed by `contentNumber` and another keyed by
- * `contentNodeId` so the caller can pick whichever the item carries.
+ * Keying is always by the issue's GraphQL `contentNodeId`, which is globally
+ * unique. Two paths reach the same map:
+ *   - Webhook (`projects_v2_item`) trigger: payload already carries
+ *     `content_node_id` directly.
+ *   - Manual Start trigger: payload carries only `issueNumber`, which we
+ *     resolve against the project's own `issues` table — that table is
+ *     scoped by `projectId` so a foreign-repo board item with the same
+ *     `contentNumber` cannot collide.
  */
 async function loadImplementStatuses(
   db: Db,
+  projectId: string,
   defaultImplementFlowId: string | null,
-): Promise<{
-  byNumber: Map<number, ImplementStatus>;
-  byNodeId: Map<string, ImplementStatus>;
-}> {
-  const empty = {
-    byNumber: new Map<number, ImplementStatus>(),
-    byNodeId: new Map<string, ImplementStatus>(),
-  };
+): Promise<{ byNodeId: Map<string, ImplementStatus> }> {
+  const empty = { byNodeId: new Map<string, ImplementStatus>() };
   if (!defaultImplementFlowId) return empty;
 
   // One hour of look-back on terminal rows keeps the "Failed" line visible
@@ -164,6 +164,9 @@ async function loadImplementStatuses(
   // For each running run, also fetch the latest non-pending step so we can
   // refine "Implementing…" → e.g. "Creating PR…" if the flow grows beyond
   // a single agent node. Pending rows have no useful step yet.
+  // Tiebreak today is `desc(idx)`: correct while implement flows are linear.
+  // If a future flow runs sibling nodes in parallel, switch to ordering by
+  // `started_at` so "currently doing X" picks the truly most recent start.
   const runningIds = runs
     .filter((r) => r.status === "running")
     .map((r) => r.runId);
@@ -191,24 +194,73 @@ async function loadImplementStatuses(
     }
   }
 
-  const byNumber = new Map<number, ImplementStatus>();
-  const byNodeId = new Map<string, ImplementStatus>();
+  // Manual-Start payloads carry only `issueNumber`. Resolve to node id via
+  // the project's own issues table — bulk-load every needed number in one
+  // round-trip rather than N point lookups. Numbers that don't resolve
+  // (race with the issues backfill) silently drop their run: better to
+  // omit the status line than risk attaching it to the wrong card.
+  const numbersToResolve = new Set<number>();
   for (const r of runs) {
     const payload = r.eventPayload as {
       issueNumber?: unknown;
       projects_v2_item?: { content_node_id?: unknown };
     } | null;
-    const issueNumber =
-      typeof payload?.issueNumber === "number" ? payload.issueNumber : null;
-    const contentNodeId =
+    if (
+      typeof payload?.issueNumber === "number" &&
+      typeof payload?.projects_v2_item?.content_node_id !== "string"
+    ) {
+      numbersToResolve.add(payload.issueNumber);
+    }
+  }
+  const numberToNodeId = new Map<number, string>();
+  if (numbersToResolve.size > 0) {
+    const rows = await db
+      .select({
+        number: issues.number,
+        githubNodeId: issues.githubNodeId,
+      })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.projectId, projectId),
+          inArray(issues.number, [...numbersToResolve]),
+        ),
+      );
+    for (const row of rows) numberToNodeId.set(row.number, row.githubNodeId);
+  }
+
+  const byNodeId = new Map<string, ImplementStatus>();
+  for (const r of runs) {
+    // Belt-and-braces: SQL already filters out succeeded, but this guard
+    // narrows the union before the cast so a future filter widening can't
+    // silently leak `"succeeded"` into the client payload.
+    if (
+      r.status !== "pending" &&
+      r.status !== "running" &&
+      r.status !== "failed" &&
+      r.status !== "cancelled"
+    ) {
+      continue;
+    }
+
+    const payload = r.eventPayload as {
+      issueNumber?: unknown;
+      projects_v2_item?: { content_node_id?: unknown };
+    } | null;
+    const directNodeId =
       typeof payload?.projects_v2_item?.content_node_id === "string"
         ? payload.projects_v2_item.content_node_id
         : null;
-    if (issueNumber === null && contentNodeId === null) continue;
+    const resolvedNodeId =
+      directNodeId ??
+      (typeof payload?.issueNumber === "number"
+        ? (numberToNodeId.get(payload.issueNumber) ?? null)
+        : null);
+    if (resolvedNodeId === null) continue;
 
     const step = stepByRun.get(r.runId);
     const entry: ImplementStatus = {
-      state: r.status as ImplementStatus["state"],
+      state: r.status,
       label: labelForImplementStatus(r.status, step?.nodeKind ?? null),
       flowRunId: r.runId,
       nodeKind: step?.nodeKind ?? null,
@@ -216,14 +268,11 @@ async function loadImplementStatuses(
 
     // Keep only the first (most recent) row per issue. The query is already
     // ordered DESC, so setIfAbsent semantics suffice.
-    if (issueNumber !== null && !byNumber.has(issueNumber)) {
-      byNumber.set(issueNumber, entry);
-    }
-    if (contentNodeId !== null && !byNodeId.has(contentNodeId)) {
-      byNodeId.set(contentNodeId, entry);
+    if (!byNodeId.has(resolvedNodeId)) {
+      byNodeId.set(resolvedNodeId, entry);
     }
   }
-  return { byNumber, byNodeId };
+  return { byNodeId };
 }
 
 export function labelForImplementStatus(
@@ -257,25 +306,16 @@ export function labelForImplementStatus(
 }
 
 /**
- * Pure helper: pick the implement status for one mirrored kanban item by
- * looking it up in the per-issue maps. Exported for unit tests.
+ * Pure helper: pick the implement status for one mirrored kanban item by its
+ * GraphQL `contentNodeId`. Items without a node id (drafts) always miss.
+ * Exported for unit tests.
  */
 export function pickImplementStatus(
-  item: { contentNumber: number | null; contentNodeId: string | null },
-  statuses: {
-    byNumber: Map<number, ImplementStatus>;
-    byNodeId: Map<string, ImplementStatus>;
-  },
+  item: { contentNodeId: string | null },
+  statuses: { byNodeId: Map<string, ImplementStatus> },
 ): ImplementStatus | null {
-  if (item.contentNumber !== null) {
-    const hit = statuses.byNumber.get(item.contentNumber);
-    if (hit) return hit;
-  }
-  if (item.contentNodeId !== null) {
-    const hit = statuses.byNodeId.get(item.contentNodeId);
-    if (hit) return hit;
-  }
-  return null;
+  if (item.contentNodeId === null) return null;
+  return statuses.byNodeId.get(item.contentNodeId) ?? null;
 }
 
 export function kanbanRoutes(deps: KanbanRoutesDeps) {
@@ -573,6 +613,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
 
     const statuses = await loadImplementStatuses(
       deps.db,
+      project.id,
       project.defaultImplementFlowId,
     );
     const itemsWithStatus = items.map((it) => ({
@@ -773,6 +814,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         });
         const statuses = await loadImplementStatuses(
           deps.db,
+          id,
           projectRow?.defaultImplementFlowId ?? null,
         );
         const itemsWithStatus = items.map((it) => ({

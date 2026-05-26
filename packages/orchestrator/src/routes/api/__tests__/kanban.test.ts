@@ -53,45 +53,28 @@ describe("pickImplementStatus", () => {
     nodeKind: "agent",
   };
 
-  it("prefers a match on contentNumber (manual Start payload)", () => {
-    const byNumber = new Map<number, ImplementStatus>([[42, entry]]);
-    const byNodeId = new Map<string, ImplementStatus>();
-    const hit = pickImplementStatus(
-      { contentNumber: 42, contentNodeId: null },
-      { byNumber, byNodeId },
-    );
-    assert.equal(hit, entry);
-  });
-
-  it("falls back to contentNodeId (webhook projects_v2_item payload)", () => {
-    const byNumber = new Map<number, ImplementStatus>();
+  it("matches a kanban item by its GraphQL contentNodeId", () => {
     const byNodeId = new Map<string, ImplementStatus>([["I_abc", entry]]);
-    const hit = pickImplementStatus(
-      { contentNumber: 99, contentNodeId: "I_abc" },
-      { byNumber, byNodeId },
-    );
-    // The number missing forces the node-id fallback to engage.
+    const hit = pickImplementStatus({ contentNodeId: "I_abc" }, { byNodeId });
     assert.equal(hit, entry);
   });
 
-  it("returns null when no map carries the item", () => {
+  it("returns null when the node id is absent from the map", () => {
     const hit = pickImplementStatus(
-      { contentNumber: 7, contentNodeId: "I_z" },
-      {
-        byNumber: new Map(),
-        byNodeId: new Map(),
-      },
+      { contentNodeId: "I_unknown" },
+      { byNodeId: new Map() },
     );
     assert.equal(hit, null);
   });
 
-  it("returns null when both keys are absent on the item (e.g. drafts)", () => {
-    const byNumber = new Map<number, ImplementStatus>([[42, entry]]);
+  it("returns null for items without a contentNodeId (e.g. drafts)", () => {
+    // Cross-repo collision regression: keying purely on node id (resolved
+    // from the project's own issues table for manual-Start runs) means a
+    // foreign-repo board item with the same `contentNumber` as an own-repo
+    // issue with a running run will not pick up that status — because their
+    // `contentNodeId`s differ even when the numbers don't.
     const byNodeId = new Map<string, ImplementStatus>([["I_abc", entry]]);
-    const hit = pickImplementStatus(
-      { contentNumber: null, contentNodeId: null },
-      { byNumber, byNodeId },
-    );
+    const hit = pickImplementStatus({ contentNodeId: null }, { byNodeId });
     assert.equal(hit, null);
   });
 });
