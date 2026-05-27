@@ -23,6 +23,7 @@ import { projectDetailBuilder } from "./skills/projectDetail.js";
 import { projectFlowDetailBuilder } from "./skills/projectFlowDetail.js";
 import { flowTemplateDetailBuilder } from "./skills/flowTemplateDetail.js";
 import { flowRunDetailBuilder } from "./skills/flowRunDetail.js";
+import { flowRunStepChatBuilder } from "./skills/flowRunStepChat.js";
 import { projectPmBuilder } from "./skills/projectPm.js";
 
 export interface SkillEnvelope {
@@ -50,6 +51,10 @@ export interface PageContextLike {
   projectId?: string;
   flowSlug?: string;
   flowRunId?: string;
+  /** flow_run_steps.id — set by the steering chat in FlowRunDetailPage so
+   * the `flow-run-step-chat` skill builder can resolve the right node
+   * and seed the agent's context with that step's history. */
+  flowRunStepId?: string;
   selectedNodeId?: string;
   data?: Record<string, unknown>;
   canvas?: {
@@ -96,6 +101,7 @@ const REGISTRY: Record<string, PageSkillBuilder> = {
   "project-flow-detail": projectFlowDetailBuilder,
   "flow-template-detail": flowTemplateDetailBuilder,
   "flow-run-detail": flowRunDetailBuilder,
+  "flow-run-step-chat": flowRunStepChatBuilder,
   "project-pm": projectPmBuilder,
 };
 

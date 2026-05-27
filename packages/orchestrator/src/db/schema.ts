@@ -629,7 +629,15 @@ export const projectV2Items = pgTable(
 // Allowed values for `chat_sessions.scope_kind`. Stored as text rather than
 // a pg enum so adding a new scope (e.g. 'flow' for per-flow threads) is a
 // code-only change. Validated at the route boundary.
-export const CHAT_SESSION_SCOPE_KINDS = ["project", "template", "user"] as const;
+export const CHAT_SESSION_SCOPE_KINDS = [
+  "project",
+  "template",
+  "user",
+  // Steering chat anchored to a single flow_run_step. Lets the user
+  // continue (or steer) the agent that ran that node by resuming its
+  // ACP session. scope_id = flow_run_steps.id.
+  "flow_run_step",
+] as const;
 export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
 
 // N rows per (user, scope) — e.g. (alice, 'project', proj_123) may hold

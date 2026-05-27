@@ -987,10 +987,16 @@ export const pmWavesQuery = (projectId: string) => ({
 // ---- Chat sessions (generic per-(user, scope) persistence) ----
 //
 // scopeKind/scopeId match the orchestrator's chat_sessions PK:
-//   'project'  + projectId      — every project-scoped page
-//   'template' + templateSlug   — /flows/:slug
-//   'user'     + ''             — user-global / unregistered pages
-export type ChatSessionScopeKind = "project" | "template" | "user";
+//   'project'        + projectId        — every project-scoped page
+//   'template'       + templateSlug     — /flows/:slug
+//   'user'           + ''               — user-global / unregistered pages
+//   'flow_run_step'  + flowRunStepId    — steering chat for one agent node
+//                                         in FlowRunDetailPage
+export type ChatSessionScopeKind =
+  | "project"
+  | "template"
+  | "user"
+  | "flow_run_step";
 
 export interface ChatSession {
   id: string;

@@ -30,7 +30,11 @@ import type { Db } from "../../db/client.js";
 import {
   CHAT_SESSION_SCOPE_KINDS,
   type ChatSessionScopeKind,
+  agentRuns,
   chatSessions,
+  flowRunSteps,
+  flowRuns,
+  flowNodeSettings,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
@@ -81,8 +85,100 @@ async function gateScope(
     if (!scopeId) return { ok: false, status: 400, error: "scopeId required for template scope" };
     return { ok: true };
   }
+  if (kind === "flow_run_step") {
+    if (!scopeId) {
+      return { ok: false, status: 400, error: "scopeId required for flow_run_step scope" };
+    }
+    const owned = await loadFlowRunStepProject(deps.db, scopeId, userId);
+    if (!owned) return { ok: false, status: 404, error: "not found" };
+    return { ok: true };
+  }
   // 'user' scope: no extra check beyond auth.
   return { ok: true };
+}
+
+// Resolves a flow_run_step to its owning project, gated by user ownership.
+// Returns the projectId on success, undefined otherwise. The step → project
+// chain is step → flow_run → project; we join all three rather than reading
+// flow_run.projectId on faith, so a request that smuggles a step id from
+// another user's project bounces.
+//
+// Exported for unit tests that exercise the gate with a fake Db.
+export async function loadFlowRunStepProject(
+  db: Db,
+  stepId: string,
+  userId: string,
+): Promise<string | undefined> {
+  const step = await db.query.flowRunSteps.findFirst({
+    where: eq(flowRunSteps.id, stepId),
+    columns: { flowRunId: true },
+  });
+  if (!step) return undefined;
+  const run = await db.query.flowRuns.findFirst({
+    where: eq(flowRuns.id, step.flowRunId),
+    columns: { projectId: true },
+  });
+  if (!run) return undefined;
+  const owned = await loadOwnedProject(db, run.projectId, userId);
+  return owned ? run.projectId : undefined;
+}
+
+// For the flow_run_step scope, look up the underlying agent_run linked
+// to this step and return the values we want to pre-seed the chat row
+// with. Reading the row at session-create time means the first chat
+// turn resumes the ACP session straight away — no extra "associate
+// session" round-trip from the panel.
+//
+// Exported for unit tests that exercise hydration with a fake Db.
+export async function hydrateFromFlowRunStep(
+  db: Db,
+  stepId: string,
+): Promise<{
+  agentId: string | null;
+  acpSessionId: string | null;
+  acpSessionHostId: string | null;
+}> {
+  const step = await db.query.flowRunSteps.findFirst({
+    where: eq(flowRunSteps.id, stepId),
+    columns: { id: true, flowRunId: true, nodeId: true },
+  });
+  if (!step) {
+    return { agentId: null, acpSessionId: null, acpSessionHostId: null };
+  }
+  const run = await db.query.flowRuns.findFirst({
+    where: eq(flowRuns.id, step.flowRunId),
+    columns: { flowId: true },
+  });
+  // Most recent agent_run for the step wins. A failed first iteration
+  // followed by a successful retry is the common shape; chatting from
+  // the page targets the latest run's session for resume continuity.
+  const lastRun = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.flowRunStepId, step.id),
+    orderBy: [desc(agentRuns.createdAt)],
+    columns: { id: true, hostId: true, spec: true },
+  });
+  const setting = run
+    ? await db.query.flowNodeSettings.findFirst({
+        where: and(
+          eq(flowNodeSettings.flowId, run.flowId),
+          eq(flowNodeSettings.nodeId, step.nodeId),
+        ),
+        columns: { agentId: true },
+      })
+    : undefined;
+  const spec = (lastRun?.spec ?? null) as
+    | { acp?: { priorSessionId?: string | null } | null }
+    | null;
+  // The orchestrator persists the resulting acpSessionId back onto the
+  // spec only via the chat path; flow-engine runs don't write it back
+  // onto the agent_runs row today. Fall back to priorSessionId so a
+  // resumed iteration's chat still picks up the right id.
+  const acpSessionId = spec?.acp?.priorSessionId ?? null;
+  return {
+    agentId: setting?.agentId ?? null,
+    acpSessionId,
+    acpSessionHostId: lastRun?.hostId ?? null,
+  };
 }
 
 function toResponse(row: typeof chatSessions.$inferSelect): SessionResponse {
@@ -148,6 +244,13 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     const id = `chat_${ulid()}`;
     const threadKey = id;
     const now = new Date();
+    // For flow_run_step scope, pre-seed the row with the agent + ACP
+    // session id of the underlying flow agent run, so the very first
+    // user message resumes that conversation instead of starting fresh.
+    const seed =
+      kind === "flow_run_step"
+        ? await hydrateFromFlowRunStep(deps.db, scopeId)
+        : { agentId: null, acpSessionId: null, acpSessionHostId: null };
     const [created] = await deps.db
       .insert(chatSessions)
       .values({
@@ -156,7 +259,9 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
         scopeKind: kind,
         scopeId,
         threadKey,
-        agentId: null,
+        agentId: seed.agentId,
+        acpSessionId: seed.acpSessionId,
+        acpSessionHostId: seed.acpSessionHostId,
         updatedAt: now,
       })
       .returning();
@@ -186,6 +291,19 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     if (!existing) {
       const id = `chat_${ulid()}`;
       const threadKey = id;
+      // Same hydration as the GET path — a panel that POSTs without
+      // first GETting still ends up on a row with the flow agent's
+      // acpSessionId pre-populated, so the very first user message
+      // resumes the conversation. If the caller supplied an explicit
+      // agentId it wins; we still inherit the ACP session ids when the
+      // chosen agent matches the one the flow ran (best-effort).
+      const seed =
+        kind === "flow_run_step"
+          ? await hydrateFromFlowRunStep(deps.db, scopeId)
+          : { agentId: null, acpSessionId: null, acpSessionHostId: null };
+      const resolvedAgentId = agentId ?? seed.agentId;
+      const inheritsAcp =
+        kind === "flow_run_step" && seed.agentId === resolvedAgentId;
       const [created] = await deps.db
         .insert(chatSessions)
         .values({
@@ -194,7 +312,9 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
           scopeKind: kind,
           scopeId,
           threadKey,
-          agentId,
+          agentId: resolvedAgentId,
+          acpSessionId: inheritsAcp ? seed.acpSessionId : null,
+          acpSessionHostId: inheritsAcp ? seed.acpSessionHostId : null,
           updatedAt: now,
         })
         .returning();
@@ -284,6 +404,18 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
         .where(eq(chatSessions.id, existing.id));
     }
 
+    // /new path also pre-seeds for flow_run_step. The previous active
+    // row was just archived above; the fresh row should re-pick up the
+    // step's ACP session id so the new conversation also resumes the
+    // flow agent (otherwise "New chat" inside this scope would silently
+    // strand the user on a fresh session/new).
+    const seed =
+      kind === "flow_run_step"
+        ? await hydrateFromFlowRunStep(deps.db, scopeId)
+        : { agentId: null, acpSessionId: null, acpSessionHostId: null };
+    const resolvedAgentId = agentId ?? seed.agentId;
+    const inheritsAcp =
+      kind === "flow_run_step" && seed.agentId === resolvedAgentId;
     const id = `chat_${ulid()}`;
     const threadKey = id;
     const [created] = await deps.db
@@ -294,7 +426,9 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
         scopeKind: kind,
         scopeId,
         threadKey,
-        agentId,
+        agentId: resolvedAgentId,
+        acpSessionId: inheritsAcp ? seed.acpSessionId : null,
+        acpSessionHostId: inheritsAcp ? seed.acpSessionHostId : null,
         updatedAt: now,
       })
       .returning();
