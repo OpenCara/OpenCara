@@ -418,6 +418,49 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     }
   });
 
+  // Cancel a running flow run. Mirrors the per-wave cancel in /pm: flip the
+  // row to `cancelled` only if still non-terminal (guarded UPDATE), then ping
+  // the flow_runs LISTEN channel so any SSE stream and the kanban board see
+  // the new status without waiting for the next poll tick.
+  //
+  // The agent_run rows referenced by the in-flight step keep their status —
+  // the engine notices the cancelled parent on its next tick and stops
+  // assigning new agent runs. A live agent process is *not* signalled to
+  // stop from this endpoint; the typical implement run is short enough that
+  // the agent finishes naturally and the cancelled status on the flow_run
+  // is what the UI cares about.
+  r.post("/flow-runs/:id/cancel", auth, async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user")!;
+    const run = await deps.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, id),
+      columns: { id: true, projectId: true, status: true },
+    });
+    if (!run) return c.json({ error: "not found" }, 404);
+    const owned = await loadOwnedProject(deps.db, run.projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    if (run.status !== "pending" && run.status !== "running") {
+      return c.json({ error: "already terminal" }, 409);
+    }
+    await deps.db
+      .update(flowRuns)
+      .set({
+        status: "cancelled",
+        cancelReason: "user_stopped",
+        finishedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(flowRuns.id, id),
+          inArray(flowRuns.status, ["pending", "running"]),
+        ),
+      );
+    // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
+    // board, which LISTENs on `flow_runs` to refresh implement statuses).
+    void deps.pg.notify("flow_runs", id);
+    return c.json({ ok: true });
+  });
+
   r.get("/flow-runs/:id", auth, async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;

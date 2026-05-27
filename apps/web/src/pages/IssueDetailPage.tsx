@@ -5,6 +5,7 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { IssueAgentProgress } from "@/components/canvas/IssueAgentProgress";
 import { IssueBodyEditor } from "@/components/canvas/IssueBodyEditor";
 import { IssueStatusDropdown } from "@/components/canvas/IssueStatusDropdown";
 import { AgentPicker } from "@/components/agent/AgentPicker";
@@ -143,6 +144,10 @@ export function IssueDetailPage() {
           Save failed: {save.error instanceof Error ? save.error.message : String(save.error)}
         </div>
       )}
+      <IssueAgentProgress
+        projectId={projectId}
+        issueNumber={issue.number}
+      />
       <div className="p-6">
         <IssueBodyEditor
           bodyMd={effectiveBody}

@@ -342,6 +342,80 @@ export function useSetIssueDraft(projectId: string, issueNumber: number) {
   });
 }
 
+/**
+ * One flow run targeting an issue, returned by
+ * GET /api/projects/:id/issues/:n/flow-runs. Shape mirrors `FlowRunSummary`
+ * plus the joined flow's slug/name (so the panel can show "issue-implement"
+ * instead of an opaque flow id) and the currently-running step's nodeKind
+ * (used to refine the status label for in-flight runs without a second
+ * fetch per row).
+ */
+export interface IssueFlowRun {
+  id: string;
+  flowId: string;
+  projectId: string;
+  triggerEventId: string | null;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  error: string | null;
+  flowSlug: string;
+  flowName: string;
+  /** Currently-executing step's nodeKind, only meaningful while status === "running". */
+  currentNodeKind: string | null;
+}
+
+export const issueFlowRunsQuery = (
+  projectId: string,
+  issueNumber: number,
+) => ({
+  queryKey: [
+    "projects",
+    projectId,
+    "issues",
+    issueNumber,
+    "flow-runs",
+  ] as const,
+  queryFn: () =>
+    api.get<{ runs: IssueFlowRun[] }>(
+      `/api/projects/${projectId}/issues/${issueNumber}/flow-runs`,
+    ),
+});
+
+/**
+ * Cancel a flow run. Used by the issue-editing page's "Cancel" button to
+ * stop an in-flight implement run from outside the flow-run detail page.
+ */
+export function useCancelFlowRun(projectId: string, issueNumber: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowRunId: string) =>
+      api.post<{ ok: boolean }>(`/api/flow-runs/${flowRunId}/cancel`),
+    onSuccess: (_data, flowRunId) => {
+      // Refresh the per-issue list — SSE will eventually catch the new
+      // status too, but the user clicked Cancel and expects immediate
+      // feedback. Also invalidate the flow-run detail in case it's open
+      // in another tab, and the kanban board (its implementStatus depends
+      // on the same flow_run row).
+      qc.invalidateQueries({
+        queryKey: [
+          "projects",
+          projectId,
+          "issues",
+          issueNumber,
+          "flow-runs",
+        ],
+      });
+      qc.invalidateQueries({ queryKey: ["flow-runs", flowRunId] });
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
 export const projectRunsQuery = (id: string) => ({
   queryKey: ["projects", id, "runs"] as const,
   queryFn: () => api.get<{ runs: ProjectRun[] }>(`/api/projects/${id}/runs`),

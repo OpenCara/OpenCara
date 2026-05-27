@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
   agents,
+  flowRuns,
+  flowRunSteps,
   flows,
   githubInstallations,
   issues,
@@ -458,6 +460,104 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         500,
       );
     }
+  });
+
+  // List flow runs that targeted a specific issue, in reverse-chronological
+  // order. Used by the issue editing page to show "what an implement agent
+  // has been doing on this issue" — both the live run (if any) and history.
+  //
+  // We match an issue to a flow run via the trigger event payload, mirroring
+  // the kanban's loadImplementStatuses lookup:
+  //   - Manual trigger (e.g. kanban "Start"): payload.issueNumber
+  //   - projects_v2_item webhook trigger: payload.projects_v2_item.content_node_id
+  // Both paths converge on this issue's githubNodeId/number, so a single
+  // SQL `OR` over both predicates catches every implement run for the issue
+  // regardless of how it was triggered.
+  r.get("/:id/issues/:number/flow-runs", async (c) => {
+    const id = c.req.param("id");
+    const user = c.get("user")!;
+    const number = Number.parseInt(c.req.param("number"), 10);
+    if (!Number.isFinite(number)) {
+      return c.json({ error: "invalid issue number" }, 400);
+    }
+    const owned = await loadOwnedProject(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "issue not found" }, 404);
+    const issueRow = await deps.db.query.issues.findFirst({
+      where: (i, { and, eq, isNull }) =>
+        and(eq(i.projectId, id), eq(i.number, number), isNull(i.removedAt)),
+      columns: { id: true, githubNodeId: true, number: true },
+    });
+    if (!issueRow) return c.json({ error: "issue not found" }, 404);
+
+    const limit = clampLimit(c.req.query("limit"));
+    const rows = await deps.db
+      .select({
+        id: flowRuns.id,
+        flowId: flowRuns.flowId,
+        projectId: flowRuns.projectId,
+        triggerEventId: flowRuns.triggerEventId,
+        status: flowRuns.status,
+        startedAt: flowRuns.startedAt,
+        finishedAt: flowRuns.finishedAt,
+        createdAt: flowRuns.createdAt,
+        error: flowRuns.error,
+        flowSlug: flows.slug,
+        flowName: flows.name,
+      })
+      .from(flowRuns)
+      .innerJoin(platformEvents, eq(flowRuns.triggerEventId, platformEvents.id))
+      .innerJoin(flows, eq(flowRuns.flowId, flows.id))
+      .where(
+        and(
+          eq(flowRuns.projectId, id),
+          // Hide trigger-skip rows by default — they're the bulk of fan-out
+          // noise and the issue-editing user is interested in real runs.
+          sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
+          or(
+            sql`(${platformEvents.payload}->>'issueNumber')::int = ${issueRow.number}`,
+            sql`${platformEvents.payload}->'projects_v2_item'->>'content_node_id' = ${issueRow.githubNodeId}`,
+          ),
+        ),
+      )
+      .orderBy(desc(flowRuns.createdAt))
+      .limit(limit);
+
+    // Surface the currently-running step's nodeKind for active runs so the
+    // panel can refine its label ("Implementing…" vs. "Creating PR…")
+    // without an extra fetch per run.
+    const activeRunIds = rows
+      .filter((r) => r.status === "running")
+      .map((r) => r.id);
+    const currentStepByRun = new Map<
+      string,
+      { nodeKind: string; status: string; idx: number }
+    >();
+    if (activeRunIds.length > 0) {
+      const steps = await deps.db
+        .select({
+          flowRunId: flowRunSteps.flowRunId,
+          nodeKind: flowRunSteps.nodeKind,
+          status: flowRunSteps.status,
+          idx: flowRunSteps.idx,
+        })
+        .from(flowRunSteps)
+        .where(inArray(flowRunSteps.flowRunId, activeRunIds))
+        .orderBy(desc(flowRunSteps.idx));
+      for (const s of steps) {
+        const prev = currentStepByRun.get(s.flowRunId);
+        if (!prev) currentStepByRun.set(s.flowRunId, s);
+        else if (prev.status !== "running" && s.status === "running") {
+          currentStepByRun.set(s.flowRunId, s);
+        }
+      }
+    }
+
+    const runs = rows.map((row) => ({
+      ...row,
+      currentNodeKind: currentStepByRun.get(row.id)?.nodeKind ?? null,
+    }));
+
+    return c.json({ runs });
   });
 
   r.get("/:id/runs", async (c) => {
