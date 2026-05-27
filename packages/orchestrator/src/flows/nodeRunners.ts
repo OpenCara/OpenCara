@@ -241,6 +241,27 @@ async function pullRequestReviewTrigger(
     throw new SkipFlowError(`expected pull_request_review trigger, got ${node.kind}`);
   }
 
+  // Skip cleanly when the PR is already closed (merged or closed-unmerged).
+  // `pull_request_review.submitted` (and an `@opencara fix` `issue_comment`)
+  // can land seconds after a merge — by that point GitHub may have
+  // auto-deleted the head branch, and the downstream worktree allocator
+  // would fail with `fatal: Remote branch <head> not found in upstream
+  // origin`. Prefer the PR object built by `buildPullRequestContext`
+  // (covers both event paths); fall back to the raw webhook payload in
+  // case that fetch threw — `payload.pull_request.state` for
+  // pull_request_review events, `payload.issue.state` for issue_comment.
+  const rawPayload = ctx.event.payload as {
+    pull_request?: { state?: string };
+    issue?: { state?: string };
+  } | undefined;
+  const prState =
+    (ctx.prContext?.stdin.pr as { state?: string } | undefined)?.state ??
+    rawPayload?.pull_request?.state ??
+    rawPayload?.issue?.state;
+  if (prState === "closed") {
+    throw new SkipFlowError("PR is closed; skipping review-fix on stale event");
+  }
+
   // issue_comment.created on a PR — the comment-phrase opt-in path.
   // Bypasses the reviewStates / users filters (those gate reviews, not
   // comments). Edits / deletes don't fire (same "submitted-only"
