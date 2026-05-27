@@ -30,13 +30,18 @@ const NO_STATUS_VALUE = "__none";
  *   - the issue isn't on the linked board (e.g. a brand-new issue webhook
  *     hasn't reached the kanban mirror yet — refreshing the kanban tab will
  *     pull it in).
+ *
+ * Matching by `issueHtmlUrl` (the issue's GitHub URL) rather than just the
+ * issue number — Projects v2 boards are multi-repo, so two repos can each
+ * contribute an `#N` to the same board; the URL is the only repo-scoped key
+ * available on a cached board item.
  */
 export function IssueStatusDropdown({
   projectId,
-  issueNumber,
+  issueHtmlUrl,
 }: {
   projectId: string;
-  issueNumber: number;
+  issueHtmlUrl: string;
 }) {
   const q = useQuery(kanbanQuery(projectId));
   // Keep the cached snapshot fresh while this page is open. Webhook-driven
@@ -48,9 +53,9 @@ export function IssueStatusDropdown({
   const item = useMemo(
     () =>
       q.data?.items.find(
-        (it) => it.kind === "issue" && it.contentNumber === issueNumber,
+        (it) => it.kind === "issue" && it.contentUrl === issueHtmlUrl,
       ) ?? null,
-    [q.data, issueNumber],
+    [q.data, issueHtmlUrl],
   );
 
   const orderedColumns: KanbanStatusOption[] = useMemo(() => {
@@ -81,7 +86,16 @@ export function IssueStatusDropdown({
       <span className="uppercase tracking-wide text-muted-foreground">
         Status
       </span>
-      <Select value={value} onValueChange={onValueChange}>
+      <Select
+        value={value}
+        onValueChange={onValueChange}
+        // Drop the stale "failed" pill when the user re-engages the control —
+        // otherwise a one-off PATCH failure stays pinned to the header until
+        // the next Status change, even though it no longer reflects reality.
+        onOpenChange={(open) => {
+          if (open && setStatus.isError) setStatus.reset();
+        }}
+      >
         <SelectTrigger size="sm" className="h-7 text-xs">
           <SelectValue placeholder="No status">
             <StatusDot

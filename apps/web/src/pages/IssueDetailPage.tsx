@@ -228,7 +228,7 @@ function Header({
           </div>
           <IssueStatusDropdown
             projectId={projectId}
-            issueNumber={issue.number}
+            issueHtmlUrl={issue.htmlUrl}
           />
           <AgentPicker
             projectId={projectId}
