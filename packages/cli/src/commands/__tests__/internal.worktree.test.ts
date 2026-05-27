@@ -310,8 +310,7 @@ describe("internal worktree create — concurrent cache-prep", () => {
       // refs to advance — increasing the odds of a ref-lock collision
       // without the flock fix.
       const repo = "octo/repo";
-      const safeRepo = "octo/repo";
-      const cacheDir = join(home, ".opencara", "cache", safeRepo);
+      const cacheDir = join(home, ".opencara", "cache", repo);
       execFileSync(
         "git",
         ["clone", origin, cacheDir],
