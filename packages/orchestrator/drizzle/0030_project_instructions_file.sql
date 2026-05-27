@@ -1,12 +1,14 @@
 -- Per-project agent instructions file. Path is relative to the repo root in
--- the worktree at dispatch time. The orchestrator resolves it, stat-checks
--- existence, and forwards the absolute path to claude-acp (via
--- AcpSpec.instructionsFile) so the agent system prompt comes from ONE
--- canonical file regardless of agent kind. See issue #130 for context.
+-- the worktree at dispatch time. The orchestrator forwards the path to
+-- claude-acp (via AcpSpec.instructionsFile) so the agent system prompt
+-- comes from ONE canonical file regardless of agent kind. See issue #130.
 --
--- Default 'AGENTS.md' picks the closest thing to a cross-tool convention
--- (codex's discovery default). Existing teams already on CLAUDE.md flip
--- this in the project settings page; the column is non-null with a
--- default so the column reads identically for every row, old or new.
+-- Default '' (empty = injection disabled) on purpose. Defaulting to
+-- 'AGENTS.md' would silently flip behaviour on the next dispatch for
+-- any existing project that happens to have a committed AGENTS.md
+-- AND relies on `claude auth login` keychain auth, since claude-acp
+-- adds `--bare` whenever the file resolves (and `--bare` disables
+-- keychain reads). Operators opt in from the project settings page
+-- — typing 'AGENTS.md' (or 'CLAUDE.md', etc.) is one click.
 ALTER TABLE projects
-  ADD COLUMN instructions_file TEXT NOT NULL DEFAULT 'AGENTS.md';
+  ADD COLUMN instructions_file TEXT NOT NULL DEFAULT '';

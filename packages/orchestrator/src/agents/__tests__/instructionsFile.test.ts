@@ -72,4 +72,29 @@ describe("validateInstructionsFileSetting", () => {
     const r = validateInstructionsFileSetting({ setting: "foo..bar.md" });
     assert.equal(r.relativePath, "foo..bar.md");
   });
+
+  it("rejects extensions other than .md (mirrors the API write-time check)", () => {
+    // The API surface (`validateInstructionsFileInput`) already enforces
+    // this on write, but the dispatch validator re-checks so direct DB
+    // writes / migration backfills / future seed scripts can't sneak
+    // `secret.env` or `.json` past the system-prompt injection path.
+    for (const bad of [
+      "AGENTS",
+      "AGENTS.txt",
+      "instructions.markdown",
+      "secret.env",
+      "creds.json",
+    ]) {
+      const r = validateInstructionsFileSetting({ setting: bad });
+      assert.equal(r.relativePath, undefined, `should reject ${bad}`);
+      assert.match(r.skipReason ?? "", /must end in \.md/);
+    }
+  });
+
+  it("accepts case-insensitive .md extension", () => {
+    for (const ok of ["x.MD", "x.Md", "x.mD"]) {
+      const r = validateInstructionsFileSetting({ setting: ok });
+      assert.equal(r.relativePath, ok, `should accept ${ok}`);
+    }
+  });
 });

@@ -53,7 +53,7 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, normalize, resolve as pathResolve, sep } from "node:path";
 import { stdin, stdout, stderr, exit } from "node:process";
 import {
@@ -212,6 +212,15 @@ export interface ResolvedInstructionsFile {
  * injection this turn, fall back to legacy auto-discovery behaviour".
  * Every miss writes one stderr line so operators can see why injection
  * didn't happen — silence is the worse failure mode.
+ *
+ * Containment check resolves symlinks via `realpathSync` before
+ * comparison. A repo could otherwise commit `AGENTS.md` as a symlink
+ * pointing at `~/.anthropic/api_key`, `~/.ssh/id_rsa`, `/etc/passwd`,
+ * etc. — the lexical `startsWith` check passes (since the on-disk
+ * symlink lives in cwd), `statSync` follows the link, and the target
+ * file's content reaches `claude --append-system-prompt`, from which
+ * it leaks through LLM output (PR comments, commit messages, chat).
+ * Real-path containment closes that hole.
  */
 export function resolveInstructionsFile(
   cwd: string,
@@ -240,6 +249,10 @@ export function resolveInstructionsFile(
   }
   const normalizedCwd = normalize(cwd);
   const candidate = pathResolve(normalizedCwd, relative);
+  // Lexical pre-check: cheap defence-in-depth that catches the obvious
+  // case where someone smuggles a literal absolute / .. through the
+  // earlier checks (e.g. via Windows separators on POSIX). The real
+  // containment check below operates on resolved (realpath) paths.
   const cwdWithSep = normalizedCwd.endsWith(sep) ? normalizedCwd : `${normalizedCwd}${sep}`;
   if (!candidate.startsWith(cwdWithSep) && candidate !== normalizedCwd) {
     stderr.write(
@@ -247,14 +260,54 @@ export function resolveInstructionsFile(
     );
     return null;
   }
-  let stat;
+  // Resolve symlinks for the actual containment authority. If the file
+  // is a symlink that hops outside the worktree (committed AGENTS.md
+  // → ~/.ssh/id_rsa), realpathSync surfaces the real target and the
+  // check below rejects it. realpathSync also doubles as a stat
+  // (throws ENOENT if missing) so we skip the separate statSync hop
+  // for existence.
+  let realCwd: string;
+  let realCandidate: string;
   try {
-    stat = statSync(candidate);
+    realCwd = realpathSync(normalizedCwd);
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: cwd '${normalizedCwd}' realpath failed: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    return null;
+  }
+  try {
+    realCandidate = realpathSync(candidate);
   } catch (err) {
     stderr.write(
       `[claude-acp] instructionsFile skipped: '${relative}' not found in cwd (${
         err instanceof Error ? err.message : String(err)
       })\n`,
+    );
+    return null;
+  }
+  const realCwdWithSep = realCwd.endsWith(sep) ? realCwd : `${realCwd}${sep}`;
+  if (
+    !realCandidate.startsWith(realCwdWithSep) &&
+    realCandidate !== realCwd
+  ) {
+    // Distinct message from the lexical one above so operators can
+    // tell a symlink-escape from a literal traversal in the log.
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' resolves to '${realCandidate}' which is outside cwd (symlink escape?)\n`,
+    );
+    return null;
+  }
+  let stat;
+  try {
+    stat = statSync(realCandidate);
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' stat failed: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
     );
     return null;
   }
@@ -272,7 +325,7 @@ export function resolveInstructionsFile(
   }
   let content: string;
   try {
-    content = readFileSync(candidate, "utf8");
+    content = readFileSync(realCandidate, "utf8");
   } catch (err) {
     stderr.write(
       `[claude-acp] instructionsFile skipped: read failed for '${relative}': ${
@@ -281,7 +334,7 @@ export function resolveInstructionsFile(
     );
     return null;
   }
-  return { path: candidate, content };
+  return { path: realCandidate, content };
 }
 
 // ─── Claude launcher ───────────────────────────────────────────────

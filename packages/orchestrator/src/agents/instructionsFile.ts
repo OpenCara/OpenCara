@@ -60,6 +60,11 @@ export interface ValidateInstructionsFileSettingResult {
  *   repo, never an arbitrary host path.
  * - Setting must NOT contain a `..` segment. Defense-in-depth against a
  *   misconfigured project pointing the agent at `../../../etc/passwd`.
+ * - Setting must end in `.md` (case-insensitive). The API enforces the
+ *   same rule on write (validateInstructionsFileInput) but we re-check
+ *   here so direct DB writes / migration backfills / future seed scripts
+ *   can't sneak `secret.env` past the dispatch path. The strict authority
+ *   lives next to the read site, not at the write boundary.
  */
 export function validateInstructionsFileSetting(
   opts: ValidateInstructionsFileSettingOpts,
@@ -78,6 +83,11 @@ export function validateInstructionsFileSetting(
   if (segments.some((s) => s === "..")) {
     return {
       skipReason: `project instructionsFile '${raw}' contains a '..' segment`,
+    };
+  }
+  if (!/\.md$/i.test(raw)) {
+    return {
+      skipReason: `project instructionsFile '${raw}' must end in .md`,
     };
   }
   return { relativePath: raw };

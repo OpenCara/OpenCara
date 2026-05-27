@@ -15,6 +15,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
   readFileSync,
   existsSync,
@@ -115,6 +116,59 @@ describe("resolveInstructionsFile", () => {
     const dir = mkdtempSync(join(tmpdir(), "claude-acp-instr-"));
     try {
       mkdirSync(join(dir, "AGENTS.md"));
+      assert.equal(resolveInstructionsFile(dir, "AGENTS.md"), null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlink that points outside the worktree (regression: #137 review)", () => {
+    // Real-world attack: a repo commits AGENTS.md as a symlink pointing
+    // at ~/.anthropic/api_key or ~/.ssh/id_rsa; the lexical containment
+    // check passes (the symlink itself lives in cwd) but the read would
+    // follow the symlink and inject the secret into --append-system-prompt,
+    // leaking it through LLM output. The realpath-based containment
+    // check closes the hole.
+    const dir = mkdtempSync(join(tmpdir(), "claude-acp-symlink-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "claude-acp-secret-"));
+    try {
+      const secret = join(outsideDir, "secret.md");
+      writeFileSync(secret, "TOP SECRET DO NOT LEAK\n");
+      // Symlink lives inside the worktree but points outside.
+      symlinkSync(secret, join(dir, "AGENTS.md"));
+      const r = resolveInstructionsFile(dir, "AGENTS.md");
+      assert.equal(
+        r,
+        null,
+        "symlink pointing outside cwd must NOT resolve",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a symlink that stays inside the worktree", () => {
+    // The reciprocal of the test above: a symlink whose target is also
+    // inside cwd should still resolve. Lets teams keep a single source
+    // file aliased under multiple names without false rejections.
+    const dir = mkdtempSync(join(tmpdir(), "claude-acp-symlink-ok-"));
+    try {
+      mkdirSync(join(dir, "docs"));
+      writeFileSync(join(dir, "docs", "agents.md"), "shared rules\n");
+      symlinkSync(join(dir, "docs", "agents.md"), join(dir, "AGENTS.md"));
+      const r = resolveInstructionsFile(dir, "AGENTS.md");
+      assert.ok(r, "in-tree symlink should resolve");
+      assert.equal(r!.content, "shared rules\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlink whose target is missing (broken link)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "claude-acp-symlink-broken-"));
+    try {
+      symlinkSync(join(dir, "missing-target.md"), join(dir, "AGENTS.md"));
       assert.equal(resolveInstructionsFile(dir, "AGENTS.md"), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });

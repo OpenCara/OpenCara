@@ -135,7 +135,7 @@ export function ProjectDetailPage() {
               </CardContent>
             </Card>
             <DefaultImplementFlowCard projectId={id!} currentFlowId={p.defaultImplementFlowId ?? null} />
-            <InstructionsFileCard projectId={id!} current={p.instructionsFile ?? "AGENTS.md"} />
+            <InstructionsFileCard projectId={id!} current={p.instructionsFile ?? ""} />
           </div>
         </TabsContent>
 
@@ -630,6 +630,12 @@ function InstructionsFileCard({
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (localError || !dirty || setInstructionsFile.isPending) return;
+    // Sync the input with the trimmed value before sending. Without
+    // this, an operator typing "AGENTS.md  " saves the right value
+    // ("AGENTS.md") on the server but the input keeps the trailing
+    // spaces visible, making the disabled Save button look broken
+    // ("the field is dirty but Save is greyed out").
+    setDraft(trimmed);
     setInstructionsFile.mutate(trimmed);
   };
 
