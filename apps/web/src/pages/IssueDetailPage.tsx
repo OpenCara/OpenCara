@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { IssueBodyEditor } from "@/components/canvas/IssueBodyEditor";
+import { IssueStatusDropdown } from "@/components/canvas/IssueStatusDropdown";
 import { AgentPicker } from "@/components/agent/AgentPicker";
 import {
   projectIssueDetailQuery,
@@ -225,6 +226,10 @@ function Header({
               GitHub <ExternalLink className="size-3" />
             </a>
           </div>
+          <IssueStatusDropdown
+            projectId={projectId}
+            issueHtmlUrl={issue.htmlUrl}
+          />
           <AgentPicker
             projectId={projectId}
             issueNumber={issue.number}
