@@ -987,10 +987,16 @@ export const pmWavesQuery = (projectId: string) => ({
 // ---- Chat sessions (generic per-(user, scope) persistence) ----
 //
 // scopeKind/scopeId match the orchestrator's chat_sessions PK:
-//   'project'  + projectId      — every project-scoped page
-//   'template' + templateSlug   — /flows/:slug
-//   'user'     + ''             — user-global / unregistered pages
-export type ChatSessionScopeKind = "project" | "template" | "user";
+//   'project'        + projectId        — every project-scoped page
+//   'template'       + templateSlug     — /flows/:slug
+//   'user'           + ''               — user-global / unregistered pages
+//   'flow_run_step'  + flowRunStepId    — steering chat for one agent node
+//                                         in FlowRunDetailPage
+export type ChatSessionScopeKind =
+  | "project"
+  | "template"
+  | "user"
+  | "flow_run_step";
 
 export interface ChatSession {
   id: string;
@@ -1109,6 +1115,27 @@ export function useRestoreChatSession(scope: ChatSessionScope) {
     },
   });
 }
+
+// Past turns on a chat session — used by step-scoped chat surfaces
+// that need to re-display the conversation after remount / refresh /
+// flow completion (the in-memory React state is gone but the
+// underlying agent_runs are still on disk).
+export interface ChatSessionHistoryTurn {
+  agentRunId: string;
+  status: "queued" | "assigned" | "running" | "succeeded" | "failed" | "cancelled";
+  createdAt: string;
+  user: string;
+  assistant: string;
+}
+
+export const chatSessionHistoryQuery = (sessionId: string | null) => ({
+  queryKey: ["chat-session-history", sessionId] as const,
+  queryFn: () =>
+    api.get<{ turns: ChatSessionHistoryTurn[] }>(
+      `/api/chat/sessions/${sessionId}/history`,
+    ),
+  enabled: !!sessionId,
+});
 
 // Soft-delete the row (archived_at set). The active-session query will
 // pick a different row on the next fetch; the History popover keeps

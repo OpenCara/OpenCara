@@ -19,6 +19,7 @@ import {
 import { formatRelative, formatAbsolute } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
 import type { StepStatus } from "@/components/flow/nodes";
+import { StepSteeringChat } from "@/components/flow/StepSteeringChat";
 import { useEventSource } from "@/lib/sse";
 
 interface LogLine {
@@ -125,6 +126,7 @@ export function FlowRunDetailPage() {
           step={selectedStep}
           agentRunId={selectedAgentRunId}
           projectId={projectId!}
+          flowRunId={run.id}
         />
       ) : (
         <Card>
@@ -171,10 +173,12 @@ function StepPanel({
   step,
   agentRunId,
   projectId,
+  flowRunId,
 }: {
   step: FlowRunStep;
   agentRunId: string | null;
   projectId: string;
+  flowRunId: string;
 }) {
   const duration =
     step.startedAt && step.finishedAt
@@ -261,6 +265,18 @@ function StepPanel({
           <>
             <Separator />
             <AgentLogPanel agentRunId={agentRunId} />
+          </>
+        )}
+        {step.nodeKind === "agent" && (
+          <>
+            <Separator />
+            <StepSteeringChat
+              flowRunStepId={step.id}
+              projectId={projectId}
+              flowRunId={flowRunId}
+              stepLabel={`Step ${step.idx + 1}`}
+              stepIsRunning={step.status === "running" || step.status === "pending"}
+            />
           </>
         )}
       </CardContent>

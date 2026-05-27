@@ -1544,6 +1544,15 @@ async function dispatchAgentRun(
       hostId: opts.hostId ?? undefined,
       projectId: ctx.projectId,
     });
+    // Record the resulting acpSessionId on the row so post-run consumers
+    // (steering chat scoped to this step, audit views) can resume the
+    // agent's conversation without spelunking the on-device JSONL.
+    // We rewrite `spec.acp.priorSessionId` IN PLACE via jsonb_set,
+    // leaving every other key on `spec` untouched. The original insert
+    // already saved `spec.env` with `<ephemeral>` placeholders; we
+    // mustn't re-serialize the in-memory `spec` here because opts.env
+    // was mutated to hold the live mintedToken and would leak any
+    // non-GH secret (ANTHROPIC_API_KEY, MCP_*_TOKEN, ...) into the row.
     await ctx.db
       .update(agentRuns)
       .set({
@@ -1551,6 +1560,11 @@ async function dispatchAgentRun(
         hostId: result.agentHostId,
         exitCode: result.exitCode,
         finishedAt: new Date(),
+        ...(result.acpSessionId && opts.acp
+          ? {
+              spec: sql`jsonb_set(${agentRuns.spec}, '{acp,priorSessionId}', to_jsonb(${result.acpSessionId}::text), true)`,
+            }
+          : {}),
       })
       .where(eq(agentRuns.id, opts.agentRunId));
     return { ...result, stderrTail: stderrChunks.join("") };
