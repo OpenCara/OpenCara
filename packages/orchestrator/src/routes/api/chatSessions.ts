@@ -25,11 +25,12 @@
 
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   CHAT_SESSION_SCOPE_KINDS,
   type ChatSessionScopeKind,
+  agentRunLogs,
   agentRuns,
   chatSessions,
   flowRunSteps,
@@ -239,7 +240,44 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     // worst case is a duplicate row that the active-session query still
     // resolves to one of them.
     const existing = await findActiveSession(deps, user.id, kind, scopeId);
-    if (existing) return c.json({ session: toResponse(existing) });
+    if (existing) {
+      // Re-hydrate stale rows on flow_run_step scope. If the panel
+      // was opened before the flow agent finished writing back its
+      // acpSessionId, the row's column will still be NULL — a later
+      // re-open (typical UI flow) needs to re-attempt the seed,
+      // otherwise the row is permanently stranded on a null session
+      // even after the flow agent wrote the id back. Best-effort:
+      // any DB error here is swallowed and the existing row is
+      // returned unchanged. agentId/acpSessionHostId fill in the
+      // same way so multi-iteration runs catch up.
+      if (
+        kind === "flow_run_step" &&
+        (!existing.acpSessionId || !existing.agentId)
+      ) {
+        const seed = await hydrateFromFlowRunStep(deps.db, scopeId);
+        const updates: Partial<typeof chatSessions.$inferInsert> = {};
+        if (!existing.acpSessionId && seed.acpSessionId) {
+          updates.acpSessionId = seed.acpSessionId;
+        }
+        if (!existing.acpSessionHostId && seed.acpSessionHostId) {
+          updates.acpSessionHostId = seed.acpSessionHostId;
+        }
+        if (!existing.agentId && seed.agentId) updates.agentId = seed.agentId;
+        if (Object.keys(updates).length > 0) {
+          try {
+            const [rehydrated] = await deps.db
+              .update(chatSessions)
+              .set(updates)
+              .where(eq(chatSessions.id, existing.id))
+              .returning();
+            return c.json({ session: toResponse(rehydrated!) });
+          } catch (err) {
+            console.error("[chat] re-hydrate failed", err);
+          }
+        }
+      }
+      return c.json({ session: toResponse(existing) });
+    }
 
     const id = `chat_${ulid()}`;
     const threadKey = id;
@@ -294,16 +332,20 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
       // Same hydration as the GET path — a panel that POSTs without
       // first GETting still ends up on a row with the flow agent's
       // acpSessionId pre-populated, so the very first user message
-      // resumes the conversation. If the caller supplied an explicit
-      // agentId it wins; we still inherit the ACP session ids when the
-      // chosen agent matches the one the flow ran (best-effort).
+      // resumes the conversation. Inherit the seeded acpSessionId
+      // whenever the caller didn't disagree on the agent — when the
+      // caller's agentId is null OR matches the seed, we keep the
+      // resume. A different explicit pick from the caller wipes it,
+      // matching the "agent switch invalidates the session" rule
+      // below.
       const seed =
         kind === "flow_run_step"
           ? await hydrateFromFlowRunStep(deps.db, scopeId)
           : { agentId: null, acpSessionId: null, acpSessionHostId: null };
       const resolvedAgentId = agentId ?? seed.agentId;
       const inheritsAcp =
-        kind === "flow_run_step" && seed.agentId === resolvedAgentId;
+        kind === "flow_run_step" &&
+        (agentId === null || seed.agentId === null || seed.agentId === agentId);
       const [created] = await deps.db
         .insert(chatSessions)
         .values({
@@ -321,13 +363,19 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
       return c.json({ session: toResponse(created!) });
     }
 
-    // Agent switch invalidates the cached ACP session: the new shim
-    // hasn't created the prior session's JSONL on any device, so a
-    // `--resume <prior-uuid>` would just error. Clear both columns
-    // alongside the agentId write so the next turn starts fresh.
-    // Unchanged agentId picks (e.g. POST replays the same value) skip
-    // the clear so an in-flight resume doesn't get wiped under it.
-    const agentChanged = existing.agentId !== agentId;
+    // Agent SWITCH (specific → different specific) invalidates the
+    // cached ACP session: the new shim hasn't created the prior
+    // session's JSONL on any device, so a `--resume <prior-uuid>`
+    // would just error. Clear both columns alongside the agentId
+    // write so the next turn starts fresh.
+    //
+    // A null → specific transition is NOT a switch — it's the first
+    // time the user has picked an agent on this row. Wiping the
+    // seeded `acpSessionId` here would silently neutralize the
+    // flow_run_step scope's whole point (resume the agent's session).
+    // Same for replaying the same value.
+    const agentChanged =
+      existing.agentId !== null && agentId !== null && existing.agentId !== agentId;
     const [updated] = await deps.db
       .update(chatSessions)
       .set({
@@ -414,8 +462,13 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
         ? await hydrateFromFlowRunStep(deps.db, scopeId)
         : { agentId: null, acpSessionId: null, acpSessionHostId: null };
     const resolvedAgentId = agentId ?? seed.agentId;
+    // Same inheritance rule as the POST /chat/sessions path: keep the
+    // seeded acpSessionId unless the caller explicitly chose a
+    // DIFFERENT agent than the one the flow ran with. A null caller
+    // pick, or a missing seed.agentId, still inherits.
     const inheritsAcp =
-      kind === "flow_run_step" && seed.agentId === resolvedAgentId;
+      kind === "flow_run_step" &&
+      (agentId === null || seed.agentId === null || seed.agentId === agentId);
     const id = `chat_${ulid()}`;
     const threadKey = id;
     const [created] = await deps.db
@@ -433,6 +486,69 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
       })
       .returning();
     return c.json({ session: toResponse(created!) });
+  });
+
+  // GET /chat/sessions/:id/history — return prior turns on this session.
+  //
+  // Used by the steering chat panel (and any other page-mounted chat
+  // surface) to repopulate the message list after remount / refresh /
+  // run completion. Each turn corresponds to one `agent_runs` row
+  // whose env carries `OPENCARA_CHAT_SESSION_ID = threadKey`. We
+  // surface:
+  //   - turn.user — the userPromptMd from the persisted spec
+  //   - turn.assistant — concatenated stdout from agent_run_logs
+  //   - turn.status — the run's terminal status (or "running")
+  //
+  // No SSE here; that's still /api/runs/:agentRunId/logs/stream for
+  // turns that are still in flight. The panel pairs them up: history
+  // hydrates the past, SSE drives the present.
+  r.get("/chat/sessions/:id/history", auth, async (c) => {
+    const user = c.get("user")!;
+    const id = c.req.param("id");
+    const row = await deps.db.query.chatSessions.findFirst({
+      where: and(eq(chatSessions.id, id), eq(chatSessions.userId, user.id)),
+    });
+    if (!row) return c.json({ error: "not found" }, 404);
+    const limit = Math.min(
+      Math.max(Number.parseInt(c.req.query("limit") ?? "50", 10) || 50, 1),
+      200,
+    );
+    // Per-turn agent_runs are matched by the chat-route env marker so
+    // we don't need a denormalized join table. Ordering is ascending
+    // so the panel can render turns in conversation order without
+    // re-sorting client-side.
+    const runs = await deps.db.query.agentRuns.findMany({
+      where: sql`${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID' = ${row.threadKey}`,
+      orderBy: [asc(agentRuns.createdAt)],
+      limit,
+    });
+    const turns = await Promise.all(
+      runs.map(async (r) => {
+        const spec = r.spec as
+          | { acp?: { userPromptMd?: string } | null }
+          | null;
+        const userText = spec?.acp?.userPromptMd ?? "";
+        const logs = await deps.db
+          .select({ chunk: agentRunLogs.chunk })
+          .from(agentRunLogs)
+          .where(
+            and(
+              eq(agentRunLogs.agentRunId, r.id),
+              eq(agentRunLogs.stream, "stdout"),
+            ),
+          )
+          .orderBy(asc(agentRunLogs.seq));
+        const assistantText = logs.map((l) => l.chunk).join("");
+        return {
+          agentRunId: r.id,
+          status: r.status,
+          createdAt: r.createdAt.toISOString(),
+          user: userText,
+          assistant: assistantText,
+        };
+      }),
+    );
+    return c.json({ turns });
   });
 
   // PATCH /chat/sessions/:id — rename a session or toggle its archive

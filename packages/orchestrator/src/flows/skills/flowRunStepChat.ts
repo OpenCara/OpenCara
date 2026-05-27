@@ -54,10 +54,6 @@ export const flowRunStepChatBuilder: PageSkillBuilder = async (ctx) => {
     orderBy: [desc(agentRuns.createdAt)],
     limit: 5,
   });
-  const distinctHostIds = Array.from(
-    new Set(stepAgentRuns.map((r) => r.hostId).filter((id): id is string => !!id)),
-  );
-  void distinctHostIds; // tracked for log only — no need to surface to agent
 
   // Look up the agent name for the most-recent run on this step, when
   // possible. `agent_runs.spec` carries the kind/command, not the user

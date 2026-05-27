@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Loader2, MessageSquare, Send, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   agentsQuery,
+  chatSessionHistoryQuery,
   chatSessionQuery,
   useChatSessionAgentMutation,
   type ChatSessionScope,
@@ -21,6 +22,11 @@ interface Props {
   flowRunId: string;
   /** Human label of the step ("Step 2 · agent" → shown in the header). */
   stepLabel?: string;
+  /** True while the flow agent's own dispatch is still in-flight. Surfaces
+   *  a queue-warning hint to the user — `claude --resume` can't open the
+   *  JSONL while the flow process holds it, so the steering message will
+   *  effectively land on the next turn. */
+  stepIsRunning?: boolean;
 }
 
 interface Message {
@@ -49,43 +55,106 @@ export function StepSteeringChat({
   projectId,
   flowRunId,
   stepLabel,
+  stepIsRunning,
 }: Props) {
   const scope: ChatSessionScope = useMemo(
     () => ({ scopeKind: "flow_run_step", scopeId: flowRunStepId }),
     [flowRunStepId],
   );
+  const qc = useQueryClient();
   const sessionQ = useQuery(chatSessionQuery(scope));
   const agentsQ = useQuery(agentsQuery());
   const updateAgent = useChatSessionAgentMutation(scope);
 
   const session = sessionQ.data?.session ?? null;
+  const sessionId = session?.id ?? null;
   const sessionAgentId = session?.agentId ?? null;
+  const historyQ = useQuery(chatSessionHistoryQuery(sessionId));
+
   const [agentId, setAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Once the session loads, sync our local agentId to the persisted pick.
-  // Fall back to the first available agent if neither the seed nor the
-  // user has chosen one (e.g. the flow ran with a one-off command-line
-  // agent that doesn't correspond to an agents-table row).
+  // Sync local agent pick from the persisted session row. Crucially:
+  //   - Do NOT auto-POST a default agent — the server treats null →
+  //     specific as an agent change and was wiping the seeded
+  //     acpSessionId. We still set local UI state so the dropdown
+  //     reflects a reasonable default; the first /api/chat/messages
+  //     dispatch will atomically associate the agent + persist the
+  //     ACP session id via chat.ts's post-dispatch update.
+  //   - Only flip the hydrated ref once we've actually applied an
+  //     agent id (or confirmed the agent list is empty). Otherwise a
+  //     sessionQ-resolves-first race permanently disables the
+  //     fallback — see PR #133 review.
   const hydratedRef = useRef(false);
   useEffect(() => {
-    if (hydratedRef.current || !sessionQ.data) return;
-    hydratedRef.current = true;
+    if (hydratedRef.current) return;
+    if (!sessionQ.data) return;
     if (sessionAgentId) {
+      hydratedRef.current = true;
       setAgentId(sessionAgentId);
       return;
     }
-    const first = agentsQ.data?.agents[0]?.id ?? null;
+    // No persisted pick yet — wait until agentsQ resolves before
+    // committing to a fallback. Empty agent list is a terminal state:
+    // mark hydrated so the effect stops re-running on every render.
+    if (!agentsQ.data) return;
+    const first = agentsQ.data.agents[0]?.id ?? null;
     if (first) {
+      hydratedRef.current = true;
       setAgentId(first);
-      updateAgent.mutate({ agentId: first });
+    } else {
+      hydratedRef.current = true;
     }
-  }, [sessionQ.data, sessionAgentId, agentsQ.data, updateAgent]);
+  }, [sessionQ.data, sessionAgentId, agentsQ.data]);
 
-  // Each render this is recomputed off `messages` — the streaming
-  // bubble is the latest assistant message that hasn't ended.
+  // Seed the message list from the history endpoint once on mount.
+  // Subsequent state changes (sending, streaming) take over; we never
+  // overwrite an in-flight conversation with the server's snapshot.
+  const hydratedHistoryRef = useRef(false);
+  useEffect(() => {
+    if (hydratedHistoryRef.current) return;
+    if (!historyQ.data) return;
+    hydratedHistoryRef.current = true;
+    if (historyQ.data.turns.length === 0) return;
+    const seeded: Message[] = [];
+    for (const turn of historyQ.data.turns) {
+      if (turn.user) {
+        seeded.push({
+          id: `hist_u_${turn.agentRunId}`,
+          role: "user",
+          text: turn.user,
+        });
+      }
+      // Surface the run regardless of whether assistant text is empty —
+      // a cancelled or errored turn with no stdout still belongs in the
+      // history so the user sees what they sent and what came back.
+      seeded.push({
+        id: `hist_a_${turn.agentRunId}`,
+        role: "assistant",
+        text: turn.assistant,
+        agentRunId: turn.agentRunId,
+        pending: false,
+        ...(turn.status !== "succeeded" && turn.status !== "running"
+          ? { endStatus: turn.status }
+          : {}),
+      });
+    }
+    setMessages(seeded);
+  }, [historyQ.data]);
+
+  // Reset hydration refs when the step changes (e.g. user clicks a
+  // different node in the graph). React unmounts/remounts under
+  // useMemo'd scope, but if a parent ever reuses the component across
+  // ids we still want clean state.
+  useEffect(() => {
+    hydratedRef.current = false;
+    hydratedHistoryRef.current = false;
+    setMessages([]);
+    setAgentId(null);
+  }, [flowRunStepId]);
+
   const streamingMessage = messages.findLast(
     (m) => m.role === "assistant" && m.pending && m.agentRunId,
   );
@@ -131,9 +200,9 @@ export function StepSteeringChat({
             flowRunId,
             flowRunStepId,
           },
-          // Local history — the server also injects the agent's ACP
-          // session via priorSessionId, so this is just a fallback for
-          // when resume isn't available (different device, etc.).
+          // Vestigial fallback for when ACP resume isn't reachable
+          // (e.g. JSONL on a different device). The server primarily
+          // relies on the chat row's acpSessionId for context.
           history: messages
             .filter((m) => !m.pending && m.text.trim().length > 0)
             .map((m) => ({ role: m.role, text: m.text })),
@@ -142,6 +211,11 @@ export function StepSteeringChat({
       setMessages((prev) =>
         prev.map((m) => (m.id === assistantId ? { ...m, agentRunId } : m)),
       );
+      // The history list now has a new turn — invalidate so a remount
+      // re-fetches with this one included rather than dropping it.
+      void qc.invalidateQueries({
+        queryKey: ["chat-session-history", session.id],
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setMessages((prev) =>
@@ -159,12 +233,13 @@ export function StepSteeringChat({
   const onAgentPick = (next: string) => {
     if (next === agentId) return;
     setAgentId(next);
+    // Switching to a different specific agent invalidates the seeded
+    // ACP session (the new shim's JSONL doesn't exist for the prior
+    // uuid). We DO call updateAgent.mutate here because the server's
+    // POST /chat/sessions only clears acpSessionId on
+    // specific → different-specific transitions, not on null → first
+    // pick. A user-driven dropdown change is the former.
     updateAgent.mutate({ agentId: next });
-    // Switching agents on a step-scoped chat invalidates the seeded ACP
-    // session anyway (the server clears acpSessionId on agent change in
-    // chatSessions.ts POST). Local message list is conversational state
-    // only — clear it so the user doesn't see stale exchanges attributed
-    // to the wrong agent.
     if (messages.length > 0) setMessages([]);
   };
 
@@ -202,9 +277,20 @@ export function StepSteeringChat({
         )}
       </div>
 
+      {stepIsRunning && (
+        <div className="border-b bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+          Flow agent is currently running on this step. Your steering message
+          will queue and be picked up on the next turn — claude --resume can't
+          open the in-use session JSONL until the current dispatch finishes.
+        </div>
+      )}
+
       <div className="max-h-72 overflow-y-auto p-3">
         {messages.length === 0 ? (
-          <EmptyState hasAgents={(agentsQ.data?.agents.length ?? 0) > 0} />
+          <EmptyState
+            hasAgents={(agentsQ.data?.agents.length ?? 0) > 0}
+            loading={historyQ.isLoading}
+          />
         ) : (
           <div className="space-y-3">
             {messages.map((m) => (
@@ -272,12 +358,18 @@ export function StepSteeringChat({
   );
 }
 
-function EmptyState({ hasAgents }: { hasAgents: boolean }) {
+function EmptyState({
+  hasAgents,
+  loading,
+}: {
+  hasAgents: boolean;
+  loading: boolean;
+}) {
   return (
     <div className="flex flex-col items-center gap-1 text-center text-xs text-muted-foreground">
       <Bot className="size-6 opacity-50" />
-      <p>No steering messages yet for this step.</p>
-      {!hasAgents && (
+      <p>{loading ? "Loading history…" : "No steering messages yet for this step."}</p>
+      {!loading && !hasAgents && (
         <p>Define an agent first under /agents to be able to chat.</p>
       )}
     </div>
@@ -341,11 +433,13 @@ function useStreamedAssistant(
   onEndRef.current = onEnd;
 
   useEffect(() => {
-    setChunks("");
-    chunksRef.current = "";
     if (!message.agentRunId) return;
     if (lastRunRef.current === message.agentRunId) return;
+    // Reset AFTER the bail-out so the StrictMode-double-mount pass
+    // doesn't wipe a stream's accumulated chunks under us.
     lastRunRef.current = message.agentRunId;
+    setChunks("");
+    chunksRef.current = "";
     const es = new EventSource(`/api/runs/${message.agentRunId}/logs/stream`, {
       withCredentials: true,
     });

@@ -1547,44 +1547,26 @@ async function dispatchAgentRun(
     // Record the resulting acpSessionId on the row so post-run consumers
     // (steering chat scoped to this step, audit views) can resume the
     // agent's conversation without spelunking the on-device JSONL.
-    // We rewrite `spec.acp.priorSessionId`: from the row's perspective,
-    // it now points at the id the next iteration would resume from.
-    //
-    // CAREFUL: opts.env was mutated above to hold the live mintedToken.
-    // The originally-inserted spec.env stayed with `<ephemeral>` only
-    // because the insert happened BEFORE the token mint; if we naively
-    // re-persist `spec` here, the real token leaks into agent_runs.spec.
-    // Rebuild the env with placeholders before writing.
-    if (result.acpSessionId && opts.acp) {
-      const safeEnv: Record<string, string> = { ...opts.env };
-      if (safeEnv.GH_TOKEN) safeEnv.GH_TOKEN = tokenPlaceholder;
-      if (safeEnv.GITHUB_TOKEN) safeEnv.GITHUB_TOKEN = tokenPlaceholder;
-      const specForUpdate: AgentSpec = {
-        ...spec,
-        env: safeEnv,
-        acp: { ...opts.acp, priorSessionId: result.acpSessionId },
-      };
-      await ctx.db
-        .update(agentRuns)
-        .set({
-          status: result.exitCode === 0 ? "succeeded" : "failed",
-          hostId: result.agentHostId,
-          exitCode: result.exitCode,
-          finishedAt: new Date(),
-          spec: specForUpdate,
-        })
-        .where(eq(agentRuns.id, opts.agentRunId));
-    } else {
-      await ctx.db
-        .update(agentRuns)
-        .set({
-          status: result.exitCode === 0 ? "succeeded" : "failed",
-          hostId: result.agentHostId,
-          exitCode: result.exitCode,
-          finishedAt: new Date(),
-        })
-        .where(eq(agentRuns.id, opts.agentRunId));
-    }
+    // We rewrite `spec.acp.priorSessionId` IN PLACE via jsonb_set,
+    // leaving every other key on `spec` untouched. The original insert
+    // already saved `spec.env` with `<ephemeral>` placeholders; we
+    // mustn't re-serialize the in-memory `spec` here because opts.env
+    // was mutated to hold the live mintedToken and would leak any
+    // non-GH secret (ANTHROPIC_API_KEY, MCP_*_TOKEN, ...) into the row.
+    await ctx.db
+      .update(agentRuns)
+      .set({
+        status: result.exitCode === 0 ? "succeeded" : "failed",
+        hostId: result.agentHostId,
+        exitCode: result.exitCode,
+        finishedAt: new Date(),
+        ...(result.acpSessionId && opts.acp
+          ? {
+              spec: sql`jsonb_set(${agentRuns.spec}, '{acp,priorSessionId}', to_jsonb(${result.acpSessionId}::text), true)`,
+            }
+          : {}),
+      })
+      .where(eq(agentRuns.id, opts.agentRunId));
     return { ...result, stderrTail: stderrChunks.join("") };
   } catch (err) {
     await ctx.db

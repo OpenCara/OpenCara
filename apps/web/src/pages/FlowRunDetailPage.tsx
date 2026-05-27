@@ -275,6 +275,7 @@ function StepPanel({
               projectId={projectId}
               flowRunId={flowRunId}
               stepLabel={`Step ${step.idx + 1}`}
+              stepIsRunning={step.status === "running" || step.status === "pending"}
             />
           </>
         )}
