@@ -143,6 +143,9 @@ export const projectQuery = (id: string) => ({
       project: ProjectListItem & {
         removedAt: string | null;
         defaultImplementFlowId: string | null;
+        /** Repo-relative path of the project's agent instructions file
+         *  (default `AGENTS.md`, empty disables injection). See #130. */
+        instructionsFile: string;
       };
       installation: InstallationSummary;
     }>(`/api/projects/${id}`),
@@ -710,6 +713,25 @@ export function useSetProjectDefaultImplementFlow(projectId: string) {
     mutationFn: (flowId: string | null) =>
       api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
         defaultImplementFlowId: flowId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId] });
+    },
+  });
+}
+
+/**
+ * Update the project's agent instructions file path. Pass an empty string
+ * to disable injection. The server validates the same rules
+ * `validateInstructionsFileSetting` enforces at dispatch time: must be
+ * repo-relative, no `..`, ends in `.md`. See issue #130.
+ */
+export function useSetProjectInstructionsFile(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (instructionsFile: string) =>
+      api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
+        instructionsFile,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", projectId] });

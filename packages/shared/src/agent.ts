@@ -69,6 +69,16 @@ export type AcpPermissionMode = z.infer<typeof AcpPermissionModeSchema>;
  *   toolbar select + "Plan mode" toggle (which is just a shortcut for
  *   `permissionMode: "plan"`). Unset = the agent's baked-in default,
  *   preserving prior behaviour for flows that haven't opted in.
+ * - `instructionsFile` (optional) is a repo-relative path to a
+ *   project-level agent instructions file. The orchestrator validated
+ *   the setting; the device-side adapter (e.g. claude-acp) resolves it
+ *   against the session cwd, stat-checks the file, and either injects
+ *   it as the project system prompt or skips silently if it's absent.
+ *   When honoured, the adapter ALSO strips its per-kind auto-discovery
+ *   (e.g. claude-acp drops `~/.claude/CLAUDE.md`) so one canonical file
+ *   becomes the source of truth across agent kinds. Unset = adapter
+ *   keeps native discovery (chat / test runs without a worktree, or
+ *   projects opting out by clearing the setting). See #130.
  */
 export const AcpSpecSchema = z.object({
   systemPromptMd: z.string(),
@@ -77,6 +87,7 @@ export const AcpSpecSchema = z.object({
   pageContextJson: z.string().optional(),
   priorSessionId: z.string().optional(),
   permissionMode: AcpPermissionModeSchema.optional(),
+  instructionsFile: z.string().optional(),
 });
 export type AcpSpec = z.infer<typeof AcpSpecSchema>;
 

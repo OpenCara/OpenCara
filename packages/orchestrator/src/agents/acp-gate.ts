@@ -98,6 +98,19 @@ export interface BuildAcpSpecOpts {
    * "Plan mode" toggle.
    */
   permissionMode?: AcpPermissionMode;
+  /**
+   * Repo-relative path to a project-level agent instructions file. The
+   * caller validated the SETTING via `validateInstructionsFileSetting`;
+   * the actual stat-check happens on the device side (claude-acp) where
+   * the worktree filesystem actually exists.
+   *
+   * When present, the ACP adapter strips its per-kind auto-discovery
+   * (e.g. claude-acp drops `~/.claude/CLAUDE.md`) and injects this
+   * file's content as the canonical project system prompt instead.
+   * Unset = adapter keeps native discovery (chat / test runs without a
+   * worktree, or projects opting out by clearing the setting). See #130.
+   */
+  instructionsFile?: string;
 }
 
 /**
@@ -124,6 +137,7 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
       : undefined,
     ...(opts.priorSessionId ? { priorSessionId: opts.priorSessionId } : {}),
     ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+    ...(opts.instructionsFile ? { instructionsFile: opts.instructionsFile } : {}),
   };
   return {
     kind: opts.agent.name,

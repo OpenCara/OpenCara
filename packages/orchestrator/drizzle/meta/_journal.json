@@ -211,6 +211,13 @@
       "when": 1777500000000,
       "tag": "0029_kanban_linked_prs",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1777510000000,
+      "tag": "0030_project_instructions_file",
+      "breakpoints": true
     }
   ]
 }
