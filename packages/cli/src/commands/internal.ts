@@ -17,7 +17,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 
 const OPENCARA_ROOT = join(homedir(), ".opencara");
 // Per-PR-branch trees are siblings under ~/.opencara/. Both keyed by
@@ -139,20 +139,37 @@ function worktreeCreate(args: string[]): void {
   // checkout's `--reference` clone borrows up-to-date packs. Without
   // this, the cache could serve stale objects and the per-key fetch
   // would have to download anything newer over the network anyway.
+  //
+  // Cache-prep is serialized via flock(2) on a sibling lockfile so a PM
+  // wave that fans out N issue-implement runs against this host doesn't
+  // race on `refs/remotes/origin/*` updates inside the shared cache (git
+  // fetch fails fast with "cannot lock ref" when concurrent processes
+  // both try to advance a ref). The kernel releases the lock on any
+  // process exit — including SIGKILL — so crashed allocators cannot
+  // poison the lockfile. Lock is per-cacheDir, so different repos still
+  // proceed in parallel.
   if (cacheDir) {
+    const cacheLockPath = `${cacheDir}.lock`;
+    mkdirSync(dirname(cacheLockPath), { recursive: true });
+
     if (existsSync(join(cacheDir, ".git"))) {
-      git(cacheDir, ["fetch", "--all", "--prune"], gitEnv);
+      gitLocked(cacheDir, ["fetch", "--all", "--prune"], cacheLockPath, gitEnv);
     } else {
       mkdirSync(cacheDir, { recursive: true });
       try {
         // No --branch: cache holds all refs so any PR branch can be
         // borrowed from it.
-        git(
+        gitLocked(
           cacheDir,
           ["-c", `credential.helper=${HELPER_SNIPPET}`, "clone", cleanUrl, "."],
+          cacheLockPath,
           gitEnv,
         );
-        git(cacheDir, ["config", "credential.helper", HELPER_SNIPPET]);
+        gitLocked(
+          cacheDir,
+          ["config", "credential.helper", HELPER_SNIPPET],
+          cacheLockPath,
+        );
       } catch (err) {
         try {
           // TOCTOU guard: a concurrent `worktree create` for a
@@ -177,7 +194,7 @@ function worktreeCreate(args: string[]): void {
       // share blobs via the symlink below. `git lfs fetch` no-ops
       // (and doesn't create the dir) when the repo has zero LFS
       // history, so mkdirSync ourselves before the symlink lands.
-      git(cacheDir, ["lfs", "fetch", "--all"], gitEnv);
+      gitLocked(cacheDir, ["lfs", "fetch", "--all"], cacheLockPath, gitEnv);
       mkdirSync(join(cacheDir, ".git", "lfs", "objects"), { recursive: true });
     }
   }
@@ -404,6 +421,28 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): void {
     stdio: ["ignore", "ignore", "inherit"],
     env: env ?? process.env,
   });
+}
+
+// Run `git <args>` under an exclusive flock(2) on `lockPath`. Concurrent
+// processes block on the lockfile (no spin, no retry budget); the kernel
+// releases the lock on process death so a crashed allocator can't poison
+// it. Used to serialize cache-prep operations against the same shared
+// cache repo across parallel worktree allocations.
+function gitLocked(
+  cwd: string,
+  args: string[],
+  lockPath: string,
+  env?: NodeJS.ProcessEnv,
+): void {
+  execFileSync(
+    "flock",
+    ["--exclusive", lockPath, "git", ...args],
+    {
+      cwd,
+      stdio: ["ignore", "ignore", "inherit"],
+      env: env ?? process.env,
+    },
+  );
 }
 
 /**
