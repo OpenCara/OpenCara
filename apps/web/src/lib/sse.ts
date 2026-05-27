@@ -24,6 +24,14 @@ interface Options<T> {
    * replays on EventSource auto-reconnect.
    */
   dedupeKey?: (item: T) => string | number | null | undefined;
+  /**
+   * Cap the accumulated events array at this size. When set, the oldest
+   * entries are dropped once the array would exceed the limit. Use this
+   * for long-running streams (agent logs, telemetry tails) where the
+   * caller only renders a windowed view — without it the underlying
+   * buffer grows linearly with output and pins memory.
+   */
+  maxBuffer?: number;
 }
 
 /**
@@ -63,7 +71,14 @@ export function useEventSource<T>(url: string | null, opts: Options<T>): UseEven
           seen.add(k);
         }
       }
-      setEvents((prev) => [...prev, item]);
+      const cap = optsRef.current.maxBuffer;
+      setEvents((prev) => {
+        const next = [...prev, item];
+        if (cap && next.length > cap) {
+          return next.slice(next.length - cap);
+        }
+        return next;
+      });
     };
 
     for (const name of eventNames) {
