@@ -60,7 +60,7 @@ export interface NodeRunCtx {
     githubRepoId: number;
     defaultBranch: string | null;
     /** Repo-relative path of the project's agent instructions file.
-     *  Default 'AGENTS.md' (per migration 0030); empty disables injection.
+     *  Default '' (per migration 0030); empty disables injection.
      *  Forwarded into AcpSpec.instructionsFile after validation. */
     instructionsFile: string;
   };
