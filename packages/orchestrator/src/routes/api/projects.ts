@@ -125,9 +125,11 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     return c.body(null, 204);
   });
 
-  // Update project settings. Currently supports:
-  //   { defaultImplementFlowId: string | null }
-  // The flow must belong to the project and be enabled; null clears the setting.
+  // Update project settings. PATCH semantics: only keys present in the body
+  // are touched. Supported keys:
+  //   { defaultImplementFlowId?: string | null }
+  //   { instructionsFile?: string }
+  // Either key may appear on its own or together. Empty body → 400.
   r.patch("/:id", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
@@ -135,26 +137,39 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     if (!owned) return c.json({ error: "not found" }, 404);
 
     const body = await c.req.json().catch(() => ({}));
-    if (!("defaultImplementFlowId" in body)) {
-      return c.json({ error: "defaultImplementFlowId required" }, 400);
-    }
-    const flowId = body.defaultImplementFlowId;
-    if (flowId !== null && typeof flowId !== "string") {
-      return c.json({ error: "defaultImplementFlowId must be a string or null" }, 400);
-    }
-
-    if (typeof flowId === "string") {
-      const flow = await deps.db.query.flows.findFirst({
-        where: and(eq(flows.id, flowId), eq(flows.projectId, id)),
-      });
-      if (!flow) return c.json({ error: "flow not found in this project" }, 404);
-      if (!flow.enabled) return c.json({ error: "flow is disabled" }, 400);
+    const hasDefaultFlow = "defaultImplementFlowId" in body;
+    const hasInstructionsFile = "instructionsFile" in body;
+    if (!hasDefaultFlow && !hasInstructionsFile) {
+      return c.json(
+        { error: "no updatable fields in body (defaultImplementFlowId or instructionsFile)" },
+        400,
+      );
     }
 
-    await deps.db
-      .update(projects)
-      .set({ defaultImplementFlowId: flowId })
-      .where(eq(projects.id, id));
+    const patch: { defaultImplementFlowId?: string | null; instructionsFile?: string } = {};
+
+    if (hasDefaultFlow) {
+      const flowId = body.defaultImplementFlowId;
+      if (flowId !== null && typeof flowId !== "string") {
+        return c.json({ error: "defaultImplementFlowId must be a string or null" }, 400);
+      }
+      if (typeof flowId === "string") {
+        const flow = await deps.db.query.flows.findFirst({
+          where: and(eq(flows.id, flowId), eq(flows.projectId, id)),
+        });
+        if (!flow) return c.json({ error: "flow not found in this project" }, 404);
+        if (!flow.enabled) return c.json({ error: "flow is disabled" }, 400);
+      }
+      patch.defaultImplementFlowId = flowId;
+    }
+
+    if (hasInstructionsFile) {
+      const validated = validateInstructionsFileInput(body.instructionsFile);
+      if (validated.error) return c.json({ error: validated.error }, 400);
+      patch.instructionsFile = validated.value;
+    }
+
+    await deps.db.update(projects).set(patch).where(eq(projects.id, id));
 
     const project = await loadOwnedProject(deps.db, id, user.id);
     if (!project) return c.json({ error: "not found" }, 404);
@@ -606,4 +621,40 @@ function clampLimit(v: string | undefined): number {
   const n = Number.parseInt(v ?? "50", 10);
   if (!Number.isFinite(n)) return 50;
   return Math.min(Math.max(n, 1), 200);
+}
+
+/**
+ * Validate the project `instructionsFile` setting from a PATCH body.
+ *
+ * Rules (mirror `validateInstructionsFileSetting` on the dispatch side, but
+ * surfaced as 400s for the operator-facing API so they see a single clear
+ * error rather than a silent skip at dispatch time):
+ *
+ * - Must be a string. Empty string is allowed → "disable injection for
+ *   this project".
+ * - Must be repo-relative (not absolute on POSIX or Windows-drive).
+ * - Must not contain a `..` segment.
+ * - Must end with `.md` (case-insensitive). Other extensions might be
+ *   syntactically fine but operators almost certainly want a markdown
+ *   file here, and disallowing non-md keeps the UI tooltip honest.
+ *   Empty string ("disabled") bypasses this check.
+ */
+export function validateInstructionsFileInput(
+  raw: unknown,
+): { value: string; error?: undefined } | { value?: undefined; error: string } {
+  if (typeof raw !== "string") {
+    return { error: "instructionsFile must be a string" };
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return { value: "" };
+  if (trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return { error: "instructionsFile must be repo-relative, not absolute" };
+  }
+  if (trimmed.split(/[\\/]/).includes("..")) {
+    return { error: "instructionsFile must not contain '..' segments" };
+  }
+  if (!/\.md$/i.test(trimmed)) {
+    return { error: "instructionsFile must end in .md" };
+  }
+  return { value: trimmed };
 }

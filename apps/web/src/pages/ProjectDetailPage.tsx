@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
@@ -27,6 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   projectQuery,
   projectEventsQuery,
@@ -35,6 +37,7 @@ import {
   projectIssuesQuery,
   projectRunsQuery,
   useSetProjectDefaultImplementFlow,
+  useSetProjectInstructionsFile,
   useSyncProjectIssues,
   type FlowRunSummary,
   type FlowSummary,
@@ -132,6 +135,7 @@ export function ProjectDetailPage() {
               </CardContent>
             </Card>
             <DefaultImplementFlowCard projectId={id!} currentFlowId={p.defaultImplementFlowId ?? null} />
+            <InstructionsFileCard projectId={id!} current={p.instructionsFile ?? ""} />
           </div>
         </TabsContent>
 
@@ -593,4 +597,104 @@ function statusVariant(s: string): "default" | "secondary" | "destructive" | "ou
   if (s === "succeeded") return "default";
   if (s === "failed" || s === "cancelled") return "destructive";
   return "secondary";
+}
+
+function InstructionsFileCard({
+  projectId,
+  current,
+}: {
+  projectId: string;
+  current: string;
+}) {
+  const setInstructionsFile = useSetProjectInstructionsFile(projectId);
+  const [draft, setDraft] = useState(current);
+  const trimmed = draft.trim();
+  const dirty = trimmed !== current;
+  // Mirror the server-side validation in `validateInstructionsFileInput`
+  // so the operator sees rejection reasons inline instead of clicking
+  // Save just to discover the value was bad. Empty string is allowed
+  // (= disable injection for this project).
+  const localError = (() => {
+    if (trimmed.length === 0) return null;
+    if (trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+      return "Must be a repo-relative path, not absolute.";
+    }
+    if (trimmed.split(/[\\/]/).includes("..")) {
+      return "Must not contain '..' segments.";
+    }
+    if (!/\.md$/i.test(trimmed)) {
+      return "Must end in .md.";
+    }
+    return null;
+  })();
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (localError || !dirty || setInstructionsFile.isPending) return;
+    // Sync the input with the trimmed value before sending. Without
+    // this, an operator typing "AGENTS.md  " saves the right value
+    // ("AGENTS.md") on the server but the input keeps the trailing
+    // spaces visible, making the disabled Save button look broken
+    // ("the field is dirty but Save is greyed out").
+    setDraft(trimmed);
+    setInstructionsFile.mutate(trimmed);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-medium text-muted-foreground">
+          Agent instructions file
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-2 text-sm">
+          <p className="text-xs text-muted-foreground">
+            Repo-relative path. Read from the worktree at dispatch and
+            injected as the canonical project system prompt for every
+            agent — replaces each CLI's per-kind auto-discovery (e.g.{" "}
+            <code className="font-mono">~/.claude/CLAUDE.md</code>) so the
+            agent's instructions are identical across kinds. Leave empty
+            to disable injection.
+          </p>
+          <Label
+            htmlFor="instructions-file"
+            className="text-xs uppercase tracking-wide text-muted-foreground"
+          >
+            File path
+          </Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="instructions-file"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="AGENTS.md"
+              className="h-8 max-w-md font-mono text-xs"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              variant="outline"
+              disabled={
+                !dirty || setInstructionsFile.isPending || localError !== null
+              }
+            >
+              {setInstructionsFile.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+          {localError && (
+            <div className="text-xs text-destructive">{localError}</div>
+          )}
+          {setInstructionsFile.error && !localError && (
+            <div className="text-xs text-destructive">
+              {setInstructionsFile.error instanceof Error
+                ? setInstructionsFile.error.message
+                : String(setInstructionsFile.error)}
+            </div>
+          )}
+        </form>
+      </CardContent>
+    </Card>
+  );
 }

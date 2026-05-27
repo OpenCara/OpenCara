@@ -53,6 +53,8 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, normalize, resolve as pathResolve, sep } from "node:path";
 import { stdin, stdout, stderr, exit } from "node:process";
 import {
   encodeFrame,
@@ -116,6 +118,18 @@ interface SessionState {
    *  agent's tool list actually contains the opencara-mcp tools the
    *  orchestrator advertised. Empty / absent → no bridge flags added. */
   mcpServers?: AcpMcpServer[];
+  /** Repo-relative path to the canonical project agent instructions file
+   *  (opencara extension on session/new + session/load — see #130). When
+   *  set AND the file resolves + exists inside `cwd`, every turn:
+   *    1. adds `--bare` so Claude skips its native CLAUDE.md auto-discovery
+   *       (both `~/.claude/CLAUDE.md` and `<cwd>/CLAUDE.md`), and
+   *    2. adds `--append-system-prompt <content>` so the file content
+   *       becomes the project-level system prompt instead.
+   *  Resolution happens per-turn (cheap; files are small) so an operator
+   *  editing the file mid-iteration is picked up. Absent / unreadable
+   *  files fall through to the pre-#130 behaviour (no `--bare`, no
+   *  append) with a stderr warning. */
+  instructionsFile?: string;
 }
 
 /** ACP `session/new` `mcpServers` array element. Mirrors the shape the
@@ -174,6 +188,154 @@ function buildClaudeMcpConfig(servers: AcpMcpServer[]): string {
 }
 
 export const sessions = new Map<string, SessionState>();
+
+// ─── Project instructions file ─────────────────────────────────────
+
+/** Hard cap on the file size we'll splat onto argv. argv strings on
+ *  Linux are bounded by MAX_ARG_STRLEN (typically 128 KiB on a 4 KiB-page
+ *  kernel); we keep some headroom. Files larger than this almost certainly
+ *  carry generated content the operator didn't mean to inject as a system
+ *  prompt anyway — better to warn and fall through than truncate. */
+const INSTRUCTIONS_FILE_MAX_BYTES = 64 * 1024;
+
+export interface ResolvedInstructionsFile {
+  /** Absolute path resolved inside cwd. */
+  path: string;
+  /** Content read from disk, bounded by INSTRUCTIONS_FILE_MAX_BYTES. */
+  content: string;
+}
+
+/**
+ * Resolve the session's `instructionsFile` relative path against `cwd`,
+ * validate it stays inside the worktree, stat it, and read the content
+ * (bounded). Returns null on any miss; the caller treats null as "skip
+ * injection this turn, fall back to legacy auto-discovery behaviour".
+ * Every miss writes one stderr line so operators can see why injection
+ * didn't happen — silence is the worse failure mode.
+ *
+ * Containment check resolves symlinks via `realpathSync` before
+ * comparison. A repo could otherwise commit `AGENTS.md` as a symlink
+ * pointing at `~/.anthropic/api_key`, `~/.ssh/id_rsa`, `/etc/passwd`,
+ * etc. — the lexical `startsWith` check passes (since the on-disk
+ * symlink lives in cwd), `statSync` follows the link, and the target
+ * file's content reaches `claude --append-system-prompt`, from which
+ * it leaks through LLM output (PR comments, commit messages, chat).
+ * Real-path containment closes that hole.
+ */
+export function resolveInstructionsFile(
+  cwd: string,
+  relative: string | undefined,
+): ResolvedInstructionsFile | null {
+  if (!relative || typeof relative !== "string" || relative.length === 0) {
+    return null;
+  }
+  if (!isAbsolute(cwd)) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: cwd '${cwd}' is not absolute\n`,
+    );
+    return null;
+  }
+  if (isAbsolute(relative) || /^[A-Za-z]:[\\/]/.test(relative)) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' must be repo-relative\n`,
+    );
+    return null;
+  }
+  if (relative.split(/[\\/]/).includes("..")) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' contains '..'\n`,
+    );
+    return null;
+  }
+  const normalizedCwd = normalize(cwd);
+  const candidate = pathResolve(normalizedCwd, relative);
+  // Lexical pre-check: cheap defence-in-depth that catches the obvious
+  // case where someone smuggles a literal absolute / .. through the
+  // earlier checks (e.g. via Windows separators on POSIX). The real
+  // containment check below operates on resolved (realpath) paths.
+  const cwdWithSep = normalizedCwd.endsWith(sep) ? normalizedCwd : `${normalizedCwd}${sep}`;
+  if (!candidate.startsWith(cwdWithSep) && candidate !== normalizedCwd) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${candidate}' escapes cwd\n`,
+    );
+    return null;
+  }
+  // Resolve symlinks for the actual containment authority. If the file
+  // is a symlink that hops outside the worktree (committed AGENTS.md
+  // → ~/.ssh/id_rsa), realpathSync surfaces the real target and the
+  // check below rejects it. realpathSync also doubles as a stat
+  // (throws ENOENT if missing) so we skip the separate statSync hop
+  // for existence.
+  let realCwd: string;
+  let realCandidate: string;
+  try {
+    realCwd = realpathSync(normalizedCwd);
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: cwd '${normalizedCwd}' realpath failed: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    return null;
+  }
+  try {
+    realCandidate = realpathSync(candidate);
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' not found in cwd (${
+        err instanceof Error ? err.message : String(err)
+      })\n`,
+    );
+    return null;
+  }
+  const realCwdWithSep = realCwd.endsWith(sep) ? realCwd : `${realCwd}${sep}`;
+  if (
+    !realCandidate.startsWith(realCwdWithSep) &&
+    realCandidate !== realCwd
+  ) {
+    // Distinct message from the lexical one above so operators can
+    // tell a symlink-escape from a literal traversal in the log.
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' resolves to '${realCandidate}' which is outside cwd (symlink escape?)\n`,
+    );
+    return null;
+  }
+  let stat;
+  try {
+    stat = statSync(realCandidate);
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' stat failed: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    return null;
+  }
+  if (!stat.isFile()) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' is not a regular file\n`,
+    );
+    return null;
+  }
+  if (stat.size > INSTRUCTIONS_FILE_MAX_BYTES) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: '${relative}' is ${stat.size} bytes (> ${INSTRUCTIONS_FILE_MAX_BYTES} cap)\n`,
+    );
+    return null;
+  }
+  let content: string;
+  try {
+    content = readFileSync(realCandidate, "utf8");
+  } catch (err) {
+    stderr.write(
+      `[claude-acp] instructionsFile skipped: read failed for '${relative}': ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    return null;
+  }
+  return { path: realCandidate, content };
+}
 
 // ─── Claude launcher ───────────────────────────────────────────────
 
@@ -235,6 +397,37 @@ async function runClaudeTurn(
         buildClaudeMcpConfig(state.mcpServers),
         "--strict-mcp-config",
       );
+    }
+    // Project-level instructions file (issue #130). The orchestrator set
+    // `instructionsFile` on session/new+load to one canonical repo-relative
+    // path the project picked (default `AGENTS.md`). When that file
+    // resolves + exists inside the worktree:
+    //
+    //   1. add `--bare` so Claude skips its native CLAUDE.md auto-discovery
+    //      (both `~/.claude/CLAUDE.md` user-level overrides AND the
+    //      worktree's own `CLAUDE.md`), and
+    //   2. add `--append-system-prompt <content>` so the file content
+    //      becomes the project's system prompt instead.
+    //
+    // This means flows get one source of truth for project instructions
+    // regardless of agent kind, and an operator's interactive
+    // `~/.claude/CLAUDE.md` rules can't silently override flow contracts
+    // (the failure mode that triggered #130).
+    //
+    // Missing / unreadable / oversized file → fall through to legacy
+    // behaviour: no `--bare`, no `--append-system-prompt`. The skip
+    // reason is already on stderr from resolveInstructionsFile.
+    //
+    // Auth caveat: `--bare` also disables keychain reads, so this only
+    // fires when the orchestrator actively opted in by setting the field.
+    // Chat / test runs leave `state.instructionsFile` undefined and keep
+    // the original auth + discovery behaviour.
+    const resolvedInstructions = resolveInstructionsFile(
+      state.cwd,
+      state.instructionsFile,
+    );
+    if (resolvedInstructions) {
+      args.push("--bare", "--append-system-prompt", resolvedInstructions.content);
     }
     // Prompt goes on stdin, not argv. Linux's execve caps a single
     // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
@@ -557,15 +750,19 @@ export function handleInitialize(_params: InitializeParams): unknown {
 interface NewSessionParams {
   cwd: string;
   mcpServers?: unknown[];
+  /** Opencara extension — see SessionState.instructionsFile. */
+  instructionsFile?: unknown;
 }
 
 export function handleNewSession(params: NewSessionParams): unknown {
   const sessionId = randomUUID();
   const mcpServers = normalizeMcpServers(params.mcpServers);
+  const instructionsFile = normalizeInstructionsFile(params.instructionsFile);
   sessions.set(sessionId, {
     cwd: params.cwd ?? process.cwd(),
     resume: false,
     ...(mcpServers.length > 0 ? { mcpServers } : {}),
+    ...(instructionsFile ? { instructionsFile } : {}),
   });
   return { sessionId };
 }
@@ -574,6 +771,8 @@ interface LoadSessionParams {
   sessionId: string;
   cwd: string;
   mcpServers?: unknown[];
+  /** Opencara extension — see SessionState.instructionsFile. */
+  instructionsFile?: unknown;
 }
 
 export function handleLoadSession(params: LoadSessionParams): unknown {
@@ -588,12 +787,23 @@ export function handleLoadSession(params: LoadSessionParams): unknown {
     throw new Error("session/load: sessionId required");
   }
   const mcpServers = normalizeMcpServers(params.mcpServers);
+  const instructionsFile = normalizeInstructionsFile(params.instructionsFile);
   sessions.set(params.sessionId, {
     cwd: params.cwd ?? process.cwd(),
     resume: true,
     ...(mcpServers.length > 0 ? { mcpServers } : {}),
+    ...(instructionsFile ? { instructionsFile } : {}),
   });
   return {};
+}
+
+/** Coerce the opencara session-extension field into a clean string or
+ *  undefined. The wire type is `unknown` because the protocol's standard
+ *  shape doesn't declare it. */
+function normalizeInstructionsFile(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 interface PromptParams {

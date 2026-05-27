@@ -36,6 +36,7 @@ function ctxForComment(body: string): NodeRunCtx {
       name: "octo-repo",
       githubRepoId: 1,
       defaultBranch: "main",
+      instructionsFile: "",
     },
     event: {
       id: "event-1",
@@ -123,6 +124,7 @@ function ctxForReviewSubmitted(opts: ReviewCtxOpts = {}): NodeRunCtx {
       name: "octo-repo",
       githubRepoId: 1,
       defaultBranch: "main",
+      instructionsFile: "",
     },
     event: {
       id: "event-1",
@@ -171,6 +173,7 @@ function ctxForFixComment(opts: ReviewCtxOpts = {}): NodeRunCtx {
       name: "octo-repo",
       githubRepoId: 1,
       defaultBranch: "main",
+      instructionsFile: "",
     },
     event: {
       id: "event-1",

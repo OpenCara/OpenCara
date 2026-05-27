@@ -620,6 +620,7 @@ export class FlowEngine {
         name: project.name,
         githubRepoId: project.githubRepoId,
         defaultBranch: project.defaultBranch,
+        instructionsFile: project.instructionsFile,
       },
       event,
       prContext,
