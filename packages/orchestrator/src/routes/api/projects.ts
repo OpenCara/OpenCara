@@ -514,7 +514,13 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
           // noise and the issue-editing user is interested in real runs.
           sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
           or(
-            sql`(${platformEvents.payload}->>'issueNumber')::int = ${issueRow.number}`,
+            // Compare as text rather than casting JSON to int — a malformed
+            // payload (e.g. trigger-skip rows that recorded `issueNumber`
+            // as a string for some unrelated event shape) would 500 the
+            // whole endpoint at SELECT time if we cast. Stringifying the
+            // issue number is safe because GitHub issue numbers are bare
+            // positive integers with no leading zeros.
+            sql`${platformEvents.payload}->>'issueNumber' = ${String(issueRow.number)}`,
             sql`${platformEvents.payload}->'projects_v2_item'->>'content_node_id' = ${issueRow.githubNodeId}`,
           ),
         ),
@@ -528,10 +534,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const activeRunIds = rows
       .filter((r) => r.status === "running")
       .map((r) => r.id);
-    const currentStepByRun = new Map<
-      string,
-      { nodeKind: string; status: string; idx: number }
-    >();
+    const currentStepByRun = new Map<string, string>();
     if (activeRunIds.length > 0) {
       const steps = await deps.db
         .select({
@@ -543,18 +546,25 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         .from(flowRunSteps)
         .where(inArray(flowRunSteps.flowRunId, activeRunIds))
         .orderBy(desc(flowRunSteps.idx));
+      // Group by run, then prefer a currently-running step; otherwise fall
+      // back to the latest (highest-idx) step so the panel can still say
+      // "Working (…)" while the engine is between steps.
+      const byRun = new Map<string, typeof steps>();
       for (const s of steps) {
-        const prev = currentStepByRun.get(s.flowRunId);
-        if (!prev) currentStepByRun.set(s.flowRunId, s);
-        else if (prev.status !== "running" && s.status === "running") {
-          currentStepByRun.set(s.flowRunId, s);
-        }
+        const list = byRun.get(s.flowRunId);
+        if (list) list.push(s);
+        else byRun.set(s.flowRunId, [s]);
+      }
+      for (const [runId, list] of byRun) {
+        const chosen =
+          list.find((s) => s.status === "running") ?? list[0]!;
+        currentStepByRun.set(runId, chosen.nodeKind);
       }
     }
 
     const runs = rows.map((row) => ({
       ...row,
-      currentNodeKind: currentStepByRun.get(row.id)?.nodeKind ?? null,
+      currentNodeKind: currentStepByRun.get(row.id) ?? null,
     }));
 
     return c.json({ runs });

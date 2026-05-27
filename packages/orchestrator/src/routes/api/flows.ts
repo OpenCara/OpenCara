@@ -442,7 +442,12 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     if (run.status !== "pending" && run.status !== "running") {
       return c.json({ error: "already terminal" }, 409);
     }
-    await deps.db
+    // The status predicate races against the engine's own terminal write
+    // (the run could finish between the SELECT above and this UPDATE).
+    // `.returning()` lets us tell honestly whether we actually cancelled,
+    // so a no-op UPDATE returns 409 instead of pretending we stopped a
+    // run that just finished.
+    const updated = await deps.db
       .update(flowRuns)
       .set({
         status: "cancelled",
@@ -454,7 +459,11 @@ export function flowRoutes(deps: FlowRoutesDeps) {
           eq(flowRuns.id, id),
           inArray(flowRuns.status, ["pending", "running"]),
         ),
-      );
+      )
+      .returning({ id: flowRuns.id });
+    if (updated.length === 0) {
+      return c.json({ error: "already terminal" }, 409);
+    }
     // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
     // board, which LISTENs on `flow_runs` to refresh implement statuses).
     void deps.pg.notify("flow_runs", id);

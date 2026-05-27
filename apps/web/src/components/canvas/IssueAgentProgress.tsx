@@ -80,7 +80,10 @@ export function IssueAgentProgress({
 
   const runs = runsQ.data?.runs ?? [];
   const activeRun = runs.find((r) => ACTIVE_STATES.has(r.status)) ?? null;
-  const historyRuns = runs.filter((r) => r !== activeRun);
+  // Filter by id rather than reference so a future refactor that re-shapes
+  // the run objects (e.g. memoised projections) doesn't quietly start
+  // including the active run twice.
+  const historyRuns = runs.filter((r) => r.id !== activeRun?.id);
 
   return (
     <div className="border-b">
@@ -135,7 +138,7 @@ function EmptyState() {
 
 function NoActiveRunHint({ mostRecent }: { mostRecent: IssueFlowRun | null }) {
   if (!mostRecent) return null;
-  const tone = TERMINAL_PRESENTATION[mostRecent.status];
+  const tone = STATUS_PRESENTATION[mostRecent.status];
   const Icon = tone.icon;
   return (
     <div className="flex items-center gap-2 rounded-md border bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
@@ -417,15 +420,19 @@ function SteeringNotice() {
  * agent doesn't blow up the page. Mirrors the AgentLogPanel from
  * FlowRunDetailPage but trimmed for an at-a-glance view. */
 function AgentLogTail({ agentRunId }: { agentRunId: string }) {
+  // Cap the underlying buffer at 60 chunks too — `events.slice(-60)` only
+  // trims at render, but the accumulator inside useEventSource keeps every
+  // chunk a chatty agent emits and that's what pins memory on long runs.
   const { events, ended, error } = useEventSource<LogLine>(
     `/api/runs/${agentRunId}/logs/stream`,
     {
       parse: (e) => (e.event === "log" ? (JSON.parse(e.data) as LogLine) : null),
       dedupeKey: (row) => row.seq,
+      maxBuffer: 60,
     },
   );
 
-  const tail = events.slice(-60);
+  const tail = events;
 
   return (
     <div className="mt-3">
@@ -492,7 +499,7 @@ function HistoryRow({
   run: IssueFlowRun;
 }) {
   const [open, setOpen] = useState(false);
-  const tone = TERMINAL_PRESENTATION[run.status];
+  const tone = STATUS_PRESENTATION[run.status];
   const Icon = tone.icon;
   const duration =
     run.startedAt && run.finishedAt
@@ -547,7 +554,7 @@ function HistoryRow({
   );
 }
 
-const TERMINAL_PRESENTATION: Record<
+const STATUS_PRESENTATION: Record<
   IssueFlowRun["status"],
   { icon: typeof Loader2; color: string; label: string }
 > = {
