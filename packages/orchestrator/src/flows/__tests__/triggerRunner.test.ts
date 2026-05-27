@@ -177,7 +177,7 @@ function ctxForFixComment(opts: ReviewCtxOpts = {}): NodeRunCtx {
       type: "issue_comment",
       payload: {
         action: "created",
-        issue: { number: 127, pull_request: {} },
+        issue: { number: 127, state, pull_request: {} },
         comment: { body: "@opencara fix this", user: { login: "operator" } },
       },
     },
@@ -227,6 +227,20 @@ describe("triggerRunner pull_request_review closed-PR skip", () => {
     await assert.rejects(
       triggerRunner(
         ctxForReviewSubmitted({ prState: "closed", withoutPrContext: true }),
+        reviewTrigger,
+      ),
+      (err) =>
+        err instanceof SkipFlowError &&
+        err.message === "PR is closed; skipping review-fix on stale event",
+    );
+  });
+
+  // issue_comment payloads carry PR state at `payload.issue.state`, not
+  // `payload.pull_request.state` — confirm the fallback handles both.
+  it("falls back to webhook payload issue.state on the @opencara fix path", async () => {
+    await assert.rejects(
+      triggerRunner(
+        ctxForFixComment({ prState: "closed", withoutPrContext: true }),
         reviewTrigger,
       ),
       (err) =>

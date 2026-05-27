@@ -238,11 +238,16 @@ async function pullRequestReviewTrigger(
   // would fail with `fatal: Remote branch <head> not found in upstream
   // origin`. Prefer the PR object built by `buildPullRequestContext`
   // (covers both event paths); fall back to the raw webhook payload in
-  // case that fetch threw.
+  // case that fetch threw — `payload.pull_request.state` for
+  // pull_request_review events, `payload.issue.state` for issue_comment.
+  const rawPayload = ctx.event.payload as {
+    pull_request?: { state?: string };
+    issue?: { state?: string };
+  } | undefined;
   const prState =
     (ctx.prContext?.stdin.pr as { state?: string } | undefined)?.state ??
-    (ctx.event.payload as { pull_request?: { state?: string } } | undefined)
-      ?.pull_request?.state;
+    rawPayload?.pull_request?.state ??
+    rawPayload?.issue?.state;
   if (prState === "closed") {
     throw new SkipFlowError("PR is closed; skipping review-fix on stale event");
   }
