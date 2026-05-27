@@ -14,6 +14,13 @@ cd "$ROOT"
 LOG=/tmp/opencara-orchestrator.log
 PORT=3030
 
+echo "==> Installing dependencies (frozen lockfile)"
+# --frozen-lockfile fails loudly if package.json drifted from pnpm-lock.yaml,
+# which is what we want on a production deploy. Catches the case where a pull
+# brought in new deps (e.g. PR #123 added remark-breaks / highlight.js) and
+# the build would otherwise fail mid-way with a missing-module TS error.
+pnpm install --frozen-lockfile
+
 echo "==> Building all packages"
 pnpm -r build
 
