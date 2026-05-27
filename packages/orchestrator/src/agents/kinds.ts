@@ -29,9 +29,14 @@ export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: st
     {
       name: "ANTHROPIC_API_KEY",
       description:
-        "Anthropic API key. Or sign in once on the device with `claude auth login` " +
-        "(token persists in ~/.claude/auth.json) — claude-acp picks it up via the " +
-        "claude-agent-sdk.",
+        "Anthropic API key. Required for any flow that sets a project " +
+        "instructions file: claude-acp passes `--bare` in that case so " +
+        "Claude skips keychain reads (and the `~/.claude/CLAUDE.md` " +
+        "auto-discovery that previously overrode flow contracts — see #130). " +
+        "For chat / test runs with no worktree, `claude auth login` tokens " +
+        "in ~/.claude/auth.json still work as a fallback. Or wire your own " +
+        "credential source via the `apiKeyHelper` field in a settings file " +
+        "passed with `--settings`.",
     },
   ],
   codex: [

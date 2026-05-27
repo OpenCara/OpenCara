@@ -224,6 +224,14 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       const cwd = spec.cwd ?? process.cwd();
       const mcpServers = [host.acpServerEntry()];
       const shimSupportsLoad = initResult.agentCapabilities?.loadSession === true;
+      // Project-level instructions file (issue #130): repo-relative path
+      // the orchestrator already validated. Forwarded on every session
+      // setup so the shim can strip its per-kind auto-discovery and
+      // inject this file instead. Shims that don't understand the field
+      // ignore it.
+      const instructionsExtra = acpSpec.instructionsFile
+        ? { instructionsFile: acpSpec.instructionsFile }
+        : {};
       let sessionId: string;
       let resumed = false;
       if (acpSpec.priorSessionId && shimSupportsLoad) {
@@ -231,11 +239,12 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
           sessionId: acpSpec.priorSessionId,
           cwd,
           mcpServers,
+          ...instructionsExtra,
         });
         sessionId = acpSpec.priorSessionId;
         resumed = true;
       } else {
-        const session = await client.newSession({ cwd, mcpServers });
+        const session = await client.newSession({ cwd, mcpServers, ...instructionsExtra });
         sessionId = session.sessionId;
       }
       activeSessionId = sessionId;

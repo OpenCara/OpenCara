@@ -36,6 +36,7 @@ function ctxForComment(body: string): NodeRunCtx {
       name: "octo-repo",
       githubRepoId: 1,
       defaultBranch: "main",
+      instructionsFile: "AGENTS.md",
     },
     event: {
       id: "event-1",

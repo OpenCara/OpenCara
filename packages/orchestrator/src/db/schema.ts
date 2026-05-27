@@ -145,6 +145,13 @@ export const projects = pgTable(
     // .references() is omitted to avoid a circular type reference between
     // projects ↔ flows; the DB constraint handles referential integrity.
     defaultImplementFlowId: text("default_implement_flow_id"),
+    // Repo-relative path of the canonical agent instructions file. The
+    // orchestrator stat-checks it in the worktree at dispatch time and
+    // forwards the absolute path to the ACP adapter so the same content
+    // becomes the system prompt regardless of agent kind (see #130).
+    // Default 'AGENTS.md' lines up with codex's discovery convention;
+    // teams already on CLAUDE.md flip this in project settings.
+    instructionsFile: text("instructions_file").notNull().default("AGENTS.md"),
     addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
     removedAt: timestamp("removed_at", { withTimezone: true }),
   },

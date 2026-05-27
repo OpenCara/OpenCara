@@ -33,6 +33,7 @@ import { parseReviewVerdict } from "../agents/verdict.js";
 import { isSelfReviewError } from "../github/errors.js";
 import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
+import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
 import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
@@ -53,7 +54,16 @@ export interface NodeRunCtx {
   flowRunStepId: string;
   projectId: string;
   installation: { id: string; githubInstallationId: number };
-  project: { owner: string; name: string; githubRepoId: number; defaultBranch: string | null };
+  project: {
+    owner: string;
+    name: string;
+    githubRepoId: number;
+    defaultBranch: string | null;
+    /** Repo-relative path of the project's agent instructions file.
+     *  Default 'AGENTS.md' (per migration 0030); empty disables injection.
+     *  Forwarded into AcpSpec.instructionsFile after validation. */
+    instructionsFile: string;
+  };
   event: { id: string; type: string; payload: unknown };
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
@@ -891,6 +901,26 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       ? worktree.priorSession.id
       : undefined;
 
+  // Validate the project-level instructions file setting and forward the
+  // relative path into the spec when it's safe + the agent will run in a
+  // worktree. The device-side adapter (claude-acp) does the actual disk
+  // stat-check; this side only gates on the setting being a sane
+  // repo-relative path. No worktree → skip (chat/test runs).
+  let projectInstructionsFile: string | undefined;
+  if (worktree?.workdir) {
+    const validated = validateInstructionsFileSetting({
+      setting: ctx.project.instructionsFile,
+    });
+    if (validated.relativePath) {
+      projectInstructionsFile = validated.relativePath;
+    } else if (validated.skipReason) {
+      console.warn(
+        `[flows] project instructionsFile not injected: ${validated.skipReason}`,
+        { projectId: ctx.projectId },
+      );
+    }
+  }
+
   const acpSpec = buildAcpSpec({
     agent: {
       kind: agent.kind,
@@ -902,6 +932,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     userPromptMd,
     pageContext,
     priorSessionId,
+    instructionsFile: projectInstructionsFile,
   });
 
   const result = await dispatchAgentRun(ctx, {

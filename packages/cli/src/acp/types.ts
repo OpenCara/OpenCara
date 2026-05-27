@@ -91,6 +91,15 @@ export type McpServer = McpServerStdio;
 export interface NewSessionRequest {
   cwd: string;
   mcpServers: McpServer[];
+  /**
+   * Opencara extension to standard ACP `session/new`: repo-relative path
+   * to a project-level agent instructions file the shim should inject as
+   * the canonical project system prompt (e.g. claude-acp wires it through
+   * to `claude --append-system-prompt`). Other ACP shims that don't
+   * understand the field ignore it. Omitted = shim keeps its native
+   * per-kind auto-discovery (e.g. `~/.claude/CLAUDE.md`). See issue #130.
+   */
+  instructionsFile?: string;
 }
 
 export interface NewSessionResponse {
@@ -113,6 +122,14 @@ export interface LoadSessionRequest {
   sessionId: string;
   cwd: string;
   mcpServers: McpServer[];
+  /**
+   * Opencara extension to standard ACP `session/load`. Same semantics as
+   * the `instructionsFile` field on `NewSessionRequest` — included on
+   * load so a resumed session still injects the project's instructions
+   * file on every prompt (the underlying CLI's JSONL replay covers
+   * conversation history, not system prompts).
+   */
+  instructionsFile?: string;
 }
 
 // Per spec the response is an empty object today. Modeled as an open
