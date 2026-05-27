@@ -365,7 +365,9 @@ function LinkedBoard({
             </div>
           </div>
           <DragOverlay>
-            {activeItem && <KanbanCardOverlay item={activeItem} />}
+            {activeItem && (
+              <KanbanCardOverlay item={activeItem} projectId={projectId} />
+            )}
           </DragOverlay>
         </DndContext>
       )}
