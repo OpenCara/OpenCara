@@ -157,7 +157,10 @@ export function KanbanCard({
             </div>
           )}
           {item.implementStatus && (
-            <ImplementStatusLine status={item.implementStatus} />
+            <ImplementStatusLine
+              status={item.implementStatus}
+              projectId={projectId}
+            />
           )}
           {item.linkedPrs?.length > 0 && (
             <div className="mt-2 flex flex-col gap-1">
@@ -222,20 +225,33 @@ export function KanbanCard({
  * succeeded runs (those don't reach the client — the linked-PR badge
  * communicates the same outcome) and uses a spinner for in-flight states
  * so the at-a-glance signal is obvious without reading the text.
+ *
+ * The whole line is a Link to the flow-run detail page so the user can
+ * jump straight to the agent's live output without hunting through the
+ * Flow Runs tab. `onPointerDown` stops the drag handler from claiming
+ * the click.
  */
-function ImplementStatusLine({ status }: { status: KanbanImplementStatus }) {
+function ImplementStatusLine({
+  status,
+  projectId,
+}: {
+  status: KanbanImplementStatus;
+  projectId: string;
+}) {
   const presentation = STATUS_PRESENTATION[status.state];
   const Icon = presentation.icon;
   return (
-    <div
-      className={`mt-2 flex items-center gap-1 text-[10px] ${presentation.color}`}
-      title={`Implement flow run ${status.flowRunId.slice(-8)} · ${status.state}`}
+    <Link
+      to={`/projects/${projectId}/flow-runs/${status.flowRunId}`}
+      className={`mt-2 flex items-center gap-1 text-[10px] hover:underline ${presentation.color}`}
+      title={`Open flow run ${status.flowRunId.slice(-8)} · ${status.state}`}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       <Icon
         className={`size-3 shrink-0 ${presentation.spin ? "animate-spin" : ""}`}
       />
       <span className="truncate">{status.label}</span>
-    </div>
+    </Link>
   );
 }
 
@@ -319,7 +335,13 @@ function StartImplementButton({
 }
 
 /** Presentational card rendered inside the DragOverlay portal. */
-export function KanbanCardOverlay({ item }: { item: KanbanItem }) {
+export function KanbanCardOverlay({
+  item,
+  projectId,
+}: {
+  item: KanbanItem;
+  projectId: string;
+}) {
   const state = item.contentState?.toUpperCase() ?? null;
   const stateLabel =
     item.kind === "draft"
@@ -374,7 +396,10 @@ export function KanbanCardOverlay({ item }: { item: KanbanItem }) {
         </div>
       )}
       {item.implementStatus && (
-        <ImplementStatusLine status={item.implementStatus} />
+        <ImplementStatusLine
+          status={item.implementStatus}
+          projectId={projectId}
+        />
       )}
       {item.linkedPrs?.length > 0 && (
         <div className="mt-2 flex flex-col gap-1">
