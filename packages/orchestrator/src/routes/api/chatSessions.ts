@@ -25,7 +25,7 @@
 
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   CHAT_SESSION_SCOPE_KINDS,
@@ -53,6 +53,13 @@ interface SessionResponse {
   title: string | null;
   archivedAt: string | null;
   updatedAt: string;
+  /**
+   * True when this session has an in-flight agent run (queued / assigned /
+   * running). Only populated by the list endpoint — the single-session
+   * resolver leaves it unset. Drives the "Running" group in the chat
+   * panel's session sidebar (see issue #143).
+   */
+  running?: boolean;
 }
 
 function parseScopeKind(raw: string | undefined): ChatSessionScopeKind | null {
@@ -216,6 +223,75 @@ async function findActiveSession(
   });
 }
 
+// Resolve which chat_sessions row a `POST /chat/sessions` agent-pick write
+// should target. With `sessionId`, the named row — bounded to (user, scope)
+// so a smuggled id from another scope/user doesn't resolve — is
+// authoritative, and `notFound` is true when it doesn't resolve (the route
+// then 404s instead of silently rewriting some other row). Without it, the
+// scope's most-recent active row is used (undefined → the route creates a
+// fresh one). Extracted so the #143 multi-active-session targeting — the
+// case that motivated this path — is unit-tested.
+//
+// Exported for unit tests that exercise it against a fake Db.
+export async function resolveAgentWriteTarget(
+  db: Db,
+  userId: string,
+  kind: ChatSessionScopeKind,
+  scopeId: string,
+  sessionId: string | null,
+): Promise<{
+  row: typeof chatSessions.$inferSelect | undefined;
+  notFound: boolean;
+}> {
+  if (sessionId) {
+    const row = await db.query.chatSessions.findFirst({
+      where: and(
+        eq(chatSessions.id, sessionId),
+        eq(chatSessions.userId, userId),
+        eq(chatSessions.scopeKind, kind),
+        eq(chatSessions.scopeId, scopeId),
+      ),
+    });
+    return { row: row ?? undefined, notFound: !row };
+  }
+  const row = await findActiveSession({ db }, userId, kind, scopeId);
+  return { row, notFound: false };
+}
+
+// Given a set of session threadKeys, return the subset that currently has
+// an in-flight agent run. A chat turn is dispatched as an `agent_runs` row
+// carrying `spec.env.OPENCARA_CHAT_SESSION_ID = threadKey` (same marker the
+// /history endpoint joins on); a session is "running" when any such run is
+// still queued / assigned / running. Used by the list endpoint to populate
+// the per-session `running` flag (issue #143).
+//
+// Exported for unit tests that exercise it against a fake Db.
+export async function selectActiveChatThreadKeys(
+  db: Db,
+  threadKeys: string[],
+): Promise<Set<string>> {
+  if (threadKeys.length === 0) return new Set();
+  const requested = new Set(threadKeys);
+  const sessionIdExpr = sql<string>`(${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID')`;
+  const active = await db.query.agentRuns.findMany({
+    where: and(
+      inArray(agentRuns.status, ["queued", "assigned", "running"]),
+      inArray(sessionIdExpr, threadKeys),
+    ),
+    columns: { spec: true },
+  });
+  const running = new Set<string>();
+  for (const run of active) {
+    const spec = run.spec as { env?: Record<string, string> } | null;
+    const key = spec?.env?.OPENCARA_CHAT_SESSION_ID;
+    // Intersect with the requested set rather than trusting the row blindly
+    // — keeps the result scoped to the caller's threadKeys even if the
+    // query ever returns a stray marker.
+    if (key && requested.has(key)) running.add(key);
+  }
+  return running;
+}
+
 export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
@@ -306,24 +382,49 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     return c.json({ session: toResponse(created!) });
   });
 
-  // POST /chat/sessions — upsert the agent pick for the (user, scope).
-  // Body: { scopeKind, scopeId, agentId }. agentId may be null.
+  // POST /chat/sessions — upsert the agent pick for a session.
+  // Body: { scopeKind, scopeId, agentId, sessionId? }. agentId may be null.
+  //
+  // `sessionId` targets a SPECIFIC row (the one the panel is currently
+  // viewing). It matters since #143: the session sidebar can leave several
+  // non-archived rows in a scope, so resolving the target by scope alone
+  // (`findActiveSession` = most-recent active) would write the agent pick
+  // onto whichever row was touched last — not the one the user is looking
+  // at, clobbering an unrelated conversation's agent + ACP session. When
+  // `sessionId` is omitted we keep the legacy scope-resolve-or-create
+  // behaviour (first-ever pick on a fresh scope).
   r.post("/chat/sessions", auth, async (c) => {
     const user = c.get("user")!;
     const body = (await c.req.json().catch(() => ({}))) as {
       scopeKind?: string;
       scopeId?: string;
       agentId?: string | null;
+      sessionId?: string;
     };
     const kind = parseScopeKind(body.scopeKind);
     if (!kind) return c.json({ error: "invalid scopeKind" }, 400);
     const scopeId = normalizedScopeId(kind, body.scopeId ?? "");
     const agentId = body.agentId ?? null;
+    const sessionId =
+      typeof body.sessionId === "string" && body.sessionId.length > 0
+        ? body.sessionId
+        : null;
 
     const gate = await gateScope(deps, user.id, kind, scopeId);
     if (!gate.ok) return c.json({ error: gate.error }, gate.status);
 
-    const existing = await findActiveSession(deps, user.id, kind, scopeId);
+    // When the caller names a session, that row is authoritative — bounded
+    // to (user, scope) so a smuggled id from another scope/user 404s rather
+    // than being silently rewritten. Otherwise fall back to the active row.
+    const target = await resolveAgentWriteTarget(
+      deps.db,
+      user.id,
+      kind,
+      scopeId,
+      sessionId,
+    );
+    if (target.notFound) return c.json({ error: "not found" }, 404);
+    const existing = target.row;
 
     const now = new Date();
     if (!existing) {
@@ -412,7 +513,16 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
       orderBy: [desc(chatSessions.updatedAt)],
       limit: 50,
     });
-    return c.json({ sessions: rows.map(toResponse) });
+    const runningKeys = await selectActiveChatThreadKeys(
+      deps.db,
+      rows.map((r) => r.threadKey),
+    );
+    return c.json({
+      sessions: rows.map((r) => ({
+        ...toResponse(r),
+        running: runningKeys.has(r.threadKey),
+      })),
+    });
   });
 
   // POST /chat/sessions/new — "New chat" button. Archives the current
@@ -423,17 +533,24 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
   // Optional `agentId` lets the panel persist the user's current agent
   // pick onto the new row in the same trip — saves a follow-up POST
   // /chat/sessions just to set it.
+  //
+  // `archivePrevious` (default true) controls whether the currently-active
+  // row is archived. The session-sidebar "+" button (issue #143) passes
+  // false: it wants the prior conversation to stay visible under the
+  // sidebar's "History" group rather than be tucked away under "Archived".
   r.post("/chat/sessions/new", auth, async (c) => {
     const user = c.get("user")!;
     const body = (await c.req.json().catch(() => ({}))) as {
       scopeKind?: string;
       scopeId?: string;
       agentId?: string | null;
+      archivePrevious?: boolean;
     };
     const kind = parseScopeKind(body.scopeKind);
     if (!kind) return c.json({ error: "invalid scopeKind" }, 400);
     const scopeId = normalizedScopeId(kind, body.scopeId ?? "");
     const agentId = body.agentId ?? null;
+    const archivePrevious = body.archivePrevious ?? true;
 
     const gate = await gateScope(deps, user.id, kind, scopeId);
     if (!gate.ok) return c.json({ error: gate.error }, gate.status);
@@ -444,7 +561,9 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     // "New chat" simultaneously leaves both prior actives archived
     // and two fresh rows in their place; the next GET picks the
     // most-recently-updated one. Slightly wasteful but correct.
-    const existing = await findActiveSession(deps, user.id, kind, scopeId);
+    const existing = archivePrevious
+      ? await findActiveSession(deps, user.id, kind, scopeId)
+      : undefined;
     if (existing) {
       await deps.db
         .update(chatSessions)

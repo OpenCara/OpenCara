@@ -1103,6 +1103,13 @@ export interface ChatSession {
   title: string | null;
   archivedAt: string | null;
   updatedAt: string;
+  /**
+   * True when the session has an in-flight agent run. Only the list
+   * endpoint (`chatSessionListQuery`) populates this; the single-session
+   * resolver leaves it undefined. Drives the "Running" group in the chat
+   * session sidebar (issue #143).
+   */
+  running?: boolean;
 }
 
 export interface ChatSessionScope {
@@ -1129,20 +1136,39 @@ export const chatSessionListQuery = (scope: ChatSessionScope) => ({
     ),
 });
 
+// Persist the agent pick for a session. `sessionId` names the specific
+// row the panel is viewing — required since #143, where a scope can hold
+// several non-archived sessions and the server would otherwise resolve
+// the agent write onto the most-recent active row (see POST /chat/sessions).
 export function useChatSessionAgentMutation(scope: ChatSessionScope) {
   const qc = useQueryClient();
+  const sessionKey = ["chat-session", scope.scopeKind, scope.scopeId] as const;
   return useMutation({
-    mutationFn: ({ agentId }: { agentId: string | null }) =>
+    mutationFn: ({
+      agentId,
+      sessionId,
+    }: {
+      agentId: string | null;
+      sessionId?: string | null;
+    }) =>
       api.post<{ session: ChatSession }>("/api/chat/sessions", {
         scopeKind: scope.scopeKind,
         scopeId: scope.scopeId,
         agentId,
+        ...(sessionId ? { sessionId } : {}),
       }),
     onSuccess: (data) => {
-      qc.setQueryData(
-        ["chat-session", scope.scopeKind, scope.scopeId] as const,
-        data,
-      );
+      // Only refresh the "active session" cache when the row we just wrote
+      // IS the cached active one. Writing a non-active (sidebar-selected)
+      // row's response into this key would mis-represent the active session.
+      // Require `cached` to be populated rather than seeding it on a miss: a
+      // miss could otherwise stamp an override (sidebar) row into the active
+      // key before sessionQ has hydrated. The active query refetches on its
+      // own, so skipping the seed only costs one fetch — never correctness.
+      const cached = qc.getQueryData<{ session: ChatSession }>(sessionKey);
+      if (cached && cached.session.id === data.session.id) {
+        qc.setQueryData(sessionKey, data);
+      }
       // The list query caches by scope; agent flip bumps updatedAt so
       // the cached list ordering is stale until invalidated.
       void qc.invalidateQueries({
@@ -1152,17 +1178,28 @@ export function useChatSessionAgentMutation(scope: ChatSessionScope) {
   });
 }
 
-// "New chat" — archive the current active row and start fresh. Returns
-// the newly-created session so the caller can pivot the panel onto it
-// without an extra fetch.
+// "New chat" — start a fresh session row and return it so the caller can
+// pivot the panel onto it without an extra fetch.
+//
+// `archivePrevious` (default true) preserves the legacy "New chat archives
+// the current thread" behaviour. The session sidebar's "+" button passes
+// false so the prior conversation stays visible under the sidebar's
+// "History" group instead of being archived away (issue #143).
 export function useNewChatSession(scope: ChatSessionScope) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ agentId }: { agentId: string | null }) =>
+    mutationFn: ({
+      agentId,
+      archivePrevious,
+    }: {
+      agentId: string | null;
+      archivePrevious?: boolean;
+    }) =>
       api.post<{ session: ChatSession }>("/api/chat/sessions/new", {
         scopeKind: scope.scopeKind,
         scopeId: scope.scopeId,
         agentId,
+        ...(archivePrevious === undefined ? {} : { archivePrevious }),
       }),
     onSuccess: (data) => {
       qc.setQueryData(
