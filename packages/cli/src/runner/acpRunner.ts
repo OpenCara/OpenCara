@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as pathResolve } from "node:path";
 import type {
   AcpHistoryTurn,
+  AcpImageInput,
   AgentCallRequest,
   AgentCallResultMessage,
   AgentSpec,
@@ -312,16 +313,23 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
 
 /**
  * Stuff system prompt, history, page context, and the user message into
- * one text content block for `session/prompt`. ACP's prompt is a single
- * turn — there's no separate `systemPrompt` channel, and per-turn
- * sessions in #29 mean the agent has no prior memory beyond what we
- * include here. Bracketed section headers help the model parse roles.
+ * one text content block for `session/prompt`, plus one image block per
+ * attachment. ACP's prompt is a single turn — there's no separate
+ * `systemPrompt` channel, and per-turn sessions in #29 mean the agent
+ * has no prior memory beyond what we include here. Bracketed section
+ * headers help the model parse roles.
+ *
+ * Image blocks (#142) follow the text block so the model reads the
+ * instructions first, then the attachments. Shims that don't support
+ * image content (codex/opencode today) drop them silently; claude-acp
+ * forwards them to the model via `--input-format stream-json`.
  */
 export function buildPromptContent(acp: {
   systemPromptMd: string;
   userPromptMd: string;
   history?: AcpHistoryTurn[];
   pageContextJson?: string;
+  images?: AcpImageInput[];
 }): ContentBlock[] {
   const parts: string[] = [];
   if (acp.systemPromptMd.trim().length > 0) {
@@ -338,7 +346,11 @@ export function buildPromptContent(acp: {
     parts.push(`# Conversation history\n\n${turns}`);
   }
   parts.push(`# Current message\n\n${acp.userPromptMd}`);
-  return [{ type: "text", text: parts.join("\n\n---\n\n") }];
+  const blocks: ContentBlock[] = [{ type: "text", text: parts.join("\n\n---\n\n") }];
+  for (const img of acp.images ?? []) {
+    blocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
+  }
+  return blocks;
 }
 
 export type LogSink = (stream: "stdout" | "stderr", chunk: string) => void;

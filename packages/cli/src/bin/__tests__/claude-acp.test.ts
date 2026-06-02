@@ -5,6 +5,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildStreamJsonInput,
   handleInitialize,
   handleLoadSession,
   handleNewSession,
@@ -20,6 +21,42 @@ describe("handleInitialize", () => {
       agentCapabilities: { loadSession: boolean };
     };
     assert.equal(r.agentCapabilities.loadSession, true);
+  });
+
+  it("advertises image prompt capability (#142)", () => {
+    const r = handleInitialize({ protocolVersion: 1 }) as {
+      agentCapabilities: { promptCapabilities: { image: boolean } };
+    };
+    assert.equal(r.agentCapabilities.promptCapabilities.image, true);
+  });
+});
+
+describe("buildStreamJsonInput", () => {
+  it("emits a newline-terminated user message with text + image blocks", () => {
+    const line = buildStreamJsonInput("describe this", [
+      { type: "image", data: "AAAA", mimeType: "image/png" },
+    ]);
+    assert.ok(line.endsWith("\n"), "must be newline-terminated for stream-json");
+    const parsed = JSON.parse(line.trim());
+    assert.equal(parsed.type, "user");
+    assert.equal(parsed.message.role, "user");
+    assert.deepEqual(parsed.message.content, [
+      { type: "text", text: "describe this" },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "AAAA" },
+      },
+    ]);
+  });
+
+  it("omits the text block when the prompt text is empty (image-only turn)", () => {
+    const line = buildStreamJsonInput("", [
+      { type: "image", data: "BBBB", mimeType: "image/webp" },
+    ]);
+    const parsed = JSON.parse(line.trim());
+    assert.equal(parsed.message.content.length, 1);
+    assert.equal(parsed.message.content[0].type, "image");
+    assert.equal(parsed.message.content[0].source.media_type, "image/webp");
   });
 });
 

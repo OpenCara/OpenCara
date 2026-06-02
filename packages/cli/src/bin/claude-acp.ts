@@ -18,7 +18,10 @@
 //     to claude's stdin, and pipes its JSONL stdout through the
 //     translator. Stdin (not argv) carries the prompt so large
 //     flow-injected contexts don't trip Linux's per-string execve cap
-//     (MAX_ARG_STRLEN, 128 KiB on a 4 KiB-page host).
+//     (MAX_ARG_STRLEN, 128 KiB on a 4 KiB-page host). When the turn has
+//     image attachments (#142), it adds `--input-format stream-json` and
+//     pipes a structured `user` message (text + base64 image blocks)
+//     instead of a bare text prompt.
 //   - Translates a small set of Claude events:
 //       * `{type:"stream_event", event:{type:"content_block_delta",
 //          delta:{type:"text_delta",text}}}`
@@ -345,6 +348,35 @@ interface ClaudePromptResult {
 }
 
 /**
+ * Serialize one turn for claude's `--input-format stream-json` stdin:
+ * a single newline-terminated `user` message whose content array mixes
+ * a text block (omitted when empty) with one Anthropic-format `image`
+ * block per attachment (`source: { type: "base64", media_type, data }`).
+ *
+ * Exported for unit testing — the format is a contract with the claude
+ * CLI, so a regression here silently strips images from the model's view.
+ */
+export function buildStreamJsonInput(
+  promptText: string,
+  images: PromptImageBlock[],
+): string {
+  const content: Array<Record<string, unknown>> = [];
+  if (promptText.length > 0) {
+    content.push({ type: "text", text: promptText });
+  }
+  for (const img of images) {
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: img.mimeType, data: img.data },
+    });
+  }
+  return `${JSON.stringify({
+    type: "user",
+    message: { role: "user", content },
+  })}\n`;
+}
+
+/**
  * Run a single Claude turn. Streams `agent_message_chunk` updates as
  * the assistant text arrives; resolves with the stop reason when
  * Claude emits its terminal `result` event.
@@ -353,6 +385,7 @@ async function runClaudeTurn(
   sessionId: string,
   state: SessionState,
   promptText: string,
+  images: PromptImageBlock[],
   permissionMode: PromptParams["permissionMode"],
 ): Promise<ClaudePromptResult> {
   return new Promise<ClaudePromptResult>((resolve, reject) => {
@@ -372,6 +405,16 @@ async function runClaudeTurn(
       idFlag,
       sessionId,
     ];
+    // Image attachments (#142) can't ride a plain `-p` text prompt, so
+    // when any are present we switch claude to structured stdin: one
+    // newline-delimited `user` message whose content array carries the
+    // text plus a provider-native `image` block per attachment. Without
+    // images we keep the bare-text path — fewer moving parts, and it's
+    // the hot path for text-only chat.
+    const useStreamJsonInput = images.length > 0;
+    if (useStreamJsonInput) {
+      args.push("--input-format", "stream-json");
+    }
     // Per-turn permission knob from the chat panel toolbar. The two
     // modes are mutually exclusive with `--dangerously-skip-permissions`
     // — passing both makes claude exit immediately with an arg-parse
@@ -447,7 +490,9 @@ async function runClaudeTurn(
     // already observable on `close`, so we don't need to surface the
     // write failure twice.
     child.stdin.on("error", () => {});
-    child.stdin.end(promptText);
+    child.stdin.end(
+      useStreamJsonInput ? buildStreamJsonInput(promptText, images) : promptText,
+    );
 
     const decoder = new FrameDecoder();
     let resolved = false;
@@ -741,7 +786,9 @@ export function handleInitialize(_params: InitializeParams): unknown {
       // on each turn (see SessionState.mcpServers / runClaudeTurn).
       loadSession: true,
       mcpCapabilities: {},
-      promptCapabilities: { embeddedContext: false, image: false, audio: false },
+      // image: true since #142 — image blocks are forwarded to claude via
+      // `--input-format stream-json`. embeddedContext / audio still unsupported.
+      promptCapabilities: { embeddedContext: false, image: true, audio: false },
     },
     authMethods: [],
   };
@@ -806,9 +853,16 @@ function normalizeInstructionsFile(raw: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+interface PromptImageBlock {
+  type: "image";
+  /** Base64 image bytes (no `data:` prefix). */
+  data: string;
+  mimeType: string;
+}
+
 interface PromptParams {
   sessionId: string;
-  prompt: Array<{ type: string; text?: string }>;
+  prompt: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
   /** Opencara extension — see PromptRequest in packages/cli/src/acp/types.ts. */
   permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
 }
@@ -818,21 +872,33 @@ async function handlePrompt(params: PromptParams): Promise<unknown> {
   if (!state) {
     throw new Error(`unknown sessionId: ${params.sessionId}`);
   }
-  // Concatenate all text content blocks into the text we pipe to
-  // claude on stdin. Image / embedded-context / audio aren't supported
-  // here yet — a future PR threads them through `--input-format
-  // stream-json`.
+  // Concatenate all text content blocks into the text we pipe to claude.
   const promptText = params.prompt
     .filter((b) => b.type === "text")
     .map((b) => (typeof b.text === "string" ? b.text : ""))
     .join("\n\n");
-  if (promptText.length === 0) {
-    throw new Error("session/prompt: no text content blocks");
+  // Image blocks (#142) — clipboard pastes / dropped files from the chat
+  // panel. When present we switch claude to `--input-format stream-json`
+  // and hand it a structured user message instead of a bare text prompt.
+  // Embedded-context / audio are still dropped (no consumer yet).
+  const images: PromptImageBlock[] = params.prompt
+    .filter(
+      (b): b is PromptImageBlock =>
+        b.type === "image" &&
+        typeof b.data === "string" &&
+        b.data.length > 0 &&
+        typeof b.mimeType === "string" &&
+        b.mimeType.length > 0,
+    )
+    .map((b) => ({ type: "image", data: b.data, mimeType: b.mimeType }));
+  if (promptText.length === 0 && images.length === 0) {
+    throw new Error("session/prompt: no text or image content blocks");
   }
   const result = await runClaudeTurn(
     params.sessionId,
     state,
     promptText,
+    images,
     params.permissionMode,
   );
   // After a successful first turn, Claude has written the JSONL under

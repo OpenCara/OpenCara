@@ -22,6 +22,24 @@ export const AcpHistoryTurnSchema = z.object({
 export type AcpHistoryTurn = z.infer<typeof AcpHistoryTurnSchema>;
 
 /**
+ * One image attached to the current chat turn. The chat panel captures
+ * these from clipboard paste / drag-and-drop, encodes the raw bytes as
+ * base64 (NO `data:` URI prefix — just the payload), and tags the MIME
+ * type so the ACP shim can rebuild a provider-native image block.
+ *
+ * Images ride the live `session/prompt` content on every turn (they are
+ * NOT folded into the text-only `history` replay), so a resumed session
+ * still receives them as first-class image blocks rather than alt-text.
+ */
+export const AcpImageInputSchema = z.object({
+  /** Base64-encoded image bytes, without the `data:<mime>;base64,` prefix. */
+  data: z.string(),
+  /** IANA image MIME type, e.g. `image/png`, `image/jpeg`, `image/webp`. */
+  mimeType: z.string(),
+});
+export type AcpImageInput = z.infer<typeof AcpImageInputSchema>;
+
+/**
  * Permission modes accepted by the claude CLI (`--permission-mode`).
  * `plan` is the most useful from the chat panel — the agent drafts an
  * approach but refuses to mutate the workspace. `acceptEdits` /
@@ -79,6 +97,11 @@ export type AcpPermissionMode = z.infer<typeof AcpPermissionModeSchema>;
  *   becomes the source of truth across agent kinds. Unset = adapter
  *   keeps native discovery (chat / test runs without a worktree, or
  *   projects opting out by clearing the setting). See #130.
+ * - `images` (optional) are attachments for THIS turn — clipboard pastes
+ *   or dropped files from the chat panel. The device runner appends them
+ *   to the `session/prompt` content as image blocks; shims that advertise
+ *   `promptCapabilities.image` (e.g. claude-acp) forward them to the
+ *   underlying model, others ignore them. See #142.
  */
 export const AcpSpecSchema = z.object({
   systemPromptMd: z.string(),
@@ -88,6 +111,7 @@ export const AcpSpecSchema = z.object({
   priorSessionId: z.string().optional(),
   permissionMode: AcpPermissionModeSchema.optional(),
   instructionsFile: z.string().optional(),
+  images: z.array(AcpImageInputSchema).default([]),
 });
 export type AcpSpec = z.infer<typeof AcpSpecSchema>;
 

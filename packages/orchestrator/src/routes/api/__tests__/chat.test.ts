@@ -5,7 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { MCP_POISON_PATTERNS } from "../chat.js";
+import { MCP_POISON_PATTERNS, normalizeImages } from "../chat.js";
 
 function matchesAny(text: string): boolean {
   return MCP_POISON_PATTERNS.some((p) => p.test(text));
@@ -47,5 +47,47 @@ describe("MCP_POISON_PATTERNS", () => {
     for (const s of safe) {
       assert.ok(!matchesAny(s), `should NOT match: "${s}"`);
     }
+  });
+});
+
+describe("normalizeImages", () => {
+  it("keeps well-formed image attachments and lowercases the mime type", () => {
+    const out = normalizeImages([
+      { data: "AAAA", mimeType: "image/PNG" },
+      { data: "BBBB", mimeType: "image/jpeg" },
+    ]);
+    assert.deepEqual(out, [
+      { data: "AAAA", mimeType: "image/png" },
+      { data: "BBBB", mimeType: "image/jpeg" },
+    ]);
+  });
+
+  it("drops non-array, malformed, empty, and non-image entries", () => {
+    assert.deepEqual(normalizeImages(undefined), []);
+    assert.deepEqual(normalizeImages("nope"), []);
+    assert.deepEqual(
+      normalizeImages([
+        null,
+        42,
+        { data: "", mimeType: "image/png" }, // empty payload
+        { data: "X", mimeType: "application/pdf" }, // wrong type
+        { data: "X" }, // missing mime
+        { mimeType: "image/png" }, // missing data
+      ]),
+      [],
+    );
+  });
+
+  it("caps the attachment count at the per-turn limit", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      data: `d${i}`,
+      mimeType: "image/png",
+    }));
+    assert.equal(normalizeImages(many).length, 8);
+  });
+
+  it("rejects oversized base64 payloads", () => {
+    const huge = "a".repeat(10_000_001);
+    assert.deepEqual(normalizeImages([{ data: huge, mimeType: "image/png" }]), []);
   });
 });
