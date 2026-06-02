@@ -75,127 +75,160 @@ export function appWebhookRoutes(deps: WebhookDeps) {
       return c.json({ error: "invalid json" }, 400);
     }
 
-    try {
-      const installationRowId = await resolveInstallationId(deps.db, payload, eventType);
-      const projectRowId = await resolveProjectId(deps.db, payload, eventType);
-
-      await deps.db
-        .insert(platformEvents)
-        .values({
-          id: deliveryId,
-          platform: "github",
-          type: eventType,
-          payload: payload as object,
-          installationId: installationRowId,
-          projectId: projectRowId,
-          githubRepoId: payload.repository?.id,
+    // Fast-ACK. GitHub aborts any delivery that isn't answered within ~10s and
+    // re-emits it as a fresh original (new GUID) — the systemic timeout that
+    // (a) duplicates every webhook-driven flow and (b) slipped past our
+    // GUID-only dedup to double pr-review runs (issue #147). Every step below
+    // — installation/project resolution, the platform_events insert, mirror
+    // upkeep, flow dispatch, worktree teardown — is already fail-soft (errors
+    // are logged, never surfaced to GitHub), so none of it needs to block the
+    // 200. setImmediate yields the event loop so the response flushes before
+    // the in-process flow dispatcher starts saturating it. Re-delivery is now
+    // harmless anyway: the flow engine dedups on event content.
+    setImmediate(() => {
+      void processDelivery(deps, eventType, deliveryId, payload).catch((err) => {
+        console.error("[webhooks] background processing failed", {
+          eventType,
           deliveryId,
-        })
-        .onConflictDoNothing();
-
-      await handleMetaEvent(deps.db, eventType, payload);
-
-      if (eventType === "projects_v2" || eventType === "projects_v2_item") {
-        try {
-          await handleProjectsV2Event(deps, eventType, payload);
-        } catch (err) {
-          // Same fail-soft shape as the issues path: don't let mirror
-          // upkeep block the platform_events insert + flow engine fan-out.
-          console.error("[webhooks] projects_v2 handler failed", {
-            eventType,
-            action: payload.action,
-            err,
-          });
-        }
-      }
-
-      if (eventType === "issues" && projectRowId && payload.issue && payload.action) {
-        try {
-          await upsertIssueFromWebhook(deps.db, projectRowId, payload.action, payload.issue);
-        } catch (err) {
-          // Don't let issue normalization failure swallow the rest of the
-          // webhook pipeline — platform_events row is already in, and the
-          // flow engine still needs to fire.
-          console.error("[webhooks] issue upsert failed", {
-            projectId: projectRowId,
-            number: payload.issue.number,
-            err,
-          });
-        }
-
-        // Propagate label/assignee changes into any Kanban mirror that
-        // tracks this issue. The projects_v2_item webhook does NOT fire on
-        // label/assignee changes — only on the project-item state — so
-        // without this hand-off the kanban's labels column lags until the
-        // next backfill. This benefits any label change, not just the
-        // agent:* labels picker writes.
-        if (
-          (payload.action === "labeled" ||
-            payload.action === "unlabeled" ||
-            payload.action === "assigned" ||
-            payload.action === "unassigned") &&
-          payload.issue.node_id
-        ) {
-          try {
-            await syncIssueIntoKanbanMirror(
-              deps,
-              payload.issue,
-              installationRowId,
-            );
-          } catch (err) {
-            console.error("[webhooks] kanban label sync failed", {
-              issueNodeId: payload.issue.node_id,
-              err,
-            });
-          }
-        }
-      }
-
-      if (deps.flowEngine) {
-        deps.flowEngine.onPlatformEvent({
-          id: deliveryId,
-          type: eventType,
-          projectId: projectRowId,
-          payload,
+          err,
         });
-      }
-
-      // PR-close worktree teardown. Removes the per-(repo, branch)
-      // checkout + agent-session.json on the pinned device, regardless
-      // of merge state — a closed-without-merge PR's branch is just as
-      // dead as a merged one's, and leaving the worktree alive ties up
-      // disk on the device. Fire-and-forget; failures are logged
-      // inside cleanupClosedPrWorktree.
-      if (eventType === "pull_request" && payload.action === "closed") {
-        const prAny = payload as unknown as {
-          pull_request?: { head?: { ref?: string } };
-          repository?: { full_name?: string };
-        };
-        const headRef = prAny.pull_request?.head?.ref;
-        const ownerRepo = prAny.repository?.full_name;
-        if (headRef && ownerRepo) {
-          void cleanupClosedPrWorktree(
-            { db: deps.db, pg: deps.pg, dispatcher: deps.dispatcher },
-            ownerRepo,
-            headRef,
-            projectRowId,
-          ).catch((err) =>
-            console.error("[webhooks] PR-close worktree cleanup failed", {
-              ownerRepo,
-              headRef,
-              err,
-            }),
-          );
-        }
-      }
-    } catch (err) {
-      console.error("[webhooks] handler error", { eventType, deliveryId, err });
-    }
+      });
+    });
 
     return c.json({ ok: true });
   });
 
   return app;
+}
+
+/**
+ * The full webhook pipeline, run off the HTTP response path (see fast-ACK note
+ * in the route handler). Mirrors the previous inline behavior exactly — same
+ * order, same fail-soft try/catch around each mirror-upkeep step — it just no
+ * longer holds the 200 open while it runs.
+ */
+async function processDelivery(
+  deps: WebhookDeps,
+  eventType: string,
+  deliveryId: string,
+  payload: WebhookPayload,
+): Promise<void> {
+  try {
+    const installationRowId = await resolveInstallationId(deps.db, payload, eventType);
+    const projectRowId = await resolveProjectId(deps.db, payload, eventType);
+
+    await deps.db
+      .insert(platformEvents)
+      .values({
+        id: deliveryId,
+        platform: "github",
+        type: eventType,
+        payload: payload as object,
+        installationId: installationRowId,
+        projectId: projectRowId,
+        githubRepoId: payload.repository?.id,
+        deliveryId,
+      })
+      .onConflictDoNothing();
+
+    await handleMetaEvent(deps.db, eventType, payload);
+
+    if (eventType === "projects_v2" || eventType === "projects_v2_item") {
+      try {
+        await handleProjectsV2Event(deps, eventType, payload);
+      } catch (err) {
+        // Same fail-soft shape as the issues path: don't let mirror
+        // upkeep block the platform_events insert + flow engine fan-out.
+        console.error("[webhooks] projects_v2 handler failed", {
+          eventType,
+          action: payload.action,
+          err,
+        });
+      }
+    }
+
+    if (eventType === "issues" && projectRowId && payload.issue && payload.action) {
+      try {
+        await upsertIssueFromWebhook(deps.db, projectRowId, payload.action, payload.issue);
+      } catch (err) {
+        // Don't let issue normalization failure swallow the rest of the
+        // webhook pipeline — platform_events row is already in, and the
+        // flow engine still needs to fire.
+        console.error("[webhooks] issue upsert failed", {
+          projectId: projectRowId,
+          number: payload.issue.number,
+          err,
+        });
+      }
+
+      // Propagate label/assignee changes into any Kanban mirror that
+      // tracks this issue. The projects_v2_item webhook does NOT fire on
+      // label/assignee changes — only on the project-item state — so
+      // without this hand-off the kanban's labels column lags until the
+      // next backfill. This benefits any label change, not just the
+      // agent:* labels picker writes.
+      if (
+        (payload.action === "labeled" ||
+          payload.action === "unlabeled" ||
+          payload.action === "assigned" ||
+          payload.action === "unassigned") &&
+        payload.issue.node_id
+      ) {
+        try {
+          await syncIssueIntoKanbanMirror(
+            deps,
+            payload.issue,
+            installationRowId,
+          );
+        } catch (err) {
+          console.error("[webhooks] kanban label sync failed", {
+            issueNodeId: payload.issue.node_id,
+            err,
+          });
+        }
+      }
+    }
+
+    if (deps.flowEngine) {
+      deps.flowEngine.onPlatformEvent({
+        id: deliveryId,
+        type: eventType,
+        projectId: projectRowId,
+        payload,
+      });
+    }
+
+    // PR-close worktree teardown. Removes the per-(repo, branch)
+    // checkout + agent-session.json on the pinned device, regardless
+    // of merge state — a closed-without-merge PR's branch is just as
+    // dead as a merged one's, and leaving the worktree alive ties up
+    // disk on the device. Fire-and-forget; failures are logged
+    // inside cleanupClosedPrWorktree.
+    if (eventType === "pull_request" && payload.action === "closed") {
+      const prAny = payload as unknown as {
+        pull_request?: { head?: { ref?: string } };
+        repository?: { full_name?: string };
+      };
+      const headRef = prAny.pull_request?.head?.ref;
+      const ownerRepo = prAny.repository?.full_name;
+      if (headRef && ownerRepo) {
+        void cleanupClosedPrWorktree(
+          { db: deps.db, pg: deps.pg, dispatcher: deps.dispatcher },
+          ownerRepo,
+          headRef,
+          projectRowId,
+        ).catch((err) =>
+          console.error("[webhooks] PR-close worktree cleanup failed", {
+            ownerRepo,
+            headRef,
+            err,
+          }),
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[webhooks] handler error", { eventType, deliveryId, err });
+  }
 }
 
 function cryptoRandom(): string {

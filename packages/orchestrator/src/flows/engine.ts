@@ -240,6 +240,12 @@ export class FlowEngine {
   }
 
   private async dispatchEvent(event: PlatformEventInput): Promise<void> {
+    // Content-level idempotency: derive a key from stable payload fields so a
+    // webhook GitHub re-delivered as a fresh original (new GUID) collapses
+    // onto the first run instead of spawning a duplicate. See issue #147 and
+    // computeEventDedupeKey. Computed once and shared across all this
+    // project's flows — each flow dedups within its own (flow_id, key) space.
+    const dedupeKey = computeEventDedupeKey(event);
     const projectFlows = await this.deps.db.query.flows.findMany({
       where: eq(flows.projectId, event.projectId!),
     });
@@ -249,7 +255,7 @@ export class FlowEngine {
       if (!def) continue;
 
       try {
-        const prepared = await this.prepareRun(row.id, event);
+        const prepared = await this.prepareRun(row.id, event, dedupeKey);
         if (!prepared) continue;
         await this.executeFlow(prepared, def, event);
       } catch (err) {
@@ -261,6 +267,7 @@ export class FlowEngine {
   private async prepareRun(
     flowId: string,
     event: PlatformEventInput,
+    dedupeKey: string | null = null,
   ): Promise<PreparedRun | null> {
     const project = await this.deps.db.query.projects.findFirst({
       where: eq(projects.id, event.projectId!),
@@ -271,15 +278,35 @@ export class FlowEngine {
     });
     if (!installation) return null;
 
+    // Insert with ON CONFLICT DO NOTHING + RETURNING. The id is a fresh ulid
+    // so the only constraint it can ever violate is the partial unique index
+    // flow_runs_flow_dedupe_uq (flow_id, dedupe_key) — an empty RETURNING
+    // therefore means "a run for this (flow, content) already exists", i.e. a
+    // re-delivered webhook we should drop (issue #147). dedupeKey is null on
+    // manual/rerun paths (and event types without a stable identity), where
+    // the partial predicate excludes the row and the insert always lands.
     const flowRunId = ulid();
-    await this.deps.db.insert(flowRuns).values({
-      id: flowRunId,
-      flowId,
-      projectId: project.id,
-      triggerEventId: event.id,
-      status: "running",
-      startedAt: new Date(),
-    });
+    const inserted = await this.deps.db
+      .insert(flowRuns)
+      .values({
+        id: flowRunId,
+        flowId,
+        projectId: project.id,
+        triggerEventId: event.id,
+        status: "running",
+        startedAt: new Date(),
+        dedupeKey,
+      })
+      .onConflictDoNothing()
+      .returning({ id: flowRuns.id });
+    if (inserted.length === 0) {
+      console.log("[flow-engine] dedup: dropping duplicate dispatch", {
+        flowId,
+        dedupeKey,
+        eventId: event.id,
+      });
+      return null;
+    }
     await this.deps.pg.notify("flow_runs", flowRunId);
 
     return { flowRunId, flowId, project, installation };
@@ -696,6 +723,63 @@ interface ReusedStep {
 interface PreloadedRun {
   outputs: Map<string, string | undefined>;
   reused: ReusedStep[];
+}
+
+/**
+ * Derive a content-level idempotency key for a webhook-driven event, or null
+ * when the event has no stable identity to dedup on.
+ *
+ * GitHub delivers webhooks at-least-once: an endpoint that doesn't ACK within
+ * the 10s window gets the same logical event re-sent as a *fresh* original —
+ * a NEW x-github-delivery GUID with redelivery=false, not a flagged retry.
+ * platform_events dedups on that GUID, so two GUIDs for one push slip through
+ * as two rows and (historically) two flow runs + two posted reviews
+ * (issue #147). The key is built only from payload fields that are byte-for-byte
+ * identical across such duplicate deliveries:
+ *   - pull_request: PR number + action + head SHA. A genuinely new push changes
+ *     the SHA → new key → the flow runs again, as intended. This is the
+ *     "(eventType, action, after-SHA)" key the issue proposes.
+ *   - pull_request_review: the review id (stable, globally unique) + action.
+ *   - issue_comment: the comment id + action (covers the `@opencara fix`
+ *     review-fix path).
+ * Other event types return null and keep today's GUID-only behavior — they're
+ * either cheap mirror upkeep (projects_v2_item) or lack a single stable id, and
+ * over-deduping legitimately-distinct events there would be worse than the
+ * occasional duplicate.
+ */
+export function computeEventDedupeKey(event: PlatformEventInput): string | null {
+  const p = event.payload;
+  if (!p || typeof p !== "object") return null;
+  const payload = p as {
+    action?: unknown;
+    pull_request?: { number?: unknown; head?: { sha?: unknown } };
+    review?: { id?: unknown };
+    comment?: { id?: unknown };
+  };
+  const action = typeof payload.action === "string" ? payload.action : "";
+
+  switch (event.type) {
+    case "pull_request": {
+      const num = payload.pull_request?.number;
+      const sha = payload.pull_request?.head?.sha;
+      if (typeof num !== "number" || typeof sha !== "string" || sha.length === 0) {
+        return null;
+      }
+      return `pull_request:${num}:${action}:${sha}`;
+    }
+    case "pull_request_review": {
+      const id = payload.review?.id;
+      if (typeof id !== "number") return null;
+      return `pull_request_review:${id}:${action}`;
+    }
+    case "issue_comment": {
+      const id = payload.comment?.id;
+      if (typeof id !== "number") return null;
+      return `issue_comment:${id}:${action}`;
+    }
+    default:
+      return null;
+  }
 }
 
 function parseFlowDefinition(row: {
