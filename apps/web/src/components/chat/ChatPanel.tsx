@@ -265,6 +265,12 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   const effectiveSessionId = wantPersistence
     ? overrideSession?.threadKey ?? sessionQ.data?.session.threadKey ?? null
     : ephemeralSessionIdRef.current;
+  // The chat_sessions row id the panel is currently viewing (override wins
+  // over the scope's resolved active row). Agent-pick persistence must
+  // target THIS row, not the scope's most-recent active one — since #143 a
+  // scope can hold several non-archived sessions at once.
+  const effectiveSessionRowId =
+    overrideSession?.id ?? sessionQ.data?.session.id ?? null;
 
   // Initialize the agent pick from the persisted session once it loads.
   // Falls back to the first available agent for ephemeral / fresh sessions.
@@ -307,7 +313,14 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       // most-common golden path (first-ever chat on a scope, server
       // creates the row with agentId=null, client auto-picks the first
       // agent without POSTing it) never gets resume continuity.
-      if (wantPersistence) updateAgent.mutate({ agentId: first });
+      if (wantPersistence) {
+        // During hydration there's no override yet, so the active row is
+        // the scope's resolved session; pass its id explicitly anyway.
+        updateAgent.mutate({
+          agentId: first,
+          sessionId: sessionQ.data?.session.id ?? null,
+        });
+      }
     }
   }, [wantPersistence, sessionQ.data, agentsQ.data, agentId, updateAgent]);
 
@@ -333,7 +346,8 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       setAnsweredOptionMessageIds(new Set());
     }
     setAgentId(v);
-    if (wantPersistence) updateAgent.mutate({ agentId: v });
+    if (wantPersistence)
+      updateAgent.mutate({ agentId: v, sessionId: effectiveSessionRowId });
   };
 
   // The pending assistant turn currently streaming, if any. Stop is
@@ -1381,6 +1395,9 @@ export function partitionSessions(sessions: ChatSession[]): {
   const history: ChatSession[] = [];
   const archived: ChatSession[] = [];
   for (const s of sessions) {
+    // Archived wins over running: a soft-deleted thread stays under
+    // "Archived" (for restore) even if a run is somehow still in flight,
+    // rather than resurfacing in the Running group.
     if (s.archivedAt) archived.push(s);
     else if (s.running) running.push(s);
     else history.push(s);

@@ -1136,20 +1136,35 @@ export const chatSessionListQuery = (scope: ChatSessionScope) => ({
     ),
 });
 
+// Persist the agent pick for a session. `sessionId` names the specific
+// row the panel is viewing — required since #143, where a scope can hold
+// several non-archived sessions and the server would otherwise resolve
+// the agent write onto the most-recent active row (see POST /chat/sessions).
 export function useChatSessionAgentMutation(scope: ChatSessionScope) {
   const qc = useQueryClient();
+  const sessionKey = ["chat-session", scope.scopeKind, scope.scopeId] as const;
   return useMutation({
-    mutationFn: ({ agentId }: { agentId: string | null }) =>
+    mutationFn: ({
+      agentId,
+      sessionId,
+    }: {
+      agentId: string | null;
+      sessionId?: string | null;
+    }) =>
       api.post<{ session: ChatSession }>("/api/chat/sessions", {
         scopeKind: scope.scopeKind,
         scopeId: scope.scopeId,
         agentId,
+        ...(sessionId ? { sessionId } : {}),
       }),
     onSuccess: (data) => {
-      qc.setQueryData(
-        ["chat-session", scope.scopeKind, scope.scopeId] as const,
-        data,
-      );
+      // Only refresh the "active session" cache when the row we just wrote
+      // IS the cached active one. Writing a non-active (sidebar-selected)
+      // row's response into this key would mis-represent the active session.
+      const cached = qc.getQueryData<{ session: ChatSession }>(sessionKey);
+      if (!cached || cached.session.id === data.session.id) {
+        qc.setQueryData(sessionKey, data);
+      }
       // The list query caches by scope; agent flip bumps updatedAt so
       // the cached list ordering is stale until invalidated.
       void qc.invalidateQueries({

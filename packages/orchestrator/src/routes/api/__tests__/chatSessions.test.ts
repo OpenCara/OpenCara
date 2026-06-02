@@ -19,6 +19,7 @@ import {
   loadFlowRunStepProject,
   hydrateFromFlowRunStep,
   selectActiveChatThreadKeys,
+  resolveAgentWriteTarget,
 } from "../chatSessions.js";
 import { CHAT_SESSION_SCOPE_KINDS } from "../../../db/schema.js";
 import type { Db } from "../../../db/client.js";
@@ -72,6 +73,19 @@ interface FakeRows {
     status: string;
     spec: { env?: Record<string, string> } | unknown;
   }>;
+  /** chat_sessions keyed by id — drives the findFirst fake used by
+   *  resolveAgentWriteTarget (by-id lookup and active-row fallback). */
+  chatSessions: Record<
+    string,
+    {
+      id: string;
+      userId: string;
+      scopeKind: string;
+      scopeId: string;
+      archivedAt: Date | null;
+      updatedAt: Date;
+    }
+  >;
 }
 
 // Drizzle's `findFirst({ where: eq(table.column, value), ... })` accepts
@@ -181,6 +195,37 @@ function makeFakeDb(rows: FakeRows): Db {
           return undefined;
         },
       },
+      chatSessions: {
+        // Serves both shapes resolveAgentWriteTarget issues:
+        //   by-id:  and(eq(id), eq(userId), eq(scopeKind), eq(scopeId))
+        //   active: and(eq(userId), eq(scopeKind), eq(scopeId), isNull(archivedAt))
+        //           orderBy desc(updatedAt)
+        // collectStringParams yields the eq() literals (isNull adds none);
+        // a row matches when userId + scopeKind + scopeId are all present.
+        // If the query also pinned an id, only the row with that id matches;
+        // otherwise we return the most-recent non-archived row.
+        findFirst: ({ where: w }: { where: unknown }) => {
+          const params = collectStringParams(w);
+          const inScope = Object.values(rows.chatSessions).filter(
+            (s) =>
+              params.includes(s.userId) &&
+              params.includes(s.scopeKind) &&
+              params.includes(s.scopeId),
+          );
+          const byId = inScope.find((s) => params.includes(s.id));
+          if (byId) return byId;
+          // A row whose id is in params but scope/user mismatched means an
+          // explicit by-id query that missed — return nothing rather than
+          // falling back to an active row in the wrong scope.
+          const idQueried = Object.values(rows.chatSessions).some((s) =>
+            params.includes(s.id),
+          );
+          if (idQueried) return undefined;
+          return [...inScope]
+            .filter((s) => !s.archivedAt)
+            .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+        },
+      },
     },
   };
   return fake as unknown as Db;
@@ -195,6 +240,7 @@ function emptyFakeRows(): FakeRows {
     agentRunsByStep: {},
     flowNodeSettings: {},
     activeRuns: [],
+    chatSessions: {},
   };
 }
 
@@ -341,5 +387,99 @@ describe("selectActiveChatThreadKeys", () => {
     ];
     const got = await selectActiveChatThreadKeys(makeFakeDb(seed), ["chat_a"]);
     assert.equal(got.size, 0);
+  });
+});
+
+describe("resolveAgentWriteTarget", () => {
+  it("targets the named session row, not the most-recent active one (#143)", async () => {
+    // Two non-archived rows in the same scope — exactly the multi-active
+    // state the session sidebar creates. The agent write must land on the
+    // row the caller named (older `chat_a`), not the most-recent (`chat_b`).
+    const seed = emptyFakeRows();
+    seed.chatSessions["chat_a"] = {
+      id: "chat_a",
+      userId: "user1",
+      scopeKind: "project",
+      scopeId: "proj1",
+      archivedAt: null,
+      updatedAt: new Date("2026-05-01T10:00:00Z"),
+    };
+    seed.chatSessions["chat_b"] = {
+      id: "chat_b",
+      userId: "user1",
+      scopeKind: "project",
+      scopeId: "proj1",
+      archivedAt: null,
+      updatedAt: new Date("2026-05-02T10:00:00Z"),
+    };
+    const got = await resolveAgentWriteTarget(
+      makeFakeDb(seed),
+      "user1",
+      "project",
+      "proj1",
+      "chat_a",
+    );
+    assert.equal(got.notFound, false);
+    assert.equal(got.row?.id, "chat_a");
+  });
+
+  it("404s (notFound) a sessionId that belongs to another scope", async () => {
+    // A smuggled id from proj2 must not resolve when the scope is proj1 —
+    // and must NOT silently fall through to proj1's active row.
+    const seed = emptyFakeRows();
+    seed.chatSessions["chat_x"] = {
+      id: "chat_x",
+      userId: "user1",
+      scopeKind: "project",
+      scopeId: "proj2",
+      archivedAt: null,
+      updatedAt: new Date("2026-05-01T10:00:00Z"),
+    };
+    seed.chatSessions["chat_a"] = {
+      id: "chat_a",
+      userId: "user1",
+      scopeKind: "project",
+      scopeId: "proj1",
+      archivedAt: null,
+      updatedAt: new Date("2026-05-02T10:00:00Z"),
+    };
+    const got = await resolveAgentWriteTarget(
+      makeFakeDb(seed),
+      "user1",
+      "project",
+      "proj1",
+      "chat_x",
+    );
+    assert.equal(got.notFound, true);
+    assert.equal(got.row, undefined);
+  });
+
+  it("falls back to the most-recent active row when no sessionId is given", async () => {
+    const seed = emptyFakeRows();
+    seed.chatSessions["chat_a"] = {
+      id: "chat_a",
+      userId: "user1",
+      scopeKind: "project",
+      scopeId: "proj1",
+      archivedAt: null,
+      updatedAt: new Date("2026-05-01T10:00:00Z"),
+    };
+    seed.chatSessions["chat_b"] = {
+      id: "chat_b",
+      userId: "user1",
+      scopeKind: "project",
+      scopeId: "proj1",
+      archivedAt: null,
+      updatedAt: new Date("2026-05-03T10:00:00Z"),
+    };
+    const got = await resolveAgentWriteTarget(
+      makeFakeDb(seed),
+      "user1",
+      "project",
+      "proj1",
+      null,
+    );
+    assert.equal(got.notFound, false);
+    assert.equal(got.row?.id, "chat_b");
   });
 });
