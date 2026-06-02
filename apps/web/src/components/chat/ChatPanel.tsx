@@ -117,9 +117,11 @@ const PAGE_PATTERNS: { pattern: RegExp; page: string }[] = [
   { pattern: /^\/projects\/[^/]+\/flow-runs\/[^/]+$/, page: "flow-run-detail" },
   { pattern: /^\/projects\/[^/]+\/flows\/[^/]+$/, page: "project-flow-detail" },
   { pattern: /^\/flows\/[^/]+$/, page: "flow-template-detail" },
-  // Kanban PM panel — must be before project-detail catch-all.
-  { pattern: /^\/projects\/[^/]+\/kanban$/, page: "project-pm" },
-  // Project-detail covers `/projects/:id` AND `/projects/:id/:tab` — kept
+  // Board (kanban) PM panel. Since #140 the board is the default tab at
+  // the project base path, so the PM panel binds to `/projects/:id` (no
+  // tab). Must come before the project-detail catch-all.
+  { pattern: /^\/projects\/[^/]+$/, page: "project-pm" },
+  // Project-detail covers the remaining `/projects/:id/:tab` URLs — kept
   // last so the more-specific patterns above win first.
   { pattern: /^\/projects\/[^/]+(?:\/[^/]+)?$/, page: "project-detail" },
 ];

@@ -6,7 +6,6 @@ import { ActivityPage } from "@/pages/ActivityPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { AddProjectPage } from "@/pages/AddProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
-import { ProjectFlowsPage } from "@/pages/ProjectFlowsPage";
 import { ProjectFlowDetailPage } from "@/pages/ProjectFlowDetailPage";
 import { FlowRunDetailPage } from "@/pages/FlowRunDetailPage";
 import { DevicePairPage } from "@/pages/DevicePairPage";
@@ -32,7 +31,8 @@ export function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/new" element={<AddProjectPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
-        <Route path="projects/:id/flows" element={<ProjectFlowsPage />} />
+        {/* `projects/:id/flows` (no slug) is the Flows tab — it falls through
+            to the `:tab` route below. The slug route stays for flow detail. */}
         <Route path="projects/:id/flows/:slug" element={<ProjectFlowDetailPage />} />
         <Route path="projects/:id/flow-runs/:runId" element={<FlowRunDetailPage />} />
         <Route path="projects/:id/issues/:number" element={<IssueDetailPage />} />
