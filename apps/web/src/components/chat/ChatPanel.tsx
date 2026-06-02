@@ -1458,7 +1458,7 @@ function SessionRow({
           : "border-transparent hover:bg-muted/50",
       )}
     >
-      {s.running && (
+      {s.running && !s.archivedAt && (
         <span
           className="relative flex size-2 shrink-0"
           title="Agent is running"
