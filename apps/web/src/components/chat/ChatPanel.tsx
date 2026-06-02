@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
@@ -10,13 +10,14 @@ import {
   ArchiveRestore,
   Bot,
   Brain,
-  History,
   Info,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
   Plus,
   Send,
   Square,
-  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -187,12 +188,15 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   const [skillOpen, setSkillOpen] = useState(false);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [showThinking, setShowThinking] = useShowThinking();
-  const [historyOpen, setHistoryOpen] = useState(false);
-  // When the user picks a session from the History dialog, the panel
-  // pivots onto that row instead of the "active" (most-recent-non-
-  // archived) one the GET /chat/sessions resolver returns. Cleared
-  // when the scope changes; otherwise sticks until the user picks a
-  // different row or starts a new chat.
+  // Collapsible session sidebar (issue #143) — replaces the old History
+  // dialog. Open by default so the session list is visible alongside the
+  // chat; the user can collapse it to reclaim width for the conversation.
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
+  // When the user picks a session from the sidebar, the panel pivots onto
+  // that row instead of the "active" (most-recent-non-archived) one the
+  // GET /chat/sessions resolver returns. Cleared when the scope changes;
+  // otherwise sticks until the user picks a different row or starts a new
+  // chat.
   const [overrideSession, setOverrideSession] = useState<ChatSession | null>(
     null,
   );
@@ -240,7 +244,11 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   const restoreSessionMut = useRestoreChatSession(scope ?? NO_SCOPE);
   const listQ = useQuery({
     ...chatSessionListQuery(scope ?? NO_SCOPE),
-    enabled: wantPersistence && historyOpen,
+    enabled: wantPersistence && open && sessionPanelOpen,
+    // Poll while the sidebar is visible so the Running/History split and
+    // the pulsing indicators track agent runs that start or finish
+    // out-of-band (e.g. a flow run streaming into this scope's session).
+    refetchInterval: wantPersistence && open && sessionPanelOpen ? 5000 : false,
   });
 
   // Per-panel-open ephemeral session id for pages without a scope.
@@ -483,12 +491,61 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   return (
     <aside
       className={cn(
-        "fixed right-0 top-0 z-40 flex h-screen w-[28rem] flex-col border-l bg-card shadow-xl transition-transform",
+        "fixed right-0 top-0 z-40 flex h-screen flex-row border-l bg-card shadow-xl transition-transform",
+        wantPersistence && sessionPanelOpen ? "w-[42rem]" : "w-[28rem]",
         open ? "translate-x-0" : "translate-x-full",
       )}
       aria-hidden={!open}
     >
+      {wantPersistence && sessionPanelOpen && (
+        <SessionPanel
+          sessions={listQ.data?.sessions ?? []}
+          activeSessionId={
+            overrideSession?.id ?? sessionQ.data?.session.id ?? null
+          }
+          loading={listQ.isLoading}
+          onCollapse={() => setSessionPanelOpen(false)}
+          onNewChat={async () => {
+            // archivePrevious:false — leave the prior conversation in the
+            // sidebar's History group instead of archiving it away.
+            const result = await newSessionMut.mutateAsync({
+              agentId,
+              archivePrevious: false,
+            });
+            setOverrideSession(result.session);
+            setMessages([]);
+            setAnsweredOptionMessageIds(new Set());
+          }}
+          onPick={(s) => {
+            // Switching is non-destructive: we only re-point the panel at a
+            // different thread; any in-flight agent run keeps streaming on
+            // its own session untouched.
+            setOverrideSession(s);
+            setMessages([]);
+            setAnsweredOptionMessageIds(new Set());
+            // Hydrate the agent dropdown to whatever that session was last
+            // run with — so the panel doesn't dispatch the user's current
+            // agent into someone else's prior ACP thread.
+            if (s.agentId) setAgentId(s.agentId);
+          }}
+          onRename={(id, title) => renameSessionMut.mutate({ id, title })}
+          onDelete={(id) => deleteSessionMut.mutate({ id })}
+          onRestore={(id) => restoreSessionMut.mutate({ id })}
+        />
+      )}
+
+      <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-3">
+        {wantPersistence && !sessionPanelOpen && (
+          <Button
+            size="sm"
+            variant="ghost"
+            title="Show sessions"
+            onClick={() => setSessionPanelOpen(true)}
+          >
+            <PanelLeftOpen className="size-4" />
+          </Button>
+        )}
         <Bot className="size-4 text-muted-foreground" />
         {isStreaming && (
           <span
@@ -516,16 +573,6 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
               ))}
             </SelectContent>
           </Select>
-          {wantPersistence && (
-            <Button
-              size="sm"
-              variant="ghost"
-              title="Chat history"
-              onClick={() => setHistoryOpen(true)}
-            >
-              <History className="size-4" />
-            </Button>
-          )}
           <Button
             size="sm"
             variant={showThinking ? "default" : "ghost"}
@@ -570,36 +617,6 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
               }
             : pageContext
         }
-      />
-
-      <HistoryDialog
-        open={historyOpen}
-        onOpenChange={setHistoryOpen}
-        sessions={listQ.data?.sessions ?? []}
-        activeSessionId={
-          overrideSession?.id ?? sessionQ.data?.session.id ?? null
-        }
-        loading={listQ.isLoading}
-        onNewChat={async () => {
-          const result = await newSessionMut.mutateAsync({ agentId });
-          setOverrideSession(result.session);
-          setMessages([]);
-          setAnsweredOptionMessageIds(new Set());
-          setHistoryOpen(false);
-        }}
-        onPick={(s) => {
-          setOverrideSession(s);
-          setMessages([]);
-          setAnsweredOptionMessageIds(new Set());
-          // Picking from history hydrates the agent dropdown to whatever
-          // that session was last run with — so the panel doesn't dispatch
-          // the user's current agent into someone else's prior ACP thread.
-          if (s.agentId) setAgentId(s.agentId);
-          setHistoryOpen(false);
-        }}
-        onRename={(id, title) => renameSessionMut.mutate({ id, title })}
-        onDelete={(id) => deleteSessionMut.mutate({ id })}
-        onRestore={(id) => restoreSessionMut.mutate({ id })}
       />
 
       <div className="flex-1 overflow-y-auto p-4">
@@ -712,6 +729,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
             </Button>
           )}
         </div>
+      </div>
       </div>
     </aside>
   );
@@ -1214,23 +1232,30 @@ function TypingDots() {
   );
 }
 
-function HistoryDialog({
-  open,
-  onOpenChange,
+/**
+ * Collapsible session sidebar (issue #143) — replaces the old History
+ * dialog. Lists every chat session for the current scope, split into a
+ * "Running" group (sessions with an in-flight agent run, marked with a
+ * pulsing dot) and a "History" group (everything else, most-recent
+ * first); archived sessions trail behind for restore. The "+" button
+ * starts a fresh session without interrupting any running one. Rename /
+ * archive / restore live on each row as hover actions.
+ */
+function SessionPanel({
   sessions,
   activeSessionId,
   loading,
+  onCollapse,
   onNewChat,
   onPick,
   onRename,
   onDelete,
   onRestore,
 }: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
   sessions: ChatSession[];
   activeSessionId: string | null;
   loading: boolean;
+  onCollapse: () => void;
   onNewChat: () => Promise<void> | void;
   onPick: (s: ChatSession) => void;
   onRename: (id: string, title: string | null) => void;
@@ -1240,10 +1265,9 @@ function HistoryDialog({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   // Pressing Enter on the rename input fires commitRename, and the
-  // synchronous unmount that follows ALSO fires onBlur on the input —
-  // which would call commitRename again and fire a duplicate PATCH.
-  // Track the last id we committed on this rename so the second call
-  // short-circuits. Reset whenever a new rename starts.
+  // synchronous unmount that follows ALSO fires onBlur — which would
+  // call commitRename again and fire a duplicate PATCH. Track the last
+  // committed id so the second call short-circuits. Reset on new rename.
   const committedIdRef = useRef<string | null>(null);
   const commitRenameOnce = (s: ChatSession) => {
     if (committedIdRef.current === s.id) return;
@@ -1260,82 +1284,129 @@ function HistoryDialog({
     committedIdRef.current = null;
     setRenamingId(null);
   };
-  const active = sessions.filter((s) => !s.archivedAt);
-  const archived = sessions.filter((s) => !!s.archivedAt);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Chat history</DialogTitle>
-          <DialogDescription>
-            Pick an older conversation to continue, or start a new one.
-            "New chat" archives the current thread; archived threads can be
-            restored.
-          </DialogDescription>
-        </DialogHeader>
 
-        <div className="flex justify-end">
+  const { running, history, archived } = partitionSessions(sessions);
+  const rowProps = {
+    activeSessionId,
+    renamingId,
+    draftTitle,
+    setDraftTitle,
+    startRename: startRenameAndReset,
+    commitRename: commitRenameOnce,
+    cancelRename: cancelRenameAndReset,
+    onPick,
+    onDelete,
+    onRestore,
+  };
+
+  return (
+    <div className="flex h-full w-56 shrink-0 flex-col border-r bg-muted/20">
+      <div className="flex items-center gap-1 border-b px-3 py-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Sessions
+        </span>
+        <div className="ml-auto flex items-center gap-1">
           <Button
             size="sm"
-            onClick={() => {
-              void onNewChat();
-            }}
+            variant="ghost"
+            className="size-7 p-0"
+            title="New session"
+            onClick={() => void onNewChat()}
           >
-            <Plus className="size-3.5" />
-            New chat
+            <Plus className="size-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="size-7 p-0"
+            title="Collapse session panel"
+            onClick={onCollapse}
+          >
+            <PanelLeftClose className="size-4" />
           </Button>
         </div>
+      </div>
 
-        <div className="-mr-2 max-h-96 overflow-auto pr-2">
-          {loading && (
-            <p className="text-xs text-muted-foreground">Loading…</p>
-          )}
-          {!loading && sessions.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              No prior conversations for this page.
-            </p>
-          )}
-          {active.length > 0 && (
-            <HistorySection
-              label="Active"
-              sessions={active}
-              activeSessionId={activeSessionId}
-              renamingId={renamingId}
-              draftTitle={draftTitle}
-              setDraftTitle={setDraftTitle}
-              startRename={startRenameAndReset}
-              commitRename={commitRenameOnce}
-              cancelRename={cancelRenameAndReset}
-              onPick={onPick}
-              onDelete={onDelete}
-              onRestore={onRestore}
-            />
-          )}
-          {archived.length > 0 && (
-            <HistorySection
-              label="Archived"
-              sessions={archived}
-              activeSessionId={activeSessionId}
-              renamingId={renamingId}
-              draftTitle={draftTitle}
-              setDraftTitle={setDraftTitle}
-              startRename={startRenameAndReset}
-              commitRename={commitRenameOnce}
-              cancelRename={cancelRenameAndReset}
-              onPick={onPick}
-              onDelete={onDelete}
-              onRestore={onRestore}
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+      <div className="flex-1 overflow-y-auto px-2 py-1">
+        {loading && sessions.length === 0 && (
+          <p className="px-1 py-2 text-xs text-muted-foreground">Loading…</p>
+        )}
+        {!loading && sessions.length === 0 && (
+          <p className="px-1 py-2 text-xs text-muted-foreground">
+            No conversations yet. Press + to start one.
+          </p>
+        )}
+        {running.length > 0 && (
+          <SessionGroup label="Running">
+            {running.map((s) => (
+              <SessionRow key={s.id} session={s} {...rowProps} />
+            ))}
+          </SessionGroup>
+        )}
+        {history.length > 0 && (
+          <SessionGroup label="History">
+            {history.map((s) => (
+              <SessionRow key={s.id} session={s} {...rowProps} />
+            ))}
+          </SessionGroup>
+        )}
+        {archived.length > 0 && (
+          <SessionGroup label="Archived">
+            {archived.map((s) => (
+              <SessionRow key={s.id} session={s} {...rowProps} />
+            ))}
+          </SessionGroup>
+        )}
+      </div>
+    </div>
   );
 }
 
-function HistorySection({
+/**
+ * Split a scope's sessions into the three sidebar groups:
+ *   - running:  active (non-archived) sessions with an in-flight agent run
+ *   - history:  the remaining active (non-archived) sessions
+ *   - archived: soft-deleted sessions (kept for restore)
+ * Input order is preserved — the list endpoint returns rows most-recent
+ * first, so each group stays sorted by recency without re-sorting here.
+ *
+ * Exported for unit tests.
+ */
+export function partitionSessions(sessions: ChatSession[]): {
+  running: ChatSession[];
+  history: ChatSession[];
+  archived: ChatSession[];
+} {
+  const running: ChatSession[] = [];
+  const history: ChatSession[] = [];
+  const archived: ChatSession[] = [];
+  for (const s of sessions) {
+    if (s.archivedAt) archived.push(s);
+    else if (s.running) running.push(s);
+    else history.push(s);
+  }
+  return { running, history, archived };
+}
+
+function SessionGroup({
   label,
-  sessions,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-2 first:mt-1">
+      <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <ul className="space-y-1">{children}</ul>
+    </div>
+  );
+}
+
+function SessionRow({
+  session: s,
   activeSessionId,
   renamingId,
   draftTitle,
@@ -1347,8 +1418,7 @@ function HistorySection({
   onDelete,
   onRestore,
 }: {
-  label: string;
-  sessions: ChatSession[];
+  session: ChatSession;
   activeSessionId: string | null;
   renamingId: string | null;
   draftTitle: string;
@@ -1360,96 +1430,91 @@ function HistorySection({
   onDelete: (id: string) => void;
   onRestore: (id: string) => void;
 }) {
+  const isActive = s.id === activeSessionId;
+  const isRenaming = s.id === renamingId;
   return (
-    <div className="mt-3">
-      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <ul className="space-y-1">
-        {sessions.map((s) => {
-          const isActive = s.id === activeSessionId;
-          const isRenaming = s.id === renamingId;
-          return (
-            <li
-              key={s.id}
-              className={cn(
-                "group flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs",
-                isActive
-                  ? "border-primary/60 bg-primary/5"
-                  : "border-border hover:bg-muted/40",
-              )}
+    <li
+      className={cn(
+        "group flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs",
+        isActive
+          ? "border-primary/60 bg-primary/5"
+          : "border-transparent hover:bg-muted/50",
+      )}
+    >
+      {s.running && (
+        <span
+          className="relative flex size-2 shrink-0"
+          title="Agent is running"
+          aria-label="running"
+        >
+          <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500/70" />
+          <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+        </span>
+      )}
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={draftTitle}
+          onChange={(e) => setDraftTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename(s);
+            if (e.key === "Escape") cancelRename();
+          }}
+          onBlur={() => commitRename(s)}
+          className="min-w-0 flex-1 rounded border bg-background px-1 text-xs"
+        />
+      ) : (
+        <button
+          type="button"
+          className="min-w-0 flex-1 truncate text-left"
+          onClick={() => onPick(s)}
+          title="Switch to this conversation"
+        >
+          <span className="font-medium">{s.title || "(untitled)"}</span>
+        </button>
+      )}
+      {!isRenaming && (
+        <>
+          {/* Timestamp normally; swaps to the action cluster on hover so
+              the narrow row isn't cluttered with both at once. */}
+          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
+            {formatRelative(s.updatedAt)}
+          </span>
+          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="size-6 p-0"
+              title="Rename"
+              onClick={() => startRename(s)}
             >
-              {isRenaming ? (
-                <input
-                  autoFocus
-                  value={draftTitle}
-                  onChange={(e) => setDraftTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename(s);
-                    if (e.key === "Escape") cancelRename();
-                  }}
-                  onBlur={() => commitRename(s)}
-                  className="flex-1 rounded border bg-background px-1 text-xs"
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="flex-1 truncate text-left"
-                  onClick={() => onPick(s)}
-                  title="Switch to this conversation"
-                >
-                  <span className="font-medium">
-                    {s.title || "(untitled)"}
-                  </span>
-                  {isActive && (
-                    <span className="ml-2 rounded bg-primary/15 px-1 text-[10px] uppercase text-primary">
-                      active
-                    </span>
-                  )}
-                </button>
-              )}
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {formatRelative(s.updatedAt)}
-              </span>
-              {!isRenaming && (
-                <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-1"
-                    title="Rename"
-                    onClick={() => startRename(s)}
-                  >
-                    <span className="text-[10px]">Rename</span>
-                  </Button>
-                  {s.archivedAt ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-1"
-                      title="Restore (un-archive)"
-                      onClick={() => onRestore(s.id)}
-                    >
-                      <ArchiveRestore className="size-3" />
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-1"
-                      title="Archive"
-                      onClick={() => onDelete(s.id)}
-                    >
-                      <Archive className="size-3" />
-                    </Button>
-                  )}
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+              <Pencil className="size-3" />
+            </Button>
+            {s.archivedAt ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="size-6 p-0"
+                title="Restore (un-archive)"
+                onClick={() => onRestore(s.id)}
+              >
+                <ArchiveRestore className="size-3" />
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="size-6 p-0"
+                title="Archive"
+                onClick={() => onDelete(s.id)}
+              >
+                <Archive className="size-3" />
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+    </li>
   );
 }
 

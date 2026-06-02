@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import {
   loadFlowRunStepProject,
   hydrateFromFlowRunStep,
+  selectActiveChatThreadKeys,
 } from "../chatSessions.js";
 import { CHAT_SESSION_SCOPE_KINDS } from "../../../db/schema.js";
 import type { Db } from "../../../db/client.js";
@@ -64,6 +65,13 @@ interface FakeRows {
       agentId: string | null;
     }
   >;
+  /** agent_runs surfaced to the `findMany` fake used by
+   *  selectActiveChatThreadKeys. Each carries a status + the chat session
+   *  marker on spec.env. */
+  activeRuns: Array<{
+    status: string;
+    spec: { env?: Record<string, string> } | unknown;
+  }>;
 }
 
 // Drizzle's `findFirst({ where: eq(table.column, value), ... })` accepts
@@ -149,6 +157,18 @@ function makeFakeDb(rows: FakeRows): Db {
           }
           return undefined;
         },
+        // selectActiveChatThreadKeys filters by `and(inArray(status, [...]),
+        // inArray(sql<sessionId>, threadKeys))`. collectStringParams only
+        // surfaces the status literals (drizzle inlines the threadKey
+        // values as raw strings, not Params), so the fake replays just the
+        // status filter — the helper itself intersects the result with the
+        // requested threadKey set, which is what the tests assert on.
+        findMany: ({ where: w }: { where: unknown }) => {
+          const params = collectStringParams(w);
+          return rows.activeRuns.filter((run) =>
+            params.includes(run.status),
+          );
+        },
       },
       flowNodeSettings: {
         findFirst: ({ where: w }: { where: unknown }) => {
@@ -174,6 +194,7 @@ function emptyFakeRows(): FakeRows {
     projects: {},
     agentRunsByStep: {},
     flowNodeSettings: {},
+    activeRuns: [],
   };
 }
 
@@ -284,5 +305,41 @@ describe("hydrateFromFlowRunStep", () => {
       acpSessionId: null,
       acpSessionHostId: null,
     });
+  });
+});
+
+describe("selectActiveChatThreadKeys", () => {
+  it("returns the empty set when given no threadKeys (no query issued)", async () => {
+    const got = await selectActiveChatThreadKeys(
+      makeFakeDb(emptyFakeRows()),
+      [],
+    );
+    assert.equal(got.size, 0);
+  });
+
+  it("returns only the threadKeys with an in-flight agent run", async () => {
+    const seed = emptyFakeRows();
+    seed.activeRuns = [
+      // running run on chat_a → a is running
+      { status: "running", spec: { env: { OPENCARA_CHAT_SESSION_ID: "chat_a" } } },
+      // queued run on chat_b → b is running
+      { status: "queued", spec: { env: { OPENCARA_CHAT_SESSION_ID: "chat_b" } } },
+    ];
+    const got = await selectActiveChatThreadKeys(makeFakeDb(seed), [
+      "chat_a",
+      "chat_b",
+      "chat_c",
+    ]);
+    assert.deepEqual([...got].sort(), ["chat_a", "chat_b"]);
+  });
+
+  it("ignores runs whose session id isn't in the requested set", async () => {
+    const seed = emptyFakeRows();
+    seed.activeRuns = [
+      // active run, but for a thread not asked about
+      { status: "running", spec: { env: { OPENCARA_CHAT_SESSION_ID: "chat_other" } } },
+    ];
+    const got = await selectActiveChatThreadKeys(makeFakeDb(seed), ["chat_a"]);
+    assert.equal(got.size, 0);
   });
 });

@@ -1103,6 +1103,13 @@ export interface ChatSession {
   title: string | null;
   archivedAt: string | null;
   updatedAt: string;
+  /**
+   * True when the session has an in-flight agent run. Only the list
+   * endpoint (`chatSessionListQuery`) populates this; the single-session
+   * resolver leaves it undefined. Drives the "Running" group in the chat
+   * session sidebar (issue #143).
+   */
+  running?: boolean;
 }
 
 export interface ChatSessionScope {
@@ -1152,17 +1159,28 @@ export function useChatSessionAgentMutation(scope: ChatSessionScope) {
   });
 }
 
-// "New chat" — archive the current active row and start fresh. Returns
-// the newly-created session so the caller can pivot the panel onto it
-// without an extra fetch.
+// "New chat" — start a fresh session row and return it so the caller can
+// pivot the panel onto it without an extra fetch.
+//
+// `archivePrevious` (default true) preserves the legacy "New chat archives
+// the current thread" behaviour. The session sidebar's "+" button passes
+// false so the prior conversation stays visible under the sidebar's
+// "History" group instead of being archived away (issue #143).
 export function useNewChatSession(scope: ChatSessionScope) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ agentId }: { agentId: string | null }) =>
+    mutationFn: ({
+      agentId,
+      archivePrevious,
+    }: {
+      agentId: string | null;
+      archivePrevious?: boolean;
+    }) =>
       api.post<{ session: ChatSession }>("/api/chat/sessions/new", {
         scopeKind: scope.scopeKind,
         scopeId: scope.scopeId,
         agentId,
+        ...(archivePrevious === undefined ? {} : { archivePrevious }),
       }),
     onSuccess: (data) => {
       qc.setQueryData(

@@ -25,7 +25,7 @@
 
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   CHAT_SESSION_SCOPE_KINDS,
@@ -53,6 +53,13 @@ interface SessionResponse {
   title: string | null;
   archivedAt: string | null;
   updatedAt: string;
+  /**
+   * True when this session has an in-flight agent run (queued / assigned /
+   * running). Only populated by the list endpoint — the single-session
+   * resolver leaves it unset. Drives the "Running" group in the chat
+   * panel's session sidebar (see issue #143).
+   */
+  running?: boolean;
 }
 
 function parseScopeKind(raw: string | undefined): ChatSessionScopeKind | null {
@@ -214,6 +221,40 @@ async function findActiveSession(
     ),
     orderBy: [desc(chatSessions.updatedAt)],
   });
+}
+
+// Given a set of session threadKeys, return the subset that currently has
+// an in-flight agent run. A chat turn is dispatched as an `agent_runs` row
+// carrying `spec.env.OPENCARA_CHAT_SESSION_ID = threadKey` (same marker the
+// /history endpoint joins on); a session is "running" when any such run is
+// still queued / assigned / running. Used by the list endpoint to populate
+// the per-session `running` flag (issue #143).
+//
+// Exported for unit tests that exercise it against a fake Db.
+export async function selectActiveChatThreadKeys(
+  db: Db,
+  threadKeys: string[],
+): Promise<Set<string>> {
+  if (threadKeys.length === 0) return new Set();
+  const requested = new Set(threadKeys);
+  const sessionIdExpr = sql<string>`(${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID')`;
+  const active = await db.query.agentRuns.findMany({
+    where: and(
+      inArray(agentRuns.status, ["queued", "assigned", "running"]),
+      inArray(sessionIdExpr, threadKeys),
+    ),
+    columns: { spec: true },
+  });
+  const running = new Set<string>();
+  for (const run of active) {
+    const spec = run.spec as { env?: Record<string, string> } | null;
+    const key = spec?.env?.OPENCARA_CHAT_SESSION_ID;
+    // Intersect with the requested set rather than trusting the row blindly
+    // — keeps the result scoped to the caller's threadKeys even if the
+    // query ever returns a stray marker.
+    if (key && requested.has(key)) running.add(key);
+  }
+  return running;
 }
 
 export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
@@ -412,7 +453,16 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
       orderBy: [desc(chatSessions.updatedAt)],
       limit: 50,
     });
-    return c.json({ sessions: rows.map(toResponse) });
+    const runningKeys = await selectActiveChatThreadKeys(
+      deps.db,
+      rows.map((r) => r.threadKey),
+    );
+    return c.json({
+      sessions: rows.map((r) => ({
+        ...toResponse(r),
+        running: runningKeys.has(r.threadKey),
+      })),
+    });
   });
 
   // POST /chat/sessions/new — "New chat" button. Archives the current
@@ -423,17 +473,24 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
   // Optional `agentId` lets the panel persist the user's current agent
   // pick onto the new row in the same trip — saves a follow-up POST
   // /chat/sessions just to set it.
+  //
+  // `archivePrevious` (default true) controls whether the currently-active
+  // row is archived. The session-sidebar "+" button (issue #143) passes
+  // false: it wants the prior conversation to stay visible under the
+  // sidebar's "History" group rather than be tucked away under "Archived".
   r.post("/chat/sessions/new", auth, async (c) => {
     const user = c.get("user")!;
     const body = (await c.req.json().catch(() => ({}))) as {
       scopeKind?: string;
       scopeId?: string;
       agentId?: string | null;
+      archivePrevious?: boolean;
     };
     const kind = parseScopeKind(body.scopeKind);
     if (!kind) return c.json({ error: "invalid scopeKind" }, 400);
     const scopeId = normalizedScopeId(kind, body.scopeId ?? "");
     const agentId = body.agentId ?? null;
+    const archivePrevious = body.archivePrevious ?? true;
 
     const gate = await gateScope(deps, user.id, kind, scopeId);
     if (!gate.ok) return c.json({ error: gate.error }, gate.status);
@@ -444,7 +501,9 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     // "New chat" simultaneously leaves both prior actives archived
     // and two fresh rows in their place; the next GET picks the
     // most-recently-updated one. Slightly wasteful but correct.
-    const existing = await findActiveSession(deps, user.id, kind, scopeId);
+    const existing = archivePrevious
+      ? await findActiveSession(deps, user.id, kind, scopeId)
+      : undefined;
     if (existing) {
       await deps.db
         .update(chatSessions)
