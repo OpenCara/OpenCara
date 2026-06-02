@@ -7,6 +7,7 @@
 
 import type {
   AcpHistoryTurn,
+  AcpImageInput,
   AcpPermissionMode,
   AcpSpec,
   AgentSpec,
@@ -111,6 +112,12 @@ export interface BuildAcpSpecOpts {
    * worktree, or projects opting out by clearing the setting). See #130.
    */
   instructionsFile?: string;
+  /**
+   * Image attachments for this turn (clipboard paste / drag-and-drop in
+   * the chat panel). Appended to the ACP prompt as image content blocks;
+   * shims without image support drop them. See #142.
+   */
+  images?: AcpImageInput[];
 }
 
 /**
@@ -132,6 +139,7 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     systemPromptMd: opts.systemPromptMd,
     userPromptMd: opts.userPromptMd,
     history: opts.history ?? [],
+    images: opts.images ?? [],
     pageContextJson: hasMeaningfulContext(opts.pageContext)
       ? JSON.stringify(opts.pageContext)
       : undefined,

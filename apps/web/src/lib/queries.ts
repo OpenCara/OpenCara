@@ -1161,8 +1161,12 @@ export function useChatSessionAgentMutation(scope: ChatSessionScope) {
       // Only refresh the "active session" cache when the row we just wrote
       // IS the cached active one. Writing a non-active (sidebar-selected)
       // row's response into this key would mis-represent the active session.
+      // Require `cached` to be populated rather than seeding it on a miss: a
+      // miss could otherwise stamp an override (sidebar) row into the active
+      // key before sessionQ has hydrated. The active query refetches on its
+      // own, so skipping the seed only costs one fetch — never correctness.
       const cached = qc.getQueryData<{ session: ChatSession }>(sessionKey);
-      if (!cached || cached.session.id === data.session.id) {
+      if (cached && cached.session.id === data.session.id) {
         qc.setQueryData(sessionKey, data);
       }
       // The list query caches by scope; agent flip bumps updatedAt so

@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
+  type ReactNode,
+} from "react";
 import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
@@ -10,6 +18,7 @@ import {
   ArchiveRestore,
   Bot,
   Brain,
+  ImagePlus,
   Info,
   Loader2,
   PanelLeftClose,
@@ -82,6 +91,65 @@ interface Message {
   /** Snapshot of the canvas selection at the moment THIS turn was sent.
    * Used to render an Apply button on the matching assistant reply. */
   attachedSelection?: string;
+  /** Data URLs of images attached to a user turn. Rendered inline in the
+   * bubble so the conversation history shows what was sent. */
+  images?: string[];
+}
+
+/**
+ * An image staged in the composer before send — captured from a
+ * clipboard paste or a drag-and-drop. `dataUrl` is the full
+ * `data:<mime>;base64,<payload>` form (used for the thumbnail preview and,
+ * after send, for inline rendering); `mimeType` is split out so the
+ * send-time payload can ship the bare base64 + type the agent expects.
+ */
+interface PendingImage {
+  id: string;
+  dataUrl: string;
+  mimeType: string;
+  name?: string;
+}
+
+// Composer attachment limits — kept in lockstep with the orchestrator's
+// chat route (`normalizeImages`). The client enforces them up front so
+// oversized files never hit the wire, and the server re-checks so a
+// crafted request can't bypass them.
+const MAX_IMAGES_PER_TURN = 8;
+const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
+// Mirror of the server's `ALLOWED_IMAGE_MIME`. The client MUST agree with
+// it: staging a type the server drops (e.g. HEIC/AVIF/SVG) would preview
+// + optimistically render an image the agent never receives. SVG is
+// excluded deliberately — it's an XSS vector the server rightly refuses.
+const ACCEPTED_IMAGE_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
+// `accept` for the file picker — the same set, spelled for the OS dialog.
+const ACCEPTED_IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
+
+/** Read an image File/Blob into a `data:` URL, or null if it can't be read. */
+function readImageFile(file: File): Promise<PendingImage | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl.startsWith("data:")) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        id: crypto.randomUUID(),
+        dataUrl,
+        mimeType: file.type || "image/png",
+        name: file.name || undefined,
+      });
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Strip the `data:<mime>;base64,` prefix, returning the bare base64 payload. */
+function base64Payload(dataUrl: string): string {
+  const comma = dataUrl.indexOf(",");
+  return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
 }
 
 interface PageContext {
@@ -181,6 +249,8 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   const [agentId, setAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [images, setImages] = useState<PendingImage[]>([]);
+  const [dragActive, setDragActive] = useState(false);
   const [sending, setSending] = useState(false);
   const [answeredOptionMessageIds, setAnsweredOptionMessageIds] = useState<
     Set<string>
@@ -258,6 +328,14 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   if (ephemeralSessionIdRef.current === "") {
     ephemeralSessionIdRef.current = `chat_${crypto.randomUUID()}`;
   }
+  // Hidden <input type=file> driven by the attach button — gives a
+  // discoverable, click-to-pick path alongside paste / drag-and-drop.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // dragenter/dragleave both bubble and fire as the cursor crosses child
+  // elements, so a naive boolean flickers the overlay. Count enter/leave
+  // pairs and only hide once the depth returns to zero (the cursor has
+  // truly left the panel).
+  const dragDepthRef = useRef(0);
   // The session id the panel actually dispatches against. Override wins
   // when the user explicitly picked one from History; otherwise the
   // server-resolved active session for the scope; otherwise a per-mount
@@ -397,11 +475,69 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     }
   };
 
+  // Ingest image files from a paste or drop. Non-image files are
+  // ignored; oversized ones are skipped; the staged set is capped at
+  // MAX_IMAGES_PER_TURN so the composer can't grow unbounded.
+  const addImageFiles = async (files: Iterable<File>) => {
+    const candidates = Array.from(files).filter(
+      (f) => ACCEPTED_IMAGE_MIME.test(f.type) && f.size <= MAX_IMAGE_BYTES,
+    );
+    if (candidates.length === 0) return;
+    const read = (await Promise.all(candidates.map(readImageFile))).filter(
+      (img): img is PendingImage => img !== null,
+    );
+    if (read.length === 0) return;
+    setImages((prev) => [...prev, ...read].slice(0, MAX_IMAGES_PER_TURN));
+  };
+
+  const removeImage = (id: string) =>
+    setImages((prev) => prev.filter((img) => img.id !== id));
+
+  const onPaste = (e: ReactClipboardEvent) => {
+    const items = e.clipboardData.items;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      if (item.kind === "file" && ACCEPTED_IMAGE_MIME.test(item.type)) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    // Only swallow the paste when it actually carried a supported image —
+    // a normal text paste (or an unsupported image type) must still land
+    // in the textarea / fall through to default handling untouched.
+    if (files.length > 0) {
+      e.preventDefault();
+      void addImageFiles(files);
+    }
+  };
+
+  const onDrop = (e: ReactDragEvent) => {
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    if (e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    void addImageFiles(e.dataTransfer.files);
+  };
+
   const send = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || !agentId || sending || !effectiveSessionId) return;
+    // Option-button replies (overrideText set) never carry composer
+    // images — those belong to the user's own typed turn. A normal send
+    // is valid with text OR at least one staged image.
+    const imagesToSend = overrideText === undefined ? images : [];
+    if (
+      (!text && imagesToSend.length === 0) ||
+      !agentId ||
+      sending ||
+      !effectiveSessionId
+    )
+      return;
     setSending(true);
-    if (overrideText === undefined) setInput("");
+    if (overrideText === undefined) {
+      setInput("");
+      setImages([]);
+    }
 
     // Snapshot the selection NOW (at send-time). The user can change
     // their selection while the agent is responding; we want the context
@@ -413,6 +549,10 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       role: "user",
       text,
       attachedSelection: selectionSnapshot ?? undefined,
+      images:
+        imagesToSend.length > 0
+          ? imagesToSend.map((img) => img.dataUrl)
+          : undefined,
     };
     const assistantId = `a_${Date.now()}`;
     setMessages((prev) => [
@@ -473,6 +613,16 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           message: text,
           pageContext: ctxForRequest,
           history,
+          // Bare base64 + mime per attachment — the orchestrator rebuilds
+          // these into ACP image content blocks for the agent prompt.
+          ...(imagesToSend.length > 0
+            ? {
+                images: imagesToSend.map((img) => ({
+                  data: base64Payload(img.dataUrl),
+                  mimeType: img.mimeType,
+                })),
+              }
+            : {}),
           // Only send when explicitly non-default — the orchestrator
           // already treats omitted/default identically, but keeping
           // the request body minimal makes the dev console easier to
@@ -510,6 +660,28 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
         open ? "translate-x-0" : "translate-x-full",
       )}
       aria-hidden={!open}
+      onDragEnter={(e) => {
+        // Only react to drags that carry files (an image drop), not
+        // text selections being dragged around the page.
+        if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+        e.preventDefault();
+        dragDepthRef.current += 1;
+        setDragActive(true);
+      }}
+      onDragOver={(e) => {
+        // preventDefault marks this as a valid drop target. Gate on the
+        // payload (Files), not on `dragActive` — the latter is set async
+        // by onDragEnter, so the first dragover would read it stale and
+        // the browser could reject the drop.
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+        }
+      }}
+      onDragLeave={() => {
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setDragActive(false);
+      }}
+      onDrop={onDrop}
     >
       {wantPersistence && sessionPanelOpen && (
         <SessionPanel
@@ -546,6 +718,15 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           onDelete={(id) => deleteSessionMut.mutate({ id })}
           onRestore={(id) => restoreSessionMut.mutate({ id })}
         />
+      )}
+
+      {dragActive && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-primary/10 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-primary/60 bg-card/90 px-6 py-4 text-sm font-medium text-primary">
+            <ImagePlus className="size-6" />
+            Drop images to attach
+          </div>
+        </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -693,15 +874,62 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
               ))}
             </SelectContent>
           </Select>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2"
+            title="Attach images"
+            disabled={!agentId || !effectiveSessionId}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <ImagePlus className="size-4" />
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_IMAGE_ACCEPT}
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) void addImageFiles(e.target.files);
+              // Reset so picking the same file twice still fires onChange.
+              e.target.value = "";
+            }}
+          />
           {permissionMode !== "default" && (
             <span className="text-muted-foreground">
               applies to the next turn
             </span>
           )}
         </div>
+        {images.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {images.map((img) => (
+              <div
+                key={img.id}
+                className="group relative size-16 overflow-hidden rounded-md border bg-muted"
+              >
+                <img
+                  src={img.dataUrl}
+                  alt={img.name ?? "attachment"}
+                  className="size-full object-cover"
+                />
+                <button
+                  type="button"
+                  title="Remove image"
+                  onClick={() => removeImage(img.id)}
+                  className="absolute right-0.5 top-0.5 rounded-full bg-background/80 p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -714,7 +942,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
               : agentId
                 ? selection
                   ? "Ask about the selected text… (⌘/Ctrl+Enter)"
-                  : "Ask for help with this page… (⌘/Ctrl+Enter to send)"
+                  : "Ask for help with this page… (paste or drop images, ⌘/Ctrl+Enter to send)"
                 : "Pick an agent above to start chatting"
           }
           className="min-h-20 resize-none text-sm"
@@ -735,7 +963,12 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           ) : (
             <Button
               size="sm"
-              disabled={!agentId || !input.trim() || sending || !effectiveSessionId}
+              disabled={
+                !agentId ||
+                (!input.trim() && images.length === 0) ||
+                sending ||
+                !effectiveSessionId
+              }
               onClick={() => void send()}
             >
               <Send className="size-3.5" />
@@ -771,9 +1004,26 @@ function MessageBubble({
             </span>
           </div>
         )}
-        <div className="rounded-lg bg-secondary px-3 py-2 text-sm">
-          <ChatMarkdown>{message.text}</ChatMarkdown>
-        </div>
+        {message.images && message.images.length > 0 && (
+          <div className="flex flex-wrap justify-end gap-2">
+            {message.images.map((src, i) => (
+              // No anchor wrapper: browsers block top-level navigation to
+              // `data:` URLs, so an "open in new tab" link would no-op.
+              // The inline thumbnail is the artifact the user wants to see.
+              <img
+                key={i}
+                src={src}
+                alt={`attachment ${i + 1}`}
+                className="max-h-48 rounded-md border object-contain"
+              />
+            ))}
+          </div>
+        )}
+        {message.text.trim().length > 0 && (
+          <div className="rounded-lg bg-secondary px-3 py-2 text-sm">
+            <ChatMarkdown>{message.text}</ChatMarkdown>
+          </div>
+        )}
       </div>
     );
   }
