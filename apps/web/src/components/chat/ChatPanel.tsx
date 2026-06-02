@@ -114,6 +114,13 @@ interface PendingImage {
 // crafted request can't bypass them.
 const MAX_IMAGES_PER_TURN = 8;
 const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
+// Mirror of the server's `ALLOWED_IMAGE_MIME`. The client MUST agree with
+// it: staging a type the server drops (e.g. HEIC/AVIF/SVG) would preview
+// + optimistically render an image the agent never receives. SVG is
+// excluded deliberately — it's an XSS vector the server rightly refuses.
+const ACCEPTED_IMAGE_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
+// `accept` for the file picker — the same set, spelled for the OS dialog.
+const ACCEPTED_IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
 
 /** Read an image File/Blob into a `data:` URL, or null if it can't be read. */
 function readImageFile(file: File): Promise<PendingImage | null> {
@@ -450,7 +457,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
   // MAX_IMAGES_PER_TURN so the composer can't grow unbounded.
   const addImageFiles = async (files: Iterable<File>) => {
     const candidates = Array.from(files).filter(
-      (f) => f.type.startsWith("image/") && f.size <= MAX_IMAGE_BYTES,
+      (f) => ACCEPTED_IMAGE_MIME.test(f.type) && f.size <= MAX_IMAGE_BYTES,
     );
     if (candidates.length === 0) return;
     const read = (await Promise.all(candidates.map(readImageFile))).filter(
@@ -468,13 +475,14 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
-      if (item.kind === "file" && item.type.startsWith("image/")) {
+      if (item.kind === "file" && ACCEPTED_IMAGE_MIME.test(item.type)) {
         const file = item.getAsFile();
         if (file) files.push(file);
       }
     }
-    // Only swallow the paste when it actually carried an image — a
-    // normal text paste must still land in the textarea untouched.
+    // Only swallow the paste when it actually carried a supported image —
+    // a normal text paste (or an unsupported image type) must still land
+    // in the textarea / fall through to default handling untouched.
     if (files.length > 0) {
       e.preventDefault();
       void addImageFiles(files);
@@ -637,7 +645,13 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
         setDragActive(true);
       }}
       onDragOver={(e) => {
-        if (dragActive) e.preventDefault();
+        // preventDefault marks this as a valid drop target. Gate on the
+        // payload (Files), not on `dragActive` — the latter is set async
+        // by onDragEnter, so the first dragover would read it stale and
+        // the browser could reject the drop.
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+        }
       }}
       onDragLeave={() => {
         dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
@@ -840,7 +854,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept={ACCEPTED_IMAGE_ACCEPT}
             multiple
             className="hidden"
             onChange={(e) => {
@@ -959,19 +973,15 @@ function MessageBubble({
         {message.images && message.images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
             {message.images.map((src, i) => (
-              <a
+              // No anchor wrapper: browsers block top-level navigation to
+              // `data:` URLs, so an "open in new tab" link would no-op.
+              // The inline thumbnail is the artifact the user wants to see.
+              <img
                 key={i}
-                href={src}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open image in new tab"
-              >
-                <img
-                  src={src}
-                  alt={`attachment ${i + 1}`}
-                  className="max-h-48 rounded-md border object-contain"
-                />
-              </a>
+                src={src}
+                alt={`attachment ${i + 1}`}
+                className="max-h-48 rounded-md border object-contain"
+              />
             ))}
           </div>
         )}

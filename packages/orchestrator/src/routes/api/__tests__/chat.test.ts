@@ -90,4 +90,17 @@ describe("normalizeImages", () => {
     const huge = "a".repeat(10_000_001);
     assert.deepEqual(normalizeImages([{ data: huge, mimeType: "image/png" }]), []);
   });
+
+  it("stops once the aggregate base64 budget is exceeded", () => {
+    // Three 9M-char images = 27M > the 24M aggregate cap, so only the
+    // first two (18M) survive even though the per-image and count caps
+    // would each allow all three.
+    const nineM = "a".repeat(9_000_000);
+    const out = normalizeImages([
+      { data: nineM, mimeType: "image/png" },
+      { data: nineM, mimeType: "image/png" },
+      { data: nineM, mimeType: "image/png" },
+    ]);
+    assert.equal(out.length, 2);
+  });
 });

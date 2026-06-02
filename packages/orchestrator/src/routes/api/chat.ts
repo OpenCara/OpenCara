@@ -634,27 +634,36 @@ export function chatRoutes(deps: ChatRoutesDeps) {
  */
 const MAX_IMAGES_PER_TURN = 8;
 const MAX_IMAGE_BASE64_LEN = 10_000_000;
+// Aggregate cap across all attachments on one turn. The whole payload is
+// persisted into the run's AcpSpec (jsonb), so bound the worst case
+// (8 × per-image cap ≈ 80 MB) to something a single row + a single agent
+// prompt can carry. ~24 MB base64 ≈ 18 MB of raw image total per turn.
+const MAX_IMAGES_TOTAL_BASE64_LEN = 24_000_000;
 const ALLOWED_IMAGE_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
 
 /**
  * Coerce the chat panel's image payload into validated `AcpImageInput[]`.
  * Each entry must be `{ data: <base64, no data: prefix>, mimeType: image/* }`.
  * Oversized / wrong-type / malformed entries are dropped (not fatal); the
- * whole list is capped at `MAX_IMAGES_PER_TURN`.
+ * list is capped at `MAX_IMAGES_PER_TURN` and the combined base64 length
+ * at `MAX_IMAGES_TOTAL_BASE64_LEN`.
  */
 export function normalizeImages(raw: unknown): AcpImageInput[] {
   if (!Array.isArray(raw)) return [];
   const out: AcpImageInput[] = [];
+  let totalLen = 0;
   for (const item of raw) {
     if (out.length >= MAX_IMAGES_PER_TURN) break;
     if (!item || typeof item !== "object") continue;
     const { data, mimeType } = item as { data?: unknown; mimeType?: unknown };
     if (typeof data !== "string" || data.length === 0) continue;
     if (data.length > MAX_IMAGE_BASE64_LEN) continue;
+    if (totalLen + data.length > MAX_IMAGES_TOTAL_BASE64_LEN) break;
     if (typeof mimeType !== "string" || !ALLOWED_IMAGE_MIME.test(mimeType)) {
       continue;
     }
     out.push({ data, mimeType: mimeType.toLowerCase() });
+    totalLen += data.length;
   }
   return out;
 }
