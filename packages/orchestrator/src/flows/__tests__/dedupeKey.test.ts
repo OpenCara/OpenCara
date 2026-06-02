@@ -63,7 +63,46 @@ describe("computeEventDedupeKey", () => {
     assert.notEqual(opened, synced);
   });
 
-  it("returns null for pull_request without a head SHA", () => {
+  it("keys the opened action (one-shot per PR)", () => {
+    assert.equal(
+      computeEventDedupeKey(
+        ev("pull_request", {
+          action: "opened",
+          pull_request: { number: 9, head: { sha: "cafef00d" } },
+        }),
+      ),
+      "pull_request:9:opened:cafef00d",
+    );
+  });
+
+  it("returns null for reopened — it can recur on an unchanged SHA", () => {
+    // close→reopen with no intervening commit emits `reopened` twice with the
+    // same head SHA; SHA-identity dedup would permanently drop the 2nd review.
+    // Fall back to GUID-only by returning null. (issue #147 review.)
+    assert.equal(
+      computeEventDedupeKey(
+        ev("pull_request", {
+          action: "reopened",
+          pull_request: { number: 9, head: { sha: "cafef00d" } },
+        }),
+      ),
+      null,
+    );
+  });
+
+  it("returns null for ready_for_review — draft↔ready can recur on one SHA", () => {
+    assert.equal(
+      computeEventDedupeKey(
+        ev("pull_request", {
+          action: "ready_for_review",
+          pull_request: { number: 9, head: { sha: "cafef00d" } },
+        }),
+      ),
+      null,
+    );
+  });
+
+  it("returns null for a dedupable pull_request action without a head SHA", () => {
     assert.equal(
       computeEventDedupeKey(
         ev("pull_request", { action: "opened", pull_request: { number: 1 } }),

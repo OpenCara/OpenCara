@@ -1,5 +1,5 @@
 import { ulid } from "ulid";
-import { eq, type InferSelectModel } from "drizzle-orm";
+import { eq, sql, type InferSelectModel } from "drizzle-orm";
 import type { Sql } from "postgres";
 import {
   FlowDefinitionSchema,
@@ -278,13 +278,15 @@ export class FlowEngine {
     });
     if (!installation) return null;
 
-    // Insert with ON CONFLICT DO NOTHING + RETURNING. The id is a fresh ulid
-    // so the only constraint it can ever violate is the partial unique index
-    // flow_runs_flow_dedupe_uq (flow_id, dedupe_key) — an empty RETURNING
-    // therefore means "a run for this (flow, content) already exists", i.e. a
-    // re-delivered webhook we should drop (issue #147). dedupeKey is null on
-    // manual/rerun paths (and event types without a stable identity), where
-    // the partial predicate excludes the row and the insert always lands.
+    // Insert with ON CONFLICT DO NOTHING + RETURNING, targeting ONLY the
+    // partial dedupe index flow_runs_flow_dedupe_uq (flow_id, dedupe_key)
+    // WHERE dedupe_key IS NOT NULL. With the target pinned, an empty RETURNING
+    // means exactly "a run for this (flow, content) already exists" — a
+    // re-delivered webhook we should drop (issue #147) — and we don't silently
+    // swallow some unrelated future unique conflict as a dedupe-drop. dedupeKey
+    // is null on manual/rerun paths (and event types without a stable
+    // identity), where the partial predicate excludes the row and the insert
+    // always lands.
     const flowRunId = ulid();
     const inserted = await this.deps.db
       .insert(flowRuns)
@@ -297,7 +299,10 @@ export class FlowEngine {
         startedAt: new Date(),
         dedupeKey,
       })
-      .onConflictDoNothing()
+      .onConflictDoNothing({
+        target: [flowRuns.flowId, flowRuns.dedupeKey],
+        where: sql`dedupe_key is not null`,
+      })
       .returning({ id: flowRuns.id });
     if (inserted.length === 0) {
       console.log("[flow-engine] dedup: dropping duplicate dispatch", {
@@ -736,17 +741,31 @@ interface PreloadedRun {
  * as two rows and (historically) two flow runs + two posted reviews
  * (issue #147). The key is built only from payload fields that are byte-for-byte
  * identical across such duplicate deliveries:
- *   - pull_request: PR number + action + head SHA. A genuinely new push changes
- *     the SHA → new key → the flow runs again, as intended. This is the
- *     "(eventType, action, after-SHA)" key the issue proposes.
- *   - pull_request_review: the review id (stable, globally unique) + action.
+ *   - pull_request: PR number + action + head SHA — but ONLY for actions where
+ *     (action, SHA) is a genuine one-shot identity: `synchronize` (every push
+ *     mints a new SHA, so a real recurrence always changes the key) and
+ *     `opened` (fires once per PR). Actions like `reopened` / `ready_for_review`
+ *     can legitimately recur on an UNCHANGED SHA (close→reopen, or
+ *     ready→draft→ready, with no intervening commit), so SHA-identity dedup
+ *     would permanently suppress a real re-trigger — they return null and keep
+ *     GUID-only behavior. This is the "(eventType, action, after-SHA)" key the
+ *     issue proposes, narrowed to the actions where it's safe.
+ *   - pull_request_review: the review id (stable, globally unique) + action. A
+ *     new submitted review always gets a fresh id, so recurrence is impossible
+ *     and only a redelivery collides.
  *   - issue_comment: the comment id + action (covers the `@opencara fix`
- *     review-fix path).
+ *     review-fix path). A comment is created once; only a redelivery repeats
+ *     (id, created).
  * Other event types return null and keep today's GUID-only behavior — they're
  * either cheap mirror upkeep (projects_v2_item) or lack a single stable id, and
  * over-deduping legitimately-distinct events there would be worse than the
  * occasional duplicate.
  */
+// pull_request actions whose (action, head SHA) pair is a stable one-shot
+// identity — safe to dedup on. Everything else (reopened, ready_for_review,
+// edited, labeled, …) can recur on an unchanged SHA, so we don't.
+const SHA_DEDUPABLE_PR_ACTIONS = new Set(["opened", "synchronize"]);
+
 export function computeEventDedupeKey(event: PlatformEventInput): string | null {
   const p = event.payload;
   if (!p || typeof p !== "object") return null;
@@ -760,6 +779,7 @@ export function computeEventDedupeKey(event: PlatformEventInput): string | null 
 
   switch (event.type) {
     case "pull_request": {
+      if (!SHA_DEDUPABLE_PR_ACTIONS.has(action)) return null;
       const num = payload.pull_request?.number;
       const sha = payload.pull_request?.head?.sha;
       if (typeof num !== "number" || typeof sha !== "string" || sha.length === 0) {

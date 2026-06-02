@@ -85,6 +85,14 @@ export function appWebhookRoutes(deps: WebhookDeps) {
     // 200. setImmediate yields the event loop so the response flushes before
     // the in-process flow dispatcher starts saturating it. Re-delivery is now
     // harmless anyway: the flow engine dedups on event content.
+    //
+    // Durability tradeoff: ACKing before the platform_events insert means a
+    // hard process crash in the narrow window between the 200 and that insert
+    // loses the delivery with no GitHub re-send (we already told it 200). We
+    // accept this — the window is milliseconds, and it removes the far more
+    // frequent *timeout*-driven re-delivery storm that motivated this change.
+    // If that window ever needs closing, persist the raw delivery synchronously
+    // before the 200, then process async.
     setImmediate(() => {
       void processDelivery(deps, eventType, deliveryId, payload).catch((err) => {
         console.error("[webhooks] background processing failed", {
