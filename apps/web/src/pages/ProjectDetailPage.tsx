@@ -61,7 +61,7 @@ export function ProjectDetailPage() {
 
   // Redirect legacy tab URLs before doing anything else — this only
   // depends on the path, not the fetched project.
-  if (tab !== undefined && tab in TAB_ALIASES) {
+  if (tab !== undefined && Object.hasOwn(TAB_ALIASES, tab)) {
     const target = TAB_ALIASES[tab];
     return (
       <Navigate to={`/projects/${id}${target ? `/${target}` : ""}`} replace />

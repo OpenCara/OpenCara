@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Settings } from "lucide-react";
 import {
@@ -142,6 +142,12 @@ function InstructionsFileSection({
 }) {
   const setInstructionsFile = useSetProjectInstructionsFile(projectId);
   const [draft, setDraft] = useState(current);
+  // Re-sync the draft if the persisted value changes underneath us (e.g.
+  // the project query refetches with a value edited elsewhere) so the
+  // input never shows stale text against the server state.
+  useEffect(() => {
+    setDraft(current);
+  }, [current]);
   const trimmed = draft.trim();
   const dirty = trimmed !== current;
   // Mirror the server-side validation in `validateInstructionsFileInput`

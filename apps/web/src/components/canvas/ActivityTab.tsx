@@ -45,10 +45,19 @@ function parseView(raw: string | null): ActivityView {
  * (`/events`, `/runs`, `/flow-runs`) land on the matching filter — see #140.
  */
 export function ActivityTab({ id }: { id: string }) {
-  const [searchParams] = useSearchParams();
-  const [view, setView] = useState<ActivityView>(() =>
-    parseView(searchParams.get("view")),
-  );
+  // The URL `?view=` is the source of truth, so a query-only navigation
+  // (e.g. a legacy `/events` redirect landing on an already-mounted tab)
+  // keeps the active pill in sync and the selection stays shareable.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = parseView(searchParams.get("view"));
+  const setView = (next: ActivityView) =>
+    setSearchParams(
+      (prev) => {
+        prev.set("view", next);
+        return prev;
+      },
+      { replace: true },
+    );
 
   return (
     <div className="space-y-4">
