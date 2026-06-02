@@ -54,6 +54,40 @@ describe("buildPromptContent", () => {
     assert.equal(t.includes("# Conversation history"), false);
     assert.match(t, /# Current message[\s\S]*hi/);
   });
+
+  it("appends one image block per attachment after the text block (#142)", () => {
+    const blocks = buildPromptContent({
+      systemPromptMd: "sys",
+      userPromptMd: "look at these",
+      images: [
+        { data: "AAAA", mimeType: "image/png" },
+        { data: "BBBB", mimeType: "image/jpeg" },
+      ],
+    });
+    assert.equal(blocks.length, 3);
+    // Text first so the model reads instructions before attachments.
+    assert.equal(blocks[0]!.type, "text");
+    assert.deepEqual(blocks[1], {
+      type: "image",
+      data: "AAAA",
+      mimeType: "image/png",
+    });
+    assert.deepEqual(blocks[2], {
+      type: "image",
+      data: "BBBB",
+      mimeType: "image/jpeg",
+    });
+  });
+
+  it("produces only the text block when no images are attached", () => {
+    const blocks = buildPromptContent({
+      systemPromptMd: "sys",
+      userPromptMd: "hi",
+      images: [],
+    });
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]!.type, "text");
+  });
 });
 
 describe("createUpdateTranslator", () => {

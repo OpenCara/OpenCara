@@ -2,7 +2,12 @@ import { Hono } from "hono";
 import { ulid } from "ulid";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
-import type { AcpHistoryTurn, AcpPermissionMode, AgentSpec } from "@opencara/shared";
+import type {
+  AcpHistoryTurn,
+  AcpImageInput,
+  AcpPermissionMode,
+  AgentSpec,
+} from "@opencara/shared";
 import type { Db } from "../../db/client.js";
 import {
   agentRunLogs,
@@ -131,6 +136,11 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         ? (body.pageContext as PageContext)
         : {};
     const history = Array.isArray(body.history) ? body.history : [];
+    // Image attachments for this turn (clipboard paste / drag-and-drop).
+    // Validated + capped here so a hostile or buggy client can't push an
+    // unbounded base64 blob into the agent prompt. Malformed entries are
+    // dropped rather than 400'ing the whole turn.
+    const images = normalizeImages(body.images);
     // Per-turn knobs from the chat panel's toolbar. Plan mode is just
     // a shortcut for permissionMode='plan' — the panel renders both
     // controls but only the resolved mode crosses the wire. Unknown
@@ -138,9 +148,20 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // than 400'ing so a stale client doesn't break sending.
     const permissionMode = parsePermissionMode(body.permissionMode);
 
-    if (!agentId || !sessionId || !message.trim() || !Number.isFinite(turnIndex)) {
+    // A turn needs *some* content — text or at least one image. An
+    // image-only turn (e.g. "what's wrong with this screenshot?" with no
+    // typed text) is valid, so we no longer hard-require message text.
+    if (
+      !agentId ||
+      !sessionId ||
+      (!message.trim() && images.length === 0) ||
+      !Number.isFinite(turnIndex)
+    ) {
       return c.json(
-        { error: "agentId, sessionId, turnIndex, and message are required" },
+        {
+          error:
+            "agentId, sessionId, turnIndex, and message (or at least one image) are required",
+        },
         400,
       );
     }
@@ -336,6 +357,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       pageContext: agentPageContext,
       priorSessionId,
       ...(permissionMode ? { permissionMode } : {}),
+      ...(images.length > 0 ? { images } : {}),
     });
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
@@ -603,6 +625,49 @@ export function chatRoutes(deps: ChatRoutesDeps) {
  * may include other fields we don't care about; we just keep the two
  * we need and drop anything that doesn't have a recognized role.
  */
+/**
+ * Per-turn image attachment limits. Generous enough for a handful of
+ * screenshots, tight enough that a runaway client can't blow up the
+ * agent prompt or the persisted spec. Base64 inflates bytes ~4/3, so
+ * ~10M base64 chars ≈ 7.5 MB of raw image — comfortably above a typical
+ * full-screen PNG.
+ */
+const MAX_IMAGES_PER_TURN = 8;
+const MAX_IMAGE_BASE64_LEN = 10_000_000;
+// Aggregate cap across all attachments on one turn. The whole payload is
+// persisted into the run's AcpSpec (jsonb), so bound the worst case
+// (8 × per-image cap ≈ 80 MB) to something a single row + a single agent
+// prompt can carry. ~24 MB base64 ≈ 18 MB of raw image total per turn.
+const MAX_IMAGES_TOTAL_BASE64_LEN = 24_000_000;
+const ALLOWED_IMAGE_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
+
+/**
+ * Coerce the chat panel's image payload into validated `AcpImageInput[]`.
+ * Each entry must be `{ data: <base64, no data: prefix>, mimeType: image/* }`.
+ * Oversized / wrong-type / malformed entries are dropped (not fatal); the
+ * list is capped at `MAX_IMAGES_PER_TURN` and the combined base64 length
+ * at `MAX_IMAGES_TOTAL_BASE64_LEN`.
+ */
+export function normalizeImages(raw: unknown): AcpImageInput[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AcpImageInput[] = [];
+  let totalLen = 0;
+  for (const item of raw) {
+    if (out.length >= MAX_IMAGES_PER_TURN) break;
+    if (!item || typeof item !== "object") continue;
+    const { data, mimeType } = item as { data?: unknown; mimeType?: unknown };
+    if (typeof data !== "string" || data.length === 0) continue;
+    if (data.length > MAX_IMAGE_BASE64_LEN) continue;
+    if (totalLen + data.length > MAX_IMAGES_TOTAL_BASE64_LEN) break;
+    if (typeof mimeType !== "string" || !ALLOWED_IMAGE_MIME.test(mimeType)) {
+      continue;
+    }
+    out.push({ data, mimeType: mimeType.toLowerCase() });
+    totalLen += data.length;
+  }
+  return out;
+}
+
 function normalizeHistory(history: unknown[]): AcpHistoryTurn[] {
   const out: AcpHistoryTurn[] = [];
   for (const raw of history) {
