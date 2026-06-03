@@ -328,12 +328,28 @@ export const flowRuns = pgTable(
     // 'abandoned' = reaper restored at boot. Null on non-cancelled runs
     // and pre-column rows.
     cancelReason: text("cancel_reason"),
+    // Content-level idempotency key for webhook-driven dispatch. GitHub's
+    // at-least-once delivery re-emits a slow-to-ACK delivery as a *fresh*
+    // original (new x-github-delivery GUID, redelivery=false), which slips
+    // past platform_events' GUID-only dedup and historically produced
+    // duplicate flow runs + duplicate posted reviews (issue #147). The key
+    // is derived from stable payload content (PR head SHA, review id, …),
+    // not the GUID, so a re-delivered event collapses onto the first run via
+    // the partial unique index below. NULL for manual triggers / reruns and
+    // event types with no stable identity — those keep GUID-only behavior.
+    dedupeKey: text("dedupe_key"),
   },
   (t) => ({
     projectCreatedAtIdx: index("flow_runs_project_created_at_idx").on(
       t.projectId,
       t.createdAt.desc(),
     ),
+    // Per-flow content idempotency. Partial (dedupe_key IS NOT NULL) so the
+    // many runs that don't set a key — manual triggers, reruns, event types
+    // without a stable identity — never collide with each other.
+    flowDedupeUq: uniqueIndex("flow_runs_flow_dedupe_uq")
+      .on(t.flowId, t.dedupeKey)
+      .where(sql`dedupe_key IS NOT NULL`),
   }),
 );
 
