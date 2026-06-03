@@ -16,6 +16,11 @@ import { FlowDefinitionSchema } from "@opencara/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import type { FlowEngine } from "../../flows/engine.js";
+import {
+  FLOW_RUNS_CHANNEL,
+  parseFlowRunsNotify,
+  serializeFlowRunsNotify,
+} from "../../flows/notify.js";
 
 interface FlowRoutesDeps {
   db: Db;
@@ -466,7 +471,10 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     }
     // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
     // board, which LISTENs on `flow_runs` to refresh implement statuses).
-    void deps.pg.notify("flow_runs", id);
+    void deps.pg.notify(
+      FLOW_RUNS_CHANNEL,
+      serializeFlowRunsNotify({ flowRunId: id, projectId: run.projectId }),
+    );
     return c.json({ ok: true });
   });
 
@@ -523,14 +531,18 @@ export function flowRoutes(deps: FlowRoutesDeps) {
         return;
       }
 
-      const onNotify = (payload: string) => {
-        if (payload !== runId) return;
+      // flow_run_steps carries a bare flowRunId; flow_runs carries a JSON
+      // { flowRunId, projectId } payload (see flows/notify.ts). Accept either:
+      // resolve the run id from whichever shape arrived and match on it.
+      const onNotify = (raw: string) => {
+        const flowRunId = parseFlowRunsNotify(raw)?.flowRunId ?? raw;
+        if (flowRunId !== runId) return;
         writeSnapshot("step").catch((err: unknown) => {
           console.error("[sse] flow snapshot error", err);
         });
       };
       const stepSub = await deps.pg.listen("flow_run_steps", onNotify);
-      const runSub = await deps.pg.listen("flow_runs", onNotify);
+      const runSub = await deps.pg.listen(FLOW_RUNS_CHANNEL, onNotify);
 
       const heartbeat = setInterval(() => {
         sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);

@@ -50,6 +50,10 @@ import {
   INSTALLATION_GONE_BODY,
   isInstallationGoneError,
 } from "../../github/errors.js";
+import {
+  FLOW_RUNS_CHANNEL,
+  parseFlowRunsNotify,
+} from "../../flows/notify.js";
 
 interface KanbanRoutesDeps {
   db: Db;
@@ -60,6 +64,15 @@ interface KanbanRoutesDeps {
 }
 
 const KANBAN_NOTIFY_CHANNEL = "kanban_link";
+
+/**
+ * Coalescing window for flow_runs-driven snapshot rebuilds. The flow engine
+ * fires `flow_runs` several times per run (start + each terminal write) and
+ * webhook/trigger fan-out can burst many runs at once; collapsing them into
+ * one rebuild per window keeps a single board from issuing a 4+ query rebuild
+ * per notify and starving the DB pool. See OpenCara#146.
+ */
+const FLOW_REBUILD_DEBOUNCE_MS = 400;
 
 /**
  * Notify payload shape on the `kanban_link` channel. We carry projectId so
@@ -858,12 +871,27 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
         void enqueueSnapshot();
       };
 
-      // flow_runs notify carries a bare flowRunId (engine doesn't know which
-      // project SSE handlers care). Cheaper to always rebuild the snapshot
-      // than per-notify-look-up which flow it belonged to — these fire at
-      // most a handful of times per implement run.
-      const onFlowRunNotify = (_raw: string) => {
-        void enqueueSnapshot();
+      // Coalesce flow_runs notifies into at most one rebuild per debounce
+      // window (the engine fires multiple times per run and fan-out bursts
+      // many runs at once). One timer per connection; cleared on abort.
+      let flowRebuildTimer: ReturnType<typeof setTimeout> | null = null;
+      const scheduleFlowRebuild = () => {
+        if (flowRebuildTimer) return;
+        flowRebuildTimer = setTimeout(() => {
+          flowRebuildTimer = null;
+          void enqueueSnapshot();
+        }, FLOW_REBUILD_DEBOUNCE_MS);
+      };
+
+      // flow_runs payload is JSON { flowRunId, projectId } (see
+      // flows/notify.ts). Drop notifies for other projects before doing any
+      // DB work — an unfiltered rebuild here woke *every* board on *every*
+      // run and saturated the pool (OpenCara#146). A payload we can't parse
+      // rebuilds conservatively rather than silently dropping an update.
+      const onFlowRunNotify = (raw: string) => {
+        const payload = parseFlowRunsNotify(raw);
+        if (payload && payload.projectId !== id) return;
+        scheduleFlowRebuild();
       };
 
       const heartbeat = setInterval(() => {
@@ -875,9 +903,10 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       try {
         await enqueueSnapshot();
         sub = await deps.pg.listen(KANBAN_NOTIFY_CHANNEL, onNotify);
-        flowSub = await deps.pg.listen("flow_runs", onFlowRunNotify);
+        flowSub = await deps.pg.listen(FLOW_RUNS_CHANNEL, onFlowRunNotify);
       } catch (err) {
         clearInterval(heartbeat);
+        if (flowRebuildTimer) clearTimeout(flowRebuildTimer);
         if (sub) await sub.unlisten().catch(() => undefined);
         if (flowSub) await flowSub.unlisten().catch(() => undefined);
         throw err;
@@ -885,6 +914,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
 
       sse.onAbort(async () => {
         clearInterval(heartbeat);
+        if (flowRebuildTimer) clearTimeout(flowRebuildTimer);
         if (sub) await sub.unlisten().catch(() => undefined);
         if (flowSub) await flowSub.unlisten().catch(() => undefined);
       });

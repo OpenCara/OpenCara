@@ -39,6 +39,10 @@ import {
   type NodeRunCtx,
 } from "./nodeRunners.js";
 import { extractAgentResultText } from "../agents/output.js";
+import {
+  FLOW_RUNS_CHANNEL,
+  serializeFlowRunsNotify,
+} from "./notify.js";
 
 export interface PlatformEventInput {
   id: string;
@@ -280,7 +284,10 @@ export class FlowEngine {
       status: "running",
       startedAt: new Date(),
     });
-    await this.deps.pg.notify("flow_runs", flowRunId);
+    await this.deps.pg.notify(
+      FLOW_RUNS_CHANNEL,
+      serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+    );
 
     return { flowRunId, flowId, project, installation };
   }
@@ -420,7 +427,10 @@ export class FlowEngine {
         .update(flowRuns)
         .set({ status: "failed", finishedAt: new Date(), error: message })
         .where(eq(flowRuns.id, flowRunId));
-      await this.deps.pg.notify("flow_runs", flowRunId);
+      await this.deps.pg.notify(
+        FLOW_RUNS_CHANNEL,
+        serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+      );
       return;
     }
 
@@ -492,7 +502,10 @@ export class FlowEngine {
         cancelReason: skipped ? "trigger_skip" : null,
       })
       .where(eq(flowRuns.id, flowRunId));
-    await this.deps.pg.notify("flow_runs", flowRunId);
+    await this.deps.pg.notify(
+      FLOW_RUNS_CHANNEL,
+      serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+    );
 
     await this.settleWaveItem(flowRunId, flowStatus);
   }
