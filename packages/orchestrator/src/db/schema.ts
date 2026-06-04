@@ -344,6 +344,16 @@ export const flowRuns = pgTable(
       t.projectId,
       t.createdAt.desc(),
     ),
+    // Serves the kanban implement-status query (loadImplementStatuses):
+    // WHERE flow_id = ? AND status IN (...) AND created_at > ?. Without this
+    // it falls back to the flow_id FK scan and reads every run for the flow —
+    // and the implement flow accumulates thousands of cancelled trigger_skip
+    // rows (OpenCara#146), making each kanban snapshot needlessly expensive.
+    flowStatusCreatedAtIdx: index("flow_runs_flow_status_created_at_idx").on(
+      t.flowId,
+      t.status,
+      t.createdAt.desc(),
+    ),
     // Per-flow content idempotency. Partial (dedupe_key IS NOT NULL) so the
     // many runs that don't set a key — manual triggers, reruns, event types
     // without a stable identity — never collide with each other.
