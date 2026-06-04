@@ -1,5 +1,10 @@
 import { useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type Query,
+} from "@tanstack/react-query";
 import { api } from "./api";
 
 export interface User {
@@ -1077,7 +1082,28 @@ export interface PmWave {
 export const pmWavesQuery = (projectId: string) => ({
   queryKey: ["pm", projectId, "waves"] as const,
   queryFn: () => api.get<{ waves: PmWave[] }>(`/api/projects/${projectId}/pm/waves`),
-  refetchInterval: 5000,
+  // Adaptive polling so an idle/background project tab stops hammering the DB
+  // pool every 5 s (see issue #150 / same pool pressure class as #146):
+  //   - hidden tab        → stop polling entirely
+  //   - a wave is running → 5 s, to track progress responsively
+  //   - visible but idle  → 30 s, slow enough to relieve the pool yet still
+  //                         discover a wave dispatched by the PM agent
+  // refetchOnWindowFocus re-runs the query (and re-evaluates this interval)
+  // the moment the user returns, so the hidden→stop path resumes cleanly even
+  // though the global default disables focus refetching.
+  refetchInterval: (query: Query<{ waves: PmWave[] }>) => {
+    if (
+      typeof document !== "undefined" &&
+      document.visibilityState === "hidden"
+    ) {
+      return false as const;
+    }
+    const anyRunning = (query.state.data?.waves ?? []).some(
+      (w) => w.status === "running",
+    );
+    return anyRunning ? 5000 : 30000;
+  },
+  refetchOnWindowFocus: true,
 });
 
 // ---- Chat sessions (generic per-(user, scope) persistence) ----

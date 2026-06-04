@@ -20,6 +20,31 @@ export async function loadOwnedProject(
   });
 }
 
+/**
+ * Load a project together with its GitHub installation in a single round-trip.
+ * Project detail endpoints previously ran `loadOwnedProject()` and then a
+ * separate `githubInstallations.findFirst()` serially (~2×61 ms on the remote
+ * pooler). The FK `projects.installation_id` is NOT NULL with a cascade, so
+ * every owned project has exactly one installation and an inner join is safe.
+ * Returns undefined on an ownership miss so callers still answer 404, never 403.
+ */
+export async function loadOwnedProjectWithInstallation(
+  db: Db,
+  projectId: string,
+  userId: string,
+): Promise<{ project: ProjectRow; installation: InstallationRow } | undefined> {
+  const rows = await db
+    .select({ project: projects, installation: githubInstallations })
+    .from(projects)
+    .innerJoin(
+      githubInstallations,
+      eq(projects.installationId, githubInstallations.id),
+    )
+    .where(and(eq(projects.id, projectId), eq(projects.addedByUserId, userId)))
+    .limit(1);
+  return rows[0];
+}
+
 export async function loadOwnedInstallation(
   db: Db,
   installationId: string,

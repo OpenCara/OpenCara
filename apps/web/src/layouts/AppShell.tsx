@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -30,9 +38,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { ChatPanel } from "@/components/chat/ChatPanel";
+// Lazy: ChatPanel drags in highlight.js + react-markdown (~330 KB raw). It is
+// only needed once the user opens chat, so keep it out of the initial graph
+// (incl. the login/landing path) and mount it on first open (issue #150 #1/#2).
+const ChatPanel = lazy(() =>
+  import("@/components/chat/ChatPanel").then((m) => ({ default: m.ChatPanel })),
+);
 import { SelectionToolbar } from "@/components/SelectionToolbar";
 import { ChatActionsProvider } from "@/lib/chatActions";
+import { RouteFallback } from "@/components/RouteFallback";
 
 interface NavEntry {
   to: string;
@@ -62,11 +76,15 @@ export function AppShell() {
   const devicesQ = useQuery(devicesQuery());
   const promptsQ = useQuery(promptsQuery());
   const [chatOpen, setChatOpen] = useState(false);
+  // Stays true after the first open so ChatPanel keeps its state across
+  // close/reopen — and so its lazy chunk only loads when chat is first used.
+  const [chatMounted, setChatMounted] = useState(false);
   const [selection, setSelection] = useState<string | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
 
   const onChatWithSelection = useCallback((text: string) => {
     setSelection(text);
+    setChatMounted(true);
     setChatOpen(true);
   }, []);
 
@@ -209,6 +227,7 @@ export function AppShell() {
             size="sm"
             variant={chatOpen ? "secondary" : "ghost"}
             onClick={() => {
+              setChatMounted(true);
               setChatOpen((prev) => {
                 if (prev) setSelection(null);
                 return !prev;
@@ -251,7 +270,11 @@ export function AppShell() {
         </header>
 
         <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-6">
-          <Outlet />
+          {/* Inner boundary so a lazily-loaded page chunk suspends here,
+              keeping the surrounding nav shell painted during the fetch. */}
+          <Suspense fallback={<RouteFallback />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
 
@@ -259,15 +282,19 @@ export function AppShell() {
         containerRef={mainRef}
         onChatWithSelection={onChatWithSelection}
       />
-      <ChatPanel
-        open={chatOpen}
-        onClose={() => {
-          setChatOpen(false);
-          setSelection(null);
-        }}
-        selection={selection}
-        onClearSelection={onClearSelection}
-      />
+      {chatMounted && (
+        <Suspense fallback={null}>
+          <ChatPanel
+            open={chatOpen}
+            onClose={() => {
+              setChatOpen(false);
+              setSelection(null);
+            }}
+            selection={selection}
+            onClearSelection={onClearSelection}
+          />
+        </Suspense>
+      )}
     </div>
     </ChatActionsProvider>
   );
