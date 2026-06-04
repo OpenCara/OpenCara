@@ -30,6 +30,7 @@ import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
+import { pruneTriggerSkipFlowRuns } from "./flows/prune.js";
 
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
@@ -50,6 +51,19 @@ const dispatcher = new WebSocketDispatcher(devicePool);
 
 const app = new Hono<AuthEnv>();
 const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
+
+// Without an error handler, a throw in any middleware/route falls through to
+// Hono's default, which is fine for the body but logs nothing — so a DB stall
+// or statement-timeout abort surfaced to the user as a silent failure with no
+// server-side trace (OpenCara#146). Log every unhandled error with its route,
+// and return a fast JSON 500 instead of leaving the request hanging.
+app.onError((err, c) => {
+  console.error(
+    `[orchestrator] unhandled error on ${c.req.method} ${c.req.path}:`,
+    err,
+  );
+  return c.json({ error: "internal error" }, 500);
+});
 
 app.use("*", currentUser(db, config.SESSION_COOKIE_NAME));
 
@@ -99,6 +113,22 @@ reapOrphanedRuns(db)
     }
   })
   .catch((err: unknown) => console.error("[orchestrator] reap failed", err));
+
+// Prune the `trigger_skip` flow_run backlog (webhook fan-out noise) on boot
+// and once a day. Left unbounded it grows without limit and bloats every
+// flow_id scan the kanban board issues (OpenCara#146). Best-effort: a failure
+// here never blocks startup or serving.
+const runFlowRunPrune = () => {
+  pruneTriggerSkipFlowRuns(db)
+    .then((n) => {
+      if (n > 0) console.log(`[orchestrator] pruned ${n} trigger_skip flow_run(s)`);
+    })
+    .catch((err: unknown) => console.error("[orchestrator] flow_run prune failed", err));
+};
+runFlowRunPrune();
+const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// unref so the daily timer never keeps the process alive on its own.
+setInterval(runFlowRunPrune, FLOW_RUN_PRUNE_INTERVAL_MS).unref();
 
 if (flowEngine) {
   seedBuiltinFlowsForAllProjects(db)
