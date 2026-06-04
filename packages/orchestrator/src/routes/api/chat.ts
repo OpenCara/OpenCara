@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type {
   AcpHistoryTurn,
@@ -72,6 +72,13 @@ export const MCP_POISON_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * Upper bound on stdout chunks read when scanning a prior run for an
+ * MCP-unavailable admission. Large enough to cover the early assistant
+ * output where such admissions appear, small enough to keep the read cheap.
+ */
+const POISON_SCAN_CHUNK_LIMIT = 2000;
+
+/**
  * Look at the most recent agent_run for this chat thread (matched by the
  * `OPENCARA_CHAT_SESSION_ID` env baked into spec) and return whether its
  * stdout contains a "this MCP tool isn't available" admission. Callers use
@@ -90,6 +97,12 @@ async function priorTurnDeclaredMcpUnavailable(
       orderBy: [desc(agentRuns.createdAt)],
     });
     if (!lastRun) return false;
+    // Bound the read: a long run can persist tens of thousands of stdout
+    // chunks, and pulling them all just to regex-scan was an unbounded
+    // memory hit (issue #150 #7). The "this tool isn't available" admission,
+    // when present, lands in the agent's early output as it inspects/attempts
+    // the tool, so scan the head by seq. A miss falls through to a normal
+    // resume — the safe default this function already documents.
     const logs = await db
       .select({ chunk: agentRunLogs.chunk })
       .from(agentRunLogs)
@@ -98,7 +111,9 @@ async function priorTurnDeclaredMcpUnavailable(
           eq(agentRunLogs.agentRunId, lastRun.id),
           eq(agentRunLogs.stream, "stdout"),
         ),
-      );
+      )
+      .orderBy(asc(agentRunLogs.seq))
+      .limit(POISON_SCAN_CHUNK_LIMIT);
     if (logs.length === 0) return false;
     const stdout = logs.map((l) => l.chunk).join("");
     return MCP_POISON_PATTERNS.some((p) => p.test(stdout));

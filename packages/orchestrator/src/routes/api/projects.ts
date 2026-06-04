@@ -14,7 +14,10 @@ import {
   projects,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
-import { loadOwnedProject } from "../../auth/ownership.js";
+import {
+  loadOwnedProject,
+  loadOwnedProjectWithInstallation,
+} from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
 import {
   backfillIssues,
@@ -104,12 +107,10 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.get("/:id", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
-    const project = await loadOwnedProject(deps.db, id, user.id);
-    if (!project) return c.json({ error: "not found" }, 404);
-    const installation = await deps.db.query.githubInstallations.findFirst({
-      where: eq(githubInstallations.id, project.installationId),
-    });
-    return c.json({ project, installation });
+    // Single inner join instead of project lookup + installation lookup.
+    const owned = await loadOwnedProjectWithInstallation(deps.db, id, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    return c.json({ project: owned.project, installation: owned.installation });
   });
 
   r.delete("/:id", async (c) => {
@@ -171,12 +172,10 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
 
     await deps.db.update(projects).set(patch).where(eq(projects.id, id));
 
-    const project = await loadOwnedProject(deps.db, id, user.id);
-    if (!project) return c.json({ error: "not found" }, 404);
-    const installation = await deps.db.query.githubInstallations.findFirst({
-      where: eq(githubInstallations.id, project.installationId),
-    });
-    return c.json({ project, installation });
+    // Re-read project + installation in a single inner join for the response.
+    const updated = await loadOwnedProjectWithInstallation(deps.db, id, user.id);
+    if (!updated) return c.json({ error: "not found" }, 404);
+    return c.json({ project: updated.project, installation: updated.installation });
   });
 
   r.get("/:id/events", async (c) => {
