@@ -477,7 +477,6 @@ export class FlowEngine {
     // single-trigger flows' behavior exactly.
     const allTriggers = def.nodes.filter((node) => isTriggerKind(node.kind));
     const matchedTriggerIds = new Set<string>();
-    let firstTriggerSkipReason: string | undefined;
 
     if (allTriggers.length > 0) {
       // Rerun-from-failed may preload an already-succeeded trigger's
@@ -486,20 +485,17 @@ export class FlowEngine {
         if (outputs.has(t.id)) matchedTriggerIds.add(t.id);
       }
 
-      // Manual runs (kanban Start / flow inspection) bypass trigger
-      // filters — triggerRunner matches every trigger. For a manual run
-      // tied to a specific issue (issueContext present, e.g. the kanban
-      // Start button), only the issue-implement entry-point is relevant;
-      // running the review / fix subgraphs against a bare issue would
-      // just fail. Restrict evaluation to projects_v2_item triggers there.
-      // A manual run with no issue context (pure inspection) still lights
-      // up every entry-point.
-      let triggersToEval = allTriggers.filter((t) => !outputs.has(t.id));
-      if (event.type === "manual" && issueContext) {
-        triggersToEval = triggersToEval.filter(
-          (t) => t.kind === "github.projects_v2_item",
-        );
-      }
+      // Which triggers actually get evaluated this run. Manual runs tied to
+      // an issue (kanban dispatch) are narrowed to the issue-implement
+      // entry-point — see selectTriggersToEvaluate. The narrowing can key
+      // on issueContext alone (no bare-PR escape hatch) because manual
+      // events never carry prContext: executeFlow only builds prContext for
+      // pull_request / pull_request_review / issue_comment-on-PR events.
+      const triggersToEval = selectTriggersToEvaluate(allTriggers, {
+        eventType: event.type,
+        hasIssueContext: Boolean(issueContext),
+        isAlreadyMatched: (id) => outputs.has(id),
+      });
 
       const triggerResults = await Promise.allSettled(
         triggersToEval.map((node) =>
@@ -514,36 +510,54 @@ export class FlowEngine {
           ),
         ),
       );
-      for (let i = 0; i < triggersToEval.length; i++) {
+
+      // Normalise the settled results into a pure outcome list, then let
+      // summarizeTriggerOutcomes decide matched/failed/skip. That decision —
+      // the regression-prone seam — is unit-tested in isolation
+      // (triggerPhase.test.ts) without needing the DB-backed runNodeStep.
+      const outcomes: TriggerOutcome[] = triggersToEval.map((node, i) => {
         const r = triggerResults[i]!;
-        const node = triggersToEval[i]!;
-        if (r.status === "fulfilled") {
-          if (r.value.skipped) {
-            // A skipped trigger deactivates ONLY its own subgraph. Stash
-            // the reason in case EVERY trigger skips (→ the run's
-            // trigger_skip message); don't fail/cancel the run here.
-            firstTriggerSkipReason ??= r.value.skipReason;
-            continue;
-          }
-          matchedTriggerIds.add(node.id);
-          outputs.set(
-            node.id,
-            r.value.stdoutCaptured !== undefined
-              ? extractAgentResultText(r.value.stdoutCaptured)
-              : undefined,
-          );
-        } else {
-          failed = true;
-          errorMsg ??= r.reason instanceof Error ? r.reason.message : String(r.reason);
+        if (r.status === "rejected") {
+          return {
+            id: node.id,
+            status: "failed",
+            errorMessage: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          };
         }
+        if (r.value.skipped) {
+          // A skipped trigger deactivates ONLY its own subgraph; it does
+          // not fail/cancel the run.
+          return { id: node.id, status: "skipped", skipReason: r.value.skipReason };
+        }
+        return { id: node.id, status: "matched", stdoutCaptured: r.value.stdoutCaptured };
+      });
+
+      // Thread each matched trigger's captured stdout into the outputs map
+      // for downstream fan-in (same envelope/JSONL extraction as elsewhere).
+      for (const o of outcomes) {
+        if (o.status !== "matched") continue;
+        matchedTriggerIds.add(o.id);
+        outputs.set(
+          o.id,
+          o.stdoutCaptured !== undefined
+            ? extractAgentResultText(o.stdoutCaptured)
+            : undefined,
+        );
       }
 
-      // No trigger matched → clean trigger_skip (the whole run cancels,
-      // exactly like a single-trigger flow whose only trigger skipped).
-      // Only when nothing hard-failed in the trigger phase.
-      if (!failed && matchedTriggerIds.size === 0) {
+      const summary = summarizeTriggerOutcomes(outcomes);
+      if (summary.failed) {
+        // A hard trigger failure fails the whole run, even if a sibling
+        // trigger matched.
+        failed = true;
+        errorMsg ??= summary.errorMessage;
+      } else if (matchedTriggerIds.size === 0) {
+        // No trigger matched (and none were preloaded) → clean trigger_skip,
+        // exactly like a single-trigger flow whose only trigger skipped.
+        // A sibling trigger's skip reason is NOT promoted to errorMsg when
+        // some other trigger matched — that run succeeds.
         skipped = true;
-        errorMsg ??= firstTriggerSkipReason;
+        errorMsg ??= summary.firstSkipReason;
       }
     }
 
@@ -962,6 +976,76 @@ function computeDownstreamSet(
     }
   }
   return out;
+}
+
+/** The result of evaluating one trigger node against the incoming event. */
+export interface TriggerOutcome {
+  id: string;
+  status: "matched" | "skipped" | "failed";
+  /** SkipFlowError message — present only for `skipped`. */
+  skipReason?: string;
+  /** Thrown error message — present only for `failed`. */
+  errorMessage?: string;
+  /** Captured stdout — present only for `matched`; the engine threads it
+   *  into downstream fan-in. Ignored by summarizeTriggerOutcomes. */
+  stdoutCaptured?: string;
+}
+
+/**
+ * Pick which trigger nodes to evaluate for a run.
+ * - Drops triggers already satisfied this run (rerun-from-failed preload).
+ * - Manual runs tied to an issue (kanban dispatch, `hasIssueContext`) are
+ *   narrowed to the `projects_v2_item` entry-point: triggerRunner matches
+ *   every trigger on a manual event, but only the implement stage makes
+ *   sense against a bare issue. Manual runs with no issue context (pure
+ *   flow inspection) light up every entry-point. Non-manual (webhook) runs
+ *   evaluate every not-yet-matched trigger and let each one's filter decide.
+ */
+export function selectTriggersToEvaluate(
+  triggers: FlowNode[],
+  opts: {
+    eventType: string;
+    hasIssueContext: boolean;
+    isAlreadyMatched: (id: string) => boolean;
+  },
+): FlowNode[] {
+  let toEval = triggers.filter((t) => !opts.isAlreadyMatched(t.id));
+  if (opts.eventType === "manual" && opts.hasIssueContext) {
+    toEval = toEval.filter((t) => t.kind === "github.projects_v2_item");
+  }
+  return toEval;
+}
+
+/**
+ * Reduce the trigger nodes' evaluation outcomes into the flow-level verdict.
+ * - `failed` (with the first error message) when any trigger threw a
+ *   non-skip error — that fails the whole run even if a sibling matched.
+ * - `matchedIds` are the triggers whose subgraphs should run.
+ * - `firstSkipReason` is surfaced as the run's trigger_skip message, but
+ *   only when NO trigger matched (the caller also factors in preloaded
+ *   matches before deciding to skip).
+ */
+export function summarizeTriggerOutcomes(outcomes: TriggerOutcome[]): {
+  matchedIds: string[];
+  failed: boolean;
+  errorMessage?: string;
+  firstSkipReason?: string;
+} {
+  const matchedIds: string[] = [];
+  let failed = false;
+  let errorMessage: string | undefined;
+  let firstSkipReason: string | undefined;
+  for (const o of outcomes) {
+    if (o.status === "matched") {
+      matchedIds.push(o.id);
+    } else if (o.status === "skipped") {
+      firstSkipReason ??= o.skipReason;
+    } else {
+      failed = true;
+      errorMessage ??= o.errorMessage;
+    }
+  }
+  return { matchedIds, failed, errorMessage, firstSkipReason };
 }
 
 /**

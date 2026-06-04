@@ -37,6 +37,17 @@ import type { FlowDefinition } from "../types.js";
 // fan-out (the old `pr-review-multi`), add reviewer nodes + a
 // synthesizer from the flow detail page — the review stage exposes the
 // reviewer controls just like the standalone multi-review template did.
+//
+// Review → fix loop: the fix agent pushing commits emits
+// `pull_request.synchronize`, which the review stage's trigger picks up
+// (a fresh review → another fix). This is the same review/push cycle the
+// old `pr-review` + `pr-review-fix` pair ran on; it converges when the
+// fix agent reaches a no-op (empty diff, nothing left to address), and
+// the duplicate-run dedupe (issue #147 / migration 0031) bounds repeated
+// deliveries of the same event. The fix stage's `maxIterations` block is
+// the engine-level backstop — left disabled by default to match the
+// legacy flow, but an operator can enable it (with `commentOnSkip`) to
+// hard-cap fix iterations per PR.
 export const issueLifecycleFlow: FlowDefinition = {
   slug: "issue-lifecycle",
   name: "Issue lifecycle",
