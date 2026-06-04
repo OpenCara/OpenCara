@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { FlowDefinitionSchema } from "@opencara/flows";
+import {
+  FlowDefinitionSchema,
+  builtinFlows,
+  isTriggerKind,
+  issueLifecycleFlow,
+} from "@opencara/flows";
 
 const baseFlow = {
   slug: "test-flow",
@@ -104,5 +109,50 @@ describe("FlowDefinitionSchema agent review-fix options", () => {
     const agent = parsed.nodes.find((node) => node.kind === "agent");
     assert.equal(agent?.config.autoMerge, undefined);
     assert.equal(agent?.config.maxIterations, undefined);
+  });
+});
+
+describe("unified issue-lifecycle built-in flow", () => {
+  it("is the only auto-seeded built-in flow", () => {
+    assert.deepEqual(Object.keys(builtinFlows), ["issue-lifecycle"]);
+  });
+
+  it("parses against FlowDefinitionSchema", () => {
+    assert.doesNotThrow(() => FlowDefinitionSchema.parse(issueLifecycleFlow));
+  });
+
+  it("carries three distinct trigger entry-points", () => {
+    const triggers = issueLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind));
+    const kinds = triggers.map((t) => t.kind).sort();
+    assert.deepEqual(kinds, [
+      "github.projects_v2_item",
+      "github.pull_request",
+      "github.pull_request_review",
+    ]);
+  });
+
+  it("keeps the three stages as disconnected components (each trigger is a root)", () => {
+    // Every edge's target has exactly one incoming edge and no trigger has
+    // an incoming edge — i.e. the stages don't cross-link in-graph; they're
+    // linked by GitHub webhook round-trips instead.
+    const targets = new Set(issueLifecycleFlow.edges.map((e) => e.target));
+    for (const t of issueLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind))) {
+      assert.equal(targets.has(t.id), false, `${t.id} should be a root`);
+    }
+  });
+
+  it("shares the implement branch template with the fix stage for worktree reuse", () => {
+    const implement = issueLifecycleFlow.nodes.find((n) => n.id === "implement");
+    const fix = issueLifecycleFlow.nodes.find((n) => n.id === "fix");
+    assert.equal(
+      implement?.kind === "agent" && implement.config.worktree?.branchName,
+      "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
+    );
+    // The fix stage's PR head ref IS `opencara/issue-<n>`, so its branch
+    // template resolves to the same per-(repo, branch) worktree slug.
+    assert.equal(
+      fix?.kind === "agent" && fix.config.worktree?.branchName,
+      "{{OPENCARA_PR_HEAD_REF}}",
+    );
   });
 });

@@ -225,6 +225,13 @@
       "when": 1777520000000,
       "tag": "0031_flow_run_dedupe",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1777530000000,
+      "tag": "0032_merge_flows_into_lifecycle",
+      "breakpoints": true
     }
   ]
 }

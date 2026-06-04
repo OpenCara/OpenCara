@@ -466,40 +466,66 @@ export class FlowEngine {
       return;
     }
 
-    outer: for (const layer of layers) {
-      // Snapshot idx per node before launching the layer so step rows have
-      // stable, sequential idx even when siblings run concurrently. Skip
-      // nodes whose output is already in the map (rerun-from-failed
-      // preload) — they don't get a fresh step row.
-      const layerJobs = layer
-        .filter((node) => !outputs.has(node.id))
-        .map((node) => ({
-          node,
-          idx: nodeIdx++,
-          previousOutput: buildFanInInput(node, def.edges, outputs, labels),
-        }));
-      if (layerJobs.length === 0) continue;
+    // ── Trigger phase ───────────────────────────────────────────────
+    // A flow may carry multiple trigger entry-points (issue #124's
+    // unified lifecycle graph). Evaluate the trigger nodes first; each
+    // either MATCHES the event or throws SkipFlowError ("this entry-point
+    // doesn't apply"). Only the subgraph(s) downstream of a matched
+    // trigger run — a non-matching trigger prunes its own subgraph for
+    // this event instead of cancelling the whole run. The run is a clean
+    // `trigger_skip` only when NO trigger matched, which preserves the
+    // single-trigger flows' behavior exactly.
+    const allTriggers = def.nodes.filter((node) => isTriggerKind(node.kind));
+    const matchedTriggerIds = new Set<string>();
+    let firstTriggerSkipReason: string | undefined;
 
-      const results = await Promise.allSettled(
-        layerJobs.map((job) =>
-          this.runNodeStep(prepared, def, job, event, prContext, issueContext, opts),
+    if (allTriggers.length > 0) {
+      // Rerun-from-failed may preload an already-succeeded trigger's
+      // output; treat those as matched without re-running them.
+      for (const t of allTriggers) {
+        if (outputs.has(t.id)) matchedTriggerIds.add(t.id);
+      }
+
+      // Manual runs (kanban Start / flow inspection) bypass trigger
+      // filters — triggerRunner matches every trigger. For a manual run
+      // tied to a specific issue (issueContext present, e.g. the kanban
+      // Start button), only the issue-implement entry-point is relevant;
+      // running the review / fix subgraphs against a bare issue would
+      // just fail. Restrict evaluation to projects_v2_item triggers there.
+      // A manual run with no issue context (pure inspection) still lights
+      // up every entry-point.
+      let triggersToEval = allTriggers.filter((t) => !outputs.has(t.id));
+      if (event.type === "manual" && issueContext) {
+        triggersToEval = triggersToEval.filter(
+          (t) => t.kind === "github.projects_v2_item",
+        );
+      }
+
+      const triggerResults = await Promise.allSettled(
+        triggersToEval.map((node) =>
+          this.runNodeStep(
+            prepared,
+            def,
+            { node, idx: nodeIdx++, previousOutput: undefined },
+            event,
+            prContext,
+            issueContext,
+            opts,
+          ),
         ),
       );
-
-      for (let i = 0; i < layerJobs.length; i++) {
-        const r = results[i]!;
-        const node = layerJobs[i]!.node;
+      for (let i = 0; i < triggersToEval.length; i++) {
+        const r = triggerResults[i]!;
+        const node = triggersToEval[i]!;
         if (r.status === "fulfilled") {
           if (r.value.skipped) {
-            skipped = true;
-            // Carry the SkipFlowError message up to flow_runs.error so
-            // operators can see why a webhook didn't trigger from the run
-            // header (not just by drilling into the trigger step).
-            errorMsg ??= r.value.skipReason;
+            // A skipped trigger deactivates ONLY its own subgraph. Stash
+            // the reason in case EVERY trigger skips (→ the run's
+            // trigger_skip message); don't fail/cancel the run here.
+            firstTriggerSkipReason ??= r.value.skipReason;
             continue;
           }
-          // Same envelope/JSONL extraction as the recovery path above —
-          // see comment there for why.
+          matchedTriggerIds.add(node.id);
           outputs.set(
             node.id,
             r.value.stdoutCaptured !== undefined
@@ -512,7 +538,79 @@ export class FlowEngine {
         }
       }
 
-      if (failed || skipped) break outer;
+      // No trigger matched → clean trigger_skip (the whole run cancels,
+      // exactly like a single-trigger flow whose only trigger skipped).
+      // Only when nothing hard-failed in the trigger phase.
+      if (!failed && matchedTriggerIds.size === 0) {
+        skipped = true;
+        errorMsg ??= firstTriggerSkipReason;
+      }
+    }
+
+    // Nodes reachable from a matched trigger are the only ones that run.
+    // A graph with no trigger nodes at all (defensive — none ship today)
+    // runs every node, preserving the prior "execute the whole graph"
+    // behavior.
+    const activeNodeIds =
+      allTriggers.length > 0
+        ? computeActiveSubgraph(def, matchedTriggerIds)
+        : new Set(def.nodes.map((n) => n.id));
+
+    // ── Layer phase ─────────────────────────────────────────────────
+    // Run the rest of the active subgraph layer by layer. Triggers are
+    // already done (their ids are in `outputs`); pruned nodes — not
+    // downstream of any matched trigger — are filtered out, so they get
+    // no step row and don't affect the run's status.
+    if (!failed && !skipped) {
+      outer: for (const layer of layers) {
+        // Snapshot idx per node before launching the layer so step rows
+        // have stable, sequential idx even when siblings run
+        // concurrently. Skip nodes whose output is already in the map
+        // (triggers + rerun-from-failed preload) and nodes pruned out of
+        // the active subgraph.
+        const layerJobs = layer
+          .filter((node) => activeNodeIds.has(node.id) && !outputs.has(node.id))
+          .map((node) => ({
+            node,
+            idx: nodeIdx++,
+            previousOutput: buildFanInInput(node, def.edges, outputs, labels),
+          }));
+        if (layerJobs.length === 0) continue;
+
+        const results = await Promise.allSettled(
+          layerJobs.map((job) =>
+            this.runNodeStep(prepared, def, job, event, prContext, issueContext, opts),
+          ),
+        );
+
+        for (let i = 0; i < layerJobs.length; i++) {
+          const r = results[i]!;
+          const node = layerJobs[i]!.node;
+          if (r.status === "fulfilled") {
+            if (r.value.skipped) {
+              skipped = true;
+              // Carry the SkipFlowError message up to flow_runs.error so
+              // operators can see why a run stopped from the run header
+              // (not just by drilling into the step).
+              errorMsg ??= r.value.skipReason;
+              continue;
+            }
+            // Same envelope/JSONL extraction as the recovery path above —
+            // see comment there for why.
+            outputs.set(
+              node.id,
+              r.value.stdoutCaptured !== undefined
+                ? extractAgentResultText(r.value.stdoutCaptured)
+                : undefined,
+            );
+          } else {
+            failed = true;
+            errorMsg ??= r.reason instanceof Error ? r.reason.message : String(r.reason);
+          }
+        }
+
+        if (failed || skipped) break outer;
+      }
     }
 
     // Worktrees no longer get cleaned up at end-of-run — they
@@ -864,6 +962,32 @@ function computeDownstreamSet(
     }
   }
   return out;
+}
+
+/**
+ * The set of node ids the engine should execute for a given event: every
+ * node reachable (over forward edges) from a trigger node that MATCHED the
+ * event. This is what makes a single graph carry multiple trigger
+ * entry-points (issue #124) — a `projects_v2_item` event lights up only
+ * the implement subgraph, a `pull_request` event only the review subgraph,
+ * etc. Nodes that are not downstream of any matched trigger are pruned for
+ * this run (no step row, not failed) rather than cancelling the whole flow.
+ *
+ * The matched trigger ids themselves are included so the caller can mark
+ * their step rows succeeded. Disconnected components rooted at a trigger
+ * that did NOT match contribute nothing.
+ */
+export function computeActiveSubgraph(
+  def: FlowDefinition,
+  matchedTriggerIds: Iterable<string>,
+): Set<string> {
+  const active = new Set<string>();
+  for (const triggerId of matchedTriggerIds) {
+    for (const id of computeDownstreamSet(def, triggerId)) {
+      active.add(id);
+    }
+  }
+  return active;
 }
 
 /**
