@@ -1,9 +1,24 @@
 import type { FlowDefinition } from "../types.js";
 
-// The unified issue-lifecycle flow merges the four single-purpose
+// Shared by every reviewer node in the review fan-out. The synthesizer
+// needs none of these PR extras — its input is the concatenated reviewer
+// outputs delivered on stdin.
+const reviewerContext = {
+  env: [
+    "OPENCARA_REPO",
+    "OPENCARA_PR_NUMBER",
+    "OPENCARA_PR_HEAD_SHA",
+    "OPENCARA_PR_BASE_SHA",
+  ],
+  stdinJson: true,
+};
+
+// The unified development-lifecycle flow merges the four single-purpose
 // built-ins (`issue-implement`, `pr-review`, `pr-review-multi`,
-// `pr-review-fix`) into ONE graph that covers the whole issue → PR →
-// review → fix → auto-merge pipeline.
+// `pr-review-fix`) into ONE graph that covers the whole development
+// cycle: issue → PR → review → fix → auto-merge. (It was renamed from
+// `issue-lifecycle` in migration 0034 — the old slug named only the
+// entry point, but the flow spans the whole cycle, not just the issue.)
 //
 // The graph has THREE trigger entry-points, one per lifecycle stage.
 // The engine activates only the subgraph rooted at the trigger that
@@ -23,7 +38,7 @@ import type { FlowDefinition } from "../types.js";
 //
 //   [projects_v2_item] → [implement]                      (stage 1)
 //
-//   [pull_request]     → [reviewer] → [post review]       (stage 2)
+//   [pull_request] → [reviewer ×3] → [synthesize] → [post review]  (stage 2)
 //
 //   [pull_request_review] → [fix] (auto-merge)            (stage 3)
 //
@@ -33,10 +48,13 @@ import type { FlowDefinition } from "../types.js";
 // (`opencara/issue-<n>`), so the fix agent reuses the implementer's
 // checkout and resumes its conversation from `agent-session.json`.
 //
-// The single reviewer node is the common case. To run the multi-agent
-// fan-out (the old `pr-review-multi`), add reviewer nodes + a
-// synthesizer from the flow detail page — the review stage exposes the
-// reviewer controls just like the standalone multi-review template did.
+// The review stage is a multi-agent fan-out (absorbing the old
+// `pr-review-multi`): the PR trigger lights up three reviewer agents
+// (correctness, performance, style) in parallel; a synthesizer fans them
+// in to one summary, which `post_review` posts as a single PR comment.
+// Link a different agent to each reviewer node from the flow detail page;
+// drop reviewer nodes (and their edges) to collapse back toward a single
+// reviewer.
 //
 // Review → fix loop: the fix agent pushing commits emits
 // `pull_request.synchronize`, which the review stage's trigger picks up
@@ -48,11 +66,11 @@ import type { FlowDefinition } from "../types.js";
 // the engine-level backstop — left disabled by default to match the
 // legacy flow, but an operator can enable it (with `commentOnSkip`) to
 // hard-cap fix iterations per PR.
-export const issueLifecycleFlow: FlowDefinition = {
-  slug: "issue-lifecycle",
-  name: "Issue lifecycle",
+export const developmentLifecycleFlow: FlowDefinition = {
+  slug: "development-lifecycle",
+  name: "Development lifecycle",
   description:
-    "The full issue lifecycle in one flow: a Projects v2 issue moving to Ready dispatches the implement agent in a per-PR-branch worktree (it commits, pushes, and opens the PR); the PR opening fires the reviewer agent, which posts a review; submitting that review (or an `@opencara fix` comment) wakes the same implement agent in the same worktree to apply the feedback and optionally auto-merge. Three trigger entry-points route each webhook to the matching stage — only that stage runs, so there are no `trigger_skip` runs for the other stages. Label an issue/PR `agent:<name>` to pick a specific agent per-item; add reviewer nodes to the review stage for a multi-agent fan-out review.",
+    "The full development lifecycle in one flow: a Projects v2 issue moving to Ready dispatches the implement agent in a per-PR-branch worktree (it commits, pushes, and opens the PR); the PR opening fans out to three reviewer agents (correctness, performance, style) whose reviews a synthesizer merges into one posted review; submitting that review (or an `@opencara fix` comment) wakes the same implement agent in the same worktree to apply the feedback and optionally auto-merge. Three trigger entry-points route each webhook to the matching stage — only that stage runs, so there are no `trigger_skip` runs for the other stages. Label an issue/PR `agent:<name>` to pick a specific agent per-item; link a different agent to each reviewer node from the flow detail page.",
   nodes: [
     // ── Stage 1: issue → implement ──────────────────────────────────
     {
@@ -113,19 +131,46 @@ export const issueLifecycleFlow: FlowDefinition = {
       },
     },
     {
-      id: "reviewer",
+      id: "reviewer_correctness",
       kind: "agent",
-      position: { x: 320, y: 220 },
+      position: { x: 320, y: 140 },
       config: {
-        label: "Reviewer agent",
+        label: "Correctness reviewer",
+        draftPr: false,
+        contextInjection: reviewerContext,
+      },
+    },
+    {
+      id: "reviewer_performance",
+      kind: "agent",
+      position: { x: 320, y: 240 },
+      config: {
+        label: "Performance reviewer",
+        draftPr: false,
+        contextInjection: reviewerContext,
+      },
+    },
+    {
+      id: "reviewer_style",
+      kind: "agent",
+      position: { x: 320, y: 340 },
+      config: {
+        label: "Style reviewer",
+        draftPr: false,
+        contextInjection: reviewerContext,
+      },
+    },
+    {
+      id: "review_synthesizer",
+      kind: "agent",
+      position: { x: 640, y: 240 },
+      config: {
+        label: "Review synthesizer",
         draftPr: false,
         contextInjection: {
-          env: [
-            "OPENCARA_REPO",
-            "OPENCARA_PR_NUMBER",
-            "OPENCARA_PR_HEAD_SHA",
-            "OPENCARA_PR_BASE_SHA",
-          ],
+          // No PR env extras — input is the concatenated reviewer outputs
+          // delivered via stdin (fan-in over the three reviewer nodes).
+          env: [],
           stdinJson: true,
         },
       },
@@ -133,7 +178,7 @@ export const issueLifecycleFlow: FlowDefinition = {
     {
       id: "post_review",
       kind: "github.post_review",
-      position: { x: 640, y: 220 },
+      position: { x: 960, y: 240 },
       config: { event: "COMMENT" },
     },
 
@@ -200,8 +245,14 @@ export const issueLifecycleFlow: FlowDefinition = {
   ],
   edges: [
     { id: "e_impl", source: "implement_trigger", target: "implement" },
-    { id: "e_review", source: "review_trigger", target: "reviewer" },
-    { id: "e_post", source: "reviewer", target: "post_review" },
+    // Review stage fan-out → synthesize → post.
+    { id: "e_review_c", source: "review_trigger", target: "reviewer_correctness" },
+    { id: "e_review_p", source: "review_trigger", target: "reviewer_performance" },
+    { id: "e_review_s", source: "review_trigger", target: "reviewer_style" },
+    { id: "e_c_synth", source: "reviewer_correctness", target: "review_synthesizer" },
+    { id: "e_p_synth", source: "reviewer_performance", target: "review_synthesizer" },
+    { id: "e_s_synth", source: "reviewer_style", target: "review_synthesizer" },
+    { id: "e_post", source: "review_synthesizer", target: "post_review" },
     { id: "e_fix", source: "fix_trigger", target: "fix" },
   ],
 };

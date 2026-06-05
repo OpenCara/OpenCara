@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { issueLifecycleFlow, type FlowDefinition } from "@opencara/flows";
+import { developmentLifecycleFlow, type FlowDefinition } from "@opencara/flows";
 import { computeActiveSubgraph } from "../engine.js";
 
 // A compact two-trigger graph: trigger A → agent a1, trigger B → agent b1.
@@ -90,19 +90,29 @@ describe("computeActiveSubgraph", () => {
   });
 });
 
-describe("computeActiveSubgraph on the unified issue-lifecycle flow", () => {
+describe("computeActiveSubgraph on the unified development-lifecycle flow", () => {
   it("routes a projects_v2_item match to the implement stage only", () => {
-    const active = computeActiveSubgraph(issueLifecycleFlow, ["implement_trigger"]);
+    const active = computeActiveSubgraph(developmentLifecycleFlow, ["implement_trigger"]);
     assert.deepEqual([...active].sort(), ["implement", "implement_trigger"]);
   });
 
   it("routes a pull_request match to the review stage only", () => {
-    const active = computeActiveSubgraph(issueLifecycleFlow, ["review_trigger"]);
-    assert.deepEqual([...active].sort(), ["post_review", "review_trigger", "reviewer"]);
+    const active = computeActiveSubgraph(developmentLifecycleFlow, ["review_trigger"]);
+    assert.deepEqual(
+      [...active].sort(),
+      [
+        "post_review",
+        "review_synthesizer",
+        "review_trigger",
+        "reviewer_correctness",
+        "reviewer_performance",
+        "reviewer_style",
+      ],
+    );
   });
 
   it("routes a pull_request_review match to the fix stage only", () => {
-    const active = computeActiveSubgraph(issueLifecycleFlow, ["fix_trigger"]);
+    const active = computeActiveSubgraph(developmentLifecycleFlow, ["fix_trigger"]);
     assert.deepEqual([...active].sort(), ["fix", "fix_trigger"]);
   });
 });

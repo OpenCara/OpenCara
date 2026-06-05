@@ -239,6 +239,13 @@
       "when": 1777540000000,
       "tag": "0033_flow_runs_flow_status_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1777550000000,
+      "tag": "0034_rename_lifecycle_to_development",
+      "breakpoints": true
     }
   ]
 }

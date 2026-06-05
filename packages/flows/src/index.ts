@@ -1,5 +1,5 @@
 import type { FlowDefinition } from "./types.js";
-import { issueLifecycleFlow } from "./builtin/issue-lifecycle.js";
+import { developmentLifecycleFlow } from "./builtin/development-lifecycle.js";
 import { prReviewFlow } from "./builtin/pr-review.js";
 import { prReviewMultiFlow } from "./builtin/pr-review-multi.js";
 import { issueImplementFlow } from "./builtin/issue-implement.js";
@@ -14,10 +14,10 @@ export * from "./types.js";
 // single event no longer fans out to four flows with three immediately
 // cancelled as `trigger_skip`.
 export const builtinFlows: Record<string, FlowDefinition> = {
-  [issueLifecycleFlow.slug]: issueLifecycleFlow,
+  [developmentLifecycleFlow.slug]: developmentLifecycleFlow,
 };
 
-export { issueLifecycleFlow };
+export { developmentLifecycleFlow };
 
 // The legacy stage-specific flows are no longer seeded into new
 // projects, but their definitions stay exported for reference and for
