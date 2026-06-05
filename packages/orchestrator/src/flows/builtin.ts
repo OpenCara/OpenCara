@@ -1,6 +1,10 @@
 import { ulid } from "ulid";
 import { eq, and } from "drizzle-orm";
-import { builtinFlows, type FlowDefinition } from "@opencara/flows";
+import {
+  builtinFlows,
+  DEFAULT_DISABLED_BUILTIN_FLOW_SLUGS,
+  type FlowDefinition,
+} from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import {
   flowNodeSettings,
@@ -67,7 +71,11 @@ export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): P
         slug,
         name: def.name,
         graphJson: seed,
-        enabled: true,
+        // Most built-ins seed enabled; the opt-in alternatives (e.g. the
+        // standalone single-reviewer pr-review) seed disabled so they don't
+        // double-dispatch alongside the always-on lifecycle. Only set on
+        // insert — a user's later toggle is never overwritten.
+        enabled: !DEFAULT_DISABLED_BUILTIN_FLOW_SLUGS.has(slug),
       });
     }
 
