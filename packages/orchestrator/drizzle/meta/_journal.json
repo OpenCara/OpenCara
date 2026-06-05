@@ -246,6 +246,13 @@
       "when": 1777550000000,
       "tag": "0034_rename_lifecycle_to_development",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1777560000000,
+      "tag": "0035_refresh_stale_lifecycle_template_draft",
+      "breakpoints": true
     }
   ]
 }
