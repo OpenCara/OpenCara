@@ -4,8 +4,15 @@ import { Link, useParams } from "react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { FlowGraph } from "@/components/flow/FlowGraph";
-import { NodeEditor, hasMultiReviewShape, type EditorScope } from "@/components/flow/NodeEditor";
+import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
+import {
+  NodeEditor,
+  deriveReviewerIds,
+  hasMultiReviewShape,
+  useAddReviewer,
+  useRemoveReviewer,
+  type EditorScope,
+} from "@/components/flow/NodeEditor";
 import {
   agentsQuery,
   flowTemplateDetailQuery,
@@ -17,6 +24,11 @@ export function FlowTemplateDetailPage() {
   const q = useQuery(flowTemplateDetailQuery(slug!));
   const promptsQ = useQuery(promptsQuery());
   const agentsQ = useQuery(agentsQuery());
+  // Scope + reviewer mutation hooks before the early returns so they're called
+  // unconditionally; the template slug comes from the route param, not loaded data.
+  const scope: EditorScope = { kind: "template", slug: slug! };
+  const addReviewer = useAddReviewer(scope);
+  const removeReviewer = useRemoveReviewer(scope);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -41,8 +53,24 @@ export function FlowTemplateDetailPage() {
   );
 
   // Structural shape check, not slug — see ProjectFlowDetailPage.
-  const isMultiReview = hasMultiReviewShape(t.graphJson);
-  const scope: EditorScope = { kind: "template", slug: t.slug };
+  const reviewerIds = deriveReviewerIds(t.graphJson);
+  const reviewerControls: FlowReviewerControls | undefined = hasMultiReviewShape(t.graphJson)
+    ? {
+        reviewerIds,
+        canDelete: reviewerIds.size > 1,
+        pending: addReviewer.isPending || removeReviewer.isPending,
+        onAdd: () => addReviewer.mutate(),
+        onDelete: (nodeId) =>
+          removeReviewer.mutate(
+            { nodeId },
+            {
+              onSuccess: () => {
+                if (selectedNodeId === nodeId) setSelectedNodeId(null);
+              },
+            },
+          ),
+      }
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -71,18 +99,16 @@ export function FlowTemplateDetailPage() {
         nodes={t.graphJson.nodes}
         edges={t.graphJson.edges}
         labelOverrides={labelOverrides}
+        reviewerControls={reviewerControls}
         onNodeClick={(nid) => setSelectedNodeId(nid)}
       />
 
       <NodeEditor
         scope={scope}
-        graph={t.graphJson}
         selectedNode={selectedNode}
         settings={settings}
         agents={agents}
         prompts={prompts}
-        showReviewerControls={isMultiReview}
-        onSelectedNodeRemoved={() => setSelectedNodeId(null)}
         onClose={() => setSelectedNodeId(null)}
       />
 

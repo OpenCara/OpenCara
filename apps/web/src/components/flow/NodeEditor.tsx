@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Cpu, ExternalLink, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Cpu, ExternalLink, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,6 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   AgentRow,
-  FlowGraph,
   FlowNodeSetting,
   FlowSummary,
   PromptRow,
@@ -44,15 +43,10 @@ export interface NodeEditorNode {
 
 interface NodeEditorProps {
   scope: EditorScope;
-  graph: FlowGraph;
   selectedNode: NodeEditorNode | null;
   settings: NodeSetting[];
   agents: AgentRow[];
   prompts: PromptRow[];
-  /** Whether to render the "Add reviewer / Remove selected reviewer" bar. */
-  showReviewerControls: boolean;
-  /** Called after a successful reviewer remove so the parent can clear selection. */
-  onSelectedNodeRemoved: () => void;
   onClose: () => void;
 }
 
@@ -60,29 +54,14 @@ type NodeSetting = FlowNodeSetting | TemplateNodeSetting;
 
 export function NodeEditor({
   scope,
-  graph,
   selectedNode,
   settings,
   agents,
   prompts,
-  showReviewerControls,
-  onSelectedNodeRemoved,
   onClose,
 }: NodeEditorProps) {
-  const reviewerNodeIds = showReviewerControls ? deriveReviewerIds(graph) : new Set<string>();
-  const reviewerCount = reviewerNodeIds.size;
-  const selectedIsReviewer = selectedNode ? reviewerNodeIds.has(selectedNode.id) : false;
-
   return (
     <>
-      {showReviewerControls && (
-        <ReviewerControls
-          scope={scope}
-          reviewerCount={reviewerCount}
-          selectedReviewerId={selectedIsReviewer ? selectedNode!.id : null}
-          onRemoved={onSelectedNodeRemoved}
-        />
-      )}
       {selectedNode && selectedNode.kind === "agent" && (
         <AgentNodePanel
           scope={scope}
@@ -168,7 +147,7 @@ function useSetNodeConfig(scope: EditorScope) {
   });
 }
 
-function useAddReviewer(scope: EditorScope) {
+export function useAddReviewer(scope: EditorScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => {
@@ -182,7 +161,7 @@ function useAddReviewer(scope: EditorScope) {
   });
 }
 
-function useRemoveReviewer(scope: EditorScope) {
+export function useRemoveReviewer(scope: EditorScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { nodeId: string }) => {
@@ -1513,69 +1492,6 @@ function parseList(text: string): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-/* ─── Reviewer add/remove controls ──────────────────────────────── */
-
-interface ReviewerControlsProps {
-  scope: EditorScope;
-  reviewerCount: number;
-  selectedReviewerId: string | null;
-  onRemoved: () => void;
-}
-
-function ReviewerControls({
-  scope,
-  reviewerCount,
-  selectedReviewerId,
-  onRemoved,
-}: ReviewerControlsProps) {
-  const add = useAddReviewer(scope);
-  const remove = useRemoveReviewer(scope);
-  const error = add.error ?? remove.error;
-  return (
-    <div className="flex items-center gap-3">
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => add.mutate()}
-        disabled={add.isPending}
-      >
-        <Plus className="size-3.5" />
-        {add.isPending ? "Adding…" : "Add reviewer"}
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => {
-          if (!selectedReviewerId) return;
-          remove.mutate(
-            { nodeId: selectedReviewerId },
-            { onSuccess: onRemoved },
-          );
-        }}
-        disabled={
-          remove.isPending || !selectedReviewerId || reviewerCount <= 1
-        }
-        title={
-          !selectedReviewerId
-            ? "Click a reviewer node first"
-            : reviewerCount <= 1
-              ? "Cannot remove the last reviewer"
-              : "Remove the selected reviewer"
-        }
-      >
-        <Trash2 className="size-3.5" />
-        {remove.isPending ? "Removing…" : "Remove selected reviewer"}
-      </Button>
-      <span className="text-xs text-muted-foreground">
-        {reviewerCount} reviewer{reviewerCount === 1 ? "" : "s"}
-      </span>
-      {error && (
-        <span className="text-xs text-destructive">{(error as Error).message}</span>
-      )}
-    </div>
-  );
 }
 
 /* ─── Reviewer detection ────────────────────────────────────────── */
