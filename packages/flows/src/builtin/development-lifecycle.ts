@@ -131,7 +131,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "review_trigger",
       kind: "github.pull_request",
-      position: { x: 0, y: 220 },
+      position: { x: 0, y: 620 },
       config: {
         actions: ["opened", "reopened", "commented"],
         branches: [],
@@ -147,7 +147,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "reviewer_correctness",
       kind: "agent",
-      position: { x: 320, y: 140 },
+      position: { x: 320, y: 520 },
       config: {
         label: "Correctness reviewer",
         draftPr: false,
@@ -157,7 +157,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "reviewer_performance",
       kind: "agent",
-      position: { x: 320, y: 240 },
+      position: { x: 320, y: 620 },
       config: {
         label: "Performance reviewer",
         draftPr: false,
@@ -167,7 +167,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "reviewer_style",
       kind: "agent",
-      position: { x: 320, y: 340 },
+      position: { x: 320, y: 720 },
       config: {
         label: "Style reviewer",
         draftPr: false,
@@ -177,7 +177,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "review_synthesizer",
       kind: "agent",
-      position: { x: 640, y: 240 },
+      position: { x: 640, y: 620 },
       config: {
         label: "Review synthesizer",
         draftPr: false,
@@ -192,7 +192,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "post_review",
       kind: "github.post_review",
-      position: { x: 960, y: 240 },
+      position: { x: 960, y: 620 },
       config: { event: "COMMENT" },
     },
 
@@ -200,7 +200,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "fix_trigger",
       kind: "github.pull_request_review",
-      position: { x: 0, y: 440 },
+      position: { x: 0, y: 360 },
       config: {
         reviewStates: ["commented", "changes_requested"],
         users: ["opencara[bot]"],
@@ -210,7 +210,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "fix",
       kind: "agent",
-      position: { x: 320, y: 440 },
+      position: { x: 320, y: 360 },
       config: {
         label: "Fix agent",
         draftPr: false,
@@ -265,7 +265,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "single_review_trigger",
       kind: "github.pull_request",
-      position: { x: 0, y: 660 },
+      position: { x: 0, y: 200 },
       config: {
         actions: ["synchronize", "commented"],
         branches: [],
@@ -281,7 +281,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "single_reviewer",
       kind: "agent",
-      position: { x: 320, y: 660 },
+      position: { x: 320, y: 200 },
       config: {
         label: "Single reviewer",
         draftPr: false,
@@ -291,7 +291,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     {
       id: "single_post_review",
       kind: "github.post_review",
-      position: { x: 640, y: 660 },
+      position: { x: 640, y: 200 },
       config: { event: "COMMENT" },
     },
   ],

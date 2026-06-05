@@ -79,7 +79,6 @@ export function FlowGraph({
     if (rc && rc.reviewerIds.size > 0) {
       const reviewers = nodes.filter((n) => rc.reviewerIds.has(n.id));
       if (reviewers.length > 0) {
-        const minY = Math.min(...reviewers.map((n) => n.position.y));
         const maxY = Math.max(...reviewers.map((n) => n.position.y));
         const firstReviewer = reviewers[0]!;
         // The multi trigger is the PR node that actually feeds a reviewer (not
@@ -90,10 +89,11 @@ export function FlowGraph({
             n.kind === "github.pull_request" &&
             edges.some((e) => e.source === n.id && rc.reviewerIds.has(e.target)),
         );
-        // Sit in the gap between the trigger and the reviewer column, centered
-        // vertically among the reviewers; fall back to under the last reviewer.
+        // Sit just to the RIGHT of the "Pull request" trigger node, at its
+        // vertical level (x ≈ 64px left of the reviewer column); fall back to
+        // under the last reviewer if no feeding trigger is found.
         const position = trigger
-          ? { x: (trigger.position.x + firstReviewer.position.x) / 2, y: (minY + maxY) / 2 }
+          ? { x: firstReviewer.position.x - 64, y: trigger.position.y }
           : { x: firstReviewer.position.x, y: maxY + 160 };
         mapped.push({
           id: ADD_REVIEWER_NODE_ID,
