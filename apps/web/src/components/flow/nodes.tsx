@@ -102,17 +102,17 @@ export function AddLabelNode({ data }: NodeProps) {
 }
 
 /**
- * A synthetic "+ Add reviewer" node placed under the last reviewer node on the
- * editable flow canvas. Not a real graph node — clicking it calls the
- * add-reviewer mutation, which inserts a real reviewer wired
- * trigger → reviewer → synthesizer.
+ * A synthetic "+" node placed in the gap between the PR trigger and the
+ * reviewer column on the editable flow canvas. Not a real graph node —
+ * clicking it calls the add-reviewer mutation, which inserts a real reviewer
+ * wired trigger → reviewer → synthesizer.
  */
 export function AddReviewerNode({ data }: NodeProps) {
   const d = data as NodeData;
   return (
     <button
       type="button"
-      className="nodrag nopan flex w-56 items-center justify-center gap-2 rounded-md border border-dashed bg-card/40 p-3 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:border-primary hover:text-primary disabled:pointer-events-none disabled:opacity-50"
+      className="nodrag nopan flex size-8 items-center justify-center rounded-full border border-dashed bg-card/40 text-muted-foreground shadow-sm transition-colors hover:border-primary hover:text-primary disabled:pointer-events-none disabled:opacity-50"
       disabled={d.pending}
       title="Add a reviewer to this review stage"
       onClick={(e) => {
@@ -121,7 +121,6 @@ export function AddReviewerNode({ data }: NodeProps) {
       }}
     >
       <Plus className="size-4" />
-      {d.pending ? "Adding…" : "Add reviewer"}
     </button>
   );
 }
