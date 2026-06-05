@@ -260,6 +260,13 @@
       "when": 1777570000000,
       "tag": "0036_remove_standalone_pr_review",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1777580000000,
+      "tag": "0037_purge_pr_review_rows",
+      "breakpoints": true
     }
   ]
 }
