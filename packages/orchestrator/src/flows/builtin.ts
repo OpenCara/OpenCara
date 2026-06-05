@@ -148,3 +148,40 @@ export async function seedBuiltinFlowsForAllProjects(db: Db): Promise<void> {
     await ensureBuiltinFlowsForProject(db, p.id);
   }
 }
+
+/**
+ * Reset a single project flow back to its global template — the same graph a
+ * fresh project would be seeded with (the owner's template draft if any, else
+ * the code-defined built-in). Discards the project's per-flow graph edits and
+ * clears `customizedAt`, so the flow tracks future template/code changes again.
+ * Per-node settings (agent/prompt links in `flow_node_settings`) are left
+ * untouched. Returns `{ ok:false }` when the flow has no global template
+ * (e.g. a legacy/custom flow not in `builtinFlows`).
+ */
+export async function resetProjectFlowToTemplate(
+  db: Db,
+  projectId: string,
+  slug: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const def = builtinFlows[slug];
+  if (!def) return { ok: false, error: "this flow has no global template" };
+  const flow = await db.query.flows.findFirst({
+    where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
+  });
+  if (!flow) return { ok: false, error: "flow not found in project" };
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, projectId),
+    columns: { addedByUserId: true },
+  });
+  const seed = await resolveSeedGraph(db, def, project?.addedByUserId ?? null);
+  await db
+    .update(flows)
+    .set({
+      name: def.name,
+      graphJson: seed,
+      customizedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(flows.id, flow.id));
+  return { ok: true };
+}

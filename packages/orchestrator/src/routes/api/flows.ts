@@ -15,6 +15,7 @@ import {
 import { FlowDefinitionSchema } from "@opencara/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { resetProjectFlowToTemplate } from "../../flows/builtin.js";
 import type { FlowEngine } from "../../flows/engine.js";
 import {
   FLOW_RUNS_CHANNEL,
@@ -97,6 +98,22 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       .where(eq(flows.id, flow.id));
     const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
     return c.json({ flow: updated });
+  });
+
+  // Reset a project flow back to its global template (discards per-project
+  // graph edits, clears customizedAt so it tracks the template again).
+  r.post("/projects/:id/flows/:slug/reset", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const slug = c.req.param("slug");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    const result = await resetProjectFlowToTemplate(deps.db, projectId, slug);
+    if (!result.ok) return c.json({ error: result.error }, 400);
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
+    });
+    return c.json({ flow });
   });
 
   // Sets customizedAt so the seeder doesn't clobber the edit on next start.

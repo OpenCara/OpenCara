@@ -1,11 +1,21 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import { Pause, Play, PowerOff } from "lucide-react";
+import { Pause, Play, PowerOff, RotateCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -19,6 +29,7 @@ import {
   flowDetailQuery,
   flowNodeSettingsQuery,
   promptsQuery,
+  useResetFlow,
   useSetFlowEnabled,
   useTriggerFlow,
   type FlowRunSummary,
@@ -47,6 +58,8 @@ export function ProjectFlowDetailPage() {
   });
   const trigger = useTriggerFlow(projectId);
   const setEnabled = useSetFlowEnabled(projectId, slug!);
+  const resetFlow = useResetFlow(projectId, slug!);
+  const [resetOpen, setResetOpen] = useState(false);
   // Scope built before the early returns so the reviewer mutation hooks below
   // are called unconditionally (flowId is empty until the flow loads — fine,
   // the mutations are only invoked on user action after load).
@@ -129,6 +142,52 @@ export function ProjectFlowDetailPage() {
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className="flex items-center gap-2">
+            <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  title="Discard this project's edits and restore the global template graph"
+                >
+                  <RotateCcw className="size-3.5" />
+                  Reset to template
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Reset “{flow.name}” to the template?</DialogTitle>
+                  <DialogDescription>
+                    Replaces this project's flow graph (nodes, edges, layout, trigger
+                    config) with the global template. Any reviewer add/remove or node
+                    edits made in this project are discarded, and the flow will track
+                    future template changes again. Agent/prompt assignments on nodes are
+                    kept.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button size="sm" variant="outline">
+                      Cancel
+                    </Button>
+                  </DialogClose>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={resetFlow.isPending}
+                    onClick={() =>
+                      resetFlow.mutate(undefined, {
+                        onSuccess: () => {
+                          setResetOpen(false);
+                          setSelectedNodeId(null);
+                        },
+                      })
+                    }
+                  >
+                    {resetFlow.isPending ? "Resetting…" : "Reset to template"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
             <Button
               size="sm"
               variant="outline"
@@ -162,9 +221,10 @@ export function ProjectFlowDetailPage() {
               {trigger.isPending ? "Starting…" : "Run flow"}
             </Button>
           </div>
-          {(trigger.error || setEnabled.error) && (
+          {(trigger.error || setEnabled.error || resetFlow.error) && (
             <span className="text-xs text-destructive">
-              {((trigger.error ?? setEnabled.error) as Error).message ?? "Action failed"}
+              {((trigger.error ?? setEnabled.error ?? resetFlow.error) as Error).message ??
+                "Action failed"}
             </span>
           )}
         </div>
