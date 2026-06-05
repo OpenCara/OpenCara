@@ -1605,3 +1605,18 @@ export function deriveReviewerIds(graph: {
   }
   return ids;
 }
+
+/**
+ * A flow exposes the add/remove-reviewer controls when its graph has the
+ * fan-out review shape — a PR trigger feeding one or more reviewer agents that
+ * feed a synthesizer. Detecting this structurally (instead of by slug) means
+ * the controls light up for any flow with the shape: the standalone
+ * `pr-review-multi`, the `development-lifecycle` review stage, and any future
+ * flow built the same way.
+ */
+export function hasMultiReviewShape(graph: {
+  nodes: Array<{ id: string; kind: string }>;
+  edges: Array<{ source: string; target: string }>;
+}): boolean {
+  return deriveReviewerIds(graph).size > 0;
+}

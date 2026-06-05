@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { FlowGraph } from "@/components/flow/FlowGraph";
-import { NodeEditor, type EditorScope } from "@/components/flow/NodeEditor";
+import { NodeEditor, hasMultiReviewShape, type EditorScope } from "@/components/flow/NodeEditor";
 import {
   agentsQuery,
   flowTemplateDetailQuery,
@@ -40,7 +40,8 @@ export function FlowTemplateDetailPage() {
     settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
   );
 
-  const isMultiReview = t.slug === "pr-review-multi";
+  // Structural shape check, not slug — see ProjectFlowDetailPage.
+  const isMultiReview = hasMultiReviewShape(t.graphJson);
   const scope: EditorScope = { kind: "template", slug: t.slug };
 
   return (

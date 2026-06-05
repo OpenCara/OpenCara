@@ -25,7 +25,7 @@ import {
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
-import { NodeEditor, type EditorScope } from "@/components/flow/NodeEditor";
+import { NodeEditor, hasMultiReviewShape, type EditorScope } from "@/components/flow/NodeEditor";
 
 export function ProjectFlowDetailPage() {
   const { id, slug } = useParams();
@@ -57,7 +57,10 @@ export function ProjectFlowDetailPage() {
     settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
   );
 
-  const isMultiReview = flow.slug === "pr-review-multi";
+  // Structural, not slug-based: any flow whose graph has the
+  // trigger → reviewers → synthesizer shape gets the add/remove-reviewer
+  // controls — including the development-lifecycle review stage.
+  const isMultiReview = hasMultiReviewShape(flow.graphJson);
 
   const scope: EditorScope = {
     kind: "project",
