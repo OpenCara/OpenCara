@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   FlowDefinitionSchema,
   builtinFlows,
-  DEFAULT_DISABLED_BUILTIN_FLOW_SLUGS,
   isTriggerKind,
   developmentLifecycleFlow,
 } from "@opencara/flows";
@@ -114,19 +113,8 @@ describe("FlowDefinitionSchema agent review-fix options", () => {
 });
 
 describe("unified development-lifecycle built-in flow", () => {
-  it("is auto-seeded alongside the standalone single-review flow", () => {
-    assert.deepEqual(
-      Object.keys(builtinFlows).sort(),
-      ["development-lifecycle", "pr-review"],
-    );
-  });
-
-  it("seeds the standalone pr-review disabled by default; lifecycle enabled", () => {
-    assert.equal(DEFAULT_DISABLED_BUILTIN_FLOW_SLUGS.has("pr-review"), true);
-    assert.equal(
-      DEFAULT_DISABLED_BUILTIN_FLOW_SLUGS.has("development-lifecycle"),
-      false,
-    );
+  it("is the only auto-seeded built-in flow", () => {
+    assert.deepEqual(Object.keys(builtinFlows), ["development-lifecycle"]);
   });
 
   it("parses against FlowDefinitionSchema", () => {

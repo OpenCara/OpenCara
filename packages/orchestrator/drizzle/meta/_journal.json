@@ -253,6 +253,13 @@
       "when": 1777560000000,
       "tag": "0035_refresh_stale_lifecycle_template_draft",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1777570000000,
+      "tag": "0036_remove_standalone_pr_review",
+      "breakpoints": true
     }
   ]
 }
