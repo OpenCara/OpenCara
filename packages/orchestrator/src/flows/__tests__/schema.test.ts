@@ -121,14 +121,30 @@ describe("unified development-lifecycle built-in flow", () => {
     assert.doesNotThrow(() => FlowDefinitionSchema.parse(developmentLifecycleFlow));
   });
 
-  it("carries three distinct trigger entry-points", () => {
+  it("carries four trigger entry-points (two PR triggers: multi + single review)", () => {
     const triggers = developmentLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind));
     const kinds = triggers.map((t) => t.kind).sort();
     assert.deepEqual(kinds, [
       "github.projects_v2_item",
       "github.pull_request",
+      "github.pull_request",
       "github.pull_request_review",
     ]);
+  });
+
+  it("splits the two PR review triggers by action + comment phrase (no double-post)", () => {
+    const byId = (id: string) => developmentLifecycleFlow.nodes.find((n) => n.id === id);
+    const multi = byId("review_trigger");
+    const single = byId("single_review_trigger");
+    assert.ok(multi?.kind === "github.pull_request" && single?.kind === "github.pull_request");
+    // Multi: open/reopen (NOT synchronize) + "@opencara mreview".
+    assert.equal(multi.config.actions.includes("synchronize" as never), false);
+    assert.deepEqual([...multi.config.actions].sort(), ["commented", "opened", "reopened"]);
+    assert.equal(multi.config.commentPhrase, "@opencara mreview");
+    // Single: synchronize (NOT opened) + "@opencara review".
+    assert.equal(single.config.actions.includes("opened" as never), false);
+    assert.deepEqual([...single.config.actions].sort(), ["commented", "synchronize"]);
+    assert.equal(single.config.commentPhrase, "@opencara review");
   });
 
   it("keeps the three stages as disconnected components (each trigger is a root)", () => {

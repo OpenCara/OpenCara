@@ -111,6 +111,14 @@ describe("computeActiveSubgraph on the unified development-lifecycle flow", () =
     );
   });
 
+  it("routes the single-review PR trigger to its own component only", () => {
+    const active = computeActiveSubgraph(developmentLifecycleFlow, ["single_review_trigger"]);
+    assert.deepEqual(
+      [...active].sort(),
+      ["single_post_review", "single_review_trigger", "single_reviewer"],
+    );
+  });
+
   it("routes a pull_request_review match to the fix stage only", () => {
     const active = computeActiveSubgraph(developmentLifecycleFlow, ["fix_trigger"]);
     assert.deepEqual([...active].sort(), ["fix", "fix_trigger"]);

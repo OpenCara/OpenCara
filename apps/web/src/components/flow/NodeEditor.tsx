@@ -1498,26 +1498,26 @@ function parseList(text: string): string[] {
 
 /**
  * A "reviewer" node, in the multi-agent review flow, is any agent node that
- * sits between the trigger and the synthesizer (i.e. has trigger as an
- * upstream AND synthesizer as a downstream). This is purely structural so it
- * survives graph customisation (added reviewers retain the role).
+ * feeds the synthesizer. Anchoring on the synthesizer (rather than "the PR
+ * trigger") keeps detection correct when a graph has more than one PR trigger
+ * — e.g. development-lifecycle's independent single-review component, whose
+ * `single_reviewer` feeds its own post_review, NOT the synthesizer, so it is
+ * correctly excluded. Purely structural, so added reviewers retain the role.
  */
 export function deriveReviewerIds(graph: {
   nodes: Array<{ id: string; kind: string }>;
   edges: Array<{ source: string; target: string }>;
 }): Set<string> {
-  const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
   const synth = graph.nodes.find(
     (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
   );
-  if (!trigger || !synth) return new Set();
+  if (!synth) return new Set();
   const ids = new Set<string>();
   for (const n of graph.nodes) {
     if (n.kind !== "agent") continue;
     if (n.id === synth.id) continue;
-    const fromTrigger = graph.edges.some((e) => e.source === trigger.id && e.target === n.id);
     const toSynth = graph.edges.some((e) => e.source === n.id && e.target === synth.id);
-    if (fromTrigger && toSynth) ids.add(n.id);
+    if (toSynth) ids.add(n.id);
   }
   return ids;
 }

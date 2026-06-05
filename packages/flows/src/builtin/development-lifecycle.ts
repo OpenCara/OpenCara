@@ -20,7 +20,7 @@ const reviewerContext = {
 // `issue-lifecycle` in migration 0034 — the old slug named only the
 // entry point, but the flow spans the whole cycle, not just the issue.)
 //
-// The graph has THREE trigger entry-points, one per lifecycle stage.
+// The graph has FOUR trigger entry-points across the lifecycle stages.
 // The engine activates only the subgraph rooted at the trigger that
 // matched the incoming webhook (see FlowEngine.executeFlow +
 // computeActiveSubgraph); the other entry-points are pruned for that
@@ -29,18 +29,28 @@ const reviewerContext = {
 // cancelling three of them (issue #124).
 //
 // The stages are linked by GitHub side-effects, NOT in-graph edges:
-//   stage 1's agent opens a PR  → GitHub emits `pull_request.opened` → stage 2
-//   stage 2 posts a review      → GitHub emits `pull_request_review`  → stage 3
+//   stage 1's agent opens a PR  → GitHub emits `pull_request.opened` → stage 2a
+//   a review is posted          → GitHub emits `pull_request_review`  → stage 3
+//   the fix agent pushes        → GitHub emits `pull_request.synchronize` → stage 2b
 // Each round-trip re-enters the engine as a fresh event that lights up
-// the matching entry-point. Keeping the three subgraphs as disconnected
+// the matching entry-point. Keeping the subgraphs as disconnected
 // components (each its own trigger root) is what lets a single event
 // run exactly one stage.
 //
-//   [projects_v2_item] → [implement]                      (stage 1)
+//   [projects_v2_item] → [implement]                               (stage 1)
 //
-//   [pull_request] → [reviewer ×3] → [synthesize] → [post review]  (stage 2)
+//   [pull_request opened] → [reviewer ×3] → [synthesize] → [post]  (stage 2a, multi)
 //
-//   [pull_request_review] → [fix] (auto-merge)            (stage 3)
+//   [pull_request synchronize] → [reviewer] → [post]               (stage 2b, single)
+//
+//   [pull_request_review] → [fix] (auto-merge)                     (stage 3)
+//
+// Two INDEPENDENT review components share the `pull_request` event but are
+// mutually exclusive by trigger, so only one ever runs per event (no double
+// post): the MULTI fan-out (2a) fires on `opened`/`reopened` or the comment
+// `@opencara mreview`; the SINGLE reviewer (2b) fires on `synchronize` or the
+// comment `@opencara review`. (`@opencara review` is not a substring of
+// `@opencara mreview`, so the comment phrases don't collide.)
 //
 // Worktree / session continuity across stages is preserved exactly as
 // it was across the old issue-implement + pr-review-fix pair: both the
@@ -57,9 +67,9 @@ const reviewerContext = {
 // reviewer.
 //
 // Review → fix loop: the fix agent pushing commits emits
-// `pull_request.synchronize`, which the review stage's trigger picks up
-// (a fresh review → another fix). This is the same review/push cycle the
-// old `pr-review` + `pr-review-fix` pair ran on; it converges when the
+// `pull_request.synchronize`, which the SINGLE-review trigger (2b) picks up
+// (a fresh single review → another fix). Iterations use the cheaper single
+// review; the multi fan-out only runs on the first open. It converges when the
 // fix agent reaches a no-op (empty diff, nothing left to address), and
 // the duplicate-run dedupe (issue #147 / migration 0031) bounds repeated
 // deliveries of the same event. The fix stage's `maxIterations` block is
@@ -70,7 +80,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
   slug: "development-lifecycle",
   name: "Development lifecycle",
   description:
-    "The full development lifecycle in one flow: a Projects v2 issue moving to Ready dispatches the implement agent in a per-PR-branch worktree (it commits, pushes, and opens the PR); the PR opening fans out to three reviewer agents (correctness, performance, style) whose reviews a synthesizer merges into one posted review; submitting that review (or an `@opencara fix` comment) wakes the same implement agent in the same worktree to apply the feedback and optionally auto-merge. Three trigger entry-points route each webhook to the matching stage — only that stage runs, so there are no `trigger_skip` runs for the other stages. Label an issue/PR `agent:<name>` to pick a specific agent per-item; link a different agent to each reviewer node from the flow detail page.",
+    "The full development lifecycle in one flow: a Projects v2 issue moving to Ready dispatches the implement agent in a per-PR-branch worktree (it commits, pushes, and opens the PR); opening the PR fans out to three reviewer agents (correctness, performance, style) whose reviews a synthesizer merges into one posted review (multi review), while follow-up pushes run a lighter single reviewer; submitting a review (or an `@opencara fix` comment) wakes the same implement agent in the same worktree to apply the feedback and optionally auto-merge. The two review components are independent and mutually exclusive by trigger: multi fires on PR open/reopen or `@opencara mreview`, single fires on PR synchronize or `@opencara review`. Trigger entry-points route each webhook to exactly one stage, so there are no `trigger_skip` runs. Label an issue/PR `agent:<name>` to pick a specific agent per-item; link a different agent to each reviewer node from the flow detail page.",
   nodes: [
     // ── Stage 1: issue → implement ──────────────────────────────────
     {
@@ -113,13 +123,17 @@ export const developmentLifecycleFlow: FlowDefinition = {
       },
     },
 
-    // ── Stage 2: PR opened → review ─────────────────────────────────
+    // ── Stage 2a: PR opened → MULTI review ──────────────────────────
+    // Full fan-out review on first open / reopen, or on demand via the
+    // `@opencara mreview` comment. Follow-up pushes (synchronize) are handled
+    // by the lighter single-review component below, so `synchronize` is
+    // intentionally NOT in this trigger's actions.
     {
       id: "review_trigger",
       kind: "github.pull_request",
       position: { x: 0, y: 220 },
       config: {
-        actions: ["opened", "synchronize", "reopened", "commented"],
+        actions: ["opened", "reopened", "commented"],
         branches: [],
         branchesIgnore: [],
         paths: [],
@@ -127,7 +141,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
         labels: [],
         labelsIgnore: [],
         ignoreDrafts: false,
-        commentPhrase: "@opencara review",
+        commentPhrase: "@opencara mreview",
       },
     },
     {
@@ -242,6 +256,44 @@ export const developmentLifecycleFlow: FlowDefinition = {
         },
       },
     },
+
+    // ── Stage 2b: PR synchronize → SINGLE review ────────────────────
+    // An independent, single-reviewer component (its own trigger, own post),
+    // totally separate from the multi fan-out above. It fires on follow-up
+    // pushes (synchronize) — so the review → fix loop iterates with one cheap
+    // review — or on demand via the `@opencara review` comment.
+    {
+      id: "single_review_trigger",
+      kind: "github.pull_request",
+      position: { x: 0, y: 660 },
+      config: {
+        actions: ["synchronize", "commented"],
+        branches: [],
+        branchesIgnore: [],
+        paths: [],
+        pathsIgnore: [],
+        labels: [],
+        labelsIgnore: [],
+        ignoreDrafts: false,
+        commentPhrase: "@opencara review",
+      },
+    },
+    {
+      id: "single_reviewer",
+      kind: "agent",
+      position: { x: 320, y: 660 },
+      config: {
+        label: "Single reviewer",
+        draftPr: false,
+        contextInjection: reviewerContext,
+      },
+    },
+    {
+      id: "single_post_review",
+      kind: "github.post_review",
+      position: { x: 640, y: 660 },
+      config: { event: "COMMENT" },
+    },
   ],
   edges: [
     { id: "e_impl", source: "implement_trigger", target: "implement" },
@@ -254,5 +306,8 @@ export const developmentLifecycleFlow: FlowDefinition = {
     { id: "e_s_synth", source: "reviewer_style", target: "review_synthesizer" },
     { id: "e_post", source: "review_synthesizer", target: "post_review" },
     { id: "e_fix", source: "fix_trigger", target: "fix" },
+    // Single-review component (independent of the multi fan-out).
+    { id: "e_single_review", source: "single_review_trigger", target: "single_reviewer" },
+    { id: "e_single_post", source: "single_reviewer", target: "single_post_review" },
   ],
 };

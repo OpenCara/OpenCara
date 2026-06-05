@@ -79,18 +79,33 @@ export function FlowGraph({
     if (rc && rc.reviewerIds.size > 0) {
       const reviewers = nodes.filter((n) => rc.reviewerIds.has(n.id));
       if (reviewers.length > 0) {
+        const minY = Math.min(...reviewers.map((n) => n.position.y));
         const maxY = Math.max(...reviewers.map((n) => n.position.y));
+        const firstReviewer = reviewers[0]!;
+        // The multi trigger is the PR node that actually feeds a reviewer (not
+        // any pull_request node — development-lifecycle has a second one for
+        // its single-review component).
+        const trigger = nodes.find(
+          (n) =>
+            n.kind === "github.pull_request" &&
+            edges.some((e) => e.source === n.id && rc.reviewerIds.has(e.target)),
+        );
+        // Sit in the gap between the trigger and the reviewer column, centered
+        // vertically among the reviewers; fall back to under the last reviewer.
+        const position = trigger
+          ? { x: (trigger.position.x + firstReviewer.position.x) / 2, y: (minY + maxY) / 2 }
+          : { x: firstReviewer.position.x, y: maxY + 160 };
         mapped.push({
           id: ADD_REVIEWER_NODE_ID,
           type: "addReviewer",
-          position: { x: reviewers[0]!.position.x, y: maxY + 160 },
+          position,
           selectable: false,
           data: { label: "Add reviewer", pending: rc.pending, onAddReviewer: rc.onAdd },
         });
       }
     }
     return mapped;
-  }, [nodes, stepStatuses, labelOverrides, reviewerControls]);
+  }, [nodes, edges, stepStatuses, labelOverrides, reviewerControls]);
   const rfEdges = useMemo<Edge[]>(
     () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false })),
     [edges],
