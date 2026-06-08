@@ -148,6 +148,11 @@ export const projectQuery = (id: string) => ({
       project: ProjectListItem & {
         removedAt: string | null;
         defaultImplementFlowId: string | null;
+        /** Project-wide defaults for the implement flow's agent + prompt.
+         *  Pre-populate the kanban card dropdowns; a per-card
+         *  `agent:<name>` / `prompt:<name>` label overrides them. See #158. */
+        defaultImplementAgentId: string | null;
+        defaultImplementPromptId: string | null;
         /** Repo-relative path of the project's agent instructions file
          *  (default `AGENTS.md`, empty disables injection). See #130. */
         instructionsFile: string;
@@ -312,6 +317,73 @@ export function useSetIssueAgent(projectId: string, issueNumber: number) {
       // detail (which we just wrote authoritatively above). Without this,
       // the wider ["projects", id, "issues"] key match cascades into the
       // detail and immediately undoes our setQueryData.
+      qc.invalidateQueries({
+        predicate: (q) => {
+          const k = q.queryKey;
+          return (
+            Array.isArray(k) &&
+            k[0] === "projects" &&
+            k[1] === projectId &&
+            k[2] === "issues" &&
+            k.length === 3
+          );
+        },
+      });
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
+/**
+ * Set or clear the implementation-prompt label on an issue. Mirrors
+ * {@link useSetIssueAgent}: pass a `promptId` from `promptsQuery` to assign,
+ * or `null` to remove all `prompt:*` labels. The server resolves the id to
+ * the prompt's name and writes label `prompt:<name>` to GitHub. The implement
+ * flow resolves that label to the prompt body at dispatch. See #158.
+ */
+export function useSetIssuePrompt(projectId: string, issueNumber: number) {
+  const qc = useQueryClient();
+  const detailKey = ["projects", projectId, "issues", issueNumber] as const;
+  return useMutation({
+    mutationFn: (vars: { promptId: string | null; promptName: string | null }) =>
+      api.patch<{ issue: ProjectIssueDetail }>(
+        `/api/projects/${projectId}/issues/${issueNumber}/prompt`,
+        { promptId: vars.promptId },
+      ),
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: detailKey });
+      const prev = qc.getQueryData<{ issue: ProjectIssueDetail }>(detailKey);
+      if (prev) {
+        const filtered = prev.issue.labels.filter(
+          (l) => !l.name.startsWith("prompt:"),
+        );
+        const priorPromptColor = prev.issue.labels.find((l) =>
+          l.name.startsWith("prompt:"),
+        )?.color;
+        const next = vars.promptName
+          ? [
+              ...filtered,
+              {
+                name: `prompt:${vars.promptName}`,
+                color: priorPromptColor ?? "",
+              },
+            ]
+          : filtered;
+        qc.setQueryData(detailKey, {
+          ...prev,
+          issue: { ...prev.issue, labels: next },
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(detailKey, data);
       qc.invalidateQueries({
         predicate: (q) => {
           const k = q.queryKey;
@@ -735,6 +807,44 @@ export function useSetProjectDefaultImplementFlow(projectId: string) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", projectId] });
+    },
+  });
+}
+
+/** Set or clear the project's default implement agent. See #158. */
+export function useSetProjectDefaultImplementAgent(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (agentId: string | null) =>
+      api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
+        defaultImplementAgentId: agentId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId] });
+      // Cards read the default to pre-populate their Agent dropdown, so the
+      // board snapshot must refresh too.
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
+/** Set or clear the project's default implement prompt. See #158. */
+export function useSetProjectDefaultImplementPrompt(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (promptId: string | null) =>
+      api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
+        defaultImplementPromptId: promptId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId] });
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
     },
   });
 }

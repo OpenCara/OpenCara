@@ -14,6 +14,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AgentPicker } from "@/components/agent/AgentPicker";
+import { PromptPicker } from "@/components/agent/PromptPicker";
 import {
   useTriggerImplementFlow,
   type KanbanImplementStatus,
@@ -57,11 +58,18 @@ export function KanbanCard({
   projectId,
   projectRepo,
   defaultImplementFlowSlug,
+  defaultAgentName,
+  defaultPromptName,
 }: {
   item: KanbanItem;
   projectId: string;
   projectRepo: { owner: string; name: string } | null;
   defaultImplementFlowSlug: string | null;
+  /** Project default implement agent/prompt names (#158). Pre-populate the
+   *  card dropdowns when the issue carries no `agent:` / `prompt:` override
+   *  label; null when the project has no such default. */
+  defaultAgentName: string | null;
+  defaultPromptName: string | null;
 }) {
   // Drag handle covers the whole card. The action icons (ExternalLink,
   // Pencil) stop pointerdown so they're clickable without starting a drag.
@@ -199,20 +207,35 @@ export function KanbanCard({
       </div>
       {showImplementControls && (
         <div
-          className="mt-2 flex items-center gap-2"
+          className="mt-2 space-y-1.5"
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <AgentPicker
-            projectId={projectId}
-            issueNumber={item.contentNumber!}
-            labels={item.labels}
-            compact
-          />
+          <div className="flex items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              <AgentPicker
+                projectId={projectId}
+                issueNumber={item.contentNumber!}
+                labels={item.labels}
+                compact
+                defaultAgentName={defaultAgentName}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <PromptPicker
+                projectId={projectId}
+                issueNumber={item.contentNumber!}
+                labels={item.labels}
+                compact
+                defaultPromptName={defaultPromptName}
+              />
+            </div>
+          </div>
           <StartImplementButton
             projectId={projectId}
             issueNumber={item.contentNumber!}
             labels={item.labels}
             flowSlug={defaultImplementFlowSlug}
+            hasDefaultAgent={defaultAgentName !== null}
           />
         </div>
       )}
@@ -293,20 +316,27 @@ function StartImplementButton({
   issueNumber,
   labels,
   flowSlug,
+  hasDefaultAgent,
 }: {
   projectId: string;
   issueNumber: number;
   labels: { name: string; color: string }[];
   flowSlug: string | null;
+  /** True when the project sets a default implement agent — the issue can
+   *  then dispatch with the inherited default even without an `agent:` label. */
+  hasDefaultAgent: boolean;
 }) {
   const trigger = useTriggerImplementFlow(projectId);
-  const hasAgent = labels.some((l) => l.name.startsWith("agent:"));
+  // An effective agent is either a per-card `agent:<name>` override label or
+  // the inherited project default — dispatch resolves the same precedence.
+  const hasAgent =
+    labels.some((l) => l.name.startsWith("agent:")) || hasDefaultAgent;
   const disabled = !flowSlug || !hasAgent || trigger.isPending;
 
   const title = !flowSlug
     ? "Set a default implement flow in project settings first"
     : !hasAgent
-      ? "Pick an agent first"
+      ? "Pick an agent first (or set a default in project settings)"
       : "Start implement flow for this issue";
 
   return (
