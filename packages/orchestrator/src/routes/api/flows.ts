@@ -15,6 +15,7 @@ import {
 import { FlowDefinitionSchema } from "@opencara/flows";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { resetProjectFlowToTemplate } from "../../flows/builtin.js";
 import type { FlowEngine } from "../../flows/engine.js";
 import {
   FLOW_RUNS_CHANNEL,
@@ -97,6 +98,22 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       .where(eq(flows.id, flow.id));
     const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
     return c.json({ flow: updated });
+  });
+
+  // Reset a project flow back to its global template (discards per-project
+  // graph edits, clears customizedAt so it tracks the template again).
+  r.post("/projects/:id/flows/:slug/reset", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const slug = c.req.param("slug");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    const result = await resetProjectFlowToTemplate(deps.db, projectId, slug);
+    if (!result.ok) return c.json({ error: result.error }, 400);
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.projectId, projectId), eq(flows.slug, slug)),
+    });
+    return c.json({ flow });
   });
 
   // Sets customizedAt so the seeder doesn't clobber the edit on next start.
@@ -183,27 +200,39 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const graph = parseGraph(flow.graphJson);
     if (!graph) return c.json({ error: "flow graph invalid" }, 400);
 
-    const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
+    // Anchor on the synthesizer: reviewers are the agents feeding it. This is
+    // robust to graphs with more than one PR trigger (e.g. development-lifecycle's
+    // independent single-review component, whose reviewer feeds its own post,
+    // not the synthesizer).
     const synth = graph.nodes.find(
       (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
     );
-    if (!trigger || !synth) {
-      return c.json(
-        { error: "flow shape not supported (need a trigger and a synthesizer node)" },
-        400,
-      );
+    if (!synth) {
+      return c.json({ error: "flow shape not supported (need a synthesizer node)" }, 400);
     }
-
     const reviewerNodes = graph.nodes.filter(
       (n) =>
         n.kind === "agent" &&
-        graph.edges.some((e) => e.source === trigger.id && e.target === n.id) &&
         graph.edges.some((e) => e.source === n.id && e.target === synth.id),
     );
     const template = reviewerNodes[0];
     if (!template) {
       return c.json(
         { error: "no reviewer node to clone — add the first one in code" },
+        400,
+      );
+    }
+    // Wire the new reviewer to the SAME PR trigger that feeds the existing
+    // reviewers (not any/the first PR trigger in the graph).
+    const triggerEdge = graph.edges.find((e) => e.target === template.id);
+    const trigger = triggerEdge
+      ? graph.nodes.find(
+          (n) => n.id === triggerEdge.source && n.kind === "github.pull_request",
+        )
+      : undefined;
+    if (!trigger) {
+      return c.json(
+        { error: "flow shape not supported (no PR trigger feeding the reviewers)" },
         400,
       );
     }
@@ -260,18 +289,18 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       const graph = parseGraph(flow.graphJson);
       if (!graph) return c.json({ error: "flow graph invalid" }, 400);
 
-      const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
+      // Synth-anchored (see the POST handler): reviewers are the agents feeding
+      // the synthesizer, so a second PR trigger / single-review node is ignored.
       const synth = graph.nodes.find(
         (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
       );
-      if (!trigger || !synth) return c.json({ error: "flow shape not supported" }, 400);
+      if (!synth) return c.json({ error: "flow shape not supported" }, 400);
 
       const reviewerIds = new Set(
         graph.nodes
           .filter(
             (n) =>
               n.kind === "agent" &&
-              graph.edges.some((e) => e.source === trigger.id && e.target === n.id) &&
               graph.edges.some((e) => e.source === n.id && e.target === synth.id),
           )
           .map((n) => n.id),
