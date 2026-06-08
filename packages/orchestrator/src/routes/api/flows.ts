@@ -554,32 +554,41 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       // doing so re-ships every agent_run.spec (incl. multi-hundred-kB ACP
       // payloads) every 2s for the life of the stream.
       const terminalCheck = setInterval(async () => {
-        const r2 = await deps.db.query.flowRuns.findFirst({
-          where: eq(flowRuns.id, runId),
-          columns: { status: true },
-        });
-        if (r2 && TERMINAL.has(r2.status)) {
-          const snap = await loadFlowRunSnapshot(deps.db, runId);
-          if (snap) {
-            await sse.writeSSE({ event: "step", data: JSON.stringify(snap) });
-            await sse.writeSSE({
-              event: "end",
-              data: JSON.stringify({ status: snap.run.status }),
-            });
+        // Guard the whole body: a rejection from an async setInterval is
+        // unhandled and Node promotes it to a fatal uncaughtException, which
+        // would take opencara.com down (see runs.ts for the full rationale —
+        // the Supabase pooler's EMAXCONNSESSION under pool pressure was the
+        // real trigger on 2026-06-07). Log and retry on the next tick instead.
+        try {
+          const r2 = await deps.db.query.flowRuns.findFirst({
+            where: eq(flowRuns.id, runId),
+            columns: { status: true },
+          });
+          if (r2 && TERMINAL.has(r2.status)) {
+            const snap = await loadFlowRunSnapshot(deps.db, runId);
+            if (snap) {
+              await sse.writeSSE({ event: "step", data: JSON.stringify(snap) });
+              await sse.writeSSE({
+                event: "end",
+                data: JSON.stringify({ status: snap.run.status }),
+              });
+            }
+            clearInterval(heartbeat);
+            clearInterval(terminalCheck);
+            await stepSub.unlisten();
+            await runSub.unlisten();
+            await sse.close();
           }
-          clearInterval(heartbeat);
-          clearInterval(terminalCheck);
-          await stepSub.unlisten();
-          await runSub.unlisten();
-          await sse.close();
+        } catch (err) {
+          console.error("[sse] flow terminal check error", err);
         }
       }, 2_000);
 
       sse.onAbort(async () => {
         clearInterval(heartbeat);
         clearInterval(terminalCheck);
-        await stepSub.unlisten();
-        await runSub.unlisten();
+        await stepSub.unlisten().catch(() => undefined);
+        await runSub.unlisten().catch(() => undefined);
       });
     });
   });

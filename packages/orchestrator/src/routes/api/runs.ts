@@ -123,24 +123,34 @@ export function runRoutes(deps: RunRoutesDeps) {
       // Poll terminal state every 2s; close stream when run finishes.
       // Status-only projection — see the initial check above.
       const terminalCheck = setInterval(async () => {
-        const r2 = await deps.db.query.agentRuns.findFirst({
-          where: eq(agentRuns.id, runId),
-          columns: { id: true, status: true },
-        });
-        if (r2 && TERMINAL.has(r2.status)) {
-          await flush();
-          await sse.writeSSE({ event: "end", data: JSON.stringify({ status: r2.status }) });
-          clearInterval(heartbeat);
-          clearInterval(terminalCheck);
-          await subscription.unlisten();
-          await sse.close();
+        // A bare async setInterval is a process-level hazard: an unhandled
+        // rejection here (e.g. the Supabase pooler returning EMAXCONNSESSION
+        // when the query pool is saturated) is promoted to a fatal
+        // uncaughtException by Node and takes the whole orchestrator — and so
+        // opencara.com — down. Swallow everything; the poll just retries on the
+        // next tick once the pool recovers, and onAbort still cleans up.
+        try {
+          const r2 = await deps.db.query.agentRuns.findFirst({
+            where: eq(agentRuns.id, runId),
+            columns: { id: true, status: true },
+          });
+          if (r2 && TERMINAL.has(r2.status)) {
+            await flush();
+            await sse.writeSSE({ event: "end", data: JSON.stringify({ status: r2.status }) });
+            clearInterval(heartbeat);
+            clearInterval(terminalCheck);
+            await subscription.unlisten();
+            await sse.close();
+          }
+        } catch (err) {
+          console.error("[sse] terminal check error", err);
         }
       }, 2_000);
 
       sse.onAbort(async () => {
         clearInterval(heartbeat);
         clearInterval(terminalCheck);
-        await subscription.unlisten();
+        await subscription.unlisten().catch(() => undefined);
       });
     });
   });
