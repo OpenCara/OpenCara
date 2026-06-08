@@ -32,9 +32,21 @@ function intFromEnv(
  * these options are defense-in-depth so a future hot path degrades gracefully
  * instead of taking the whole site down:
  *
- *   max               More headroom before queries start queueing. Stays well
- *                     under Postgres `max_connections` (shared with the pooler
- *                     and other clients). Override with DB_POOL_MAX.
+ *   max               Size of the QUERY connection pool. It must stay strictly
+ *                     below the Supabase session pooler's per-role ceiling
+ *                     (Supavisor `pool_size`, 15 on this project) because
+ *                     postgres-js opens a SEPARATE, dedicated LISTEN connection
+ *                     (one shared singleton for all `pg.listen` channels, see
+ *                     postgres-js `listen.sql`) that is NOT counted in `max`.
+ *                     So real peak = max + 1 (listen) + brief overlap while a
+ *                     `max_lifetime`-recycled connection is replaced. With the
+ *                     old default of 15, that peak was 16 > 15 and the pooler
+ *                     rejected the surplus with EMAXCONNSESSION the moment the
+ *                     query pool saturated — which crashed the orchestrator via
+ *                     an unguarded SSE poll (2026-06-07). 12 leaves headroom for
+ *                     the listen connection and recycle overlap. Override with
+ *                     DB_POOL_MAX (raise only if the Supabase pool_size is
+ *                     raised to match).
  *   connect_timeout   Fail a connection attempt fast rather than hanging.
  *   max_lifetime      Recycle connections periodically so a long-lived process
  *                     never accumulates permanently-stale pooler connections.
@@ -54,7 +66,7 @@ export function poolOptions(
   const isLocal = /@(localhost|127\.0\.0\.1|\[::1])\b/.test(databaseUrl);
   const statementTimeoutMs = intFromEnv(env, "DB_STATEMENT_TIMEOUT_MS", 30_000);
   return {
-    max: intFromEnv(env, "DB_POOL_MAX", 15),
+    max: intFromEnv(env, "DB_POOL_MAX", 12),
     ssl: isLocal ? false : "require",
     connect_timeout: intFromEnv(env, "DB_CONNECT_TIMEOUT_SEC", 10),
     max_lifetime: intFromEnv(env, "DB_MAX_LIFETIME_SEC", 60 * 30),

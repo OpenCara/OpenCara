@@ -12,7 +12,7 @@ const LOCAL = "postgres://opencara:opencara@localhost:5433/opencara";
 describe("poolOptions", () => {
   it("applies hardened defaults on a remote URL", () => {
     const o = poolOptions(REMOTE, {});
-    assert.equal(o.max, 15);
+    assert.equal(o.max, 12);
     assert.equal(o.ssl, "require");
     assert.equal(o.connect_timeout, 10);
     assert.equal(o.max_lifetime, 60 * 30);
@@ -42,7 +42,7 @@ describe("poolOptions", () => {
 
   it("ignores non-positive / non-numeric overrides and keeps defaults", () => {
     const o = poolOptions(REMOTE, { DB_POOL_MAX: "0", DB_STATEMENT_TIMEOUT_MS: "abc" });
-    assert.equal(o.max, 15);
+    assert.equal(o.max, 12);
     assert.deepEqual(o.connection, { statement_timeout: 30_000 });
   });
 });
