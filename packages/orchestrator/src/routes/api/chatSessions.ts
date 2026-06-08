@@ -717,9 +717,13 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
   });
 
   // DELETE /chat/sessions/:id — soft delete by default (sets archived_at).
-  // `?hard=1` removes the row outright; useful for clearing a noisy
-  // history but loses the link to the on-device ACP JSONL (the file
-  // itself isn't deleted, just no longer addressable from the UI).
+  // `?hard=1` permanently removes the session AND every agent_run that
+  // belongs to its conversation (matched by the `OPENCARA_CHAT_SESSION_ID`
+  // env marker the chat route bakes onto each turn — the same join the
+  // /history endpoint uses). agent_run_logs cascade off agent_runs, so the
+  // chat transcript goes too. This is the irreversible "Delete" the session
+  // sidebar exposes (issue #153); the on-device ACP JSONL is simply no
+  // longer addressable once the row is gone.
   r.delete("/chat/sessions/:id", auth, async (c) => {
     const user = c.get("user")!;
     const id = c.req.param("id");
@@ -731,6 +735,14 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     if (!row) return c.json({ error: "not found" }, 404);
 
     if (hard) {
+      // Drop the per-turn agent_runs first (logs cascade), then the
+      // session row itself, so no orphaned history lingers under a
+      // threadKey that can never be reached from the UI again.
+      await deps.db
+        .delete(agentRuns)
+        .where(
+          sql`${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID' = ${row.threadKey}`,
+        );
       await deps.db.delete(chatSessions).where(eq(chatSessions.id, id));
       return c.json({ ok: true, deleted: "hard" });
     }

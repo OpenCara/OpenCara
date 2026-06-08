@@ -27,6 +27,7 @@ import {
   Plus,
   Send,
   Square,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -717,6 +718,20 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           onRename={(id, title) => renameSessionMut.mutate({ id, title })}
           onDelete={(id) => deleteSessionMut.mutate({ id })}
           onRestore={(id) => restoreSessionMut.mutate({ id })}
+          onHardDelete={(id) => {
+            // Permanent removal: drops the chat_sessions row AND its
+            // associated agent_runs/history server-side (hard=1). Unlike
+            // archive this is irreversible, so the row leaves the sidebar
+            // entirely on the next list refetch.
+            deleteSessionMut.mutate({ id, hard: true });
+            // If we just deleted the thread the panel is viewing, pivot
+            // off it so we don't keep dispatching against a dead session.
+            if (id === effectiveSessionRowId) {
+              setOverrideSession(null);
+              setMessages([]);
+              setAnsweredOptionMessageIds(new Set());
+            }
+          }}
         />
       )}
 
@@ -1515,6 +1530,7 @@ function SessionPanel({
   onRename,
   onDelete,
   onRestore,
+  onHardDelete,
 }: {
   sessions: ChatSession[];
   activeSessionId: string | null;
@@ -1525,6 +1541,7 @@ function SessionPanel({
   onRename: (id: string, title: string | null) => void;
   onDelete: (id: string) => void;
   onRestore: (id: string) => void;
+  onHardDelete: (id: string) => void;
 }) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -1561,6 +1578,7 @@ function SessionPanel({
     onPick,
     onDelete,
     onRestore,
+    onHardDelete,
   };
 
   return (
@@ -1684,6 +1702,7 @@ function SessionRow({
   onPick,
   onDelete,
   onRestore,
+  onHardDelete,
 }: {
   session: ChatSession;
   activeSessionId: string | null;
@@ -1696,6 +1715,7 @@ function SessionRow({
   onPick: (s: ChatSession) => void;
   onDelete: (id: string) => void;
   onRestore: (id: string) => void;
+  onHardDelete: (id: string) => void;
 }) {
   const isActive = s.id === activeSessionId;
   const isRenaming = s.id === renamingId;
@@ -1778,6 +1798,27 @@ function SessionRow({
                 <Archive className="size-3" />
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="size-6 p-0 text-destructive hover:text-destructive"
+              title="Delete permanently"
+              onClick={() => {
+                // Irreversible: confirm before dropping the session and
+                // its chat history for good (acceptance criteria #2/#5).
+                if (
+                  window.confirm(
+                    `Permanently delete "${s.title || "(untitled)"}"? ` +
+                      `This removes the conversation and its chat history ` +
+                      `and cannot be undone.`,
+                  )
+                ) {
+                  onHardDelete(s.id);
+                }
+              }}
+            >
+              <Trash2 className="size-3" />
+            </Button>
           </div>
         </>
       )}
