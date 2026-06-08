@@ -34,6 +34,25 @@ export interface FlowGraphEdge {
   target: string;
 }
 
+/**
+ * Enables in-canvas reviewer management on an editable flow. Omitted on the
+ * read-only run view, so its delete buttons / add-reviewer node never render
+ * there.
+ */
+export interface FlowReviewerControls {
+  /** Node ids that are reviewers (from deriveReviewerIds). */
+  reviewerIds: Set<string>;
+  /** False when only one reviewer remains — hides the delete buttons. */
+  canDelete: boolean;
+  /** A reviewer add/remove mutation is in flight. */
+  pending: boolean;
+  onAdd: () => void;
+  onDelete: (nodeId: string) => void;
+}
+
+/** Synthetic node id for the "+ Add reviewer" affordance (not a real graph node). */
+export const ADD_REVIEWER_NODE_ID = "__add_reviewer__";
+
 interface FlowGraphProps {
   nodes: FlowGraphNode[];
   edges: FlowGraphEdge[];
@@ -41,6 +60,8 @@ interface FlowGraphProps {
   stepStatuses?: Record<string, StepStatus>;
   /** Map node id → custom display label (rename). Optional. */
   labelOverrides?: Record<string, string>;
+  /** When set, renders per-reviewer delete buttons + an add-reviewer node. */
+  reviewerControls?: FlowReviewerControls;
   onNodeClick?: (nodeId: string) => void;
 }
 
@@ -49,12 +70,42 @@ export function FlowGraph({
   edges,
   stepStatuses,
   labelOverrides,
+  reviewerControls,
   onNodeClick,
 }: FlowGraphProps) {
-  const rfNodes = useMemo<Node[]>(
-    () => nodes.map((n) => mapNode(n, stepStatuses, labelOverrides)),
-    [nodes, stepStatuses, labelOverrides],
-  );
+  const rfNodes = useMemo<Node[]>(() => {
+    const mapped = nodes.map((n) => mapNode(n, stepStatuses, labelOverrides, reviewerControls));
+    const rc = reviewerControls;
+    if (rc && rc.reviewerIds.size > 0) {
+      const reviewers = nodes.filter((n) => rc.reviewerIds.has(n.id));
+      if (reviewers.length > 0) {
+        const maxY = Math.max(...reviewers.map((n) => n.position.y));
+        const firstReviewer = reviewers[0]!;
+        // The multi trigger is the PR node that actually feeds a reviewer (not
+        // any pull_request node — development-lifecycle has a second one for
+        // its single-review component).
+        const trigger = nodes.find(
+          (n) =>
+            n.kind === "github.pull_request" &&
+            edges.some((e) => e.source === n.id && rc.reviewerIds.has(e.target)),
+        );
+        // Sit just to the RIGHT of the "Pull request" trigger node, at its
+        // vertical level (x ≈ 64px left of the reviewer column); fall back to
+        // under the last reviewer if no feeding trigger is found.
+        const position = trigger
+          ? { x: firstReviewer.position.x - 64, y: trigger.position.y }
+          : { x: firstReviewer.position.x, y: maxY + 160 };
+        mapped.push({
+          id: ADD_REVIEWER_NODE_ID,
+          type: "addReviewer",
+          position,
+          selectable: false,
+          data: { label: "Add reviewer", pending: rc.pending, onAddReviewer: rc.onAdd },
+        });
+      }
+    }
+    return mapped;
+  }, [nodes, edges, stepStatuses, labelOverrides, reviewerControls]);
   const rfEdges = useMemo<Edge[]>(
     () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false })),
     [edges],
@@ -86,17 +137,20 @@ function mapNode(
   n: FlowGraphNode,
   statuses?: Record<string, StepStatus>,
   overrides?: Record<string, string>,
+  reviewerControls?: FlowReviewerControls,
 ): Node {
   const type = nodeTypeFor(n.kind);
   const label = overrides?.[n.id] ?? pickLabel(n);
   const subtitle = pickSubtitle(n);
   const status = statuses?.[n.id] ?? "idle";
-  return {
-    id: n.id,
-    type,
-    position: n.position,
-    data: { label, subtitle, status },
-  };
+  const data: Record<string, unknown> = { label, subtitle, status };
+  if (reviewerControls?.reviewerIds.has(n.id)) {
+    data.isReviewer = true;
+    data.canDelete = reviewerControls.canDelete;
+    data.pending = reviewerControls.pending;
+    data.onDeleteReviewer = reviewerControls.onDelete;
+  }
+  return { id: n.id, type, position: n.position, data };
 }
 
 function nodeTypeFor(kind: string): string {

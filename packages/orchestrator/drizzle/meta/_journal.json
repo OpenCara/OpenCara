@@ -239,6 +239,34 @@
       "when": 1777540000000,
       "tag": "0033_flow_runs_flow_status_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1777550000000,
+      "tag": "0034_rename_lifecycle_to_development",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1777560000000,
+      "tag": "0035_refresh_stale_lifecycle_template_draft",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1777570000000,
+      "tag": "0036_remove_standalone_pr_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1777580000000,
+      "tag": "0037_purge_pr_review_rows",
+      "breakpoints": true
     }
   ]
 }

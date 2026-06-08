@@ -680,6 +680,20 @@ export function useSetFlowEnabled(projectId: string, slug: string) {
   });
 }
 
+export function useResetFlow(projectId: string, slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ flow: FlowSummary }>(
+        `/api/projects/${projectId}/flows/${slug}/reset`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows", slug] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
 export function useTriggerFlow(projectId: string) {
   const qc = useQueryClient();
   return useMutation({

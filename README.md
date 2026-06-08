@@ -4,10 +4,10 @@ Orchestration layer between AI agents and GitHub (extensible to other platforms)
 
 OpenCara receives webhook events from GitHub, coordinates agents driven by those events, and writes results back to the platform.
 
-The full issue lifecycle ships as one built-in flow, `issue-lifecycle`, with three trigger entry-points in a single graph:
+The full development lifecycle ships as one built-in flow, `development-lifecycle`, with three trigger entry-points in a single graph:
 
 - Issue moves from `backlog` → `ready` on a GitHub Projects v2 board → dispatch the implement agent (it commits, pushes, and opens the PR).
-- PR opened → start a reviewer agent → post the review.
+- PR opened → fan out to three reviewer agents (correctness, performance, style) → synthesize their reviews into one → post it.
 - Review submitted (or an `@opencara fix` comment) → wake the implement agent in the same worktree to address feedback, then optionally auto-merge.
 
 Each incoming webhook activates only the matching stage's subgraph, so a single event no longer fans out to four separate flows with three immediately cancelled as `trigger_skip`. (The earlier `issue-implement`, `pr-review`, `pr-review-multi`, and `pr-review-fix` templates are superseded by this one; their definitions remain in `packages/flows` for reference.)

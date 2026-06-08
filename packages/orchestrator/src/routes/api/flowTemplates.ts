@@ -357,20 +357,18 @@ interface ReviewerErr {
   error: string;
 }
 function addReviewer(graph: MutableGraph): ReviewerOk | ReviewerErr {
-  const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
+  // Anchor on the synthesizer: reviewers are the agents feeding it. Robust to
+  // graphs with more than one PR trigger (e.g. development-lifecycle's
+  // independent single-review component is ignored).
   const synth = graph.nodes.find(
     (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
   );
-  if (!trigger || !synth) {
-    return {
-      ok: false,
-      error: "flow shape not supported (need a trigger and a synthesizer node)",
-    };
+  if (!synth) {
+    return { ok: false, error: "flow shape not supported (need a synthesizer node)" };
   }
   const reviewerNodes = graph.nodes.filter(
     (n) =>
       n.kind === "agent" &&
-      graph.edges.some((e) => e.source === trigger.id && e.target === n.id) &&
       graph.edges.some((e) => e.source === n.id && e.target === synth.id),
   );
   const template = reviewerNodes[0];
@@ -378,6 +376,19 @@ function addReviewer(graph: MutableGraph): ReviewerOk | ReviewerErr {
     return {
       ok: false,
       error: "no reviewer node to clone — add the first one in code",
+    };
+  }
+  // Wire the new reviewer to the SAME PR trigger that feeds the existing ones.
+  const triggerEdge = graph.edges.find((e) => e.target === template.id);
+  const trigger = triggerEdge
+    ? graph.nodes.find(
+        (n) => n.id === triggerEdge.source && n.kind === "github.pull_request",
+      )
+    : undefined;
+  if (!trigger) {
+    return {
+      ok: false,
+      error: "flow shape not supported (no PR trigger feeding the reviewers)",
     };
   }
   const newId = `reviewer_${ulid().slice(-8).toLowerCase()}`;
@@ -404,11 +415,10 @@ function removeReviewer(
   graph: MutableGraph,
   nodeId: string,
 ): { ok: true } | ReviewerErr {
-  const trigger = graph.nodes.find((n) => n.kind === "github.pull_request");
   const synth = graph.nodes.find(
     (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
   );
-  if (!trigger || !synth) {
+  if (!synth) {
     return { ok: false, error: "flow shape not supported" };
   }
   const reviewerIds = new Set(
@@ -416,7 +426,6 @@ function removeReviewer(
       .filter(
         (n) =>
           n.kind === "agent" &&
-          graph.edges.some((e) => e.source === trigger.id && e.target === n.id) &&
           graph.edges.some((e) => e.source === n.id && e.target === synth.id),
       )
       .map((n) => n.id),

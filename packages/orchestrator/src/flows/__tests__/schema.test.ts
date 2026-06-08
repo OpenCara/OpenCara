@@ -4,7 +4,7 @@ import {
   FlowDefinitionSchema,
   builtinFlows,
   isTriggerKind,
-  issueLifecycleFlow,
+  developmentLifecycleFlow,
 } from "@opencara/flows";
 
 const baseFlow = {
@@ -112,38 +112,54 @@ describe("FlowDefinitionSchema agent review-fix options", () => {
   });
 });
 
-describe("unified issue-lifecycle built-in flow", () => {
+describe("unified development-lifecycle built-in flow", () => {
   it("is the only auto-seeded built-in flow", () => {
-    assert.deepEqual(Object.keys(builtinFlows), ["issue-lifecycle"]);
+    assert.deepEqual(Object.keys(builtinFlows), ["development-lifecycle"]);
   });
 
   it("parses against FlowDefinitionSchema", () => {
-    assert.doesNotThrow(() => FlowDefinitionSchema.parse(issueLifecycleFlow));
+    assert.doesNotThrow(() => FlowDefinitionSchema.parse(developmentLifecycleFlow));
   });
 
-  it("carries three distinct trigger entry-points", () => {
-    const triggers = issueLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind));
+  it("carries four trigger entry-points (two PR triggers: multi + single review)", () => {
+    const triggers = developmentLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind));
     const kinds = triggers.map((t) => t.kind).sort();
     assert.deepEqual(kinds, [
       "github.projects_v2_item",
+      "github.pull_request",
       "github.pull_request",
       "github.pull_request_review",
     ]);
   });
 
+  it("splits the two PR review triggers by action + comment phrase (no double-post)", () => {
+    const byId = (id: string) => developmentLifecycleFlow.nodes.find((n) => n.id === id);
+    const multi = byId("review_trigger");
+    const single = byId("single_review_trigger");
+    assert.ok(multi?.kind === "github.pull_request" && single?.kind === "github.pull_request");
+    // Multi: open/reopen (NOT synchronize) + "@opencara mreview".
+    assert.equal(multi.config.actions.includes("synchronize" as never), false);
+    assert.deepEqual([...multi.config.actions].sort(), ["commented", "opened", "reopened"]);
+    assert.equal(multi.config.commentPhrase, "@opencara mreview");
+    // Single: synchronize (NOT opened) + "@opencara review".
+    assert.equal(single.config.actions.includes("opened" as never), false);
+    assert.deepEqual([...single.config.actions].sort(), ["commented", "synchronize"]);
+    assert.equal(single.config.commentPhrase, "@opencara review");
+  });
+
   it("keeps the three stages as disconnected components (each trigger is a root)", () => {
-    // Every edge's target has exactly one incoming edge and no trigger has
-    // an incoming edge — i.e. the stages don't cross-link in-graph; they're
-    // linked by GitHub webhook round-trips instead.
-    const targets = new Set(issueLifecycleFlow.edges.map((e) => e.target));
-    for (const t of issueLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind))) {
+    // No trigger has an incoming edge — i.e. the stages don't cross-link
+    // in-graph; they're linked by GitHub webhook round-trips instead. (Within
+    // a stage, fan-in is fine: the review synthesizer has three incoming edges.)
+    const targets = new Set(developmentLifecycleFlow.edges.map((e) => e.target));
+    for (const t of developmentLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind))) {
       assert.equal(targets.has(t.id), false, `${t.id} should be a root`);
     }
   });
 
   it("shares the implement branch template with the fix stage for worktree reuse", () => {
-    const implement = issueLifecycleFlow.nodes.find((n) => n.id === "implement");
-    const fix = issueLifecycleFlow.nodes.find((n) => n.id === "fix");
+    const implement = developmentLifecycleFlow.nodes.find((n) => n.id === "implement");
+    const fix = developmentLifecycleFlow.nodes.find((n) => n.id === "fix");
     assert.equal(
       implement?.kind === "agent" && implement.config.worktree?.branchName,
       "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
