@@ -997,6 +997,23 @@ export interface KanbanImplementStatus {
   nodeKind: string | null;
 }
 
+/**
+ * Active PR-review flow surfaced on an issue card. Populated by the server when
+ * one of the issue's linked PRs has an in-flight (pending/running) PR-review
+ * flow run (pr-review, pr-review-multi, pr-review-fix). Only active runs are
+ * sent — the indicator vanishes the moment the run terminates.
+ */
+export interface KanbanPrFlowStatus {
+  state: "pending" | "running";
+  /** Flow name, e.g. "PR Review", "PR Review → Fix". */
+  label: string;
+  flowRunId: string;
+  /** Source flow slug. */
+  slug: string;
+  /** The linked PR the run is operating on. */
+  prNumber: number;
+}
+
 export interface KanbanItem {
   id: string;
   projectV2LinkId: string;
@@ -1014,6 +1031,8 @@ export interface KanbanItem {
   linkedPrs: KanbanLinkedPr[];
   /** Null when there's no active/recent implement run for this issue. */
   implementStatus: KanbanImplementStatus | null;
+  /** Null when no linked PR has an active PR-review flow run. */
+  prFlowStatus: KanbanPrFlowStatus | null;
   updatedAt: string;
 }
 
