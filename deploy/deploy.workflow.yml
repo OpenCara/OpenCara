@@ -49,7 +49,10 @@ jobs:
         # Tags can point anywhere; only ship a commit that's actually on main
         # so a feature-branch tag can never deploy to production.
         run: |
-          git fetch origin main --depth=200
+          # checkout used fetch-depth: 0, so full history is already present —
+          # fetch main WITHOUT --depth so we don't re-shallow the repo and break
+          # the ancestry check for a tag pointing at an older commit.
+          git fetch origin main
           if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
             echo "::error::Tag commit ${GITHUB_SHA} is not on main; refusing to deploy."
             exit 1
