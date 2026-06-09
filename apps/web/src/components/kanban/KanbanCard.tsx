@@ -488,15 +488,19 @@ export function KanbanCardOverlay({
           ))}
         </div>
       )}
-      {item.prFlowStatus && (
-        <div className="mt-2 flex items-center gap-1 text-[10px] text-violet-600">
-          <GitPullRequestArrow className="size-3 shrink-0" />
-          <Loader2
-            className={`size-3 shrink-0 ${item.prFlowStatus.state === "running" ? "animate-spin" : ""}`}
-          />
-          <span className="truncate">{item.prFlowStatus.label}</span>
-        </div>
-      )}
+      {item.prFlowStatus &&
+        (() => {
+          // Match PrFlowStatusLine: spinner while running, clock while queued.
+          const spin = item.prFlowStatus.state === "running";
+          const Icon = spin ? Loader2 : Clock;
+          return (
+            <div className="mt-2 flex items-center gap-1 text-[10px] text-violet-600">
+              <GitPullRequestArrow className="size-3 shrink-0" />
+              <Icon className={`size-3 shrink-0 ${spin ? "animate-spin" : ""}`} />
+              <span className="truncate">{item.prFlowStatus.label}</span>
+            </div>
+          );
+        })()}
     </div>
   );
 }

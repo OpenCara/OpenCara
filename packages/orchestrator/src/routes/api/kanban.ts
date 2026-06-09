@@ -422,6 +422,8 @@ async function loadPrFlowStatuses(
 
   const byPrNumber = new Map<number, PrFlowStatus>();
   for (const r of runs) {
+    // The SQL already filters to pending/running; this guard also narrows
+    // r.status to the `"pending" | "running"` union the typed field needs.
     if (r.status !== "pending" && r.status !== "running") continue;
 
     const prNumber = prNumberFromPayload(r.eventPayload);
