@@ -100,11 +100,16 @@ export class FlowEngine {
     // first run via flow_runs' partial unique index, exactly like the
     // webhook content-dedup path. null on the manual/kanban trigger path.
     const prepared = await this.prepareRun(row.id, event, dedupeKey);
-    if (!prepared) {
-      // A null prepared on the schedule path means the dedupe index swallowed
-      // a duplicate fire — surface a benign sentinel rather than throwing so
-      // the scheduler's bookkeeping still advances.
-      if (dedupeKey) return { flowRunId: "" };
+    if (prepared === "dedupe") {
+      // The dedupe index swallowed a duplicate fire (e.g. an overlapping
+      // scheduler tick). Benign — return an empty sentinel so the scheduler's
+      // bookkeeping still advances without treating it as an error.
+      return { flowRunId: "" };
+    }
+    if (prepared === "missing") {
+      // Genuinely broken: the project/installation is gone. Throw so the
+      // caller (scheduler/manual-trigger route) surfaces it instead of
+      // silently advancing a dead schedule (PR #164 review item 2).
       throw new Error(`flow ${flowId} project/installation missing`);
     }
 
@@ -168,7 +173,11 @@ export class FlowEngine {
     }
 
     const prepared = await this.prepareRun(flowRow.id, event);
-    if (!prepared) throw new Error("project/installation missing");
+    // Rerun never sets a dedupeKey, so "dedupe" can't occur here; treat any
+    // non-PreparedRun result as the missing-project/installation error.
+    if (prepared === "missing" || prepared === "dedupe") {
+      throw new Error("project/installation missing");
+    }
 
     setImmediate(() => {
       this.executeFlow(prepared, def, event, preloaded, { rerun: true }).catch((err) => {
@@ -282,7 +291,9 @@ export class FlowEngine {
 
       try {
         const prepared = await this.prepareRun(row.id, event, dedupeKey);
-        if (!prepared) continue;
+        // Both "missing" (no project/installation) and "dedupe" (duplicate
+        // webhook) are non-errors on the fan-out path — skip this flow.
+        if (prepared === "missing" || prepared === "dedupe") continue;
         await this.executeFlow(prepared, def, event);
       } catch (err) {
         console.error("[flow-engine] runFlow failed", { flowId: row.id, err });
@@ -290,19 +301,26 @@ export class FlowEngine {
     }
   }
 
+  // Returns the prepared run, or a discriminated reason it couldn't start:
+  //   - "missing": the project or its installation row is gone — a genuine
+  //     misconfiguration the caller should surface (the scheduler logs it).
+  //   - "dedupe": the partial unique index swallowed a duplicate dispatch —
+  //     benign; the caller should drop the event quietly.
+  // Distinguishing the two keeps a permanently-broken schedule from looking
+  // identical to a routine duplicate fire (PR #164 review).
   private async prepareRun(
     flowId: string,
     event: PlatformEventInput,
     dedupeKey: string | null = null,
-  ): Promise<PreparedRun | null> {
+  ): Promise<PreparedRun | "missing" | "dedupe"> {
     const project = await this.deps.db.query.projects.findFirst({
       where: eq(projects.id, event.projectId!),
     });
-    if (!project) return null;
+    if (!project) return "missing";
     const installation = await this.deps.db.query.githubInstallations.findFirst({
       where: eq(githubInstallations.id, project.installationId),
     });
-    if (!installation) return null;
+    if (!installation) return "missing";
 
     // Insert with ON CONFLICT DO NOTHING + RETURNING, targeting ONLY the
     // partial dedupe index flow_runs_flow_dedupe_uq (flow_id, dedupe_key)
@@ -336,7 +354,7 @@ export class FlowEngine {
         dedupeKey,
         eventId: event.id,
       });
-      return null;
+      return "dedupe";
     }
     await this.deps.pg.notify(
       FLOW_RUNS_CHANNEL,

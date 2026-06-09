@@ -155,10 +155,15 @@ if (flowEngine) {
 }
 
 // Cron scheduler (#128). Polls flow_schedule_state every minute and fires any
-// schedule.cron trigger whose next occurrence has passed. Minute resolution
-// matches cron's own granularity, so a 60s tick can never skip a slot. As with
-// the other background jobs: best-effort, errors logged not thrown, and the
-// timer is unref'd so it never holds the process open on its own.
+// schedule.cron trigger whose next occurrence has passed. Each schedule fires
+// at most once per tick: an occurrence that's already due when the tick runs
+// is dispatched, then the row jumps to the next occurrence after *now* (not
+// the missed one). For hourly-or-coarser schedules that's exactly-once even if
+// a tick is delayed; a sub-hourly schedule (e.g. every-minute) can drop an
+// occurrence under tick backpressure — acceptable for recurring jobs, but not
+// a hard "every slot fires" guarantee. As with the other background jobs:
+// best-effort, errors logged not thrown, and the timer is unref'd so it never
+// holds the process open on its own.
 if (flowEngine) {
   const engine = flowEngine;
   const SCHEDULER_TICK_MS = 60 * 1000;

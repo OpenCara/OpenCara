@@ -233,6 +233,12 @@ const MAX_STEP_MINUTES = 366 * 24 * 60 + 24 * 60;
  * evaluated in `timeZone` (IANA name, e.g. "America/New_York"; defaults to
  * "UTC"). Returns fewer than `count` only if none exist within a year.
  *
+ * DST caveat (standard cron-in-a-timezone behavior): occurrences are matched
+ * against the local wall clock, so around a transition a daily schedule can
+ * fire twice on the fall-back day (the repeated hour) or be skipped on the
+ * spring-forward day (the non-existent hour). Use UTC if you need exactly-once
+ * regardless of DST.
+ *
  * Throws if the expression is invalid (callers that want soft failure should
  * validateCron first).
  */

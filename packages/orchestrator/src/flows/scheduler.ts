@@ -175,6 +175,19 @@ export async function runSchedulerTick(
             updatedAt: now,
           })
           .where(eq(flowScheduleState.id, existing.id));
+      } else if (existing.nextFireAt === null) {
+        // Re-arm a dormant row: nextFireAt is nulled when a schedule's flow is
+        // disabled (see phase 2). Re-enabling the flow brings it back into the
+        // phase-1 scan, so recompute its next fire. Skip the write when the
+        // cron genuinely has no upcoming occurrence (impossible date) — that
+        // legitimately stays null, and avoids churning a write every tick.
+        const next = computeNextFireAt(sched.cron, sched.timezone, now);
+        if (next) {
+          await deps.db
+            .update(flowScheduleState)
+            .set({ nextFireAt: next, updatedAt: now })
+            .where(eq(flowScheduleState.id, existing.id));
+        }
       }
     }
   }
@@ -194,15 +207,15 @@ export async function runSchedulerTick(
     if (!occurrence) continue;
 
     const flow = enabledFlows.find((f) => f.id === state.flowId);
-    // The owning flow was disabled / deleted since we loaded it: advance the
-    // row past this occurrence so it doesn't sit "due" forever, and move on.
+    // The owning flow was disabled since we loaded it (a deleted flow would
+    // have cascade-removed this row). Make the row dormant with a single write
+    // — nulling nextFireAt drops it out of the `is not null` due query, so it
+    // won't churn a write every tick. Phase 1 re-arms it if the flow is later
+    // re-enabled. (PR #164 review item 5.)
     if (!flow) {
       await deps.db
         .update(flowScheduleState)
-        .set({
-          nextFireAt: computeNextFireAt(state.cron, state.timezone, now),
-          updatedAt: now,
-        })
+        .set({ nextFireAt: null, updatedAt: now })
         .where(eq(flowScheduleState.id, state.id));
       continue;
     }
