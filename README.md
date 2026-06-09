@@ -52,6 +52,14 @@ pnpm build
 
 Default local postgres: `postgres://opencara:opencara@localhost:5433/opencara`. Copy `.env.example` to `packages/orchestrator/.env` and fill in `GITHUB_WEBHOOK_SECRET`.
 
+## Deployment
+
+Pushing a `v<semver>` tag builds a versioned Docker image, pushes it to GHCR, and rolls it out to opencara.com over SSH (gated on a health check). Rollback is redeploying a prior image tag — no rebuild. See [`deploy/README.md`](deploy/README.md) for secrets, host setup, and the rollback procedure.
+
+```bash
+git tag v1.0.2 && git push origin v1.0.2
+```
+
 ## GitHub App permissions and events
 
 For the built-in flows to work end-to-end, the GitHub App needs:

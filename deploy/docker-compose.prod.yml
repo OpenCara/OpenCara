@@ -1,0 +1,39 @@
+# Production compose for the opencara.com server.
+#
+# Lives on the deploy host at /opt/opencara/docker-compose.prod.yml (the deploy
+# workflow scp's it there). It runs the released server image published to GHCR
+# by .github/workflows/deploy.yml.
+#
+# The image tag is pinned per release via OPENCARA_IMAGE_TAG so rollback is just
+# "set the var to a prior tag and re-up" — no rebuild, no CI. See deploy/README.md.
+#
+# Secrets/config are NOT in this file or the image. They live in
+# /opt/opencara/.env.production on the host (chmod 600), which env_file loads
+# at container start. See deploy/README.md for the required keys.
+
+services:
+  server:
+    image: ${OPENCARA_REGISTRY:-ghcr.io}/${OPENCARA_IMAGE:-opencara/opencara/server}:${OPENCARA_IMAGE_TAG:-latest}
+    container_name: opencara_server
+    # The supervisor the bare-metal nohup process never had: a hard crash now
+    # restarts instead of taking opencara.com down until a human notices.
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      # Bake the running version into the env so it shows up in `docker inspect`
+      # and logs — handy when confirming a rollback actually took.
+      OPENCARA_IMAGE_TAG: ${OPENCARA_IMAGE_TAG:-latest}
+    ports:
+      # Bind to loopback only: the Cloudflare tunnel terminates TLS and forwards
+      # to localhost:3030. Nothing should hit the container from the public NIC.
+      - "127.0.0.1:3030:3030"
+    # Honoured by `docker compose up --wait`: the deploy fails fast if the new
+    # container never reports healthy. Mirrors the Dockerfile HEALTHCHECK so a
+    # host without the inline healthcheck still gates on readiness.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3030/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
