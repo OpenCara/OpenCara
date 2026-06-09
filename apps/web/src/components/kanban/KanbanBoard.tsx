@@ -18,10 +18,12 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
+  agentsQuery,
   kanbanQuery,
   pmWavesQuery,
   projectFlowsQuery,
   projectQuery,
+  promptsQuery,
   useKanbanStream,
   useRefreshKanban,
   useSetItemStatus,
@@ -82,6 +84,22 @@ function LinkedBoard({
     const flow = (flowsQ.data?.flows ?? []).find((f) => f.id === flowId);
     return flow?.slug ?? null;
   }, [projQ.data, flowsQ.data]);
+
+  // Resolve the project default implement agent/prompt to display names so the
+  // card dropdowns can show "Default (<name>)" when an issue has no override
+  // label (#158). Cards inherit these unless they carry their own label.
+  const agentsQ = useQuery(agentsQuery());
+  const promptsQ = useQuery(promptsQuery());
+  const defaultAgentName = useMemo(() => {
+    const agentId = projQ.data?.project.defaultImplementAgentId;
+    if (!agentId) return null;
+    return (agentsQ.data?.agents ?? []).find((a) => a.id === agentId)?.name ?? null;
+  }, [projQ.data, agentsQ.data]);
+  const defaultPromptName = useMemo(() => {
+    const promptId = projQ.data?.project.defaultImplementPromptId;
+    if (!promptId) return null;
+    return (promptsQ.data?.prompts ?? []).find((p) => p.id === promptId)?.name ?? null;
+  }, [projQ.data, promptsQ.data]);
 
   // Track the item being dragged so the DragOverlay can render a portal clone
   // that isn't clipped by column overflow boundaries.
@@ -346,6 +364,8 @@ function LinkedBoard({
                   option={col}
                   items={grouped.get(col.optionId) ?? []}
                   defaultImplementFlowSlug={defaultImplementFlowSlug}
+                  defaultAgentName={defaultAgentName}
+                  defaultPromptName={defaultPromptName}
                 />
               ))}
               {/* Always rendered — it's a valid drop target for "clear Status",
@@ -361,6 +381,8 @@ function LinkedBoard({
                 }}
                 items={noStatusItems}
                 defaultImplementFlowSlug={defaultImplementFlowSlug}
+                defaultAgentName={defaultAgentName}
+                defaultPromptName={defaultPromptName}
               />
             </div>
           </div>
@@ -382,12 +404,16 @@ function Column({
   projectId,
   projectRepo,
   defaultImplementFlowSlug,
+  defaultAgentName,
+  defaultPromptName,
 }: {
   option: KanbanStatusOption;
   items: KanbanItem[];
   projectId: string;
   projectRepo: { owner: string; name: string } | null;
   defaultImplementFlowSlug: string | null;
+  defaultAgentName: string | null;
+  defaultPromptName: string | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: option.optionId });
   return (
@@ -425,6 +451,8 @@ function Column({
               projectId={projectId}
               projectRepo={projectRepo}
               defaultImplementFlowSlug={defaultImplementFlowSlug}
+              defaultAgentName={defaultAgentName}
+              defaultPromptName={defaultPromptName}
             />
           ))
         )}

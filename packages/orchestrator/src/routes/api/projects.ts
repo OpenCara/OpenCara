@@ -12,6 +12,7 @@ import {
   issues,
   platformEvents,
   projects,
+  prompts,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import {
@@ -23,6 +24,7 @@ import {
   backfillIssues,
   pushIssueBodyToGithub,
   setIssueAgentLabel,
+  setIssuePromptLabel,
 } from "../../github/issues.js";
 
 interface ProjectRoutesDeps {
@@ -129,8 +131,10 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   // Update project settings. PATCH semantics: only keys present in the body
   // are touched. Supported keys:
   //   { defaultImplementFlowId?: string | null }
+  //   { defaultImplementAgentId?: string | null }
+  //   { defaultImplementPromptId?: string | null }
   //   { instructionsFile?: string }
-  // Either key may appear on its own or together. Empty body → 400.
+  // Any subset may appear on its own or together. Empty body → 400.
   r.patch("/:id", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
@@ -139,15 +143,30 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
 
     const body = await c.req.json().catch(() => ({}));
     const hasDefaultFlow = "defaultImplementFlowId" in body;
+    const hasDefaultAgent = "defaultImplementAgentId" in body;
+    const hasDefaultPrompt = "defaultImplementPromptId" in body;
     const hasInstructionsFile = "instructionsFile" in body;
-    if (!hasDefaultFlow && !hasInstructionsFile) {
+    if (
+      !hasDefaultFlow &&
+      !hasDefaultAgent &&
+      !hasDefaultPrompt &&
+      !hasInstructionsFile
+    ) {
       return c.json(
-        { error: "no updatable fields in body (defaultImplementFlowId or instructionsFile)" },
+        {
+          error:
+            "no updatable fields in body (defaultImplementFlowId, defaultImplementAgentId, defaultImplementPromptId, or instructionsFile)",
+        },
         400,
       );
     }
 
-    const patch: { defaultImplementFlowId?: string | null; instructionsFile?: string } = {};
+    const patch: {
+      defaultImplementFlowId?: string | null;
+      defaultImplementAgentId?: string | null;
+      defaultImplementPromptId?: string | null;
+      instructionsFile?: string;
+    } = {};
 
     if (hasDefaultFlow) {
       const flowId = body.defaultImplementFlowId;
@@ -162,6 +181,37 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         if (!flow.enabled) return c.json({ error: "flow is disabled" }, 400);
       }
       patch.defaultImplementFlowId = flowId;
+    }
+
+    // Agent / prompt defaults are user-scoped rows; only accept ids the
+    // requesting user actually owns so one user can't pin another's agent
+    // or prompt as a project default. null clears the default.
+    if (hasDefaultAgent) {
+      const agentId = body.defaultImplementAgentId;
+      if (agentId !== null && typeof agentId !== "string") {
+        return c.json({ error: "defaultImplementAgentId must be a string or null" }, 400);
+      }
+      if (typeof agentId === "string") {
+        const agent = await deps.db.query.agents.findFirst({
+          where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
+        });
+        if (!agent) return c.json({ error: "agent not found or not yours" }, 404);
+      }
+      patch.defaultImplementAgentId = agentId;
+    }
+
+    if (hasDefaultPrompt) {
+      const promptId = body.defaultImplementPromptId;
+      if (promptId !== null && typeof promptId !== "string") {
+        return c.json({ error: "defaultImplementPromptId must be a string or null" }, 400);
+      }
+      if (typeof promptId === "string") {
+        const prompt = await deps.db.query.prompts.findFirst({
+          where: and(eq(prompts.id, promptId), eq(prompts.userId, user.id)),
+        });
+        if (!prompt) return c.json({ error: "prompt not found or not yours" }, 404);
+      }
+      patch.defaultImplementPromptId = promptId;
     }
 
     if (hasInstructionsFile) {
@@ -432,6 +482,73 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         projectId: id,
         number,
         agentName,
+        err,
+      });
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        500,
+      );
+    }
+  });
+
+  // Set or clear the implementation-prompt label on an issue. Body:
+  //   { promptId: string | null }
+  // Mirrors the agent route above: null clears all prompt:* labels; non-null
+  // must reference a prompt owned by the current user. Resolves to the
+  // prompt's name and writes label `prompt:<name>` on GitHub (auto-creating
+  // the label, color #0e8a16). The implement flow resolves this label to the
+  // prompt body injected as OPENCARA_PROMPT at dispatch (#158).
+  r.patch("/:id/issues/:number/prompt", async (c) => {
+    if (!deps.app) return c.json({ error: "github app not configured" }, 503);
+    const user = c.get("user")!;
+    const id = c.req.param("id");
+    const number = Number.parseInt(c.req.param("number"), 10);
+    if (!Number.isFinite(number)) {
+      return c.json({ error: "invalid issue number" }, 400);
+    }
+    const reqBody = (await c.req.json().catch(() => null)) as {
+      promptId?: unknown;
+    } | null;
+    if (!reqBody || (reqBody.promptId !== null && typeof reqBody.promptId !== "string")) {
+      return c.json({ error: "promptId (string or null) required" }, 400);
+    }
+    const promptIdRaw = reqBody.promptId;
+
+    const project = await loadOwnedProject(deps.db, id, user.id);
+    // 404 hides existence — both "no row" and "not yours" funnel to the
+    // same response so a curious client cannot probe for project ids.
+    if (!project) {
+      return c.json({ error: "project not found" }, 404);
+    }
+
+    let promptName: string | null = null;
+    if (typeof promptIdRaw === "string" && promptIdRaw) {
+      const prompt = await deps.db.query.prompts.findFirst({
+        where: and(eq(prompts.id, promptIdRaw), eq(prompts.userId, user.id)),
+      });
+      if (!prompt) return c.json({ error: "prompt not found or not yours" }, 404);
+      promptName = prompt.name;
+    }
+
+    try {
+      const refreshed = await setIssuePromptLabel(
+        deps.app,
+        {
+          id: project.id,
+          owner: project.owner,
+          name: project.name,
+          installationId: project.installationId,
+        },
+        number,
+        promptName,
+        deps.db,
+      );
+      return c.json({ issue: refreshed });
+    } catch (err) {
+      console.error("[projects] set prompt label failed", {
+        projectId: id,
+        number,
+        promptName,
         err,
       });
       return c.json(

@@ -20,8 +20,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  agentsQuery,
   projectFlowsQuery,
+  promptsQuery,
+  useSetProjectDefaultImplementAgent,
   useSetProjectDefaultImplementFlow,
+  useSetProjectDefaultImplementPrompt,
   useSetProjectInstructionsFile,
 } from "@/lib/queries";
 
@@ -34,10 +38,14 @@ import {
 export function ProjectSettingsSheet({
   projectId,
   defaultImplementFlowId,
+  defaultImplementAgentId,
+  defaultImplementPromptId,
   instructionsFile,
 }: {
   projectId: string;
   defaultImplementFlowId: string | null;
+  defaultImplementAgentId: string | null;
+  defaultImplementPromptId: string | null;
   instructionsFile: string;
 }) {
   return (
@@ -63,6 +71,14 @@ export function ProjectSettingsSheet({
           <DefaultImplementFlowSection
             projectId={projectId}
             currentFlowId={defaultImplementFlowId}
+          />
+          <DefaultImplementAgentSection
+            projectId={projectId}
+            currentAgentId={defaultImplementAgentId}
+          />
+          <DefaultImplementPromptSection
+            projectId={projectId}
+            currentPromptId={defaultImplementPromptId}
           />
           <InstructionsFileSection
             projectId={projectId}
@@ -118,6 +134,120 @@ function DefaultImplementFlowSection({
           {enabledOrCurrent.map((f) => (
             <SelectItem key={f.id} value={f.id}>
               {f.name}{!f.enabled ? " (disabled)" : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {setDefault.error && (
+        <div className="text-xs text-destructive">
+          {setDefault.error instanceof Error
+            ? setDefault.error.message
+            : String(setDefault.error)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const NO_AGENT_VALUE = "__none";
+
+function DefaultImplementAgentSection({
+  projectId,
+  currentAgentId,
+}: {
+  projectId: string;
+  currentAgentId: string | null;
+}) {
+  const agentsQ = useQuery(agentsQuery());
+  const setDefault = useSetProjectDefaultImplementAgent(projectId);
+  const agents = agentsQ.data?.agents ?? [];
+  const value = currentAgentId ?? NO_AGENT_VALUE;
+
+  const onSelect = (next: string) => {
+    if (next === value) return;
+    setDefault.mutate(next === NO_AGENT_VALUE ? null : next);
+  };
+
+  return (
+    <section className="space-y-2 text-sm">
+      <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+        Implement agent
+      </Label>
+      <p className="text-xs text-muted-foreground">
+        Default agent for the implement flow. Pre-populates the Agent dropdown
+        on each kanban card; a per-card pick overrides it without changing this
+        default.
+      </p>
+      <Select
+        value={value}
+        onValueChange={onSelect}
+        disabled={setDefault.isPending || agentsQ.isLoading}
+      >
+        <SelectTrigger className="h-8 w-full">
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_AGENT_VALUE}>None</SelectItem>
+          {agents.map((a) => (
+            <SelectItem key={a.id} value={a.id}>
+              {a.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {setDefault.error && (
+        <div className="text-xs text-destructive">
+          {setDefault.error instanceof Error
+            ? setDefault.error.message
+            : String(setDefault.error)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const NO_PROMPT_VALUE = "__none";
+
+function DefaultImplementPromptSection({
+  projectId,
+  currentPromptId,
+}: {
+  projectId: string;
+  currentPromptId: string | null;
+}) {
+  const promptsQ = useQuery(promptsQuery());
+  const setDefault = useSetProjectDefaultImplementPrompt(projectId);
+  const prompts = promptsQ.data?.prompts ?? [];
+  const value = currentPromptId ?? NO_PROMPT_VALUE;
+
+  const onSelect = (next: string) => {
+    if (next === value) return;
+    setDefault.mutate(next === NO_PROMPT_VALUE ? null : next);
+  };
+
+  return (
+    <section className="space-y-2 text-sm">
+      <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+        Implement prompt
+      </Label>
+      <p className="text-xs text-muted-foreground">
+        Default prompt for the implement flow, injected as the agent's task
+        instructions. Pre-populates the Prompt dropdown on each kanban card; a
+        per-card pick overrides it. Manage named prompts on the Prompts page.
+      </p>
+      <Select
+        value={value}
+        onValueChange={onSelect}
+        disabled={setDefault.isPending || promptsQ.isLoading}
+      >
+        <SelectTrigger className="h-8 w-full">
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_PROMPT_VALUE}>None</SelectItem>
+          {prompts.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
             </SelectItem>
           ))}
         </SelectContent>

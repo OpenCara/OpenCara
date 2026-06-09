@@ -9,6 +9,7 @@ import { IssueAgentProgress } from "@/components/canvas/IssueAgentProgress";
 import { IssueBodyEditor } from "@/components/canvas/IssueBodyEditor";
 import { IssueStatusDropdown } from "@/components/canvas/IssueStatusDropdown";
 import { AgentPicker } from "@/components/agent/AgentPicker";
+import { PromptPicker } from "@/components/agent/PromptPicker";
 import {
   projectIssueDetailQuery,
   useSaveIssueBody,
@@ -236,6 +237,11 @@ function Header({
             issueHtmlUrl={issue.htmlUrl}
           />
           <AgentPicker
+            projectId={projectId}
+            issueNumber={issue.number}
+            labels={issue.labels}
+          />
+          <PromptPicker
             projectId={projectId}
             issueNumber={issue.number}
             labels={issue.labels}

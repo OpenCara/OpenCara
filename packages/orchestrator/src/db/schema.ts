@@ -145,6 +145,16 @@ export const projects = pgTable(
     // .references() is omitted to avoid a circular type reference between
     // projects ↔ flows; the DB constraint handles referential integrity.
     defaultImplementFlowId: text("default_implement_flow_id"),
+    // Project-wide defaults for the implement flow's agent + prompt (#158).
+    // FKs → agents.id / prompts.id (ON DELETE SET NULL) are declared in
+    // migration 0038; drizzle .references() is omitted to keep these columns
+    // free of a forward type-reference to the user-scoped agents/prompts
+    // tables (defined later in this file) — the DB constraint owns referential
+    // integrity. These pre-populate the Agent/Prompt dropdowns on each kanban
+    // issue card; a per-card `agent:<name>` / `prompt:<name>` label overrides
+    // them at dispatch without mutating the project default.
+    defaultImplementAgentId: text("default_implement_agent_id"),
+    defaultImplementPromptId: text("default_implement_prompt_id"),
     // Repo-relative path of the canonical agent instructions file. The
     // orchestrator forwards it to the ACP adapter, which resolves +
     // stat-checks against the worktree and injects the content as the
