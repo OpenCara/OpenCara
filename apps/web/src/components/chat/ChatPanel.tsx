@@ -60,7 +60,7 @@ import {
   type ChatSession,
   type ChatSessionScope,
 } from "@/lib/queries";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useChatActions } from "@/lib/chatActions";
 import { useShowThinking } from "./preferences";
@@ -718,12 +718,29 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           onRename={(id, title) => renameSessionMut.mutate({ id, title })}
           onDelete={(id) => deleteSessionMut.mutate({ id })}
           onRestore={(id) => restoreSessionMut.mutate({ id })}
-          onHardDelete={(id) => {
+          onHardDelete={async (id) => {
             // Permanent removal: drops the chat_sessions row AND its
             // associated agent_runs/history server-side (hard=1). Unlike
             // archive this is irreversible, so the row leaves the sidebar
             // entirely on the next list refetch.
-            deleteSessionMut.mutate({ id, hard: true });
+            //
+            // Await the result before touching panel state: the server
+            // rejects (409) a session with an in-flight run, and we must
+            // not clear the conversation the user is still watching when
+            // the delete didn't actually happen.
+            try {
+              await deleteSessionMut.mutateAsync({ id, hard: true });
+            } catch (err) {
+              const msg =
+                err instanceof ApiError &&
+                err.body &&
+                typeof err.body === "object" &&
+                "error" in err.body
+                  ? String((err.body as { error: unknown }).error)
+                  : "Failed to delete session.";
+              window.alert(msg);
+              return;
+            }
             // If we just deleted the thread the panel is viewing, pivot
             // off it so we don't keep dispatching against a dead session.
             if (id === effectiveSessionRowId) {

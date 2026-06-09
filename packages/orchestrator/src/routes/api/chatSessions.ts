@@ -735,15 +735,32 @@ export function chatSessionsRoutes(deps: ChatSessionsRoutesDeps) {
     if (!row) return c.json({ error: "not found" }, 404);
 
     if (hard) {
+      // Refuse to hard-delete a session with an in-flight turn: the
+      // agent_runs delete below would pull the row out from under a live
+      // worker, whose subsequent log/status writes against that
+      // agent_run_id would then fail and orphan the run. The caller can
+      // Stop the run (or wait for it) and retry. Soft-delete/archive has
+      // no such hazard, so it stays unconditional.
+      const active = await selectActiveChatThreadKeys(deps.db, [row.threadKey]);
+      if (active.has(row.threadKey)) {
+        return c.json(
+          { error: "session has an in-flight run; stop it before deleting" },
+          409,
+        );
+      }
       // Drop the per-turn agent_runs first (logs cascade), then the
       // session row itself, so no orphaned history lingers under a
-      // threadKey that can never be reached from the UI again.
-      await deps.db
-        .delete(agentRuns)
-        .where(
-          sql`${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID' = ${row.threadKey}`,
-        );
-      await deps.db.delete(chatSessions).where(eq(chatSessions.id, id));
+      // threadKey that can never be reached from the UI again. Both run
+      // in one transaction so a mid-sequence failure can't leave the
+      // session row pointing at a now-empty history (and vice versa).
+      await deps.db.transaction(async (tx) => {
+        await tx
+          .delete(agentRuns)
+          .where(
+            sql`${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID' = ${row.threadKey}`,
+          );
+        await tx.delete(chatSessions).where(eq(chatSessions.id, id));
+      });
       return c.json({ ok: true, deleted: "hard" });
     }
     const now = new Date();
