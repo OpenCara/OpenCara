@@ -25,7 +25,11 @@ import {
   autoMergePullRequest,
   linkPrToIssueAndCopyAgentLabel,
 } from "../github/pulls.js";
-import type { IssueStatusContext, PullRequestContext } from "./context.js";
+import type {
+  IssueStatusContext,
+  PullRequestContext,
+  ScheduleContext,
+} from "./context.js";
 import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
@@ -68,6 +72,7 @@ export interface NodeRunCtx {
   event: { id: string; type: string; payload: unknown };
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
+  scheduleContext?: ScheduleContext;
   previousOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
@@ -97,6 +102,28 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   // on demand. The trigger node still "matches" so the graph lights up.
   if (ctx.event.type === "manual") {
     return { output: { matched: true, manual: true } };
+  }
+  // schedule.cron is driven by the orchestrator's scheduler, not a webhook.
+  // The scheduler stamps the firing node's id onto the synthetic `schedule`
+  // event so that, in a graph carrying more than one schedule, only the due
+  // one lights up.
+  if (node.kind === "schedule.cron") {
+    if (ctx.event.type !== "schedule") {
+      throw new SkipFlowError("schedule.cron only fires on schedule events");
+    }
+    if (node.config.enabled === false) {
+      throw new SkipFlowError("schedule is disabled");
+    }
+    const targetNodeId = (ctx.event.payload as { nodeId?: unknown }).nodeId;
+    if (typeof targetNodeId === "string" && targetNodeId !== node.id) {
+      throw new SkipFlowError("schedule event targets a different node");
+    }
+    return { output: { matched: true, schedule: true, nodeId: node.id } };
+  }
+  // A schedule event only ever lights up schedule.cron triggers; every GitHub
+  // trigger in the graph prunes its own subgraph for this run.
+  if (ctx.event.type === "schedule") {
+    throw new SkipFlowError("not a schedule trigger");
   }
   if (node.kind === "github.projects_v2_item") {
     return projectsV2ItemTrigger(ctx, node);
@@ -556,6 +583,12 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       if (v !== undefined) env[key] = v;
     }
   }
+  if (ctx.scheduleContext) {
+    for (const key of node.config.contextInjection.env) {
+      const v = ctx.scheduleContext.envExtras[key];
+      if (v !== undefined) env[key] = v;
+    }
+  }
 
   // Prompt resolution mirrors the agent precedence (#158):
   //   1. per-issue `prompt:<name>` label
@@ -816,6 +849,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     ? {
         ...(ctx.prContext?.stdin ?? {}),
         ...(ctx.issueContext?.stdin ?? {}),
+        ...(ctx.scheduleContext?.stdin ?? {}),
         previousOutput: ctx.previousOutput,
         prompt: promptBody ?? undefined,
       }

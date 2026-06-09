@@ -96,10 +96,40 @@ export const GithubProjectsV2ItemTriggerSchema = z.object({
 });
 export type GithubProjectsV2ItemTrigger = z.infer<typeof GithubProjectsV2ItemTriggerSchema>;
 
+// Time-based trigger. Unlike the GitHub trigger kinds, this one is not woken
+// by a webhook — the orchestrator's scheduler loop scans flows for these
+// nodes, computes each one's next fire time from `cron` (evaluated in
+// `timezone`), and dispatches a synthetic `schedule` platform event when a
+// fire is due. The subgraph downstream of a matched schedule trigger runs
+// exactly as it would for any other trigger, with schedule metadata surfaced
+// to agents via OPENCARA_SCHEDULE_* env vars + stdin. `enabled` lets an
+// operator pause one schedule without deleting the node (or the flow).
+export const ScheduleCronTriggerSchema = z.object({
+  id: z.string(),
+  kind: z.literal("schedule.cron"),
+  position: Position,
+  config: z.object({
+    // Human label for the schedule (shown in the management UI and passed to
+    // the agent as OPENCARA_SCHEDULE_NAME).
+    name: z.string().default("Scheduled task"),
+    // Standard 5-field cron (minute hour day-of-month month day-of-week).
+    // Validated by @opencara/shared's parseCron at edit time and at fire time.
+    cron: z.string().default("0 9 * * *"),
+    // IANA timezone the cron is evaluated in (e.g. "America/New_York").
+    // Defaults to UTC so a bare expression behaves predictably on the server.
+    timezone: z.string().default("UTC"),
+    // Pause switch. A disabled schedule is skipped by the scheduler but keeps
+    // its config so it can be re-enabled later.
+    enabled: z.boolean().default(true),
+  }),
+});
+export type ScheduleCronTrigger = z.infer<typeof ScheduleCronTriggerSchema>;
+
 export const TriggerNodeSchema = z.discriminatedUnion("kind", [
   GithubPullRequestTriggerSchema,
   GithubPullRequestReviewTriggerSchema,
   GithubProjectsV2ItemTriggerSchema,
+  ScheduleCronTriggerSchema,
 ]);
 export type TriggerNode = z.infer<typeof TriggerNodeSchema>;
 
@@ -107,6 +137,7 @@ export const TRIGGER_KINDS = [
   "github.pull_request",
   "github.pull_request_review",
   "github.projects_v2_item",
+  "schedule.cron",
 ] as const;
 export function isTriggerKind(kind: string): boolean {
   return (TRIGGER_KINDS as readonly string[]).includes(kind);

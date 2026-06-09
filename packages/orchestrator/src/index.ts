@@ -31,6 +31,7 @@ import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
 import { pruneTriggerSkipFlowRuns } from "./flows/prune.js";
+import { runSchedulerTick } from "./flows/scheduler.js";
 
 // Resilience backstop. opencara.com runs as a bare `nohup` process with no
 // supervisor (no systemd / PM2 / Docker restart policy), so any hard crash
@@ -151,6 +152,26 @@ if (flowEngine) {
   seedBuiltinFlowsForAllProjects(db)
     .then(() => console.log("[orchestrator] flow engine ready (built-in flows seeded)"))
     .catch((err: unknown) => console.error("[orchestrator] flow seeding failed", err));
+}
+
+// Cron scheduler (#128). Polls flow_schedule_state every minute and fires any
+// schedule.cron trigger whose next occurrence has passed. Minute resolution
+// matches cron's own granularity, so a 60s tick can never skip a slot. As with
+// the other background jobs: best-effort, errors logged not thrown, and the
+// timer is unref'd so it never holds the process open on its own.
+if (flowEngine) {
+  const engine = flowEngine;
+  const SCHEDULER_TICK_MS = 60 * 1000;
+  const runScheduler = () => {
+    runSchedulerTick({ db, engine })
+      .then((n) => {
+        if (n > 0) console.log(`[orchestrator] scheduler fired ${n} scheduled run(s)`);
+      })
+      .catch((err: unknown) => console.error("[orchestrator] scheduler tick failed", err));
+  };
+  runScheduler();
+  setInterval(runScheduler, SCHEDULER_TICK_MS).unref();
+  console.log("[orchestrator] cron scheduler started (60s tick)");
 }
 
 if (config.github && config.SESSION_ENCRYPTION_KEY) {

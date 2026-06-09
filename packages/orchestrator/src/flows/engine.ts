@@ -28,8 +28,10 @@ import {
   buildIssueStatusContext,
   buildManualIssueContext,
   buildPullRequestContext,
+  buildScheduleContext,
   type IssueStatusContext,
   type PullRequestContext,
+  type ScheduleContext,
 } from "./context.js";
 import {
   actionRunner,
@@ -82,6 +84,7 @@ export class FlowEngine {
   async triggerFlow(
     flowId: string,
     event: PlatformEventInput,
+    dedupeKey: string | null = null,
   ): Promise<{ flowRunId: string }> {
     const row = await this.deps.db.query.flows.findFirst({
       where: eq(flows.id, flowId),
@@ -92,8 +95,18 @@ export class FlowEngine {
     const def = parseFlowDefinition(row);
     if (!def) throw new Error(`flow ${flowId} has an invalid graph`);
 
-    const prepared = await this.prepareRun(row.id, event);
-    if (!prepared) throw new Error(`flow ${flowId} project/installation missing`);
+    // dedupeKey is set by the scheduler (schedule:<flow>:<node>:<occurrence>)
+    // so a re-fire across a restart / overlapping tick collapses onto the
+    // first run via flow_runs' partial unique index, exactly like the
+    // webhook content-dedup path. null on the manual/kanban trigger path.
+    const prepared = await this.prepareRun(row.id, event, dedupeKey);
+    if (!prepared) {
+      // A null prepared on the schedule path means the dedupe index swallowed
+      // a duplicate fire — surface a benign sentinel rather than throwing so
+      // the scheduler's bookkeeping still advances.
+      if (dedupeKey) return { flowRunId: "" };
+      throw new Error(`flow ${flowId} project/installation missing`);
+    }
 
     setImmediate(() => {
       this.executeFlow(prepared, def, event).catch((err) => {
@@ -258,6 +271,15 @@ export class FlowEngine {
       const def = parseFlowDefinition(row);
       if (!def) continue;
 
+      // A flow whose only entry-points are schedule.cron triggers can never
+      // match a webhook event — dispatching it would just mint a cancelled
+      // `trigger_skip` run for every push/comment/review. Skip it here; the
+      // scheduler drives those flows directly via triggerFlow.
+      const triggers = def.nodes.filter((n) => isTriggerKind(n.kind));
+      if (triggers.length > 0 && triggers.every((t) => t.kind === "schedule.cron")) {
+        continue;
+      }
+
       try {
         const prepared = await this.prepareRun(row.id, event, dedupeKey);
         if (!prepared) continue;
@@ -380,6 +402,15 @@ export class FlowEngine {
       } catch (err) {
         console.error("[flow-engine] issue context fetch failed", err);
       }
+    }
+
+    // Schedule (cron) runs carry no GitHub entity — the synthetic event the
+    // scheduler dispatched already holds every field, so this is pure (no
+    // fetch). Surfaces OPENCARA_SCHEDULE_* env vars + stdin.schedule to the
+    // dispatched agent.
+    let scheduleContext: ScheduleContext | undefined;
+    if (event.type === "schedule") {
+      scheduleContext = buildScheduleContext(project, event.payload as never);
     }
 
     // Manual triggers with an issueNumber (kanban Start button): build the
@@ -506,6 +537,7 @@ export class FlowEngine {
             event,
             prContext,
             issueContext,
+            scheduleContext,
             opts,
           ),
         ),
@@ -593,7 +625,16 @@ export class FlowEngine {
 
         const results = await Promise.allSettled(
           layerJobs.map((job) =>
-            this.runNodeStep(prepared, def, job, event, prContext, issueContext, opts),
+            this.runNodeStep(
+              prepared,
+              def,
+              job,
+              event,
+              prContext,
+              issueContext,
+              scheduleContext,
+              opts,
+            ),
           ),
         );
 
@@ -716,6 +757,7 @@ export class FlowEngine {
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
     issueContext: IssueStatusContext | undefined,
+    scheduleContext: ScheduleContext | undefined,
     opts: { rerun?: boolean },
   ): Promise<{
     stdoutCaptured?: string;
@@ -782,6 +824,7 @@ export class FlowEngine {
       event,
       prContext,
       issueContext,
+      scheduleContext,
       previousOutput,
       publicBaseUrl: this.deps.publicBaseUrl,
       hasDownstreamPostReview,

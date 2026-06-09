@@ -101,11 +101,29 @@ export interface FlowRunSummary {
   flowId: string;
   projectId: string;
   triggerEventId: string | null;
+  /** Type of the originating platform event (e.g. "schedule", "pull_request",
+   *  "manual"). Null only for legacy rows whose event was pruned. Present on
+   *  the project-wide flow-runs list (#128). */
+  triggerType?: string | null;
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
   error: string | null;
+}
+
+export interface ScheduleSummary {
+  flowId: string;
+  slug: string;
+  name: string;
+  nodeId: string;
+  cron: string;
+  timezone: string;
+  enabled: boolean;
+  nextFireTimes: string[];
+  cronError: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface FlowRunStep {
   id: string;
@@ -864,6 +882,64 @@ export function useSetProjectInstructionsFile(projectId: string) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", projectId] });
+    },
+  });
+}
+
+/* ─── Scheduled tasks (cron) — #128 ─────────────────────────────────── */
+
+export const projectSchedulesQuery = (projectId: string) => ({
+  queryKey: ["projects", projectId, "schedules"] as const,
+  queryFn: () =>
+    api.get<{ schedules: ScheduleSummary[] }>(`/api/projects/${projectId}/schedules`),
+});
+
+export function useCreateSchedule(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { name: string; cron: string; timezone: string }) =>
+      api.post<{ schedule: ScheduleSummary | null }>(
+        `/api/projects/${projectId}/schedules`,
+        vars,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "schedules"] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
+export function useUpdateSchedule(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      flowId: string;
+      name?: string;
+      cron?: string;
+      timezone?: string;
+      enabled?: boolean;
+    }) => {
+      const { flowId, ...body } = vars;
+      return api.patch<{ schedule: ScheduleSummary | null }>(
+        `/api/projects/${projectId}/schedules/${flowId}`,
+        body,
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "schedules"] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
+export function useDeleteSchedule(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string) =>
+      api.delete<{ ok: boolean }>(`/api/projects/${projectId}/schedules/${flowId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "schedules"] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
     },
   });
 }

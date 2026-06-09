@@ -172,3 +172,60 @@ describe("unified development-lifecycle built-in flow", () => {
     );
   });
 });
+
+describe("schedule.cron trigger node", () => {
+  const scheduleFlow = {
+    slug: "nightly-audit",
+    name: "Nightly audit",
+    description: "",
+    nodes: [
+      {
+        id: "schedule",
+        kind: "schedule.cron",
+        position: { x: 0, y: 0 },
+        config: {
+          name: "Nightly dependency audit",
+          cron: "0 3 * * *",
+          timezone: "America/New_York",
+          enabled: true,
+        },
+      },
+      {
+        id: "agent",
+        kind: "agent",
+        position: { x: 320, y: 0 },
+        config: { label: "Auditor", contextInjection: { env: [], stdinJson: true } },
+      },
+    ],
+    edges: [{ id: "e1", source: "schedule", target: "agent" }],
+  };
+
+  it("is recognised as a trigger kind", () => {
+    assert.equal(isTriggerKind("schedule.cron"), true);
+  });
+
+  it("round-trips cron/timezone/name/enabled", () => {
+    const parsed = FlowDefinitionSchema.parse(scheduleFlow);
+    const node = parsed.nodes.find((n) => n.kind === "schedule.cron");
+    assert.ok(node && node.kind === "schedule.cron");
+    assert.equal(node.config.cron, "0 3 * * *");
+    assert.equal(node.config.timezone, "America/New_York");
+    assert.equal(node.config.name, "Nightly dependency audit");
+    assert.equal(node.config.enabled, true);
+  });
+
+  it("applies defaults for an empty schedule config", () => {
+    const parsed = FlowDefinitionSchema.parse({
+      ...scheduleFlow,
+      nodes: [
+        { ...scheduleFlow.nodes[0], config: {} },
+        scheduleFlow.nodes[1],
+      ],
+    });
+    const node = parsed.nodes.find((n) => n.kind === "schedule.cron");
+    assert.ok(node && node.kind === "schedule.cron");
+    assert.equal(node.config.cron, "0 9 * * *");
+    assert.equal(node.config.timezone, "UTC");
+    assert.equal(node.config.enabled, true);
+  });
+});

@@ -241,6 +241,7 @@ function FlowRunsTable({ id }: { id: string }) {
             <TableRow>
               <TableHead>Created</TableHead>
               <TableHead>Flow</TableHead>
+              <TableHead>Trigger</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Duration</TableHead>
               <TableHead>Error</TableHead>
@@ -295,6 +296,11 @@ function FlowRunRow({
         )}
       </TableCell>
       <TableCell>
+        <Badge variant="outline" className="font-normal">
+          {triggerTypeLabel(run.triggerType)}
+        </Badge>
+      </TableCell>
+      <TableCell>
         <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
       </TableCell>
       <TableCell className="text-sm">{duration}</TableCell>
@@ -303,6 +309,28 @@ function FlowRunRow({
       </TableCell>
     </TableRow>
   );
+}
+
+function triggerTypeLabel(type: string | null | undefined): string {
+  switch (type) {
+    case "schedule":
+      return "Schedule";
+    case "pull_request":
+      return "Pull request";
+    case "pull_request_review":
+      return "PR review";
+    case "projects_v2_item":
+      return "Project status";
+    case "issue_comment":
+      return "Comment";
+    case "manual":
+      return "Manual";
+    case null:
+    case undefined:
+      return "—";
+    default:
+      return type;
+  }
 }
 
 function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
