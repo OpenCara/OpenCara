@@ -1,0 +1,151 @@
+name: deploy
+
+# Release-deploy the OpenCara server to opencara.com.
+#
+# On every `v<semver>` tag we build a versioned Docker image, push it to GHCR,
+# and roll it out to the production host over SSH — gating the run on the new
+# container reporting healthy. Because each release is a distinct, immutable
+# image tag in GHCR, rollback is "redeploy a prior tag" with no rebuild: use
+# the `workflow_dispatch` entry point (or run deploy/deploy.sh on the host).
+# See deploy/README.md for the required secrets, host prerequisites, and the
+# rollback procedure.
+#
+# This runs ALONGSIDE publish-cli.yml (same `v*.*.*` trigger): that ships the
+# npm CLI, this ships the server. They're independent.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  # Manual rollback / redeploy of an already-built image — no build step.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Existing image tag to (re)deploy, e.g. v1.0.1'
+        required: true
+        type: string
+
+# Never let two production rollouts interleave; queue them instead of
+# cancelling (a half-applied deploy is worse than a slightly delayed one).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build & push image
+    # Only build on a tag push. Manual dispatch deploys an existing image.
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push the image to GHCR
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history for the on-main ancestry check
+
+      - name: Verify tag is on main
+        # Tags can point anywhere; only ship a commit that's actually on main
+        # so a feature-branch tag can never deploy to production.
+        run: |
+          # checkout used fetch-depth: 0, so full history is already present —
+          # fetch main WITHOUT --depth so we don't re-shallow the repo and break
+          # the ancestry check for a tag pointing at an older commit.
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag commit ${GITHUB_SHA} is not on main; refusing to deploy."
+            exit 1
+          fi
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/server
+          tags: |
+            type=semver,pattern=v{{version}}
+            # Move `latest` only for real releases, never for prereleases
+            # (v1.2.3-rc.1 must not become what a fresh `:latest` pull gets).
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # gha cache makes repeat builds (and re-runs) reuse unchanged layers.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to opencara.com
+    needs: [build-and-push]
+    # Run after a successful build on tag push, OR standalone on manual
+    # dispatch (where build-and-push is skipped). always() keeps the job from
+    # being skipped along with its skipped dependency.
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.build-and-push.result == 'success') }}
+    runs-on: ubuntu-latest
+    # Gate on the `production` environment so required reviewers / protection
+    # rules (configured in repo settings) apply before anything touches the host.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::Image tag '$TAG' must be v<semver> (got '$TAG')."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Copy deploy assets to host
+        # Repo is the source of truth for the compose file + deploy script; ship
+        # the current versions every release so the host never drifts.
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_SSH_PORT }}
+          source: "deploy/docker-compose.prod.yml,deploy/deploy.sh"
+          target: "/opt/opencara"
+          strip_components: 1   # drop the leading deploy/ → land files in /opt/opencara
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          OPENCARA_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          # The runner's GITHUB_TOKEN can't authenticate from the host, so the
+          # server pulls with its own read:packages credential. Omit the secret
+          # entirely if the GHCR package is public — deploy.sh skips login then.
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_SSH_PORT }}
+          envs: OPENCARA_IMAGE_TAG,GHCR_USERNAME,GHCR_TOKEN
+          script: |
+            set -euo pipefail
+            chmod +x /opt/opencara/deploy.sh
+            /opt/opencara/deploy.sh
