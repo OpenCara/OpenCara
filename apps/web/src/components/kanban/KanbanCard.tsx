@@ -4,6 +4,7 @@ import {
   Clock,
   ExternalLink,
   GitPullRequest,
+  GitPullRequestArrow,
   Loader2,
   Pencil,
   Play,
@@ -20,6 +21,7 @@ import {
   type KanbanImplementStatus,
   type KanbanItem,
   type KanbanLinkedPr,
+  type KanbanPrFlowStatus,
 } from "@/lib/queries";
 
 const STATE_VARIANT: Record<
@@ -177,6 +179,12 @@ export function KanbanCard({
               ))}
             </div>
           )}
+          {item.prFlowStatus && (
+            <PrFlowStatusLine
+              status={item.prFlowStatus}
+              projectId={projectId}
+            />
+          )}
         </div>
         <div className="flex flex-col items-center gap-1">
           {item.kind === "issue" &&
@@ -292,6 +300,37 @@ const STATUS_PRESENTATION: Record<
   failed: { icon: AlertCircle, color: "text-destructive", spin: false },
   cancelled: { icon: CircleSlash, color: "text-muted-foreground", spin: false },
 };
+
+/**
+ * Inline indicator surfaced on an issue card while one of its linked PRs has
+ * an active PR-review flow run (#160). The whole line links to the flow-run
+ * detail page. Uses a spinner while running and a clock while queued so the
+ * at-a-glance "review in progress" signal reads without parsing the text.
+ * Styled violet to set it apart from the blue implement-status line and the
+ * PR-state colours on the linked-PR badges.
+ */
+function PrFlowStatusLine({
+  status,
+  projectId,
+}: {
+  status: KanbanPrFlowStatus;
+  projectId: string;
+}) {
+  const spin = status.state === "running";
+  const Icon = spin ? Loader2 : Clock;
+  return (
+    <Link
+      to={`/projects/${projectId}/flow-runs/${status.flowRunId}`}
+      className="mt-2 flex items-center gap-1 text-[10px] text-violet-600 hover:underline"
+      title={`PR #${status.prNumber} · ${status.label}${status.state === "pending" ? " (queued)" : ""}`}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <GitPullRequestArrow className="size-3 shrink-0" />
+      <Icon className={`size-3 shrink-0 ${spin ? "animate-spin" : ""}`} />
+      <span className="truncate">{status.label}</span>
+    </Link>
+  );
+}
 
 function LinkedPrBadge({ pr }: { pr: KanbanLinkedPr }) {
   const colorClass = PR_STATE_COLOR[pr.state] ?? "text-muted-foreground";
@@ -449,6 +488,19 @@ export function KanbanCardOverlay({
           ))}
         </div>
       )}
+      {item.prFlowStatus &&
+        (() => {
+          // Match PrFlowStatusLine: spinner while running, clock while queued.
+          const spin = item.prFlowStatus.state === "running";
+          const Icon = spin ? Loader2 : Clock;
+          return (
+            <div className="mt-2 flex items-center gap-1 text-[10px] text-violet-600">
+              <GitPullRequestArrow className="size-3 shrink-0" />
+              <Icon className={`size-3 shrink-0 ${spin ? "animate-spin" : ""}`} />
+              <span className="truncate">{item.prFlowStatus.label}</span>
+            </div>
+          );
+        })()}
     </div>
   );
 }

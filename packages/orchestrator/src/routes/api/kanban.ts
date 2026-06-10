@@ -26,6 +26,7 @@ import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
+  flows,
   flowRuns,
   flowRunSteps,
   githubInstallations,
@@ -331,6 +332,157 @@ export function pickImplementStatus(
   return statuses.byNodeId.get(item.contentNodeId) ?? null;
 }
 
+/**
+ * Flow slugs treated as "PR review" flows for the kanban card indicator.
+ * These are the dedicated review built-ins (`pr-review`, `pr-review-multi`,
+ * `pr-review-fix`). The unified `development-lifecycle` flow runs the review
+ * stage inside a single long-lived run, so detecting "this run is currently
+ * reviewing a PR" there would mean inspecting the active subgraph rather than
+ * the flow slug — out of scope here. Kept as a Set so callers can extend it
+ * (e.g. a project-specific review flow) without touching the query.
+ */
+export const PR_FLOW_SLUGS = [
+  "pr-review",
+  "pr-review-multi",
+  "pr-review-fix",
+] as const;
+
+/** Short, card-friendly label per PR-review flow slug. */
+export function prFlowLabel(slug: string): string {
+  switch (slug) {
+    case "pr-review":
+      return "PR Review";
+    case "pr-review-multi":
+      return "PR Review (multi-agent)";
+    case "pr-review-fix":
+      return "PR Review → Fix";
+    default:
+      return "PR Review";
+  }
+}
+
+/**
+ * One-line indicator shown on a kanban issue card while a PR-review flow is
+ * active for one of the issue's linked PRs. Only in-flight runs surface here:
+ * the indicator must vanish the moment the run terminates (issue #160), so —
+ * unlike the implement-status line — there is no terminal-state look-back.
+ *
+ * - `state` is the (pending|running) flow_run lifecycle state.
+ * - `label` is the flow name ("PR Review", "PR Review → Fix", …).
+ * - `flowRunId` lets the card link to the run detail page.
+ * - `slug` is the source flow slug, carried for the front-end if it wants to
+ *   style by flow kind later.
+ * - `prNumber` is the linked PR the run is operating on.
+ */
+export interface PrFlowStatus {
+  state: "pending" | "running";
+  label: string;
+  flowRunId: string;
+  slug: string;
+  prNumber: number;
+}
+
+/**
+ * Find every active (pending/running) PR-review flow run in this project and
+ * key it by the PR number it operates on. The PR number comes from the run's
+ * trigger event payload:
+ *   - `pull_request` / `pull_request_review` webhooks carry `pull_request.number`.
+ *   - `issue_comment`-on-PR webhooks carry `issue.number` with `issue.pull_request`
+ *     set (GitHub's marker that the "issue" is really a PR).
+ * Runs whose trigger payload yields no PR number (or manual runs with no
+ * trigger event — dropped by the inner join) are skipped.
+ *
+ * PR numbers are repo-scoped; filtering by `projectId` scopes the runs to this
+ * project's repo, so a bare number key cannot collide across repos — the same
+ * safety argument the implement-status loader makes for issue numbers.
+ */
+async function loadPrFlowStatuses(
+  db: Db,
+  projectId: string,
+): Promise<{ byPrNumber: Map<number, PrFlowStatus> }> {
+  const runs = await db
+    .select({
+      runId: flowRuns.id,
+      slug: flows.slug,
+      status: flowRuns.status,
+      createdAt: flowRuns.createdAt,
+      eventPayload: platformEvents.payload,
+    })
+    .from(flowRuns)
+    .innerJoin(flows, eq(flowRuns.flowId, flows.id))
+    .innerJoin(platformEvents, eq(flowRuns.triggerEventId, platformEvents.id))
+    .where(
+      and(
+        eq(flowRuns.projectId, projectId),
+        inArray(flows.slug, [...PR_FLOW_SLUGS]),
+        inArray(flowRuns.status, ["pending", "running"]),
+      ),
+    )
+    .orderBy(desc(flowRuns.createdAt));
+
+  const byPrNumber = new Map<number, PrFlowStatus>();
+  for (const r of runs) {
+    // The SQL already filters to pending/running; this guard also narrows
+    // r.status to the `"pending" | "running"` union the typed field needs.
+    if (r.status !== "pending" && r.status !== "running") continue;
+
+    const prNumber = prNumberFromPayload(r.eventPayload);
+    if (prNumber === null) continue;
+
+    // Keep only the first (most recent) run per PR — the query is ordered
+    // DESC by created_at, so setIfAbsent semantics suffice.
+    if (byPrNumber.has(prNumber)) continue;
+    byPrNumber.set(prNumber, {
+      state: r.status,
+      label: prFlowLabel(r.slug),
+      flowRunId: r.runId,
+      slug: r.slug,
+      prNumber,
+    });
+  }
+  return { byPrNumber };
+}
+
+/**
+ * Extract the PR number a PR-flow trigger event refers to. Mirrors the
+ * resolution order in `buildPullRequestContext`: prefer the inline
+ * `pull_request.number`, else fall back to `issue.number` when the payload
+ * marks the issue as a PR (`issue.pull_request` present). Exported for tests.
+ */
+export function prNumberFromPayload(payload: unknown): number | null {
+  const p = payload as {
+    pull_request?: { number?: unknown };
+    issue?: { number?: unknown; pull_request?: unknown };
+  } | null;
+  if (typeof p?.pull_request?.number === "number") {
+    return p.pull_request.number;
+  }
+  if (
+    p?.issue?.pull_request != null &&
+    typeof p.issue.number === "number"
+  ) {
+    return p.issue.number;
+  }
+  return null;
+}
+
+/**
+ * Pure helper: pick the active PR-flow status for one kanban item by scanning
+ * its linked PRs. Returns the first linked PR that has an active run (linkedPrs
+ * order — typically a single PR per issue). Items with no linked PRs always
+ * miss. Exported for unit tests.
+ */
+export function pickPrFlowStatus(
+  item: { linkedPrs: { number: number }[] },
+  statuses: { byPrNumber: Map<number, PrFlowStatus> },
+): PrFlowStatus | null {
+  for (const pr of item.linkedPrs) {
+    const hit = statuses.byPrNumber.get(pr.number);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function kanbanRoutes(deps: KanbanRoutesDeps) {
   const r = new Hono<AuthEnv>();
   const auth = requireUser();
@@ -629,9 +781,11 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       project.id,
       project.defaultImplementFlowId,
     );
+    const prStatuses = await loadPrFlowStatuses(deps.db, project.id);
     const itemsWithStatus = items.map((it) => ({
       ...it,
       implementStatus: pickImplementStatus(it, statuses),
+      prFlowStatus: pickPrFlowStatus(it, prStatuses),
     }));
 
     return c.json({
@@ -830,9 +984,11 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
           id,
           projectRow?.defaultImplementFlowId ?? null,
         );
+        const prStatuses = await loadPrFlowStatuses(deps.db, id);
         const itemsWithStatus = items.map((it) => ({
           ...it,
           implementStatus: pickImplementStatus(it, statuses),
+          prFlowStatus: pickPrFlowStatus(it, prStatuses),
         }));
         return {
           link,
