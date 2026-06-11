@@ -39,6 +39,15 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Issue triggers inject `OPENCARA_ISSUE_NUMBER`. The two sets don't overlap.
 - A flow cloned from an issue-implement template into a PR context will fail at template-var expansion (`{{OPENCARA_ISSUE_NUMBER}} not in run env`). Update `branchName` / `--from-branch` template vars to a PR-trigger one (e.g. `opencara/pr-{{OPENCARA_PR_NUMBER}}`).
 
+## Deploy / restart
+
+### [hits: 1] Prod provider keys must live in packages/orchestrator/.env, NOT only the launching shell
+- Prod runs as `node --import tsx --env-file=.env src/index.ts` (cwd `packages/orchestrator`, log `/tmp/opencara-orchestrator.log`, port 3030). `--env-file=.env` is the ONLY env source on a clean restart.
+- Gotcha (2026-06-11): the model-provider keys (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GEMINI_API_KEY_AUTH_MECHANISM`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CN_API_KEY`) were present in the *running process* but were NEVER in `.env` — they'd been exported in the shell that first launched it. A plain `--env-file=.env` restart silently drops them. They're now appended to `.env` (gitignored, confirmed via `git check-ignore`), so restarts are reproducible. Before killing prod, diff live env vs `.env` and persist anything provider/secret-shaped that's only in the live process.
+- `/proc/$PID/environ` shows ONLY exec-time vars, never what Node's `--env-file` injects at runtime — so DATABASE_URL/PORT/etc. always look "missing" there even though the app has them. To verify what the app actually sees, run `node --import tsx --env-file=.env -e 'console.log(process.env.KIMI_API_KEY?.length)'`, don't grep `/proc/environ`.
+- Don't try to clone the old env with `xargs -0 env node ...` — it split the 98-var environ into batches and only the first applied (lost KIMI_API_KEY + MINIMAX_CN_API_KEY), AND `env -i $(...)` word-splits values and dies (`env: '53213': No such file or directory`). Fix the source of truth (`.env`) and restart with `--env-file` alone.
+- Detached relaunch that survives the shell: `setsid bash -c 'exec /usr/bin/node --import tsx --env-file=.env src/index.ts' >> /tmp/opencara-orchestrator.log 2>&1 < /dev/null &`.
+
 ## Releases
 
 ### [hits: 1] CLI publish is tag-driven; package.json stays at 0.0.0
