@@ -28,8 +28,10 @@ import {
   buildIssueStatusContext,
   buildManualIssueContext,
   buildPullRequestContext,
+  buildScheduleContext,
   type IssueStatusContext,
   type PullRequestContext,
+  type ScheduleContext,
 } from "./context.js";
 import {
   actionRunner,
@@ -82,6 +84,7 @@ export class FlowEngine {
   async triggerFlow(
     flowId: string,
     event: PlatformEventInput,
+    dedupeKey: string | null = null,
   ): Promise<{ flowRunId: string }> {
     const row = await this.deps.db.query.flows.findFirst({
       where: eq(flows.id, flowId),
@@ -92,8 +95,23 @@ export class FlowEngine {
     const def = parseFlowDefinition(row);
     if (!def) throw new Error(`flow ${flowId} has an invalid graph`);
 
-    const prepared = await this.prepareRun(row.id, event);
-    if (!prepared) throw new Error(`flow ${flowId} project/installation missing`);
+    // dedupeKey is set by the scheduler (schedule:<flow>:<node>:<occurrence>)
+    // so a re-fire across a restart / overlapping tick collapses onto the
+    // first run via flow_runs' partial unique index, exactly like the
+    // webhook content-dedup path. null on the manual/kanban trigger path.
+    const prepared = await this.prepareRun(row.id, event, dedupeKey);
+    if (prepared === "dedupe") {
+      // The dedupe index swallowed a duplicate fire (e.g. an overlapping
+      // scheduler tick). Benign — return an empty sentinel so the scheduler's
+      // bookkeeping still advances without treating it as an error.
+      return { flowRunId: "" };
+    }
+    if (prepared === "missing") {
+      // Genuinely broken: the project/installation is gone. Throw so the
+      // caller (scheduler/manual-trigger route) surfaces it instead of
+      // silently advancing a dead schedule (PR #164 review item 2).
+      throw new Error(`flow ${flowId} project/installation missing`);
+    }
 
     setImmediate(() => {
       this.executeFlow(prepared, def, event).catch((err) => {
@@ -155,7 +173,11 @@ export class FlowEngine {
     }
 
     const prepared = await this.prepareRun(flowRow.id, event);
-    if (!prepared) throw new Error("project/installation missing");
+    // Rerun never sets a dedupeKey, so "dedupe" can't occur here; treat any
+    // non-PreparedRun result as the missing-project/installation error.
+    if (prepared === "missing" || prepared === "dedupe") {
+      throw new Error("project/installation missing");
+    }
 
     setImmediate(() => {
       this.executeFlow(prepared, def, event, preloaded, { rerun: true }).catch((err) => {
@@ -258,9 +280,20 @@ export class FlowEngine {
       const def = parseFlowDefinition(row);
       if (!def) continue;
 
+      // A flow whose only entry-points are schedule.cron triggers can never
+      // match a webhook event — dispatching it would just mint a cancelled
+      // `trigger_skip` run for every push/comment/review. Skip it here; the
+      // scheduler drives those flows directly via triggerFlow.
+      const triggers = def.nodes.filter((n) => isTriggerKind(n.kind));
+      if (triggers.length > 0 && triggers.every((t) => t.kind === "schedule.cron")) {
+        continue;
+      }
+
       try {
         const prepared = await this.prepareRun(row.id, event, dedupeKey);
-        if (!prepared) continue;
+        // Both "missing" (no project/installation) and "dedupe" (duplicate
+        // webhook) are non-errors on the fan-out path — skip this flow.
+        if (prepared === "missing" || prepared === "dedupe") continue;
         await this.executeFlow(prepared, def, event);
       } catch (err) {
         console.error("[flow-engine] runFlow failed", { flowId: row.id, err });
@@ -268,19 +301,26 @@ export class FlowEngine {
     }
   }
 
+  // Returns the prepared run, or a discriminated reason it couldn't start:
+  //   - "missing": the project or its installation row is gone — a genuine
+  //     misconfiguration the caller should surface (the scheduler logs it).
+  //   - "dedupe": the partial unique index swallowed a duplicate dispatch —
+  //     benign; the caller should drop the event quietly.
+  // Distinguishing the two keeps a permanently-broken schedule from looking
+  // identical to a routine duplicate fire (PR #164 review).
   private async prepareRun(
     flowId: string,
     event: PlatformEventInput,
     dedupeKey: string | null = null,
-  ): Promise<PreparedRun | null> {
+  ): Promise<PreparedRun | "missing" | "dedupe"> {
     const project = await this.deps.db.query.projects.findFirst({
       where: eq(projects.id, event.projectId!),
     });
-    if (!project) return null;
+    if (!project) return "missing";
     const installation = await this.deps.db.query.githubInstallations.findFirst({
       where: eq(githubInstallations.id, project.installationId),
     });
-    if (!installation) return null;
+    if (!installation) return "missing";
 
     // Insert with ON CONFLICT DO NOTHING + RETURNING, targeting ONLY the
     // partial dedupe index flow_runs_flow_dedupe_uq (flow_id, dedupe_key)
@@ -314,7 +354,7 @@ export class FlowEngine {
         dedupeKey,
         eventId: event.id,
       });
-      return null;
+      return "dedupe";
     }
     await this.deps.pg.notify(
       FLOW_RUNS_CHANNEL,
@@ -380,6 +420,15 @@ export class FlowEngine {
       } catch (err) {
         console.error("[flow-engine] issue context fetch failed", err);
       }
+    }
+
+    // Schedule (cron) runs carry no GitHub entity — the synthetic event the
+    // scheduler dispatched already holds every field, so this is pure (no
+    // fetch). Surfaces OPENCARA_SCHEDULE_* env vars + stdin.schedule to the
+    // dispatched agent.
+    let scheduleContext: ScheduleContext | undefined;
+    if (event.type === "schedule") {
+      scheduleContext = buildScheduleContext(project, event.payload as never);
     }
 
     // Manual triggers with an issueNumber (kanban Start button): build the
@@ -506,6 +555,7 @@ export class FlowEngine {
             event,
             prContext,
             issueContext,
+            scheduleContext,
             opts,
           ),
         ),
@@ -593,7 +643,16 @@ export class FlowEngine {
 
         const results = await Promise.allSettled(
           layerJobs.map((job) =>
-            this.runNodeStep(prepared, def, job, event, prContext, issueContext, opts),
+            this.runNodeStep(
+              prepared,
+              def,
+              job,
+              event,
+              prContext,
+              issueContext,
+              scheduleContext,
+              opts,
+            ),
           ),
         );
 
@@ -716,6 +775,7 @@ export class FlowEngine {
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
     issueContext: IssueStatusContext | undefined,
+    scheduleContext: ScheduleContext | undefined,
     opts: { rerun?: boolean },
   ): Promise<{
     stdoutCaptured?: string;
@@ -782,6 +842,7 @@ export class FlowEngine {
       event,
       prContext,
       issueContext,
+      scheduleContext,
       previousOutput,
       publicBaseUrl: this.deps.publicBaseUrl,
       hasDownstreamPostReview,

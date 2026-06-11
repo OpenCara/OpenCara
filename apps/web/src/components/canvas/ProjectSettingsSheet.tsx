@@ -22,12 +22,18 @@ import {
 import {
   agentsQuery,
   projectFlowsQuery,
+  projectSchedulesQuery,
   promptsQuery,
+  useCreateSchedule,
+  useDeleteSchedule,
   useSetProjectDefaultImplementAgent,
   useSetProjectDefaultImplementFlow,
   useSetProjectDefaultImplementPrompt,
   useSetProjectInstructionsFile,
+  useUpdateSchedule,
+  type ScheduleSummary,
 } from "@/lib/queries";
+import { useCronPreview, CronPreview } from "@/components/flow/cron-preview";
 
 /**
  * Project settings, surfaced behind the header gear icon. Holds the two
@@ -84,9 +90,259 @@ export function ProjectSettingsSheet({
             projectId={projectId}
             current={instructionsFile}
           />
+          <ScheduledTasksSection projectId={projectId} />
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const DEFAULT_TZ =
+  typeof Intl !== "undefined"
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+    : "UTC";
+
+/**
+ * Per-project scheduled tasks (#128). Each schedule is a dedicated flow with a
+ * `schedule.cron` trigger; this section is the flat create / edit / pause /
+ * delete surface over them. The agent each schedule runs is the project's
+ * default implement agent — wire up that default above for the runs to do
+ * useful work.
+ */
+function ScheduledTasksSection({ projectId }: { projectId: string }) {
+  const schedulesQ = useQuery(projectSchedulesQuery(projectId));
+  const schedules = schedulesQ.data?.schedules ?? [];
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <Label className="text-sm font-medium">Scheduled tasks</Label>
+        <p className="text-xs text-muted-foreground">
+          Run a flow on a recurring cron schedule (e.g. nightly audits). Each
+          schedule dispatches the project&apos;s default implement agent.
+        </p>
+      </div>
+
+      {schedulesQ.isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading…</p>
+      ) : schedules.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No scheduled tasks yet.</p>
+      ) : (
+        <ul className="space-y-2">
+          {schedules.map((s) => (
+            <ScheduleRow key={s.flowId} projectId={projectId} schedule={s} />
+          ))}
+        </ul>
+      )}
+
+      <CreateScheduleForm projectId={projectId} />
+    </section>
+  );
+}
+
+function ScheduleRow({
+  projectId,
+  schedule,
+}: {
+  projectId: string;
+  schedule: ScheduleSummary;
+}) {
+  const [editing, setEditing] = useState(false);
+  const update = useUpdateSchedule(projectId);
+  const del = useDeleteSchedule(projectId);
+
+  const toggleEnabled = () =>
+    update.mutate({ flowId: schedule.flowId, enabled: !schedule.enabled });
+
+  return (
+    <li className="rounded-md border border-border p-3 text-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium">{schedule.name}</span>
+            {!schedule.enabled && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+                Paused
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 font-mono text-xs text-muted-foreground">
+            {schedule.cron} · {schedule.timezone}
+          </div>
+          {schedule.cronError ? (
+            <div className="mt-1 text-xs text-destructive">{schedule.cronError}</div>
+          ) : schedule.nextFireTimes[0] ? (
+            <div className="mt-1 text-xs text-muted-foreground">
+              Next: {new Date(schedule.nextFireTimes[0]).toLocaleString()}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 gap-1">
+          <Button size="sm" variant="ghost" onClick={toggleEnabled} disabled={update.isPending}>
+            {schedule.enabled ? "Pause" : "Resume"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setEditing((v) => !v)}>
+            {editing ? "Cancel" : "Edit"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive"
+            disabled={del.isPending}
+            onClick={() => {
+              if (confirm(`Delete schedule "${schedule.name}"?`)) {
+                del.mutate(schedule.flowId);
+              }
+            }}
+          >
+            Delete
+          </Button>
+        </div>
+      </div>
+
+      {editing && (
+        <ScheduleEditForm
+          projectId={projectId}
+          schedule={schedule}
+          onDone={() => setEditing(false)}
+        />
+      )}
+    </li>
+  );
+}
+
+function ScheduleEditForm({
+  projectId,
+  schedule,
+  onDone,
+}: {
+  projectId: string;
+  schedule: ScheduleSummary;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(schedule.name);
+  const [cron, setCron] = useState(schedule.cron);
+  const [timezone, setTimezone] = useState(schedule.timezone);
+  const update = useUpdateSchedule(projectId);
+  const preview = useCronPreview(cron, timezone);
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!preview.valid) return;
+    update.mutate(
+      { flowId: schedule.flowId, name: name.trim() || "Scheduled task", cron: cron.trim(), timezone: timezone.trim() || "UTC" },
+      { onSuccess: onDone },
+    );
+  };
+
+  return (
+    <form onSubmit={onSubmit} className="mt-3 space-y-2 border-t border-border pt-3">
+      <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
+      <Input
+        value={cron}
+        onChange={(e) => setCron(e.target.value)}
+        placeholder="0 9 * * *"
+        className="font-mono text-xs"
+      />
+      <Input
+        value={timezone}
+        onChange={(e) => setTimezone(e.target.value)}
+        placeholder="UTC"
+        className="font-mono text-xs"
+      />
+      <CronPreview preview={preview} />
+      {update.error && (
+        <div className="text-xs text-destructive">
+          {(update.error as Error).message ?? "Save failed"}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button type="submit" size="sm" disabled={update.isPending || !preview.valid}>
+          {update.isPending ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function CreateScheduleForm({ projectId }: { projectId: string }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("Scheduled task");
+  const [cron, setCron] = useState("0 9 * * *");
+  const [timezone, setTimezone] = useState(DEFAULT_TZ);
+  const create = useCreateSchedule(projectId);
+  const preview = useCronPreview(cron, timezone);
+
+  const reset = () => {
+    setName("Scheduled task");
+    setCron("0 9 * * *");
+    setTimezone(DEFAULT_TZ);
+  };
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!preview.valid) return;
+    create.mutate(
+      { name: name.trim() || "Scheduled task", cron: cron.trim(), timezone: timezone.trim() || "UTC" },
+      {
+        onSuccess: () => {
+          reset();
+          setOpen(false);
+        },
+      },
+    );
+  };
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        + Add scheduled task
+      </Button>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-2 rounded-md border border-border p-3">
+      <div className="text-sm font-medium">New scheduled task</div>
+      <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
+      <Input
+        value={cron}
+        onChange={(e) => setCron(e.target.value)}
+        placeholder="0 9 * * *"
+        className="font-mono text-xs"
+      />
+      <p className="text-xs text-muted-foreground">
+        Standard 5-field cron: minute hour day-of-month month day-of-week.
+      </p>
+      <Input
+        value={timezone}
+        onChange={(e) => setTimezone(e.target.value)}
+        placeholder="UTC"
+        className="font-mono text-xs"
+      />
+      <CronPreview preview={preview} />
+      {create.error && (
+        <div className="text-xs text-destructive">
+          {(create.error as Error).message ?? "Create failed"}
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            reset();
+            setOpen(false);
+          }}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={create.isPending || !preview.valid}>
+          {create.isPending ? "Creating…" : "Create"}
+        </Button>
+      </div>
+    </form>
   );
 }
 

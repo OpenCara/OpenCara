@@ -47,6 +47,65 @@ export interface IssueStatusContext {
   };
 }
 
+// Agent-facing context for a `schedule.cron` trigger. Mirrors the
+// PR / issue context shape (envExtras selected into the agent env via the
+// node's contextInjection.env list; stdin merged into the agent's page
+// context) so a scheduled agent reads its run metadata the same way every
+// other flow agent does. There is no GitHub fetch on this path — all the
+// data comes from the synthetic schedule event the scheduler dispatched.
+export interface ScheduleContext {
+  envExtras: Record<string, string>;
+  stdin: {
+    schedule: {
+      name: string;
+      cron: string;
+      timezone: string;
+      /** The cron occurrence this run fires for (ISO 8601). */
+      occurrence: string;
+      /** When the scheduler actually dispatched the run (ISO 8601). */
+      dispatchedAt: string;
+    };
+  };
+}
+
+interface SchedulePayload {
+  nodeId?: string;
+  scheduleName?: string;
+  cron?: string;
+  timezone?: string;
+  occurrence?: string;
+  dispatchedAt?: string;
+}
+
+/**
+ * Build ScheduleContext from a synthetic `schedule` platform event's payload.
+ * Pure (no I/O): the scheduler already stamped every field onto the payload
+ * when it dispatched the run.
+ */
+export function buildScheduleContext(
+  project: ProjectLike,
+  payload: SchedulePayload,
+): ScheduleContext {
+  const name = payload.scheduleName ?? "Scheduled task";
+  const cron = payload.cron ?? "";
+  const timezone = payload.timezone ?? "UTC";
+  const occurrence = payload.occurrence ?? "";
+  const dispatchedAt = payload.dispatchedAt ?? "";
+
+  const envExtras: Record<string, string> = {
+    OPENCARA_REPO: `${project.owner}/${project.name}`,
+    OPENCARA_SCHEDULE_NAME: name,
+    OPENCARA_SCHEDULE_CRON: cron,
+    OPENCARA_SCHEDULE_TIMEZONE: timezone,
+    OPENCARA_SCHEDULE_RUN_AT: occurrence,
+  };
+
+  return {
+    envExtras,
+    stdin: { schedule: { name, cron, timezone, occurrence, dispatchedAt } },
+  };
+}
+
 interface GithubInstallationLike {
   githubInstallationId: number;
 }
