@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq, isNull } from "drizzle-orm";
 import {
   DeviceToServerMessageSchema,
@@ -41,12 +41,18 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
       };
     }
 
+    // Per-connection identity. Lets the pool tell THIS socket apart from a
+    // later reconnection under the same host id, so a stale socket's late
+    // close can't evict the live one. See ConnectedDevice.connId.
+    const connId = randomUUID();
     let registered = false;
     return {
       onOpen(_evt: unknown, ws: { send: (msg: string) => void }) {
         deps.pool.register({
           agentHostId: host.id,
+          connId,
           userId: host.userId,
+          isAlive: true,
           // The WS context shape varies; cast for the pool's needs.
           ws: ws as never,
           inflight: new Set<string>(),
@@ -106,7 +112,9 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
         deps.pool.handleMessage(host.id, parsed);
       },
       onClose() {
-        if (registered) deps.pool.unregister(host.id);
+        // connId-scoped: if the device already reconnected under a fresh
+        // socket, this stale close is a no-op against the live registration.
+        if (registered) deps.pool.unregister(host.id, connId);
         console.log(`[device-ws] ${host.name} (${host.id}) disconnected`);
       },
     };
