@@ -1,0 +1,38 @@
+# Keep the build context small and reproducible: bring source + manifests
+# only, and let `pnpm install` / `pnpm -r build` regenerate everything else
+# inside the image. Anything an installed/compiled tree would carry is excluded
+# so it can't poison the image with host-built artifacts.
+
+# deps + build outputs (rebuilt in-image)
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# vcs + CI
+.git
+.github
+
+# env + secrets (injected at runtime on the server, never baked in)
+.env
+.env.*
+*.pem
+*.key
+
+# local tooling / editor / OS
+.idea
+.vscode
+.DS_Store
+*.log
+
+# dev-run dumps
+.opencara-acp-spike
+.opencara-mcp-smoke
+
+# the deploy assets themselves aren't needed inside the image
+deploy
+docker-compose.yml
