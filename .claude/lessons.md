@@ -22,6 +22,11 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - The `version` column gets bumped each time a device sends `hello` on WS connect. Between reconnects it's stale and may reflect an older incarnation.
 - For live state, tail the orchestrator log for the *most recent* `hello from <name>: version=...` line. If the most recent event is `disconnected`, the device isn't currently dispatchable.
 
+### [hits: 1] postgres-js opens a dedicated LISTEN connection NOT counted in pool `max` — keep `max` under the Supabase pooler ceiling
+- The orchestrator crashed opencara.com on 2026-06-07 with `PostgresError (EMAXCONNSESSION): max clients reached in session mode - pool_size: 15`. Root cause: the Supabase session pooler (Supavisor) caps this role at **15** concurrent connections, but postgres-js opens a **separate dedicated LISTEN connection** (singleton `listen.sql` with `max:1`, in `node_modules/postgres/src/index.js`) for ALL `pg.listen` channels, on top of the query pool's `max`. With `DB_POOL_MAX=15`, peak was 15 + 1 = 16 > 15 → the pooler rejected the surplus the instant the query pool saturated. Fixed by lowering the default to `12` (`packages/orchestrator/src/db/client.ts`); leaves room for the listen connection + `max_lifetime` recycle overlap.
+- The LISTEN connection is a single shared singleton — `pg.listen('a')` and `pg.listen('b')` and 100 concurrent SSE subscribers all multiplex onto ONE connection (extra listeners just push to an in-memory array; only the first per channel sends `LISTEN`). So there is NO per-SSE-stream connection leak — the bug was static over-subscription by one, not a leak. Don't go hunting for un-unlistened subscriptions.
+- The crash was delivered by an **unguarded `async setInterval`** in the SSE routes (`runs.ts` / `flows.ts` `terminalCheck`): a rejected DB query inside it is an unhandled rejection, which Node promotes to a fatal `uncaughtException`. Any `setInterval(async …)` that awaits the DB MUST try/catch its whole body. There is now also a process-level `unhandledRejection`/`uncaughtException` backstop in `index.ts` (non-fatal log) because prod runs under bare `nohup` with no supervisor — a crash stays down until a human restarts it.
+
 ## Dispatch
 
 ### [hits: 1] pickIdle() ignores device capability/version
