@@ -964,7 +964,9 @@ if (isMainModule) {
   // Capture operator-configured extras (e.g. `--model claude-opus-4-5`)
   // that the device passed as argv. These are forwarded to every `claude`
   // subprocess invocation so per-agent model / provider knobs work.
+  // claude-acp itself consumes no argv — all args are treated as passthrough.
   extraClaudeArgs = process.argv.slice(2);
+  Object.freeze(extraClaudeArgs);
 
   const decoder = new FrameDecoder();
 
