@@ -1004,6 +1004,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       kind: agent.kind,
       name: agent.name,
       cwd: worktree?.workdir ?? agent.cwd ?? null,
+      args: agent.args,
     },
     env,
     systemPromptMd,
