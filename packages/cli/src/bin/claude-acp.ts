@@ -192,6 +192,20 @@ function buildClaudeMcpConfig(servers: AcpMcpServer[]): string {
 
 export const sessions = new Map<string, SessionState>();
 
+/**
+ * Operator-configured extras forwarded from `AgentSpec.args` via the device
+ * runner. The orchestrator builds the spec with the agent's DB `args` column
+ * (e.g. `["--model", "claude-opus-4-5"]`) appended after the adapter's own
+ * args; the device spawns `claude-acp <...spec.args>` so they land here as
+ * `process.argv.slice(2)`. We capture them at startup and append them to
+ * every `claude` subprocess invocation so operators can pin a model, set a
+ * provider, or pass any other per-agent flag without redeploying the shim.
+ *
+ * Only set when running as main (guards the export so unit tests don't
+ * accidentally pick up the test runner's argv).
+ */
+export let extraClaudeArgs: string[] = [];
+
 // ─── Project instructions file ─────────────────────────────────────
 
 /** Hard cap on the file size we'll splat onto argv. argv strings on
@@ -471,6 +485,13 @@ async function runClaudeTurn(
     );
     if (resolvedInstructions) {
       args.push("--bare", "--append-system-prompt", resolvedInstructions.content);
+    }
+    // Operator-configured extras (e.g. `--model claude-opus-4-5`).
+    // Appended last so they can override any of the flags above when
+    // the operator explicitly needs a different value. Captured from
+    // process.argv at startup; empty for test imports.
+    if (extraClaudeArgs.length > 0) {
+      args.push(...extraClaudeArgs);
     }
     // Prompt goes on stdin, not argv. Linux's execve caps a single
     // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
@@ -940,6 +961,11 @@ const isMainModule =
   process.argv[1]?.endsWith("claude-acp.js") === true;
 
 if (isMainModule) {
+  // Capture operator-configured extras (e.g. `--model claude-opus-4-5`)
+  // that the device passed as argv. These are forwarded to every `claude`
+  // subprocess invocation so per-agent model / provider knobs work.
+  extraClaudeArgs = process.argv.slice(2);
+
   const decoder = new FrameDecoder();
 
   stdin.setEncoding("utf8");
