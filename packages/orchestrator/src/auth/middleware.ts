@@ -22,7 +22,10 @@ export interface AuthEnv {
 const AUTH_PATH_PREFIXES = ["/api/", "/auth/", "/webhooks/"] as const;
 
 function needsSessionLookup(path: string): boolean {
-  return AUTH_PATH_PREFIXES.some((p) => path.startsWith(p));
+  // Match both the exact base path (e.g. "/api") and any sub-path (e.g. "/api/me").
+  // Without the exact-match check, a request to "/api" (no trailing slash) would
+  // be treated as a static path and silently skip the session lookup.
+  return AUTH_PATH_PREFIXES.some((p) => path === p.slice(0, -1) || path.startsWith(p));
 }
 
 // Fail fast instead of hanging on a starved pool. postgres-js queues query
@@ -41,6 +44,11 @@ function resolveLookupTimeoutMs(): number {
 class SessionLookupTimeout extends Error {}
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  // NOTE: when the timeout fires, `p` continues running in the background
+  // (postgres-js has no query cancellation). Under sustained pool starvation
+  // each 503 response leaves a zombie loadSession() waiting for a slot — which
+  // can delay recovery. Acceptable trade-off: the 503 fast-fail is still the
+  // right call; a future follow-up could cap in-flight lookups with a semaphore.
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new SessionLookupTimeout()), ms);
     // Never let this watchdog timer hold the process open on its own.

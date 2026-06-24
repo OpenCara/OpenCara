@@ -93,16 +93,19 @@ describe("currentUser middleware", () => {
   it("returns 503 (not a hang) when the session lookup exceeds the deadline", async () => {
     // currentUser() reads the timeout once at construction, so set it first.
     process.env["AUTH_SESSION_TIMEOUT_MS"] = "50";
-    const { db } = fakeDb({ hangMs: 1000, session: null });
-    const app = new Hono<AuthEnv>();
-    app.use("*", currentUser(db, "sid"));
-    app.get("/api/me", (c) => c.text("ok"));
-    const started = Date.now();
-    const res = await app.request("/api/me", { headers: { cookie: "sid=abc" } });
-    const elapsed = Date.now() - started;
-    delete process.env["AUTH_SESSION_TIMEOUT_MS"];
-    assert.equal(res.status, 503);
-    assert.equal(res.headers.get("retry-after"), "2");
-    assert.ok(elapsed < 500, `should fail fast, took ${elapsed}ms`);
+    try {
+      const { db } = fakeDb({ hangMs: 1000, session: null });
+      const app = new Hono<AuthEnv>();
+      app.use("*", currentUser(db, "sid"));
+      app.get("/api/me", (c) => c.text("ok"));
+      const started = Date.now();
+      const res = await app.request("/api/me", { headers: { cookie: "sid=abc" } });
+      const elapsed = Date.now() - started;
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get("retry-after"), "2");
+      assert.ok(elapsed < 500, `should fail fast, took ${elapsed}ms`);
+    } finally {
+      delete process.env["AUTH_SESSION_TIMEOUT_MS"];
+    }
   });
 });
