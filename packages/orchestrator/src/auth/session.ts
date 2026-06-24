@@ -112,6 +112,15 @@ export async function createSession(
   return { sessionId, expiresAt };
 }
 
+// `lastSeenAt` only powers coarse "active sessions" reporting, yet the original
+// code wrote it on EVERY request — a third DB round-trip (a WRITE, contending
+// for a scarce pooled connection) on the hottest path in the app. Two changes
+// keep that cost off the request:
+//   1. Throttle: skip the write unless lastSeenAt is already stale by this much.
+//   2. Fire-and-forget: never `await` the bookkeeping write, so request latency
+//      (and its pool slot) never depends on it completing.
+const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
+
 export async function loadSession(
   db: Db,
   sessionId: string,
@@ -126,10 +135,15 @@ export async function loadSession(
   }
   const u = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
   if (!u) return null;
-  await db
-    .update(sessions)
-    .set({ lastSeenAt: new Date() })
-    .where(eq(sessions.id, sessionId));
+  if (Date.now() - row.lastSeenAt.getTime() > LAST_SEEN_THROTTLE_MS) {
+    void db
+      .update(sessions)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(sessions.id, sessionId))
+      .catch((err: unknown) => {
+        console.error("[auth] lastSeenAt update failed (non-fatal):", err);
+      });
+  }
   return {
     session: { id: row.id, userId: row.userId, expiresAt: row.expiresAt },
     user: {
