@@ -1780,11 +1780,14 @@ function SessionRow({
       {!isRenaming && (
         <>
           {/* Timestamp normally; swaps to the action cluster on hover so
-              the narrow row isn't cluttered with both at once. */}
-          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
+              the narrow row isn't cluttered with both at once. In Tailwind
+              v4 the group-hover selector uses :where() which can match the
+              specificity of the static hidden/visible classes — use the !
+              suffix to guarantee the hover state always wins the cascade. */}
+          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden!">
             {formatRelative(s.updatedAt)}
           </span>
-          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex!">
             <Button
               size="sm"
               variant="ghost"
