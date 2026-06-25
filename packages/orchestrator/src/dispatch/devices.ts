@@ -24,8 +24,27 @@ import type { GithubAppClient } from "../github/app.js";
 
 export interface ConnectedDevice {
   agentHostId: string;
+  /**
+   * Per-connection identity, minted once per WebSocket in the WS endpoint's
+   * onOpen. The pool keys its map by agentHostId (one live socket per host),
+   * but a flaky link can leave a *stale* socket whose `close` arrives only
+   * AFTER the device has already reconnected with a fresh socket. Without a
+   * connection identity, that late close would `delete(agentHostId)` and
+   * evict the live reconnection — the device then looks disconnected while
+   * the client believes it is online (chat dispatch throws "pinned device …
+   * is not connected"). Every mutation that can race a reconnect is therefore
+   * gated on connId so a stale socket only ever tears down itself.
+   */
+  connId: string;
   userId: string | null;
   ws: WSContext<unknown>;
+  /**
+   * Liveness flag for the server-side heartbeat sweep. Set true on register
+   * and on every pong; the sweep flips it false before each ping and reaps
+   * the socket if it is still false on the next tick (missed a full round —
+   * a half-open connection the TCP stack hasn't noticed yet).
+   */
+  isAlive: boolean;
   /**
    * RunIds currently dispatched to this device but not yet acked with `done`.
    * The CLI's onMessage hands each job off via `void executeJob(...)` so the
@@ -35,12 +54,31 @@ export interface ConnectedDevice {
   inflight: Set<string>;
 }
 
+/**
+ * The subset of the underlying `ws` WebSocket (exposed as WSContext.raw by
+ * @hono/node-ws) the heartbeat needs. Kept minimal so the pool doesn't take a
+ * hard dependency on the `ws` types and stays trivially fakeable in tests.
+ */
+interface RawSocket {
+  readyState: number;
+  ping(): void;
+  terminate(): void;
+  on(event: "pong", listener: () => void): void;
+}
+
 interface PendingJob {
   resolve: (r: RunResult) => void;
   reject: (e: Error) => void;
   onLog: RunContext["onLog"];
   stdoutCaptured: string[];
   agentHostId: string;
+  /**
+   * The connId of the socket this job was dispatched to. A reconnect mints a
+   * new connId, so when an old socket finally closes we reject only the jobs
+   * that were actually running on *it* — jobs dispatched to the fresh socket
+   * survive the stale close.
+   */
+  connId: string;
   /**
    * Project scope for agent-call validation. The CLI proxies callbacks
    * over WS using its device token; when an `agent-call` arrives, the
@@ -85,6 +123,29 @@ export class DevicePool {
   }
 
   register(d: ConnectedDevice): void {
+    d.isAlive = true;
+    // Mark live on every pong so the heartbeat sweep doesn't reap a healthy
+    // socket. Registering the listener here (rather than in startHeartbeat)
+    // keeps it tied to the socket's lifetime and is harmless when the sweep
+    // is disabled (e.g. in unit tests).
+    const raw = d.ws.raw as RawSocket | undefined;
+    raw?.on("pong", () => {
+      d.isAlive = true;
+    });
+
+    // Supersede any existing socket for this host. On a flaky link the client
+    // reconnects (this new socket) before the old socket's close propagates;
+    // proactively closing the old one stops it lingering as a half-open leak
+    // and turns its eventual onClose into a connId-mismatched no-op below.
+    const existing = this.devices.get(d.agentHostId);
+    if (existing && existing.connId !== d.connId) {
+      try {
+        existing.ws.close(4000, "superseded");
+      } catch {
+        // best-effort; the old socket may already be closing.
+      }
+    }
+
     this.devices.set(d.agentHostId, d);
     void this.db
       .update(agentHosts)
@@ -92,14 +153,27 @@ export class DevicePool {
       .where(eq(agentHosts.id, d.agentHostId));
   }
 
-  unregister(agentHostId: string): void {
-    this.devices.delete(agentHostId);
-    // Reject any pending jobs assigned to this device.
+  /**
+   * Tear down a socket. `connId` scopes the teardown to a specific connection
+   * so a stale socket's late close can't evict a live reconnection:
+   *  - the device entry is deleted only if the *currently registered* socket
+   *    is the one closing (connId matches);
+   *  - pending jobs are rejected only if they were dispatched to that socket.
+   * Omitting connId purges the host outright (revoke path), rejecting all of
+   * its pending jobs regardless of connection.
+   */
+  unregister(agentHostId: string, connId?: string): void {
+    const current = this.devices.get(agentHostId);
+    if (connId === undefined || current?.connId === connId) {
+      this.devices.delete(agentHostId);
+    }
+    // Reject pending jobs that ran on this connection (or all of the host's
+    // jobs when no connId is given).
     for (const [runId, p] of this.pending) {
-      if (p.agentHostId === agentHostId) {
-        p.reject(new Error(`device ${agentHostId} disconnected`));
-        this.pending.delete(runId);
-      }
+      if (p.agentHostId !== agentHostId) continue;
+      if (connId !== undefined && p.connId !== connId) continue;
+      p.reject(new Error(`device ${agentHostId} disconnected`));
+      this.pending.delete(runId);
     }
   }
 
@@ -118,7 +192,51 @@ export class DevicePool {
         // best-effort; the WS may already be in a closing state
       }
     }
+    // Purge the whole host (no connId): revoke must drop every connection and
+    // fail every in-flight job, not just the currently-registered socket.
     this.unregister(agentHostId);
+  }
+
+  /**
+   * Start a server-side heartbeat. Each tick pings every connected device and
+   * reaps any socket that missed the previous round's pong — a half-open
+   * connection the local TCP stack hasn't surfaced yet. The CLI also pings
+   * from its side, but only the server reap promptly evicts a silently-dead
+   * socket from the pool (otherwise it lingers until TCP keepalive, ~2h, and
+   * pinned dispatch keeps targeting a dead connection). Returns the timer so
+   * the caller can `.unref()` it; safe to leave unstarted in tests.
+   */
+  startHeartbeat(intervalMs = 30_000): NodeJS.Timeout {
+    return setInterval(() => this.heartbeatSweep(), intervalMs);
+  }
+
+  /**
+   * One heartbeat round (extracted from the interval so it can be driven
+   * deterministically in tests): reap sockets that missed the previous
+   * round's pong, then ping the rest and arm them for the next round.
+   */
+  heartbeatSweep(): void {
+    for (const dev of this.devices.values()) {
+      const raw = dev.ws.raw as RawSocket | undefined;
+      if (!raw) continue;
+      if (!dev.isAlive) {
+        // Missed a full ping/pong round — force the socket closed. The
+        // resulting onClose runs connId-scoped unregister, so this can't
+        // evict a newer reconnection.
+        try {
+          raw.terminate();
+        } catch {
+          // best-effort
+        }
+        continue;
+      }
+      dev.isAlive = false;
+      try {
+        raw.ping();
+      } catch {
+        // best-effort; a send failure will surface as a close next tick.
+      }
+    }
   }
 
   /**
@@ -327,6 +445,7 @@ export class DevicePool {
   awaitJob(
     runId: string,
     agentHostId: string,
+    connId: string,
     onLog: RunContext["onLog"],
     projectId: string | null,
     userId: string | null,
@@ -339,6 +458,7 @@ export class DevicePool {
         onLog,
         stdoutCaptured: [],
         agentHostId,
+        connId,
         projectId,
         userId,
         sessionId,
@@ -405,6 +525,7 @@ export class WebSocketDispatcher implements AgentDispatcher {
     const promise = this.pool.awaitJob(
       run.id,
       dev.agentHostId,
+      dev.connId,
       ctx.onLog,
       ctx.projectId ?? null,
       ctx.userId ?? null,

@@ -148,6 +148,11 @@ const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // unref so the daily timer never keeps the process alive on its own.
 setInterval(runFlowRunPrune, FLOW_RUN_PRUNE_INTERVAL_MS).unref();
 
+// Server-side WS heartbeat: ping every device each tick and reap half-open
+// sockets that miss a pong, so a flaky-link reconnect can't leave a dead
+// socket registered for pinned dispatch. unref so it never holds the process.
+devicePool.startHeartbeat().unref();
+
 if (flowEngine) {
   seedBuiltinFlowsForAllProjects(db)
     .then(() => console.log("[orchestrator] flow engine ready (built-in flows seeded)"))

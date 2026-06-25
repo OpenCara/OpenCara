@@ -356,11 +356,15 @@ export class FlowEngine {
       });
       return "dedupe";
     }
-    await this.deps.pg.notify(
-      FLOW_RUNS_CHANNEL,
-      serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
-    );
-
+    // NOTE: intentionally NO flow_runs notify here. The run row exists but its
+    // trigger hasn't been evaluated yet, so we don't know if it's a real run or
+    // an about-to-be `trigger_skip`. Notifying at creation woke every open
+    // kanban board (which LISTENs on `flow_runs`) for EVERY dispatched flow on
+    // EVERY webhook — and most are trigger_skips — a rebuild firehose that
+    // starved the DB pool and shed auth 503s (2026-06-24). executeFlow emits
+    // the "run started" notify once a trigger actually matches; trigger_skips
+    // never notify. The run-scoped SSE stream (/flow-runs/:id/events/stream)
+    // doesn't need this notify — it loads its own initial snapshot on connect.
     return { flowRunId, flowId, project, installation };
   }
 
@@ -611,6 +615,28 @@ export class FlowEngine {
       }
     }
 
+    // Whether this run is "real" — at least one trigger matched (or it's a
+    // defensive no-trigger flow that runs everything). A run that matched
+    // nothing becomes a `trigger_skip` and must NOT wake any board: those are
+    // the bulk of dispatches (every unrelated webhook hits every flow's trigger
+    // and is rejected) and rebuilding open kanban boards for them is what
+    // starved the DB pool. See the prepareRun note above.
+    const triggerMatched = runNotifiesBoard({
+      hasTriggers: allTriggers.length > 0,
+      matchedTriggerCount: matchedTriggerIds.size,
+    });
+
+    // "Run started" board signal: now that we know a trigger matched, tell the
+    // kanban board (and any run-scoped SSE) the run is live so cards can show
+    // "Implementing…". A trigger-phase hard failure skips this — the terminal
+    // notify below carries the failed state instead.
+    if (triggerMatched && !failed) {
+      await this.deps.pg.notify(
+        FLOW_RUNS_CHANNEL,
+        serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+      );
+    }
+
     // Nodes reachable from a matched trigger are the only ones that run.
     // A graph with no trigger nodes at all (defensive — none ship today)
     // runs every node, preserving the prior "execute the whole graph"
@@ -705,10 +731,19 @@ export class FlowEngine {
         cancelReason: skipped ? "trigger_skip" : null,
       })
       .where(eq(flowRuns.id, flowRunId));
-    await this.deps.pg.notify(
-      FLOW_RUNS_CHANNEL,
-      serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
-    );
+    // Only notify for runs the board ever saw. A pure `trigger_skip` (no
+    // trigger matched) never emitted a "run started" notify, so emitting a
+    // terminal one here would wake every board for a no-op — the exact
+    // firehose we're killing. A run that matched then skipped a node mid-flow
+    // (skipped === true but triggerMatched) DID start, so it still notifies so
+    // the card clears. settleWaveItem still runs unconditionally — PM wave
+    // bookkeeping is independent of board notifications.
+    if (triggerMatched) {
+      await this.deps.pg.notify(
+        FLOW_RUNS_CHANNEL,
+        serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+      );
+    }
 
     await this.settleWaveItem(flowRunId, flowStatus);
   }
@@ -1050,6 +1085,24 @@ export interface TriggerOutcome {
   /** Captured stdout — present only for `matched`; the engine threads it
    *  into downstream fan-in. Ignored by summarizeTriggerOutcomes. */
   stdoutCaptured?: string;
+}
+
+/**
+ * Should a flow run's lifecycle transitions wake project boards (the kanban
+ * `flow_runs` LISTENers)? Only runs that actually started are board-relevant:
+ * a trigger matched, or the run belongs to a defensive no-trigger flow that
+ * executes every node. A pure `trigger_skip` run — dispatched then rejected by
+ * every trigger — must never notify, otherwise every unrelated webhook
+ * (issue_comment, push, pull_request, a status move to an unwatched column…)
+ * rebuilds every open board and starves the DB pool. This is the seam that the
+ * 2026-06-24 auth-503 incident traced back to, extracted so the rule is
+ * unit-tested without standing up the DB-backed engine.
+ */
+export function runNotifiesBoard(opts: {
+  hasTriggers: boolean;
+  matchedTriggerCount: number;
+}): boolean {
+  return !opts.hasTriggers || opts.matchedTriggerCount > 0;
 }
 
 /**
