@@ -165,33 +165,38 @@ export async function pushIssueBodyToGithub(
   return refreshed;
 }
 
+// Single-valued label families written onto issues to route the implement
+// flow's agent + prompt. See setIssueScopedLabel for the convention.
+export const AGENT_LABEL_COLOR = "5856d6";
+export const AGENT_LABEL_PREFIX = "agent:";
+// Distinct hue (GitHub green) so `prompt:*` labels read apart from the
+// indigo `agent:*` cluster at a glance on the issue / kanban card.
+export const PROMPT_LABEL_COLOR = "0e8a16";
+export const PROMPT_LABEL_PREFIX = "prompt:";
+
 /**
- * Set or clear the implementation-agent label on an issue.
+ * Set or clear a single-valued, prefix-scoped label on an issue (the engine
+ * behind {@link setIssueAgentLabel} and {@link setIssuePromptLabel}).
  *
- * Convention (mirrors the existing `issue-implement` flow's routing): an
- * issue can have at most one `agent:<name>` label at a time. The label is
- * auto-created on the repo if missing, with a single distinctive color so
- * all `agent:*` labels cluster visually.
+ * Convention: an issue holds at most one `<prefix><name>` label at a time.
+ * The label is auto-created on the repo if missing, with one distinctive
+ * color so all labels in the family cluster visually.
  *
- * Implementation note: we use targeted DELETE + POST against GitHub
- * directly, not the wholesale PUT label-set replace. The PUT path looked
- * cleaner but it requires either a fresh GitHub-side read (extra round
- * trip + race window) or trusting the local mirror — and the local mirror
- * lags webhooks, so a PUT built from it can silently delete unrelated
- * labels added by other integrations or users in between webhook events.
- * DELETE per existing `agent:*` then POST the new one keeps unrelated
- * labels untouched and avoids the mirror-staleness footgun entirely.
+ * `value === null` clears every label in the family; a non-null value sets
+ * exactly that one and drops any siblings.
  *
  * Returns the refreshed issue row from our DB.
  */
-export const AGENT_LABEL_COLOR = "5856d6";
-export const AGENT_LABEL_PREFIX = "agent:";
-
-export async function setIssueAgentLabel(
+async function setIssueScopedLabel(
   app: GithubAppClient,
   project: { id: string; owner: string; name: string; installationId: string },
   issueNumber: number,
-  agentName: string | null,
+  opts: {
+    prefix: string;
+    color: string;
+    value: string | null;
+    describe: (value: string) => string;
+  },
   db: Db,
 ): Promise<typeof issues.$inferSelect> {
   const inst = await db.query.githubInstallations.findFirst({
@@ -210,11 +215,11 @@ export async function setIssueAgentLabel(
   });
   if (!issueRow) throw new Error(`issue ${issueNumber} not found in ${project.id}`);
 
-  const targetLabel = agentName ? `${AGENT_LABEL_PREFIX}${agentName}` : null;
+  const targetLabel = opts.value ? `${opts.prefix}${opts.value}` : null;
 
   // Read the *current* labels from GitHub. Local mirror lags; using it for
   // the deletion list could leave a freshly-added (but unmirrored)
-  // `agent:other` label in place. One extra round-trip — worth it.
+  // `<prefix>other` label in place. One extra round-trip — worth it.
   const listRes = await octokit.request(
     "GET /repos/{owner}/{repo}/issues/{issue_number}/labels",
     {
@@ -227,14 +232,14 @@ export async function setIssueAgentLabel(
   const liveLabels = (listRes.data as Array<{ name?: string }>)
     .map((l) => l.name ?? "")
     .filter(Boolean);
-  const existingAgentLabels = liveLabels.filter((n) =>
-    n.startsWith(AGENT_LABEL_PREFIX),
+  const existingScopedLabels = liveLabels.filter((n) =>
+    n.startsWith(opts.prefix),
   );
 
-  // Drop every existing `agent:*` label except (if applicable) the one we
+  // Drop every existing `<prefix>*` label except (if applicable) the one we
   // are about to set — DELETE is idempotent enough but skipping a no-op is
   // free and clearer in the log.
-  for (const name of existingAgentLabels) {
+  for (const name of existingScopedLabels) {
     if (targetLabel && name === targetLabel) continue;
     await octokit
       .request(
@@ -276,8 +281,8 @@ export async function setIssueAgentLabel(
           owner: project.owner,
           repo: project.name,
           name: targetLabel,
-          color: AGENT_LABEL_COLOR,
-          description: `Implementation agent: ${agentName}`,
+          color: opts.color,
+          description: opts.describe(opts.value!),
         });
       } catch (err) {
         // 422 = "already_exists" — fine, race resolved by the other writer.
@@ -288,7 +293,7 @@ export async function setIssueAgentLabel(
     // Skip the add if the issue already had this exact label (we kept it
     // above and didn't delete it). Otherwise add. Also tolerant of the race
     // where the label was just added by something else.
-    if (!existingAgentLabels.includes(targetLabel)) {
+    if (!existingScopedLabels.includes(targetLabel)) {
       await octokit.request(
         "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
         {
@@ -336,6 +341,65 @@ export async function setIssueAgentLabel(
     );
   }
   return refreshed;
+}
+
+/**
+ * Set or clear the implementation-agent label (`agent:<name>`) on an issue.
+ *
+ * Implementation note: we use targeted DELETE + POST against GitHub
+ * directly, not the wholesale PUT label-set replace. The PUT path looked
+ * cleaner but it requires either a fresh GitHub-side read (extra round
+ * trip + race window) or trusting the local mirror — and the local mirror
+ * lags webhooks, so a PUT built from it can silently delete unrelated
+ * labels added by other integrations or users in between webhook events.
+ * DELETE per existing `agent:*` then POST the new one keeps unrelated
+ * labels untouched and avoids the mirror-staleness footgun entirely.
+ */
+export function setIssueAgentLabel(
+  app: GithubAppClient,
+  project: { id: string; owner: string; name: string; installationId: string },
+  issueNumber: number,
+  agentName: string | null,
+  db: Db,
+): Promise<typeof issues.$inferSelect> {
+  return setIssueScopedLabel(
+    app,
+    project,
+    issueNumber,
+    {
+      prefix: AGENT_LABEL_PREFIX,
+      color: AGENT_LABEL_COLOR,
+      value: agentName,
+      describe: (name) => `Implementation agent: ${name}`,
+    },
+    db,
+  );
+}
+
+/**
+ * Set or clear the implementation-prompt label (`prompt:<name>`) on an issue.
+ * Mirrors {@link setIssueAgentLabel} — the flow engine resolves this label to
+ * a user-scoped prompt body injected as `OPENCARA_PROMPT` at dispatch (#158).
+ */
+export function setIssuePromptLabel(
+  app: GithubAppClient,
+  project: { id: string; owner: string; name: string; installationId: string },
+  issueNumber: number,
+  promptName: string | null,
+  db: Db,
+): Promise<typeof issues.$inferSelect> {
+  return setIssueScopedLabel(
+    app,
+    project,
+    issueNumber,
+    {
+      prefix: PROMPT_LABEL_PREFIX,
+      color: PROMPT_LABEL_COLOR,
+      value: promptName,
+      describe: (name) => `Implementation prompt: ${name}`,
+    },
+    db,
+  );
 }
 
 // One-shot REST backfill of every issue in a repo. Called from project add.

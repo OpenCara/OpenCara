@@ -13,6 +13,11 @@ import {
   platformEvents,
 } from "../../db/schema.js";
 import { FlowDefinitionSchema } from "@opencara/flows";
+import {
+  validateCron,
+  nextCronOccurrences,
+  isValidTimeZone,
+} from "@opencara/shared";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import { resetProjectFlowToTemplate } from "../../flows/builtin.js";
@@ -404,17 +409,224 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const limit = clampLimit(c.req.query("limit"));
     // Hide trigger-skip rows by default; ?includeSkipped=true shows them.
     const includeSkipped = c.req.query("includeSkipped") === "true";
-    const rows = await deps.db.query.flowRuns.findMany({
-      where: includeSkipped
-        ? eq(flowRuns.projectId, projectId)
-        : and(
-            eq(flowRuns.projectId, projectId),
-            sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
-          ),
-      orderBy: [desc(flowRuns.createdAt)],
-      limit,
-    });
+    const where = includeSkipped
+      ? eq(flowRuns.projectId, projectId)
+      : and(
+          eq(flowRuns.projectId, projectId),
+          sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
+        );
+    // LEFT JOIN the originating platform event so the UI can show a trigger
+    // type indicator (#128): "schedule" for cron runs, "pull_request" /
+    // "projects_v2_item" / "manual" / … for the rest. triggerType is null
+    // only for legacy rows whose event was pruned.
+    const rows = await deps.db
+      .select({
+        id: flowRuns.id,
+        flowId: flowRuns.flowId,
+        projectId: flowRuns.projectId,
+        triggerEventId: flowRuns.triggerEventId,
+        triggerType: platformEvents.type,
+        status: flowRuns.status,
+        startedAt: flowRuns.startedAt,
+        finishedAt: flowRuns.finishedAt,
+        createdAt: flowRuns.createdAt,
+        error: flowRuns.error,
+        cancelReason: flowRuns.cancelReason,
+      })
+      .from(flowRuns)
+      .leftJoin(platformEvents, eq(flowRuns.triggerEventId, platformEvents.id))
+      .where(where)
+      .orderBy(desc(flowRuns.createdAt))
+      .limit(limit);
     return c.json({ runs: rows });
+  });
+
+  // ── Scheduled tasks (cron) ────────────────────────────────────────────────
+  // A scheduled task is modelled as a dedicated flow whose entry-point is a
+  // `schedule.cron` trigger (graph: schedule → agent). These endpoints give the
+  // project-settings UI a flat CRUD surface over those flows without exposing
+  // the underlying graph plumbing. The orchestrator's scheduler loop fires them
+  // (see flows/scheduler.ts); editing cron/enabled here just rewrites the
+  // trigger node's config + flows.enabled.
+
+  // List the project's scheduled tasks with their next fire times.
+  r.get("/projects/:id/schedules", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    const rows = await deps.db.query.flows.findMany({
+      where: eq(flows.projectId, projectId),
+    });
+    const schedules = rows
+      .map((f) => buildScheduleSummary(f))
+      .filter((s): s is ScheduleSummary => s !== null);
+    return c.json({ schedules });
+  });
+
+  // Create a scheduled task: a new flow with a schedule.cron → agent graph.
+  r.post("/projects/:id/schedules", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+
+    const body = await c.req.json().catch(() => ({}));
+    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : "Scheduled task";
+    const cron = typeof body.cron === "string" ? body.cron.trim() : "";
+    const timezone = typeof body.timezone === "string" && body.timezone ? body.timezone : "UTC";
+
+    const cronCheck = validateCron(cron);
+    if (!cronCheck.valid) {
+      return c.json({ error: `invalid cron: ${cronCheck.error}` }, 400);
+    }
+    if (!isValidTimeZone(timezone)) {
+      return c.json({ error: `invalid timezone: ${timezone}` }, 400);
+    }
+
+    const flowId = ulid();
+    const slug = `schedule-${flowId.slice(-10).toLowerCase()}`;
+    const graph = {
+      description: `Scheduled task: ${name}`,
+      nodes: [
+        {
+          id: "schedule",
+          kind: "schedule.cron",
+          position: { x: 0, y: 0 },
+          config: { name, cron, timezone, enabled: true },
+        },
+        {
+          id: "agent",
+          kind: "agent",
+          position: { x: 0, y: 200 },
+          config: {
+            label: "Scheduled agent",
+            contextInjection: {
+              env: [
+                "OPENCARA_REPO",
+                "OPENCARA_SCHEDULE_NAME",
+                "OPENCARA_SCHEDULE_CRON",
+                "OPENCARA_SCHEDULE_TIMEZONE",
+                "OPENCARA_SCHEDULE_RUN_AT",
+              ],
+              stdinJson: true,
+            },
+          },
+        },
+      ],
+      edges: [{ id: "e_schedule_agent", source: "schedule", target: "agent" }],
+    };
+
+    // Validate the assembled graph before persisting (same guard as node config
+    // edits) so a future schema change can't let a broken schedule flow land.
+    const validation = FlowDefinitionSchema.safeParse({
+      slug,
+      name,
+      description: graph.description,
+      nodes: graph.nodes,
+      edges: graph.edges,
+    });
+    if (!validation.success) {
+      const issue = validation.error.issues[0];
+      return c.json(
+        { error: `invalid schedule: ${issue?.path.join(".") ?? ""} ${issue?.message ?? ""}` },
+        400,
+      );
+    }
+
+    const now = new Date();
+    await deps.db.insert(flows).values({
+      id: flowId,
+      projectId,
+      slug,
+      name,
+      graphJson: graph,
+      enabled: true,
+      customizedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const created = await deps.db.query.flows.findFirst({ where: eq(flows.id, flowId) });
+    return c.json({ schedule: created ? buildScheduleSummary(created) : null }, 201);
+  });
+
+  // Edit a scheduled task: name / cron / timezone / enabled.
+  r.patch("/projects/:id/schedules/:flowId", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const flowId = c.req.param("flowId");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+    });
+    if (!flow) return c.json({ error: "not found" }, 404);
+    const graph = parseGraph(flow.graphJson);
+    const scheduleNode = graph?.nodes.find((n) => n.kind === "schedule.cron");
+    if (!graph || !scheduleNode) {
+      return c.json({ error: "flow is not a scheduled task" }, 400);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const cfg = (scheduleNode.config ?? {}) as Record<string, unknown>;
+
+    if (typeof body.cron === "string") {
+      const cronCheck = validateCron(body.cron.trim());
+      if (!cronCheck.valid) {
+        return c.json({ error: `invalid cron: ${cronCheck.error}` }, 400);
+      }
+      cfg.cron = body.cron.trim();
+    }
+    if (typeof body.timezone === "string") {
+      if (!isValidTimeZone(body.timezone)) {
+        return c.json({ error: `invalid timezone: ${body.timezone}` }, 400);
+      }
+      cfg.timezone = body.timezone;
+    }
+    let newName: string | undefined;
+    if (typeof body.name === "string" && body.name.trim()) {
+      newName = body.name.trim();
+      cfg.name = newName;
+    }
+    let enabled: boolean | undefined;
+    if (typeof body.enabled === "boolean") {
+      enabled = body.enabled;
+      cfg.enabled = body.enabled;
+    }
+    scheduleNode.config = cfg as typeof scheduleNode.config;
+
+    const now = new Date();
+    await deps.db
+      .update(flows)
+      .set({
+        graphJson: graph,
+        name: newName ?? flow.name,
+        enabled: enabled ?? flow.enabled,
+        customizedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(flows.id, flow.id));
+    const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
+    return c.json({ schedule: updated ? buildScheduleSummary(updated) : null });
+  });
+
+  // Delete a scheduled task (cascades to flow_schedule_state + flow_runs).
+  r.delete("/projects/:id/schedules/:flowId", auth, async (c) => {
+    const projectId = c.req.param("id");
+    const flowId = c.req.param("flowId");
+    const user = c.get("user")!;
+    const owned = await loadOwnedProject(deps.db, projectId, user.id);
+    if (!owned) return c.json({ error: "not found" }, 404);
+    const flow = await deps.db.query.flows.findFirst({
+      where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+    });
+    if (!flow) return c.json({ error: "not found" }, 404);
+    const graph = parseGraph(flow.graphJson);
+    if (!graph?.nodes.some((n) => n.kind === "schedule.cron")) {
+      return c.json({ error: "flow is not a scheduled task" }, 400);
+    }
+    await deps.db.delete(flows).where(eq(flows.id, flow.id));
+    return c.json({ ok: true });
   });
 
   // Single flow_run + its steps + linked agent_runs
@@ -668,6 +880,72 @@ interface MutableGraph {
   }>;
   edges: Array<{ id: string; source: string; target: string }>;
   description?: string;
+}
+
+interface ScheduleSummary {
+  flowId: string;
+  slug: string;
+  /** Flow name (kept in sync with the schedule node's `name`). */
+  name: string;
+  nodeId: string;
+  cron: string;
+  timezone: string;
+  /** Whether the schedule is active (flow enabled AND node not paused). */
+  enabled: boolean;
+  /** Next up-to-3 fire times (ISO 8601), or [] for an invalid cron. */
+  nextFireTimes: string[];
+  /** Validation message when the cron can't be parsed; null otherwise. */
+  cronError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Derive a ScheduleSummary from a flow row, or null when the flow has no
+ * schedule.cron trigger (i.e. it's an ordinary flow). The "enabled" flag folds
+ * the flow-level switch and the node-level pause together so the UI shows one
+ * coherent state.
+ */
+function buildScheduleSummary(flow: {
+  id: string;
+  slug: string;
+  name: string;
+  enabled: boolean;
+  graphJson: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}): ScheduleSummary | null {
+  const graph = parseGraph(flow.graphJson);
+  const node = graph?.nodes.find((n) => n.kind === "schedule.cron");
+  if (!graph || !node) return null;
+  const cfg = (node.config ?? {}) as {
+    name?: string;
+    cron?: string;
+    timezone?: string;
+    enabled?: boolean;
+  };
+  const cron = cfg.cron ?? "";
+  const timezone = cfg.timezone ?? "UTC";
+  const cronCheck = validateCron(cron);
+  let nextFireTimes: string[] = [];
+  if (cronCheck.valid) {
+    nextFireTimes = nextCronOccurrences(cron, new Date(), 3, timezone).map((d) =>
+      d.toISOString(),
+    );
+  }
+  return {
+    flowId: flow.id,
+    slug: flow.slug,
+    name: cfg.name ?? flow.name,
+    nodeId: node.id,
+    cron,
+    timezone,
+    enabled: flow.enabled && cfg.enabled !== false,
+    nextFireTimes,
+    cronError: cronCheck.valid ? null : cronCheck.error ?? "invalid cron",
+    createdAt: flow.createdAt.toISOString(),
+    updatedAt: flow.updatedAt.toISOString(),
+  };
 }
 
 function parseGraph(raw: unknown): MutableGraph | null {

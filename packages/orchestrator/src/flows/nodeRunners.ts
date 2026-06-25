@@ -25,7 +25,11 @@ import {
   autoMergePullRequest,
   linkPrToIssueAndCopyAgentLabel,
 } from "../github/pulls.js";
-import type { IssueStatusContext, PullRequestContext } from "./context.js";
+import type {
+  IssueStatusContext,
+  PullRequestContext,
+  ScheduleContext,
+} from "./context.js";
 import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
@@ -37,6 +41,7 @@ import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
 import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
+import { extractScopedLabelValues } from "./labelRouting.js";
 
 export class SkipFlowError extends Error {
   constructor(reason: string) {
@@ -67,6 +72,7 @@ export interface NodeRunCtx {
   event: { id: string; type: string; payload: unknown };
   prContext?: PullRequestContext;
   issueContext?: IssueStatusContext;
+  scheduleContext?: ScheduleContext;
   previousOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
@@ -96,6 +102,28 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   // on demand. The trigger node still "matches" so the graph lights up.
   if (ctx.event.type === "manual") {
     return { output: { matched: true, manual: true } };
+  }
+  // schedule.cron is driven by the orchestrator's scheduler, not a webhook.
+  // The scheduler stamps the firing node's id onto the synthetic `schedule`
+  // event so that, in a graph carrying more than one schedule, only the due
+  // one lights up.
+  if (node.kind === "schedule.cron") {
+    if (ctx.event.type !== "schedule") {
+      throw new SkipFlowError("schedule.cron only fires on schedule events");
+    }
+    if (node.config.enabled === false) {
+      throw new SkipFlowError("schedule is disabled");
+    }
+    const targetNodeId = (ctx.event.payload as { nodeId?: unknown }).nodeId;
+    if (typeof targetNodeId === "string" && targetNodeId !== node.id) {
+      throw new SkipFlowError("schedule event targets a different node");
+    }
+    return { output: { matched: true, schedule: true, nodeId: node.id } };
+  }
+  // A schedule event only ever lights up schedule.cron triggers; every GitHub
+  // trigger in the graph prunes its own subgraph for this run.
+  if (ctx.event.type === "schedule") {
+    throw new SkipFlowError("not a schedule trigger");
   }
   if (node.kind === "github.projects_v2_item") {
     return projectsV2ItemTrigger(ctx, node);
@@ -505,25 +533,37 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     ),
   });
 
-  // Label-based agent routing: when the trigger event is an issue and the
-  // issue has exactly one `agent:<name>` label, dispatch THAT agent
-  // (project-owner-scoped) instead of the linked default. Lets a user pick a
-  // dispatcher per-issue from GitHub without re-editing the flow. If the
-  // label exists but no matching agent is found, surface an explicit error
-  // — silently falling back would mask user typos.
+  // Project row carries the #158 implement defaults (agent + prompt) used as
+  // the middle fallback tier below. Both columns are null for legacy
+  // projects, so their presence never changes prior behaviour.
+  const project = await ctx.db.query.projects.findFirst({
+    where: eq(projects.id, ctx.projectId),
+  });
+
+  // Agent resolution precedence (highest first):
+  //   1. per-issue `agent:<name>` label  — user picks a dispatcher from the
+  //      kanban card / GitHub without re-editing the flow.
+  //   2. project default implement agent — the project-settings pick the card
+  //      dropdowns pre-populate with (#158).
+  //   3. flow-node linked agent          — the advanced per-node default set
+  //      on the flow detail page.
+  // A label that names a missing agent is a hard error (masking a typo would
+  // silently run the wrong dispatcher).
   let agent: typeof agents.$inferSelect | null = await resolveLabelRoutedAgent(ctx);
   if (!agent) {
-    if (!setting?.agentId) {
+    const fallbackAgentId =
+      project?.defaultImplementAgentId ?? setting?.agentId ?? null;
+    if (!fallbackAgentId) {
       throw new Error(
-        `agent node '${node.id}' has no linked agent and no agent:<name> label on the issue or PR — link a default from the flow detail page or label the issue/PR`,
+        `agent node '${node.id}' has no agent to run: no agent:<name> label on the issue/PR, no project default implement agent, and no linked agent on the flow node — set a default in project settings, label the issue/PR, or link one from the flow detail page`,
       );
     }
     agent =
       (await ctx.db.query.agents.findFirst({
-        where: eq(agents.id, setting.agentId),
+        where: eq(agents.id, fallbackAgentId),
       })) ?? null;
     if (!agent) {
-      throw new Error(`linked agent ${setting.agentId} not found (revoked or deleted)`);
+      throw new Error(`implement agent ${fallbackAgentId} not found (revoked or deleted)`);
     }
   }
 
@@ -543,16 +583,32 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       if (v !== undefined) env[key] = v;
     }
   }
+  if (ctx.scheduleContext) {
+    for (const key of node.config.contextInjection.env) {
+      const v = ctx.scheduleContext.envExtras[key];
+      if (v !== undefined) env[key] = v;
+    }
+  }
 
-  // Look up linked prompt for this flow node, if any. (When the agent came
-  // from a label and no flow_node_settings row exists, there's no linked
-  // prompt either — that's fine, agent runs without OPENCARA_PROMPT.)
-  const linkedPromptBody = setting?.promptId
-    ? (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, setting.promptId) }))
-        ?.body ?? null
-    : null;
-  if (linkedPromptBody !== null) {
-    env["OPENCARA_PROMPT"] = linkedPromptBody;
+  // Prompt resolution mirrors the agent precedence (#158):
+  //   1. per-issue `prompt:<name>` label
+  //   2. project default implement prompt
+  //   3. flow-node linked prompt
+  // The prompt is optional at every tier — when none resolve the agent runs
+  // without OPENCARA_PROMPT. A label naming a missing prompt is a hard error,
+  // same rationale as the agent label.
+  let promptBody: string | null = await resolveLabelRoutedPrompt(ctx);
+  if (promptBody === null) {
+    const fallbackPromptId =
+      project?.defaultImplementPromptId ?? setting?.promptId ?? null;
+    if (fallbackPromptId) {
+      promptBody =
+        (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, fallbackPromptId) }))
+          ?.body ?? null;
+    }
+  }
+  if (promptBody !== null) {
+    env["OPENCARA_PROMPT"] = promptBody;
   }
 
   const agentRunId = ulid();
@@ -793,8 +849,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     ? {
         ...(ctx.prContext?.stdin ?? {}),
         ...(ctx.issueContext?.stdin ?? {}),
+        ...(ctx.scheduleContext?.stdin ?? {}),
         previousOutput: ctx.previousOutput,
-        prompt: linkedPromptBody ?? undefined,
+        prompt: promptBody ?? undefined,
       }
     : undefined;
 
@@ -832,8 +889,8 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
 
   const systemPromptParts: string[] = [];
   const injectedSkills: Array<{ name: string; instructions: string }> = [];
-  if (linkedPromptBody && linkedPromptBody.trim().length > 0) {
-    systemPromptParts.push(linkedPromptBody.trim());
+  if (promptBody && promptBody.trim().length > 0) {
+    systemPromptParts.push(promptBody.trim());
   }
   if (implementSkill) {
     systemPromptParts.push(implementSkill.instructions);
@@ -947,6 +1004,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       kind: agent.kind,
       name: agent.name,
       cwd: worktree?.workdir ?? agent.cwd ?? null,
+      args: agent.args,
     },
     env,
     systemPromptMd,
@@ -1285,11 +1343,7 @@ async function resolveLabelRoutedAgent(
       if (typeof l.name === "string") sources.push(l.name);
     }
   }
-  const PREFIX = "agent:";
-  const requested = sources
-    .filter((n) => n.startsWith(PREFIX))
-    .map((n) => n.slice(PREFIX.length).trim())
-    .filter((n) => n.length > 0);
+  const requested = extractScopedLabelValues(sources, "agent:");
   if (requested.length === 0) return null;
   if (requested.length > 1) {
     throw new SkipFlowError(
@@ -1318,6 +1372,52 @@ async function resolveLabelRoutedAgent(
     );
   }
   return found;
+}
+
+/**
+ * Resolve a per-issue `prompt:<name>` label to its prompt body, mirroring
+ * {@link resolveLabelRoutedAgent}. Returns the body string, or null when no
+ * `prompt:*` label is present (the caller then falls back to project / node
+ * defaults). Throws on multiple labels or a label naming a non-existent
+ * prompt — same fail-loud rationale as the agent path (#158).
+ */
+async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null> {
+  const sources: string[] = [];
+  for (const l of ctx.issueContext?.stdin.issue?.labels ?? []) {
+    if (typeof l.name === "string") sources.push(l.name);
+  }
+  if (ctx.event.type === "pull_request_review" && ctx.prContext?.stdin.pr) {
+    const pr = ctx.prContext.stdin.pr as { labels?: Array<{ name?: unknown }> };
+    for (const l of pr.labels ?? []) {
+      if (typeof l.name === "string") sources.push(l.name);
+    }
+  }
+  const requested = extractScopedLabelValues(sources, "prompt:");
+  if (requested.length === 0) return null;
+  if (requested.length > 1) {
+    throw new SkipFlowError(
+      `multiple prompt:<name> labels on issue/PR (${requested.join(", ")}); pick one`,
+    );
+  }
+  const name = requested[0]!;
+
+  const project = await ctx.db.query.projects.findFirst({
+    where: eq(projects.id, ctx.projectId),
+  });
+  if (!project?.addedByUserId) {
+    throw new Error(
+      `cannot resolve prompt:${name} — project ${ctx.projectId} has no addedByUserId`,
+    );
+  }
+  const found = await ctx.db.query.prompts.findFirst({
+    where: and(eq(prompts.userId, project.addedByUserId), eq(prompts.name, name)),
+  });
+  if (!found) {
+    throw new Error(
+      `label requested prompt:${name} but no prompt named '${name}' exists for the project owner — create it on /prompts or fix the label`,
+    );
+  }
+  return found.body;
 }
 
 export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {

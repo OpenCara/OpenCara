@@ -4,6 +4,7 @@ import {
   Clock,
   ExternalLink,
   GitPullRequest,
+  GitPullRequestArrow,
   Loader2,
   Pencil,
   Play,
@@ -14,11 +15,13 @@ import { CSS } from "@dnd-kit/utilities";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AgentPicker } from "@/components/agent/AgentPicker";
+import { PromptPicker } from "@/components/agent/PromptPicker";
 import {
   useTriggerImplementFlow,
   type KanbanImplementStatus,
   type KanbanItem,
   type KanbanLinkedPr,
+  type KanbanPrFlowStatus,
 } from "@/lib/queries";
 
 const STATE_VARIANT: Record<
@@ -57,11 +60,18 @@ export function KanbanCard({
   projectId,
   projectRepo,
   defaultImplementFlowSlug,
+  defaultAgentName,
+  defaultPromptName,
 }: {
   item: KanbanItem;
   projectId: string;
   projectRepo: { owner: string; name: string } | null;
   defaultImplementFlowSlug: string | null;
+  /** Project default implement agent/prompt names (#158). Pre-populate the
+   *  card dropdowns when the issue carries no `agent:` / `prompt:` override
+   *  label; null when the project has no such default. */
+  defaultAgentName: string | null;
+  defaultPromptName: string | null;
 }) {
   // Drag handle covers the whole card. The action icons (ExternalLink,
   // Pencil) stop pointerdown so they're clickable without starting a drag.
@@ -169,6 +179,12 @@ export function KanbanCard({
               ))}
             </div>
           )}
+          {item.prFlowStatus && (
+            <PrFlowStatusLine
+              status={item.prFlowStatus}
+              projectId={projectId}
+            />
+          )}
         </div>
         <div className="flex flex-col items-center gap-1">
           {item.kind === "issue" &&
@@ -199,20 +215,35 @@ export function KanbanCard({
       </div>
       {showImplementControls && (
         <div
-          className="mt-2 flex items-center gap-2"
+          className="mt-2 space-y-1.5"
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <AgentPicker
-            projectId={projectId}
-            issueNumber={item.contentNumber!}
-            labels={item.labels}
-            compact
-          />
+          <div className="flex items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              <AgentPicker
+                projectId={projectId}
+                issueNumber={item.contentNumber!}
+                labels={item.labels}
+                compact
+                defaultAgentName={defaultAgentName}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <PromptPicker
+                projectId={projectId}
+                issueNumber={item.contentNumber!}
+                labels={item.labels}
+                compact
+                defaultPromptName={defaultPromptName}
+              />
+            </div>
+          </div>
           <StartImplementButton
             projectId={projectId}
             issueNumber={item.contentNumber!}
             labels={item.labels}
             flowSlug={defaultImplementFlowSlug}
+            hasDefaultAgent={defaultAgentName !== null}
           />
         </div>
       )}
@@ -270,6 +301,37 @@ const STATUS_PRESENTATION: Record<
   cancelled: { icon: CircleSlash, color: "text-muted-foreground", spin: false },
 };
 
+/**
+ * Inline indicator surfaced on an issue card while one of its linked PRs has
+ * an active PR-review flow run (#160). The whole line links to the flow-run
+ * detail page. Uses a spinner while running and a clock while queued so the
+ * at-a-glance "review in progress" signal reads without parsing the text.
+ * Styled violet to set it apart from the blue implement-status line and the
+ * PR-state colours on the linked-PR badges.
+ */
+function PrFlowStatusLine({
+  status,
+  projectId,
+}: {
+  status: KanbanPrFlowStatus;
+  projectId: string;
+}) {
+  const spin = status.state === "running";
+  const Icon = spin ? Loader2 : Clock;
+  return (
+    <Link
+      to={`/projects/${projectId}/flow-runs/${status.flowRunId}`}
+      className="mt-2 flex items-center gap-1 text-[10px] text-violet-600 hover:underline"
+      title={`PR #${status.prNumber} · ${status.label}${status.state === "pending" ? " (queued)" : ""}`}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <GitPullRequestArrow className="size-3 shrink-0" />
+      <Icon className={`size-3 shrink-0 ${spin ? "animate-spin" : ""}`} />
+      <span className="truncate">{status.label}</span>
+    </Link>
+  );
+}
+
 function LinkedPrBadge({ pr }: { pr: KanbanLinkedPr }) {
   const colorClass = PR_STATE_COLOR[pr.state] ?? "text-muted-foreground";
   return (
@@ -293,20 +355,27 @@ function StartImplementButton({
   issueNumber,
   labels,
   flowSlug,
+  hasDefaultAgent,
 }: {
   projectId: string;
   issueNumber: number;
   labels: { name: string; color: string }[];
   flowSlug: string | null;
+  /** True when the project sets a default implement agent — the issue can
+   *  then dispatch with the inherited default even without an `agent:` label. */
+  hasDefaultAgent: boolean;
 }) {
   const trigger = useTriggerImplementFlow(projectId);
-  const hasAgent = labels.some((l) => l.name.startsWith("agent:"));
+  // An effective agent is either a per-card `agent:<name>` override label or
+  // the inherited project default — dispatch resolves the same precedence.
+  const hasAgent =
+    labels.some((l) => l.name.startsWith("agent:")) || hasDefaultAgent;
   const disabled = !flowSlug || !hasAgent || trigger.isPending;
 
   const title = !flowSlug
     ? "Set a default implement flow in project settings first"
     : !hasAgent
-      ? "Pick an agent first"
+      ? "Pick an agent first (or set a default in project settings)"
       : "Start implement flow for this issue";
 
   return (
@@ -419,6 +488,19 @@ export function KanbanCardOverlay({
           ))}
         </div>
       )}
+      {item.prFlowStatus &&
+        (() => {
+          // Match PrFlowStatusLine: spinner while running, clock while queued.
+          const spin = item.prFlowStatus.state === "running";
+          const Icon = spin ? Loader2 : Clock;
+          return (
+            <div className="mt-2 flex items-center gap-1 text-[10px] text-violet-600">
+              <GitPullRequestArrow className="size-3 shrink-0" />
+              <Icon className={`size-3 shrink-0 ${spin ? "animate-spin" : ""}`} />
+              <span className="truncate">{item.prFlowStatus.label}</span>
+            </div>
+          );
+        })()}
     </div>
   );
 }

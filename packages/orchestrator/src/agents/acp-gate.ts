@@ -75,7 +75,7 @@ export function checkAcpEligibility(agentKind: string): AcpEligibility {
 }
 
 export interface BuildAcpSpecOpts {
-  agent: { kind: string; name: string; cwd: string | null };
+  agent: { kind: string; name: string; cwd: string | null; args?: string[] };
   env: Record<string, string>;
   systemPromptMd: string;
   userPromptMd: string;
@@ -150,7 +150,11 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
   return {
     kind: opts.agent.name,
     command: adapter.command,
-    args: [...adapter.args],
+    // Adapter's own args first, then operator-configured extras (e.g.
+    // `--model claude-opus-4-5` from the agent's DB `args` column). The
+    // device passes these through to the ACP adapter binary (claude-acp),
+    // which in turn appends them to the underlying CLI invocation.
+    args: [...adapter.args, ...(opts.agent.args ?? [])],
     env: opts.env,
     cwd: opts.agent.cwd ?? undefined,
     acp,

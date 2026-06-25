@@ -26,6 +26,10 @@ export interface FlowGraphNode {
     fromOptions?: string[];
     toOptions?: string[];
     fieldName?: string;
+    /** schedule.cron trigger config — surfaced as the node title + subtitle. */
+    name?: string;
+    cron?: string;
+    timezone?: string;
   };
 }
 export interface FlowGraphEdge {
@@ -169,6 +173,8 @@ function pickLabel(n: FlowGraphNode): string {
       return "PR review submitted";
     case "github.projects_v2_item":
       return "Project status change";
+    case "schedule.cron":
+      return n.config?.name ?? "Schedule";
     case "agent":
       return n.config?.label ?? "Agent";
     case "github.post_review":
@@ -196,6 +202,11 @@ function pickSubtitle(n: FlowGraphNode): string | undefined {
       const fromStr = fromList.length === 0 ? "*" : fromList.join("|");
       const toStr = toList.length === 0 ? "*" : toList.join("|");
       return `${field}: ${fromStr} → ${toStr}`;
+    }
+    case "schedule.cron": {
+      const cron = n.config?.cron ?? "";
+      const tz = n.config?.timezone ?? "UTC";
+      return cron ? `${cron} (${tz})` : "trigger";
     }
     case "agent":
       // When the agent has a worktree option, show the branch

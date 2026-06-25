@@ -117,6 +117,8 @@ export function ProjectDetailPage() {
           <ProjectSettingsSheet
             projectId={id!}
             defaultImplementFlowId={p.defaultImplementFlowId ?? null}
+            defaultImplementAgentId={p.defaultImplementAgentId ?? null}
+            defaultImplementPromptId={p.defaultImplementPromptId ?? null}
             instructionsFile={p.instructionsFile ?? ""}
           />
         </div>

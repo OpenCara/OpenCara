@@ -27,6 +27,7 @@ import {
   Plus,
   Send,
   Square,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -59,7 +60,7 @@ import {
   type ChatSession,
   type ChatSessionScope,
 } from "@/lib/queries";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useChatActions } from "@/lib/chatActions";
 import { useShowThinking } from "./preferences";
@@ -717,6 +718,37 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           onRename={(id, title) => renameSessionMut.mutate({ id, title })}
           onDelete={(id) => deleteSessionMut.mutate({ id })}
           onRestore={(id) => restoreSessionMut.mutate({ id })}
+          onHardDelete={async (id) => {
+            // Permanent removal: drops the chat_sessions row AND its
+            // associated agent_runs/history server-side (hard=1). Unlike
+            // archive this is irreversible, so the row leaves the sidebar
+            // entirely on the next list refetch.
+            //
+            // Await the result before touching panel state: the server
+            // rejects (409) a session with an in-flight run, and we must
+            // not clear the conversation the user is still watching when
+            // the delete didn't actually happen.
+            try {
+              await deleteSessionMut.mutateAsync({ id, hard: true });
+            } catch (err) {
+              const msg =
+                err instanceof ApiError &&
+                err.body &&
+                typeof err.body === "object" &&
+                "error" in err.body
+                  ? String((err.body as { error: unknown }).error)
+                  : "Failed to delete session.";
+              window.alert(msg);
+              return;
+            }
+            // If we just deleted the thread the panel is viewing, pivot
+            // off it so we don't keep dispatching against a dead session.
+            if (id === effectiveSessionRowId) {
+              setOverrideSession(null);
+              setMessages([]);
+              setAnsweredOptionMessageIds(new Set());
+            }
+          }}
         />
       )}
 
@@ -1515,6 +1547,7 @@ function SessionPanel({
   onRename,
   onDelete,
   onRestore,
+  onHardDelete,
 }: {
   sessions: ChatSession[];
   activeSessionId: string | null;
@@ -1525,6 +1558,7 @@ function SessionPanel({
   onRename: (id: string, title: string | null) => void;
   onDelete: (id: string) => void;
   onRestore: (id: string) => void;
+  onHardDelete: (id: string) => void;
 }) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -1561,6 +1595,7 @@ function SessionPanel({
     onPick,
     onDelete,
     onRestore,
+    onHardDelete,
   };
 
   return (
@@ -1684,6 +1719,7 @@ function SessionRow({
   onPick,
   onDelete,
   onRestore,
+  onHardDelete,
 }: {
   session: ChatSession;
   activeSessionId: string | null;
@@ -1696,6 +1732,7 @@ function SessionRow({
   onPick: (s: ChatSession) => void;
   onDelete: (id: string) => void;
   onRestore: (id: string) => void;
+  onHardDelete: (id: string) => void;
 }) {
   const isActive = s.id === activeSessionId;
   const isRenaming = s.id === renamingId;
@@ -1743,11 +1780,14 @@ function SessionRow({
       {!isRenaming && (
         <>
           {/* Timestamp normally; swaps to the action cluster on hover so
-              the narrow row isn't cluttered with both at once. */}
-          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
+              the narrow row isn't cluttered with both at once. In Tailwind
+              v4 the group-hover selector uses :where() which can match the
+              specificity of the static hidden/visible classes — use the !
+              suffix to guarantee the hover state always wins the cascade. */}
+          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden!">
             {formatRelative(s.updatedAt)}
           </span>
-          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex!">
             <Button
               size="sm"
               variant="ghost"
@@ -1778,6 +1818,27 @@ function SessionRow({
                 <Archive className="size-3" />
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="size-6 p-0 text-destructive hover:text-destructive"
+              title="Delete permanently"
+              onClick={() => {
+                // Irreversible: confirm before dropping the session and
+                // its chat history for good (acceptance criteria #2/#5).
+                if (
+                  window.confirm(
+                    `Permanently delete "${s.title || "(untitled)"}"? ` +
+                      `This removes the conversation and its chat history ` +
+                      `and cannot be undone.`,
+                  )
+                ) {
+                  onHardDelete(s.id);
+                }
+              }}
+            >
+              <Trash2 className="size-3" />
+            </Button>
           </div>
         </>
       )}

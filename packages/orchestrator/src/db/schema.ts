@@ -145,6 +145,16 @@ export const projects = pgTable(
     // .references() is omitted to avoid a circular type reference between
     // projects ↔ flows; the DB constraint handles referential integrity.
     defaultImplementFlowId: text("default_implement_flow_id"),
+    // Project-wide defaults for the implement flow's agent + prompt (#158).
+    // FKs → agents.id / prompts.id (ON DELETE SET NULL) are declared in
+    // migration 0038; drizzle .references() is omitted to keep these columns
+    // free of a forward type-reference to the user-scoped agents/prompts
+    // tables (defined later in this file) — the DB constraint owns referential
+    // integrity. These pre-populate the Agent/Prompt dropdowns on each kanban
+    // issue card; a per-card `agent:<name>` / `prompt:<name>` label overrides
+    // them at dispatch without mutating the project default.
+    defaultImplementAgentId: text("default_implement_agent_id"),
+    defaultImplementPromptId: text("default_implement_prompt_id"),
     // Repo-relative path of the canonical agent instructions file. The
     // orchestrator forwards it to the ACP adapter, which resolves +
     // stat-checks against the worktree and injects the content as the
@@ -457,6 +467,41 @@ export const flowNodeSettings = pgTable(
   },
   (t) => ({
     flowNodeUq: uniqueIndex("flow_node_settings_flow_node_uq").on(t.flowId, t.nodeId),
+  }),
+);
+
+// Firing bookkeeping for `schedule.cron` trigger nodes. One row per
+// (flowId, nodeId). The scheduler scans flows for cron triggers, ensures a
+// row exists (initialising nextFireAt to the next occurrence after "now" so a
+// freshly-created schedule never backfills history), then on each tick fires
+// every row whose nextFireAt has passed and advances it to the following
+// occurrence. `cron`/`timezone` mirror the node config they were computed
+// against so an edited expression triggers a recompute. Keeping this state in
+// its own table (rather than re-deriving from flow_runs each tick) makes the
+// hot path a single indexed `WHERE next_fire_at <= now` query, and the cron
+// occurrence math runs only at init / after a fire.
+export const flowScheduleState = pgTable(
+  "flow_schedule_state",
+  {
+    id: text("id").primaryKey(),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => flows.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    cron: text("cron").notNull(),
+    timezone: text("timezone").notNull().default("UTC"),
+    // Next time this schedule is due. NULL means "no upcoming occurrence
+    // within a year" (e.g. an impossible date) — such rows are never due.
+    nextFireAt: timestamp("next_fire_at", { withTimezone: true }),
+    // The occurrence time we last dispatched a run for (NULL until first fire).
+    lastFiredAt: timestamp("last_fired_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    flowNodeUq: uniqueIndex("flow_schedule_state_flow_node_uq").on(t.flowId, t.nodeId),
+    // Serves the scheduler tick: WHERE next_fire_at <= now ORDER BY next_fire_at.
+    nextFireIdx: index("flow_schedule_state_next_fire_idx").on(t.nextFireAt),
   }),
 );
 

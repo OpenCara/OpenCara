@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCronPreview, CronPreview } from "@/components/flow/cron-preview";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
@@ -81,11 +82,15 @@ export function NodeEditor({
       {selectedNode && selectedNode.kind === "github.projects_v2_item" && (
         <ProjectsV2ItemTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
+      {selectedNode && selectedNode.kind === "schedule.cron" && (
+        <ScheduleCronTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
+      )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
         selectedNode.kind !== "github.pull_request" &&
         selectedNode.kind !== "github.pull_request_review" &&
-        selectedNode.kind !== "github.projects_v2_item" && (
+        selectedNode.kind !== "github.projects_v2_item" &&
+        selectedNode.kind !== "schedule.cron" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
@@ -1457,6 +1462,117 @@ function ProjectsV2ItemTriggerPanel({
             onClick={save}
           >
             {set.isPending ? "Saving…" : "Save filters"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface ScheduleCronTriggerPanelProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+  onClose: () => void;
+}
+
+function ScheduleCronTriggerPanel({ scope, node, onClose }: ScheduleCronTriggerPanelProps) {
+  const cfg = (node.config ?? {}) as {
+    name?: string;
+    cron?: string;
+    timezone?: string;
+    enabled?: boolean;
+  };
+  const initialName = cfg.name ?? "Scheduled task";
+  const initialCron = cfg.cron ?? "0 9 * * *";
+  const initialTz = cfg.timezone ?? "UTC";
+  const initialEnabled = cfg.enabled !== false;
+
+  const [name, setName] = useState(initialName);
+  const [cron, setCron] = useState(initialCron);
+  const [timezone, setTimezone] = useState(initialTz);
+  const [enabled, setEnabled] = useState(initialEnabled);
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setName(initialName);
+    setCron(initialCron);
+    setTimezone(initialTz);
+    setEnabled(initialEnabled);
+  }, [initialName, initialCron, initialTz, initialEnabled]);
+
+  const preview = useCronPreview(cron, timezone);
+
+  const save = () => {
+    if (!preview.valid) return;
+    set.mutate({
+      nodeId: node.id,
+      config: {
+        name: name.trim() || "Scheduled task",
+        cron: cron.trim(),
+        timezone: timezone.trim() || "UTC",
+        enabled,
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Schedule (cron)</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Fires on a recurring schedule. The orchestrator evaluates the cron
+              expression in the chosen timezone and dispatches this flow when due.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ChipField
+          label="Name"
+          placeholder="Scheduled task"
+          help="Shown in the schedule list and passed to the agent as OPENCARA_SCHEDULE_NAME."
+          value={name}
+          onChange={setName}
+        />
+        <ChipField
+          label="Cron expression"
+          placeholder="0 9 * * *"
+          help="Standard 5-field cron: minute hour day-of-month month day-of-week. e.g. `0 9 * * 1-5` = 09:00 on weekdays."
+          value={cron}
+          onChange={setCron}
+        />
+        <ChipField
+          label="Timezone"
+          placeholder="UTC"
+          help="IANA timezone the cron is evaluated in, e.g. `America/New_York`."
+          value={timezone}
+          onChange={setTimezone}
+        />
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          Enabled
+        </label>
+
+        <CronPreview preview={preview} />
+
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button size="sm" disabled={set.isPending || !preview.valid} onClick={save}>
+            {set.isPending ? "Saving…" : "Save schedule"}
           </Button>
         </div>
       </CardContent>

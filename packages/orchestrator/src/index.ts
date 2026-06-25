@@ -31,6 +31,24 @@ import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
 import { pruneTriggerSkipFlowRuns } from "./flows/prune.js";
+import { runSchedulerTick } from "./flows/scheduler.js";
+
+// Resilience backstop. opencara.com runs as a bare `nohup` process with no
+// supervisor (no systemd / PM2 / Docker restart policy), so any hard crash
+// takes the public site down until a human restarts it. A single async slip
+// must never be able to do that. The real failure on 2026-06-07: an unguarded
+// async setInterval in an SSE route hit the Supabase pooler's connection
+// ceiling (EMAXCONNSESSION); the rejection was unhandled and Node's default
+// promoted it to a fatal uncaughtException. Individual hot paths still guard
+// themselves (see the SSE routes) — this is defense-in-depth, not a license to
+// stop catching errors locally. We log loudly and keep serving: with no
+// supervisor, limping on a logged error strictly beats a dead site.
+process.on("unhandledRejection", (reason) => {
+  console.error("[orchestrator] unhandledRejection (non-fatal):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[orchestrator] uncaughtException (non-fatal):", err);
+});
 
 // Resilience backstop. opencara.com runs as a bare `nohup` process with no
 // supervisor (no systemd / PM2 / Docker restart policy), so any hard crash
@@ -156,6 +174,31 @@ if (flowEngine) {
   seedBuiltinFlowsForAllProjects(db)
     .then(() => console.log("[orchestrator] flow engine ready (built-in flows seeded)"))
     .catch((err: unknown) => console.error("[orchestrator] flow seeding failed", err));
+}
+
+// Cron scheduler (#128). Polls flow_schedule_state every minute and fires any
+// schedule.cron trigger whose next occurrence has passed. Each schedule fires
+// at most once per tick: an occurrence that's already due when the tick runs
+// is dispatched, then the row jumps to the next occurrence after *now* (not
+// the missed one). For hourly-or-coarser schedules that's exactly-once even if
+// a tick is delayed; a sub-hourly schedule (e.g. every-minute) can drop an
+// occurrence under tick backpressure — acceptable for recurring jobs, but not
+// a hard "every slot fires" guarantee. As with the other background jobs:
+// best-effort, errors logged not thrown, and the timer is unref'd so it never
+// holds the process open on its own.
+if (flowEngine) {
+  const engine = flowEngine;
+  const SCHEDULER_TICK_MS = 60 * 1000;
+  const runScheduler = () => {
+    runSchedulerTick({ db, engine })
+      .then((n) => {
+        if (n > 0) console.log(`[orchestrator] scheduler fired ${n} scheduled run(s)`);
+      })
+      .catch((err: unknown) => console.error("[orchestrator] scheduler tick failed", err));
+  };
+  runScheduler();
+  setInterval(runScheduler, SCHEDULER_TICK_MS).unref();
+  console.log("[orchestrator] cron scheduler started (60s tick)");
 }
 
 if (config.github && config.SESSION_ENCRYPTION_KEY) {

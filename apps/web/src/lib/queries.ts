@@ -101,11 +101,29 @@ export interface FlowRunSummary {
   flowId: string;
   projectId: string;
   triggerEventId: string | null;
+  /** Type of the originating platform event (e.g. "schedule", "pull_request",
+   *  "manual"). Null only for legacy rows whose event was pruned. Present on
+   *  the project-wide flow-runs list (#128). */
+  triggerType?: string | null;
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
   error: string | null;
+}
+
+export interface ScheduleSummary {
+  flowId: string;
+  slug: string;
+  name: string;
+  nodeId: string;
+  cron: string;
+  timezone: string;
+  enabled: boolean;
+  nextFireTimes: string[];
+  cronError: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface FlowRunStep {
   id: string;
@@ -148,6 +166,11 @@ export const projectQuery = (id: string) => ({
       project: ProjectListItem & {
         removedAt: string | null;
         defaultImplementFlowId: string | null;
+        /** Project-wide defaults for the implement flow's agent + prompt.
+         *  Pre-populate the kanban card dropdowns; a per-card
+         *  `agent:<name>` / `prompt:<name>` label overrides them. See #158. */
+        defaultImplementAgentId: string | null;
+        defaultImplementPromptId: string | null;
         /** Repo-relative path of the project's agent instructions file
          *  (default `AGENTS.md`, empty disables injection). See #130. */
         instructionsFile: string;
@@ -312,6 +335,73 @@ export function useSetIssueAgent(projectId: string, issueNumber: number) {
       // detail (which we just wrote authoritatively above). Without this,
       // the wider ["projects", id, "issues"] key match cascades into the
       // detail and immediately undoes our setQueryData.
+      qc.invalidateQueries({
+        predicate: (q) => {
+          const k = q.queryKey;
+          return (
+            Array.isArray(k) &&
+            k[0] === "projects" &&
+            k[1] === projectId &&
+            k[2] === "issues" &&
+            k.length === 3
+          );
+        },
+      });
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
+/**
+ * Set or clear the implementation-prompt label on an issue. Mirrors
+ * {@link useSetIssueAgent}: pass a `promptId` from `promptsQuery` to assign,
+ * or `null` to remove all `prompt:*` labels. The server resolves the id to
+ * the prompt's name and writes label `prompt:<name>` to GitHub. The implement
+ * flow resolves that label to the prompt body at dispatch. See #158.
+ */
+export function useSetIssuePrompt(projectId: string, issueNumber: number) {
+  const qc = useQueryClient();
+  const detailKey = ["projects", projectId, "issues", issueNumber] as const;
+  return useMutation({
+    mutationFn: (vars: { promptId: string | null; promptName: string | null }) =>
+      api.patch<{ issue: ProjectIssueDetail }>(
+        `/api/projects/${projectId}/issues/${issueNumber}/prompt`,
+        { promptId: vars.promptId },
+      ),
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: detailKey });
+      const prev = qc.getQueryData<{ issue: ProjectIssueDetail }>(detailKey);
+      if (prev) {
+        const filtered = prev.issue.labels.filter(
+          (l) => !l.name.startsWith("prompt:"),
+        );
+        const priorPromptColor = prev.issue.labels.find((l) =>
+          l.name.startsWith("prompt:"),
+        )?.color;
+        const next = vars.promptName
+          ? [
+              ...filtered,
+              {
+                name: `prompt:${vars.promptName}`,
+                color: priorPromptColor ?? "",
+              },
+            ]
+          : filtered;
+        qc.setQueryData(detailKey, {
+          ...prev,
+          issue: { ...prev.issue, labels: next },
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(detailKey, data);
       qc.invalidateQueries({
         predicate: (q) => {
           const k = q.queryKey;
@@ -739,6 +829,44 @@ export function useSetProjectDefaultImplementFlow(projectId: string) {
   });
 }
 
+/** Set or clear the project's default implement agent. See #158. */
+export function useSetProjectDefaultImplementAgent(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (agentId: string | null) =>
+      api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
+        defaultImplementAgentId: agentId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId] });
+      // Cards read the default to pre-populate their Agent dropdown, so the
+      // board snapshot must refresh too.
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
+/** Set or clear the project's default implement prompt. See #158. */
+export function useSetProjectDefaultImplementPrompt(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (promptId: string | null) =>
+      api.patch<{ project: unknown }>(`/api/projects/${projectId}`, {
+        defaultImplementPromptId: promptId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId] });
+      qc.invalidateQueries({
+        queryKey: ["projects", projectId, "kanban"],
+        exact: true,
+      });
+    },
+  });
+}
+
 /**
  * Update the project's agent instructions file path. Pass an empty string
  * to disable injection. The server validates the same rules
@@ -754,6 +882,64 @@ export function useSetProjectInstructionsFile(projectId: string) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", projectId] });
+    },
+  });
+}
+
+/* ─── Scheduled tasks (cron) — #128 ─────────────────────────────────── */
+
+export const projectSchedulesQuery = (projectId: string) => ({
+  queryKey: ["projects", projectId, "schedules"] as const,
+  queryFn: () =>
+    api.get<{ schedules: ScheduleSummary[] }>(`/api/projects/${projectId}/schedules`),
+});
+
+export function useCreateSchedule(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { name: string; cron: string; timezone: string }) =>
+      api.post<{ schedule: ScheduleSummary | null }>(
+        `/api/projects/${projectId}/schedules`,
+        vars,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "schedules"] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
+export function useUpdateSchedule(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      flowId: string;
+      name?: string;
+      cron?: string;
+      timezone?: string;
+      enabled?: boolean;
+    }) => {
+      const { flowId, ...body } = vars;
+      return api.patch<{ schedule: ScheduleSummary | null }>(
+        `/api/projects/${projectId}/schedules/${flowId}`,
+        body,
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "schedules"] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
+    },
+  });
+}
+
+export function useDeleteSchedule(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string) =>
+      api.delete<{ ok: boolean }>(`/api/projects/${projectId}/schedules/${flowId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "schedules"] });
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
     },
   });
 }
@@ -887,6 +1073,23 @@ export interface KanbanImplementStatus {
   nodeKind: string | null;
 }
 
+/**
+ * Active PR-review flow surfaced on an issue card. Populated by the server when
+ * one of the issue's linked PRs has an in-flight (pending/running) PR-review
+ * flow run (pr-review, pr-review-multi, pr-review-fix). Only active runs are
+ * sent — the indicator vanishes the moment the run terminates.
+ */
+export interface KanbanPrFlowStatus {
+  state: "pending" | "running";
+  /** Flow name, e.g. "PR Review", "PR Review → Fix". */
+  label: string;
+  flowRunId: string;
+  /** Source flow slug. */
+  slug: string;
+  /** The linked PR the run is operating on. */
+  prNumber: number;
+}
+
 export interface KanbanItem {
   id: string;
   projectV2LinkId: string;
@@ -904,6 +1107,8 @@ export interface KanbanItem {
   linkedPrs: KanbanLinkedPr[];
   /** Null when there's no active/recent implement run for this issue. */
   implementStatus: KanbanImplementStatus | null;
+  /** Null when no linked PR has an active PR-review flow run. */
+  prFlowStatus: KanbanPrFlowStatus | null;
   updatedAt: string;
 }
 

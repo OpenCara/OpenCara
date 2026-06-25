@@ -267,6 +267,20 @@
       "when": 1777580000000,
       "tag": "0037_purge_pr_review_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1777590000000,
+      "tag": "0038_project_default_implement_agent_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1777600000000,
+      "tag": "0039_flow_schedule_state",
+      "breakpoints": true
     }
   ]
 }
