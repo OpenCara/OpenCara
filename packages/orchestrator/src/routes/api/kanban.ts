@@ -161,6 +161,13 @@ async function loadImplementStatuses(
     .where(
       and(
         eq(flowRuns.flowId, defaultImplementFlowId),
+        // `trigger_skip` runs are status='cancelled' but represent a webhook
+        // the implement flow's trigger rejected — they never implemented
+        // anything. Without this they'd render "Cancelled" on the card for an
+        // hour (e.g. moving an issue to a column the trigger doesn't watch
+        // mints one with a resolvable content_node_id). Mirrors the same
+        // filter the /projects/:id/flow-runs listing uses.
+        sql`(${flowRuns.cancelReason} IS NULL OR ${flowRuns.cancelReason} <> 'trigger_skip')`,
         or(
           inArray(flowRuns.status, ["pending", "running"]),
           and(

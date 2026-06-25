@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { FlowNode } from "@opencara/flows";
 import {
+  runNotifiesBoard,
   selectTriggersToEvaluate,
   summarizeTriggerOutcomes,
   type TriggerOutcome,
@@ -114,5 +115,40 @@ describe("summarizeTriggerOutcomes", () => {
       errorMessage: undefined,
       firstSkipReason: undefined,
     });
+  });
+});
+
+describe("runNotifiesBoard", () => {
+  // This is the firehose guard: a dispatched-then-rejected run (trigger_skip)
+  // must NOT wake project boards, or every unrelated webhook rebuilds every
+  // open kanban board and starves the DB pool (2026-06-24 auth-503 incident).
+  it("does NOT notify a trigger_skip run (has triggers, none matched)", () => {
+    assert.equal(
+      runNotifiesBoard({ hasTriggers: true, matchedTriggerCount: 0 }),
+      false,
+    );
+  });
+
+  it("notifies when a trigger matched", () => {
+    assert.equal(
+      runNotifiesBoard({ hasTriggers: true, matchedTriggerCount: 1 }),
+      true,
+    );
+  });
+
+  it("notifies when several triggers matched", () => {
+    assert.equal(
+      runNotifiesBoard({ hasTriggers: true, matchedTriggerCount: 3 }),
+      true,
+    );
+  });
+
+  it("always notifies a defensive no-trigger flow (it runs every node)", () => {
+    // hasTriggers === false ⇒ the graph has no trigger gates, so every node
+    // executes; that run is real and the board should see it.
+    assert.equal(
+      runNotifiesBoard({ hasTriggers: false, matchedTriggerCount: 0 }),
+      true,
+    );
   });
 });
