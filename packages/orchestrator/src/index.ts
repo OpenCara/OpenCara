@@ -50,23 +50,6 @@ process.on("uncaughtException", (err) => {
   console.error("[orchestrator] uncaughtException (non-fatal):", err);
 });
 
-// Resilience backstop. opencara.com runs as a bare `nohup` process with no
-// supervisor (no systemd / PM2 / Docker restart policy), so any hard crash
-// takes the public site down until a human restarts it. A single async slip
-// must never be able to do that. The real failure on 2026-06-07: an unguarded
-// async setInterval in an SSE route hit the Supabase pooler's connection
-// ceiling (EMAXCONNSESSION); the rejection was unhandled and Node's default
-// promoted it to a fatal uncaughtException. Individual hot paths still guard
-// themselves (see the SSE routes) — this is defense-in-depth, not a license to
-// stop catching errors locally. We log loudly and keep serving: with no
-// supervisor, limping on a logged error strictly beats a dead site.
-process.on("unhandledRejection", (reason) => {
-  console.error("[orchestrator] unhandledRejection (non-fatal):", reason);
-});
-process.on("uncaughtException", (err) => {
-  console.error("[orchestrator] uncaughtException (non-fatal):", err);
-});
-
 const config = loadConfig();
 const { db, pg } = createDb(config.DATABASE_URL);
 
