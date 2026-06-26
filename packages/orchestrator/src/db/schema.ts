@@ -409,6 +409,12 @@ export const agents = pgTable(
     kind: agentKindEnum("kind").notNull().default("claude"),
     command: text("command").notNull(),
     args: jsonb("args").$type<string[]>().notNull().default([]),
+    // Full ACP adapter args OVERRIDE. NULL = derive from kind: the adapter's
+    // base args (`ACP_ADAPTERS`) plus the per-kind model translation of `args`
+    // (see buildAcpSpec). When set, these are used verbatim as the adapter args
+    // (the command still comes from `kind`), so operators can fix
+    // adapter/version/model quirks themselves without a code change.
+    acpArgs: jsonb("acp_args").$type<string[] | null>(),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
     cwd: text("cwd"),
     // Optional pin to a specific agent host. NULL = "any idle device".

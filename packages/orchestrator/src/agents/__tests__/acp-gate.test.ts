@@ -1,8 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  acpCommandFor,
   buildAcpSpec,
   checkAcpEligibility,
+  defaultAcpArgsFor,
+  resolveAdapterArgs,
   resolveAdapterInvocation,
   splitModelArg,
 } from "../acp-gate.js";
@@ -163,6 +166,79 @@ describe("buildAcpSpec — model translation end to end", () => {
     });
     assert.equal(spec.args.includes("-m"), false);
     assert.equal(spec.env?.OPENCODE_MODEL, "kimi-for-coding/k2p6");
+  });
+});
+
+describe("acpCommandFor / defaultAcpArgsFor (UI-facing)", () => {
+  it("acpCommandFor returns the kind-fixed executable", () => {
+    assert.equal(acpCommandFor("codex"), "npx");
+    assert.equal(acpCommandFor("claude"), "claude-acp");
+    assert.equal(acpCommandFor("CODEX"), "npx"); // case-insensitive
+    assert.equal(acpCommandFor("custom"), undefined);
+  });
+
+  it("defaultAcpArgsFor reflects the kind base args + model translation", () => {
+    assert.deepEqual(defaultAcpArgsFor("codex", ["--model", "gpt-5.5"]), [
+      "--yes",
+      "@zed-industries/codex-acp",
+      "-c",
+      'model="gpt-5.5"',
+    ]);
+    // opencode model goes to env, so the default args are just the base.
+    assert.deepEqual(defaultAcpArgsFor("opencode", ["-m", "kimi/k2"]), [
+      "--yes",
+      "opencode-ai@latest",
+      "acp",
+    ]);
+    assert.equal(defaultAcpArgsFor("custom", ["x"]), undefined);
+  });
+});
+
+describe("resolveAdapterArgs — override vs default", () => {
+  const codex = { command: "npx", args: ["--yes", "@zed-industries/codex-acp"] };
+
+  it("uses acpArgs verbatim when set (no base args, no translation)", () => {
+    const { args, env } = resolveAdapterArgs(
+      "codex",
+      codex,
+      { args: ["--model", "ignored"], acpArgs: ["--yes", "@x/codex", "-c", 'model="o3"'] },
+      { K: "1" },
+    );
+    assert.deepEqual(args, ["--yes", "@x/codex", "-c", 'model="o3"']);
+    assert.deepEqual(env, { K: "1" }); // override doesn't inject model env
+  });
+
+  it("falls back to the translated default when acpArgs is null/empty", () => {
+    assert.deepEqual(
+      resolveAdapterArgs("codex", codex, { args: ["--model", "gpt-5.5"], acpArgs: null }, {}).args,
+      ["--yes", "@zed-industries/codex-acp", "-c", 'model="gpt-5.5"'],
+    );
+    assert.deepEqual(
+      resolveAdapterArgs("codex", codex, { args: [], acpArgs: [] }, {}).args,
+      ["--yes", "@zed-industries/codex-acp"],
+    );
+  });
+
+  it("buildAcpSpec end-to-end: acpArgs override wins over kind default", () => {
+    const spec = buildAcpSpec({
+      env: {},
+      systemPromptMd: "s",
+      userPromptMd: "u",
+      agent: {
+        kind: "codex",
+        name: "Codex GPT",
+        cwd: null,
+        args: ["--model", "gpt-5.5"],
+        acpArgs: ["--yes", "@agentclientprotocol/codex-acp", "-c", 'model="gpt-5.5"'],
+      },
+    });
+    assert.equal(spec.command, "npx");
+    assert.deepEqual(spec.args, [
+      "--yes",
+      "@agentclientprotocol/codex-acp",
+      "-c",
+      'model="gpt-5.5"',
+    ]);
   });
 });
 
