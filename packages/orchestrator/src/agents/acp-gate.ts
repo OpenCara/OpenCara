@@ -147,18 +147,93 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     ...(opts.instructionsFile ? { instructionsFile: opts.instructionsFile } : {}),
   };
+  // Per-adapter model handling. The operator configures model selection in the
+  // agent's DB `args` (e.g. `--model gpt-5.5`), but adapters disagree on how a
+  // model is named: claude-acp accepts `--model` on argv, codex-acp accepts it
+  // ONLY as a `-c model="…"` config override, and opencode's `acp` subcommand
+  // has NO model flag at all (model comes from opencode config, optionally via
+  // `{env:OPENCODE_MODEL}`). Forwarding the raw `--model`/`-m` to codex/opencode
+  // made the adapter exit non-zero ("unexpected argument '--model'") and failed
+  // the whole job. resolveAdapterInvocation translates it per kind.
+  const { args, env } = resolveAdapterInvocation(
+    opts.agent.kind,
+    adapter.args,
+    opts.agent.args ?? [],
+    opts.env,
+  );
   return {
     kind: opts.agent.name,
     command: adapter.command,
-    // Adapter's own args first, then operator-configured extras (e.g.
-    // `--model claude-opus-4-5` from the agent's DB `args` column). The
-    // device passes these through to the ACP adapter binary (claude-acp),
-    // which in turn appends them to the underlying CLI invocation.
-    args: [...adapter.args, ...(opts.agent.args ?? [])],
-    env: opts.env,
+    args,
+    env,
     cwd: opts.agent.cwd ?? undefined,
     acp,
   };
+}
+
+/**
+ * Split a model selection out of an agent's configured args. Recognises
+ * `--model <v>`, `-m <v>`, `--model=<v>`, and `-m=<v>` (first occurrence wins).
+ * Returns the model (if any) plus the remaining args with the model flag
+ * removed, so callers can re-emit the model in an adapter-specific form.
+ */
+export function splitModelArg(
+  args: readonly string[],
+): { model?: string; rest: string[] } {
+  const rest: string[] = [];
+  let model: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (model === undefined) {
+      const eq = /^(?:--model|-m)=(.*)$/.exec(a);
+      if (eq) {
+        model = eq[1];
+        continue;
+      }
+      if (a === "--model" || a === "-m") {
+        const v = args[i + 1];
+        if (v !== undefined) {
+          model = v;
+          i++; // consume the value token
+        }
+        // a bare trailing flag with no value is dropped (malformed)
+        continue;
+      }
+    }
+    rest.push(a);
+  }
+  return { model, rest };
+}
+
+/**
+ * Build the (args, env) for an adapter invocation, translating the operator's
+ * model selection into the form each adapter actually accepts:
+ *   - codex    → `-c model="<v>"` (codex-acp config override; it has no --model)
+ *   - opencode → `OPENCODE_MODEL` env (its `acp` subcommand has no model flag;
+ *                model resolves through opencode config's `{env:OPENCODE_MODEL}`)
+ *   - claude   → `--model <v>` on argv (claude-acp accepts it) — pass-through
+ *   - other (e.g. pi, unverified) → unchanged pass-through
+ * Non-model args are always preserved.
+ */
+export function resolveAdapterInvocation(
+  kind: string,
+  adapterArgs: readonly string[],
+  agentArgs: readonly string[],
+  baseEnv: Record<string, string>,
+): { args: string[]; env: Record<string, string> } {
+  const k = kind.toLowerCase();
+  if (k === "codex") {
+    const { model, rest } = splitModelArg(agentArgs);
+    const modelArgs = model ? ["-c", `model=${JSON.stringify(model)}`] : [];
+    return { args: [...adapterArgs, ...rest, ...modelArgs], env: baseEnv };
+  }
+  if (k === "opencode") {
+    const { model, rest } = splitModelArg(agentArgs);
+    const env = model ? { ...baseEnv, OPENCODE_MODEL: model } : baseEnv;
+    return { args: [...adapterArgs, ...rest], env };
+  }
+  // claude accepts --model on argv; pi is unverified — preserve prior behaviour.
+  return { args: [...adapterArgs, ...agentArgs], env: baseEnv };
 }
 
 function hasMeaningfulContext(ctx: Record<string, unknown> | undefined): boolean {
