@@ -9,7 +9,7 @@ import { DevicePool, WebSocketDispatcher } from "./dispatch/devices.js";
 import { createGithubAppClient } from "./github/app.js";
 import { GithubOAuth } from "./github/oauth.js";
 import { TokenCipher } from "./auth/session.js";
-import { currentUser, type AuthEnv } from "./auth/middleware.js";
+import { currentUser, createSessionCache, type AuthEnv } from "./auth/middleware.js";
 import { appWebhookRoutes } from "./routes/webhooks.js";
 import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/api/projects.js";
@@ -83,7 +83,10 @@ app.onError((err, c) => {
   return c.json({ error: "internal error" }, 500);
 });
 
-app.use("*", currentUser(db, config.SESSION_COOKIE_NAME));
+// One cache shared by the auth middleware (reads) and the logout route (eager
+// invalidation) so a logout takes effect immediately instead of after the TTL.
+const sessionCache = createSessionCache(db);
+app.use("*", currentUser(db, config.SESSION_COOKIE_NAME, sessionCache));
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -202,6 +205,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
       ttlDays: config.SESSION_TTL_DAYS,
       publicBaseUrl: config.PUBLIC_BASE_URL,
       app: githubApp ?? undefined,
+      sessionCache,
     }),
   );
   app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));

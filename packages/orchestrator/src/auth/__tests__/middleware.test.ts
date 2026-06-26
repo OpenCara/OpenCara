@@ -90,6 +90,45 @@ describe("currentUser middleware", () => {
     assert.equal(res.status, 200);
   });
 
+  it("coalesces concurrent same-cookie lookups into a single DB read (fan-out fix)", async () => {
+    const now = new Date();
+    // Hang each query briefly so the 10 requests overlap in-flight; without
+    // single-flight that would be 10 loadSession()s (= 20 findFirst calls).
+    const { db, calls } = fakeDb({
+      hangMs: 30,
+      session: { id: "abc", userId: "u1", expiresAt: new Date(now.getTime() + 1e6), lastSeenAt: now },
+      user: { id: "u1" },
+    });
+    const app = new Hono<AuthEnv>();
+    app.use("*", currentUser(db, "sid"));
+    app.get("/api/me", (c) => c.json({ user: c.get("user") ?? null }));
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        app.request("/api/me", { headers: { cookie: "sid=abc" } }),
+      ),
+    );
+    for (const res of results) assert.equal(res.status, 200);
+    // One loadSession() = sessions.findFirst + users.findFirst = 2 calls, shared
+    // across all 10 concurrent requests.
+    assert.equal(calls(), 2, "10 concurrent requests must share one session lookup");
+  });
+
+  it("serves a cached identity on a second request without re-reading the DB", async () => {
+    const now = new Date();
+    const { db, calls } = fakeDb({
+      session: { id: "abc", userId: "u1", expiresAt: new Date(now.getTime() + 1e6), lastSeenAt: now },
+      user: { id: "u1" },
+    });
+    const app = new Hono<AuthEnv>();
+    app.use("*", currentUser(db, "sid"));
+    app.get("/api/me", (c) => c.json({ user: c.get("user") ?? null }));
+
+    await app.request("/api/me", { headers: { cookie: "sid=abc" } });
+    await app.request("/api/me", { headers: { cookie: "sid=abc" } });
+    assert.equal(calls(), 2, "second request within TTL must be served from cache");
+  });
+
   it("returns 503 (not a hang) when the session lookup exceeds the deadline", async () => {
     // currentUser() reads the timeout once at construction, so set it first.
     process.env["AUTH_SESSION_TIMEOUT_MS"] = "50";

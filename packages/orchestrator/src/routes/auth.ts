@@ -9,6 +9,7 @@ import type { GithubOAuth } from "../github/oauth.js";
 import type { GithubAppClient } from "../github/app.js";
 import { upsertUser, createSession, destroySession, type TokenCipher } from "../auth/session.js";
 import type { AuthEnv } from "../auth/middleware.js";
+import type { SessionCache } from "../auth/sessionCache.js";
 import { upsertInstallation } from "../github/installations.js";
 
 interface AuthRouteDeps {
@@ -19,6 +20,7 @@ interface AuthRouteDeps {
   ttlDays: number;
   publicBaseUrl: string;
   app?: GithubAppClient;
+  sessionCache?: SessionCache;
 }
 
 const STATE_COOKIE = "ocara_oauth_state";
@@ -133,6 +135,9 @@ export function authRoutes(deps: AuthRouteDeps) {
     const sid = getCookie(c, deps.cookieName);
     if (sid) {
       await destroySession(deps.db, sid);
+      // Drop the cached identity so the (now-deleted) session can't be served
+      // from cache for up to the TTL after the user logs out.
+      deps.sessionCache?.invalidate(sid);
       deleteCookie(c, deps.cookieName, { path: "/" });
     }
     return c.body(null, 204);
