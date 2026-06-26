@@ -7,7 +7,12 @@ import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js"
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
 import { isAgentKind, type AgentKind } from "../../agents/kinds.js";
-import { buildAcpSpec, checkAcpEligibility } from "../../agents/acp-gate.js";
+import {
+  acpCommandFor,
+  buildAcpSpec,
+  checkAcpEligibility,
+  defaultAcpArgsFor,
+} from "../../agents/acp-gate.js";
 import type { AgentSpec } from "@opencara/shared";
 
 interface AgentRoutesDeps {
@@ -27,7 +32,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       .from(agents)
       .where(eq(agents.userId, user.id))
       .orderBy(desc(agents.updatedAt));
-    return c.json({ agents: rows });
+    return c.json({ agents: rows.map(serializeAgent) });
   });
 
   r.post("/agents", auth, async (c) => {
@@ -58,6 +63,8 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     // whatever the dashboard sends and persist it untouched.
     const command = typeof body.command === "string" ? body.command.trim() : kind;
     const args = parseExtraArgs(body);
+    // undefined (field absent) defaults to null on create.
+    const acpArgs = parseAcpArgs(body) ?? null;
 
     const env =
       body.env && typeof body.env === "object" && !Array.isArray(body.env)
@@ -79,6 +86,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         kind,
         command,
         args,
+        acpArgs,
         env,
         cwd,
         hostId: hostIdRes.hostId,
@@ -92,17 +100,20 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     }
     return c.json(
       {
-        agent: {
+        agent: serializeAgent({
           id,
           userId: user.id,
           name,
           kind,
           command,
           args,
+          acpArgs,
           env,
           cwd,
           hostId: hostIdRes.hostId,
-        },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
       },
       201,
     );
@@ -115,7 +126,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       where: and(eq(agents.id, id), eq(agents.userId, user.id)),
     });
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json({ agent: row });
+    return c.json({ agent: serializeAgent(row) });
   });
 
   r.patch("/agents/:id", auth, async (c) => {
@@ -142,6 +153,11 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     }
     if (body.extraArgs !== undefined) {
       updates.args = parseExtraArgs(body);
+    }
+    // acpArgs: absent → unchanged; null/empty → reset to kind default; else override.
+    const acpArgs = parseAcpArgs(body);
+    if (acpArgs !== undefined) {
+      updates.acpArgs = acpArgs;
     }
     if (body.env && typeof body.env === "object" && !Array.isArray(body.env)) {
       updates.env = Object.fromEntries(
@@ -175,7 +191,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       where: and(eq(agents.id, id), eq(agents.userId, user.id)),
     });
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json({ agent: row });
+    return c.json({ agent: serializeAgent(row) });
   });
 
   // Smoke-test an agent with a prompt; returns agentRunId for SSE tail.
@@ -380,6 +396,44 @@ function parseExtraArgs(body: Record<string, unknown>): string[] {
     return tokenizeCommand(`_ ${trimmed}`).args;
   }
   return [];
+}
+
+/**
+ * Parse the `acpArgs` override from a request body. Returns:
+ * - `undefined` when the field is absent (PATCH leaves the column unchanged),
+ * - `null` to reset to the kind default (explicit null, or an empty value),
+ * - `string[]` for an override (array as-is, or a shell string tokenized).
+ */
+function parseAcpArgs(body: Record<string, unknown>): string[] | null | undefined {
+  if (!("acpArgs" in body)) return undefined;
+  const raw = body.acpArgs;
+  if (raw === null) return null;
+  let arr: string[];
+  if (Array.isArray(raw)) {
+    arr = raw.map((s) => String(s));
+  } else if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    arr = trimmed ? tokenizeCommand(`_ ${trimmed}`).args : [];
+  } else {
+    return null;
+  }
+  // An empty override is meaningless (the command alone won't run) — treat it
+  // as "reset to default" so the UI's clear/reset path lands as NULL.
+  return arr.length > 0 ? arr : null;
+}
+
+/**
+ * Shape an agent row for the API, adding the computed `acpCommand` (the fixed,
+ * kind-derived adapter executable) and `defaultAcpArgs` (what runs by default
+ * for this kind + the agent's `args`). The UI shows the command read-only and
+ * pre-fills the editable args field with `acpArgs ?? defaultAcpArgs`.
+ */
+function serializeAgent(row: typeof agents.$inferSelect) {
+  return {
+    ...row,
+    acpCommand: acpCommandFor(row.kind) ?? row.command,
+    defaultAcpArgs: defaultAcpArgsFor(row.kind, row.args) ?? row.args,
+  };
 }
 
 export function tokenizeCommand(input: string): {

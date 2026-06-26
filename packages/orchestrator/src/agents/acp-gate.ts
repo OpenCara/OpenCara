@@ -75,7 +75,19 @@ export function checkAcpEligibility(agentKind: string): AcpEligibility {
 }
 
 export interface BuildAcpSpecOpts {
-  agent: { kind: string; name: string; cwd: string | null; args?: string[] };
+  agent: {
+    kind: string;
+    name: string;
+    cwd: string | null;
+    args?: string[];
+    /**
+     * Full ACP adapter args override (the `acp_args` column). When set and
+     * non-empty, used verbatim as the adapter args — the kind-derived base args
+     * and the per-kind model translation of `args` are bypassed. Null/empty =
+     * derive from kind (the default path).
+     */
+    acpArgs?: string[] | null;
+  };
   env: Record<string, string>;
   systemPromptMd: string;
   userPromptMd: string;
@@ -155,10 +167,10 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
   // `{env:OPENCODE_MODEL}`). Forwarding the raw `--model`/`-m` to codex/opencode
   // made the adapter exit non-zero ("unexpected argument '--model'") and failed
   // the whole job. resolveAdapterInvocation translates it per kind.
-  const { args, env } = resolveAdapterInvocation(
+  const { args, env } = resolveAdapterArgs(
     opts.agent.kind,
-    adapter.args,
-    opts.agent.args ?? [],
+    adapter,
+    { args: opts.agent.args, acpArgs: opts.agent.acpArgs },
     opts.env,
   );
   return {
@@ -169,6 +181,50 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     cwd: opts.agent.cwd ?? undefined,
     acp,
   };
+}
+
+/**
+ * The ACP adapter command (executable) for a kind — `npx`, `claude-acp`, … —
+ * or undefined if the kind has no adapter. The command is always derived from
+ * kind; only the args are overridable. Surfaced to the agent-config UI so it
+ * can show the fixed command alongside the editable args.
+ */
+export function acpCommandFor(kind: string): string | undefined {
+  return ACP_ADAPTERS.get(kind.toLowerCase())?.command;
+}
+
+/**
+ * The adapter args that run by DEFAULT for a kind given the agent's configured
+ * `args` (i.e. the kind base args + the per-kind model translation, exactly
+ * what `buildAcpSpec` uses when there is no `acpArgs` override). Returns
+ * undefined for an unknown kind. The UI pre-fills the editable args field with
+ * this so "edit args" starts from the real default.
+ */
+export function defaultAcpArgsFor(
+  kind: string,
+  agentArgs: readonly string[] = [],
+): string[] | undefined {
+  const adapter = ACP_ADAPTERS.get(kind.toLowerCase());
+  if (!adapter) return undefined;
+  return resolveAdapterInvocation(kind, adapter.args, agentArgs, {}).args;
+}
+
+/**
+ * Resolve the adapter (args, env) for dispatch, honouring a full `acpArgs`
+ * override. A non-empty override is used verbatim (no kind base args, no model
+ * translation) — the operator owns the line. Otherwise fall back to the
+ * kind-derived default via resolveAdapterInvocation.
+ */
+export function resolveAdapterArgs(
+  kind: string,
+  adapter: { command: string; args: readonly string[] },
+  agent: { args?: string[]; acpArgs?: string[] | null },
+  baseEnv: Record<string, string>,
+): { args: string[]; env: Record<string, string> } {
+  if (agent.acpArgs && agent.acpArgs.length > 0) {
+    return { args: [...agent.acpArgs], env: baseEnv };
+  }
+  return resolveAdapterInvocation(kind, adapter.args, agent.args ?? [], baseEnv);
 }
 
 /**
