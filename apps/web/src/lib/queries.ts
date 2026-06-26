@@ -5,7 +5,27 @@ import {
   useQueryClient,
   type Query,
 } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, ApiError } from "./api";
+
+// The global default is `retry: false`, which is right for most queries but
+// wrong for the session probe: the orchestrator returns a transient 503 (with
+// Retry-After) when an auth session lookup races past its deadline under DB
+// pool pressure. Without a retry that blip becomes a permanent "Failed to load
+// session." screen until a manual reload. Retry server (5xx) and network errors
+// a few times with backoff; never retry a real client error like 401 (logged
+// out) — that must fall straight through to the /login redirect.
+function retryOnServerError(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status < 500) return false;
+  return failureCount < 3;
+}
+
+function serverErrorRetryDelay(attemptIndex: number, error: unknown): number {
+  if (error instanceof ApiError && error.retryAfterMs !== undefined) {
+    return error.retryAfterMs;
+  }
+  // Exponential backoff, capped, when the server gives no Retry-After hint.
+  return Math.min(1000 * 2 ** attemptIndex, 4000);
+}
 
 export interface User {
   id: string;
@@ -152,6 +172,8 @@ export interface AgentRunRow {
 export const meQuery = () => ({
   queryKey: ["me"] as const,
   queryFn: () => api.get<{ user: User }>("/api/me"),
+  retry: retryOnServerError,
+  retryDelay: serverErrorRetryDelay,
 });
 
 export const projectsQuery = () => ({

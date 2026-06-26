@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import type { Db } from "../db/client.js";
 import { loadSession, type SessionRecord, type UserRecord } from "./session.js";
+import { SessionCache, type LoadedSession } from "./sessionCache.js";
 
 export interface AuthEnv {
   Variables: {
@@ -41,14 +42,35 @@ function resolveLookupTimeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 3000;
 }
 
+// How long a resolved session identity may be reused before the next request
+// re-reads it from the DB. Tiny on purpose — it exists to absorb the page-load
+// fan-out and repeat traffic, not to be a long-lived cache. Set to 0 to keep
+// only the single-flight coalescing and disable caching. Override with
+// AUTH_SESSION_CACHE_TTL_MS.
+function resolveCacheTtlMs(): number {
+  const raw = process.env["AUTH_SESSION_CACHE_TTL_MS"];
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 10_000;
+}
+
+// Build the process-wide session cache. Constructed once and shared between the
+// auth middleware (reads) and the logout route (eager invalidation), so a logout
+// is reflected immediately rather than lingering for the TTL.
+export function createSessionCache(db: Db): SessionCache {
+  return new SessionCache((sid) => loadSession(db, sid), resolveCacheTtlMs());
+}
+
 class SessionLookupTimeout extends Error {}
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   // NOTE: when the timeout fires, `p` continues running in the background
   // (postgres-js has no query cancellation). Under sustained pool starvation
-  // each 503 response leaves a zombie loadSession() waiting for a slot — which
-  // can delay recovery. Acceptable trade-off: the 503 fast-fail is still the
-  // right call; a future follow-up could cap in-flight lookups with a semaphore.
+  // each 503 response leaves a zombie lookup waiting for a slot — which can
+  // delay recovery. SessionCache single-flight bounds this: concurrent requests
+  // for the same sid share ONE background lookup, so the pool sees one queued
+  // acquire per sid, not one per request. The 503 fast-fail is still the right
+  // call; a future follow-up could additionally cap in-flight lookups with a
+  // semaphore across distinct sids.
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new SessionLookupTimeout()), ms);
     // Never let this watchdog timer hold the process open on its own.
@@ -66,14 +88,18 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-export function currentUser(db: Db, cookieName: string): MiddlewareHandler<AuthEnv> {
+export function currentUser(
+  db: Db,
+  cookieName: string,
+  cache: SessionCache = createSessionCache(db),
+): MiddlewareHandler<AuthEnv> {
   const timeoutMs = resolveLookupTimeoutMs();
   return async (c, next) => {
     const sid = getCookie(c, cookieName);
     if (sid && needsSessionLookup(c.req.path)) {
-      let loaded: Awaited<ReturnType<typeof loadSession>>;
+      let loaded: LoadedSession;
       try {
-        loaded = await withTimeout(loadSession(db, sid), timeoutMs);
+        loaded = await withTimeout(cache.get(sid), timeoutMs);
       } catch (err) {
         if (err instanceof SessionLookupTimeout) {
           console.error(
