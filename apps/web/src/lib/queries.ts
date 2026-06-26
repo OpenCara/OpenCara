@@ -662,6 +662,16 @@ export interface AgentRow {
   kind: AgentKind;
   command: string;
   args: string[];
+  /** Full ACP adapter args override. null = use the kind default
+   *  (`defaultAcpArgs`). When set, used verbatim as the adapter args. */
+  acpArgs: string[] | null;
+  /** Computed (read-only): the fixed adapter executable for this kind,
+   *  e.g. `npx` / `claude-acp`. The command is not user-editable. */
+  acpCommand: string;
+  /** Computed (read-only): the adapter args that run by default for this
+   *  kind (incl. per-kind model translation of `args`). The editor pre-fills
+   *  the editable args field with `acpArgs ?? defaultAcpArgs`. */
+  defaultAcpArgs: string[];
   env: Record<string, string>;
   cwd: string | null;
   /** Pin to a specific agent_host (device). null = "any idle device". */
@@ -689,6 +699,9 @@ export function useCreateAgent() {
        *  (e.g. `--provider kimi-coding --model kimi-k2-thinking` for pi).
        *  Free-form string — server tokenizes the same way as Command. */
       extraArgs?: string;
+      /** Full ACP adapter args override as a shell string (server tokenizes).
+       *  Omit or null to use the kind default. */
+      acpArgs?: string | null;
       env?: Record<string, string>;
       cwd?: string | null;
       /** Specific device id; null/undefined = "any idle device". */
@@ -701,8 +714,18 @@ export function useCreateAgent() {
 export function useUpdateAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; patch: Partial<Omit<AgentRow, "id" | "userId" | "createdAt" | "updatedAt">> }) =>
-      api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
+    mutationFn: (vars: {
+      id: string;
+      patch: Partial<
+        Omit<
+          AgentRow,
+          "id" | "userId" | "createdAt" | "updatedAt" | "acpArgs" | "acpCommand" | "defaultAcpArgs"
+        >
+      > & {
+        /** Override as a shell string (server tokenizes); null resets to default. */
+        acpArgs?: string | string[] | null;
+      };
+    }) => api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
 }
