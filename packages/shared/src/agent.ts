@@ -102,6 +102,12 @@ export type AcpPermissionMode = z.infer<typeof AcpPermissionModeSchema>;
  *   to the `session/prompt` content as image blocks; shims that advertise
  *   `promptCapabilities.image` (e.g. claude-acp) forward them to the
  *   underlying model, others ignore them. See #142.
+ * - `model` (optional) is the model the agent should run, e.g.
+ *   `volcengine-ark/glm-5.2`. Some adapters (pi-acp) ignore `--model` on
+ *   argv and instead advertise the model as an ACP session config option;
+ *   the device runner selects it via `session/set_config_option` after
+ *   `session/new`. Derived from the agent's `--model`/`-m` arg. Unset =
+ *   the adapter's default model. See the pi glm-5.2 case.
  */
 export const AcpSpecSchema = z.object({
   systemPromptMd: z.string(),
@@ -112,6 +118,7 @@ export const AcpSpecSchema = z.object({
   permissionMode: AcpPermissionModeSchema.optional(),
   instructionsFile: z.string().optional(),
   images: z.array(AcpImageInputSchema).default([]),
+  model: z.string().optional(),
 });
 export type AcpSpec = z.infer<typeof AcpSpecSchema>;
 
