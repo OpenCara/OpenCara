@@ -46,6 +46,7 @@ import {
   isMessageChunk,
   isToolCallProgress,
   isToolCallStart,
+  type AcpConfigOption,
   type ContentBlock,
   type SessionUpdate,
 } from "../acp/types.js";
@@ -235,8 +236,9 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         : {};
       let sessionId: string;
       let resumed = false;
+      let configOptions: AcpConfigOption[] | undefined;
       if (acpSpec.priorSessionId && shimSupportsLoad) {
-        await client.loadSession({
+        const loaded = await client.loadSession({
           sessionId: acpSpec.priorSessionId,
           cwd,
           mcpServers,
@@ -244,11 +246,27 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         });
         sessionId = acpSpec.priorSessionId;
         resumed = true;
+        configOptions = loaded.configOptions;
       } else {
         const session = await client.newSession({ cwd, mcpServers, ...instructionsExtra });
         sessionId = session.sessionId;
+        configOptions = session.configOptions;
       }
       activeSessionId = sessionId;
+      // Model selection over ACP. Adapters like pi-acp ignore `--model` on argv
+      // and instead advertise the model as a session config option; select it
+      // here via session/set_config_option. Best-effort — a miss or the agent's
+      // "model not found" is logged and the run continues on the adapter default,
+      // never failing the job on a model-name typo.
+      if (acpSpec.model) {
+        await selectAcpModel(
+          client,
+          sessionId,
+          acpSpec.model,
+          configOptions,
+          handlers.onLog,
+        );
+      }
       // Cancel arrived before the session was minted. Forward the
       // notification so the agent's bookkeeping records a cancel, then
       // skip session/prompt outright — without this, we'd spawn the
@@ -354,6 +372,73 @@ export function buildPromptContent(acp: {
 }
 
 export type LogSink = (stream: "stdout" | "stderr", chunk: string) => void;
+
+/**
+ * Pick the config-option value that best matches a requested model. ACP model
+ * option values are "provider/id" (e.g. "volcengine-ark/glm-5.2"). Tries exact,
+ * then case-insensitive, then a suffix match so a bare id ("glm-5.2") resolves
+ * to "volcengine-ark/glm-5.2". Returns the actual value to send, or undefined.
+ */
+export function matchModelValue(
+  requested: string,
+  values: readonly string[],
+): string | undefined {
+  const want = requested.trim();
+  if (!want) return undefined;
+  const exact = values.find((v) => v === want);
+  if (exact) return exact;
+  const ci = values.find((v) => v.toLowerCase() === want.toLowerCase());
+  if (ci) return ci;
+  const suffix = `/${want.toLowerCase()}`;
+  return values.find((v) => v.toLowerCase().endsWith(suffix));
+}
+
+/**
+ * Select the requested model via ACP `session/set_config_option`. Best-effort:
+ * logs a note and returns when the agent advertised no model option or the
+ * model can't be matched, and swallows the agent's error (e.g. "Model not
+ * found") so a bad model name degrades to the adapter default instead of
+ * failing the run.
+ */
+async function selectAcpModel(
+  client: AcpClient,
+  sessionId: string,
+  requested: string,
+  configOptions: AcpConfigOption[] | undefined,
+  onLog: LogSink,
+): Promise<void> {
+  const modelOption = configOptions?.find(
+    (o) => o.id === "model" || o.category === "model",
+  );
+  if (!modelOption) {
+    onLog(
+      "stderr",
+      `[acp] model "${requested}" requested but the agent advertised no model option; using its default\n`,
+    );
+    return;
+  }
+  const values = (modelOption.options ?? []).map((o) => o.value);
+  const target = matchModelValue(requested, values);
+  if (!target) {
+    onLog(
+      "stderr",
+      `[acp] model "${requested}" not among available models [${values.join(", ")}]; using the default\n`,
+    );
+    return;
+  }
+  if (modelOption.currentValue === target) return; // already the active model
+  try {
+    await client.setConfigOption({
+      sessionId,
+      configId: modelOption.id,
+      value: target,
+    });
+    onLog("stderr", `[acp] selected model ${target}\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onLog("stderr", `[acp] model selection failed (${msg}); using the default\n`);
+  }
+}
 
 export interface UpdateTranslator {
   /** Route one session/update onto the log-frame pipeline. */

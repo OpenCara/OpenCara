@@ -167,6 +167,28 @@ describe("buildAcpSpec — model translation end to end", () => {
     assert.equal(spec.args.includes("-m"), false);
     assert.equal(spec.env?.OPENCODE_MODEL, "kimi-for-coding/k2p6");
   });
+
+  it("threads the model onto acp.model so the device selects it over ACP (pi glm-5.2)", () => {
+    const spec = buildAcpSpec({
+      ...base,
+      agent: {
+        kind: "pi",
+        name: "my-pi glm-5.2",
+        cwd: null,
+        args: ["--model", "volcengine-ark/glm-5.2"],
+      },
+    });
+    assert.equal(spec.acp?.model, "volcengine-ark/glm-5.2");
+  });
+
+  it("omits acp.model when the agent has no model arg", () => {
+    const spec = buildAcpSpec({
+      ...base,
+      agent: { kind: "pi", name: "pi default", cwd: null, args: [] },
+    });
+    assert.equal(spec.acp?.model, undefined);
+    assert.equal("model" in (spec.acp ?? {}), false);
+  });
 });
 
 describe("acpCommandFor / defaultAcpArgsFor (UI-facing)", () => {

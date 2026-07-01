@@ -5,13 +5,40 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildPromptContent, createUpdateTranslator } from "../acpRunner.js";
+import {
+  buildPromptContent,
+  createUpdateTranslator,
+  matchModelValue,
+} from "../acpRunner.js";
 import type {
   MessageChunkUpdate,
   SessionUpdate,
   ToolCallProgressUpdate,
   ToolCallStartUpdate,
 } from "../../acp/types.js";
+
+describe("matchModelValue", () => {
+  const values = [
+    "google/gemini-2.5-flash",
+    "volcengine-ark/glm-5.2",
+    "minimax/MiniMax-M2.7",
+  ];
+  it("matches the exact provider/id value", () => {
+    assert.equal(matchModelValue("volcengine-ark/glm-5.2", values), "volcengine-ark/glm-5.2");
+  });
+  it("matches case-insensitively", () => {
+    assert.equal(matchModelValue("MINIMAX/minimax-m2.7", values), "minimax/MiniMax-M2.7");
+  });
+  it("matches a bare model id by provider-qualified suffix", () => {
+    assert.equal(matchModelValue("glm-5.2", values), "volcengine-ark/glm-5.2");
+  });
+  it("returns undefined when nothing matches", () => {
+    assert.equal(matchModelValue("nope/model-x", values), undefined);
+  });
+  it("returns undefined for empty input", () => {
+    assert.equal(matchModelValue("  ", values), undefined);
+  });
+});
 
 describe("buildPromptContent", () => {
   it("assembles all sections in the expected order", () => {

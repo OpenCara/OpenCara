@@ -147,6 +147,13 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
         `caller must run checkAcpEligibility first`,
     );
   }
+  // The operator's model choice lives in the agent's `--model`/`-m` arg. Thread
+  // it onto the ACP spec so the device runner can select it over the protocol
+  // (`session/set_config_option`) for adapters that ignore `--model` on argv but
+  // advertise the model as a session config option (pi-acp). This is additive to
+  // the per-kind arg translation below — belt-and-suspenders for codex/claude,
+  // and the ONLY working path for pi.
+  const { model } = splitModelArg(opts.agent.args ?? []);
   const acp: AcpSpec = {
     systemPromptMd: opts.systemPromptMd,
     userPromptMd: opts.userPromptMd,
@@ -158,6 +165,7 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     ...(opts.priorSessionId ? { priorSessionId: opts.priorSessionId } : {}),
     ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     ...(opts.instructionsFile ? { instructionsFile: opts.instructionsFile } : {}),
+    ...(model ? { model } : {}),
   };
   // Per-adapter model handling. The operator configures model selection in the
   // agent's DB `args` (e.g. `--model gpt-5.5`), but adapters disagree on how a
