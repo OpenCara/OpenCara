@@ -25,7 +25,7 @@ import {
   buildAcpSpec,
   checkAcpEligibility,
 } from "../../agents/acp-gate.js";
-import type { GithubAppClient } from "../../github/app.js";
+import type { EphemeralToken, GithubAppClient } from "../../github/app.js";
 
 interface ChatRoutesDeps {
   db: Db;
@@ -289,7 +289,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // (way more than a single turn). On non-project pages, GH_TOKEN is
     // simply absent — `gh` will fail with a clean auth error rather than
     // silently doing the wrong thing.
-    let ghToken: string | null = null;
+    let mintedToken: EphemeralToken | null = null;
     if (projectId && deps.app) {
       const projectRow = await deps.db
         .select({ project: projects, installation: githubInstallations })
@@ -303,7 +303,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       if (projectRow.length > 0) {
         const { project, installation } = projectRow[0]!;
         try {
-          const ephemeral = await deps.app.mintEphemeralToken({
+          mintedToken = await deps.app.mintEphemeralToken({
             installationId: installation.githubInstallationId,
             repositoryIds: [project.githubRepoId],
             permissions: {
@@ -313,7 +313,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
               checks: "read",
             },
           });
-          ghToken = ephemeral.token;
         } catch (err) {
           // Token mint failure is non-fatal — the chat still runs, just
           // without `gh` privileges. The agent will surface a 401 from gh
@@ -327,17 +326,19 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     }
 
     // Build the full env + spec BEFORE the agent_runs insert so the
-    // persisted spec includes everything the agent will actually see.
-    // Earlier this stored env={} to avoid leaking the per-run token; that
-    // token is gone now and the audit/debug/retry workflows want the real
-    // env captured at dispatch time.
+    // persisted spec includes everything the agent will actually see —
+    // EXCEPT the GH token, which is persisted as an `<ephemeral>` marker
+    // (mirroring dispatchAgentRun in flows/nodeRunners.ts). The live token
+    // is written onto the in-memory spec.env AFTER the insert, so it
+    // reaches the device but never the DB row.
+    const tokenPlaceholder = "<ephemeral>";
     const env: Record<string, string> = {
       ...agent.env,
       OPENCARA_CHAT_SESSION_ID: sessionId,
       OPENCARA_CHAT_TURN_INDEX: String(turnIndex),
       OPENCARA_CHAT_PAGE_CONTEXT: JSON.stringify(pageContext),
       OPENCARA_AGENT_RUN_ID: agentRunId,
-      ...(ghToken ? { GH_TOKEN: ghToken } : {}),
+      ...(mintedToken ? { GH_TOKEN: tokenPlaceholder } : {}),
     };
 
     // ACP eligibility — every supported kind dispatches via ACP. An
@@ -387,6 +388,13 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       addedByUserId: user.id,
       startedAt: new Date(),
     });
+
+    // Inject the real token only after the spec snapshot is persisted.
+    // spec.env is the object the dispatcher serializes to the device, so
+    // this mutation affects the wire copy but not the DB row above.
+    if (mintedToken) {
+      spec.env["GH_TOKEN"] = mintedToken.token;
+    }
 
     // Auto-title: if the chat row has no title yet, derive one from this
     // turn's user message so the History popover has something better
@@ -503,6 +511,15 @@ export function chatRoutes(deps: ChatRoutesDeps) {
               inArray(agentRuns.status, ["running", "queued", "assigned"]),
             ),
           );
+      } finally {
+        if (mintedToken && deps.app) {
+          // Best-effort revoke, mirroring dispatchAgentRun: the token
+          // expires in ≤1h regardless, so a network blip here is logged
+          // and swallowed rather than failing the already-finished turn.
+          await deps.app.revokeToken(mintedToken.token).catch((err: unknown) => {
+            console.error("[chat] revokeToken failed", err);
+          });
+        }
       }
       // Trigger one final SSE flush so the panel sees terminal state.
       void deps.pg.notify("agent_run_logs", agentRunId);

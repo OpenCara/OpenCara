@@ -43,6 +43,13 @@ export interface RunContext {
    * Optional; null for non-chat dispatch paths.
    */
   sessionId?: string | null;
+  /**
+   * Per-run wall-clock deadline in ms. Overrides the dispatcher's
+   * configured default (JOB_TIMEOUT_MS); 0 disables the deadline for
+   * this run; unset applies the default. On expiry the dispatcher
+   * signals the device to kill the process and rejects the run promise.
+   */
+  timeoutMs?: number;
 }
 
 export interface RunResult {

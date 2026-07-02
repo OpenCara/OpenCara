@@ -476,10 +476,36 @@ export class DevicePool {
   hostForRun(runId: string): string | null {
     return this.pending.get(runId)?.agentHostId ?? null;
   }
+
+  /**
+   * Reject a still-pending job (deadline path). Mirrors the `done`
+   * handler's cleanup so the device's inflight set and the pending map
+   * stay consistent, and emits a synthetic stderr line so the timeout is
+   * visible in agent_run_logs instead of only in the step error. Returns
+   * false when the run already settled — a lost race is a no-op.
+   */
+  expireJob(runId: string, message: string): boolean {
+    const p = this.pending.get(runId);
+    if (!p) return false;
+    const dev = this.devices.get(p.agentHostId);
+    if (dev) dev.inflight.delete(runId);
+    this.pending.delete(runId);
+    p.onLog("stderr", `[orchestrator] ${message}\n`);
+    p.reject(new Error(message));
+    return true;
+  }
 }
 
 export class WebSocketDispatcher implements AgentDispatcher {
-  constructor(private pool: DevicePool) {}
+  /**
+   * @param defaultJobTimeoutMs wall-clock ceiling applied to every run
+   * unless the caller overrides via `ctx.timeoutMs`. 0/undefined disables
+   * the default (callers can still set a per-run deadline).
+   */
+  constructor(
+    private pool: DevicePool,
+    private defaultJobTimeoutMs?: number,
+  ) {}
 
   isConnected(hostId: string): boolean {
     return this.pool.isConnected(hostId);
@@ -532,7 +558,32 @@ export class WebSocketDispatcher implements AgentDispatcher {
       ctx.sessionId ?? null,
     );
     this.pool.send(dev, { type: "job", run, spec, stdinJson: ctx.stdinJson });
-    return promise;
+
+    // Per-job wall-clock deadline. Without one, a wedged agent on a healthy
+    // socket parks the pending entry — and its flow run — as "running"
+    // forever; the boot reaper (orchestrator restart) was the only recovery.
+    const timeoutMs = ctx.timeoutMs ?? this.defaultJobTimeoutMs ?? 0;
+    if (timeoutMs <= 0) return promise;
+    const timer = setTimeout(() => {
+      // Order matters: cancel() resolves the device via the pending map,
+      // so signal the process before expireJob() removes the entry.
+      //
+      // Wire reason is "user_stopped" (not a dedicated "timeout") because
+      // CancelJobSchema's enum is closed and already-published CLIs drop
+      // frames that fail strict parse — a new enum value would make old
+      // devices ignore the kill entirely. Revisit when the protocol grows
+      // a version handshake.
+      this.cancel(runId, "user_stopped");
+      this.pool.expireJob(
+        runId,
+        `agent run ${runId} exceeded the ${Math.round(timeoutMs / 1000)}s job timeout and was cancelled`,
+      );
+    }, timeoutMs);
+    // No .unref(): the timer is cleared whenever the promise settles, and
+    // socket teardown (unregister) settles every pending job — so this
+    // can't hold a shutting-down process open, but unref'ing it WOULD let
+    // an otherwise-idle event loop exit before the deadline fires.
+    return promise.finally(() => clearTimeout(timer));
   }
 
   cancel(

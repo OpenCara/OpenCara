@@ -21,7 +21,7 @@ import {
   pmWaves,
   projects,
 } from "../db/schema.js";
-import { and, asc, not } from "drizzle-orm";
+import { and, asc, inArray, not } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
@@ -719,7 +719,13 @@ export class FlowEngine {
     // routes/webhooks.ts + worktrees/cleanup.ts.
 
     const flowStatus = failed ? "failed" : skipped ? "cancelled" : "succeeded";
-    await this.deps.db
+    // Guarded terminal write: the cancel endpoint (and the reaper) may have
+    // already flipped this run to `cancelled` while the layers were still
+    // executing. Overwriting that would erase the user's cancel — and null
+    // its cancel_reason — the moment the in-flight agent finished. Zero rows
+    // updated means "someone else terminated this run first"; their status
+    // wins, including for wave settlement below.
+    const terminal = await this.deps.db
       .update(flowRuns)
       .set({
         status: flowStatus,
@@ -730,7 +736,14 @@ export class FlowEngine {
         // sets cancel_reason='abandoned'.)
         cancelReason: skipped ? "trigger_skip" : null,
       })
-      .where(eq(flowRuns.id, flowRunId));
+      .where(
+        and(
+          eq(flowRuns.id, flowRunId),
+          inArray(flowRuns.status, ["pending", "running"]),
+        ),
+      )
+      .returning({ id: flowRuns.id });
+    const terminalWriteApplied = terminal.length > 0;
     // Only notify for runs the board ever saw. A pure `trigger_skip` (no
     // trigger matched) never emitted a "run started" notify, so emitting a
     // terminal one here would wake every board for a no-op — the exact
@@ -738,14 +751,19 @@ export class FlowEngine {
     // (skipped === true but triggerMatched) DID start, so it still notifies so
     // the card clears. settleWaveItem still runs unconditionally — PM wave
     // bookkeeping is independent of board notifications.
-    if (triggerMatched) {
+    if (triggerMatched && terminalWriteApplied) {
       await this.deps.pg.notify(
         FLOW_RUNS_CHANNEL,
         serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
       );
     }
 
-    await this.settleWaveItem(flowRunId, flowStatus);
+    // If the guarded write lost (user cancel / reaper won), settle the wave
+    // item as cancelled — mirroring the status that actually stuck on the run.
+    await this.settleWaveItem(
+      flowRunId,
+      terminalWriteApplied ? flowStatus : "cancelled",
+    );
   }
 
   /**
