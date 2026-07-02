@@ -26,7 +26,7 @@
     "dev": "tsx watch src/bin.ts",
     "start": "node dist/bin.js",
     "typecheck": "tsc -b",
-    "test": "node --import tsx --test --test-reporter=spec src/acp/__tests__/*.test.ts src/mcp/__tests__/*.test.ts src/runner/__tests__/*.test.ts src/bin/__tests__/*.test.ts src/commands/__tests__/*.test.ts",
+    "test": "node --import tsx --test --test-reporter=spec src/acp/__tests__/*.test.ts src/mcp/__tests__/*.test.ts src/runner/__tests__/*.test.ts src/bin/__tests__/*.test.ts src/commands/__tests__/*.test.ts src/transport/__tests__/*.test.ts",
     "acp:spike": "tsx src/acp/spike.ts",
     "mcp:smoke": "tsx src/mcp/smoke.ts",
     "clean": "rm -rf dist *.tsbuildinfo"

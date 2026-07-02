@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { eq, isNull } from "drizzle-orm";
 import {
+  DEVICE_TO_SERVER_TYPES,
   DeviceToServerMessageSchema,
+  HOST_PROTOCOL_VERSION,
+  MIN_HOST_PROTOCOL_VERSION,
+  WS_CLOSE_PROTOCOL_TOO_OLD,
   type DeviceToServerMessage,
 } from "@opencara/shared";
 import type { Db } from "../../../db/client.js";
@@ -63,15 +67,46 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
             type: "hello-ack",
             agentHostId: host.id,
             deviceName: host.name,
+            // Old CLIs strip unknown keys, so advertising this is safe;
+            // new CLIs use it to log a version-skew warning.
+            protocolVersion: HOST_PROTOCOL_VERSION,
           }),
         );
         console.log(`[device-ws] ${host.name} (${host.id}) connected`);
       },
-      onMessage(evt: { data: string | { toString(): string } }) {
+      onMessage(
+        evt: { data: string | { toString(): string } },
+        ws: { close: (code?: number, reason?: string) => void },
+      ) {
         const raw = typeof evt.data === "string" ? evt.data : evt.data.toString();
+        let json: unknown;
+        try {
+          json = JSON.parse(raw);
+        } catch {
+          console.error(
+            "[device-ws] non-JSON frame from",
+            host.name,
+            "preview:",
+            raw.slice(0, 200),
+          );
+          return;
+        }
+        // Forward-compat: a frame type this server doesn't know means the
+        // DEVICE is newer — ignore it quietly instead of error-logging every
+        // occurrence as corruption.
+        const frameType =
+          typeof json === "object" && json !== null && "type" in json
+            ? (json as { type: unknown }).type
+            : undefined;
+        if (typeof frameType === "string" && !DEVICE_TO_SERVER_TYPES.has(frameType)) {
+          console.log(
+            `[device-ws] ignoring unknown frame type "${frameType}" from ${host.name} (CLI newer than server?)`,
+          );
+          return;
+        }
         let parsed: DeviceToServerMessage;
         try {
-          parsed = DeviceToServerMessageSchema.parse(JSON.parse(raw));
+          parsed = DeviceToServerMessageSchema.parse(json);
         } catch (err) {
           console.error(
             "[device-ws] invalid frame from",
@@ -84,6 +119,21 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
           return;
         }
         if (parsed.type === "hello") {
+          // Protocol floor: hellos below MIN_HOST_PROTOCOL_VERSION are
+          // rejected with a close code the CLI treats as fatal (no
+          // reconnect storm) and a human-readable upgrade hint. Absent
+          // protocolVersion = pre-versioning CLI = 0.
+          const deviceProtocol = parsed.protocolVersion ?? 0;
+          if (deviceProtocol < MIN_HOST_PROTOCOL_VERSION) {
+            console.warn(
+              `[device-ws] rejecting ${host.name}: protocol v${deviceProtocol} < server floor v${MIN_HOST_PROTOCOL_VERSION} (CLI ${parsed.version})`,
+            );
+            ws.close(
+              WS_CLOSE_PROTOCOL_TOO_OLD,
+              `device protocol v${deviceProtocol} is below the server minimum v${MIN_HOST_PROTOCOL_VERSION}; upgrade with: npm i -g opencara`,
+            );
+            return;
+          }
           console.log(
             `[device-ws] hello from ${host.name}: platform=${parsed.platform} version=${parsed.version} systemInfo=${parsed.systemInfo ? "yes" : "no"}`,
           );

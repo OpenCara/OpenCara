@@ -15,12 +15,14 @@ import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
 import { runAcpJob, type AcpRunController } from "../runner/spawn.js";
-import type {
-  AgentSpec,
-  DeviceToServerMessage,
-  JobAssignment,
-  ServerToDeviceMessage,
-  SystemInfo,
+import {
+  HOST_PROTOCOL_VERSION,
+  WS_CLOSE_PROTOCOL_TOO_OLD,
+  type AgentSpec,
+  type DeviceToServerMessage,
+  type JobAssignment,
+  type ServerToDeviceMessage,
+  type SystemInfo,
 } from "@opencara/shared";
 
 // Baked at bundle time by build.mjs (`define` substitutes the literal).
@@ -61,6 +63,7 @@ export async function run(opts: RunOpts = {}): Promise<void> {
         type: "hello",
         platform: platform(),
         version: PKG_VERSION,
+        protocolVersion: HOST_PROTOCOL_VERSION,
         // Advertise ACP transport support. Pre-v0.30 devices reported
         // "agent-call" (the fenced-stdout-block protocol); since the
         // legacy path was removed, this version reports "acp" so the
@@ -71,6 +74,17 @@ export async function run(opts: RunOpts = {}): Promise<void> {
     },
     onMessage: (msg: ServerToDeviceMessage) => handleServerMessage(msg, client, cfg),
     onClose: (code, reason) => {
+      if (code === WS_CLOSE_PROTOCOL_TOO_OLD) {
+        // WsClient already disabled reconnect for this code; make the
+        // failure unmissable and exit non-zero so a supervisor restart
+        // (with the same binary) doesn't loop silently either.
+        console.error(
+          `[opencara] this CLI's protocol is too old for the orchestrator: ${reason}`,
+        );
+        console.error("[opencara] upgrade with: npm i -g opencara");
+        process.exitCode = 1;
+        return;
+      }
       console.log(`[opencara] disconnected (code=${code} reason="${reason}")`);
     },
   });
@@ -92,6 +106,19 @@ function handleServerMessage(
 ): void {
   if (msg.type === "hello-ack") {
     console.log(`[opencara] acked as ${msg.deviceName} (${msg.agentHostId})`);
+    // Version-skew visibility only — the server enforces its floor by
+    // closing with WS_CLOSE_PROTOCOL_TOO_OLD; the client never gates.
+    if (
+      msg.protocolVersion !== undefined &&
+      msg.protocolVersion !== HOST_PROTOCOL_VERSION
+    ) {
+      console.warn(
+        `[opencara] protocol skew: server v${msg.protocolVersion}, CLI v${HOST_PROTOCOL_VERSION}` +
+          (msg.protocolVersion > HOST_PROTOCOL_VERSION
+            ? " — consider `npm i -g opencara`"
+            : ""),
+      );
+    }
     return;
   }
   if (msg.type === "ping") return;
