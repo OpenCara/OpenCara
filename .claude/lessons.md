@@ -100,6 +100,15 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Architecture quirks
 
+### [hits: 1] nodeRunners.ts contains intentional NUL bytes — grep/rg treat it as binary
+- `packages/orchestrator/src/flows/nodeRunners.ts` uses literal `\x00` sentinel bytes in string literals (`"\x00ANYPATH\x00"` etc.) for glob-to-regex normalization. They are NOT corruption; the file compiles fine.
+- Consequence: plain `grep`/`rg` silently return nothing (or "binary file matches") on this file. Searches that "find no matches" there are lying.
+- Use `rg -na` / `grep -a` when searching it, and don't "clean up" the bytes.
+
+### [hits: 1] agent_runs.spec.acp.priorSessionId is overwritten post-run with the RESULT session id
+- `nodeRunners.ts` rewrites `spec.acp.priorSessionId` in place via `jsonb_set` after the run finishes, so the DB value is the session the run ENDED with, not what it resumed from. For claude-acp resume the two are equal (resume keeps the id); for fresh runs it's a brand-new UUID.
+- To learn whether a run actually resumed, check the device-side pin `~/.opencara/sessions/<owner>/<repo>/branch-<safe>/agent-session.json` mtime vs the run time, or the Claude transcript under `~/.claude/projects/<munged-cwd>/<sessionId>.jsonl` (a fresh session has a single user turn).
+
 ### [hits: 1] Worktree allocation runs as its own agent_run, unpinned
 - `nodeRunners.ts:517-539` dispatches `opencara internal worktree create` as a SEPARATE `agent_run` from the node's actual agent. Its `pinnedHostId` reads only `node.config.worktree.hostId`, NOT the agent's pin from `flow_node_settings`.
 - Consequence: a flow node whose agent is pinned to host X can still allocate its worktree on host Y (because of `pickIdle`), and then the orchestrator pins the agent to Y too (via `allocateResult.agentHostId` at line 593). The agent doesn't run where you expected.

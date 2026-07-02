@@ -1260,11 +1260,17 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
 /**
  * Compose a node's previousOutput from its upstream nodes' captured stdout.
  * - 0 incoming: undefined (e.g. trigger nodes)
- * - 1 incoming: that node's output verbatim — preserves the linear chain that
- *   single-agent flows expect
+ * - 1 incoming into an action node: that node's output verbatim — post_review
+ *   and add_comment publish the body as-is, so a section header would leak
+ *   into the posted review and unseat the verdict line
+ * - 1 incoming into an agent node: labeled section. An unlabeled pasted
+ *   review reads as the agent's own completed work and produces "I've
+ *   completed my review" stub replies (ParadiseGodot#25 review 4618560289)
  * - 2+ incoming: markdown sections so a synthesizer agent can parse them
+ *
+ * Exported for unit tests.
  */
-function buildFanInInput(
+export function buildFanInInput(
   node: FlowNode,
   edges: FlowDefinition["edges"],
   outputs: Map<string, string | undefined>,
@@ -1272,7 +1278,14 @@ function buildFanInInput(
 ): string | undefined {
   const incoming = edges.filter((e) => e.target === node.id);
   if (incoming.length === 0) return undefined;
-  if (incoming.length === 1) return outputs.get(incoming[0]!.source);
+  if (incoming.length === 1) {
+    const output = outputs.get(incoming[0]!.source);
+    // Empty/absent upstream (trigger sources) must stay undefined so the
+    // agent runner's "(no upstream output)" sentinel still fires.
+    if (node.kind !== "agent" || !output?.trim()) return output;
+    const heading = labels.get(incoming[0]!.source) ?? incoming[0]!.source;
+    return `## From ${heading}\n\n${output}`;
+  }
   return incoming
     .map((e) => {
       const heading = labels.get(e.source) ?? e.source;

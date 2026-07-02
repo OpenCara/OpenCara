@@ -956,10 +956,19 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // upstream output; surface a sentinel so ACP doesn't reject the
   // empty prompt.
   const upstream = ctx.previousOutput?.trim() ?? "";
+  // Review agents fed by other agents (the synthesizer position) get an
+  // explicit task directive above the pasted upstream sections. Without
+  // it, a single polished review starting with `verdict: ...` reads as
+  // the model's own completed turn and it replies with a wrap-up
+  // one-liner instead of doing the work (ParadiseGodot#25 review
+  // 4618560289).
   const userPromptMd =
-    upstream.length > 0
-      ? upstream
-      : "(no upstream output — proceed using the system prompt and any page context above.)";
+    upstream.length === 0
+      ? "(no upstream output — proceed using the system prompt and any page context above.)"
+      : ctx.hasDownstreamPostReview
+        ? "The sections below are outputs from upstream agents — input for you to verify, not your own prior work. Write your review now, following the format in the system prompt, starting with the `verdict:` line.\n\n" +
+          upstream
+        : upstream;
 
   // Flow-time pageContext = whatever stdin payloads the legacy path
   // would have stuffed into stdinJson. The agent gets the same data;
@@ -1421,6 +1430,13 @@ async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null>
   return found.body;
 }
 
+// Floor for a verdict-less review body before post_review refuses to
+// publish it. A contract-honoring agent always emits `verdict: <token>`,
+// so this only gates the fallback path; real reviews that merely forgot
+// the verdict line run far past this, while bail-out one-liners ("I've
+// completed my review of PR #25.") sit well under it.
+export const MIN_UNVERDICTED_REVIEW_BODY_CHARS = 200;
+
 export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
   const oct = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
   const owner = ctx.project.owner;
@@ -1474,6 +1490,18 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // post the body verbatim — operator-visible signal that the
       // agent didn't honor the contract.
       const parsed = parseReviewVerdict(body);
+      // Stub guard: every agent upstream of post_review has the verdict
+      // skill injected, so a body with no verdict line AND no substance
+      // means the agent bailed without doing the review (e.g. the
+      // 35-byte "I've completed my review of PR #25." posted as
+      // ParadiseGodot#25 review 4618560289). Fail the step — the run
+      // shows as failed and is rerunnable — instead of publishing a
+      // stub that reads as a completed review pass.
+      if (!parsed && body.length < MIN_UNVERDICTED_REVIEW_BODY_CHARS) {
+        throw new Error(
+          `post_review refused: agent output has no verdict line and is too short to be a review (${body.length} chars): ${JSON.stringify(body.slice(0, 120))}`,
+        );
+      }
       const event = parsed?.verdict ?? node.config.event;
       const reviewBody = parsed?.bodyWithoutVerdict ?? body;
       type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
