@@ -128,9 +128,13 @@ export function deviceWsHandler(deps: DeviceWsDeps) {
             console.warn(
               `[device-ws] rejecting ${host.name}: protocol v${deviceProtocol} < server floor v${MIN_HOST_PROTOCOL_VERSION} (CLI ${parsed.version})`,
             );
+            // RFC 6455 caps close reasons at 123 BYTES — `ws` throws past
+            // that, which would turn a polite rejection into a socket error.
+            const reason =
+              `protocol v${deviceProtocol} < server min v${MIN_HOST_PROTOCOL_VERSION}; run: npm i -g opencara`;
             ws.close(
               WS_CLOSE_PROTOCOL_TOO_OLD,
-              `device protocol v${deviceProtocol} is below the server minimum v${MIN_HOST_PROTOCOL_VERSION}; upgrade with: npm i -g opencara`,
+              Buffer.byteLength(reason) <= 123 ? reason : reason.slice(0, 123),
             );
             return;
           }
