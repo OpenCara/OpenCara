@@ -46,7 +46,17 @@ import { runSchedulerTick } from "./flows/scheduler.js";
 process.on("unhandledRejection", (reason) => {
   console.error("[orchestrator] unhandledRejection (non-fatal):", reason);
 });
+// Under a supervisor (the container's `restart: unless-stopped` sets
+// OPENCARA_SUPERVISED=1 via the Dockerfile) a clean crash-and-restart beats
+// limping in unknown state — the original reason for swallowing these was
+// precisely that the bare nohup process had no one to restart it. Unsupervised
+// boots keep the limp-on behaviour.
+const SUPERVISED = process.env["OPENCARA_SUPERVISED"] === "1";
 process.on("uncaughtException", (err) => {
+  if (SUPERVISED) {
+    console.error("[orchestrator] uncaughtException (fatal — supervisor restarts):", err);
+    process.exit(1);
+  }
   console.error("[orchestrator] uncaughtException (non-fatal):", err);
 });
 
@@ -248,3 +258,31 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, ({ port }) => {
   console.log(`[orchestrator] listening on :${port}`);
 });
 injectWebSocket(server);
+
+// Graceful shutdown. Deploys send SIGTERM (docker stop / kill -TERM): stop
+// accepting new connections, close device sockets so CLIs reconnect to the
+// replacement process, then close the pg pool and exit 0. Open SSE streams
+// hold the HTTP server open indefinitely, so a grace timer — not
+// server.close() completing — is what actually bounds the drain.
+let shuttingDown = false;
+const DRAIN_GRACE_MS = 8_000;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[orchestrator] ${signal} received — draining (max ${DRAIN_GRACE_MS}ms)`);
+  const finish = () => {
+    void Promise.resolve(pg.end({ timeout: 5 }))
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  devicePool.closeAll();
+  server.close(() => finish());
+  // Not unref'd: it must fire even while lingering SSE/WS connections keep
+  // the server (and therefore server.close's callback) from completing.
+  setTimeout(() => {
+    console.log("[orchestrator] drain grace elapsed — exiting with streams open");
+    finish();
+  }, DRAIN_GRACE_MS);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
