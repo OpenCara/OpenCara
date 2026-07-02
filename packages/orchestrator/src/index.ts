@@ -270,7 +270,12 @@ function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[orchestrator] ${signal} received — draining (max ${DRAIN_GRACE_MS}ms)`);
+  // Reachable from both server.close()'s callback and the grace timer;
+  // guard so pg.end() runs once no matter which fires first.
+  let finished = false;
   const finish = () => {
+    if (finished) return;
+    finished = true;
     void Promise.resolve(pg.end({ timeout: 5 }))
       .catch(() => {})
       .finally(() => process.exit(0));

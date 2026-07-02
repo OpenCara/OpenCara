@@ -203,6 +203,15 @@ export class DevicePool {
    * backoff, landing on the replacement process. unregister() rejects
    * each socket's pending jobs so in-flight dispatch promises settle
    * (and their DB writes run) before the pg pool closes behind them.
+   *
+   * Rolling-deploy semantics, deliberately: in-flight jobs are recorded
+   * as failed ("device … disconnected") even though the agent process
+   * may keep running on the CLI. Its eventual `done` frame arrives at
+   * the REPLACEMENT orchestrator, whose pending map has no entry for
+   * that runId, so the true result is dropped. Deploys are rare and
+   * runs are retryable; awaiting real outcomes across a process swap
+   * would need the job journal / reconciliation work tracked in the
+   * review backlog.
    */
   closeAll(code = 1001, reason = "server shutting down"): void {
     for (const dev of [...this.devices.values()]) {
