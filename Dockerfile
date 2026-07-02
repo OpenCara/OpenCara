@@ -51,6 +51,10 @@ FROM node:${NODE_VERSION}-slim AS runner
 
 ENV NODE_ENV=production
 ENV PORT=3030
+# The compose file's `restart: unless-stopped` is the supervisor; telling the
+# orchestrator so makes uncaughtException fatal (crash → clean restart)
+# instead of the limp-on-logged-error posture the bare nohup process needed.
+ENV OPENCARA_SUPERVISED=1
 
 # curl powers the container HEALTHCHECK below (and the deploy script's gate).
 RUN apt-get update \

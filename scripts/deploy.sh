@@ -43,7 +43,11 @@ if [[ -n "$PIDS" ]]; then
     echo "    kill -TERM $pid"
     kill -TERM "$pid" 2>/dev/null || true
   done
-  for _ in $(seq 1 10); do
+  # 15s: must exceed the orchestrator's graceful-drain budget (8s grace
+  # timer + pg.end's 5s timeout — see index.ts shutdown()), else this
+  # escalates to SIGKILL mid-drain. Mirrors stop_grace_period in the
+  # container deploy (deploy/docker-compose.prod.yml).
+  for _ in $(seq 1 30); do
     sleep 0.5
     if ! ss -tln 2>/dev/null | grep -q ":$PORT "; then
       break

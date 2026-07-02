@@ -18,6 +18,11 @@ services:
     # The supervisor the bare-metal nohup process never had: a hard crash now
     # restarts instead of taking opencara.com down until a human notices.
     restart: unless-stopped
+    # Must exceed the orchestrator's self-drain budget (8s grace timer +
+    # pg.end's 5s timeout ≈ 13s worst case, see index.ts shutdown()). The
+    # Docker default of 10s would SIGKILL a container that's still draining
+    # an open SSE stream — the exact case the grace timer exists for.
+    stop_grace_period: 20s
     env_file:
       - .env.production
     environment:

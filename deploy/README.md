@@ -7,19 +7,8 @@ opencara.com host on every `v<semver>` git tag by the deploy workflow.
 git tag v1.0.2 && git push origin v1.0.2
 ```
 
-> **Installing the workflow (one-time):** the workflow ships in this PR as
-> [`deploy/deploy.workflow.yml`](./deploy.workflow.yml) rather than under
-> `.github/workflows/`, because the bot that opened the PR lacks GitHub's
-> `workflows` permission to push workflow files. A maintainer must move it into
-> place once:
->
-> ```bash
-> git mv deploy/deploy.workflow.yml .github/workflows/deploy.yml
-> git commit -m "ci: install deploy workflow" && git push
-> ```
->
-> (or copy its contents into `.github/workflows/deploy.yml` via the GitHub web
-> editor). Everything below describes the workflow once installed.
+The workflow lives at
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml).
 
 That single tag push triggers two independent workflows:
 
