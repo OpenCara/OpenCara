@@ -34,6 +34,40 @@ export type PairingConfirmRequest = z.infer<typeof PairingConfirmRequestSchema>;
 // ─── Device WebSocket transport ──────────────────────────────────────
 
 /**
+ * Host wire-protocol version (orchestrator ⟷ opencara CLI). Distinct from
+ * both the CLI app version (hello.version) and the ACP protocolVersion.
+ *
+ * Bump when a change would break an OLDER peer: a new device→server frame
+ * the server must understand, a removed/renamed field, a semantic change.
+ * Purely additive server→device changes (new optional fields, new frame
+ * types the device may ignore) do NOT need a bump — old clients strip
+ * unknown object keys and skip unknown frame types.
+ *
+ * History:
+ *   0 — implicit pre-versioning protocol (CLI ≤ 0.110.x sends no
+ *       protocolVersion in hello).
+ *   1 — hello/hello-ack carry protocolVersion; clients tolerate unknown
+ *       server frame types and unknown cancel reasons.
+ */
+export const HOST_PROTOCOL_VERSION = 1;
+
+/**
+ * Oldest device protocol the orchestrator still accepts. A hello below
+ * this floor is rejected with WS close code WS_CLOSE_PROTOCOL_TOO_OLD and
+ * an "upgrade opencara" reason. Keep at 0 until a change genuinely breaks
+ * pre-versioning CLIs — raising it kicks every npm-installed CLI older
+ * than the floor off the fleet.
+ */
+export const MIN_HOST_PROTOCOL_VERSION = 0;
+
+/**
+ * WS close code the server sends when a device's protocol is below the
+ * floor. In the 4000-4999 private-use range. Clients MUST treat this as
+ * fatal (no reconnect) — retrying the same handshake can never succeed.
+ */
+export const WS_CLOSE_PROTOCOL_TOO_OLD = 4400;
+
+/**
  * Best-effort device system metrics, collected once at connect. Never used
  * for routing decisions — purely for the operator's "what hardware do I
  * have paired" view in the dashboard.
@@ -69,6 +103,12 @@ export const HelloMessageSchema = z.object({
   type: z.literal("hello"),
   platform: z.string(),
   version: z.string(),
+  /**
+   * HOST_PROTOCOL_VERSION the device speaks. Absent from CLIs published
+   * before versioning existed — the server treats absent as 0 and gates
+   * on MIN_HOST_PROTOCOL_VERSION.
+   */
+  protocolVersion: z.number().int().nonnegative().optional(),
   capabilities: z.array(z.string()).default([]),
   systemInfo: SystemInfoSchema.optional(),
 });
@@ -113,6 +153,12 @@ export const HelloAckSchema = z.object({
   type: z.literal("hello-ack"),
   agentHostId: z.string(),
   deviceName: z.string(),
+  /**
+   * Server's HOST_PROTOCOL_VERSION. Optional so old servers (which don't
+   * send it) still satisfy new clients' parse; clients use it only to log
+   * a version-skew warning, never to gate.
+   */
+  protocolVersion: z.number().int().nonnegative().optional(),
 });
 export type HelloAck = z.infer<typeof HelloAckSchema>;
 
@@ -131,7 +177,11 @@ export type HelloAck = z.infer<typeof HelloAckSchema>;
 export const CancelJobSchema = z.object({
   type: z.literal("cancel"),
   runId: z.string(),
-  reason: z.enum(["user_stopped", "wave_cancelled"]),
+  // `.catch()` — not a bare enum — so a future server that grows a new
+  // reason (e.g. "timeout") degrades on THIS client to "user_stopped"
+  // instead of failing the whole frame's parse and silently dropping the
+  // cancel, which left the job unkillable on pre-versioning CLIs.
+  reason: z.enum(["user_stopped", "wave_cancelled"]).catch("user_stopped"),
 });
 export type CancelJob = z.infer<typeof CancelJobSchema>;
 
@@ -296,6 +346,26 @@ export const DeviceToServerMessageSchema = z.union([
   AgentCallRequestSchema,
 ]);
 export type DeviceToServerMessage = z.infer<typeof DeviceToServerMessageSchema>;
+
+// Known frame types per direction, mirroring the union members above
+// (kept adjacent so a new member is added to both). Receivers use these to
+// tell "frame from a newer peer" (unknown type → ignore, forward-
+// compatible) apart from "malformed frame from a current peer" (known
+// type failing parse → a real bug worth a loud log).
+export const SERVER_TO_DEVICE_TYPES: ReadonlySet<string> = new Set([
+  "job",
+  "hello-ack",
+  "ping",
+  "agent-call-result",
+  "cancel",
+]);
+export const DEVICE_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
+  "hello",
+  "log",
+  "done",
+  "pong",
+  "agent-call-request",
+]);
 
 // ─── Legacy aliases (kept for backwards-compat in shared exports) ───
 
