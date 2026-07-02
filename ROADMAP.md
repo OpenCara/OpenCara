@@ -2,11 +2,15 @@
 
 ## Recent Activity
 
+- **2026-07-02**: Merged [#189](https://github.com/OpenCara/OpenCara/pull/189) - Install release-deploy workflow + graceful shutdown for supervised runtime
+- **2026-07-02**: Merged [#188](https://github.com/OpenCara/OpenCara/pull/188) - Host protocol version handshake + tolerant frame parsing
 - **2026-07-02**: Merged [#186](https://github.com/OpenCara/OpenCara/pull/186) - Week-one safety fixes: working cancellation, job timeouts, fail-closed config, chat token scrub, tests in CI
 - **2026-07-01**: Merged [#184](https://github.com/OpenCara/OpenCara/pull/184) - feat(acp): select agent model over ACP session/set_config_option
 
 ## Completed
 
+- [x] Install release-deploy workflow + graceful shutdown for supervised runtime ([#189](https://github.com/OpenCara/OpenCara/pull/189))
+- [x] Host protocol version handshake + tolerant frame parsing ([#188](https://github.com/OpenCara/OpenCara/pull/188))
 - [x] Week-one safety fixes: working cancellation, job timeouts, fail-closed config, chat token scrub, tests in CI ([#186](https://github.com/OpenCara/OpenCara/pull/186))
 - [x] feat(acp): select agent model over ACP session/set_config_option ([#184](https://github.com/OpenCara/OpenCara/pull/184))
 - [x] feat(agents): editable ACP adapter args override (kind-fixed command) ([#183](https://github.com/OpenCara/OpenCara/pull/183))
