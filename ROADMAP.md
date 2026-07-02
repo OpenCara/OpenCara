@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-07-02**: Merged [#191](https://github.com/OpenCara/OpenCara/pull/191) - fix(flows): stop synthesizer stub reviews from reaching GitHub
 - **2026-07-02**: Merged [#189](https://github.com/OpenCara/OpenCara/pull/189) - Install release-deploy workflow + graceful shutdown for supervised runtime
 - **2026-07-02**: Merged [#188](https://github.com/OpenCara/OpenCara/pull/188) - Host protocol version handshake + tolerant frame parsing
 - **2026-07-02**: Merged [#186](https://github.com/OpenCara/OpenCara/pull/186) - Week-one safety fixes: working cancellation, job timeouts, fail-closed config, chat token scrub, tests in CI
@@ -9,6 +10,7 @@
 
 ## Completed
 
+- [x] fix(flows): stop synthesizer stub reviews from reaching GitHub ([#191](https://github.com/OpenCara/OpenCara/pull/191))
 - [x] Install release-deploy workflow + graceful shutdown for supervised runtime ([#189](https://github.com/OpenCara/OpenCara/pull/189))
 - [x] Host protocol version handshake + tolerant frame parsing ([#188](https://github.com/OpenCara/OpenCara/pull/188))
 - [x] Week-one safety fixes: working cancellation, job timeouts, fail-closed config, chat token scrub, tests in CI ([#186](https://github.com/OpenCara/OpenCara/pull/186))
