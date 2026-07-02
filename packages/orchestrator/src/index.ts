@@ -65,7 +65,7 @@ await migrate(db, {
 console.log("[orchestrator] migrations up to date");
 
 const devicePool = new DevicePool(db);
-const dispatcher = new WebSocketDispatcher(devicePool);
+const dispatcher = new WebSocketDispatcher(devicePool, config.JOB_TIMEOUT_MS);
 
 const app = new Hono<AuthEnv>();
 const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
@@ -215,7 +215,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   // prefix — subsequent app.route("/api", ...) calls are silently dropped.
   // Combine the /api sub-routers into one before mounting once.
   const apiHono = new Hono<AuthEnv>();
-  apiHono.route("/", flowRoutes({ db, pg, flowEngine: flowEngine ?? undefined }));
+  apiHono.route("/", flowRoutes({ db, pg, flowEngine: flowEngine ?? undefined, dispatcher }));
   apiHono.route("/", runRoutes({ db, pg }));
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
@@ -226,7 +226,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
     "/",
     kanbanRoutes({ db, pg, app: githubApp ?? undefined, cipher, oauth }),
   );
-  apiHono.route("/", pmRoutes({ db, flowEngine: flowEngine ?? undefined }));
+  apiHono.route("/", pmRoutes({ db, flowEngine: flowEngine ?? undefined, dispatcher }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the

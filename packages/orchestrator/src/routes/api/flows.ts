@@ -21,7 +21,9 @@ import {
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import { resetProjectFlowToTemplate } from "../../flows/builtin.js";
+import { cancelFlowRunAgents } from "../../flows/cancelAgents.js";
 import type { FlowEngine } from "../../flows/engine.js";
+import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
 import {
   FLOW_RUNS_CHANNEL,
   parseFlowRunsNotify,
@@ -32,6 +34,7 @@ interface FlowRoutesDeps {
   db: Db;
   pg: Sql;
   flowEngine?: FlowEngine;
+  dispatcher?: AgentDispatcher;
 }
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
@@ -665,16 +668,13 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Cancel a running flow run. Mirrors the per-wave cancel in /pm: flip the
-  // row to `cancelled` only if still non-terminal (guarded UPDATE), then ping
-  // the flow_runs LISTEN channel so any SSE stream and the kanban board see
-  // the new status without waiting for the next poll tick.
-  //
-  // The agent_run rows referenced by the in-flight step keep their status —
-  // the engine notices the cancelled parent on its next tick and stops
-  // assigning new agent runs. A live agent process is *not* signalled to
-  // stop from this endpoint; the typical implement run is short enough that
-  // the agent finishes naturally and the cancelled status on the flow_run
-  // is what the UI cares about.
+  // row to `cancelled` only if still non-terminal (guarded UPDATE), cancel
+  // the in-flight agent_runs and signal their device (best-effort — the DB
+  // write is the load-bearing state either way), then ping the flow_runs
+  // LISTEN channel so any SSE stream and the kanban board see the new
+  // status without waiting for the next poll tick. The engine's own
+  // terminal write is status-guarded, so the finished agent can't flip
+  // this run back to succeeded/failed.
   r.post("/flow-runs/:id/cancel", auth, async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
@@ -710,13 +710,26 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     if (updated.length === 0) {
       return c.json({ error: "already terminal" }, 409);
     }
+    // Flip the in-flight agent_runs rows and signal the device to actually
+    // kill the process. Without the WS frame, "cancelled" here was purely
+    // cosmetic — the agent kept executing on the device (and could still
+    // push commits / open PRs) until it finished naturally.
+    let signalled = 0;
+    if (deps.dispatcher) {
+      ({ signalled } = await cancelFlowRunAgents(
+        deps.db,
+        deps.dispatcher,
+        id,
+        "user_stopped",
+      ));
+    }
     // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
     // board, which LISTENs on `flow_runs` to refresh implement statuses).
     void deps.pg.notify(
       FLOW_RUNS_CHANNEL,
       serializeFlowRunsNotify({ flowRunId: id, projectId: run.projectId }),
     );
-    return c.json({ ok: true });
+    return c.json({ ok: true, signalled });
   });
 
   r.get("/flow-runs/:id", auth, async (c) => {

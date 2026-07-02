@@ -288,6 +288,13 @@
       "when": 1777610000000,
       "tag": "0040_agent_acp_args",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1777620000000,
+      "tag": "0041_agent_runs_chat_session_key_idx",
+      "breakpoints": true
     }
   ]
 }

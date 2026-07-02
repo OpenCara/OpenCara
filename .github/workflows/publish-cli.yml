@@ -82,6 +82,11 @@ jobs:
           echo "Publishing opencara@$VERSION"
           (cd packages/cli && npm version "$VERSION" --no-git-tag-version --allow-same-version)
 
+      - name: Test
+        # Gate the publish on the CLI's own suite — a tag used to be able
+        # to ship a green-built but functionally broken CLI to npm.
+        run: pnpm --filter opencara test
+
       - name: Build (tsc + esbuild bundle)
         # `tsc -b` typechecks via project refs (builds @opencara/shared
         # then opencara). `node build.mjs` then bundles src/bin.ts → a

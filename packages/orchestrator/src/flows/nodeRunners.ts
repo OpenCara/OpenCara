@@ -8,7 +8,7 @@ import type {
   TriggerNode,
 } from "@opencara/flows";
 import type { AgentSpec } from "@opencara/shared";
-import { and } from "drizzle-orm";
+import { and, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   agentRunLogs,
@@ -1706,6 +1706,9 @@ async function dispatchAgentRun(
     // mustn't re-serialize the in-memory `spec` here because opts.env
     // was mutated to hold the live mintedToken and would leak any
     // non-GH secret (ANTHROPIC_API_KEY, MCP_*_TOKEN, ...) into the row.
+    // Guarded terminal write (mirrors the chat stop endpoint): a cancel
+    // path may have already flipped this row to "cancelled" — the finished
+    // agent must not overwrite that with succeeded/failed.
     await ctx.db
       .update(agentRuns)
       .set({
@@ -1719,13 +1722,23 @@ async function dispatchAgentRun(
             }
           : {}),
       })
-      .where(eq(agentRuns.id, opts.agentRunId));
+      .where(
+        and(
+          eq(agentRuns.id, opts.agentRunId),
+          inArray(agentRuns.status, ["queued", "assigned", "running"]),
+        ),
+      );
     return { ...result, stderrTail: stderrChunks.join("") };
   } catch (err) {
     await ctx.db
       .update(agentRuns)
       .set({ status: "failed", finishedAt: new Date() })
-      .where(eq(agentRuns.id, opts.agentRunId));
+      .where(
+        and(
+          eq(agentRuns.id, opts.agentRunId),
+          inArray(agentRuns.status, ["queued", "assigned", "running"]),
+        ),
+      );
     throw err;
   } finally {
     if (mintedToken) {

@@ -617,6 +617,14 @@ export const agentRuns = pgTable(
     ),
     flowRunStepIdx: index("agent_runs_flow_run_step_id_idx").on(t.flowRunStepId),
     addedByUserIdIdx: index("agent_runs_added_by_user_id_idx").on(t.addedByUserId),
+    // Chat thread lookups (chat.ts priorTurn probe, chatSessions.ts
+    // history/hard-delete/active-keys) all filter on this JSONB
+    // expression — without an index each one seq-scans a table that
+    // grows with every agent run. Partial on IS NOT NULL keeps
+    // flow-engine runs (no chat env key) out of the index entirely.
+    chatSessionKeyIdx: index("agent_runs_chat_session_key_idx")
+      .on(sql`(${t.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID')`)
+      .where(sql`(spec->'env'->>'OPENCARA_CHAT_SESSION_ID') IS NOT NULL`),
   }),
 );
 
