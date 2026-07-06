@@ -82,16 +82,20 @@ jobs:
           echo "Publishing opencara@$VERSION"
           (cd packages/cli && npm version "$VERSION" --no-git-tag-version --allow-same-version)
 
-      - name: Test
-        # Gate the publish on the CLI's own suite — a tag used to be able
-        # to ship a green-built but functionally broken CLI to npm.
-        run: pnpm --filter opencara test
-
       - name: Build (tsc + esbuild bundle)
         # `tsc -b` typechecks via project refs (builds @opencara/shared
         # then opencara). `node build.mjs` then bundles src/bin.ts → a
         # single dist/bin.js with @opencara/shared inlined.
         run: pnpm --filter opencara build
+
+      - name: Test
+        # Gate the publish on the CLI's own suite. MUST run after Build:
+        # the tests import @opencara/shared, whose dist/ only exists once
+        # tsc -b has built the project references — running first fails
+        # every suite with ERR_MODULE_NOT_FOUND (broke the v0.111.0 and
+        # v0.112.0 publishes; ci.yml only passes because its typecheck
+        # step emits shared's dist as a side effect).
+        run: pnpm --filter opencara test
 
       - name: Pack (pnpm rewrites workspace:* in the tarball's package.json)
         working-directory: packages/cli
