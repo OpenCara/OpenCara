@@ -1,5 +1,32 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import { createPrivateKey } from "node:crypto";
+
+/**
+ * Boot-time validation of the GitHub App private key. Returns the PEM
+ * unchanged; throws with an actionable message when it doesn't parse.
+ *
+ * Why fail here and not on first use: octokit mints the App JWT lazily,
+ * so a malformed key (the 2026-07-06 incident: an env-file inlining step
+ * dropped the PEM's newlines, gluing base64 to the headers) leaves
+ * /health green while EVERY App-authenticated feature fails at runtime
+ * with swallowed ERR_OSSL_UNSUPPORTED errors. Failing the boot makes the
+ * deploy's health gate catch it instead.
+ */
+export function validateAppPrivateKeyPem(pem: string): string {
+  try {
+    createPrivateKey(pem);
+    return pem;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      "GITHUB_APP_PRIVATE_KEY does not parse as a private key " +
+        `(${msg}). When inlining the PEM into an env var, encode real ` +
+        "newlines as literal \\n sequences (e.g. `sed -z 's/\\n/\\\\n/g' key.pem`); " +
+        "headers glued directly to the base64 body are not valid PEM.",
+    );
+  }
+}
 
 const BaseSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3030),
@@ -100,9 +127,11 @@ export function loadConfig(): AppConfig {
       GITHUB_APP_PRIVATE_KEY: process.env["GITHUB_APP_PRIVATE_KEY"],
       GITHUB_APP_PRIVATE_KEY_PATH: process.env["GITHUB_APP_PRIVATE_KEY_PATH"],
     });
-    const privateKeyPem = appCfg.GITHUB_APP_PRIVATE_KEY
-      ? appCfg.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, "\n")
-      : readFileSync(appCfg.GITHUB_APP_PRIVATE_KEY_PATH!, "utf8");
+    const privateKeyPem = validateAppPrivateKeyPem(
+      appCfg.GITHUB_APP_PRIVATE_KEY
+        ? appCfg.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, "\n")
+        : readFileSync(appCfg.GITHUB_APP_PRIVATE_KEY_PATH!, "utf8"),
+    );
     github = {
       appId: appCfg.GITHUB_APP_ID,
       clientId: appCfg.GITHUB_APP_CLIENT_ID,
