@@ -400,7 +400,7 @@ export function matchModelValue(
  * found") so a bad model name degrades to the adapter default instead of
  * failing the run.
  */
-async function selectAcpModel(
+export async function selectAcpModel(
   client: AcpClient,
   sessionId: string,
   requested: string,
@@ -420,10 +420,23 @@ async function selectAcpModel(
   const values = (modelOption.options ?? []).map((o) => o.value);
   const target = matchModelValue(requested, values);
   if (!target) {
-    onLog(
-      "stderr",
-      `[acp] model "${requested}" not among available models [${values.join(", ")}]; using the default\n`,
-    );
+    // Some agents (claude-acp) accept freeform model ids beyond the
+    // advertised list — attempt the raw value before giving up. Agents
+    // that validate (pi) reject it and we degrade to their default,
+    // same as before but with one extra round trip.
+    try {
+      await client.setConfigOption({
+        sessionId,
+        configId: modelOption.id,
+        value: requested.trim(),
+      });
+      onLog("stderr", `[acp] selected model ${requested.trim()} (freeform)\n`);
+    } catch {
+      onLog(
+        "stderr",
+        `[acp] model "${requested}" not among available models [${values.join(", ")}]; using the default\n`,
+      );
+    }
     return;
   }
   if (modelOption.currentValue === target) return; // already the active model
