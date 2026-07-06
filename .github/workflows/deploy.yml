@@ -100,6 +100,11 @@ jobs:
     # Gate on the `production` environment so required reviewers / protection
     # rules (configured in repo settings) apply before anything touches the host.
     environment: production
+    permissions:
+      contents: read
+      # Lets the job's GITHUB_TOKEN serve as the host's GHCR pull credential
+      # (forwarded to deploy.sh below) when no GHCR_PULL_TOKEN secret is set.
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -134,11 +139,17 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           OPENCARA_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
-          # The runner's GITHUB_TOKEN can't authenticate from the host, so the
-          # server pulls with its own read:packages credential. Omit the secret
-          # entirely if the GHCR package is public — deploy.sh skips login then.
+          # GHCR pull credential for the host. Preference order:
+          #   1. GHCR_PULL_TOKEN secret (long-lived PAT), if configured;
+          #   2. the job's ephemeral GITHUB_TOKEN (packages: read above) —
+          #      forwarded over SSH for `docker login`, valid only for the
+          #      job's lifetime, scoped to this repo's packages. This makes
+          #      private GHCR packages work with zero standing secrets; the
+          #      stale login it leaves in ~/.docker/config.json expires with
+          #      the job. Public packages never hit either path in practice
+          #      (anonymous pull succeeds), but login is harmless there.
           GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || github.token }}
         with:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
