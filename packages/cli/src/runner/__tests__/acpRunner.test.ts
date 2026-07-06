@@ -9,7 +9,10 @@ import {
   buildPromptContent,
   createUpdateTranslator,
   matchModelValue,
+  selectAcpModel,
 } from "../acpRunner.js";
+import type { AcpClient } from "../../acp/client.js";
+import type { AcpConfigOption } from "../../acp/types.js";
 import type {
   MessageChunkUpdate,
   SessionUpdate,
@@ -37,6 +40,72 @@ describe("matchModelValue", () => {
   });
   it("returns undefined for empty input", () => {
     assert.equal(matchModelValue("  ", values), undefined);
+  });
+});
+
+describe("selectAcpModel", () => {
+  const modelOption = (values: string[], current?: string): AcpConfigOption[] => [
+    {
+      type: "select",
+      id: "model",
+      category: "model",
+      currentValue: current,
+      options: values.map((value) => ({ value })),
+    },
+  ];
+  const fakeClient = (impl: (req: unknown) => Promise<unknown>) => {
+    const calls: unknown[] = [];
+    const client = {
+      setConfigOption: (req: unknown) => {
+        calls.push(req);
+        return impl(req);
+      },
+    } as unknown as AcpClient;
+    return { client, calls };
+  };
+  const collectLogs = () => {
+    const lines: string[] = [];
+    return { lines, sink: (_s: string, chunk: string) => void lines.push(chunk) };
+  };
+
+  it("stays silent when the advertised currentValue already matches (claude argv path)", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(
+      client,
+      "s1",
+      "claude-sonnet-5",
+      modelOption(["claude-sonnet-5"], "claude-sonnet-5"),
+      sink,
+    );
+    assert.equal(calls.length, 0);
+    assert.deepEqual(lines, []);
+  });
+
+  it("attempts a freeform set when no advertised value matches, and reports success", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(client, "s1", "claude-fable-5", modelOption(["claude-sonnet-5"]), sink);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], { sessionId: "s1", configId: "model", value: "claude-fable-5" });
+    assert.ok(lines.some((l) => l.includes("selected model claude-fable-5 (freeform)")));
+  });
+
+  it("falls back to the default message when the freeform attempt is rejected", async () => {
+    const { client } = fakeClient(async () => {
+      throw new Error("Model not found");
+    });
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(client, "s1", "nope-1", modelOption(["claude-sonnet-5"]), sink);
+    assert.ok(lines.some((l) => l.includes('not among available models')));
+  });
+
+  it("still logs the no-option note when the agent advertises nothing", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(client, "s1", "claude-sonnet-5", undefined, sink);
+    assert.equal(calls.length, 0);
+    assert.ok(lines.some((l) => l.includes("advertised no model option")));
   });
 });
 
