@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-07-18**: Merged [#197](https://github.com/OpenCara/OpenCara/pull/197) - docs(readme): refresh for ACP cutover + new-user onboarding section
 - **2026-07-06**: Merged [#192](https://github.com/OpenCara/OpenCara/pull/192) - fix(claude-acp): advertise the model as an ACP config option
 - **2026-07-02**: Merged [#191](https://github.com/OpenCara/OpenCara/pull/191) - fix(flows): stop synthesizer stub reviews from reaching GitHub
 - **2026-07-02**: Merged [#189](https://github.com/OpenCara/OpenCara/pull/189) - Install release-deploy workflow + graceful shutdown for supervised runtime
@@ -11,6 +12,7 @@
 
 ## Completed
 
+- [x] docs(readme): refresh for ACP cutover + new-user onboarding section ([#197](https://github.com/OpenCara/OpenCara/pull/197))
 - [x] fix(claude-acp): advertise the model as an ACP config option ([#192](https://github.com/OpenCara/OpenCara/pull/192))
 - [x] fix(flows): stop synthesizer stub reviews from reaching GitHub ([#191](https://github.com/OpenCara/OpenCara/pull/191))
 - [x] Install release-deploy workflow + graceful shutdown for supervised runtime ([#189](https://github.com/OpenCara/OpenCara/pull/189))
