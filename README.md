@@ -12,6 +12,34 @@ The full development lifecycle ships as one built-in flow, `development-lifecycl
 
 Each incoming webhook activates only the matching stage's subgraph, so a single event no longer fans out to four separate flows with three immediately cancelled as `trigger_skip`. (The earlier `issue-implement`, `pr-review`, `pr-review-multi`, and `pr-review-fix` templates are superseded by this one; their definitions remain in `packages/flows` for reference.)
 
+## Using opencara.com
+
+### Why
+
+[opencara.com](https://opencara.com) is the hosted orchestrator. It turns the lifecycle above on for your own repos without running any server yourself — you bring the machines the agents run on:
+
+- **Your hardware, your keys.** Agents execute on devices you pair (a laptop, a homelab box, a VPS), using your own provider subscriptions and API keys. Nothing about your code or credentials passes through a third-party runner; opencara.com only sees webhook events, orchestration state, and the logs the device streams back.
+- **No CI minutes, real dev environments.** Agents run where your toolchain already works — with your installed CLIs, caches, and checkouts. Worktrees persist per PR branch, so a fix iteration resumes the same conversation in the same checkout instead of starting cold.
+- **The full loop, not one bot.** Issue → implementation PR → multi-agent review → review-driven fixes → optional auto-merge, visible end-to-end as flow runs you can inspect, edit, and re-run per project.
+
+### How
+
+1. **Sign in** at [opencara.com](https://opencara.com) with your GitHub account.
+2. **Install the GitHub App** on the repos you want automated: [github.com/apps/opencara](https://github.com/apps/opencara/installations/new). The permissions it asks for are listed [below](#github-app-permissions-and-events).
+3. **Add a project** (`/projects` → add): pick the installation and repo. The built-in `development-lifecycle` flow is seeded automatically.
+4. **Pair a device** — on the machine that should run agents:
+
+   ```bash
+   npx opencara        # or: npm i -g opencara && opencara
+   ```
+
+   First start prints a pairing code and opens `/devices/pair` in your browser; confirm there, and the daemon stays connected waiting for jobs. Keep it running (tmux, systemd, …). Pair as many devices as you like.
+5. **Create an agent** (`/agents`): pick a kind (`claude`, `codex`, `opencode`, or `pi` — see [Agent kinds](#agent-kinds-acp)) and set the provider API key in the agent's env. The device must have the underlying tool available (e.g. the `claude` CLI for kind `claude`; the `npx`-based adapters fetch themselves).
+6. **Bind the agent to the flow**: open the project's flow, and assign your agent (and optionally a custom prompt) to the implement and reviewer nodes.
+7. **Use it from GitHub**: move an issue to `Ready` on the linked Projects v2 board to get an implementation PR; open a PR to get a synthesized multi-agent review; submit a review or comment `@opencara fix` to send the agent back for fixes. Watch progress live on the project's flow-run pages.
+
+Self-hosting the orchestrator instead is just this repo + Postgres + your own GitHub App — see [Development](#development) and [Deployment](#deployment).
+
 ## Architecture
 
 | Package | Purpose |
@@ -19,7 +47,7 @@ Each incoming webhook activates only the matching stage's subgraph, so a single 
 | `packages/shared` | Shared TS types and wire-protocol contracts. Published to npm as `@opencara/shared`. |
 | `packages/flows` | Built-in flow definitions + Zod schemas for the orchestrator's DAG types. |
 | `packages/orchestrator` | Hono server: webhook ingestion, event-driven agent dispatch, persistent state (Postgres + Drizzle). |
-| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agent subprocesses. Published as [`opencara`](https://www.npmjs.com/package/opencara) (`npm i -g opencara` → `opencara` binary; runs the pair flow on first start, then accepts jobs). Think: GitHub Actions self-hosted runners. |
+| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agents as [ACP](https://agentclientprotocol.com) subprocesses. Published as [`opencara`](https://www.npmjs.com/package/opencara) (`npm i -g opencara` → `opencara`, `opencara-mcp`, and `claude-acp` binaries; runs the pair flow on first start, then accepts jobs). Think: GitHub Actions self-hosted runners. |
 | `apps/web` | React + React Flow UI for visualizing and editing orchestration flows. |
 
 ## Stack
@@ -54,7 +82,7 @@ Default local postgres: `postgres://opencara:opencara@localhost:5433/opencara`. 
 
 ## Deployment
 
-Pushing a `v<semver>` tag builds a versioned Docker image, pushes it to GHCR, and rolls it out to opencara.com over SSH (gated on a health check). Rollback is redeploying a prior image tag — no rebuild. See [`deploy/README.md`](deploy/README.md) for secrets, host setup, and the rollback procedure.
+Pushing a `v<semver>` tag builds a versioned Docker image, pushes it to GHCR, rolls it out to opencara.com over SSH (gated on a health check), and publishes the `opencara` CLI to npm at the same version. Rollback is redeploying a prior image tag — no rebuild. See [`deploy/README.md`](deploy/README.md) for secrets, host setup, and the rollback procedure. (`packages/cli/package.json` stays at `0.0.0` on purpose; CI stamps the version from the tag before publishing.)
 
 ```bash
 git tag v1.0.2 && git push origin v1.0.2
@@ -65,16 +93,16 @@ git tag v1.0.2 && git push origin v1.0.2
 For the built-in flows to work end-to-end, the GitHub App needs:
 
 - **Repository permissions:** `Issues: read & write`, `Pull requests: read & write`, `Metadata: read`, `Contents: read & write`, `Checks: read`.
-- **Organization permissions:** `Projects: read` (required for the `issue-implement` flow to receive `projects_v2_item` events).
+- **Organization permissions:** `Projects: read` (required to receive the `projects_v2_item` events that drive the implement stage).
 - **Subscribed events:** `Pull request`, `Issues`, `Projects v2 item`, `Installation`, `Installation repositories`.
 
-The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the project page (issue rows are normalized from the webhook + a one-shot REST backfill on project add) and the `issue-implement` flow template (Projects v2 status changes).
+The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the project page (issue rows are normalized from the webhook + a one-shot REST backfill on project add) and the implement trigger (Projects v2 status changes).
 
 ## Agent runtime credentials
 
 Each agent run dispatched through a flow gets an ephemeral GitHub App installation token injected into its environment, so `gh` and any octokit-based tool work out of the box without per-host `gh auth login`:
 
-- `GH_TOKEN`, `GITHUB_TOKEN` — same value, ≤1h TTL, scoped to the project's repo with `contents: write, issues: write, pull_requests: write, checks: read` (`contents: write` is needed for agent flows like `issue-implement` that push branches; `checks: read` lets agents query Check Run status for auto-merge gating).
+- `GH_TOKEN`, `GITHUB_TOKEN` — same value, ≤1h TTL, scoped to the project's repo with `contents: write, issues: write, pull_requests: write, checks: read` (`contents: write` is needed for the implement stage to push branches; `checks: read` lets agents query Check Run status for auto-merge gating).
 - `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` — pinned to `opencara[bot]` so commits attribute to the App and don't leak the host's global `~/.gitconfig` identity into the run.
 
 The token is minted per run and revoked when the agent finishes. Identity inside the agent: `gh api user` returns `apps/<slug>` (the App's bot identity); the persisted `agent_runs.spec.env` shows `<ephemeral>` for the token fields rather than the secret.
@@ -86,36 +114,39 @@ Limitations (v1):
 
 ## Worktrees + PR creation
 
-Agents that need a checkout configure a worktree directly on the agent flow node — `agent.config.worktree = { fromBranch, branchName, hostId }`. The engine allocates (or reuses) a stable per-`(repo, branch)` working directory on a paired device under `~/.opencara/work/<owner>/<repo>/branch-<safe>/checkout/` and exposes it to the agent via `OPENCARA_WORKTREE_DIR` / `OPENCARA_WORKTREE_BRANCH` / `OPENCARA_SESSION_DIR`. The agent commits, pushes, and (for the issue-implement flow) calls `gh pr create` itself — there is no dedicated `github.create_pull_request` flow node; the agent's `GH_TOKEN` env (PR #22) is what makes this work. Enable `agent.config.draftPr` to inject `OPENCARA_PR_DRAFT=1`; the agent should pass `--draft` to `gh pr create`, and after a successful agent run the engine marks that branch's open draft PR ready for review.
+Agents that need a checkout configure a worktree directly on the agent flow node — `agent.config.worktree = { fromBranch, branchName, hostId }`. The engine allocates (or reuses) a stable per-`(repo, branch)` working directory on a paired device under `~/.opencara/work/<owner>/<repo>/branch-<safe>/checkout/` and exposes it to the agent via `OPENCARA_WORKTREE_DIR` / `OPENCARA_WORKTREE_BRANCH` / `OPENCARA_SESSION_DIR`. The agent commits, pushes, and (in the implement stage) calls `gh pr create` itself — there is no dedicated `github.create_pull_request` flow node; the agent's injected `GH_TOKEN` is what makes this work. Enable `agent.config.draftPr` to inject `OPENCARA_PR_DRAFT=1`; the agent should pass `--draft` to `gh pr create`, and after a successful agent run the engine marks that branch's open draft PR ready for review.
 
-**Worktrees persist across flow runs** on the same PR branch. The implementer's run clones; subsequent `pr-review-fix` iterations on the same PR find `.git/` already present and just `git fetch` + checkout. The pinned device + the agent's session id file (`agent-session.json` next to the worktree) are what make the resumable review-fix loop possible.
+**Worktrees persist across flow runs** on the same PR branch. The implementer's run clones; subsequent fix iterations on the same PR find `.git/` already present and just `git fetch` + checkout. The pinned device + the agent's session id file (`agent-session.json` next to the worktree) are what make the resumable review-fix loop possible.
 
 **Cleanup is event-driven, not time-bounded.** When GitHub fires `pull_request.closed` (merged or not), the orchestrator dispatches `opencara internal worktree remove --key <slug>` to the pinned device, wiping both the checkout and the session dir, and deletes the `worktree_pins` row. Orphaned worktrees on disconnected devices (rare) need manual cleanup.
 
-CLI side: `opencara internal worktree {create,remove,write-session}`. **Paired devices must be running a CLI build that includes these subcommands** — older CLIs fail with `unknown command: internal`. Rebuild + redeploy `opencara` on each paired host after upgrading the orchestrator.
+CLI side: `opencara internal worktree {create,remove,write-session}`. **Keep paired devices on a current CLI build** — device and orchestrator exchange a host-protocol version in the `hello`/`hello-ack` handshake (`packages/shared/src/host-protocol.ts`), and CLIs predating the ACP cutover can't run dispatched agents at all. `npm exec opencara@latest` on each paired host after upgrading the orchestrator.
 
-> **Upgrade note:** the previous release shipped two dedicated flow nodes for this — `git.create_worktree` and `github.create_pull_request`. They're gone in this release. Project flows that adopted the old issue-implement / pr-review-fix templates have those node kinds in their stored graph and will fail to parse on the next webhook event. Recovery: re-adopt the built-in templates from the project's flows page (the orchestrator re-seeds the latest shape on startup).
+## Agent kinds (ACP)
 
-## Agent kinds (resumable agents)
+Every agent runs as an [Agent Client Protocol](https://agentclientprotocol.com) subprocess on the paired device — the legacy stdin-JSON runner is gone. `agents.kind` selects which ACP adapter the device spawns (`packages/orchestrator/src/agents/acp-gate.ts`):
 
-`agents.kind` selects how the orchestrator invokes an agent at dispatch time. Four named kinds get **per-run conversation resume** — the second iteration on the same PR (e.g. when a reviewer leaves a review) wakes the agent up at the same point in the conversation, on the same device, with its prior plan/scratchpad intact:
+| Kind | Adapter command |
+|---|---|
+| `claude` | `claude-acp` — in-package shim around the local `claude` CLI; ships inside the `opencara` npm package and resolves to the bundled `dist/claude-acp.js`, no separate install. |
+| `codex` | `npx --yes @zed-industries/codex-acp` |
+| `opencode` | `npx --yes opencode-ai@latest acp` |
+| `pi` | `npx --yes pi-acp@latest` |
 
-| Kind | Binary | Resume model |
-|---|---|---|
-| `claude` | `claude` | Orchestrator generates a UUID and passes `--session-id <uuid>` on first run, `--resume <uuid>` afterwards. |
-| `codex` | `codex` | First run is `codex exec --json …`; resume is `codex exec resume <id> …`. Session id parsed from the first JSONL frame's `payload.id`. |
-| `opencode` | `opencode` | `opencode run --format json [--session <id>] …`. Session id read from each event's `sessionID` field. |
-| `pi` | `pi` (`@mariozechner/pi-coding-agent`) | `pi --mode json [--session <id>] …`. Session id read from line-1's `id` field. |
-| `custom` | (operator-defined) | No resume. Free-form `command + args` from the agents row, exactly like before. |
+(`custom` survives in the Postgres enum for pre-cutover rows but is no longer dispatchable — re-save those agents with a registered kind.)
 
-Pick the kind in the agents view (`/agents`). For named kinds, set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). The "Extra args" field is appended to the adapter's base args — that's where you put `--provider X --model Y` for pi, model overrides, etc.
+Pick the kind in the agents view (`/agents`) and set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). Model selection: put `--model <id>` in the agent's args and the orchestrator translates it per adapter (codex takes a `-c model="…"` config override; adapters that advertise a model option — claude-acp, opencode — get it over ACP `session/set_config_option`). The "ACP args" field replaces the adapter's args verbatim when set; the adapter *command* is always fixed by kind.
+
+**Resume:** the session id an agent ends a run with is persisted (`agent_runs.spec.acp.priorSessionId`, plus `agent-session.json` next to the worktree on the device). The next run on the same (repo, branch) is pinned to the same device and resumes that conversation where the adapter supports it — so a fix iteration wakes up with the implementer's prior context intact.
 
 ## PR review → fix loop
 
-Built-in flow `pr-review-fix` triggers when a reviewer submits a review on a PR opened by `issue-implement`. It clones the PR's head branch in place into a fresh worktree, then dispatches the agent — pinned to the **same device** that ran the original implementation, **resuming the same conversation** via the per-kind adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
+The `development-lifecycle` flow's fix stage triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It re-dispatches the implement agent pinned to the **same device** that produced the branch, in the same persistent worktree, **resuming the same conversation** via the ACP adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
 
-How the device pin works: every `git.create_worktree` upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host. If the pinned host is offline at trigger time, the engine falls back to `pickIdle()` and the agent starts a fresh conversation (no session id is reachable on a different device).
-
-The review-fix flow only fires on `commented` and `changes_requested` review states by default — `approved` reviews skip it (no fix needed). Adjust in the trigger node config.
+How the device pin works: worktree allocation upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host. If the pinned host is offline at trigger time, the engine falls back to `pickIdle()` and the agent starts a fresh conversation (no session id is reachable on a different device).
 
 **No iteration cap:** GitHub's review/push cycle is the bound. If the operator needs to stop a runaway loop, disable the flow.
+
+## Scheduled flows
+
+Flows can also fire on a timer instead of a webhook: a `schedule.cron` trigger node carries a cron expression + timezone, and the orchestrator's scheduler (`packages/orchestrator/src/flows/scheduler.ts`) persists the next fire time per `(flow, node)` and dispatches when it comes due. Useful for periodic maintenance tasks (dependency bumps, triage sweeps) on a project without any GitHub event involved.
