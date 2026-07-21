@@ -64,36 +64,40 @@ const KIND_HINTS: Record<
 > = {
   claude: {
     label: "Claude Code",
-    defaultCommand: "claude",
+    defaultCommand: "npx",
     envHint:
-      "Set ANTHROPIC_API_KEY here, or run `claude auth login` once on the device.",
-    argsPlaceholder: "(usually empty — claude needs no extras)",
+      "Set ANTHROPIC_API_KEY here, or run `claude auth login` once on the device. " +
+      "No global install needed — the adapter auto-fetches opencara@latest via npx.",
+    argsPlaceholder: "(usually empty — claude-acp needs no extras)",
     argsHint:
-      "Optional extra args. Adapter already passes -p / --output-format json / --resume.",
+      "Optional extra args passed to claude-acp. Leave empty for the npx default.",
   },
   codex: {
     label: "Codex (OpenAI)",
-    defaultCommand: "codex",
+    defaultCommand: "npx",
     envHint:
-      "Set OPENAI_API_KEY here, or run `codex login --with-api-key` once on the device.",
+      "Set OPENAI_API_KEY here, or run `codex login --with-api-key` once on the device. " +
+      "No global install needed — the adapter auto-fetches @zed-industries/codex-acp@latest via npx.",
     argsPlaceholder: "(usually empty)",
     argsHint:
       "Optional extra args. Adapter already passes exec --json --skip-git-repo-check -a never.",
   },
   opencode: {
     label: "opencode",
-    defaultCommand: "opencode",
+    defaultCommand: "npx",
     envHint:
-      "Set the provider key (ANTHROPIC_API_KEY / OPENAI_API_KEY / …) for the model your opencode config picks.",
+      "Set the provider key (ANTHROPIC_API_KEY / OPENAI_API_KEY / …) for the model your opencode config picks. " +
+      "No global install needed — the adapter auto-fetches opencode-ai@latest via npx.",
     argsPlaceholder: "(usually empty)",
     argsHint:
       "Optional extra args. Adapter already passes run --format json --dangerously-skip-permissions.",
   },
   pi: {
     label: "pi (pi-coding-agent)",
-    defaultCommand: "pi",
+    defaultCommand: "npx",
     envHint:
-      "Set the provider's *_API_KEY (e.g. KIMI_API_KEY, MINIMAX_CN_API_KEY) for the model you select via --provider/--model.",
+      "Set the provider's *_API_KEY (e.g. KIMI_API_KEY, MINIMAX_CN_API_KEY) for the model you select via --provider/--model. " +
+      "No global install needed — the adapter auto-fetches pi-acp@latest via npx.",
     argsPlaceholder: "--provider kimi-coding --model kimi-k2-thinking",
     argsHint:
       "Pass --provider X --model Y here. Adapter passes --mode json / --offline / --no-context-files.",
@@ -108,7 +112,8 @@ const KIND_HINTS: Record<
 };
 
 const COMMAND_OVERRIDE_HINT =
-  "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
+  "Leave empty to use the adapter default (npx auto-fetches the latest version — no global install needed). " +
+  "Override with a full path (e.g. `/opt/opencara/bin/claude-acp`) or a globally-installed binary name to pin a specific version.";
 
 const KIND_ORDER: AgentKind[] = ["claude", "codex", "opencode", "pi", "custom"];
 

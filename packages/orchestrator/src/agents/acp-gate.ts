@@ -17,26 +17,33 @@ import type {
  * Per-kind ACP adapter invocation. Adding a new kind is a one-line
  * append here.
  *
- * - codex: `npx --yes @zed-industries/codex-acp` — third-party Rust
- *   adapter that links the codex-rs SDK directly. The npm package's
- *   optionalDependencies pull the right platform binary on first use.
- * - claude: `claude-acp` — our own thin shim
- *   (`packages/cli/src/bin/claude-acp.ts`) that wraps the local
- *   `claude` CLI. No third-party in the critical path; full Claude Code
- *   fidelity (CLAUDE.md, settings.json, MCP servers, OAuth auth) by
- *   delegating to the actual binary. The bin ships in opencara@latest
- *   so paired devices have it on PATH after `npm i -g opencara`.
- * - opencode: `npx opencode-ai@latest acp` — native ACP via the
+ * All adapters are invoked via `npx --yes` so devices never need a
+ * global install — npx fetches and caches the latest version on first
+ * use. No global `npm i -g` required; Node.js 20+ (already a
+ * prerequisite) ships npx. Operators who want a pinned version can
+ * override `agent.command` in the dashboard.
+ *
+ * - claude: `npx --yes --package=opencara@latest claude-acp` — our own
+ *   thin shim (`packages/cli/src/bin/claude-acp.ts`) bundled in the
+ *   opencara package. Wraps the local `claude` CLI; full Claude Code
+ *   fidelity (CLAUDE.md, settings.json, MCP servers, OAuth auth).
+ * - codex: `npx --yes @zed-industries/codex-acp@latest` — third-party
+ *   Rust adapter that links the codex-rs SDK directly. optionalDeps
+ *   pull the right platform binary on first use.
+ * - opencode: `npx --yes opencode-ai@latest acp` — native ACP via the
  *   official `opencode` CLI's `acp` subcommand.
- * - pi: `npx pi-acp@latest` — community ACP adapter for the pi coding
- *   agent.
+ * - pi: `npx --yes pi-acp@latest` — community ACP adapter for the pi
+ *   coding agent.
  */
 const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] }>([
   [
-    "codex",
-    { command: "npx", args: ["--yes", "@zed-industries/codex-acp"] },
+    "claude",
+    { command: "npx", args: ["--yes", "--package=opencara@latest", "claude-acp"] },
   ],
-  ["claude", { command: "claude-acp", args: [] }],
+  [
+    "codex",
+    { command: "npx", args: ["--yes", "@zed-industries/codex-acp@latest"] },
+  ],
   [
     "opencode",
     { command: "npx", args: ["--yes", "opencode-ai@latest", "acp"] },
