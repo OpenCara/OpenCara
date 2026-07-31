@@ -386,3 +386,111 @@ describe("internal worktree create — concurrent cache-prep", () => {
     }
   });
 });
+
+// Regression: GitHub is rolling out a second installation-token format
+// alongside the classic 40-char `ghs_`+alphanumerics one — a ~390-char
+// `ghs_<48>.<254>.<86>` (three dot-separated segments, JWT-shaped). Both
+// authenticate fine and which one a mint returns varies per call, so the
+// old alphanumerics-only guard (`/^[\w-]+$/`) rejected a growing random
+// share of valid runs with "GH_TOKEN contains unexpected characters"
+// (flow run 01KYS8NYV68M2P2TAP1K97AFAJ, node review_synthesizer).
+describe("internal worktree create — GH_TOKEN shape validation", () => {
+  // Mirrors the real shape: ghs_ + 48/254/86 dot-separated segments.
+  const dottedToken =
+    "ghs_" +
+    "a".repeat(44) +
+    "." +
+    "b".repeat(254) +
+    "." +
+    "c".repeat(86);
+
+  function seedOrigin(root: string): { origin: string; home: string } {
+    const home = join(root, "home");
+    mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+    mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+
+    const origin = join(root, "origin.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+      stdio: "ignore",
+    });
+
+    const seed = join(root, "seed");
+    mkdirSync(seed);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "t@example.com"]);
+    git(seed, ["config", "user.name", "t"]);
+    writeFileSync(join(seed, "README"), "hi\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "init"]);
+    git(seed, ["remote", "add", "origin", origin]);
+    git(seed, ["push", "origin", "main"]);
+
+    return { origin, home };
+  }
+
+  it("accepts the new dot-separated installation token format", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-dottok-"));
+    try {
+      const { origin, home } = seedOrigin(root);
+
+      const repo = "talespark-git/bank-heist";
+      const branch = "opencara/pr-dotted";
+      const key = "talespark-git/bank-heist/branch-opencara_pr-dotted";
+      const checkout = join(home, ".opencara", "work", key, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      const r = runInternal(
+        { ...process.env, HOME: home, GH_TOKEN: dottedToken },
+        [
+          "worktree", "create",
+          "--repo", repo,
+          "--branch", branch,
+          "--from-branch", "main",
+          "--key", key,
+        ],
+      );
+
+      assert.doesNotMatch(
+        r.stderr,
+        /GH_TOKEN contains unexpected characters/,
+        "dot-separated installation tokens must not be rejected",
+      );
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\nstderr: ${r.stderr}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The guard is defense-in-depth for the credential-helper string —
+  // widening it to allow `.` must not let shell metachars through.
+  for (const [label, bad] of [
+    ["semicolon", "ghs_abc;rm -rf /"],
+    ["command substitution", "ghs_abc`id`"],
+    ["dollar", "ghs_abc$FOO"],
+    ["whitespace", "ghs_abc def"],
+    ["quote", "ghs_abc'\"x"],
+    ["newline", "ghs_abc\nx"],
+  ] as const) {
+    it(`still rejects a token containing a ${label}`, () => {
+      const root = mkdtempSync(join(tmpdir(), "opencara-wt-badtok-"));
+      try {
+        const { home } = seedOrigin(root);
+        const r = runInternal(
+          { ...process.env, HOME: home, GH_TOKEN: bad },
+          [
+            "worktree", "create",
+            "--repo", "talespark-git/bank-heist",
+            "--branch", "opencara/pr-bad",
+            "--from-branch", "main",
+            "--key", "talespark-git/bank-heist/branch-opencara_pr-bad",
+          ],
+        );
+        assert.notEqual(r.status, 0, "expected a non-zero exit");
+        assert.match(r.stderr, /GH_TOKEN contains unexpected characters/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});

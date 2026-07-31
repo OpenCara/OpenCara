@@ -81,10 +81,22 @@ function worktreeCreate(args: string[]): void {
     fail("worktree create needs GH_TOKEN in env (the orchestrator injects this per run)");
   }
   // Sanity-check the token shape so a fat-fingered env doesn't smuggle
-  // shell metachars into the credential helper string. GitHub
-  // installation tokens are ASCII alphanumerics; reject anything else
-  // before it lands in a `git -c` value.
-  if (!/^[\w-]+$/.test(token)) {
+  // shell metachars into the credential helper string before it lands in
+  // a `git -c` value.
+  //
+  // `.` IS allowed: GitHub is rolling out a second installation-token
+  // format alongside the classic 40-char `ghs_`+alphanumerics one — a
+  // ~390-char `ghs_<48>.<254>.<86>` (three dot-separated segments,
+  // JWT-shaped). Both authenticate fine, and which one you get varies
+  // per mint call, so an alphanumerics-only guard rejected a growing
+  // random ~4%+ of otherwise-valid runs (flow run 01KYS8NYV68M2P2TAP1K97AFAJ:
+  // "worktree allocation ... GH_TOKEN contains unexpected characters").
+  //
+  // This is defense-in-depth, not a correctness requirement: HELPER_SNIPPET
+  // below references the token by NAME ($GH_TOKEN), so the value never
+  // reaches argv or .git/config. Whitespace, quotes, $ and backticks —
+  // the characters that would actually matter — stay rejected.
+  if (!/^[\w.-]+$/.test(token)) {
     fail("GH_TOKEN contains unexpected characters; refusing to use");
   }
 

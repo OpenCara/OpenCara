@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-07-30**: Merged [#198](https://github.com/OpenCara/OpenCara/pull/198) - fix(cli): accept dot-separated GitHub installation tokens in worktree create
 - **2026-07-18**: Merged [#197](https://github.com/OpenCara/OpenCara/pull/197) - docs(readme): refresh for ACP cutover + new-user onboarding section
 - **2026-07-06**: Merged [#192](https://github.com/OpenCara/OpenCara/pull/192) - fix(claude-acp): advertise the model as an ACP config option
 - **2026-07-02**: Merged [#191](https://github.com/OpenCara/OpenCara/pull/191) - fix(flows): stop synthesizer stub reviews from reaching GitHub
@@ -23,6 +24,7 @@
 - [x] fix(agents): translate model selection per ACP adapter (codex/opencode) ([#181](https://github.com/OpenCara/OpenCara/pull/181))
 - [x] fix(auth): coalesce+cache session lookups; SPA recovers from 503 ([#180](https://github.com/OpenCara/OpenCara/pull/180))
 - [x] Development-lifecycle multi-agent review + dispatch/pooler reliability fixes ([#165](https://github.com/OpenCara/OpenCara/pull/165))
+- [x] fix(cli): accept dot-separated GitHub installation tokens in worktree create ([#198](https://github.com/OpenCara/OpenCara/pull/198))
 
 ## In Progress
 
