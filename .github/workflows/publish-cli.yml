@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # required for npm trusted publishing + provenance
+      id-token: write   # required for npm trusted publishing (OIDC)
 
     steps:
       - uses: actions/checkout@v4
@@ -103,6 +103,19 @@ jobs:
 
       - name: Publish opencara
         working-directory: packages/cli
-        # `--provenance` activates npm's trusted-publishing OIDC exchange
-        # (no NODE_AUTH_TOKEN needed).
-        run: npm publish ./opencara-*.tgz --provenance
+        # Deliberately NOT `--provenance`. Provenance attestations are
+        # only accepted from PUBLIC source repos; this repo is private,
+        # so npm rejects the publish outright:
+        #
+        #   npm error 422 ... Error verifying sigstore provenance bundle:
+        #   Unsupported GitHub Actions source repository visibility:
+        #   "private". Only public source repositories are supported when
+        #   publishing with provenance.
+        #
+        # That's what broke the v0.112.2 publish (v0.112.1 predates the
+        # repo going private). Auth is unaffected: the trusted-publishing
+        # OIDC exchange is driven by `id-token: write` + npm >= 11.5.1
+        # detecting the Actions OIDC env, NOT by this flag — so no
+        # NODE_AUTH_TOKEN is needed either way. Re-add `--provenance`
+        # if the repo is ever made public again.
+        run: npm publish ./opencara-*.tgz
