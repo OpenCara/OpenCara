@@ -188,7 +188,12 @@ export const azureDevopsConnections = pgTable(
     orgName: text("org_name").notNull(),
     /** Azure DevOps accountId GUID; resolved lazily after connect. */
     orgId: text("org_id"),
-    entraTenantId: text("entra_tenant_id").notNull(),
+    /**
+     * Directory the grant came from, read best-effort from the access token's
+     * `tid` claim. Nullable (0045) — diagnostic metadata only; token refresh
+     * goes through the shared EntraOAuth built from AZDO_ENTRA_TENANT.
+     */
+    entraTenantId: text("entra_tenant_id"),
     /** `oid` claim of the user who connected the org. */
     entraObjectId: text("entra_object_id").notNull(),
     // Encrypted with the same TokenCipher as session tokens.

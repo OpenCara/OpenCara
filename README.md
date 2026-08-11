@@ -106,7 +106,7 @@ Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure Dev
 
 Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
 
-A deployment can be Azure-DevOps-only: with no `GITHUB_APP_*` set, the flow engine still starts and runs Azure DevOps flows.
+A deployment can be Azure-DevOps-only: with `AZDO_ENTRA_*` and `SESSION_ENCRYPTION_KEY` set and no `GITHUB_APP_*`, auth, `/api/*`, `/webhooks/azure-devops` and the flow engine all mount. `/api/installations` and the GitHub sign-in routes are simply absent, and the login page offers Microsoft alone.
 
 ### What agents get on Azure DevOps
 

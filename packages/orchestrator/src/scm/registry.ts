@@ -78,6 +78,7 @@ export async function providerFor(
         client,
         projectName: parsed.projectName,
         repositoryId: target.externalRepoId,
+        repositoryName: target.name,
       });
     }
   }

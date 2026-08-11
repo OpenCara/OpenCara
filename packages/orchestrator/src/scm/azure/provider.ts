@@ -69,8 +69,14 @@ export interface AzureProviderOptions {
   client: AzureDevopsClient;
   /** Team project name or GUID — the path segment above the repo. */
   projectName: string;
-  /** Repository GUID. */
+  /** Repository GUID — what the REST API addresses the repo by. */
   repositoryId: string;
+  /**
+   * Repository NAME, used only to build browsable URLs. Azure DevOps redirects
+   * a `_git/<guid>` URL, but the canonical form uses the name, and that is what
+   * ends up in `flow_run_steps.output` for a human to click.
+   */
+  repositoryName: string;
 }
 
 const ThreadSchema = z.object({
@@ -88,17 +94,21 @@ const LabelsSchema = z.object({
 });
 
 export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
-  const { client, projectName, repositoryId } = opts;
+  const { client, projectName, repositoryId, repositoryName } = opts;
 
   const prBase = (prNumber: number) =>
     `${client.orgUrl}/${encodeURIComponent(projectName)}/_apis/git/repositories/${encodeURIComponent(
       repositoryId,
     )}/pullRequests/${prNumber}`;
 
-  /** Web URL for a thread — Azure DevOps doesn't return one on the API response. */
+  /**
+   * Web URL for a thread — Azure DevOps doesn't return one on the API response.
+   * Built from the repo NAME (the canonical browsable form), not the GUID the
+   * REST calls above use.
+   */
   const threadUrl = (prNumber: number, threadId: number) =>
     `${client.orgUrl}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(
-      repositoryId,
+      repositoryName,
     )}/pullrequest/${prNumber}?discussionId=${threadId}`;
 
   const postThread = async (prNumber: number, content: string): Promise<number> => {

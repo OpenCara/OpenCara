@@ -226,3 +226,29 @@ export function parseIdTokenClaims(idToken: string): EntraProfile {
     email: c.email ?? (login.includes("@") ? login : null),
   };
 }
+
+/**
+ * Best-effort tenant id from an Entra ACCESS token's `tid` claim.
+ *
+ * Access tokens for the Azure DevOps resource are JWTs, so the directory the
+ * grant came from is readable without a round-trip. Unlike `parseIdTokenClaims`
+ * this returns null rather than throwing: the value is diagnostic metadata, the
+ * token format is not contractually guaranteed, and a connect must not fail
+ * because a claim was missing.
+ *
+ * Same trust argument as `parseIdTokenClaims` — this token came from our own
+ * server-to-server exchange, not from a client — and the same caveat: never use
+ * this on a token supplied by a caller.
+ */
+export function tenantIdFromAccessToken(accessToken: string): string | null {
+  const parts = accessToken.split(".");
+  if (parts.length < 2 || !parts[1]) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
+      tid?: unknown;
+    };
+    return typeof payload.tid === "string" ? payload.tid : null;
+  } catch {
+    return null;
+  }
+}

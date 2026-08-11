@@ -6,7 +6,7 @@ import type { Db } from "../../db/client.js";
 import { azureDevopsConnections, projects, sessions } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { TokenCipher } from "../../auth/session.js";
-import type { EntraOAuth } from "../../azure/entra.js";
+import { tenantIdFromAccessToken, type EntraOAuth } from "../../azure/entra.js";
 import { AzureDevopsClient, clientForConnection } from "../../azure/client.js";
 import {
   azureCloneUrl,
@@ -301,16 +301,22 @@ export function azureRoutes(deps: AzureRoutesDeps) {
   async function entraClaimsFromSession(
     d: AzureRoutesDeps,
     session: typeof sessions.$inferSelect,
-  ): Promise<{ tenantId: string; objectId: string }> {
+  ): Promise<{ tenantId: string | null; objectId: string }> {
     // The identity row written at sign-in is the authoritative record of who
-    // this is; the tenant is only needed for diagnostics on the connection.
+    // this is — its externalId IS the Entra `oid`.
     const identity = await d.db.query.userIdentities.findFirst({
       where: (t, { and: a, eq: e }) =>
         a(e(t.userId, session.userId), e(t.provider, "entra")),
     });
+    // The `tid` claim is readable off the session's access token, so the tenant
+    // needs no extra round-trip and no extra column. Null when it can't be
+    // parsed — recording "unknown" as a string would look like real data.
+    const tenantId = session.entraAccessTokenEnc
+      ? tenantIdFromAccessToken(d.cipher.decrypt(session.entraAccessTokenEnc))
+      : null;
     return {
       objectId: identity?.externalId ?? session.userId,
-      tenantId: "unknown",
+      tenantId,
     };
   }
 }

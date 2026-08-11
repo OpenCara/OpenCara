@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   EntraOAuth,
   parseIdTokenClaims,
+  tenantIdFromAccessToken,
   ENTRA_SCOPES,
   AZURE_DEVOPS_RESOURCE_ID,
 } from "../entra.js";
@@ -229,5 +230,34 @@ describe("displayLogin", () => {
     assert.ok(out.length > 0);
     // Last 6 chars of the ULID — enough to disambiguate in a UI list.
     assert.equal(out, "user-CDEFGH");
+  });
+});
+
+// The connection's tenant used to be persisted as the literal string "unknown",
+// which looks like data. It is now read off the access token's `tid` claim, and
+// is null when that isn't available.
+describe("tenantIdFromAccessToken", () => {
+  it("reads the tid claim from a JWT access token", () => {
+    assert.equal(tenantIdFromAccessToken(idToken({ tid: "tenant-guid", oid: "o" })), "tenant-guid");
+  });
+
+  it("returns null when the token carries no tid", () => {
+    assert.equal(tenantIdFromAccessToken(idToken({ oid: "o" })), null);
+  });
+
+  it("returns null for an opaque (non-JWT) token rather than throwing", () => {
+    // Unlike the id token parser this must never throw: a connect should not
+    // fail because a diagnostic claim was unavailable.
+    assert.doesNotThrow(() => tenantIdFromAccessToken("opaque-token"));
+    assert.equal(tenantIdFromAccessToken("opaque-token"), null);
+  });
+
+  it("returns null when the payload is not JSON", () => {
+    const bad = `${Buffer.from("{}").toString("base64url")}.${Buffer.from("nope").toString("base64url")}.s`;
+    assert.equal(tenantIdFromAccessToken(bad), null);
+  });
+
+  it("returns null when tid is present but not a string", () => {
+    assert.equal(tenantIdFromAccessToken(idToken({ tid: 42 })), null);
   });
 });

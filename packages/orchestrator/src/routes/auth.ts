@@ -22,7 +22,9 @@ import { parseIdTokenClaims, type EntraOAuth } from "../azure/entra.js";
 
 interface AuthRouteDeps {
   db: Db;
-  oauth: GithubOAuth;
+  /** Absent on an Azure-DevOps-only deployment; the /auth/github/* routes are
+   *  then not mounted and the login page offers Microsoft alone. */
+  oauth?: GithubOAuth;
   cipher: TokenCipher;
   cookieName: string;
   ttlDays: number;
@@ -43,106 +45,114 @@ const REDIRECT_AFTER_LOGIN = "/";
 export function authRoutes(deps: AuthRouteDeps) {
   const r = new Hono<AuthEnv>();
 
-  r.get("/auth/github/login", (c) => {
-    const state = randomBytes(16).toString("base64url");
-    setCookie(c, STATE_COOKIE, state, {
-      httpOnly: true,
-      secure: deps.publicBaseUrl.startsWith("https://"),
-      sameSite: "Lax",
-      path: "/",
-      maxAge: STATE_TTL_SEC,
-    });
-    return c.redirect(deps.oauth.buildAuthorizeUrl(state));
-  });
+  // GitHub sign-in, mounted only when a GitHub App is configured. Everything
+  // below the `if` (logout, /api/me, /api/auth/providers) is platform-neutral
+  // and always mounts.
+  if (deps.oauth) {
+    const oauth = deps.oauth;
 
-  r.get("/auth/github/callback", async (c) => {
-    const code = c.req.query("code");
-    const state = c.req.query("state");
-    const cookieState = getCookie(c, STATE_COOKIE);
-    deleteCookie(c, STATE_COOKIE, { path: "/" });
-
-    if (!code || !state || !cookieState || cookieState !== state) {
-      return c.redirect("/login?error=oauth_state_mismatch");
-    }
-
-    try {
-      const tokens = await deps.oauth.exchangeCode(code);
-      const viewer = await deps.oauth.getViewer(tokens.accessToken);
-      const user = await upsertUser(deps.db, viewer);
-      const { sessionId, expiresAt } = await createSession(
-        deps.db,
-        deps.cipher,
-        user.id,
-        tokens,
-        deps.ttlDays,
-      );
-      setCookie(c, deps.cookieName, sessionId, {
+    r.get("/auth/github/login", (c) => {
+      const state = randomBytes(16).toString("base64url");
+      setCookie(c, STATE_COOKIE, state, {
         httpOnly: true,
         secure: deps.publicBaseUrl.startsWith("https://"),
         sameSite: "Lax",
         path: "/",
-        expires: expiresAt,
+        maxAge: STATE_TTL_SEC,
       });
-      return c.redirect(REDIRECT_AFTER_LOGIN);
-    } catch (err) {
-      console.error("[auth] callback error", err);
-      return c.redirect("/login?error=oauth_failed");
-    }
-  });
+      return c.redirect(oauth.buildAuthorizeUrl(state));
+    });
 
-  r.get("/auth/github/setup", async (c) => {
-    const installationIdParam = c.req.query("installation_id");
-    if (!installationIdParam || !deps.app) {
-      return c.redirect("/projects/new");
-    }
-    const installationId = Number.parseInt(installationIdParam, 10);
-    if (Number.isFinite(installationId)) {
-      try {
-        // GET /app/installations/{id} is an App-level endpoint — it must
-        // be authenticated with the App JWT, not an installation token.
-        // `deps.app.app` carries the createAppAuth strategy which picks
-        // the right credential per endpoint; `forInstallation()` would
-        // attach a `ghs_...` token and GitHub would reject it with
-        // "A JSON web token could not be decoded", silently aborting the
-        // claim of the addedByUserId row.
-        const res = await deps.app.app.request(
-          "GET /app/installations/{installation_id}",
-          { installation_id: installationId },
-        );
-        // The currentUser middleware runs ahead of this route, so the
-        // cookie session (if any) is already loaded. Attribute the
-        // installation to the user who just round-tripped through GitHub's
-        // setup screen — this is the only point in the flow where we
-        // reliably know who initiated the install. upsertInstallation
-        // refuses to overwrite a row that's already attributed.
-        const sessionUser = c.get("user");
-        await upsertInstallation(
-          deps.db,
-          {
-            id: res.data.id,
-            account: res.data.account
-              ? {
-                  id: (res.data.account as { id: number }).id,
-                  login: (res.data.account as { login?: string; slug?: string }).login ??
-                    (res.data.account as { slug?: string }).slug ??
-                    "unknown",
-                  type: (res.data.account as { type?: string }).type,
-                }
-              : undefined,
-            target_type: res.data.target_type,
-            repository_selection: res.data.repository_selection,
-            permissions: res.data.permissions as Record<string, string>,
-            events: res.data.events,
-            suspended_at: res.data.suspended_at ?? null,
-          },
-          { addedByUserId: sessionUser?.id ?? null },
-        );
-      } catch (err) {
-        console.error("[auth] setup sync error", err);
+    r.get("/auth/github/callback", async (c) => {
+      const code = c.req.query("code");
+      const state = c.req.query("state");
+      const cookieState = getCookie(c, STATE_COOKIE);
+      deleteCookie(c, STATE_COOKIE, { path: "/" });
+
+      if (!code || !state || !cookieState || cookieState !== state) {
+        return c.redirect("/login?error=oauth_state_mismatch");
       }
-    }
-    return c.redirect("/projects/new");
-  });
+
+      try {
+        const tokens = await oauth.exchangeCode(code);
+        const viewer = await oauth.getViewer(tokens.accessToken);
+        const user = await upsertUser(deps.db, viewer);
+        const { sessionId, expiresAt } = await createSession(
+          deps.db,
+          deps.cipher,
+          user.id,
+          tokens,
+          deps.ttlDays,
+        );
+        setCookie(c, deps.cookieName, sessionId, {
+          httpOnly: true,
+          secure: deps.publicBaseUrl.startsWith("https://"),
+          sameSite: "Lax",
+          path: "/",
+          expires: expiresAt,
+        });
+        return c.redirect(REDIRECT_AFTER_LOGIN);
+      } catch (err) {
+        console.error("[auth] callback error", err);
+        return c.redirect("/login?error=oauth_failed");
+      }
+    });
+
+    r.get("/auth/github/setup", async (c) => {
+      const installationIdParam = c.req.query("installation_id");
+      if (!installationIdParam || !deps.app) {
+        return c.redirect("/projects/new");
+      }
+      const installationId = Number.parseInt(installationIdParam, 10);
+      if (Number.isFinite(installationId)) {
+        try {
+          // GET /app/installations/{id} is an App-level endpoint — it must
+          // be authenticated with the App JWT, not an installation token.
+          // `deps.app.app` carries the createAppAuth strategy which picks
+          // the right credential per endpoint; `forInstallation()` would
+          // attach a `ghs_...` token and GitHub would reject it with
+          // "A JSON web token could not be decoded", silently aborting the
+          // claim of the addedByUserId row.
+          const res = await deps.app.app.request(
+            "GET /app/installations/{installation_id}",
+            { installation_id: installationId },
+          );
+          // The currentUser middleware runs ahead of this route, so the
+          // cookie session (if any) is already loaded. Attribute the
+          // installation to the user who just round-tripped through GitHub's
+          // setup screen — this is the only point in the flow where we
+          // reliably know who initiated the install. upsertInstallation
+          // refuses to overwrite a row that's already attributed.
+          const sessionUser = c.get("user");
+          await upsertInstallation(
+            deps.db,
+            {
+              id: res.data.id,
+              account: res.data.account
+                ? {
+                    id: (res.data.account as { id: number }).id,
+                    login: (res.data.account as { login?: string; slug?: string }).login ??
+                      (res.data.account as { slug?: string }).slug ??
+                      "unknown",
+                    type: (res.data.account as { type?: string }).type,
+                  }
+                : undefined,
+              target_type: res.data.target_type,
+              repository_selection: res.data.repository_selection,
+              permissions: res.data.permissions as Record<string, string>,
+              events: res.data.events,
+              suspended_at: res.data.suspended_at ?? null,
+            },
+            { addedByUserId: sessionUser?.id ?? null },
+          );
+        } catch (err) {
+          console.error("[auth] setup sync error", err);
+        }
+      }
+      return c.redirect("/projects/new");
+    });
+
+  }
 
   // ---------------------------------------------------------------------
   // Microsoft Entra ID — sign-in for Azure DevOps users
@@ -239,7 +249,7 @@ export function authRoutes(deps: AuthRouteDeps) {
   // design — it leaks only which providers this deployment has configured,
   // which the login page reveals anyway.
   r.get("/api/auth/providers", (c) =>
-    c.json({ providers: { github: true, entra: !!deps.entraOAuth } }),
+    c.json({ providers: { github: !!deps.oauth, entra: !!deps.entraOAuth } }),
   );
 
   // Helper: throwaway log for an unused identifier so the bundler keeps imports.

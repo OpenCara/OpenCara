@@ -47,6 +47,7 @@ function providerWith(
       client,
       projectName: "Team",
       repositoryId: "repo-guid",
+      repositoryName: "widgets",
     }),
     calls,
   };
@@ -127,6 +128,9 @@ describe("azure provider postReview", () => {
     const res = await provider.postReview(PR, "COMMENT", "note");
     assert.equal(res.reviewId, 55);
     assert.match(String(res.htmlUrl), /pullrequest\/42\?discussionId=55/);
+    // Browsable URLs use the repo NAME; the GUID is only for REST paths.
+    assert.match(String(res.htmlUrl), /_git\/widgets\//);
+    assert.doesNotMatch(String(res.htmlUrl), /_git\/repo-guid/);
   });
 
   it("substitutes a placeholder for an empty review body", async () => {

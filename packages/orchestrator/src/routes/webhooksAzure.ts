@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { azureDevopsConnections, platformEvents, projects } from "../db/schema.js";
 import type { TokenCipher } from "../auth/session.js";
@@ -98,15 +98,21 @@ async function resolveProject(
   if (!normalized) return null;
   // PR and comment events identify the repository directly. Work item events
   // carry only the team project, so they match every project row under it.
+  // `removedAt` guard: removing a project deletes its subscriptions, but that
+  // teardown is best-effort against a remote API — a failed delete (or a
+  // subscription recreated by hand in Azure DevOps) would otherwise keep
+  // dispatching agent runs for a project the user believes is gone.
   const where = normalized.repositoryId
     ? and(
         eq(projects.platform, "azure_devops"),
         eq(projects.externalRepoId, normalized.repositoryId),
+        isNull(projects.removedAt),
       )
     : normalized.projectId
       ? and(
           eq(projects.platform, "azure_devops"),
           eq(projects.azdoProjectId, normalized.projectId),
+          isNull(projects.removedAt),
         )
       : null;
   if (!where) return null;

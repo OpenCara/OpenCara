@@ -227,12 +227,20 @@ if (flowEngine) {
   console.log("[orchestrator] cron scheduler started (60s tick)");
 }
 
-if (config.github && config.SESSION_ENCRYPTION_KEY) {
-  const oauth = new GithubOAuth({
-    clientId: config.github.clientId,
-    clientSecret: config.github.clientSecret,
-    publicBaseUrl: config.PUBLIC_BASE_URL,
-  });
+// Auth + the whole /api surface mount when EITHER platform is configured.
+// Gating this on `config.github` alone is what made an Azure-DevOps-only
+// deployment silently serve nothing but /health: the flow engine started, but
+// sign-in, /api/*, and /webhooks/azure-devops never mounted.
+// SESSION_ENCRYPTION_KEY is required either way — it encrypts session and
+// connection tokens.
+if ((config.github || azureDeps) && config.SESSION_ENCRYPTION_KEY) {
+  const oauth = config.github
+    ? new GithubOAuth({
+        clientId: config.github.clientId,
+        clientSecret: config.github.clientSecret,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : undefined;
   // Same key, so azureDeps.cipher (when present) is interchangeable; reuse it
   // rather than holding two instances of the same cipher.
   const cipher = azureDeps?.cipher ?? new TokenCipher(config.SESSION_ENCRYPTION_KEY);
@@ -281,7 +289,11 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
     );
   }
   app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));
-  app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  // GitHub App installations have no Azure DevOps analogue — the equivalent
+  // surface is /api/azure/connections.
+  if (config.github) {
+    app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  }
   app.route("/api/activity", activityRoutes({ db }));
   // Hono's app.route(prefix, subapp) only honours the FIRST mount at a given
   // prefix — subsequent app.route("/api", ...) calls are silently dropped.
@@ -309,7 +321,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   console.log("[orchestrator] auth + API routes mounted (WS at /api/devices/ws)");
 } else {
   console.log(
-    "[orchestrator] auth/API not mounted (need GitHub App config + SESSION_ENCRYPTION_KEY)",
+    "[orchestrator] auth/API not mounted — configure GITHUB_APP_* and/or AZDO_ENTRA_*, plus SESSION_ENCRYPTION_KEY",
   );
 }
 
