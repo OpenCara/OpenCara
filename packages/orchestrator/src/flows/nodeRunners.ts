@@ -21,6 +21,7 @@ import {
 } from "../db/schema.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
+import { clientForConnection, type AzureDevopsClientDeps } from "../azure/client.js";
 import {
   autoMergePullRequest,
   linkPrToIssueAndCopyAgentLabel,
@@ -49,20 +50,51 @@ export class SkipFlowError extends Error {
   }
 }
 
+/**
+ * Everything platform-specific about the project a run belongs to, as a
+ * discriminated union so the compiler forces each consumer to say what it does
+ * on both platforms rather than silently assuming GitHub.
+ */
+export type PlatformRunCtx =
+  | {
+      platform: "github";
+      installation: { id: string; githubInstallationId: number };
+      /** Used to scope the ephemeral installation token to this repo. */
+      githubRepoId: number;
+    }
+  | {
+      platform: "azure_devops";
+      connectionId: string;
+      /** Azure DevOps organization, e.g. "contoso". */
+      orgName: string;
+      /** Team project — the segment between org and repo. */
+      projectName: string;
+      /** Repository GUID. */
+      externalRepoId: string;
+      /** HTTPS clone remote; the CLI takes this via --clone-url. */
+      cloneUrl: string;
+    };
+
 export interface NodeRunCtx {
   db: Db;
   pg: Sql;
-  app: GithubAppClient;
+  /**
+   * Optional since an Azure-DevOps-only deployment configures no GitHub App.
+   * GitHub-only paths call `requireGithubApp()` rather than asserting.
+   */
+  app?: GithubAppClient;
+  /** Present when AZDO_ENTRA_* is configured; required for Azure DevOps runs. */
+  azure?: AzureDevopsClientDeps;
   dispatcher: AgentDispatcher;
   flowId: string;
   flowRunId: string;
   flowRunStepId: string;
   projectId: string;
-  installation: { id: string; githubInstallationId: number };
+  /** Platform-specific identity + credentials for this run. */
+  scm: PlatformRunCtx;
   project: {
     owner: string;
     name: string;
-    githubRepoId: number;
     defaultBranch: string | null;
     /** Repo-relative path of the project's agent instructions file.
      *  Default '' (per migration 0030); empty disables injection.
@@ -84,6 +116,49 @@ export interface NodeRunCtx {
   hasDownstreamPostReview?: boolean;
   /** True for an operator-triggered rerun from the flow detail page. */
   rerun?: boolean;
+}
+
+/**
+ * The GitHub App client, or a clear error.
+ *
+ * Reached only from GitHub-specific paths that a platform guard has already
+ * narrowed to `scm.platform === "github"`. If this throws, the deployment has a
+ * GitHub project but no GitHub App configured — a config error, not a run error.
+ */
+function requireGithubApp(ctx: NodeRunCtx): GithubAppClient {
+  if (!ctx.app) {
+    throw new Error(
+      "this run needs the GitHub App but GITHUB_APP_* is not configured on the orchestrator",
+    );
+  }
+  return ctx.app;
+}
+
+/** Installation id for a run already known to be GitHub-backed. */
+function githubInstallationId(ctx: NodeRunCtx): number {
+  if (ctx.scm.platform !== "github") {
+    throw new Error(
+      `expected a GitHub project, got platform '${ctx.scm.platform}' — this is a missing platform guard, not a config problem`,
+    );
+  }
+  return ctx.scm.installation.githubInstallationId;
+}
+
+/**
+ * Log-and-skip for GitHub-only conveniences (PR↔issue linking, draft-PR
+ * ready-for-review, auto-merge) on an Azure DevOps run.
+ *
+ * These are enhancements layered on top of a successful agent step, not the
+ * step itself, so the honest behaviour is to skip them loudly rather than fail
+ * a run whose actual work succeeded. Each has an Azure DevOps equivalent that
+ * can be filled in later; until then an operator sees exactly what didn't run.
+ */
+function skipOnAzure(ctx: NodeRunCtx, feature: string): boolean {
+  if (ctx.scm.platform === "github") return false;
+  console.warn(
+    `[flows] ${feature} is not implemented for Azure DevOps yet — skipping for ${ctx.project.owner}/${ctx.project.name}`,
+  );
+  return true;
 }
 
 export interface NodeRunResult {
@@ -713,6 +788,18 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       "--key",
       key,
     ];
+    if (ctx.scm.platform === "azure_devops") {
+      // Azure DevOps remotes are org/project/_git/repo — three segments, which
+      // `--repo OWNER/NAME` cannot express — and the basic-auth username must
+      // not be GitHub's literal "x-access-token". Both flags are additive, so
+      // GitHub runs keep dispatching exactly the argv they always have.
+      //
+      // A device on a CLI predating these flags will reject the unknown
+      // arguments and fail the allocation with a visible error, rather than
+      // silently cloning the wrong thing. `npm exec opencara@latest` on the
+      // paired hosts is the fix.
+      allocateArgs.push("--clone-url", ctx.scm.cloneUrl, "--auth-user", "opencara");
+    }
     const cacheRepo = node.config.worktree.cacheRepo;
     if (cacheRepo?.enabled) {
       allocateArgs.push("--cache-repo");
@@ -839,6 +926,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
           issueNumber: ctx.issueContext.stdin.issue.number,
           defaultBranch: ctx.project.defaultBranch ?? "main",
           draftPr: Boolean(node.config.draftPr),
+          platform: ctx.scm.platform,
         })
       : null;
   if (implementSkill && ctx.issueContext?.stdin.issue?.number) {
@@ -1103,11 +1191,16 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   //   - `transient-failure` (network / 5xx on the list call) → log
   //     and continue; the agent's work is unaffected and the PR may
   //     well exist.
-  if (issueImplementRun && ctx.issueContext?.stdin.issue?.number && worktree?.branch) {
+  if (
+    issueImplementRun &&
+    ctx.issueContext?.stdin.issue?.number &&
+    worktree?.branch &&
+    !skipOnAzure(ctx, "linking the PR to its issue")
+  ) {
     let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
     try {
-      const octokit = await ctx.app.forInstallation(
-        ctx.installation.githubInstallationId,
+      const octokit = await requireGithubApp(ctx).forInstallation(
+        githubInstallationId(ctx),
       );
       linkResult = await linkPrToIssueAndCopyAgentLabel({
         octokit,
@@ -1129,10 +1222,15 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     }
   }
 
-  if (node.config.draftPr && issueImplementRun && worktree?.branch) {
+  if (
+    node.config.draftPr &&
+    issueImplementRun &&
+    worktree?.branch &&
+    !skipOnAzure(ctx, "marking the draft PR ready for review")
+  ) {
     try {
-      const octokit = await ctx.app.forInstallation(
-        ctx.installation.githubInstallationId,
+      const octokit = await requireGithubApp(ctx).forInstallation(
+        githubInstallationId(ctx),
       );
       await markDraftPrReadyByHead({
         octokit,
@@ -1245,7 +1343,7 @@ async function postMaxIterationsCommentOnce(
   body: string,
 ): Promise<void> {
   try {
-    const octokit = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
+    const octokit = await requireGithubApp(ctx).forInstallation(githubInstallationId(ctx));
     const comments = await octokit.request(
       "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
       {
@@ -1277,12 +1375,16 @@ async function maybeAutoMergeAfterFix(
   const cfg = node.config.autoMerge;
   if (!cfg?.enabled) return null;
   if (!isPrReviewFixContext(ctx)) return null;
+  // Azure DevOps expresses this as `autoCompleteSetBy` on the PR plus branch
+  // policies, not as GitHub's merge-queue call. Skipping is the safe default:
+  // the fix landed, only the automatic merge didn't.
+  if (skipOnAzure(ctx, "auto-merging the pull request")) return null;
   const prNumber = getPrNumber(ctx);
   if (!prNumber) {
     throw new Error("autoMerge enabled but PR number is unavailable");
   }
 
-  const octokit = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
+  const octokit = await requireGithubApp(ctx).forInstallation(githubInstallationId(ctx));
   const result = await autoMergePullRequest({
     octokit,
     owner: ctx.project.owner,
@@ -1438,16 +1540,27 @@ async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null>
 export const MIN_UNVERDICTED_REVIEW_BODY_CHARS = 200;
 
 export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
-  // All platform traffic goes through the provider seam (scm/registry.ts) so
-  // this runner stays platform-blind. `platform` is pinned to "github" until
-  // the projects table carries the column — at which point this reads
-  // `ctx.project.platform` and Azure DevOps projects route to their own
-  // implementation with no change here.
+  // All platform traffic goes through the provider seam (scm/registry.ts), so
+  // this runner stays platform-blind: the registry picks the implementation
+  // from `ctx.scm.platform` and everything below is identical on both.
   const provider = await providerFor(
-    { platform: "github", owner: ctx.project.owner, name: ctx.project.name },
+    {
+      platform: ctx.scm.platform,
+      owner: ctx.project.owner,
+      name: ctx.project.name,
+      ...(ctx.scm.platform === "azure_devops"
+        ? {
+            externalRepoId: ctx.scm.externalRepoId,
+            azdoConnectionId: ctx.scm.connectionId,
+          }
+        : {}),
+    },
     {
       app: ctx.app,
-      githubInstallationId: ctx.installation.githubInstallationId,
+      ...(ctx.scm.platform === "github"
+        ? { githubInstallationId: ctx.scm.installation.githubInstallationId }
+        : {}),
+      azure: ctx.azure,
     },
   );
   const prPayload = ctx.event.payload as {
@@ -1624,24 +1737,61 @@ async function dispatchAgentRun(
   // Mint AFTER insert. The persisted spec.env snapshot still carries the
   // `<ephemeral>` markers; subsequent mutations of opts.env only affect
   // the dispatched copy. Mint failures are non-fatal — the agent runs
-  // without GH_TOKEN, surfacing as 401s downstream rather than masking
+  // without a token, surfacing as 401s downstream rather than masking
   // as a generic flow failure.
+  //
+  // The two platforms differ in what "mint" even means. GitHub issues a fresh
+  // installation token scoped to this repo, which is revoked when the agent
+  // finishes. Azure DevOps has no such call: the best available credential is
+  // the connection's own (refreshed) user-delegated access token, which is
+  // org-wide and cannot be revoked early — see the trust boundary note in the
+  // README. `revokeMintedToken` below therefore only has work to do on GitHub.
   let mintedToken: EphemeralToken | null = null;
   try {
-    mintedToken = await ctx.app.mintEphemeralToken({
-      installationId: ctx.installation.githubInstallationId,
-      repositoryIds: [ctx.project.githubRepoId],
-      permissions: { contents: "write", issues: "write", pull_requests: "write", checks: "read" },
-    });
-    opts.env["GH_TOKEN"] = mintedToken.token;
-    opts.env["GITHUB_TOKEN"] = mintedToken.token;
+    if (ctx.scm.platform === "github") {
+      mintedToken = await requireGithubApp(ctx).mintEphemeralToken({
+        installationId: ctx.scm.installation.githubInstallationId,
+        repositoryIds: [ctx.scm.githubRepoId],
+        permissions: {
+          contents: "write",
+          issues: "write",
+          pull_requests: "write",
+          checks: "read",
+        },
+      });
+      opts.env["GH_TOKEN"] = mintedToken.token;
+      opts.env["GITHUB_TOKEN"] = mintedToken.token;
+      opts.env["OPENCARA_SCM_TOKEN"] = mintedToken.token;
+    } else {
+      if (!ctx.azure) {
+        throw new Error("azure devops run needs AZDO_ENTRA_* configured");
+      }
+      const client = await clientForConnection(ctx.azure, ctx.scm.connectionId);
+      if (!client) {
+        throw new Error(
+          `azure devops connection ${ctx.scm.connectionId} no longer exists — reconnect the organization`,
+        );
+      }
+      const token = await client.accessToken();
+      // Only the neutral name: GH_TOKEN would make `gh` pick it up and talk to
+      // github.com with an Azure DevOps token, producing confusing 401s.
+      opts.env["OPENCARA_SCM_TOKEN"] = token;
+      opts.env["AZURE_DEVOPS_EXT_PAT"] = token; // what `az repos` reads
+      opts.env["OPENCARA_AZDO_ORG"] = ctx.scm.orgName;
+      opts.env["OPENCARA_AZDO_PROJECT"] = ctx.scm.projectName;
+      // `az repos pr create --repository` wants the bare repo name;
+      // OPENCARA_REPO is the "org/project/repo"-style display label.
+      opts.env["OPENCARA_REPO_NAME"] = ctx.project.name;
+    }
   } catch (err) {
     console.error(
-      "[flows] mintEphemeralToken failed; agent runs without GH_TOKEN",
+      `[flows] ${ctx.scm.platform} token mint failed; agent runs without a platform token`,
       err,
     );
     delete opts.env["GH_TOKEN"];
     delete opts.env["GITHUB_TOKEN"];
+    delete opts.env["OPENCARA_SCM_TOKEN"];
+    delete opts.env["AZURE_DEVOPS_EXT_PAT"];
   }
 
   // Bounded stderr ring buffer so non-zero exits can carry the real
@@ -1722,7 +1872,9 @@ async function dispatchAgentRun(
       );
     throw err;
   } finally {
-    if (mintedToken) {
+    // `mintedToken` is only ever set on the GitHub path — Azure DevOps has no
+    // revoke endpoint, so its token is left to expire (README trust boundary).
+    if (mintedToken && ctx.app) {
       // Best-effort revoke. The token expires in ≤1h regardless, so a
       // network blip here is logged + swallowed.
       await ctx.app.revokeToken(mintedToken.token).catch((err: unknown) => {

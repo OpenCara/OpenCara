@@ -102,7 +102,19 @@ The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the pr
 
 Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure DevOps Server (on-prem) is not.
 
-**Status.** You can sign in with Microsoft, connect an organization, add repositories as projects, and OpenCara authenticates and records their service hook deliveries. **Flow execution for Azure DevOps projects is not wired up yet** — deliveries are stored in `platform_events` and visible in the activity feed, but they do not dispatch agent runs. Boards/kanban mirroring is GitHub-only so far. Track the remaining work in ROADMAP.md.
+**Status.** Sign in with Microsoft, connect an organization, add repositories as projects, and PR flows run end-to-end: a pull request event dispatches the flow, the agent gets a worktree and a token, and reviews post back as a comment thread plus a reviewer vote.
+
+Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
+
+A deployment can be Azure-DevOps-only: with no `GITHUB_APP_*` set, the flow engine still starts and runs Azure DevOps flows.
+
+### What agents get on Azure DevOps
+
+Run context uses the **same `OPENCARA_*` variable names** as GitHub, so prompts and flow templates are portable. Two additions and one gap:
+
+- `OPENCARA_PLATFORM=azure_devops`, plus `OPENCARA_AZDO_ORG` / `OPENCARA_AZDO_PROJECT` / `OPENCARA_REPO_NAME`.
+- The token arrives as `OPENCARA_SCM_TOKEN` and `AZURE_DEVOPS_EXT_PAT` (what `az repos` reads) — **not** as `GH_TOKEN`, so `gh` cannot pick up an Azure DevOps token and fail confusingly against github.com.
+- `OPENCARA_PR_DIFF_INLINE=0` and an empty `stdin.diff`. Azure DevOps has no single endpoint returning a unified diff for a PR, so rather than inline a partial one, agents are expected to `git diff` in the worktree. Reviewer flows without a worktree will see no diff.
 
 ### Setup
 

@@ -42,16 +42,20 @@ Landed:
 - [x] Azure DevOps action provider (PR thread + reviewer vote, comment, labels)
 - [x] CLI `worktree create --clone-url / --auth-user`, `OPENCARA_SCM_TOKEN`
 
-Remaining before Azure DevOps flows actually run:
+- [x] Flow engine accepts Azure DevOps projects; `PlatformRunCtx` threads platform identity through `NodeRunCtx`
+- [x] Azure DevOps token minting + `--clone-url` / `--auth-user` at worktree allocation
+- [x] `OPENCARA_*` run context from Azure DevOps payloads (same variable names, plus `OPENCARA_PLATFORM`)
+- [x] Dispatch flows from Azure DevOps deliveries; engine starts with no GitHub App configured
+- [x] Azure DevOps variant of the issue-implement contract skill (`az repos pr` instead of `gh pr`)
 
-- [ ] Let the flow engine accept non-GitHub projects (`prepareRun` currently refuses them) and thread `platform` through `NodeRunCtx`
-- [ ] Mint the Azure DevOps token and pass `--clone-url` / `--auth-user` at worktree allocation
-- [ ] Build the `OPENCARA_*` run context from Azure DevOps payloads (same variable names, plus `OPENCARA_PLATFORM`)
-- [ ] Dispatch flows from recorded Azure DevOps deliveries
-- [ ] Device capability gating (`scm.azure_devops`) — `pickIdle` ignores capabilities today, which already misroutes jobs
-- [ ] Azure DevOps variants of the agent skill prompts (they currently instruct agents to shell out to `gh`)
-- [ ] Boards / kanban parity: work item mirroring, `scm.board_item` trigger from `workitem.updated`
-- [ ] Default the review→fix reviewer filter to the connection's user (no `opencara[bot]` identity on Azure DevOps)
+Remaining:
+
+- [ ] Boards / kanban parity: work item mirroring, `scm.board_item` trigger from `workitem.updated`. Work item events are received and recorded but drive nothing.
+- [ ] Inline PR diffs for Azure DevOps agents. There is no single unified-diff endpoint, so `stdin.diff` is empty and `OPENCARA_PR_DIFF_INLINE=0`; agents must `git diff` in the worktree. Reviewer flows *without* a worktree get no diff at all.
+- [ ] Azure DevOps equivalents for the features currently skipped-with-a-log: auto-merge (`autoCompleteSetBy` + branch policies), PR↔work-item linking, draft-PR ready-for-review
+- [ ] Device capability gating (`scm.azure_devops`). `pickIdle` ignores capabilities entirely — a pre-existing bug. Today a device on an older CLI fails an Azure DevOps worktree allocation with an "unknown argument" error, which is visible but not routed around.
+- [ ] Default the review→fix reviewer filter to the connection's user (no `opencara[bot]` identity on Azure DevOps, so the default filter never matches)
+- [ ] Azure DevOps variants of the remaining `gh`-based skill prompts (`projectPm`, `projectDetail`, `flowRunStepChat`)
 
 ## Planned
 

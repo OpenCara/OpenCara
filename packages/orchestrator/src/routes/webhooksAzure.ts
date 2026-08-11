@@ -6,6 +6,7 @@ import { azureDevopsConnections, platformEvents, projects } from "../db/schema.j
 import type { TokenCipher } from "../auth/session.js";
 import { normalizeAzureEvent } from "../azure/events.js";
 import { parseBasicAuthPassword, secretMatches } from "../azure/webhookAuth.js";
+import type { FlowEngine } from "../flows/engine.js";
 
 /**
  * Inbound Azure DevOps service hooks.
@@ -25,6 +26,8 @@ import { parseBasicAuthPassword, secretMatches } from "../azure/webhookAuth.js";
 interface AzureWebhookDeps {
   db: Db;
   cipher: TokenCipher;
+  /** Absent only when no platform is configured; deliveries are then recorded but not dispatched. */
+  flowEngine?: FlowEngine;
 }
 
 export function azureWebhookRoutes(deps: AzureWebhookDeps) {
@@ -130,10 +133,13 @@ async function processDelivery(
   // x-github-delivery. Azure DevOps does not document at-least-once delivery as
   // explicitly as GitHub, but the payload id is stable across retries and the
   // insert is cheap insurance.
+  // One id for both the platform_events row and the engine's event, so a flow
+  // run's trigger_event_id resolves back to the stored delivery.
+  const eventId = normalized.deliveryId ?? ulid();
   await deps.db
     .insert(platformEvents)
     .values({
-      id: normalized.deliveryId ?? ulid(),
+      id: eventId,
       platform: "azure_devops",
       type: normalized.type,
       payload: rawPayload as never,
@@ -143,10 +149,22 @@ async function processDelivery(
     })
     .onConflictDoNothing();
 
-  // Flow dispatch for Azure DevOps projects lands with the ADO provider. Until
-  // then the delivery is recorded (so the wiring is verifiable end-to-end from
-  // the activity feed) but drives nothing.
-  console.log(
-    `[webhooks-azure] recorded ${normalized.type} for ${resolved.project.owner}/${resolved.project.name}`,
-  );
+  if (!deps.flowEngine) {
+    console.log(
+      `[webhooks-azure] recorded ${normalized.type} for ${resolved.project.owner}/${resolved.project.name} (no flow engine configured)`,
+    );
+    return;
+  }
+
+  // The engine consumes the NORMALIZED payload, not the raw service hook body:
+  // trigger matching, PR context and env injection are all written against the
+  // GitHub webhook shape, and normalizeAzureEvent is what makes an Azure
+  // delivery look like one. `platform_events.payload` keeps the raw body for
+  // forensics.
+  deps.flowEngine.onPlatformEvent({
+    id: normalized.deliveryId ?? eventId,
+    type: normalized.type,
+    projectId: resolved.project.id,
+    payload: normalized.payload,
+  });
 }

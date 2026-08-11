@@ -107,9 +107,36 @@ const githubApp = config.github
   ? createGithubAppClient(config.github, config.GITHUB_WEBHOOK_SECRET)
   : null;
 
-const flowEngine = githubApp
-  ? new FlowEngine({ db, pg, app: githubApp, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL })
-  : null;
+// Azure DevOps client deps, built once and shared by the flow engine and the
+// API routes. Requires SESSION_ENCRYPTION_KEY because connection tokens are
+// stored encrypted with the same cipher as session tokens.
+const azureDeps =
+  config.azureDevops && config.SESSION_ENCRYPTION_KEY
+    ? {
+        db,
+        cipher: new TokenCipher(config.SESSION_ENCRYPTION_KEY),
+        entra: new EntraOAuth({
+          clientId: config.azureDevops.clientId,
+          clientSecret: config.azureDevops.clientSecret,
+          tenant: config.azureDevops.tenant,
+          publicBaseUrl: config.PUBLIC_BASE_URL,
+        }),
+      }
+    : null;
+
+// Built when EITHER platform is configured — an Azure-DevOps-only deployment
+// has no GitHub App but still needs an engine to run its flows.
+const flowEngine =
+  githubApp || azureDeps
+    ? new FlowEngine({
+        db,
+        pg,
+        app: githubApp ?? undefined,
+        azure: azureDeps ?? undefined,
+        dispatcher,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : null;
 
 // Wire flowEngine and githubApp into the device pool after construction
 // to break the circular dependency (pool → engine, engine → dispatcher → pool).
@@ -206,18 +233,14 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
     clientSecret: config.github.clientSecret,
     publicBaseUrl: config.PUBLIC_BASE_URL,
   });
-  const cipher = new TokenCipher(config.SESSION_ENCRYPTION_KEY);
+  // Same key, so azureDeps.cipher (when present) is interchangeable; reuse it
+  // rather than holding two instances of the same cipher.
+  const cipher = azureDeps?.cipher ?? new TokenCipher(config.SESSION_ENCRYPTION_KEY);
 
   // Optional second sign-in provider. Absent config leaves /auth/azure/*
-  // unmounted and the login page GitHub-only.
-  const entraOAuth = config.azureDevops
-    ? new EntraOAuth({
-        clientId: config.azureDevops.clientId,
-        clientSecret: config.azureDevops.clientSecret,
-        tenant: config.azureDevops.tenant,
-        publicBaseUrl: config.PUBLIC_BASE_URL,
-      })
-    : undefined;
+  // unmounted and the login page GitHub-only. Reuses the single client built
+  // for `azureDeps` above so token refreshes share one instance.
+  const entraOAuth = azureDeps?.entra;
   if (entraOAuth) {
     console.log(
       `[orchestrator] Microsoft Entra sign-in enabled (tenant: ${config.azureDevops!.tenant})`,
@@ -241,7 +264,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   if (entraOAuth) {
     app.route(
       "/webhooks/azure-devops",
-      azureWebhookRoutes({ db, cipher }),
+      azureWebhookRoutes({ db, cipher, flowEngine: flowEngine ?? undefined }),
     );
     app.route(
       "/api/azure",

@@ -39,11 +39,14 @@ function ctxForPostReview(previousOutput: string): {
     flowRunId: "run-1",
     flowRunStepId: "step-1",
     projectId: "project-1",
-    installation: { id: "installation-1", githubInstallationId: 1 },
+    scm: {
+      platform: "github" as const,
+      installation: { id: "installation-1", githubInstallationId: 1 },
+      githubRepoId: 1,
+    },
     project: {
       owner: "octo-org",
       name: "octo-repo",
-      githubRepoId: 1,
       defaultBranch: "main",
       instructionsFile: "",
     },

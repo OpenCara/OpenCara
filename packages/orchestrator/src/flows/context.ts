@@ -373,3 +373,95 @@ export async function buildIssueStatusContext(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Azure DevOps
+// ---------------------------------------------------------------------------
+
+interface AzurePrPayload {
+  pull_request?: {
+    number: number;
+    head: { sha: string; ref?: string };
+    base: { sha: string; ref?: string };
+  };
+  repository?: { full_name?: string };
+  comment?: {
+    id?: number | null;
+    body?: string;
+    user?: { login?: string };
+    html_url?: string | null;
+  };
+}
+
+/**
+ * PR run context for an Azure DevOps project.
+ *
+ * Deliberately does no API calls. `normalizeAzureEvent` already puts a
+ * GitHub-shaped `pull_request` object on every PR and PR-comment payload —
+ * including the comment path, which on GitHub needs a fetch because
+ * `issue_comment` carries no PR object. So everything the engine needs is
+ * already in hand.
+ *
+ * The env variable NAMES are identical to the GitHub path on purpose: prompts,
+ * flow templates and `{{VAR}}` substitutions stay portable across platforms.
+ * `OPENCARA_PLATFORM` is the one addition, for prompts that must branch.
+ *
+ * KNOWN GAP — `stdin.diff` is empty. Azure DevOps has no single endpoint that
+ * returns a unified diff for a pull request (only a per-file changes list, and
+ * then per-file content fetches), so rather than inline a fabricated or
+ * partial diff this leaves it empty and sets `OPENCARA_PR_DIFF_INLINE=0`.
+ * Reviewer agents running with a worktree can `git diff` the real thing, which
+ * is both cheaper and more accurate. Inlining a real diff would mean N+1 API
+ * calls per review; worth doing only if a diff-less review proves inadequate.
+ */
+export function buildAzurePullRequestContext(
+  payload: AzurePrPayload,
+  project: { owner: string; name: string },
+): PullRequestContext {
+  const pr = payload.pull_request;
+  if (!pr) {
+    throw new Error(
+      "buildAzurePullRequestContext: normalized payload carries no pull_request",
+    );
+  }
+
+  const envExtras: Record<string, string> = {
+    OPENCARA_PLATFORM: "azure_devops",
+    OPENCARA_REPO: payload.repository?.full_name ?? `${project.owner}/${project.name}`,
+    OPENCARA_PR_NUMBER: String(pr.number),
+    OPENCARA_PR_HEAD_SHA: pr.head.sha,
+    OPENCARA_PR_BASE_SHA: pr.base.sha,
+    // Signals to prompts that they must read the worktree rather than expect a
+    // diff on stdin. See the KNOWN GAP note above.
+    OPENCARA_PR_DIFF_INLINE: "0",
+  };
+  if (pr.head.ref) envExtras["OPENCARA_PR_HEAD_REF"] = pr.head.ref;
+  if (pr.base.ref) envExtras["OPENCARA_PR_BASE_REF"] = pr.base.ref;
+
+  if (payload.comment?.body) {
+    envExtras["OPENCARA_COMMENT_BODY"] = payload.comment.body;
+    if (payload.comment.user?.login) {
+      envExtras["OPENCARA_COMMENT_AUTHOR"] = payload.comment.user.login;
+    }
+    if (payload.comment.id != null) {
+      envExtras["OPENCARA_COMMENT_ID"] = String(payload.comment.id);
+    }
+  }
+
+  return {
+    envExtras,
+    stdin: {
+      pr,
+      diff: "",
+      ...(payload.comment?.body
+        ? {
+            comment: {
+              id: payload.comment.id ?? undefined,
+              body: payload.comment.body,
+              user: payload.comment.user,
+            },
+          }
+        : {}),
+    },
+  };
+}
