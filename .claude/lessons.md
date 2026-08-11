@@ -9,6 +9,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Quick query pattern: `set -a && . packages/orchestrator/.env && set +a && psql "$DATABASE_URL" -c "..."`.
 - Useful tables: `flow_runs`, `flow_run_steps`, `agent_runs`, `agent_run_logs`, `agent_hosts`, `worktree_pins`, `flows` (config in `graph_json` jsonb), `flow_node_settings` (per-node agent/prompt/host bindings), `sessions` (auth cookies).
 
+### [hits: 1] Adding a pg enum value: drizzle runs ALL pending migrations in ONE transaction, and a fresh-DB test gives a FALSE PASS
+- `ALTER TYPE x ADD VALUE 'v'` followed by any use of `'v'` fails with `ERROR: unsafe use of new value "v" of enum type x` — Postgres won't let a new enum value be used in the transaction that added it.
+- Splitting the ADD VALUE into its own migration FILE does NOT fix it. The postgres-js migrator wraps every pending migration in a single transaction, so on the deploy where both are pending they share one. (This is what I assumed would work when adding `azure_devops` to `platform` on 2026-08-11; it doesn't.)
+- **The dangerous part**: it does NOT reproduce against a fresh database. Postgres exempts the case where the enum type was CREATED in the same transaction — exactly what a from-scratch `0000..NNNN` replay does. So `migrate()` on an empty DB says OK while the prod upgrade dies. Verified both directions against `postgres:17-alpine`.
+- Fixes, in order of preference: (a) don't reference the literal — compare `col::text = 'v'`, which never materialises the enum value (used by the `projects_platform_connection_ck` CHECK in 0043); (b) put the ADD VALUE in a deploy that ships BEFORE the migration that uses it; (c) use a text column + CHECK instead of an enum.
+- Migrations that ship AFTER the ADD VALUE has been applied in a previous deploy can use the literal freely — the restriction is only within the adding transaction.
+- **Always test a migration against a database seeded with pre-migration rows, not just an empty one.** Recipe: `docker run -d --rm -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17-alpine`, copy `drizzle/` to /tmp and strip the new entries from `meta/_journal.json`, migrate to the old point, INSERT representative legacy rows, then migrate with the real folder. This also exercises the backfills, which are no-ops on an empty DB.
+
 ### [hits: 1] agent_runs.host_id is NULL on disk
 - The orchestrator doesn't persist which device handled an agent_run — the column exists but isn't written.
 - To trace routing of a specific failure: check the current orchestrator log around the `started_at` timestamp for `[device-ws] hello / connected / disconnected` lines, or `worktree_pins` (gets set on successful worktree-allocate).
@@ -61,9 +69,12 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - `packages/cli/package.json` `"version": "0.0.0"` is intentional. CI runs `npm version <from-tag> --no-git-tag-version --allow-same-version` before build so esbuild's `define` bakes the real version into `dist/bin.js`. Bumping the file on main is unnecessary (and would just get clobbered next release).
 - One-line release for a fix already on main: `git tag -a vX.Y.Z -m "..." <sha> && git push origin vX.Y.Z`.
 
-### [hits: 1] Devices on this box live in npx cache 35cf602f65bb4257
-- Cache path: `~/.npm/_npx/35cf602f65bb4257/node_modules/opencara/dist/bin.js`.
+### [hits: 2] Devices on this box live in npx cache 35cf602f65bb4257 — NEVER purge it while the device is running
+- Cache path: `~/.npm/_npx/35cf602f65bb4257/node_modules/opencara/dist/bin.js` (hash is for spec `opencara@latest`; a pinned spec like `opencara@0.112.1` gets a DIFFERENT hash dir).
 - After publish, force a refresh: `rm -rf ~/.npm/_npx/35cf602f65bb4257 && npm exec opencara@latest`. The cache won't re-download otherwise (see user-wide lesson on `npm exec @latest` caching).
+- 2026-07-16 incident: the cache dir backing the LIVE device process was deleted (~04:53 UTC) while the device kept running from memory. Every claude-acp job after that failed in ~3s with `[device] acp connection closed: child error: spawn claude-acp ENOENT` — `resolveLocalAcpAdapter` (`packages/cli/src/runner/acpRunner.ts`) does `existsSync` on `dist/claude-acp.js` *next to the (deleted) bundle* at job time, misses, and falls back to bare `claude-acp` on PATH, which doesn't exist. Non-claude ACP jobs (`npx pi-acp …`) and internal jobs kept succeeding, so the device looked healthy.
+- Fix: kill the stale device (`pgrep -af 'npm exec opencara'` lineage) and relaunch detached: `cd ~ && setsid bash -c 'exec npm exec --yes opencara@latest' >> ~/opencara-device.log 2>&1 < /dev/null &`. It re-acks under the same host id (token in ~/.opencara). Then rerun failed flows from the failed step via the rerun API.
+- Rule: any `rm -rf ~/.npm/_npx/<hash>` MUST be immediately followed by a device restart on that box. Device log lives at `~/opencara-device.log`.
 
 ## ACP runner
 
@@ -89,6 +100,20 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Saves agent costs when an upstream reviewer ran for minutes successfully and a later step failed.
 - Look up the step id: `SELECT id FROM flow_run_steps WHERE flow_run_id='<old-run-id>' AND node_id='<node>';`.
 
+## Azure DevOps
+
+### [hits: 1] Widening a GitHub-only ctx: use a discriminated union, not nullable fields
+- When adding Azure DevOps to `NodeRunCtx` (2026-08-11), replacing `installation: {...}` with a `PlatformRunCtx` discriminated union (`{platform:"github",...} | {platform:"azure_devops",...}`) made `tsc` enumerate every site that had silently assumed GitHub — about 10 across nodeRunners/engine. Adding nullable `azdo*` fields alongside the existing ones would have compiled clean and failed at runtime on the first ADO run.
+- Corollary: `ctx.app` (GithubAppClient) had to become optional, because an ADO-only deployment configures no GitHub App at all. `FlowEngine` is now constructed when EITHER platform is configured; it used to be `githubApp ? new FlowEngine(...) : null`, which would have left an ADO-only install with no engine and no error.
+- Pattern for GitHub-only extras (auto-merge, PR↔issue link, draft-PR ready): a `skipOnAzure(ctx, feature)` helper that logs and returns true, rather than throwing. These run AFTER a successful agent step, so failing the run would discard completed work over a missing convenience.
+
+### [hits: 1] Service hooks authenticate with HTTP Basic, not an HMAC signature — resolve the project BEFORE checking the secret
+- GitHub signs each delivery (`x-hub-signature-256`) and one secret covers the whole App. Azure DevOps signs nothing: the Basic-auth password registered on the subscription is the entire inbound authentication, and it is stored per connection.
+- Consequence for the handler (`routes/webhooksAzure.ts`): you cannot know which secret to compare against until you know which project the delivery is for. Resolve project → connection from the payload's repository/project GUID FIRST, then compare against exactly that connection's secret. Comparing against "any connection whose secret matches" would let one org's secret authenticate another org's events.
+- Because the body is unsigned and the secret is long-lived, a replayed delivery is indistinguishable from a fresh one. Content dedup on the payload `id` (`platform_events.delivery_id`) is the only thing bounding replay — not the auth check.
+- Azure DevOps **auto-disables a subscription** after repeated delivery failures, with no notification. Non-2xx from our endpoint is therefore load-bearing: unmapped event types and unknown repos return 200 (`ignored`/`unmatched`) on purpose, so a stray variant can't silently tear down a working hook. `listSubscriptions()` exists to spot ones that got disabled anyway.
+- Subscriptions are per (team project, event type) and need HTTPS when basic auth is set — `PUBLIC_BASE_URL` on http:// makes every subscription creation fail with a 400.
+
 ## Webhooks
 
 ### [hits: 1] Duplicate reviews/runs come from GitHub at-least-once delivery, NOT a double webhook config
@@ -100,10 +125,18 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Architecture quirks
 
-### [hits: 1] nodeRunners.ts contains intentional NUL bytes — grep/rg treat it as binary
+### [hits: 2] nodeRunners.ts contains intentional NUL bytes — grep/rg treat it as binary
 - `packages/orchestrator/src/flows/nodeRunners.ts` uses literal `\x00` sentinel bytes in string literals (`"\x00ANYPATH\x00"` etc.) for glob-to-regex normalization. They are NOT corruption; the file compiles fine.
 - Consequence: plain `grep`/`rg` silently return nothing (or "binary file matches") on this file. Searches that "find no matches" there are lying.
 - Use `rg -na` / `grep -a` when searching it, and don't "clean up" the bytes.
+- RECURS (2026-08-11, azure-devops phase 0): a `sed -i` rewrite of node kinds across several files succeeded here, but the *verification* `grep` printed nothing and briefly looked like the edit had missed the file. Verifying an edit is exactly when this bites — the edit worked, the check lied. Use `grep -a` (or `sed -n … | tr -d '\000'` to read a region) for any before/after check on this file.
+- The `Edit` tool matches fine against regions with no NULs; only the shell text tools are affected.
+
+### [hits: 1] `parseGraph` in routes/api/flows.ts + agent-calls/* is a shallow cast, NOT FlowDefinitionSchema
+- There are two unrelated things named "parse a graph". `FlowDefinitionSchema.parse()` (zod) validates and applies defaults; the local `parseGraph()` helpers in `routes/api/flows.ts`, `agent-calls/flowNodeConfigSet.ts` (and the draft readers `currentGraph()` in `routes/api/flowTemplates.ts` + `agent-calls/templateNodeConfigSet.ts`) only null-check, `as`-cast and deep-clone. They deliberately tolerate graphs that no longer validate.
+- Consequence: anything you implement *in the zod schema* — validation, defaults, kind normalization — does NOT apply on those four read paths, and those are the paths that feed the web canvas. Assuming "every graph read funnels through the schema" is wrong; verify before relying on it.
+- Bit during the `github.*` → `scm.*` node-kind rename (2026-08-11): the zod preprocess normalized the engine's reads, but the flow/template detail endpoints would still have served pre-rename kinds to the UI. Fix was an explicit `normalizeGraphKinds()` call at each raw reader.
+- When adding cross-cutting graph behaviour, grep for BOTH `FlowDefinitionSchema` and `parseGraph|currentGraph` and handle all of them.
 
 ### [hits: 1] agent_runs.spec.acp.priorSessionId is overwritten post-run with the RESULT session id
 - `nodeRunners.ts` rewrites `spec.acp.priorSessionId` in place via `jsonb_set` after the run finishes, so the DB value is the session the run ENDED with, not what it resumed from. For claude-acp resume the two are equal (resume keeps the id); for fresh runs it's a brand-new UUID.
@@ -125,3 +158,28 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Fix: delete the stale draft (scope it so you only drop pre-change drafts, e.g. `WHERE NOT (graph_json->'nodes') @> '[{"id":"<new-node-id>"}]'::jsonb`); the boot-time `seedBuiltinFlowsForAllProjects` (runs after `migrate()` in `index.ts`) then refreshes non-customized project flows from the code template. Per-node agent/prompt assignments live in `template_node_settings` (keyed independently of the draft) and survive the delete. Migration 0035 did exactly this for `development-lifecycle`.
 - Renaming a flow slug must also rename `flows.slug` + `template_drafts.template_slug` + `template_node_settings.template_slug` in lockstep (migration 0034), or the seeder treats the new slug as a brand-new built-in and INSERTs a duplicate row → double-dispatch.
 - RECURS: a fresh draft is created the moment the owner edits the **template** page (`/flows/<slug>` template detail, not a project flow) — any node-config/add/remove on template scope writes a `template_drafts` row snapshotting the then-current graph. After that, every subsequent code-template deploy is silently ignored for that owner's projects (they reseed from the frozen draft) even though `customized_at` stays NULL. Verified twice on `development-lifecycle` (2026-06-04 migration 0035, then again 2026-06-05). Quick live fix (no migration): `DELETE FROM template_drafts WHERE template_slug='development-lifecycle'` then run `seedBuiltinFlowsForAllProjects(db)` in a one-off `node --import tsx --env-file=.env` script — the orchestrator serves flows from the DB per request, so no restart needed. When a deploy's graph/position/config changes don't show up live, CHECK FOR A DRAFT FIRST (`select count(*) from template_drafts where template_slug=...`).
+
+### [hits: 1] Inlining a PEM into an env var: verify with createPrivateKey before shipping; /health green ≠ App auth working
+- 2026-07-06 incident: the container cutover's `.env.production` was generated with a layered-quoting awk that ATE the PEM's newlines (headers glued to base64). `crypto.createPrivateKey` → `ERR_OSSL_UNSUPPORTED`, so EVERY GitHub-App call failed (PR context, token minting, kanban), while `/health` stayed green — octokit mints the App JWT lazily, and the engine swallows context-fetch errors (`[flow-engine] pr context fetch failed`), so flow runs surfaced only a misleading downstream error (`{{OPENCARA_PR_NUMBER}} not in run env`).
+- Correct inlining: `sed -z 's/\n/\\n/g' key.pem` (literal `\n` escapes; config.ts un-escapes). ALWAYS verify the round-trip with `node -e "createPrivateKey(...)"` before deploying, and prefer a functional probe (App JWT → `GET /app` expecting 200) over the health endpoint when auth-critical env changed.
+- Since PR #196 a malformed key fails loudly at boot → the deploy's health gate rejects the rollout. Diagnosis path for "flow failed with a weird template-var error": check `docker logs opencara_server | grep "pr context fetch failed"` — the template error is usually the SECOND-order symptom of a swallowed GitHub auth/API failure.
+
+## GitHub tokens
+
+### [hits: 1] GitHub installation tokens are NO LONGER always `ghs_`+alphanumerics — the new 390-char format contains dots and breaks strict `[\w-]` validation
+- Symptom (2026-07-30, flow run `01KYS8NYV68M2P2TAP1K97AFAJ`, node `review_synthesizer`): `flow_runs.error` = `worktree allocation on host … exited with code 1: GH_TOKEN contains unexpected characters; refusing to use`. Intermittent — 239 successes vs 11 failures on the same host over 30 days, and the failure rate is RISING (a 20-sample mint probe on 2026-07-30 returned 7/20 bad).
+- Root cause: `packages/cli/src/commands/internal.ts:87` guards the injected token with `/^[\w-]+$/`, and its comment asserts "GitHub installation tokens are ASCII alphanumerics". That assumption is now false. `POST /app/installations/{id}/access_tokens` returns, for a growing fraction of calls, a **390-char** token shaped `ghs_<48>.<254>.<86>` (three dot-separated segments, JWT-like) instead of the classic 40-char `ghs_`+36. Both are valid — the long ones authenticate fine (verified with `GET /repos/{owner}/{repo}`). GitHub is rolling the new format out progressively, which is exactly why it looks random.
+- Do NOT chase the orchestrator side. The mint→inject path in `nodeRunners.ts` `dispatchAgentRun` is correct: `<ephemeral>` is only an audit marker written to `agent_runs.spec.env` BEFORE the real token is mutated onto the live `opts.env`, the dispatcher sends the in-memory spec (`devices.ts:587`), and the device merges `{...process.env, ...spec.env}` (`cli/src/commands/run.ts:302`) so spec wins. Seeing `<ephemeral>` in the persisted `agent_runs.spec.env` is EXPECTED and is not the leak. A mint *failure* deletes the key and produces the different error "worktree create needs GH_TOKEN in env".
+- Fix: widen the guard to allow `.` (e.g. `/^[\w.-]+$/`). Safe because the git credential helper references the token **by name** (`'!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`, `internal.ts:133`) — the value never enters argv or `.git/config`, so the regex is defense-in-depth against shell metachars, not a correctness requirement. Keep rejecting whitespace/quotes/`$`/backticks.
+- Probe to confirm the format distribution: mint N tokens with the app creds and print only `len`, `prefix`, and the set of chars failing `[A-Za-z0-9_-]` — never log the token; revoke each with `DELETE /installation/token`.
+
+### [hits: 1] Containerized prod: secrets live in /opt/opencara/.env.production, not packages/orchestrator/.env
+- Since the 2026-07-06 container cutover the running config is `/opt/opencara/.env.production` (chmod 600, owned by `quabug`), loaded via `env_file` in `/opt/opencara/docker-compose.prod.yml`. The older `packages/orchestrator/.env` note above is stale for prod.
+- Quick query pattern: `export $(/usr/bin/grep -E "^DATABASE_URL=" /opt/opencara/.env.production) && psql "$DATABASE_URL" -c "..."`.
+- Logs are `sg docker -c "docker logs opencara_server"` (NOT `/tmp/opencara-orchestrator.log`, which is pre-container and stale). `docker logs --since/--until` interpret bare timestamps as LOCAL time — append `Z` for UTC or you get zero lines and wrongly conclude the window is empty.
+
+### [hits: 1] `npm publish --provenance` fails once the repo goes private — publish-cli silently blocks all device-side fixes
+- 2026-07-30: tagging `v0.112.2` deployed the server fine but the `publish-cli` job died with `npm error 422 ... Error verifying sigstore provenance bundle: Unsupported GitHub Actions source repository visibility: "private". Only public source repositories are supported when publishing with provenance.` `v0.112.1` (2026-07-06) predates OpenCara/OpenCara going private, so this is latent breakage, not a regression from the tagged commit.
+- Consequence worth internalizing: a `v*` tag fans out to TWO workflows (`deploy` → GHCR + SSH rollout, `publish-cli` → npm). They fail independently. A green `deploy` does NOT mean the CLI shipped — always check `npm view opencara version` after tagging, because **devices only ever get fixes through npm**.
+- The old comment in publish-cli.yml claimed `--provenance` "activates npm's trusted-publishing OIDC exchange". That is WRONG and made the flag look load-bearing for auth. The OIDC exchange comes from `id-token: write` + npm >= 11.5.1 detecting the Actions OIDC env; `--provenance` only adds the sigstore attestation. Dropping it (PR #199) keeps trusted publishing working with no NPM_TOKEN.
+- A failed publish leaves an orphan tag: `v0.112.2` exists as a git tag and a GHCR image with no matching npm version. Don't retry by moving/force-pushing the tag — cut the next patch (`v0.112.3`).
