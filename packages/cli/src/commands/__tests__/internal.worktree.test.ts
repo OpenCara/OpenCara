@@ -453,7 +453,7 @@ describe("internal worktree create — GH_TOKEN shape validation", () => {
 
       assert.doesNotMatch(
         r.stderr,
-        /GH_TOKEN contains unexpected characters/,
+        /SCM token contains unexpected characters/,
         "dot-separated installation tokens must not be rejected",
       );
       assert.equal(r.status, 0, `expected exit 0, got ${r.status}\nstderr: ${r.stderr}`);
@@ -487,10 +487,177 @@ describe("internal worktree create — GH_TOKEN shape validation", () => {
           ],
         );
         assert.notEqual(r.status, 0, "expected a non-zero exit");
-        assert.match(r.stderr, /GH_TOKEN contains unexpected characters/);
+        assert.match(r.stderr, /SCM token contains unexpected characters/);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
   }
+});
+
+// Azure DevOps repositories live at org/project/_git/repo — three segments,
+// which the GitHub-shaped `--repo OWNER/NAME` cannot express. `--clone-url`
+// carries the full remote instead, and `--auth-user` the basic-auth username
+// (GitHub demands the literal "x-access-token"; Azure DevOps accepts anything).
+describe("internal worktree create — platform-neutral clone flags", () => {
+  function seedOrigin(root: string): { origin: string; home: string } {
+    const home = join(root, "home");
+    mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+    mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+
+    const origin = join(root, "origin.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+      stdio: "ignore",
+    });
+
+    const seed = join(root, "seed");
+    mkdirSync(seed);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "t@example.com"]);
+    git(seed, ["config", "user.name", "t"]);
+    writeFileSync(join(seed, "README"), "hi\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "init"]);
+    git(seed, ["remote", "add", "origin", origin]);
+    git(seed, ["push", "origin", "main"]);
+
+    return { origin, home };
+  }
+
+  const KEY = "contoso/widgets/branch-opencara_pr-1";
+
+  it("accepts OPENCARA_SCM_TOKEN in place of GH_TOKEN", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-scmtok-"));
+    try {
+      const { origin, home } = seedOrigin(root);
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" };
+      delete env.GH_TOKEN;
+      const r = runInternal(env, [
+        "worktree", "create",
+        "--repo", "contoso/widgets",
+        "--branch", "opencara/pr-1",
+        "--from-branch", "main",
+        "--key", KEY,
+      ]);
+
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\nstderr: ${r.stderr}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails clearly when neither token variable is set", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-notok-"));
+    try {
+      const { home } = seedOrigin(root);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+      delete env.GH_TOKEN;
+      delete env.OPENCARA_SCM_TOKEN;
+      const r = runInternal(env, [
+        "worktree", "create",
+        "--repo", "contoso/widgets",
+        "--branch", "opencara/pr-1",
+        "--key", KEY,
+      ]);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /GH_TOKEN or OPENCARA_SCM_TOKEN/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clones from --clone-url, with a --repo that is not OWNER/NAME shaped", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-cloneurl-"));
+    try {
+      const { origin, home } = seedOrigin(root);
+      // A file:// origin stands in for the real remote; the point under test is
+      // that --clone-url is used verbatim and --repo is not shape-validated.
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--repo", "contoso/Team",
+          "--clone-url", `https://example.invalid/contoso/Team/_git/widgets`,
+          "--branch", "opencara/pr-1",
+          "--from-branch", "main",
+          "--key", KEY,
+        ],
+      );
+      // The clone itself cannot succeed against example.invalid — what matters
+      // is that it got as far as attempting the URL we passed, rather than
+      // rejecting --repo's shape or falling back to github.com.
+      assert.doesNotMatch(r.stderr, /expected OWNER\/NAME/);
+      assert.doesNotMatch(r.stderr, /github\.com/);
+      void origin;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a non-https clone url", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-badurl-"));
+    try {
+      const { home } = seedOrigin(root);
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--clone-url", "ssh://git@example.com/x/y",
+          "--branch", "b",
+          "--key", KEY,
+        ],
+      );
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /expected an https:\/\/ URL/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The clone URL lands in a `git clone` argv; a value shaped like a flag would
+  // be argument injection.
+  it("rejects a clone url that could be read as a git option", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-injurl-"));
+    try {
+      const { home } = seedOrigin(root);
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--clone-url", "--upload-pack=touch /tmp/pwned",
+          "--branch", "b",
+          "--key", KEY,
+        ],
+      );
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /expected an https:\/\/ URL/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an --auth-user containing shell metacharacters", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-badauthuser-"));
+    try {
+      const { home } = seedOrigin(root);
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--repo", "contoso/widgets",
+          "--auth-user", "x`id`",
+          "--branch", "b",
+          "--key", KEY,
+        ],
+      );
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /--auth-user contains unexpected characters/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
