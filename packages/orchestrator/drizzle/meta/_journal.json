@@ -309,6 +309,13 @@
       "when": 1777640000000,
       "tag": "0043_azure_devops_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1777650000000,
+      "tag": "0044_project_azdo_subscriptions",
+      "breakpoints": true
     }
   ]
 }

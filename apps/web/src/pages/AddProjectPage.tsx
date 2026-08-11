@@ -24,6 +24,10 @@ import {
   installationsQuery,
   availableReposQuery,
   useAddProject,
+  azureOrganizationsQuery,
+  azureRepositoriesQuery,
+  useConnectAzureOrg,
+  useAddAzureProject,
   type InstallationSummary,
   type AvailableRepo,
 } from "@/lib/queries";
@@ -31,19 +35,53 @@ import { ApiError } from "@/lib/api";
 
 const APP_INSTALL_URL = "https://github.com/apps/opencara/installations/new";
 
+type Source = "github" | "azure";
+
 export function AddProjectPage() {
-  const installations = useQuery(installationsQuery());
-  const [selected, setSelected] = useState<InstallationSummary | null>(null);
+  const [source, setSource] = useState<Source>("github");
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Add project</h1>
         <p className="text-sm text-muted-foreground">
-          Pick a repository from one of your installations.
+          Pick a repository from a connected account.
         </p>
       </div>
 
+      <div className="inline-flex rounded-md border p-1">
+        {(
+          [
+            ["github", "GitHub"],
+            ["azure", "Azure DevOps"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setSource(value)}
+            className={`rounded px-3 py-1.5 text-sm transition ${
+              source === value
+                ? "bg-secondary font-medium"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {source === "github" ? <GithubSource /> : <AzureSource />}
+    </div>
+  );
+}
+
+function GithubSource() {
+  const installations = useQuery(installationsQuery());
+  const [selected, setSelected] = useState<InstallationSummary | null>(null);
+
+  return (
+    <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-3">
         {installations.isLoading ? (
           <Skeleton className="h-32" />
@@ -81,6 +119,183 @@ export function AddProjectPage() {
 
       {selected && <RepoPicker installation={selected} />}
     </div>
+  );
+}
+
+/**
+ * Azure DevOps source. Two steps, because connecting an organization and
+ * picking a repo from it need different credentials: the org list comes from
+ * the signed-in user's Entra token, the repo list from the stored connection.
+ */
+function AzureSource() {
+  const orgs = useQuery(azureOrganizationsQuery());
+  const connect = useConnectAzureOrg();
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+
+  if (orgs.isLoading) return <Skeleton className="h-32" />;
+
+  // 409 = this session authenticated with GitHub, so it holds no Microsoft
+  // credentials. Recoverable by signing in with Microsoft, so say that rather
+  // than showing a generic error.
+  if (orgs.isError) {
+    const needsSignIn =
+      orgs.error instanceof ApiError && orgs.error.status === 409;
+    return (
+      <Card>
+        <CardContent className="space-y-3 py-8 text-center">
+          {needsSignIn ? (
+            <>
+              <div className="text-sm text-muted-foreground">
+                Connecting an Azure DevOps organization needs Microsoft credentials on
+                this session.
+              </div>
+              <Button
+                onClick={() => {
+                  window.location.href = "/auth/azure/login";
+                }}
+              >
+                Sign in with Microsoft
+              </Button>
+            </>
+          ) : (
+            <div className="text-sm text-destructive">
+              Failed to load organizations:{" "}
+              {orgs.error instanceof Error ? orgs.error.message : "unknown error"}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const organizations = orgs.data?.organizations ?? [];
+  if (organizations.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+          No Azure DevOps organizations found for this account.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-3">
+        {organizations.map((org) => (
+          <Card
+            key={org.id}
+            className={`cursor-pointer transition ${
+              connectionId && org.connectionId === connectionId ? "ring-2 ring-ring" : ""
+            }`}
+            onClick={() => {
+              if (org.connectionId) {
+                setConnectionId(org.connectionId);
+                return;
+              }
+              connect.mutate(org.name, {
+                onSuccess: (res) => setConnectionId(res.connection.id),
+              });
+            }}
+          >
+            <CardHeader>
+              <CardTitle className="text-base">{org.name}</CardTitle>
+              <CardDescription>
+                {org.connectionId ? "connected" : "click to connect"}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ))}
+      </div>
+
+      {connect.isError && (
+        <div className="text-sm text-destructive">
+          Could not connect:{" "}
+          {connect.error instanceof Error ? connect.error.message : "unknown error"}
+        </div>
+      )}
+
+      {connectionId && <AzureRepoPicker connectionId={connectionId} />}
+    </div>
+  );
+}
+
+function AzureRepoPicker({ connectionId }: { connectionId: string }) {
+  const repos = useQuery(azureRepositoriesQuery(connectionId));
+  const add = useAddAzureProject();
+  const navigate = useNavigate();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-medium">Available repositories</CardTitle>
+        <CardDescription>
+          Adding a repository also subscribes to its Azure DevOps service hooks.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {repos.isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : repos.isError ? (
+          <div className="py-8 text-center text-sm text-destructive">
+            Failed to load repositories:{" "}
+            {repos.error instanceof Error ? repos.error.message : "unknown error"}
+          </div>
+        ) : (repos.data?.repositories ?? []).length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No Git repositories in this organization.
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Project / repo</TableHead>
+                <TableHead>Default branch</TableHead>
+                <TableHead className="text-right" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(repos.data?.repositories ?? []).map((repo) => (
+                <TableRow key={repo.id}>
+                  <TableCell className="font-medium">
+                    <span className="text-muted-foreground">{repo.projectName}</span> /{" "}
+                    {repo.name}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {repo.defaultBranch ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {repo.added ? (
+                      <Badge variant="secondary">added</Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        disabled={add.isPending}
+                        onClick={() =>
+                          add.mutate(
+                            { connectionId, repositoryId: repo.id },
+                            { onSuccess: (res) => navigate(`/projects/${res.project.id}`) },
+                          )
+                        }
+                      >
+                        <Plus className="size-4" />
+                        Add
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        {add.isError && (
+          <div className="pt-3 text-sm text-destructive">
+            Could not add:{" "}
+            {add.error instanceof Error ? add.error.message : "unknown error"}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

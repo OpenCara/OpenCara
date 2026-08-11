@@ -241,6 +241,13 @@ export const projects = pgTable(
       () => azureDevopsConnections.id,
       { onDelete: "cascade" },
     ),
+    /** Azure DevOps team project GUID — required by the work item + hooks APIs. */
+    azdoProjectId: text("azdo_project_id"),
+    /** Service hook subscription ids, recorded so project removal can delete them. */
+    azdoSubscriptionIds: jsonb("azdo_subscription_ids")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     /** GitHub-only; null for Azure DevOps projects. Prefer `externalRepoId`. */
     githubRepoId: bigint("github_repo_id", { mode: "number" }),
     /**

@@ -13,6 +13,8 @@ import { currentUser, createSessionCache, type AuthEnv } from "./auth/middleware
 import { appWebhookRoutes } from "./routes/webhooks.js";
 import { authRoutes } from "./routes/auth.js";
 import { EntraOAuth } from "./azure/entra.js";
+import { azureWebhookRoutes } from "./routes/webhooksAzure.js";
+import { azureRoutes } from "./routes/api/azure.js";
 import { projectRoutes } from "./routes/api/projects.js";
 import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
@@ -236,6 +238,25 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
       entraOAuth,
     }),
   );
+  if (entraOAuth) {
+    app.route(
+      "/webhooks/azure-devops",
+      azureWebhookRoutes({ db, cipher }),
+    );
+    app.route(
+      "/api/azure",
+      azureRoutes({
+        db,
+        cipher,
+        entra: entraOAuth,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+        cookieName: config.SESSION_COOKIE_NAME,
+      }),
+    );
+    console.log(
+      "[orchestrator] Azure DevOps routes mounted (webhooks at /webhooks/azure-devops)",
+    );
+  }
   app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
   app.route("/api/activity", activityRoutes({ db }));

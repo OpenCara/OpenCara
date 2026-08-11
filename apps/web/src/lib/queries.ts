@@ -615,6 +615,73 @@ export const availableReposQuery = (installationId: string) => ({
     ),
 });
 
+// --- Azure DevOps ---------------------------------------------------------
+
+export interface AzureOrganization {
+  id: string;
+  name: string;
+  url: string;
+  /** Non-null once this org has been connected by the signed-in user. */
+  connectionId: string | null;
+}
+
+export interface AzureRepository {
+  id: string;
+  name: string;
+  projectName: string;
+  projectId: string;
+  defaultBranch: string | null;
+  webUrl: string;
+  isPrivate: boolean;
+  added: boolean;
+}
+
+export const azureOrganizationsQuery = () => ({
+  queryKey: ["azure", "organizations"] as const,
+  queryFn: () =>
+    api.get<{ organizations: AzureOrganization[] }>("/api/azure/organizations"),
+  // A 409 here means "signed in with GitHub, so no Microsoft credentials" —
+  // an expected state with a UI affordance, not a transient failure to retry.
+  retry: false,
+});
+
+export const azureRepositoriesQuery = (connectionId: string) => ({
+  queryKey: ["azure", "connections", connectionId, "repositories"] as const,
+  queryFn: () =>
+    api.get<{ repositories: AzureRepository[] }>(
+      `/api/azure/connections/${connectionId}/repositories`,
+    ),
+});
+
+export function useConnectAzureOrg() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orgName: string) =>
+      api.post<{ connection: { id: string; orgName: string } }>(
+        "/api/azure/connections",
+        { orgName },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
+export function useAddAzureProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { connectionId: string; repositoryId: string }) =>
+      api.post<{ project: { id: string } }>(
+        `/api/azure/connections/${vars.connectionId}/projects`,
+        { repositoryId: vars.repositoryId },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
 export const activityQuery = () => ({
   queryKey: ["activity"] as const,
   queryFn: () => api.get<{ activity: ActivityItem[] }>("/api/activity"),
