@@ -98,6 +98,43 @@ For the built-in flows to work end-to-end, the GitHub App needs:
 
 The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the project page (issue rows are normalized from the webhook + a one-shot REST backfill on project add) and the implement trigger (Projects v2 status changes).
 
+## Azure DevOps
+
+Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure DevOps Server (on-prem) is not.
+
+**Status.** You can sign in with Microsoft, connect an organization, add repositories as projects, and OpenCara authenticates and records their service hook deliveries. **Flow execution for Azure DevOps projects is not wired up yet** — deliveries are stored in `platform_events` and visible in the activity feed, but they do not dispatch agent runs. Boards/kanban mirroring is GitHub-only so far. Track the remaining work in ROADMAP.md.
+
+### Setup
+
+1. Register a **Microsoft Entra ID** application (portal.azure.com → Microsoft Entra ID → App registrations).
+   Entra rather than an Azure DevOps OAuth app: Microsoft stopped accepting new Azure DevOps OAuth registrations in April 2025 and is retiring that service.
+2. Add the redirect URI `<PUBLIC_BASE_URL>/auth/azure/callback`.
+3. Grant the app **Azure DevOps** delegated permissions. Request the least you need — `vso.code_write`, `vso.work_write`, `vso.threads_full` cover the built-in flows.
+4. Set `AZDO_ENTRA_CLIENT_ID`, `AZDO_ENTRA_CLIENT_SECRET`, and optionally `AZDO_ENTRA_TENANT` (`common` by default; pin your tenant GUID for a single-tenant deployment).
+5. Restart. The login page grows a "Sign in with Microsoft" button and **Add project** grows an Azure DevOps tab.
+
+`PUBLIC_BASE_URL` **must be HTTPS.** Azure DevOps refuses to create a service hook subscription with basic-auth credentials against a plaintext endpoint, so every subscription will fail on an `http://` deployment.
+
+### Credentials: how this differs from the GitHub App
+
+This is the part worth understanding before you connect a production organization.
+
+A GitHub App installation token is scoped to specific repositories, acts as a distinct bot identity, and is revoked the moment an agent run finishes. An Entra token is **user-delegated**, and none of those three things hold:
+
+- **No repository scoping.** The token carries whatever Azure DevOps permissions the app registration was granted, across every organization the connecting user can reach. An agent handed that token can reach all of it. Narrow the app registration — that is the only place this can be constrained.
+- **No revocation.** Access tokens simply expire (~1h). There is no equivalent of GitHub's token-revoke call, so a leaked token is valid until it ages out.
+- **No bot identity.** PR comments and reviewer votes are attributed to the person who connected the organization, not to `opencara[bot]`. Automated review→fix loops that filter on a bot login need to filter on that user instead.
+
+Refresh tokens are stored encrypted with `SESSION_ENCRYPTION_KEY`, the same cipher as GitHub session tokens, and agents are only ever handed a short-lived access token — never the refresh token.
+
+### Webhooks
+
+Azure DevOps does not sign webhook deliveries. Where the GitHub handler verifies an HMAC over the body, service hooks authenticate with **HTTP Basic**, and the password registered on the subscription is the entire inbound authentication. OpenCara generates a random 32-byte secret per connection, stores it encrypted, and compares it in constant time. Treat it like `GITHUB_WEBHOOK_SECRET`: anyone holding it can drive agent runs.
+
+Adding a repository creates one subscription per event type (`git.pullrequest.created`, `git.pullrequest.updated`, the PR comment event, `workitem.created`, `workitem.updated`) scoped to that repository. Removing the project deletes them by the ids recorded on the project row.
+
+Azure DevOps **auto-disables a subscription** after repeated delivery failures, silently. The webhook handler therefore answers 200 even for payloads it cannot map, so an unrecognised event variant can never tear down a working hook.
+
 ## Agent runtime credentials
 
 Each agent run dispatched through a flow gets an ephemeral GitHub App installation token injected into its environment, so `gh` and any octokit-based tool work out of the box without per-host `gh auth login`:

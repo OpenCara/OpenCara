@@ -30,7 +30,28 @@
 
 ## In Progress
 
-<!-- No items currently in progress -->
+### Azure DevOps support
+
+Landed:
+
+- [x] Platform-neutral flow node kinds (`github.*` → `scm.*`, old spellings still accepted on read) + `ScmProvider` seam
+- [x] Schema: `azure_devops_connections`, `user_identities`, per-platform project columns (migrations 0042–0044)
+- [x] Microsoft Entra sign-in
+- [x] Connect an organization, list + add repositories, create service hook subscriptions
+- [x] Authenticate and record inbound service hook deliveries
+- [x] Azure DevOps action provider (PR thread + reviewer vote, comment, labels)
+- [x] CLI `worktree create --clone-url / --auth-user`, `OPENCARA_SCM_TOKEN`
+
+Remaining before Azure DevOps flows actually run:
+
+- [ ] Let the flow engine accept non-GitHub projects (`prepareRun` currently refuses them) and thread `platform` through `NodeRunCtx`
+- [ ] Mint the Azure DevOps token and pass `--clone-url` / `--auth-user` at worktree allocation
+- [ ] Build the `OPENCARA_*` run context from Azure DevOps payloads (same variable names, plus `OPENCARA_PLATFORM`)
+- [ ] Dispatch flows from recorded Azure DevOps deliveries
+- [ ] Device capability gating (`scm.azure_devops`) — `pickIdle` ignores capabilities today, which already misroutes jobs
+- [ ] Azure DevOps variants of the agent skill prompts (they currently instruct agents to shell out to `gh`)
+- [ ] Boards / kanban parity: work item mirroring, `scm.board_item` trigger from `workitem.updated`
+- [ ] Default the review→fix reviewer filter to the connection's user (no `opencara[bot]` identity on Azure DevOps)
 
 ## Planned
 
