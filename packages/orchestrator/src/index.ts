@@ -12,6 +12,7 @@ import { TokenCipher } from "./auth/session.js";
 import { currentUser, createSessionCache, type AuthEnv } from "./auth/middleware.js";
 import { appWebhookRoutes } from "./routes/webhooks.js";
 import { authRoutes } from "./routes/auth.js";
+import { EntraOAuth } from "./azure/entra.js";
 import { projectRoutes } from "./routes/api/projects.js";
 import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
@@ -205,6 +206,22 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   });
   const cipher = new TokenCipher(config.SESSION_ENCRYPTION_KEY);
 
+  // Optional second sign-in provider. Absent config leaves /auth/azure/*
+  // unmounted and the login page GitHub-only.
+  const entraOAuth = config.azureDevops
+    ? new EntraOAuth({
+        clientId: config.azureDevops.clientId,
+        clientSecret: config.azureDevops.clientSecret,
+        tenant: config.azureDevops.tenant,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : undefined;
+  if (entraOAuth) {
+    console.log(
+      `[orchestrator] Microsoft Entra sign-in enabled (tenant: ${config.azureDevops!.tenant})`,
+    );
+  }
+
   app.route(
     "/",
     authRoutes({
@@ -216,6 +233,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
       publicBaseUrl: config.PUBLIC_BASE_URL,
       app: githubApp ?? undefined,
       sessionCache,
+      entraOAuth,
     }),
   );
   app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));

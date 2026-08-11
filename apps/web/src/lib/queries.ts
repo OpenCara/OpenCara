@@ -29,10 +29,26 @@ function serverErrorRetryDelay(attemptIndex: number, error: unknown): number {
 
 export interface User {
   id: string;
-  githubLogin: string;
+  /** Null for a user who signed in with Microsoft Entra — use `displayLogin`. */
+  githubLogin: string | null;
   name: string | null;
   avatarUrl: string | null;
   email: string | null;
+}
+
+/**
+ * Best available handle for a user, across sign-in providers. Mirrors
+ * `displayLogin` in the orchestrator's auth/session.ts — falls back through
+ * GitHub login → name → email local-part → a short id so nothing renders as
+ * "@undefined".
+ */
+export function displayLogin(user: Partial<User> | null | undefined): string {
+  if (!user) return "";
+  if (user.githubLogin) return user.githubLogin;
+  if (user.name) return user.name;
+  const local = user.email?.split("@")[0];
+  if (local) return local;
+  return user.id ? `user-${user.id.slice(-6)}` : "";
 }
 
 export interface ProjectListItem {

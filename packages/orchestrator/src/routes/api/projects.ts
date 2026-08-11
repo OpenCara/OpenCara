@@ -32,6 +32,34 @@ interface ProjectRoutesDeps {
   app?: GithubAppClient;
 }
 
+const GITHUB_ONLY_ROUTE =
+  "this endpoint is GitHub-only; the project is on a different platform";
+
+/**
+ * Narrow a project row to the GitHub-backed shape the issue-mirroring helpers
+ * in `github/issues.ts` require.
+ *
+ * `projects.installation_id` became nullable when Azure DevOps projects landed
+ * (migration 0043). Returns null for anything that isn't a GitHub project so
+ * the caller can answer 400, instead of passing a null installation id into an
+ * Octokit call and failing with something unrelated-looking.
+ */
+function requireGithubProject(project: {
+  id: string;
+  owner: string;
+  name: string;
+  platform: string;
+  installationId: string | null;
+}): { id: string; owner: string; name: string; installationId: string } | null {
+  if (project.platform !== "github" || !project.installationId) return null;
+  return {
+    id: project.id,
+    owner: project.owner,
+    name: project.name,
+    installationId: project.installationId,
+  };
+}
+
 export function projectRoutes(deps: ProjectRoutesDeps) {
   const r = new Hono<AuthEnv>();
   r.use("*", requireUser());
@@ -356,15 +384,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       );
     }
 
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const refreshed = await pushIssueBodyToGithub(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         number,
         bodyMd,
         deps.db,
@@ -463,15 +488,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       agentName = agent.name;
     }
 
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const refreshed = await setIssueAgentLabel(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         number,
         agentName,
         deps.db,
@@ -530,15 +552,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       promptName = prompt.name;
     }
 
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const refreshed = await setIssuePromptLabel(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         number,
         promptName,
         deps.db,
@@ -567,15 +586,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const user = c.get("user")!;
     const project = await loadOwnedProject(deps.db, id, user.id);
     if (!project) return c.json({ error: "project not found" }, 404);
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const stats = await backfillIssues(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         deps.db,
       );
       return c.json({ ok: true, ...stats });

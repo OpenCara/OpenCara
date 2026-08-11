@@ -317,6 +317,18 @@ export class FlowEngine {
       where: eq(projects.id, event.projectId!),
     });
     if (!project) return "missing";
+    // The run pipeline below is still GitHub-only: it resolves a GitHub App
+    // installation, mints a repo-scoped installation token, and builds PR
+    // context from GitHub webhook payloads. Azure DevOps projects get their own
+    // path when the ADO provider lands; until then refuse the run outright
+    // rather than let it fail deeper in with a confusing error.
+    if (project.platform !== "github" || !project.installationId || project.githubRepoId === null) {
+      console.warn(
+        `[flow-engine] skipping run for project ${project.id}: platform '${project.platform}' has no flow execution path yet`,
+      );
+      return "missing";
+    }
+    const githubRepoId = project.githubRepoId;
     const installation = await this.deps.db.query.githubInstallations.findFirst({
       where: eq(githubInstallations.id, project.installationId),
     });
@@ -365,7 +377,14 @@ export class FlowEngine {
     // the "run started" notify once a trigger actually matches; trigger_skips
     // never notify. The run-scoped SSE stream (/flow-runs/:id/events/stream)
     // doesn't need this notify — it loads its own initial snapshot on connect.
-    return { flowRunId, flowId, project, installation };
+    // Re-attach the two columns narrowed by the platform guard above, so every
+    // consumer of PreparedRun gets them as non-null without re-checking.
+    return {
+      flowRunId,
+      flowId,
+      project: { ...project, githubRepoId, installationId: project.installationId },
+      installation,
+    };
   }
 
   private async executeFlow(
@@ -949,7 +968,16 @@ export class FlowEngine {
 interface PreparedRun {
   flowRunId: string;
   flowId: string;
-  project: InferSelectModel<typeof projects>;
+  /**
+   * `githubRepoId` and `installationId` are nullable on the table (Azure DevOps
+   * projects leave both NULL), but `prepareRun` refuses any project that isn't
+   * GitHub-backed, so they are guaranteed present by the time a run is
+   * prepared. Encoding that here saves every downstream consumer a re-check.
+   */
+  project: Omit<InferSelectModel<typeof projects>, "githubRepoId" | "installationId"> & {
+    githubRepoId: number;
+    installationId: string;
+  };
   installation: InferSelectModel<typeof githubInstallations>;
 }
 

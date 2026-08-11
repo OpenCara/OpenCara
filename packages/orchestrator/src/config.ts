@@ -76,6 +76,22 @@ const AppGithubSchema = z
     }
   });
 
+/**
+ * Microsoft Entra ID app registration used for Azure DevOps.
+ *
+ * Entra rather than an Azure DevOps OAuth app: Microsoft stopped accepting new
+ * Azure DevOps OAuth registrations in April 2025 and is retiring the service
+ * through 2026. Entra tokens are accepted everywhere Azure DevOps OAuth tokens
+ * were, so this is the only forward-compatible option.
+ */
+const AzureDevopsSchema = z.object({
+  AZDO_ENTRA_CLIENT_ID: z.string().min(1),
+  AZDO_ENTRA_CLIENT_SECRET: z.string().min(1),
+  // "common" (any tenant + personal accounts), "organizations", or a specific
+  // tenant GUID. Single-tenant deployments should pin their tenant id.
+  AZDO_ENTRA_TENANT: z.string().min(1).default("common"),
+});
+
 export interface AppConfig {
   PORT: number;
   DATABASE_URL: string;
@@ -91,6 +107,14 @@ export interface AppConfig {
         clientId: string;
         clientSecret: string;
         privateKeyPem: string;
+      }
+    | null;
+  /** Null when AZDO_ENTRA_* is unset — Azure DevOps routes stay unmounted. */
+  azureDevops:
+    | {
+        clientId: string;
+        clientSecret: string;
+        tenant: string;
       }
     | null;
 }
@@ -140,5 +164,27 @@ export function loadConfig(): AppConfig {
     };
   }
 
-  return { ...base, github };
+  // Same fail-loud-if-partial stance as the GitHub block: setting one AZDO_*
+  // var and forgetting the rest should be a boot error, not a silently
+  // half-configured Azure DevOps integration that 500s on first use.
+  const hasAnyAzdo =
+    !!process.env["AZDO_ENTRA_CLIENT_ID"] ||
+    !!process.env["AZDO_ENTRA_CLIENT_SECRET"] ||
+    !!process.env["AZDO_ENTRA_TENANT"];
+
+  let azureDevops: AppConfig["azureDevops"] = null;
+  if (hasAnyAzdo) {
+    const azdoCfg = AzureDevopsSchema.parse({
+      AZDO_ENTRA_CLIENT_ID: process.env["AZDO_ENTRA_CLIENT_ID"],
+      AZDO_ENTRA_CLIENT_SECRET: process.env["AZDO_ENTRA_CLIENT_SECRET"],
+      AZDO_ENTRA_TENANT: process.env["AZDO_ENTRA_TENANT"],
+    });
+    azureDevops = {
+      clientId: azdoCfg.AZDO_ENTRA_CLIENT_ID,
+      clientSecret: azdoCfg.AZDO_ENTRA_CLIENT_SECRET,
+      tenant: azdoCfg.AZDO_ENTRA_TENANT,
+    };
+  }
+
+  return { ...base, github, azureDevops };
 }

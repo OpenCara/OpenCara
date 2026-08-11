@@ -27,6 +27,7 @@ import {
   agentsQuery,
   devicesQuery,
   promptsQuery,
+  displayLogin,
 } from "@/lib/queries";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -243,14 +244,18 @@ export function AppShell() {
               <Avatar className="size-8 cursor-pointer">
                 <AvatarImage src={user?.avatarUrl ?? undefined} />
                 <AvatarFallback>
-                  {user?.githubLogin?.[0]?.toUpperCase() ?? "?"}
+                  {displayLogin(user)[0]?.toUpperCase() ?? "?"}
                 </AvatarFallback>
               </Avatar>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <div className="px-2 py-1.5 text-sm">
-                <div className="font-medium">{user?.name ?? user?.githubLogin}</div>
-                <div className="text-xs text-muted-foreground">@{user?.githubLogin}</div>
+                <div className="font-medium">{user?.name ?? displayLogin(user)}</div>
+                {/* An Entra user has no GitHub handle; the @-prefixed line is
+                    only meaningful when there is one to show. */}
+                {user?.githubLogin && (
+                  <div className="text-xs text-muted-foreground">@{user.githubLogin}</div>
+                )}
               </div>
               <DropdownMenuSeparator />
               <DropdownMenuItem

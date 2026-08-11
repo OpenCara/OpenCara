@@ -7,10 +7,18 @@ import type { Db } from "../db/client.js";
 import { githubInstallations } from "../db/schema.js";
 import type { GithubOAuth } from "../github/oauth.js";
 import type { GithubAppClient } from "../github/app.js";
-import { upsertUser, createSession, destroySession, type TokenCipher } from "../auth/session.js";
+import {
+  upsertUser,
+  upsertUserByIdentity,
+  createSession,
+  createEntraSession,
+  destroySession,
+  type TokenCipher,
+} from "../auth/session.js";
 import type { AuthEnv } from "../auth/middleware.js";
 import type { SessionCache } from "../auth/sessionCache.js";
 import { upsertInstallation } from "../github/installations.js";
+import { parseIdTokenClaims, type EntraOAuth } from "../azure/entra.js";
 
 interface AuthRouteDeps {
   db: Db;
@@ -21,9 +29,14 @@ interface AuthRouteDeps {
   publicBaseUrl: string;
   app?: GithubAppClient;
   sessionCache?: SessionCache;
+  /** Present only when AZDO_ENTRA_* is configured. */
+  entraOAuth?: EntraOAuth;
 }
 
 const STATE_COOKIE = "ocara_oauth_state";
+// Separate from STATE_COOKIE so two sign-ins started in different tabs (one
+// GitHub, one Entra) don't overwrite each other's CSRF state.
+const ENTRA_STATE_COOKIE = "ocara_entra_oauth_state";
 const STATE_TTL_SEC = 60 * 5;
 const REDIRECT_AFTER_LOGIN = "/";
 
@@ -131,6 +144,79 @@ export function authRoutes(deps: AuthRouteDeps) {
     return c.redirect("/projects/new");
   });
 
+  // ---------------------------------------------------------------------
+  // Microsoft Entra ID — sign-in for Azure DevOps users
+  // ---------------------------------------------------------------------
+  // Mounted only when AZDO_ENTRA_* is configured; without it the login page
+  // shows GitHub alone. Uses its own state cookie so an in-flight GitHub
+  // login and an in-flight Entra login can't clobber each other's CSRF token.
+  if (deps.entraOAuth) {
+    const entra = deps.entraOAuth;
+
+    r.get("/auth/azure/login", (c) => {
+      const state = randomBytes(16).toString("base64url");
+      setCookie(c, ENTRA_STATE_COOKIE, state, {
+        httpOnly: true,
+        secure: deps.publicBaseUrl.startsWith("https://"),
+        sameSite: "Lax",
+        path: "/",
+        maxAge: STATE_TTL_SEC,
+      });
+      return c.redirect(entra.buildAuthorizeUrl(state));
+    });
+
+    r.get("/auth/azure/callback", async (c) => {
+      const code = c.req.query("code");
+      const state = c.req.query("state");
+      const cookieState = getCookie(c, ENTRA_STATE_COOKIE);
+      deleteCookie(c, ENTRA_STATE_COOKIE, { path: "/" });
+
+      if (!code || !state || !cookieState || cookieState !== state) {
+        return c.redirect("/login?error=oauth_state_mismatch");
+      }
+
+      try {
+        const tokens = await entra.exchangeCode(code);
+        if (!tokens.idToken) {
+          // Without an id token there is no verified identity to key the
+          // account on. Treat as a failed sign-in rather than inventing one
+          // from the access token.
+          console.error("[auth] entra callback returned no id_token");
+          return c.redirect("/login?error=oauth_failed");
+        }
+        const profile = parseIdTokenClaims(tokens.idToken);
+        const user = await upsertUserByIdentity(deps.db, {
+          provider: "entra",
+          externalId: profile.objectId,
+          login: profile.login,
+          name: profile.name,
+          email: profile.email,
+          // Entra exposes a photo only via a separate Graph call that needs
+          // its own permission; not worth a round-trip on every sign-in.
+          avatarUrl: null,
+        });
+        const { sessionId, expiresAt } = await createEntraSession(
+          deps.db,
+          deps.cipher,
+          user.id,
+          tokens,
+          deps.ttlDays,
+        );
+        setCookie(c, deps.cookieName, sessionId, {
+          httpOnly: true,
+          secure: deps.publicBaseUrl.startsWith("https://"),
+          sameSite: "Lax",
+          path: "/",
+          expires: expiresAt,
+        });
+        return c.redirect(REDIRECT_AFTER_LOGIN);
+      } catch (err) {
+        console.error("[auth] entra callback error", err);
+        return c.redirect("/login?error=oauth_failed");
+      }
+    });
+  }
+
   r.post("/auth/logout", async (c) => {
     const sid = getCookie(c, deps.cookieName);
     if (sid) {
@@ -148,6 +234,13 @@ export function authRoutes(deps: AuthRouteDeps) {
     if (!user) return c.json({ error: "unauthenticated" }, 401);
     return c.json({ user });
   });
+
+  // Which sign-in buttons the login page should render. Unauthenticated by
+  // design — it leaks only which providers this deployment has configured,
+  // which the login page reveals anyway.
+  r.get("/api/auth/providers", (c) =>
+    c.json({ providers: { github: true, entra: !!deps.entraOAuth } }),
+  );
 
   // Helper: throwaway log for an unused identifier so the bundler keeps imports.
   void githubInstallations;

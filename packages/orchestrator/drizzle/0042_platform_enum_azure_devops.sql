@@ -1,0 +1,25 @@
+-- Add 'azure_devops' to the `platform` enum, ahead of the Azure DevOps
+-- connection tables in 0043.
+--
+-- ## Why 0043 must not write the literal 'azure_devops'
+--
+-- Postgres refuses to use a newly added enum value in the same TRANSACTION that
+-- added it:
+--
+--   ERROR: unsafe use of new value "azure_devops" of enum type platform
+--
+-- Splitting the ADD VALUE into its own migration FILE does not avoid this:
+-- drizzle's migrator runs every pending migration inside ONE transaction, so on
+-- the deploy where 0042 and 0043 are both pending they share it.
+--
+-- Worse, this does not reproduce on a fresh database. Postgres makes an
+-- exception when the enum type was CREATED in the same transaction — which is
+-- exactly what happens when 0000 onwards replay from scratch. So a from-scratch
+-- migration test PASSES while the production upgrade FAILS. Verified both ways
+-- against postgres:17 on 2026-08-11.
+--
+-- The workaround, used by the CHECK constraint in 0043: compare
+-- `platform::text = 'azure_devops'` instead of the bare enum literal. Casting to
+-- text never materialises the new enum value, so the safety check does not fire.
+-- Migrations added AFTER this pair has shipped can use the literal freely.
+ALTER TYPE "platform" ADD VALUE IF NOT EXISTS 'azure_devops';
