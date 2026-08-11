@@ -55,6 +55,7 @@ import {
   FLOW_RUNS_CHANNEL,
   parseFlowRunsNotify,
 } from "../../flows/notify.js";
+import { normalizeNodeKind } from "@opencara/flows";
 
 interface KanbanRoutesDeps {
   db: Db;
@@ -311,18 +312,22 @@ export function labelForImplementStatus(
   // step so this maps to "Implementing…" today; the other branches are here
   // so future multi-step implement flows light up the UI without server
   // changes on this side.
-  switch (runningNodeKind) {
+  //
+  // `runningNodeKind` is a PERSISTED string off `flow_run_steps.node_kind`, so
+  // rows written before the `github.*` → `scm.*` rename still carry the old
+  // spelling. Normalizing means one case arm per kind instead of two.
+  switch (runningNodeKind === null ? null : normalizeNodeKind(runningNodeKind)) {
     case "agent":
       return "Implementing…";
     case "git.create_pr":
       return "Creating PR…";
     case "git.create_worktree":
       return "Preparing worktree…";
-    case "github.post_review":
+    case "scm.post_review":
       return "Posting review…";
-    case "github.add_comment":
+    case "scm.add_comment":
       return "Commenting…";
-    case "github.add_label":
+    case "scm.add_label":
       return "Labelling…";
     default:
       return runningNodeKind ? "Working…" : "Starting…";

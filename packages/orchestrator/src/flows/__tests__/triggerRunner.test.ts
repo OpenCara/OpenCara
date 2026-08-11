@@ -5,7 +5,7 @@ import { SkipFlowError, triggerRunner, type NodeRunCtx } from "../nodeRunners.js
 
 const pullRequestTrigger: TriggerNode = {
   id: "t1",
-  kind: "github.pull_request",
+  kind: "scm.pull_request",
   position: { x: 0, y: 0 },
   config: {
     actions: ["opened", "synchronize", "reopened", "commented"],
@@ -85,7 +85,7 @@ describe("triggerRunner pull_request commentPhrase", () => {
 // the missing remote ref. The trigger must skip closed PRs cleanly.
 const reviewTrigger: TriggerNode = {
   id: "t-review",
-  kind: "github.pull_request_review",
+  kind: "scm.pull_request_review",
   position: { x: 0, y: 0 },
   config: {
     reviewStates: ["commented", "changes_requested"],

@@ -13,7 +13,7 @@ const twoTriggerFlow: FlowDefinition = {
   nodes: [
     {
       id: "tA",
-      kind: "github.projects_v2_item",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,
@@ -35,7 +35,7 @@ const twoTriggerFlow: FlowDefinition = {
     },
     {
       id: "tB",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 200 },
       config: {
         actions: ["opened"],

@@ -4,6 +4,7 @@ import {
   FlowDefinitionSchema,
   builtinFlows,
   isTriggerKind,
+  normalizeGraphKinds,
   developmentLifecycleFlow,
 } from "@opencara/flows";
 
@@ -14,7 +15,7 @@ const baseFlow = {
   nodes: [
     {
       id: "t1",
-      kind: "github.projects_v2_item",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,
@@ -125,10 +126,10 @@ describe("unified development-lifecycle built-in flow", () => {
     const triggers = developmentLifecycleFlow.nodes.filter((n) => isTriggerKind(n.kind));
     const kinds = triggers.map((t) => t.kind).sort();
     assert.deepEqual(kinds, [
-      "github.projects_v2_item",
-      "github.pull_request",
-      "github.pull_request",
-      "github.pull_request_review",
+      "scm.board_item",
+      "scm.pull_request",
+      "scm.pull_request",
+      "scm.pull_request_review",
     ]);
   });
 
@@ -136,7 +137,7 @@ describe("unified development-lifecycle built-in flow", () => {
     const byId = (id: string) => developmentLifecycleFlow.nodes.find((n) => n.id === id);
     const multi = byId("review_trigger");
     const single = byId("single_review_trigger");
-    assert.ok(multi?.kind === "github.pull_request" && single?.kind === "github.pull_request");
+    assert.ok(multi?.kind === "scm.pull_request" && single?.kind === "scm.pull_request");
     // Multi: open/reopen (NOT synchronize) + "@opencara mreview".
     assert.equal(multi.config.actions.includes("synchronize" as never), false);
     assert.deepEqual([...multi.config.actions].sort(), ["commented", "opened", "reopened"]);
@@ -227,5 +228,103 @@ describe("schedule.cron trigger node", () => {
     assert.equal(node.config.cron, "0 9 * * *");
     assert.equal(node.config.timezone, "UTC");
     assert.equal(node.config.enabled, true);
+  });
+});
+
+// Every `flows.graph_json` / `template_drafts.graph_json` row in production was
+// written before node kinds were renamed `github.*` → `scm.*` for multi-platform
+// support. Nothing rewrites those rows, so the schema MUST keep accepting the old
+// spelling and canonicalize it on read — otherwise every existing project flow
+// fails to parse on the deploy that ships the rename.
+describe("legacy github.* node kinds", () => {
+  const legacyFlow = {
+    slug: "legacy-flow",
+    name: "Legacy Flow",
+    description: "Graph as stored before the scm.* rename",
+    nodes: [
+      {
+        id: "t1",
+        kind: "github.pull_request",
+        position: { x: 0, y: 0 },
+        config: { actions: ["opened"] },
+      },
+      {
+        id: "a1",
+        kind: "agent",
+        position: { x: 320, y: 0 },
+        config: { label: "Reviewer", contextInjection: { env: [], stdinJson: true } },
+      },
+      {
+        id: "x1",
+        kind: "github.post_review",
+        position: { x: 640, y: 0 },
+        config: { event: "COMMENT" },
+      },
+    ],
+    edges: [
+      { id: "e1", source: "t1", target: "a1" },
+      { id: "e2", source: "a1", target: "x1" },
+    ],
+  };
+
+  it("parses a stored pre-rename graph", () => {
+    assert.doesNotThrow(() => FlowDefinitionSchema.parse(legacyFlow));
+  });
+
+  it("canonicalizes legacy kinds to their scm.* spelling on parse", () => {
+    const parsed = FlowDefinitionSchema.parse(legacyFlow);
+    assert.deepEqual(
+      parsed.nodes.map((n) => n.kind),
+      ["scm.pull_request", "agent", "scm.post_review"],
+    );
+  });
+
+  it("preserves config through normalization", () => {
+    const parsed = FlowDefinitionSchema.parse(legacyFlow);
+    const action = parsed.nodes.find((n) => n.kind === "scm.post_review");
+    assert.ok(action && action.kind === "scm.post_review");
+    assert.equal(action.config.event, "COMMENT");
+  });
+
+  it("maps the projects_v2_item trigger onto the neutral board trigger", () => {
+    const parsed = FlowDefinitionSchema.parse({
+      ...legacyFlow,
+      nodes: [
+        { ...legacyFlow.nodes[0], kind: "github.projects_v2_item", config: {} },
+        legacyFlow.nodes[1],
+        legacyFlow.nodes[2],
+      ],
+    });
+    const trigger = parsed.nodes.find((n) => n.kind === "scm.board_item");
+    assert.ok(trigger && trigger.kind === "scm.board_item");
+    // Defaults still apply after the kind rewrite.
+    assert.equal(trigger.config.fieldName, "Status");
+  });
+
+  it("classifies both spellings as trigger kinds", () => {
+    for (const kind of [
+      "github.pull_request",
+      "github.pull_request_review",
+      "github.projects_v2_item",
+      "scm.pull_request",
+      "scm.pull_request_review",
+      "scm.board_item",
+      "schedule.cron",
+    ]) {
+      assert.equal(isTriggerKind(kind), true, kind);
+    }
+    assert.equal(isTriggerKind("agent"), false);
+    assert.equal(isTriggerKind("scm.post_review"), false);
+  });
+
+  it("normalizeGraphKinds rewrites a raw graph in place", () => {
+    const raw = {
+      nodes: [{ kind: "github.add_label" }, { kind: "agent" }, { kind: "scm.add_comment" }],
+    };
+    normalizeGraphKinds(raw);
+    assert.deepEqual(
+      raw.nodes.map((n) => n.kind),
+      ["scm.add_label", "agent", "scm.add_comment"],
+    );
   });
 });

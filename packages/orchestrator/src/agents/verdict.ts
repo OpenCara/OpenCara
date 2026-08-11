@@ -1,5 +1,5 @@
 // Reviewer-agent verdict contract: when an agent's output flows into a
-// `github.post_review` action node, the orchestrator injects a skill
+// `scm.post_review` action node, the orchestrator injects a skill
 // envelope (see flows/skills/prReviewVerdict.ts) that asks the agent
 // to emit a single line of the form:
 //
@@ -79,7 +79,7 @@ export function parseReviewVerdict(body: string): ParsedReviewVerdict | null {
 //   - `buildPullRequestContext` overrides OPENCARA_REVIEW_STATE so the
 //     pr-review-fix agent sees "changes_requested" even when the actual
 //     posted review was downgraded to COMMENT (see self-review fallback
-//     in flows/nodeRunners.ts `github.post_review`).
+//     in flows/nodeRunners.ts `scm.post_review`).
 //   - `pullRequestReviewTrigger` uses the resolved state for its
 //     `reviewStates` gate, so operators filter on intent rather than on
 //     GitHub's badge.

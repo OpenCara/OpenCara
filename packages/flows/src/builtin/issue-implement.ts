@@ -8,7 +8,7 @@ export const issueImplementFlow: FlowDefinition = {
   nodes: [
     {
       id: "t1",
-      kind: "github.projects_v2_item",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,

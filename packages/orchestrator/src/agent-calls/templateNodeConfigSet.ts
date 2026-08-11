@@ -3,6 +3,7 @@ import { ulid } from "ulid";
 import {
   builtinFlows,
   FlowDefinitionSchema,
+  normalizeGraphKinds,
   type FlowDefinition,
 } from "@opencara/flows";
 import type { TemplateNodeConfigSetCall } from "@opencara/shared";
@@ -82,7 +83,8 @@ async function currentGraph(
     ),
   });
   if (draft) {
-    return JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
+    // Canonicalize legacy `github.*` kinds — see normalizeGraphKinds.
+    return normalizeGraphKinds(JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph);
   }
   return codeGraph(def);
 }

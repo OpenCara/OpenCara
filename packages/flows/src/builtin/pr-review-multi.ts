@@ -18,7 +18,7 @@ export const prReviewMultiFlow: FlowDefinition = {
   nodes: [
     {
       id: "trigger",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 160 },
       config: {
         actions: ["opened", "synchronize", "reopened", "commented"],
@@ -83,7 +83,7 @@ export const prReviewMultiFlow: FlowDefinition = {
     },
     {
       id: "post",
-      kind: "github.post_review",
+      kind: "scm.post_review",
       position: { x: 840, y: 160 },
       config: { event: "COMMENT" },
     },

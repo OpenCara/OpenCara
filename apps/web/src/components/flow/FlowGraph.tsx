@@ -90,7 +90,7 @@ export function FlowGraph({
         // its single-review component).
         const trigger = nodes.find(
           (n) =>
-            n.kind === "github.pull_request" &&
+            n.kind === "scm.pull_request" &&
             edges.some((e) => e.source === n.id && rc.reviewerIds.has(e.target)),
         );
         // Sit just to the RIGHT of the "Pull request" trigger node, at its
@@ -159,29 +159,29 @@ function mapNode(
 
 function nodeTypeFor(kind: string): string {
   if (kind === "agent") return "agent";
-  if (kind === "github.post_review") return "postReview";
-  if (kind === "github.add_comment") return "addComment";
-  if (kind === "github.add_label") return "addLabel";
+  if (kind === "scm.post_review") return "postReview";
+  if (kind === "scm.add_comment") return "addComment";
+  if (kind === "scm.add_label") return "addLabel";
   return "trigger";
 }
 
 function pickLabel(n: FlowGraphNode): string {
   switch (n.kind) {
-    case "github.pull_request":
+    case "scm.pull_request":
       return "Pull request";
-    case "github.pull_request_review":
+    case "scm.pull_request_review":
       return "PR review submitted";
-    case "github.projects_v2_item":
+    case "scm.board_item":
       return "Project status change";
     case "schedule.cron":
       return n.config?.name ?? "Schedule";
     case "agent":
       return n.config?.label ?? "Agent";
-    case "github.post_review":
+    case "scm.post_review":
       return "Post PR review";
-    case "github.add_comment":
+    case "scm.add_comment":
       return "Add comment";
-    case "github.add_label":
+    case "scm.add_label":
       return "Add label";
     default:
       return n.kind;
@@ -190,11 +190,11 @@ function pickLabel(n: FlowGraphNode): string {
 
 function pickSubtitle(n: FlowGraphNode): string | undefined {
   switch (n.kind) {
-    case "github.pull_request":
+    case "scm.pull_request":
       return "trigger";
-    case "github.pull_request_review":
+    case "scm.pull_request_review":
       return "trigger";
-    case "github.projects_v2_item": {
+    case "scm.board_item": {
       // Compose `Status: Backlog → Ready` from from/to options. * for empty.
       const field = n.config?.fieldName ?? "Status";
       const fromList = n.config?.fromOptions ?? [];
@@ -213,9 +213,9 @@ function pickSubtitle(n: FlowGraphNode): string | undefined {
       // template instead of the (rarely-set) spec.command — the
       // branch is the more useful at-a-glance summary.
       return n.config?.worktree?.branchName ?? n.config?.spec?.command ?? undefined;
-    case "github.post_review":
+    case "scm.post_review":
       return n.config?.event;
-    case "github.add_label":
+    case "scm.add_label":
       return n.config?.labels?.join(", ");
     default:
       return undefined;

@@ -12,15 +12,15 @@ import {
 // and `kind`, so the configs can be empty for this test.
 const projectsTrigger = {
   id: "implement_trigger",
-  kind: "github.projects_v2_item",
+  kind: "scm.board_item",
 } as unknown as FlowNode;
 const prTrigger = {
   id: "review_trigger",
-  kind: "github.pull_request",
+  kind: "scm.pull_request",
 } as unknown as FlowNode;
 const reviewTrigger = {
   id: "fix_trigger",
-  kind: "github.pull_request_review",
+  kind: "scm.pull_request_review",
 } as unknown as FlowNode;
 const allTriggers = [projectsTrigger, prTrigger, reviewTrigger];
 

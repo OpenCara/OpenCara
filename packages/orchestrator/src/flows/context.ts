@@ -201,7 +201,7 @@ export async function buildPullRequestContext(
   }
   // When the review body carries a `verdict: <token>` contract line, prefer
   // the verdict's intended state over GitHub's raw `review.state`. The
-  // mismatch shows up for reviews posted by `github.post_review` against a
+  // mismatch shows up for reviews posted by `scm.post_review` against a
   // PR opened by the same App identity: GitHub forbids APPROVE /
   // REQUEST_CHANGES on a self-PR (422), so post_review falls back to a
   // COMMENT-typed review and leaves the verdict line in the body. Without

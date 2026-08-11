@@ -85,7 +85,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // ── Stage 1: issue → implement ──────────────────────────────────
     {
       id: "implement_trigger",
-      kind: "github.projects_v2_item",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,
@@ -130,7 +130,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // intentionally NOT in this trigger's actions.
     {
       id: "review_trigger",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 620 },
       config: {
         actions: ["opened", "reopened", "commented"],
@@ -191,7 +191,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     },
     {
       id: "post_review",
-      kind: "github.post_review",
+      kind: "scm.post_review",
       position: { x: 960, y: 620 },
       config: { event: "COMMENT" },
     },
@@ -199,7 +199,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // ── Stage 3: review submitted → fix (+ auto-merge) ──────────────
     {
       id: "fix_trigger",
-      kind: "github.pull_request_review",
+      kind: "scm.pull_request_review",
       position: { x: 0, y: 360 },
       config: {
         reviewStates: ["commented", "changes_requested"],
@@ -264,7 +264,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // review — or on demand via the `@opencara review` comment.
     {
       id: "single_review_trigger",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 200 },
       config: {
         actions: ["synchronize", "commented"],
@@ -290,7 +290,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     },
     {
       id: "single_post_review",
-      kind: "github.post_review",
+      kind: "scm.post_review",
       position: { x: 640, y: 200 },
       config: { event: "COMMENT" },
     },

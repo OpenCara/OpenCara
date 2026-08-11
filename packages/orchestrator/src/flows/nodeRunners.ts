@@ -34,7 +34,7 @@ import { buildIssueImplementContractSkill } from "./skills/issueImplementContrac
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
-import { isSelfReviewError } from "../github/errors.js";
+import { providerFor } from "../scm/registry.js";
 import type { AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
@@ -76,7 +76,7 @@ export interface NodeRunCtx {
   previousOutput?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
-  /** True when this node's downstream graph contains a `github.post_review`
+  /** True when this node's downstream graph contains a `scm.post_review`
    *  action node. The agent runner uses this to auto-inject the verdict-line
    *  contract skill so the post-review parser can populate the GitHub
    *  review's `event` enum from the agent body. Computed by the engine via
@@ -125,13 +125,13 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (ctx.event.type === "schedule") {
     throw new SkipFlowError("not a schedule trigger");
   }
-  if (node.kind === "github.projects_v2_item") {
+  if (node.kind === "scm.board_item") {
     return projectsV2ItemTrigger(ctx, node);
   }
-  if (node.kind === "github.pull_request_review") {
+  if (node.kind === "scm.pull_request_review") {
     return pullRequestReviewTrigger(ctx, node);
   }
-  if (node.kind !== "github.pull_request") {
+  if (node.kind !== "scm.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${(node as { kind: string }).kind}`);
   }
   const cfg = node.config;
@@ -256,7 +256,7 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
 // we skip the option-name filters rather than blocking. projectNumber is not
 // yet enforced because the webhook only carries `project_node_id`; resolving
 // to a number would need GraphQL and isn't worth the complexity for MVP.
-// Match a github.pull_request_review event. Only fires on
+// Match a scm.pull_request_review event. Only fires on
 // `submitted` reviews (the "Submit review" button click); `edited` /
 // `dismissed` aren't useful wake-up signals for the review-fix loop
 // and would surprise operators by re-running the agent on a
@@ -265,7 +265,7 @@ async function pullRequestReviewTrigger(
   ctx: NodeRunCtx,
   node: TriggerNode,
 ): Promise<NodeRunResult> {
-  if (node.kind !== "github.pull_request_review") {
+  if (node.kind !== "scm.pull_request_review") {
     throw new SkipFlowError(`expected pull_request_review trigger, got ${node.kind}`);
   }
 
@@ -372,7 +372,7 @@ async function projectsV2ItemTrigger(
   ctx: NodeRunCtx,
   node: TriggerNode,
 ): Promise<NodeRunResult> {
-  if (node.kind !== "github.projects_v2_item") {
+  if (node.kind !== "scm.board_item") {
     throw new SkipFlowError(`expected projects_v2_item trigger, got ${node.kind}`);
   }
   if (ctx.event.type !== "projects_v2_item") {
@@ -900,7 +900,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     });
   }
   // Auto-injected when this agent's downstream graph contains a
-  // `github.post_review` node. Mandates the `verdict: <token>` first-line
+  // `scm.post_review` node. Mandates the `verdict: <token>` first-line
   // contract that the post-review parser reads to populate GitHub's
   // review `event` enum. Active for both standalone reviewers
   // (pr-review) and every agent in fan-in chains (pr-review-multi
@@ -1438,9 +1438,18 @@ async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null>
 export const MIN_UNVERDICTED_REVIEW_BODY_CHARS = 200;
 
 export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
-  const oct = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
-  const owner = ctx.project.owner;
-  const repo = ctx.project.name;
+  // All platform traffic goes through the provider seam (scm/registry.ts) so
+  // this runner stays platform-blind. `platform` is pinned to "github" until
+  // the projects table carries the column — at which point this reads
+  // `ctx.project.platform` and Azure DevOps projects route to their own
+  // implementation with no change here.
+  const provider = await providerFor(
+    { platform: "github", owner: ctx.project.owner, name: ctx.project.name },
+    {
+      app: ctx.app,
+      githubInstallationId: ctx.installation.githubInstallationId,
+    },
+  );
   const prPayload = ctx.event.payload as {
     pull_request?: { number: number; head: { sha: string } };
     issue?: { number: number };
@@ -1464,7 +1473,7 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
   };
 
   switch (node.kind) {
-    case "github.post_review": {
+    case "scm.post_review": {
       // PR object resolution: the lifecycle / pull_request_review webhooks
       // carry `pull_request` inline on the event payload, but the comment
       // path (issue_comment on a PR) doesn't — the orchestrator fetches
@@ -1504,92 +1513,36 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       }
       const event = parsed?.verdict ?? node.config.event;
       const reviewBody = parsed?.bodyWithoutVerdict ?? body;
-      type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
-      const postReview = (postEvent: ReviewEvent, postBody: string) =>
-        oct.request(
-          "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-          {
-            owner,
-            repo,
-            pull_number: pr.number,
-            body: postBody || "_(no review body)_",
-            event: postEvent,
-            commit_id: pr.head.sha,
-          },
-        );
-
-      let res;
-      let downgradedFrom: string | null = null;
-      try {
-        res = await postReview(event, reviewBody);
-      } catch (err) {
-        // GitHub forbids APPROVE / REQUEST_CHANGES on a PR opened by the
-        // same identity (HTTP 422). When the App installation backing
-        // post_review also opened the PR — common in single-account
-        // setups where opencara is both the implementer and the
-        // reviewer — fall back to a COMMENT-typed review and embed the
-        // original verdict line in the body so downstream pr-review-fix
-        // can still read intent (see flows/context.ts
-        // resolveReviewStateFromBody).
-        if (!isSelfReviewError(err, event)) throw err;
-        const verdictLabel =
-          event === "REQUEST_CHANGES" ? "Request changes" : "Approve";
-        const verdictToken =
-          event === "REQUEST_CHANGES" ? "request_changes" : "approve";
-        const downgradedBody = [
-          `_Downgraded to "Commented" — GitHub forbids "${verdictLabel}" on a PR you opened. Verdict preserved below for review-fix flows._`,
-          "",
-          `verdict: ${verdictToken}`,
-          "",
-          reviewBody,
-        ]
-          .join("\n")
-          .trim();
-        try {
-          res = await postReview("COMMENT", downgradedBody);
-        } catch (retryErr) {
-          // Surface both errors so operators don't lose the original
-          // 422 context when the retry fails for an unrelated reason
-          // (transient 5xx, PR closed mid-run, etc.).
-          throw new Error(
-            `post_review fallback to COMMENT failed after ${event} self-review 422: ${String(
-              (retryErr as Error).message ?? retryErr,
-            )} (original error: ${String((err as Error).message ?? err)})`,
-            { cause: retryErr },
-          );
-        }
-        downgradedFrom = event;
-        console.warn(
-          `[post_review] self-review on ${owner}/${repo}#${pr.number} downgraded ${event} -> COMMENT`,
-        );
-      }
+      // The self-review downgrade that used to live here is now the GitHub
+      // provider's concern (scm/github/provider.ts) — it is a quirk of
+      // GitHub's review API, not flow-engine logic. `downgradedFrom` comes
+      // back on the result when it fires.
+      const res = await provider.postReview(
+        { number: pr.number, headSha: pr.head.sha },
+        event,
+        reviewBody,
+      );
       return {
         output: {
-          reviewId: res.data.id,
-          htmlUrl: res.data.html_url,
-          ...(downgradedFrom ? { downgradedFrom } : {}),
+          reviewId: res.reviewId,
+          htmlUrl: res.htmlUrl,
+          ...(res.downgradedFrom ? { downgradedFrom: res.downgradedFrom } : {}),
         },
       };
     }
-    case "github.add_comment": {
-      const res = await oct.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        {
-          owner,
-          repo,
-          issue_number: requireIssueNumber("add_comment"),
-          body: body || "_(no body)_",
-        },
+    case "scm.add_comment": {
+      const res = await provider.addComment(
+        requireIssueNumber("add_comment"),
+        body,
       );
-      return { output: { commentId: res.data.id, htmlUrl: res.data.html_url } };
+      return { output: { commentId: res.commentId, htmlUrl: res.htmlUrl } };
     }
-    case "github.add_label": {
-      const labels = node.config.labels;
-      const res = await oct.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
-        { owner, repo, issue_number: requireIssueNumber("add_label"), labels },
+    case "scm.add_label": {
+      const res = await provider.addLabel(
+        requireIssueNumber("add_label"),
+        node.config.labels,
       );
-      return { output: { labels: res.data.map((l) => l.name) } };
+      return { output: { labels: res.labels } };
     }
   }
 };

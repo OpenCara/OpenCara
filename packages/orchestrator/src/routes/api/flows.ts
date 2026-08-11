@@ -12,7 +12,7 @@ import {
   flows,
   platformEvents,
 } from "../../db/schema.js";
-import { FlowDefinitionSchema } from "@opencara/flows";
+import { FlowDefinitionSchema, normalizeGraphKinds } from "@opencara/flows";
 import {
   validateCron,
   nextCronOccurrences,
@@ -235,7 +235,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const triggerEdge = graph.edges.find((e) => e.target === template.id);
     const trigger = triggerEdge
       ? graph.nodes.find(
-          (n) => n.id === triggerEdge.source && n.kind === "github.pull_request",
+          (n) => n.id === triggerEdge.source && n.kind === "scm.pull_request",
         )
       : undefined;
     if (!trigger) {
@@ -967,7 +967,12 @@ function parseGraph(raw: unknown): MutableGraph | null {
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return null;
   // Defensive deep clone so callers mutate a fresh object — avoids accidentally
   // mutating drizzle's cached row reference.
-  return JSON.parse(JSON.stringify(g)) as MutableGraph;
+  const cloned = JSON.parse(JSON.stringify(g)) as MutableGraph;
+  // This helper deliberately skips FlowDefinitionSchema (it must tolerate
+  // graphs that no longer validate), so it also misses the schema's
+  // `github.*` → `scm.*` normalization. Apply it explicitly: these graphs go
+  // straight to the web canvas and to node-kind comparisons below.
+  return normalizeGraphKinds(cloned);
 }
 
 function clampLimit(v: string | undefined): number {

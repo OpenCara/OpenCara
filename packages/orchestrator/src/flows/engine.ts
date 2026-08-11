@@ -839,7 +839,7 @@ export class FlowEngine {
     const { node, idx, previousOutput } = job;
 
     // Reviewer-agent verdict contract: when this node's outputs flow
-    // (transitively) into a `github.post_review` action, the agent
+    // (transitively) into a `scm.post_review` action, the agent
     // runner auto-injects the verdict-line skill so the post-review
     // parser can drive GitHub's review `event` enum from the agent
     // body. See agents/verdict.ts + skills/prReviewVerdict.ts.
@@ -848,7 +848,7 @@ export class FlowEngine {
     for (const id of downstreamIds) {
       if (id === node.id) continue;
       const n = def.nodes.find((x) => x.id === id);
-      if (n?.kind === "github.post_review") {
+      if (n?.kind === "scm.post_review") {
         hasDownstreamPostReview = true;
         break;
       }
@@ -1143,7 +1143,7 @@ export function selectTriggersToEvaluate(
 ): FlowNode[] {
   let toEval = triggers.filter((t) => !opts.isAlreadyMatched(t.id));
   if (opts.eventType === "manual" && opts.hasIssueContext) {
-    toEval = toEval.filter((t) => t.kind === "github.projects_v2_item");
+    toEval = toEval.filter((t) => t.kind === "scm.board_item");
   }
   return toEval;
 }
