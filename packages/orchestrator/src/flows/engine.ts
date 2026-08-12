@@ -24,6 +24,7 @@ import {
 } from "../db/schema.js";
 import { and, asc, inArray, not } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
+import { requireGithubApp } from "../github/app.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
   buildIssueStatusContext,
@@ -69,16 +70,6 @@ export interface FlowEngineDeps {
   /** Base URL the agent uses to call back into /api/agent/* — threaded
    * down to NodeRunCtx so the agent runner can stamp it onto env vars. */
   publicBaseUrl: string;
-}
-
-/** GitHub App client for a run already known to be GitHub-backed. */
-function requireGithubAppDep(deps: FlowEngineDeps): GithubAppClient {
-  if (!deps.app) {
-    throw new Error(
-      "a GitHub project needs the GitHub App, but GITHUB_APP_* is not configured",
-    );
-  }
-  return deps.app;
 }
 
 export class FlowEngine {
@@ -476,7 +467,7 @@ export class FlowEngine {
         prContext =
           scm.platform === "github"
             ? await buildPullRequestContext(
-                requireGithubAppDep(this.deps),
+                requireGithubApp(this.deps.app),
                 scm.installation,
                 project,
                 event.payload as never,

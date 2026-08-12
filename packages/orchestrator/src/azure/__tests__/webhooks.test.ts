@@ -2,7 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseBasicAuthPassword, secretMatches } from "../webhookAuth.js";
 import { normalizeAzureEvent } from "../events.js";
-import { AZDO_EVENT_TYPES } from "../hooks.js";
+import { AZDO_EVENT_TYPES, deleteSubscriptions } from "../hooks.js";
+import type { AzureDevopsClient } from "../client.js";
 
 const basic = (user: string, pass: string) =>
   `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
@@ -302,5 +303,55 @@ describe("normalizeAzureEvent — rejections", () => {
   it("returns null for a non-object payload", () => {
     assert.equal(normalizeAzureEvent("nope"), null);
     assert.equal(normalizeAzureEvent(null), null);
+  });
+});
+
+// Subscriptions live in the CUSTOMER's Azure DevOps organization, so removing
+// a project must delete them there — dropping our row does nothing. Left
+// behind they are permanent: the webhook handler answers 200 for an unmatched
+// repo (so Azure never auto-disables them), and they keep firing forever.
+describe("deleteSubscriptions", () => {
+  function fakeClient(responder: (id: string) => void = () => {}) {
+    const deleted: { path: string; method: string }[] = [];
+    const client = {
+      orgRequest: async (path: string, init: { method?: string } = {}) => {
+        deleted.push({ path, method: init.method ?? "GET" });
+        responder(path);
+        return {};
+      },
+    } as unknown as AzureDevopsClient;
+    return { client, deleted };
+  }
+
+  it("issues one DELETE per subscription id", async () => {
+    const { client, deleted } = fakeClient();
+    await deleteSubscriptions(client, ["sub-1", "sub-2", "sub-3"]);
+
+    assert.equal(deleted.length, 3);
+    assert.ok(deleted.every((d) => d.method === "DELETE"));
+    assert.ok(deleted[0]!.path.endsWith("/hooks/subscriptions/sub-1"));
+    assert.ok(deleted[2]!.path.endsWith("/hooks/subscriptions/sub-3"));
+  });
+
+  // One dead subscription must not strand the rest — a partial teardown leaves
+  // exactly the silent leak this exists to prevent.
+  it("continues past a failing delete instead of aborting the rest", async () => {
+    const { client, deleted } = fakeClient((path) => {
+      if (path.includes("sub-2")) throw new Error("VS404: subscription not found");
+    });
+    await assert.doesNotReject(deleteSubscriptions(client, ["sub-1", "sub-2", "sub-3"]));
+    assert.equal(deleted.length, 3);
+  });
+
+  it("url-encodes ids rather than interpolating them raw", async () => {
+    const { client, deleted } = fakeClient();
+    await deleteSubscriptions(client, ["a/b c"]);
+    assert.ok(deleted[0]!.path.endsWith("/hooks/subscriptions/a%2Fb%20c"));
+  });
+
+  it("does nothing for an empty list", async () => {
+    const { client, deleted } = fakeClient();
+    await deleteSubscriptions(client, []);
+    assert.equal(deleted.length, 0);
   });
 });

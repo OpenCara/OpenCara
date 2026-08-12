@@ -51,6 +51,7 @@ Landed:
 Remaining:
 
 - [ ] Boards / kanban parity: work item mirroring, `scm.board_item` trigger from `workitem.updated`. Work item events are received and recorded but drive nothing.
+  - Blocker to resolve first: a work item event carries only the team project, so `resolveProject` in `webhooksAzure.ts` matches every OpenCara project under that team project and `.limit(1)` picks an arbitrary one. Harmless while these events drive nothing; board mirroring must key on the work item's linked repository or an explicit board↔project link.
 - [ ] Inline PR diffs for Azure DevOps agents. There is no single unified-diff endpoint, so `stdin.diff` is empty and `OPENCARA_PR_DIFF_INLINE=0`; agents must `git diff` in the worktree. Reviewer flows *without* a worktree get no diff at all.
 - [ ] Azure DevOps equivalents for the features currently skipped-with-a-log: auto-merge (`autoCompleteSetBy` + branch policies), PR↔work-item linking, draft-PR ready-for-review
 - [ ] Device capability gating (`scm.azure_devops`). `pickIdle` ignores capabilities entirely — a pre-existing bug. Today a device on an older CLI fails an Azure DevOps worktree allocation with an "unknown argument" error, which is visible but not routed around.

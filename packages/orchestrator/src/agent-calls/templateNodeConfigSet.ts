@@ -3,7 +3,7 @@ import { ulid } from "ulid";
 import {
   builtinFlows,
   FlowDefinitionSchema,
-  normalizeGraphKinds,
+  cloneAndNormalizeGraph,
   type FlowDefinition,
 } from "@opencara/flows";
 import type { TemplateNodeConfigSetCall } from "@opencara/shared";
@@ -83,8 +83,8 @@ async function currentGraph(
     ),
   });
   if (draft) {
-    // Canonicalize legacy `github.*` kinds — see normalizeGraphKinds.
-    return normalizeGraphKinds(JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph);
+    // Clone + canonicalize legacy `github.*` kinds — see cloneAndNormalizeGraph.
+    return cloneAndNormalizeGraph(draft.graphJson as MutableGraph);
   }
   return codeGraph(def);
 }

@@ -97,3 +97,21 @@ export function createGithubAppClient(
 
   return { app, forInstallation, webhooks, mintEphemeralToken, revokeToken };
 }
+
+/**
+ * Narrow an optional GitHub App client to a present one.
+ *
+ * `app` is optional throughout the engine because an Azure-DevOps-only
+ * deployment configures no GitHub App. Call this from paths a platform guard
+ * has already narrowed to GitHub: reaching it with no client means the
+ * deployment has GitHub projects but no App configured — a config error, not a
+ * per-run failure.
+ */
+export function requireGithubApp(app: GithubAppClient | undefined): GithubAppClient {
+  if (!app) {
+    throw new Error(
+      "this run needs the GitHub App but GITHUB_APP_* is not configured on the orchestrator",
+    );
+  }
+  return app;
+}

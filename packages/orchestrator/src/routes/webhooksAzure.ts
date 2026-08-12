@@ -102,6 +102,14 @@ async function resolveProject(
   // teardown is best-effort against a remote API — a failed delete (or a
   // subscription recreated by hand in Azure DevOps) would otherwise keep
   // dispatching agent runs for a project the user believes is gone.
+  //
+  // AMBIGUITY, harmless today: work item events carry only the team project,
+  // not a repository, so when one Azure DevOps team project backs several
+  // OpenCara projects this matches all of them and `.limit(1)` picks an
+  // arbitrary row. That is fine while work item events drive nothing, but board
+  // mirroring MUST resolve this properly — the right key is the work item's own
+  // linked repository or an explicit board↔project link, not "first match".
+  // Tracked in ROADMAP.md under Boards / kanban parity.
   const where = normalized.repositoryId
     ? and(
         eq(projects.platform, "azure_devops"),

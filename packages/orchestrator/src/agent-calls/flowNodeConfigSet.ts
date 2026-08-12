@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { FlowDefinitionSchema, normalizeGraphKinds } from "@opencara/flows";
+import { FlowDefinitionSchema, cloneAndNormalizeGraph } from "@opencara/flows";
 import type { FlowNodeConfigSetCall } from "@opencara/shared";
 import type { Db } from "../db/client.js";
 import { flows } from "../db/schema.js";
@@ -72,6 +72,6 @@ function parseGraph(raw: unknown): MutableGraph | null {
   if (!raw || typeof raw !== "object") return null;
   const g = raw as MutableGraph;
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return null;
-  // Canonicalize legacy `github.*` kinds — see normalizeGraphKinds.
-  return normalizeGraphKinds(JSON.parse(JSON.stringify(g)) as MutableGraph);
+  // Clone + canonicalize legacy `github.*` kinds — see cloneAndNormalizeGraph.
+  return cloneAndNormalizeGraph(g) as MutableGraph;
 }

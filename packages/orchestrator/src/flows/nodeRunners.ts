@@ -20,6 +20,7 @@ import {
   prompts,
 } from "../db/schema.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
+import { requireGithubApp } from "../github/app.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import { clientForConnection, type AzureDevopsClientDeps } from "../azure/client.js";
 import {
@@ -116,22 +117,6 @@ export interface NodeRunCtx {
   hasDownstreamPostReview?: boolean;
   /** True for an operator-triggered rerun from the flow detail page. */
   rerun?: boolean;
-}
-
-/**
- * The GitHub App client, or a clear error.
- *
- * Reached only from GitHub-specific paths that a platform guard has already
- * narrowed to `scm.platform === "github"`. If this throws, the deployment has a
- * GitHub project but no GitHub App configured — a config error, not a run error.
- */
-function requireGithubApp(ctx: NodeRunCtx): GithubAppClient {
-  if (!ctx.app) {
-    throw new Error(
-      "this run needs the GitHub App but GITHUB_APP_* is not configured on the orchestrator",
-    );
-  }
-  return ctx.app;
 }
 
 /** Installation id for a run already known to be GitHub-backed. */
@@ -1199,7 +1184,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   ) {
     let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
     try {
-      const octokit = await requireGithubApp(ctx).forInstallation(
+      const octokit = await requireGithubApp(ctx.app).forInstallation(
         githubInstallationId(ctx),
       );
       linkResult = await linkPrToIssueAndCopyAgentLabel({
@@ -1229,7 +1214,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     !skipOnAzure(ctx, "marking the draft PR ready for review")
   ) {
     try {
-      const octokit = await requireGithubApp(ctx).forInstallation(
+      const octokit = await requireGithubApp(ctx.app).forInstallation(
         githubInstallationId(ctx),
       );
       await markDraftPrReadyByHead({
@@ -1343,7 +1328,7 @@ async function postMaxIterationsCommentOnce(
   body: string,
 ): Promise<void> {
   try {
-    const octokit = await requireGithubApp(ctx).forInstallation(githubInstallationId(ctx));
+    const octokit = await requireGithubApp(ctx.app).forInstallation(githubInstallationId(ctx));
     const comments = await octokit.request(
       "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
       {
@@ -1384,7 +1369,7 @@ async function maybeAutoMergeAfterFix(
     throw new Error("autoMerge enabled but PR number is unavailable");
   }
 
-  const octokit = await requireGithubApp(ctx).forInstallation(githubInstallationId(ctx));
+  const octokit = await requireGithubApp(ctx.app).forInstallation(githubInstallationId(ctx));
   const result = await autoMergePullRequest({
     octokit,
     owner: ctx.project.owner,
@@ -1749,7 +1734,7 @@ async function dispatchAgentRun(
   let mintedToken: EphemeralToken | null = null;
   try {
     if (ctx.scm.platform === "github") {
-      mintedToken = await requireGithubApp(ctx).mintEphemeralToken({
+      mintedToken = await requireGithubApp(ctx.app).mintEphemeralToken({
         installationId: ctx.scm.installation.githubInstallationId,
         repositoryIds: [ctx.scm.githubRepoId],
         permissions: {

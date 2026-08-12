@@ -12,7 +12,7 @@ import {
   flows,
   platformEvents,
 } from "../../db/schema.js";
-import { FlowDefinitionSchema, normalizeGraphKinds } from "@opencara/flows";
+import { FlowDefinitionSchema, cloneAndNormalizeGraph } from "@opencara/flows";
 import {
   validateCron,
   nextCronOccurrences,
@@ -965,14 +965,11 @@ function parseGraph(raw: unknown): MutableGraph | null {
   if (!raw || typeof raw !== "object") return null;
   const g = raw as MutableGraph;
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return null;
-  // Defensive deep clone so callers mutate a fresh object — avoids accidentally
-  // mutating drizzle's cached row reference.
-  const cloned = JSON.parse(JSON.stringify(g)) as MutableGraph;
-  // This helper deliberately skips FlowDefinitionSchema (it must tolerate
-  // graphs that no longer validate), so it also misses the schema's
-  // `github.*` → `scm.*` normalization. Apply it explicitly: these graphs go
-  // straight to the web canvas and to node-kind comparisons below.
-  return normalizeGraphKinds(cloned);
+  // Deep clone (drizzle's row reference must not be mutated) + canonicalize
+  // kinds. This helper deliberately skips FlowDefinitionSchema — it must
+  // tolerate graphs that no longer validate — so it misses the schema's
+  // `github.*` → `scm.*` rewrite and has to apply it explicitly.
+  return cloneAndNormalizeGraph(g);
 }
 
 function clampLimit(v: string | undefined): number {

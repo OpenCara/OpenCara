@@ -21,6 +21,11 @@ import {
 } from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
 import {
+  clientForConnection,
+  type AzureDevopsClientDeps,
+} from "../../azure/client.js";
+import { deleteSubscriptions } from "../../azure/hooks.js";
+import {
   backfillIssues,
   pushIssueBodyToGithub,
   setIssueAgentLabel,
@@ -30,6 +35,53 @@ import {
 interface ProjectRoutesDeps {
   db: Db;
   app?: GithubAppClient;
+  /** Required to tear down Azure DevOps service hooks on project removal. */
+  azure?: AzureDevopsClientDeps;
+}
+
+/**
+ * Best-effort teardown of a project's Azure DevOps service hooks.
+ *
+ * Never throws: a project the user asked to remove must still be removed even
+ * if the remote call fails (revoked consent, dead connection, Azure outage).
+ * Failures are logged loudly with the subscription ids, because the leftovers
+ * then need manual cleanup in the Azure DevOps project's Service Hooks page —
+ * nothing will retry this.
+ */
+async function removeAzureSubscriptions(
+  deps: ProjectRoutesDeps,
+  project: {
+    id: string;
+    platform: string;
+    azdoConnectionId: string | null;
+    azdoSubscriptionIds: string[];
+  },
+): Promise<void> {
+  if (project.platform !== "azure_devops") return;
+  const ids = project.azdoSubscriptionIds ?? [];
+  if (ids.length === 0 || !project.azdoConnectionId) return;
+
+  if (!deps.azure) {
+    console.error(
+      `[projects] cannot delete Azure DevOps subscriptions for ${project.id} — AZDO_ENTRA_* not configured. Remove these by hand: ${ids.join(", ")}`,
+    );
+    return;
+  }
+  try {
+    const client = await clientForConnection(deps.azure, project.azdoConnectionId);
+    if (!client) {
+      console.error(
+        `[projects] Azure DevOps connection ${project.azdoConnectionId} is gone; subscriptions left behind for ${project.id}: ${ids.join(", ")}`,
+      );
+      return;
+    }
+    await deleteSubscriptions(client, ids);
+  } catch (err) {
+    console.error(
+      `[projects] Azure DevOps subscription teardown failed for ${project.id}; remove these by hand: ${ids.join(", ")}`,
+      err,
+    );
+  }
 }
 
 const GITHUB_ONLY_ROUTE =
@@ -148,6 +200,16 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const user = c.get("user")!;
     const owned = await loadOwnedProject(deps.db, id, user.id);
     if (!owned) return c.json({ error: "not found" }, 404);
+
+    // Azure DevOps service hooks live in the CUSTOMER's organization, not in
+    // our database, so dropping the row does not remove them. Left behind they
+    // are permanent: the webhook handler answers 200 for an unmatched repo (so
+    // Azure never auto-disables them), meaning they would keep firing forever,
+    // leak which repos were once connected, and consume the org's subscription
+    // quota. Tear them down BEFORE the row goes, since the ids and the
+    // connection both live on it.
+    await removeAzureSubscriptions(deps, owned);
+
     // Hard delete: FK cascade drops issues, flows, flow runs, flow node
     // settings, and projectV2 links; platform_events and agent_runs are
     // ON DELETE SET NULL, so their rows survive as an orphaned audit

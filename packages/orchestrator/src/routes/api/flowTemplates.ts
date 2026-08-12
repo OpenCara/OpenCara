@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import {
   builtinFlows,
   FlowDefinitionSchema,
-  normalizeGraphKinds,
+  cloneAndNormalizeGraph,
   type FlowDefinition,
 } from "@opencara/flows";
 import type { Db } from "../../db/client.js";
@@ -49,10 +49,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     if (!def) return c.json({ error: "not found" }, 404);
 
     const draft = await loadDraft(deps.db, user.id, def.slug);
+    // `draft.graphJson` is drizzle's cached row reference — clone before
+    // normalizing so it isn't mutated in place.
     const graph = draft
-      ? // Clone before normalizing: `draft.graphJson` is drizzle's cached row
-        // reference and must not be mutated in place.
-        normalizeGraphKinds(JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph)
+      ? cloneAndNormalizeGraph(draft.graphJson as MutableGraph)
       : codeGraph(def);
     const settings = await deps.db
       .select()
@@ -307,7 +307,7 @@ async function currentGraph(
 ): Promise<MutableGraph> {
   const draft = await loadDraft(db, userId, def.slug);
   if (draft) {
-    return normalizeGraphKinds(JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph);
+    return cloneAndNormalizeGraph(draft.graphJson as MutableGraph);
   }
   return codeGraph(def);
 }

@@ -145,6 +145,8 @@ Azure DevOps does not sign webhook deliveries. Where the GitHub handler verifies
 
 Adding a repository creates one subscription per event type (`git.pullrequest.created`, `git.pullrequest.updated`, the PR comment event, `workitem.created`, `workitem.updated`) scoped to that repository. Removing the project deletes them by the ids recorded on the project row.
 
+That teardown is **best-effort**: subscriptions live in your Azure DevOps organization, not in OpenCara's database, so a revoked grant or an API outage can leave them behind. Nothing retries, and an orphaned subscription is effectively permanent — the handler answers 200 for an unmatched repo (see above), so Azure never auto-disables it. Removal logs the subscription ids at `error` level when it can't delete them; those need clearing by hand from the Azure DevOps project's **Service Hooks** page.
+
 Azure DevOps **auto-disables a subscription** after repeated delivery failures, silently. The webhook handler therefore answers 200 even for payloads it cannot map, so an unrecognised event variant can never tear down a working hook.
 
 ## Agent runtime credentials

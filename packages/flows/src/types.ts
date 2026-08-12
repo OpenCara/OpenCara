@@ -40,6 +40,21 @@ export function normalizeNodeKind(kind: string): string {
 }
 
 /**
+ * Deep-clone a stored graph and canonicalize its node kinds in one step.
+ *
+ * This is the shape every non-zod read path wants: the four `parseGraph` /
+ * `currentGraph` helpers in the orchestrator all need a mutable copy (drizzle
+ * hands back a cached row reference) AND the `github.*` → `scm.*` rewrite. Doing
+ * it in one exported call is what stops a fifth read path from being added with
+ * the clone but without the normalization — the exact failure mode recorded in
+ * .claude/lessons.md, where the zod-level normalization silently didn't apply to
+ * these paths.
+ */
+export function cloneAndNormalizeGraph<T extends { nodes?: unknown }>(graph: T): T {
+  return normalizeGraphKinds(JSON.parse(JSON.stringify(graph)) as T);
+}
+
+/**
  * In-place canonicalization of every node kind in a loosely-typed graph object.
  *
  * `FlowDefinitionSchema` normalizes on parse, but several read paths

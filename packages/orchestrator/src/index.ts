@@ -288,7 +288,10 @@ if ((config.github || azureDeps) && config.SESSION_ENCRYPTION_KEY) {
       "[orchestrator] Azure DevOps routes mounted (webhooks at /webhooks/azure-devops)",
     );
   }
-  app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));
+  app.route(
+    "/api/projects",
+    projectRoutes({ db, app: githubApp ?? undefined, azure: azureDeps ?? undefined }),
+  );
   // GitHub App installations have no Azure DevOps analogue — the equivalent
   // surface is /api/azure/connections.
   if (config.github) {
