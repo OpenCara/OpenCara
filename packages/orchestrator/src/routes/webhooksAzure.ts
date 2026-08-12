@@ -21,6 +21,15 @@ import type { FlowEngine } from "../flows/engine.js";
  *    payload's repository/project id first, then verifies against exactly that
  *    project's connection secret — never against "any connection that matches",
  *    which would let one org's secret authenticate another org's events.
+ *
+ * ACCEPTED TRADE-OFF: resolving before authenticating means an unauthenticated
+ * caller can tell "this repository GUID is connected" (401) from "it isn't"
+ * (200 unmatched) — a small existence oracle. It is accepted rather than
+ * overlooked. Closing it would mean either answering 401 for unknown repos
+ * (which lets a stray event type disable a working subscription, since Azure
+ * auto-disables on repeated failure) or 200 for a bad secret (which hides a
+ * genuine misconfiguration). The leak requires already knowing a v4 GUID, and
+ * reveals only whether it is connected here.
  */
 
 interface AzureWebhookDeps {

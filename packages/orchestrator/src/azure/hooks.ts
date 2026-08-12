@@ -129,7 +129,15 @@ export async function createSubscriptions(
   return { created, errors };
 }
 
-/** Best-effort teardown. Never throws — a leftover subscription is noise, not breakage. */
+/**
+ * Best-effort teardown. Never throws, and never aborts the loop on one failure
+ * — a partial teardown leaves exactly the leak this exists to prevent.
+ *
+ * Failures log at `error`, not `warn`: a subscription we could not delete is
+ * effectively permanent (the webhook handler answers 200 for an unmatched repo,
+ * so Azure never auto-disables it) and needs a human to remove it from the
+ * project's Service Hooks page. Nothing retries.
+ */
 export async function deleteSubscriptions(
   client: AzureDevopsClient,
   subscriptionIds: string[],
@@ -140,7 +148,10 @@ export async function deleteSubscriptions(
         method: "DELETE",
       });
     } catch (err) {
-      console.warn(`[azure-hooks] failed to delete subscription ${id}:`, err);
+      console.error(
+        `[azure-hooks] could not delete subscription ${id} — it will keep delivering; remove it by hand from the Azure DevOps project's Service Hooks page:`,
+        err,
+      );
     }
   }
 }

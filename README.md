@@ -142,6 +142,8 @@ A GitHub App installation token is scoped to specific repositories, acts as a di
 - **No revocation.** Access tokens simply expire (~1h). There is no equivalent of GitHub's token-revoke call, so a leaked token is valid until it ages out.
 - **No bot identity.** PR comments and reviewer votes are attributed to the person who connected the organization, not to `opencara[bot]`. Automated review→fix loops that filter on a bot login need to filter on that user instead.
 
+A note on votes, since branch policies key off them: every review writes a vote, including the explicit **0** for a commented review. That is what clears a previous verdict — without it, an approve followed later by a comment-only review would leave "Approved" standing, and a required-reviewer policy could honour that stale approval to merge a PR whose latest review raised a concern. OpenCara therefore appears as a reviewer on any PR it reviews, even when it is only commenting.
+
 Refresh tokens are stored encrypted with `SESSION_ENCRYPTION_KEY`, the same cipher as GitHub session tokens, and agents are only ever handed a short-lived access token — never the refresh token.
 
 ### Webhooks

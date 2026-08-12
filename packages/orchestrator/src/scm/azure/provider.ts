@@ -51,8 +51,9 @@ export const AZDO_VOTE = {
  *
  * COMMENT maps to `noVote` rather than being skipped: posting a commented
  * review on GitHub explicitly does not endorse or block, and 0 is exactly that
- * statement. It also clears a previous vote, so a re-review that downgrades
- * from approve to comment doesn't leave a stale approval standing.
+ * statement. `postReview` writes this value like any other — that is what
+ * clears a previous vote, so a re-review downgrading from approve to comment
+ * doesn't leave a stale approval standing for a branch policy to honour.
  */
 export function voteForReviewEvent(event: ScmReviewEvent): number {
   switch (event) {
@@ -148,16 +149,25 @@ export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
     return parsed.data.id;
   };
 
-  /** Identity id of the connection's user — the only identity we can vote as. */
-  const selfIdentityId = async (): Promise<string> => {
-    const res = await client.orgRequest("_apis/connectionData", {
-      apiVersion: "7.1-preview",
-    });
-    const parsed = ConnectionDataSchema.safeParse(res);
-    if (!parsed.success) {
-      throw new Error("azure devops connectionData did not include an authenticated user");
-    }
-    return parsed.data.authenticatedUser.id;
+  /**
+   * Identity id of the connection's user — the only identity we can vote as.
+   * Memoized per provider instance: every review now issues a vote (including
+   * the explicit 0 that clears a stale one), and the id cannot change for a
+   * fixed connection within a step.
+   */
+  let selfIdentityPromise: Promise<string> | null = null;
+  const selfIdentityId = (): Promise<string> => {
+    selfIdentityPromise ??= (async () => {
+      const res = await client.orgRequest("_apis/connectionData", {
+        apiVersion: "7.1-preview",
+      });
+      const parsed = ConnectionDataSchema.safeParse(res);
+      if (!parsed.success) {
+        throw new Error("azure devops connectionData did not include an authenticated user");
+      }
+      return parsed.data.authenticatedUser.id;
+    })();
+    return selfIdentityPromise;
   };
 
   return {
@@ -168,20 +178,34 @@ export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
       // vote (not a reviewer on this PR, branch policy forbids self-approval).
       const threadId = await postThread(pr.number, body);
 
+      // The vote is ALWAYS written, including the explicit 0 for a COMMENT.
+      // Skipping the call for 0 would leave a prior approval standing: a
+      // reviewer agent approves, a later run posts a COMMENT raising a concern,
+      // and Azure DevOps still shows "Approved" — which, depending on branch
+      // policy, can satisfy a required-reviewer rule and let the PR merge with
+      // the concern outstanding. Clearing costs one memoized identity lookup.
       const vote = voteForReviewEvent(event);
       let downgradedFrom: string | undefined;
-      if (vote !== AZDO_VOTE.noVote) {
-        try {
-          const reviewerId = await selfIdentityId();
-          await client.request(
-            `${prBase(pr.number)}/reviewers/${encodeURIComponent(reviewerId)}`,
-            { method: "PUT", body: { vote } },
+      try {
+        const reviewerId = await selfIdentityId();
+        await client.request(
+          `${prBase(pr.number)}/reviewers/${encodeURIComponent(reviewerId)}`,
+          { method: "PUT", body: { vote } },
+        );
+      } catch (err) {
+        // A broken connection or a transient outage must fail the step; only
+        // an actual refusal of the vote degrades. Without this the first
+        // category masquerades as the second forever.
+        if (isUnrecoverableVoteError(err)) throw err;
+        if (vote === AZDO_VOTE.noVote) {
+          // Nothing was being asserted, so there is no verdict to downgrade —
+          // e.g. we were never a reviewer on this PR and there is no stale vote
+          // to clear. Worth a line, not a status change.
+          console.warn(
+            `[post_review] azure could not clear the reviewer vote on PR #${pr.number}; a prior vote may still stand:`,
+            err instanceof Error ? err.message : err,
           );
-        } catch (err) {
-          // A broken connection or a transient outage must fail the step; only
-          // an actual refusal of the vote degrades. Without this the first
-          // category masquerades as the second forever.
-          if (isUnrecoverableVoteError(err)) throw err;
+        } else {
           // Degrade to "the review was posted as a comment" rather than failing
           // the step — the prose already landed, and losing the run over a vote
           // the policy refused would discard a completed review. Narrower than

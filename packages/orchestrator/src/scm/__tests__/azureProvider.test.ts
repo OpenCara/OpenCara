@@ -115,12 +115,39 @@ describe("azure provider postReview", () => {
     assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, { vote: -10 });
   });
 
-  it("skips the vote call entirely for a plain comment", async () => {
+  // A COMMENT must still write vote 0. Skipping it would leave a prior
+  // approval standing, and a branch policy could honour that stale approval to
+  // merge a PR whose latest review raised a concern.
+  it("clears a prior vote by writing 0 for a plain comment", async () => {
     const { provider, calls } = providerWith(happyResponder);
     await provider.postReview(PR, "COMMENT", "Just a note.");
-    assert.equal(calls.filter((c) => c.method === "PUT").length, 0);
-    // ...and doesn't waste a round-trip resolving our identity either.
-    assert.equal(calls.filter((c) => c.url.includes("connectionData")).length, 0);
+    const vote = calls.find((c) => c.method === "PUT");
+    assert.ok(vote, "expected a vote PUT even for a comment-only review");
+    assert.deepEqual(vote.body, { vote: 0 });
+  });
+
+  it("resolves our identity once even across several reviews", async () => {
+    // The vote now happens on every review, so an un-memoized connectionData
+    // lookup would repeat per call.
+    const { provider, calls } = providerWith(happyResponder);
+    await provider.postReview(PR, "COMMENT", "one");
+    await provider.postReview(PR, "APPROVE", "two");
+    assert.equal(calls.filter((c) => c.url.includes("connectionData")).length, 1);
+  });
+
+  // Failing to clear is worth a log, not a status change: there was no verdict
+  // being asserted, and the common benign case is "we were never a reviewer".
+  it("does not report a downgrade when only the vote-clear fails", async () => {
+    const { provider } = providerWith((call) => {
+      if (call.url.endsWith("/threads")) return { id: 55 };
+      if (call.url.includes("connectionData")) {
+        return { authenticatedUser: { id: "identity-1" } };
+      }
+      throw Object.assign(new Error("not a reviewer"), { status: 404 });
+    });
+    const res = await provider.postReview(PR, "COMMENT", "note");
+    assert.equal(res.downgradedFrom, undefined);
+    assert.equal(res.reviewId, 55);
   });
 
   it("returns the thread id and a browsable url", async () => {
