@@ -300,12 +300,15 @@ export function chatRoutes(deps: ChatRoutesDeps) {
           eq(projects.installationId, githubInstallations.id),
         )
         .limit(1);
-      if (projectRow.length > 0) {
+      // The inner join on githubInstallations already restricts this to GitHub
+      // projects; the extra githubRepoId check just narrows the nullable column
+      // (Azure DevOps projects leave it NULL).
+      if (projectRow.length > 0 && projectRow[0]!.project.githubRepoId !== null) {
         const { project, installation } = projectRow[0]!;
         try {
           mintedToken = await deps.app.mintEphemeralToken({
             installationId: installation.githubInstallationId,
-            repositoryIds: [project.githubRepoId],
+            repositoryIds: [project.githubRepoId!],
             permissions: {
               issues: "write",
               pull_requests: "read",

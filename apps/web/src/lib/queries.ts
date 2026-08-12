@@ -29,10 +29,26 @@ function serverErrorRetryDelay(attemptIndex: number, error: unknown): number {
 
 export interface User {
   id: string;
-  githubLogin: string;
+  /** Null for a user who signed in with Microsoft Entra — use `displayLogin`. */
+  githubLogin: string | null;
   name: string | null;
   avatarUrl: string | null;
   email: string | null;
+}
+
+/**
+ * Best available handle for a user, across sign-in providers. Mirrors
+ * `displayLogin` in the orchestrator's auth/session.ts — falls back through
+ * GitHub login → name → email local-part → a short id so nothing renders as
+ * "@undefined".
+ */
+export function displayLogin(user: Partial<User> | null | undefined): string {
+  if (!user) return "";
+  if (user.githubLogin) return user.githubLogin;
+  if (user.name) return user.name;
+  const local = user.email?.split("@")[0];
+  if (local) return local;
+  return user.id ? `user-${user.id.slice(-6)}` : "";
 }
 
 export interface ProjectListItem {
@@ -598,6 +614,73 @@ export const availableReposQuery = (installationId: string) => ({
       `/api/installations/${installationId}/available-repos`,
     ),
 });
+
+// --- Azure DevOps ---------------------------------------------------------
+
+export interface AzureOrganization {
+  id: string;
+  name: string;
+  url: string;
+  /** Non-null once this org has been connected by the signed-in user. */
+  connectionId: string | null;
+}
+
+export interface AzureRepository {
+  id: string;
+  name: string;
+  projectName: string;
+  projectId: string;
+  defaultBranch: string | null;
+  webUrl: string;
+  isPrivate: boolean;
+  added: boolean;
+}
+
+export const azureOrganizationsQuery = () => ({
+  queryKey: ["azure", "organizations"] as const,
+  queryFn: () =>
+    api.get<{ organizations: AzureOrganization[] }>("/api/azure/organizations"),
+  // A 409 here means "signed in with GitHub, so no Microsoft credentials" —
+  // an expected state with a UI affordance, not a transient failure to retry.
+  retry: false,
+});
+
+export const azureRepositoriesQuery = (connectionId: string) => ({
+  queryKey: ["azure", "connections", connectionId, "repositories"] as const,
+  queryFn: () =>
+    api.get<{ repositories: AzureRepository[] }>(
+      `/api/azure/connections/${connectionId}/repositories`,
+    ),
+});
+
+export function useConnectAzureOrg() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orgName: string) =>
+      api.post<{ connection: { id: string; orgName: string } }>(
+        "/api/azure/connections",
+        { orgName },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
+export function useAddAzureProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { connectionId: string; repositoryId: string }) =>
+      api.post<{ project: { id: string } }>(
+        `/api/azure/connections/${vars.connectionId}/projects`,
+        { repositoryId: vars.repositoryId },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
 
 export const activityQuery = () => ({
   queryKey: ["activity"] as const,

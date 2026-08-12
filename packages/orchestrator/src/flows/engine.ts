@@ -15,6 +15,7 @@ import {
   flowRuns,
   flowRunSteps,
   flows,
+  azureDevopsConnections,
   githubInstallations,
   platformEvents,
   pmWaveItems,
@@ -23,10 +24,12 @@ import {
 } from "../db/schema.js";
 import { and, asc, inArray, not } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
+import { requireGithubApp } from "../github/app.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
   buildIssueStatusContext,
   buildManualIssueContext,
+  buildAzurePullRequestContext,
   buildPullRequestContext,
   buildScheduleContext,
   type IssueStatusContext,
@@ -39,7 +42,10 @@ import {
   triggerRunner,
   SkipFlowError,
   type NodeRunCtx,
+  type PlatformRunCtx,
 } from "./nodeRunners.js";
+import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
+import type { AzureDevopsClientDeps } from "../azure/client.js";
 import { extractAgentResultText } from "../agents/output.js";
 import {
   FLOW_RUNS_CHANNEL,
@@ -56,7 +62,10 @@ export interface PlatformEventInput {
 export interface FlowEngineDeps {
   db: Db;
   pg: Sql;
-  app: GithubAppClient;
+  /** Absent on an Azure-DevOps-only deployment. */
+  app?: GithubAppClient;
+  /** Present when AZDO_ENTRA_* is configured. */
+  azure?: AzureDevopsClientDeps;
   dispatcher: AgentDispatcher;
   /** Base URL the agent uses to call back into /api/agent/* — threaded
    * down to NodeRunCtx so the agent runner can stamp it onto env vars. */
@@ -308,6 +317,62 @@ export class FlowEngine {
   //     benign; the caller should drop the event quietly.
   // Distinguishing the two keeps a permanently-broken schedule from looking
   // identical to a routine duplicate fire (PR #164 review).
+  /**
+   * Build the `PlatformRunCtx` for a project, or null when the run cannot
+   * proceed (connection row deleted, platform not configured on this
+   * deployment). Null is treated as "missing" by callers — same as a deleted
+   * project — because in every case there is nothing left to run against.
+   */
+  private async resolvePlatformCtx(
+    project: InferSelectModel<typeof projects>,
+  ): Promise<PlatformRunCtx | null> {
+    if (project.platform === "github") {
+      if (!project.installationId || project.githubRepoId === null) {
+        console.warn(
+          `[flow-engine] project ${project.id} is marked github but has no installation/repo id`,
+        );
+        return null;
+      }
+      const installation = await this.deps.db.query.githubInstallations.findFirst({
+        where: eq(githubInstallations.id, project.installationId),
+      });
+      if (!installation) return null;
+      return {
+        platform: "github",
+        installation,
+        githubRepoId: project.githubRepoId,
+      };
+    }
+
+    if (!project.azdoConnectionId) {
+      console.warn(
+        `[flow-engine] project ${project.id} is marked azure_devops but has no connection`,
+      );
+      return null;
+    }
+    const connection = await this.deps.db.query.azureDevopsConnections.findFirst({
+      where: eq(azureDevopsConnections.id, project.azdoConnectionId),
+    });
+    if (!connection) return null;
+    // `owner` is the "org/project" label; the clone URL and API paths need the
+    // team project on its own.
+    const parsed = parseAzureOwnerLabel(project.owner);
+    if (!parsed) {
+      console.warn(
+        `[flow-engine] project ${project.id} owner '${project.owner}' is not "org/project"`,
+      );
+      return null;
+    }
+    return {
+      platform: "azure_devops",
+      connectionId: connection.id,
+      orgName: parsed.orgName,
+      projectName: parsed.projectName,
+      externalRepoId: project.externalRepoId,
+      cloneUrl: azureCloneUrl(parsed.orgName, parsed.projectName, project.name),
+    };
+  }
+
   private async prepareRun(
     flowId: string,
     event: PlatformEventInput,
@@ -317,10 +382,11 @@ export class FlowEngine {
       where: eq(projects.id, event.projectId!),
     });
     if (!project) return "missing";
-    const installation = await this.deps.db.query.githubInstallations.findFirst({
-      where: eq(githubInstallations.id, project.installationId),
-    });
-    if (!installation) return "missing";
+    // Resolve the platform-specific identity + credentials for this run. The
+    // rest of the pipeline consumes the resulting discriminated union and never
+    // re-checks the platform.
+    const scm = await this.resolvePlatformCtx(project);
+    if (!scm) return "missing";
 
     // Insert with ON CONFLICT DO NOTHING + RETURNING, targeting ONLY the
     // partial dedupe index flow_runs_flow_dedupe_uq (flow_id, dedupe_key)
@@ -365,7 +431,7 @@ export class FlowEngine {
     // the "run started" notify once a trigger actually matches; trigger_skips
     // never notify. The run-scoped SSE stream (/flow-runs/:id/events/stream)
     // doesn't need this notify — it loads its own initial snapshot on connect.
-    return { flowRunId, flowId, project, installation };
+    return { flowRunId, flowId, project, scm };
   }
 
   private async executeFlow(
@@ -375,7 +441,7 @@ export class FlowEngine {
     preloaded?: PreloadedRun,
     opts: { rerun?: boolean } = {},
   ): Promise<void> {
-    const { flowRunId, flowId, project, installation } = prepared;
+    const { flowRunId, flowId, project, scm } = prepared;
 
     // Pre-build PR context once if it's a pull_request event (cheap optimization;
     // avoids re-fetching the diff for every agent node in the chain).
@@ -398,12 +464,18 @@ export class FlowEngine {
       isCommentOnPr
     ) {
       try {
-        prContext = await buildPullRequestContext(
-          this.deps.app,
-          installation,
-          project,
-          event.payload as never,
-        );
+        prContext =
+          scm.platform === "github"
+            ? await buildPullRequestContext(
+                requireGithubApp(this.deps.app),
+                scm.installation,
+                project,
+                event.payload as never,
+              )
+            : // Azure DevOps needs no fetch — normalizeAzureEvent already put a
+              // GitHub-shaped pull_request object on the payload, including on
+              // the comment path where GitHub has to go and get one.
+              buildAzurePullRequestContext(event.payload as never, project);
       } catch (err) {
         console.error("[flow-engine] pr context fetch failed", err);
       }
@@ -835,11 +907,11 @@ export class FlowEngine {
     skipped: boolean;
     skipReason?: string;
   }> {
-    const { flowRunId, flowId, project, installation } = prepared;
+    const { flowRunId, flowId, project, scm } = prepared;
     const { node, idx, previousOutput } = job;
 
     // Reviewer-agent verdict contract: when this node's outputs flow
-    // (transitively) into a `github.post_review` action, the agent
+    // (transitively) into a `scm.post_review` action, the agent
     // runner auto-injects the verdict-line skill so the post-review
     // parser can drive GitHub's review `event` enum from the agent
     // body. See agents/verdict.ts + skills/prReviewVerdict.ts.
@@ -848,7 +920,7 @@ export class FlowEngine {
     for (const id of downstreamIds) {
       if (id === node.id) continue;
       const n = def.nodes.find((x) => x.id === id);
-      if (n?.kind === "github.post_review") {
+      if (n?.kind === "scm.post_review") {
         hasDownstreamPostReview = true;
         break;
       }
@@ -876,19 +948,16 @@ export class FlowEngine {
       db: this.deps.db,
       pg: this.deps.pg,
       app: this.deps.app,
+      azure: this.deps.azure,
       dispatcher: this.deps.dispatcher,
       flowId,
       flowRunId,
       flowRunStepId: stepId,
       projectId: project.id,
-      installation: {
-        id: installation.id,
-        githubInstallationId: installation.githubInstallationId,
-      },
+      scm,
       project: {
         owner: project.owner,
         name: project.name,
-        githubRepoId: project.githubRepoId,
         defaultBranch: project.defaultBranch,
         instructionsFile: project.instructionsFile,
       },
@@ -950,7 +1019,11 @@ interface PreparedRun {
   flowRunId: string;
   flowId: string;
   project: InferSelectModel<typeof projects>;
-  installation: InferSelectModel<typeof githubInstallations>;
+  /**
+   * Platform identity + credentials, resolved once in `prepareRun`. Consumers
+   * switch on `scm.platform` rather than re-reading nullable project columns.
+   */
+  scm: PlatformRunCtx;
 }
 
 interface ReusedStep {
@@ -1143,7 +1216,7 @@ export function selectTriggersToEvaluate(
 ): FlowNode[] {
   let toEval = triggers.filter((t) => !opts.isAlreadyMatched(t.id));
   if (opts.eventType === "manual" && opts.hasIssueContext) {
-    toEval = toEval.filter((t) => t.kind === "github.projects_v2_item");
+    toEval = toEval.filter((t) => t.kind === "scm.board_item");
   }
   return toEval;
 }

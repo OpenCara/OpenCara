@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { and, eq } from "drizzle-orm";
-import { builtinFlows, FlowDefinitionSchema, type FlowDefinition } from "@opencara/flows";
+import {
+  builtinFlows,
+  FlowDefinitionSchema,
+  cloneAndNormalizeGraph,
+  type FlowDefinition,
+} from "@opencara/flows";
 import type { Db } from "../../db/client.js";
 import {
   agents,
@@ -44,7 +49,11 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     if (!def) return c.json({ error: "not found" }, 404);
 
     const draft = await loadDraft(deps.db, user.id, def.slug);
-    const graph = draft ? (draft.graphJson as MutableGraph) : codeGraph(def);
+    // `draft.graphJson` is drizzle's cached row reference — clone before
+    // normalizing so it isn't mutated in place.
+    const graph = draft
+      ? cloneAndNormalizeGraph(draft.graphJson as MutableGraph)
+      : codeGraph(def);
     const settings = await deps.db
       .select()
       .from(templateNodeSettings)
@@ -284,6 +293,12 @@ async function loadDraft(
  * Snapshot the user's current working graph for a template — their draft if
  * one exists, otherwise a deep clone of the code template. Returned graph is
  * safe to mutate; nothing is persisted until persistDraft is called.
+ *
+ * Unlike project flows, a draft is served straight from `template_drafts`
+ * without going through `FlowDefinitionSchema`, so it is the one path that
+ * would hand pre-rename `github.*` node kinds to the client. Normalize here so
+ * the API only ever emits canonical `scm.*` kinds; the draft row itself is
+ * rewritten the next time the user saves.
  */
 async function currentGraph(
   db: Db,
@@ -292,7 +307,7 @@ async function currentGraph(
 ): Promise<MutableGraph> {
   const draft = await loadDraft(db, userId, def.slug);
   if (draft) {
-    return JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
+    return cloneAndNormalizeGraph(draft.graphJson as MutableGraph);
   }
   return codeGraph(def);
 }
@@ -382,7 +397,7 @@ function addReviewer(graph: MutableGraph): ReviewerOk | ReviewerErr {
   const triggerEdge = graph.edges.find((e) => e.target === template.id);
   const trigger = triggerEdge
     ? graph.nodes.find(
-        (n) => n.id === triggerEdge.source && n.kind === "github.pull_request",
+        (n) => n.id === triggerEdge.source && n.kind === "scm.pull_request",
       )
     : undefined;
   if (!trigger) {

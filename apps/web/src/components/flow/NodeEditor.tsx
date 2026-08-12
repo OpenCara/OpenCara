@@ -73,13 +73,13 @@ export function NodeEditor({
           onClose={onClose}
         />
       )}
-      {selectedNode && selectedNode.kind === "github.pull_request" && (
+      {selectedNode && selectedNode.kind === "scm.pull_request" && (
         <TriggerNodePanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
-      {selectedNode && selectedNode.kind === "github.pull_request_review" && (
+      {selectedNode && selectedNode.kind === "scm.pull_request_review" && (
         <PullRequestReviewTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
-      {selectedNode && selectedNode.kind === "github.projects_v2_item" && (
+      {selectedNode && selectedNode.kind === "scm.board_item" && (
         <ProjectsV2ItemTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
       {selectedNode && selectedNode.kind === "schedule.cron" && (
@@ -87,9 +87,9 @@ export function NodeEditor({
       )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
-        selectedNode.kind !== "github.pull_request" &&
-        selectedNode.kind !== "github.pull_request_review" &&
-        selectedNode.kind !== "github.projects_v2_item" &&
+        selectedNode.kind !== "scm.pull_request" &&
+        selectedNode.kind !== "scm.pull_request_review" &&
+        selectedNode.kind !== "scm.board_item" &&
         selectedNode.kind !== "schedule.cron" && (
           <Card>
             <CardHeader>
@@ -1172,7 +1172,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   );
 }
 
-/* ─── github.pull_request_review trigger panel ────────────────── */
+/* ─── scm.pull_request_review trigger panel ────────────────── */
 
 const REVIEW_STATES = ["approved", "changes_requested", "commented", "dismissed"] as const;
 type ReviewState = (typeof REVIEW_STATES)[number];
@@ -1307,7 +1307,7 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
   );
 }
 
-/* ─── github.projects_v2_item trigger panel ───────────────────── */
+/* ─── scm.board_item trigger panel ───────────────────── */
 
 const PROJECTS_V2_CONTENT_TYPES = ["Issue", "PullRequest", "DraftIssue"] as const;
 type ProjectsV2ContentType = (typeof PROJECTS_V2_CONTENT_TYPES)[number];

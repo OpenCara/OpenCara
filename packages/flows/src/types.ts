@@ -2,15 +2,95 @@ import { z } from "zod";
 
 const Position = z.object({ x: z.number(), y: z.number() });
 
+// ---------------------------------------------------------------------------
+// Platform-neutral node kinds
+// ---------------------------------------------------------------------------
+// Node kinds used to be spelled `github.*`. They are now `scm.*` so a single
+// flow graph runs against whichever platform the *project* is on (GitHub or
+// Azure DevOps) — the engine resolves the concrete provider at run time from
+// `projects.platform`, so built-in flows do not need a per-platform variant.
+//
+// The old spellings are still accepted and normalized to the new ones by
+// `FlowNodeSchema`'s preprocess below. That matters: every `flows.graph_json`
+// and `template_drafts.graph_json` row in production still holds `github.*`,
+// and rewriting them would collide with the template-draft shadowing behaviour
+// documented in .claude/lessons.md. Normalizing on read means **no data
+// migration and no reseed** — old rows keep working and are upgraded in place
+// the next time the graph is saved.
+export const LEGACY_NODE_KIND_ALIASES: Readonly<Record<string, string>> = {
+  "github.pull_request": "scm.pull_request",
+  "github.pull_request_review": "scm.pull_request_review",
+  "github.projects_v2_item": "scm.board_item",
+  "github.post_review": "scm.post_review",
+  "github.add_comment": "scm.add_comment",
+  "github.add_label": "scm.add_label",
+};
+
+/**
+ * Map a possibly-legacy node kind to its canonical `scm.*` spelling. Unknown
+ * and already-canonical kinds pass through untouched, so this is safe to apply
+ * to any node kind — including `agent` and `schedule.cron`.
+ *
+ * Callers that compare a *persisted* kind string (e.g. `flow_run_steps.nodeKind`
+ * on a historical row) should run it through here first rather than adding a
+ * second case to a switch.
+ */
+export function normalizeNodeKind(kind: string): string {
+  return LEGACY_NODE_KIND_ALIASES[kind] ?? kind;
+}
+
+/**
+ * Deep-clone a stored graph and canonicalize its node kinds in one step.
+ *
+ * This is the shape every non-zod read path wants: the four `parseGraph` /
+ * `currentGraph` helpers in the orchestrator all need a mutable copy (drizzle
+ * hands back a cached row reference) AND the `github.*` → `scm.*` rewrite. Doing
+ * it in one exported call is what stops a fifth read path from being added with
+ * the clone but without the normalization — the exact failure mode recorded in
+ * .claude/lessons.md, where the zod-level normalization silently didn't apply to
+ * these paths.
+ */
+export function cloneAndNormalizeGraph<T extends { nodes?: unknown }>(graph: T): T {
+  return normalizeGraphKinds(JSON.parse(JSON.stringify(graph)) as T);
+}
+
+/**
+ * In-place canonicalization of every node kind in a loosely-typed graph object.
+ *
+ * `FlowDefinitionSchema` normalizes on parse, but several read paths
+ * deliberately skip zod and shallow-cast the stored JSON instead (the
+ * `parseGraph` helpers in routes/api/flows.ts and agent-calls/*, and the
+ * template-draft readers). Those paths feed the web canvas directly, so they
+ * need the same treatment or the UI sees pre-rename kinds and falls through to
+ * its default node rendering.
+ *
+ * Returns the same object it was handed, for convenient chaining.
+ */
+export function normalizeGraphKinds<T extends { nodes?: unknown }>(graph: T): T {
+  if (Array.isArray(graph.nodes)) {
+    for (const node of graph.nodes) {
+      if (node && typeof node === "object") {
+        const n = node as { kind?: unknown };
+        if (typeof n.kind === "string") n.kind = normalizeNodeKind(n.kind);
+      }
+    }
+  }
+  return graph;
+}
+
 // Mirrors GitHub Actions' on.pull_request filter set, plus a fifth
 // "commented" action that wakes the flow on an `issue_comment.created`
 // webhook when the comment body contains `commentPhrase` (default
 // `@opencara review`). The comment path bypasses branches/paths/labels/
 // drafts filters — only the phrase match gates it. PR-review events
-// remain a SEPARATE trigger kind (see GithubPullRequestReviewTriggerSchema).
-export const GithubPullRequestTriggerSchema = z.object({
+// remain a SEPARATE trigger kind (see ScmPullRequestReviewTriggerSchema).
+//
+// On Azure DevOps the equivalent events are `git.pullrequest.created` /
+// `git.pullrequest.updated` and a PR thread comment; the filters carry the
+// same meaning.
+export const ScmPullRequestTriggerSchema = z.object({
   id: z.string(),
-  kind: z.literal("github.pull_request"),
+  kind: z.literal("scm.pull_request"),
   position: Position,
   config: z.object({
     actions: z
@@ -31,17 +111,17 @@ export const GithubPullRequestTriggerSchema = z.object({
     commentPhrase: z.string().default("@opencara review"),
   }),
 });
-export type GithubPullRequestTrigger = z.infer<typeof GithubPullRequestTriggerSchema>;
+export type ScmPullRequestTrigger = z.infer<typeof ScmPullRequestTriggerSchema>;
 
 // Fires on the GitHub `pull_request_review` event (a reviewer hitting
-// "Submit review" or its API equivalent). The orchestrator surfaces the
-// review state + body via OPENCARA_REVIEW_* env vars, and the agent's
-// label routing reads the *PR's* labels (not the closing issue's),
-// so an operator can move the loop to a different agent mid-PR by
-// labeling the PR `agent:<name>`.
-export const GithubPullRequestReviewTriggerSchema = z.object({
+// "Submit review" or its API equivalent), or on Azure DevOps' equivalent
+// reviewer-vote change. The orchestrator surfaces the review state + body
+// via OPENCARA_REVIEW_* env vars, and the agent's label routing reads the
+// *PR's* labels (not the closing issue's), so an operator can move the loop
+// to a different agent mid-PR by labeling the PR `agent:<name>`.
+export const ScmPullRequestReviewTriggerSchema = z.object({
   id: z.string(),
-  kind: z.literal("github.pull_request_review"),
+  kind: z.literal("scm.pull_request_review"),
   position: Position,
   config: z.object({
     // Empty = match any state. Default fires on the two states that
@@ -68,21 +148,25 @@ export const GithubPullRequestReviewTriggerSchema = z.object({
     commentPhrase: z.string().default(""),
   }),
 });
-export type GithubPullRequestReviewTrigger = z.infer<
-  typeof GithubPullRequestReviewTriggerSchema
+export type ScmPullRequestReviewTrigger = z.infer<
+  typeof ScmPullRequestReviewTriggerSchema
 >;
 
-// GitHub Projects v2 item status-change trigger. Fires when a project board
-// status (or any single-select field) of a linked Issue/PR/DraftIssue changes
-// to one of the listed option names.
-export const GithubProjectsV2ItemTriggerSchema = z.object({
+// Board item status-change trigger. Fires when a board status (GitHub Projects
+// v2 single-select field, or an Azure DevOps work item's board column / state)
+// of a linked issue/PR/work item changes to one of the listed option names.
+export const ScmBoardItemTriggerSchema = z.object({
   id: z.string(),
-  kind: z.literal("github.projects_v2_item"),
+  kind: z.literal("scm.board_item"),
   position: Position,
   config: z.object({
     // Filter to a specific Projects v2 board number on the org/user. null = any.
+    // GitHub-only; ignored for Azure DevOps, where the board is implied by the
+    // project the repo lives in.
     projectNumber: z.number().int().nullable().default(null),
-    // Single-select field whose option-change should fire the trigger.
+    // Single-select field whose option-change should fire the trigger. On
+    // Azure DevOps this names the work item field watched for a change —
+    // "Status" is mapped to `System.BoardColumn`.
     fieldName: z.string().default("Status"),
     // Option names that satisfy "moved to". Empty = match any.
     toOptions: z.array(z.string()).default([]),
@@ -94,7 +178,7 @@ export const GithubProjectsV2ItemTriggerSchema = z.object({
       .default(["Issue"]),
   }),
 });
-export type GithubProjectsV2ItemTrigger = z.infer<typeof GithubProjectsV2ItemTriggerSchema>;
+export type ScmBoardItemTrigger = z.infer<typeof ScmBoardItemTriggerSchema>;
 
 // Time-based trigger. Unlike the GitHub trigger kinds, this one is not woken
 // by a webhook — the orchestrator's scheduler loop scans flows for these
@@ -126,21 +210,27 @@ export const ScheduleCronTriggerSchema = z.object({
 export type ScheduleCronTrigger = z.infer<typeof ScheduleCronTriggerSchema>;
 
 export const TriggerNodeSchema = z.discriminatedUnion("kind", [
-  GithubPullRequestTriggerSchema,
-  GithubPullRequestReviewTriggerSchema,
-  GithubProjectsV2ItemTriggerSchema,
+  ScmPullRequestTriggerSchema,
+  ScmPullRequestReviewTriggerSchema,
+  ScmBoardItemTriggerSchema,
   ScheduleCronTriggerSchema,
 ]);
 export type TriggerNode = z.infer<typeof TriggerNodeSchema>;
 
 export const TRIGGER_KINDS = [
-  "github.pull_request",
-  "github.pull_request_review",
-  "github.projects_v2_item",
+  "scm.pull_request",
+  "scm.pull_request_review",
+  "scm.board_item",
   "schedule.cron",
 ] as const;
+
+/**
+ * True for both the canonical `scm.*` spelling and the legacy `github.*` one,
+ * so callers that see a raw (unparsed) kind off an old graph_json row still
+ * classify it correctly.
+ */
 export function isTriggerKind(kind: string): boolean {
-  return (TRIGGER_KINDS as readonly string[]).includes(kind);
+  return (TRIGGER_KINDS as readonly string[]).includes(normalizeNodeKind(kind));
 }
 
 // Agent flow nodes carry no in-graph subprocess `spec` — the dispatched
@@ -220,37 +310,69 @@ export type AgentNode = z.infer<typeof AgentNodeSchema>;
 // Worktree allocation + PR creation are no longer dedicated action
 // nodes. A worktree is now an option on the agent node itself
 // (`agent.config.worktree`) and PR creation is the agent's
-// responsibility — the agent has GH_TOKEN injected (PR #22) and uses
-// `gh pr create` from inside its worktree. When `agent.config.draftPr`
+// responsibility — the agent has a platform token injected (PR #22) and
+// opens the PR from inside its worktree. When `agent.config.draftPr`
 // is true, the agent opens the PR as a draft and the engine marks it
 // ready after the successful agent step. This keeps the engine's
-// surface to "trigger → agent → optional GitHub side-effect actions".
+// surface to "trigger → agent → optional platform side-effect actions".
 export const ActionNodeSchema = z.discriminatedUnion("kind", [
   z.object({
     id: z.string(),
-    kind: z.literal("github.post_review"),
+    kind: z.literal("scm.post_review"),
     position: Position,
     config: z.object({
+      // GitHub's review event enum is the canonical spelling. Azure DevOps
+      // has no review-event concept: the provider maps APPROVE →
+      // reviewer vote 10, REQUEST_CHANGES → -10, COMMENT → thread only.
       event: z.enum(["COMMENT", "APPROVE", "REQUEST_CHANGES"]).default("COMMENT"),
     }),
   }),
   z.object({
     id: z.string(),
-    kind: z.literal("github.add_comment"),
+    kind: z.literal("scm.add_comment"),
     position: Position,
     config: z.object({}).optional(),
   }),
   z.object({
     id: z.string(),
-    kind: z.literal("github.add_label"),
+    kind: z.literal("scm.add_label"),
     position: Position,
     config: z.object({ labels: z.array(z.string()).min(1) }),
   }),
 ]);
 export type ActionNode = z.infer<typeof ActionNodeSchema>;
 
-export const FlowNodeSchema = z.union([TriggerNodeSchema, AgentNodeSchema, ActionNodeSchema]);
-export type FlowNode = z.infer<typeof FlowNodeSchema>;
+export const ACTION_KINDS = [
+  "scm.post_review",
+  "scm.add_comment",
+  "scm.add_label",
+] as const;
+
+/** Companion to `isTriggerKind`; legacy-tolerant in the same way. */
+export function isActionKind(kind: string): boolean {
+  return (ACTION_KINDS as readonly string[]).includes(normalizeNodeKind(kind));
+}
+
+const RawFlowNodeSchema = z.union([TriggerNodeSchema, AgentNodeSchema, ActionNodeSchema]);
+
+/**
+ * Every graph read in the system funnels through `FlowDefinitionSchema`, which
+ * means this preprocess is the single choke point where a legacy `github.*`
+ * kind becomes its canonical `scm.*` form. Parsed graphs therefore only ever
+ * contain canonical kinds — downstream code (engine, node runners, the web
+ * canvas) never needs to match both spellings.
+ */
+export const FlowNodeSchema = z.preprocess((raw) => {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const kind = (raw as { kind?: unknown }).kind;
+    if (typeof kind === "string") {
+      const canonical = normalizeNodeKind(kind);
+      if (canonical !== kind) return { ...(raw as object), kind: canonical };
+    }
+  }
+  return raw;
+}, RawFlowNodeSchema);
+export type FlowNode = z.infer<typeof RawFlowNodeSchema>;
 
 export const FlowEdgeSchema = z.object({
   id: z.string(),

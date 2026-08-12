@@ -1,8 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { ulid } from "ulid";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { sessions, users } from "../db/schema.js";
+import { sessions, userIdentities, users } from "../db/schema.js";
 import type { GithubOAuth, UserTokens, ViewerProfile } from "../github/oauth.js";
 
 const ALGO = "aes-256-gcm";
@@ -42,54 +42,151 @@ export interface SessionRecord {
 }
 export interface UserRecord {
   id: string;
-  githubUserId: number;
-  githubLogin: string;
+  /**
+   * Null for a user who signed in with Microsoft Entra and has never linked a
+   * GitHub account. Read `displayLogin()` rather than these when you just need
+   * something to show.
+   */
+  githubUserId: number | null;
+  githubLogin: string | null;
   name: string | null;
   avatarUrl: string | null;
   email: string | null;
 }
 
-export async function upsertUser(db: Db, viewer: ViewerProfile): Promise<UserRecord> {
-  const existing = await db.query.users.findFirst({
-    where: eq(users.githubUserId, viewer.id),
+/**
+ * Best available human-readable handle for a user, across sign-in providers.
+ * Falls back through GitHub login → display name → email local-part → a stable
+ * short id, so callers never have to render an empty string.
+ */
+export function displayLogin(user: {
+  id: string;
+  githubLogin?: string | null;
+  name?: string | null;
+  email?: string | null;
+}): string {
+  if (user.githubLogin) return user.githubLogin;
+  if (user.name) return user.name;
+  const local = user.email?.split("@")[0];
+  if (local) return local;
+  return `user-${user.id.slice(-6)}`;
+}
+
+/** Identity providers a user can sign in with. */
+export type IdentityProvider = "github" | "entra";
+
+export interface ExternalIdentity {
+  provider: IdentityProvider;
+  /** Provider-native stable id: GitHub's numeric user id, Entra's `oid`. */
+  externalId: string;
+  login: string;
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  /**
+   * GitHub only. Mirrored onto `users.github_user_id` / `github_login`, which
+   * several display paths still read directly.
+   */
+  githubUserId?: number;
+}
+
+/**
+ * Find-or-create the account behind an external identity.
+ *
+ * Lookup is by (provider, externalId) against `user_identities`, NOT by the
+ * legacy `users.github_user_id`, so a user with no GitHub account can exist.
+ * Emails are deliberately NOT used to match across providers — auto-linking on
+ * a self-asserted email is a well-known account-takeover vector, so signing in
+ * with Entra using the same address as an existing GitHub account creates a
+ * separate account. Linking is an explicit action from an authenticated
+ * session.
+ */
+export async function upsertUserByIdentity(
+  db: Db,
+  identity: ExternalIdentity,
+): Promise<UserRecord> {
+  const now = new Date();
+  const existingIdentity = await db.query.userIdentities.findFirst({
+    where: and(
+      eq(userIdentities.provider, identity.provider),
+      eq(userIdentities.externalId, identity.externalId),
+    ),
   });
-  if (existing) {
+
+  // Fields that mirror onto `users` for the display paths. Only overwrite the
+  // GitHub cache from a GitHub sign-in — an Entra sign-in must not blank out a
+  // linked GitHub login.
+  const userPatch = {
+    name: identity.name,
+    avatarUrl: identity.avatarUrl,
+    email: identity.email,
+    updatedAt: now,
+    ...(identity.provider === "github"
+      ? { githubUserId: identity.githubUserId ?? null, githubLogin: identity.login }
+      : {}),
+  };
+
+  if (existingIdentity) {
     await db
       .update(users)
-      .set({
-        githubLogin: viewer.login,
-        name: viewer.name,
-        avatarUrl: viewer.avatarUrl,
-        email: viewer.email,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, existing.id));
-    return {
-      id: existing.id,
-      githubUserId: viewer.id,
-      githubLogin: viewer.login,
-      name: viewer.name,
-      avatarUrl: viewer.avatarUrl,
-      email: viewer.email,
-    };
+      .set(userPatch)
+      .where(eq(users.id, existingIdentity.userId));
+    await db
+      .update(userIdentities)
+      .set({ login: identity.login, updatedAt: now })
+      .where(eq(userIdentities.id, existingIdentity.id));
+    const row = await db.query.users.findFirst({
+      where: eq(users.id, existingIdentity.userId),
+    });
+    return toUserRecord(existingIdentity.userId, row, identity);
   }
+
   const id = ulid();
   await db.insert(users).values({
     id,
-    githubUserId: viewer.id,
-    githubLogin: viewer.login,
-    name: viewer.name,
-    avatarUrl: viewer.avatarUrl,
-    email: viewer.email,
+    githubUserId: identity.provider === "github" ? (identity.githubUserId ?? null) : null,
+    githubLogin: identity.provider === "github" ? identity.login : null,
+    name: identity.name,
+    avatarUrl: identity.avatarUrl,
+    email: identity.email,
   });
+  await db.insert(userIdentities).values({
+    id: ulid(),
+    userId: id,
+    provider: identity.provider,
+    externalId: identity.externalId,
+    login: identity.login,
+  });
+  return toUserRecord(id, undefined, identity);
+}
+
+function toUserRecord(
+  id: string,
+  row: { githubUserId: number | null; githubLogin: string | null } | undefined,
+  identity: ExternalIdentity,
+): UserRecord {
+  const isGithub = identity.provider === "github";
   return {
     id,
-    githubUserId: viewer.id,
-    githubLogin: viewer.login,
-    name: viewer.name,
-    avatarUrl: viewer.avatarUrl,
-    email: viewer.email,
+    githubUserId: isGithub ? (identity.githubUserId ?? null) : (row?.githubUserId ?? null),
+    githubLogin: isGithub ? identity.login : (row?.githubLogin ?? null),
+    name: identity.name,
+    avatarUrl: identity.avatarUrl,
+    email: identity.email,
   };
+}
+
+/** GitHub sign-in entry point. Thin adapter over `upsertUserByIdentity`. */
+export async function upsertUser(db: Db, viewer: ViewerProfile): Promise<UserRecord> {
+  return upsertUserByIdentity(db, {
+    provider: "github",
+    externalId: String(viewer.id),
+    githubUserId: viewer.id,
+    login: viewer.login,
+    name: viewer.name,
+    email: viewer.email,
+    avatarUrl: viewer.avatarUrl,
+  });
 }
 
 export async function createSession(
@@ -104,9 +201,39 @@ export async function createSession(
   await db.insert(sessions).values({
     id: sessionId,
     userId,
+    authProvider: "github",
     githubAccessTokenEnc: cipher.encrypt(tokens.accessToken),
     githubRefreshTokenEnc: tokens.refreshToken ? cipher.encrypt(tokens.refreshToken) : null,
     githubTokenExpiresAt: tokens.expiresAt ?? null,
+    expiresAt,
+  });
+  return { sessionId, expiresAt };
+}
+
+/**
+ * Session for a user who authenticated with Microsoft Entra.
+ *
+ * The stored Entra tokens are the *user's* — used to enumerate the Azure DevOps
+ * organizations they may connect. Once an organization is connected, its own
+ * row on `azure_devops_connections` holds the credentials that drive repo and
+ * PR traffic, so this session token is not on the hot path.
+ */
+export async function createEntraSession(
+  db: Db,
+  cipher: TokenCipher,
+  userId: string,
+  tokens: { accessToken: string; refreshToken?: string | undefined; expiresAt: Date },
+  ttlDays: number,
+): Promise<{ sessionId: string; expiresAt: Date }> {
+  const sessionId = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+  await db.insert(sessions).values({
+    id: sessionId,
+    userId,
+    authProvider: "entra",
+    entraAccessTokenEnc: cipher.encrypt(tokens.accessToken),
+    entraRefreshTokenEnc: tokens.refreshToken ? cipher.encrypt(tokens.refreshToken) : null,
+    entraTokenExpiresAt: tokens.expiresAt,
     expiresAt,
   });
   return { sessionId, expiresAt };
@@ -168,6 +295,9 @@ export async function getDecryptedAccessToken(
 ): Promise<string | null> {
   const row = await db.query.sessions.findFirst({ where: eq(sessions.id, sessionId) });
   if (!row) return null;
+  // Entra-authenticated sessions hold no GitHub token. Callers already handle
+  // null as "no user token available" and degrade to installation auth.
+  if (!row.githubAccessTokenEnc) return null;
   return cipher.decrypt(row.githubAccessTokenEnc);
 }
 
@@ -191,16 +321,20 @@ export async function getFreshUserToken(
 ): Promise<string | null> {
   const row = await db.query.sessions.findFirst({ where: eq(sessions.id, sessionId) });
   if (!row) return null;
+  // Entra-authenticated session: no GitHub token to freshen. Same contract as a
+  // session miss — the caller falls back to installation auth or 401s.
+  if (!row.githubAccessTokenEnc) return null;
+  const accessTokenEnc = row.githubAccessTokenEnc;
   const now = Date.now();
   const exp = row.githubTokenExpiresAt?.getTime();
   if (exp && exp - REFRESH_SKEW_MS > now) {
-    return cipher.decrypt(row.githubAccessTokenEnc);
+    return cipher.decrypt(accessTokenEnc);
   }
   // Past skew OR no expiry recorded. The no-expiry case can happen for
   // legacy sessions written before user-token refresh was wired up — treat
   // them as "refresh if we can," fall back to the stored token if we can't.
   if (!row.githubRefreshTokenEnc) {
-    return exp && exp <= now ? null : cipher.decrypt(row.githubAccessTokenEnc);
+    return exp && exp <= now ? null : cipher.decrypt(accessTokenEnc);
   }
   const refresh = cipher.decrypt(row.githubRefreshTokenEnc);
   const next = await oauth.refreshUserToken(refresh);

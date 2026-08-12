@@ -98,6 +98,64 @@ For the built-in flows to work end-to-end, the GitHub App needs:
 
 The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the project page (issue rows are normalized from the webhook + a one-shot REST backfill on project add) and the implement trigger (Projects v2 status changes).
 
+## Azure DevOps
+
+Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure DevOps Server (on-prem) is not.
+
+**Status.** Sign in with Microsoft, connect an organization, add repositories as projects, and PR flows run end-to-end: a pull request event dispatches the flow, the agent gets a worktree and a token, and reviews post back as a comment thread plus a reviewer vote.
+
+Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
+
+> **The review→fix half of `development-lifecycle` does not run on Azure DevOps.**
+> That stage is keyed on a `scm.pull_request_review` trigger, and nothing in the Azure DevOps path ever produces one: service hooks have no reviewer-vote event, and `git.pullrequest.updated` (which does fire on a vote) is indistinguishable from a push, so it is mapped to `synchronize`. If you assign the built-in `development-lifecycle` flow to an Azure DevOps project, the implement and review stages work and the **review-submitted → fix loop silently never fires**. Reviews still post; nothing consumes them.
+>
+> A lossy proxy is possible — treat `git.pullrequest.updated` as a review event when any reviewer carries a non-zero vote — but it would re-fire on every later update to the same PR, so it needs deduplication work first. Tracked in ROADMAP.md.
+
+A deployment can be Azure-DevOps-only: with `AZDO_ENTRA_*` and `SESSION_ENCRYPTION_KEY` set and no `GITHUB_APP_*`, auth, `/api/*`, `/webhooks/azure-devops` and the flow engine all mount. `/api/installations` and the GitHub sign-in routes are simply absent, and the login page offers Microsoft alone.
+
+### What agents get on Azure DevOps
+
+Run context uses the **same `OPENCARA_*` variable names** as GitHub, so prompts and flow templates are portable. Two additions and one gap:
+
+- `OPENCARA_PLATFORM=azure_devops`, plus `OPENCARA_AZDO_ORG` / `OPENCARA_AZDO_PROJECT` / `OPENCARA_REPO_NAME`.
+- The token arrives as `OPENCARA_SCM_TOKEN` and `AZURE_DEVOPS_EXT_PAT` (what `az repos` reads) — **not** as `GH_TOKEN`, so `gh` cannot pick up an Azure DevOps token and fail confusingly against github.com.
+- `OPENCARA_PR_DIFF_INLINE=0` and an empty `stdin.diff`. Azure DevOps has no single endpoint returning a unified diff for a PR, so rather than inline a partial one, agents are expected to `git diff` in the worktree. Reviewer flows without a worktree will see no diff.
+
+### Setup
+
+1. Register a **Microsoft Entra ID** application (portal.azure.com → Microsoft Entra ID → App registrations).
+   Entra rather than an Azure DevOps OAuth app: Microsoft stopped accepting new Azure DevOps OAuth registrations in April 2025 and is retiring that service.
+2. Add the redirect URI `<PUBLIC_BASE_URL>/auth/azure/callback`.
+3. Grant the app **Azure DevOps** delegated permissions. Request the least you need — `vso.code_write`, `vso.work_write`, `vso.threads_full` cover the built-in flows.
+4. Set `AZDO_ENTRA_CLIENT_ID`, `AZDO_ENTRA_CLIENT_SECRET`, and optionally `AZDO_ENTRA_TENANT` (`common` by default; pin your tenant GUID for a single-tenant deployment).
+5. Restart. The login page grows a "Sign in with Microsoft" button and **Add project** grows an Azure DevOps tab.
+
+`PUBLIC_BASE_URL` **must be HTTPS.** Azure DevOps refuses to create a service hook subscription with basic-auth credentials against a plaintext endpoint, so every subscription will fail on an `http://` deployment.
+
+### Credentials: how this differs from the GitHub App
+
+This is the part worth understanding before you connect a production organization.
+
+A GitHub App installation token is scoped to specific repositories, acts as a distinct bot identity, and is revoked the moment an agent run finishes. An Entra token is **user-delegated**, and none of those three things hold:
+
+- **No repository scoping.** The token carries whatever Azure DevOps permissions the app registration was granted, across every organization the connecting user can reach. An agent handed that token can reach all of it. Narrow the app registration — that is the only place this can be constrained.
+- **No revocation.** Access tokens simply expire (~1h). There is no equivalent of GitHub's token-revoke call, so a leaked token is valid until it ages out.
+- **No bot identity.** PR comments and reviewer votes are attributed to the person who connected the organization, not to `opencara[bot]`. Automated review→fix loops that filter on a bot login need to filter on that user instead.
+
+A note on votes, since branch policies key off them: every review writes a vote, including the explicit **0** for a commented review. That is what clears a previous verdict — without it, an approve followed later by a comment-only review would leave "Approved" standing, and a required-reviewer policy could honour that stale approval to merge a PR whose latest review raised a concern. OpenCara therefore appears as a reviewer on any PR it reviews, even when it is only commenting.
+
+Refresh tokens are stored encrypted with `SESSION_ENCRYPTION_KEY`, the same cipher as GitHub session tokens, and agents are only ever handed a short-lived access token — never the refresh token.
+
+### Webhooks
+
+Azure DevOps does not sign webhook deliveries. Where the GitHub handler verifies an HMAC over the body, service hooks authenticate with **HTTP Basic**, and the password registered on the subscription is the entire inbound authentication. OpenCara generates a random 32-byte secret per connection, stores it encrypted, and compares it in constant time. Treat it like `GITHUB_WEBHOOK_SECRET`: anyone holding it can drive agent runs.
+
+Adding a repository creates one subscription per event type (`git.pullrequest.created`, `git.pullrequest.updated`, the PR comment event, `workitem.created`, `workitem.updated`) scoped to that repository. Removing the project deletes them by the ids recorded on the project row.
+
+That teardown is **best-effort**: subscriptions live in your Azure DevOps organization, not in OpenCara's database, so a revoked grant or an API outage can leave them behind. Nothing retries, and an orphaned subscription is effectively permanent — the handler answers 200 for an unmatched repo (see above), so Azure never auto-disables it. Removal logs the subscription ids at `error` level when it can't delete them; those need clearing by hand from the Azure DevOps project's **Service Hooks** page.
+
+Azure DevOps **auto-disables a subscription** after repeated delivery failures, silently. The webhook handler therefore answers 200 even for payloads it cannot map, so an unrecognised event variant can never tear down a working hook.
+
 ## Agent runtime credentials
 
 Each agent run dispatched through a flow gets an ephemeral GitHub App installation token injected into its environment, so `gh` and any octokit-based tool work out of the box without per-host `gh auth login`:

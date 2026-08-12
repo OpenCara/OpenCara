@@ -67,18 +67,48 @@ function worktreeCreate(args: string[]): void {
   // `~/.opencara/sessions/<key>/`, and reads any pre-existing session
   // file to seed conversation resume.
   const rawKey = pickFlag(args, "--key") ?? pickFlag(args, "--session-key");
-  if (!repo || !branch) {
-    fail("worktree create requires --repo OWNER/NAME and --branch <name>");
+  // Platform-neutral overrides, both optional so an older orchestrator that
+  // sends neither keeps the exact GitHub behaviour this command shipped with.
+  //
+  // --clone-url: full HTTPS remote. Azure DevOps repos are three segments
+  //   (org/project/_git/repo), which `--repo OWNER/NAME` cannot express.
+  // --auth-user: username half of the basic-auth pair. GitHub requires the
+  //   literal "x-access-token"; Azure DevOps accepts any non-empty value.
+  const cloneUrlFlag = pickFlag(args, "--clone-url");
+  const authUser = pickFlag(args, "--auth-user") ?? "x-access-token";
+
+  if (!branch) {
+    fail("worktree create requires --branch <name>");
+  }
+  if (!repo && !cloneUrlFlag) {
+    fail("worktree create requires --repo OWNER/NAME or --clone-url <url>");
   }
   if (!rawKey) {
     fail("worktree create requires --key <slug>");
   }
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+  // Only validate --repo's shape when it is the thing we'll build a URL from.
+  // With --clone-url present, --repo is just a label (Azure DevOps sends
+  // "org/project" there, which has its own segment count).
+  if (!cloneUrlFlag && repo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
     fail(`invalid --repo '${repo}' (expected OWNER/NAME)`);
   }
-  const token = process.env["GH_TOKEN"];
+  if (cloneUrlFlag && !/^https:\/\/[\w.-]+\//.test(cloneUrlFlag)) {
+    // Reject non-HTTPS and anything that isn't a plain URL: this value ends up
+    // in a `git clone` argv, so a `--upload-pack=...`-shaped string here would
+    // be an argument-injection vector.
+    fail(`invalid --clone-url '${cloneUrlFlag}' (expected an https:// URL)`);
+  }
+  if (!/^[\w.-]+$/.test(authUser)) {
+    fail("--auth-user contains unexpected characters; refusing to use");
+  }
+  // OPENCARA_SCM_TOKEN is the platform-neutral name; GH_TOKEN stays supported
+  // because every currently-deployed orchestrator injects that one, and agents
+  // in existing prompts reference it by name.
+  const token = process.env["OPENCARA_SCM_TOKEN"] ?? process.env["GH_TOKEN"];
   if (!token) {
-    fail("worktree create needs GH_TOKEN in env (the orchestrator injects this per run)");
+    fail(
+      "worktree create needs GH_TOKEN or OPENCARA_SCM_TOKEN in env (the orchestrator injects this per run)",
+    );
   }
   // Sanity-check the token shape so a fat-fingered env doesn't smuggle
   // shell metachars into the credential helper string before it lands in
@@ -93,11 +123,15 @@ function worktreeCreate(args: string[]): void {
   // "worktree allocation ... GH_TOKEN contains unexpected characters").
   //
   // This is defense-in-depth, not a correctness requirement: HELPER_SNIPPET
-  // below references the token by NAME ($GH_TOKEN), so the value never
-  // reaches argv or .git/config. Whitespace, quotes, $ and backticks —
+  // below references the token by NAME ($OPENCARA_SCM_TOKEN), so the value
+  // never reaches argv or .git/config. Whitespace, quotes, $ and backticks —
   // the characters that would actually matter — stay rejected.
+  //
+  // Microsoft Entra access tokens (Azure DevOps) are JWTs: three base64url
+  // segments separated by `.`, so they pass the same guard. base64url uses
+  // only [A-Za-z0-9_-], all within [\w.-].
   if (!/^[\w.-]+$/.test(token)) {
-    fail("GH_TOKEN contains unexpected characters; refusing to use");
+    fail("SCM token contains unexpected characters; refusing to use");
   }
 
   const key = safeKey(rawKey);
@@ -128,22 +162,31 @@ function worktreeCreate(args: string[]): void {
     );
   }
   // safeKey takes "owner/name" → "owner/name" (segments sanitized),
-  // which is the natural cache layout.
-  const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo)) : null;
+  // which is the natural cache layout. `repo` is a label under --clone-url,
+  // so fall back to the key when it's absent.
+  const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo || rawKey)) : null;
+  const baseGitEnv: NodeJS.ProcessEnv = { ...process.env };
+  // Normalize onto one variable name so the helper snippet below has a single
+  // thing to reference regardless of which one the orchestrator injected.
+  baseGitEnv["OPENCARA_SCM_TOKEN"] = token;
   const gitEnv: NodeJS.ProcessEnv | undefined =
     useCache && !useLfs
-      ? { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
-      : undefined;
+      ? { ...baseGitEnv, GIT_LFS_SKIP_SMUDGE: "1" }
+      : baseGitEnv;
 
   // The credential helper is a single-quoted shell snippet that git
-  // execs via /bin/sh on auth challenge. It references $GH_TOKEN by
-  // NAME — the token value never enters argv (process listings) or
+  // execs via /bin/sh on auth challenge. It references the token by
+  // NAME — the value never enters argv (process listings) or
   // .git/config. Installed inline at clone time AND persisted in the
   // worktree's .git/config so a downstream `git push`/`git fetch`
   // also picks up the agent's per-run token.
+  //
+  // The username differs by platform (GitHub demands the literal
+  // "x-access-token"; Azure DevOps accepts anything), so it is interpolated —
+  // safe because --auth-user is validated against [\w.-] above.
   const HELPER_SNIPPET =
-    '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f';
-  const cleanUrl = `https://github.com/${repo}.git`;
+    `!f() { echo username=${authUser}; echo "password=$OPENCARA_SCM_TOKEN"; }; f`;
+  const cleanUrl = cloneUrlFlag ?? `https://github.com/${repo}.git`;
 
   mkdirSync(sessionDir, { recursive: true });
 

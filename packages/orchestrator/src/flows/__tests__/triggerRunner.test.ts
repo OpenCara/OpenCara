@@ -5,7 +5,7 @@ import { SkipFlowError, triggerRunner, type NodeRunCtx } from "../nodeRunners.js
 
 const pullRequestTrigger: TriggerNode = {
   id: "t1",
-  kind: "github.pull_request",
+  kind: "scm.pull_request",
   position: { x: 0, y: 0 },
   config: {
     actions: ["opened", "synchronize", "reopened", "commented"],
@@ -30,11 +30,14 @@ function ctxForComment(body: string): NodeRunCtx {
     flowRunId: "run-1",
     flowRunStepId: "step-1",
     projectId: "project-1",
-    installation: { id: "installation-1", githubInstallationId: 1 },
+    scm: {
+      platform: "github" as const,
+      installation: { id: "installation-1", githubInstallationId: 1 },
+      githubRepoId: 1,
+    },
     project: {
       owner: "octo-org",
       name: "octo-repo",
-      githubRepoId: 1,
       defaultBranch: "main",
       instructionsFile: "",
     },
@@ -85,7 +88,7 @@ describe("triggerRunner pull_request commentPhrase", () => {
 // the missing remote ref. The trigger must skip closed PRs cleanly.
 const reviewTrigger: TriggerNode = {
   id: "t-review",
-  kind: "github.pull_request_review",
+  kind: "scm.pull_request_review",
   position: { x: 0, y: 0 },
   config: {
     reviewStates: ["commented", "changes_requested"],
@@ -118,11 +121,14 @@ function ctxForReviewSubmitted(opts: ReviewCtxOpts = {}): NodeRunCtx {
     flowRunId: "run-1",
     flowRunStepId: "step-1",
     projectId: "project-1",
-    installation: { id: "installation-1", githubInstallationId: 1 },
+    scm: {
+      platform: "github" as const,
+      installation: { id: "installation-1", githubInstallationId: 1 },
+      githubRepoId: 1,
+    },
     project: {
       owner: "octo-org",
       name: "octo-repo",
-      githubRepoId: 1,
       defaultBranch: "main",
       instructionsFile: "",
     },
@@ -167,11 +173,14 @@ function ctxForFixComment(opts: ReviewCtxOpts = {}): NodeRunCtx {
     flowRunId: "run-1",
     flowRunStepId: "step-1",
     projectId: "project-1",
-    installation: { id: "installation-1", githubInstallationId: 1 },
+    scm: {
+      platform: "github" as const,
+      installation: { id: "installation-1", githubInstallationId: 1 },
+      githubRepoId: 1,
+    },
     project: {
       owner: "octo-org",
       name: "octo-repo",
-      githubRepoId: 1,
       defaultBranch: "main",
       instructionsFile: "",
     },
@@ -277,11 +286,14 @@ function ctxForSchedule(
     flowRunId: "run-1",
     flowRunStepId: "step-1",
     projectId: "project-1",
-    installation: { id: "installation-1", githubInstallationId: 1 },
+    scm: {
+      platform: "github" as const,
+      installation: { id: "installation-1", githubInstallationId: 1 },
+      githubRepoId: 1,
+    },
     project: {
       owner: "octo-org",
       name: "octo-repo",
-      githubRepoId: 1,
       defaultBranch: "main",
       instructionsFile: "",
     },

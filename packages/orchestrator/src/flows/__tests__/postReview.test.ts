@@ -9,7 +9,7 @@ import {
 
 const postReviewNode: ActionNode = {
   id: "x1",
-  kind: "github.post_review",
+  kind: "scm.post_review",
   position: { x: 0, y: 0 },
   config: { event: "COMMENT" },
 } as ActionNode;
@@ -39,11 +39,14 @@ function ctxForPostReview(previousOutput: string): {
     flowRunId: "run-1",
     flowRunStepId: "step-1",
     projectId: "project-1",
-    installation: { id: "installation-1", githubInstallationId: 1 },
+    scm: {
+      platform: "github" as const,
+      installation: { id: "installation-1", githubInstallationId: 1 },
+      githubRepoId: 1,
+    },
     project: {
       owner: "octo-org",
       name: "octo-repo",
-      githubRepoId: 1,
       defaultBranch: "main",
       instructionsFile: "",
     },
@@ -63,7 +66,7 @@ function ctxForPostReview(previousOutput: string): {
   return { ctx, requests };
 }
 
-describe("actionRunner github.post_review stub guard", () => {
+describe("actionRunner scm.post_review stub guard", () => {
   it("refuses a verdict-less one-liner instead of publishing it", async () => {
     const { ctx, requests } = ctxForPostReview("I've completed my review of PR #25.");
     await assert.rejects(

@@ -12,7 +12,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-export const platformEnum = pgEnum("platform", ["github"]);
+export const platformEnum = pgEnum("platform", ["github", "azure_devops"]);
 
 export const agentRunStatusEnum = pgEnum("agent_run_status", [
   "queued",
@@ -64,8 +64,12 @@ export const users = pgTable(
   "users",
   {
     id: text("id").primaryKey(),
-    githubUserId: bigint("github_user_id", { mode: "number" }).notNull(),
-    githubLogin: text("github_login").notNull(),
+    // Nullable since migration 0043: a user who signed in with Microsoft Entra
+    // has no GitHub account. These two remain the cached GitHub identity for
+    // the display paths that read them directly; the authoritative,
+    // multi-provider mapping lives in `userIdentities`.
+    githubUserId: bigint("github_user_id", { mode: "number" }),
+    githubLogin: text("github_login"),
     name: text("name"),
     avatarUrl: text("avatar_url"),
     email: text("email"),
@@ -78,14 +82,53 @@ export const users = pgTable(
   }),
 );
 
+/**
+ * One row per external identity a user can sign in with. Looked up on every
+ * sign-in by (provider, externalId); a user gains a second row when they link
+ * an additional provider to the same account.
+ */
+export const userIdentities = pgTable(
+  "user_identities",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** "github" | "entra". Deliberately text, not an enum — see migration 0043. */
+    provider: text("provider").notNull(),
+    /** GitHub's numeric user id or Entra's `oid` claim, as text. */
+    externalId: text("external_id").notNull(),
+    /** GitHub login / Entra userPrincipalName. */
+    login: text("login"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    providerExternalIdUq: uniqueIndex("user_identities_provider_external_id_uq").on(
+      t.provider,
+      t.externalId,
+    ),
+    userIdIdx: index("user_identities_user_id_idx").on(t.userId),
+  }),
+);
+
 export const sessions = pgTable(
   "sessions",
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    githubAccessTokenEnc: text("github_access_token_enc").notNull(),
+    /** Which provider authenticated this session: "github" | "entra". */
+    authProvider: text("auth_provider").notNull().default("github"),
+    // Nullable since 0043 — an Entra-authenticated session carries no GitHub token.
+    githubAccessTokenEnc: text("github_access_token_enc"),
     githubRefreshTokenEnc: text("github_refresh_token_enc"),
     githubTokenExpiresAt: timestamp("github_token_expires_at", { withTimezone: true }),
+    // Entra tokens for the signed-in user. Used to enumerate the Azure DevOps
+    // organizations they can connect; per-connection tokens on
+    // `azureDevopsConnections` are what drive repo/PR traffic afterwards.
+    entraAccessTokenEnc: text("entra_access_token_enc"),
+    entraRefreshTokenEnc: text("entra_refresh_token_enc"),
+    entraTokenExpiresAt: timestamp("entra_token_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
@@ -128,14 +171,105 @@ export const githubInstallations = pgTable(
   }),
 );
 
+/**
+ * A connected Azure DevOps organization.
+ *
+ * Unlike a GitHub App installation, this is a **user-delegated** Entra grant:
+ * the credentials are one person's, API calls act as that person (not a bot),
+ * and the access token cannot be scoped to a subset of repositories or revoked
+ * early — it simply expires. See the Azure DevOps section of the README for the
+ * trust boundary that implies for agent runs.
+ */
+export const azureDevopsConnections = pgTable(
+  "azure_devops_connections",
+  {
+    id: text("id").primaryKey(),
+    /** Organization as it appears in the URL: https://dev.azure.com/<orgName>. */
+    orgName: text("org_name").notNull(),
+    /** Azure DevOps accountId GUID; resolved lazily after connect. */
+    orgId: text("org_id"),
+    /**
+     * Directory the grant came from, read best-effort from the access token's
+     * `tid` claim. Nullable (0045) — diagnostic metadata only; token refresh
+     * goes through the shared EntraOAuth built from AZDO_ENTRA_TENANT.
+     */
+    entraTenantId: text("entra_tenant_id"),
+    /** `oid` claim of the user who connected the org. */
+    entraObjectId: text("entra_object_id").notNull(),
+    // Encrypted with the same TokenCipher as session tokens.
+    refreshTokenEnc: text("refresh_token_enc"),
+    accessTokenEnc: text("access_token_enc"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    /**
+     * Shared secret registered as the HTTP Basic password on every service hook
+     * subscription for this org. Azure DevOps does not sign webhooks with an
+     * HMAC the way GitHub does, so this is the whole of inbound authentication.
+     */
+    webhookSecretEnc: text("webhook_secret_enc").notNull(),
+    /**
+     * NOT NULL (unlike githubInstallations.addedByUserId): the row's credentials
+     * ARE this user's, so it is meaningless without them — hence cascade.
+     */
+    addedByUserId: text("added_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // Per-user, not global: user-delegated credentials mean two people
+    // connecting the same org hold two genuinely different grants.
+    userOrgUq: uniqueIndex("azure_devops_connections_user_org_uq").on(
+      t.addedByUserId,
+      t.orgName,
+    ),
+    orgNameIdx: index("azure_devops_connections_org_name_idx").on(t.orgName),
+  }),
+);
+
 export const projects = pgTable(
   "projects",
   {
     id: text("id").primaryKey(),
-    installationId: text("installation_id")
+    /**
+     * Which platform this project lives on. Drives provider resolution in
+     * scm/registry.ts; every platform-specific branch keys off this column.
+     */
+    platform: platformEnum("platform").notNull().default("github"),
+    // Exactly one of installationId / azdoConnectionId is set, matching
+    // `platform` — enforced by the `projects_platform_connection_ck` CHECK
+    // constraint in migration 0043, not just by convention.
+    installationId: text("installation_id").references(() => githubInstallations.id, {
+      onDelete: "cascade",
+    }),
+    azdoConnectionId: text("azdo_connection_id").references(
+      () => azureDevopsConnections.id,
+      { onDelete: "cascade" },
+    ),
+    /** Azure DevOps team project GUID — required by the work item + hooks APIs. */
+    azdoProjectId: text("azdo_project_id"),
+    /** Service hook subscription ids, recorded so project removal can delete them. */
+    azdoSubscriptionIds: jsonb("azdo_subscription_ids")
+      .$type<string[]>()
       .notNull()
-      .references(() => githubInstallations.id, { onDelete: "cascade" }),
-    githubRepoId: bigint("github_repo_id", { mode: "number" }).notNull(),
+      .default([]),
+    /** GitHub-only; null for Azure DevOps projects. Prefer `externalRepoId`. */
+    githubRepoId: bigint("github_repo_id", { mode: "number" }),
+    /**
+     * Platform-neutral repo identity — GitHub's numeric repo id or Azure
+     * DevOps' repository GUID, as text. Unique per (platform, externalRepoId).
+     */
+    externalRepoId: text("external_repo_id").notNull(),
+    /**
+     * Canonical browser URL. Previously derived as github.com/{owner}/{name},
+     * which does not generalise (Azure DevOps is org/project/_git/repo).
+     */
+    webUrl: text("web_url"),
+    /**
+     * Display owner. For Azure DevOps this is "org/project" — the two segments
+     * above the repo — so that (owner, name) stays a unique, human-readable
+     * handle across both platforms.
+     */
     owner: text("owner").notNull(),
     name: text("name").notNull(),
     defaultBranch: text("default_branch"),
@@ -169,7 +303,13 @@ export const projects = pgTable(
     removedAt: timestamp("removed_at", { withTimezone: true }),
   },
   (t) => ({
+    // Still guards GitHub rows; Azure DevOps rows leave github_repo_id NULL and
+    // Postgres permits many NULLs under a unique index.
     githubRepoIdUq: uniqueIndex("projects_github_repo_id_uq").on(t.githubRepoId),
+    platformExternalRepoIdUq: uniqueIndex("projects_platform_external_repo_id_uq").on(
+      t.platform,
+      t.externalRepoId,
+    ),
     ownerNameUq: uniqueIndex("projects_owner_name_uq").on(t.owner, t.name),
     installationIdIdx: index("projects_installation_id_idx").on(t.installationId),
   }),
@@ -235,6 +375,11 @@ export const platformEvents = pgTable(
     installationId: text("installation_id").references(() => githubInstallations.id, {
       onDelete: "set null",
     }),
+    /** Set instead of installationId for Azure DevOps service-hook deliveries. */
+    azdoConnectionId: text("azdo_connection_id").references(
+      () => azureDevopsConnections.id,
+      { onDelete: "set null" },
+    ),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     githubRepoId: bigint("github_repo_id", { mode: "number" }),
     deliveryId: text("delivery_id"),

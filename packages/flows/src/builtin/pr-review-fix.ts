@@ -20,7 +20,7 @@ export const prReviewFixFlow: FlowDefinition = {
   nodes: [
     {
       id: "t1",
-      kind: "github.pull_request_review",
+      kind: "scm.pull_request_review",
       position: { x: 0, y: 0 },
       config: {
         // Default: fire on commented + changes_requested. Approved

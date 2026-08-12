@@ -1,7 +1,7 @@
 import type { SkillEnvelope } from "../skills.js";
 
 // Pure-markdown skill envelope injected into a reviewer agent's system
-// prompt when its downstream graph contains a `github.post_review`
+// prompt when its downstream graph contains a `scm.post_review`
 // action node. The instruction forces the verdict-line contract that
 // the post-review parser (agents/verdict.ts) reads to populate
 // GitHub's review `event` enum (APPROVE / REQUEST_CHANGES / COMMENT).

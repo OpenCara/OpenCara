@@ -12,7 +12,7 @@ function agentNode(id = "synth"): FlowNode {
 function actionNode(id = "post"): FlowNode {
   return {
     id,
-    kind: "github.post_review",
+    kind: "scm.post_review",
     position: { x: 0, y: 0 },
     config: { event: "COMMENT" },
   } as FlowNode;

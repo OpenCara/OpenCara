@@ -12,6 +12,9 @@ import { TokenCipher } from "./auth/session.js";
 import { currentUser, createSessionCache, type AuthEnv } from "./auth/middleware.js";
 import { appWebhookRoutes } from "./routes/webhooks.js";
 import { authRoutes } from "./routes/auth.js";
+import { EntraOAuth } from "./azure/entra.js";
+import { azureWebhookRoutes } from "./routes/webhooksAzure.js";
+import { azureRoutes } from "./routes/api/azure.js";
 import { projectRoutes } from "./routes/api/projects.js";
 import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
@@ -104,9 +107,36 @@ const githubApp = config.github
   ? createGithubAppClient(config.github, config.GITHUB_WEBHOOK_SECRET)
   : null;
 
-const flowEngine = githubApp
-  ? new FlowEngine({ db, pg, app: githubApp, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL })
-  : null;
+// Azure DevOps client deps, built once and shared by the flow engine and the
+// API routes. Requires SESSION_ENCRYPTION_KEY because connection tokens are
+// stored encrypted with the same cipher as session tokens.
+const azureDeps =
+  config.azureDevops && config.SESSION_ENCRYPTION_KEY
+    ? {
+        db,
+        cipher: new TokenCipher(config.SESSION_ENCRYPTION_KEY),
+        entra: new EntraOAuth({
+          clientId: config.azureDevops.clientId,
+          clientSecret: config.azureDevops.clientSecret,
+          tenant: config.azureDevops.tenant,
+          publicBaseUrl: config.PUBLIC_BASE_URL,
+        }),
+      }
+    : null;
+
+// Built when EITHER platform is configured — an Azure-DevOps-only deployment
+// has no GitHub App but still needs an engine to run its flows.
+const flowEngine =
+  githubApp || azureDeps
+    ? new FlowEngine({
+        db,
+        pg,
+        app: githubApp ?? undefined,
+        azure: azureDeps ?? undefined,
+        dispatcher,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : null;
 
 // Wire flowEngine and githubApp into the device pool after construction
 // to break the circular dependency (pool → engine, engine → dispatcher → pool).
@@ -197,13 +227,33 @@ if (flowEngine) {
   console.log("[orchestrator] cron scheduler started (60s tick)");
 }
 
-if (config.github && config.SESSION_ENCRYPTION_KEY) {
-  const oauth = new GithubOAuth({
-    clientId: config.github.clientId,
-    clientSecret: config.github.clientSecret,
-    publicBaseUrl: config.PUBLIC_BASE_URL,
-  });
-  const cipher = new TokenCipher(config.SESSION_ENCRYPTION_KEY);
+// Auth + the whole /api surface mount when EITHER platform is configured.
+// Gating this on `config.github` alone is what made an Azure-DevOps-only
+// deployment silently serve nothing but /health: the flow engine started, but
+// sign-in, /api/*, and /webhooks/azure-devops never mounted.
+// SESSION_ENCRYPTION_KEY is required either way — it encrypts session and
+// connection tokens.
+if ((config.github || azureDeps) && config.SESSION_ENCRYPTION_KEY) {
+  const oauth = config.github
+    ? new GithubOAuth({
+        clientId: config.github.clientId,
+        clientSecret: config.github.clientSecret,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : undefined;
+  // Same key, so azureDeps.cipher (when present) is interchangeable; reuse it
+  // rather than holding two instances of the same cipher.
+  const cipher = azureDeps?.cipher ?? new TokenCipher(config.SESSION_ENCRYPTION_KEY);
+
+  // Optional second sign-in provider. Absent config leaves /auth/azure/*
+  // unmounted and the login page GitHub-only. Reuses the single client built
+  // for `azureDeps` above so token refreshes share one instance.
+  const entraOAuth = azureDeps?.entra;
+  if (entraOAuth) {
+    console.log(
+      `[orchestrator] Microsoft Entra sign-in enabled (tenant: ${config.azureDevops!.tenant})`,
+    );
+  }
 
   app.route(
     "/",
@@ -216,10 +266,37 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
       publicBaseUrl: config.PUBLIC_BASE_URL,
       app: githubApp ?? undefined,
       sessionCache,
+      entraOAuth,
     }),
   );
-  app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));
-  app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  if (entraOAuth) {
+    app.route(
+      "/webhooks/azure-devops",
+      azureWebhookRoutes({ db, cipher, flowEngine: flowEngine ?? undefined }),
+    );
+    app.route(
+      "/api/azure",
+      azureRoutes({
+        db,
+        cipher,
+        entra: entraOAuth,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+        cookieName: config.SESSION_COOKIE_NAME,
+      }),
+    );
+    console.log(
+      "[orchestrator] Azure DevOps routes mounted (webhooks at /webhooks/azure-devops)",
+    );
+  }
+  app.route(
+    "/api/projects",
+    projectRoutes({ db, app: githubApp ?? undefined, azure: azureDeps ?? undefined }),
+  );
+  // GitHub App installations have no Azure DevOps analogue — the equivalent
+  // surface is /api/azure/connections.
+  if (config.github) {
+    app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  }
   app.route("/api/activity", activityRoutes({ db }));
   // Hono's app.route(prefix, subapp) only honours the FIRST mount at a given
   // prefix — subsequent app.route("/api", ...) calls are silently dropped.
@@ -247,7 +324,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   console.log("[orchestrator] auth + API routes mounted (WS at /api/devices/ws)");
 } else {
   console.log(
-    "[orchestrator] auth/API not mounted (need GitHub App config + SESSION_ENCRYPTION_KEY)",
+    "[orchestrator] auth/API not mounted — configure GITHUB_APP_* and/or AZDO_ENTRA_*, plus SESSION_ENCRYPTION_KEY",
   );
 }
 
