@@ -160,6 +160,18 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
  * matters: it is what re-runs a review when the author pushes a fix. The cost
  * is that a metadata-only edit also re-triggers; flows that care can filter on
  * the commit sha, which the engine dedups on.
+ *
+ * KNOWN GAP — nothing here ever produces `pull_request_review`, so the
+ * `scm.pull_request_review` trigger (the review→fix half of
+ * `development-lifecycle`) cannot fire on Azure DevOps. There is no
+ * reviewer-vote service hook event to subscribe to, and a vote arrives as the
+ * same `git.pullrequest.updated` as a push, with no "what changed" marker to
+ * tell them apart. A lossy proxy — treat an update carrying a non-zero reviewer
+ * vote as a review — would re-fire on every later update to the same PR, so it
+ * needs dedup work first. Documented in README + ROADMAP; the
+ * "no Azure DevOps event yields pull_request_review" suite in
+ * azure/__tests__/webhooks.test.ts is the tripwire that fails when this is
+ * implemented (delete it and the docs together).
  */
 function prAction(eventType: string, status: string | undefined): string {
   if (eventType === "git.pullrequest.created") return "opened";

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { AzureDevopsClient } from "../../azure/client.js";
+import { AzureDevopsAuthError, type AzureDevopsClient } from "../../azure/client.js";
 import { createAzureProvider, voteForReviewEvent, AZDO_VOTE } from "../azure/provider.js";
 
 interface Recorded {
@@ -205,5 +205,49 @@ describe("azure provider addComment / addLabel", () => {
     const { provider } = providerWith(() => ({}));
     const res = await provider.addLabel(42, ["needs-review"]);
     assert.deepEqual(res.labels, ["needs-review"]);
+  });
+});
+
+// The downgrade-to-comment path must stay narrow. A dead connection or a
+// transient outage swallowed as "downgraded" makes every later review report
+// success while the org actually needs reconnecting — an alert nobody gets.
+describe("azure provider postReview — which vote failures degrade", () => {
+  function voteFails(err: unknown) {
+    return providerWith((call, i) => {
+      if (call.url.endsWith("/threads")) return { id: 91 };
+      if (call.url.includes("connectionData")) {
+        return { authenticatedUser: { id: "identity-1" } };
+      }
+      void i;
+      throw err;
+    });
+  }
+
+  it("degrades on a policy refusal (4xx), keeping the posted review", async () => {
+    const err = Object.assign(new Error("VS403463: self-approval forbidden"), {
+      status: 403,
+    });
+    const { provider } = voteFails(err);
+    const res = await provider.postReview(PR, "APPROVE", "Ship it.");
+    assert.equal(res.downgradedFrom, "APPROVE");
+  });
+
+  it("fails the step on a dead connection instead of degrading forever", async () => {
+    const { provider } = voteFails(
+      new AzureDevopsAuthError("refresh token rejected — reconnect", "conn-1"),
+    );
+    await assert.rejects(provider.postReview(PR, "APPROVE", "Ship it."), /reconnect/);
+  });
+
+  it("fails the step on a transient 5xx so the run can be retried", async () => {
+    const err = Object.assign(new Error("Service Unavailable"), { status: 503 });
+    const { provider } = voteFails(err);
+    await assert.rejects(provider.postReview(PR, "APPROVE", "Ship it."), /Service Unavailable/);
+  });
+
+  it("fails the step on a 429 rather than silently dropping the verdict", async () => {
+    const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
+    const { provider } = voteFails(err);
+    await assert.rejects(provider.postReview(PR, "APPROVE", "Ship it."), /Too Many Requests/);
   });
 });

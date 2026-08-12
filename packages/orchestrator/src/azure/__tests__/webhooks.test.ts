@@ -355,3 +355,58 @@ describe("deleteSubscriptions", () => {
     assert.equal(deleted.length, 0);
   });
 });
+
+// TRIPWIRE for a documented gap. The `scm.pull_request_review` trigger — the
+// review→fix half of `development-lifecycle` and all of `pr-review-fix` —
+// cannot fire on Azure DevOps, because no service hook event maps to it: a
+// reviewer vote arrives as the same `git.pullrequest.updated` as a push, with
+// no marker distinguishing them.
+//
+// This test asserts the CURRENT behaviour, not the desired one. It is expected
+// to fail the day someone implements the mapping — at which point delete it and
+// remove the gap from README.md + ROADMAP.md, which is the point.
+describe("no Azure DevOps event yields pull_request_review (documented gap)", () => {
+  const prWithVote = {
+    pullRequestId: 42,
+    status: "active",
+    sourceRefName: "refs/heads/feature/widget",
+    targetRefName: "refs/heads/main",
+    lastMergeSourceCommit: { commitId: "aaa111" },
+    lastMergeTargetCommit: { commitId: "bbb222" },
+    // A cast reviewer vote — the closest Azure DevOps gets to "review submitted".
+    reviewers: [{ id: "rev-1", vote: 10, displayName: "Ada" }],
+    repository: {
+      id: "repo-guid",
+      name: "widgets",
+      project: { id: "proj-guid", name: "Team" },
+    },
+  };
+
+  for (const eventType of [
+    "git.pullrequest.created",
+    "git.pullrequest.updated",
+    "ms.vss-code.git-pullrequest-comment-event",
+    "workitem.created",
+    "workitem.updated",
+  ]) {
+    it(`${eventType} does not normalize to pull_request_review`, () => {
+      const resource = eventType.startsWith("workitem.")
+        ? { id: 1, fields: {} }
+        : eventType.includes("comment")
+          ? { comment: { id: 1, content: "x" }, pullRequest: prWithVote }
+          : prWithVote;
+      const ev = normalizeAzureEvent({ eventType, resource });
+      // null (unmapped) is fine; what must not happen is a pull_request_review.
+      assert.notEqual(ev?.type, "pull_request_review");
+    });
+  }
+
+  it("maps an update carrying a reviewer vote to synchronize, not a review", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "git.pullrequest.updated",
+      resource: prWithVote,
+    });
+    assert.equal(ev!.type, "pull_request");
+    assert.equal((ev!.payload as { action: string }).action, "synchronize");
+  });
+});

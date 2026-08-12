@@ -55,7 +55,9 @@ Remaining:
 - [ ] Inline PR diffs for Azure DevOps agents. There is no single unified-diff endpoint, so `stdin.diff` is empty and `OPENCARA_PR_DIFF_INLINE=0`; agents must `git diff` in the worktree. Reviewer flows *without* a worktree get no diff at all.
 - [ ] Azure DevOps equivalents for the features currently skipped-with-a-log: auto-merge (`autoCompleteSetBy` + branch policies), PR↔work-item linking, draft-PR ready-for-review
 - [ ] Device capability gating (`scm.azure_devops`). `pickIdle` ignores capabilities entirely — a pre-existing bug. Today a device on an older CLI fails an Azure DevOps worktree allocation with an "unknown argument" error, which is visible but not routed around.
-- [ ] Default the review→fix reviewer filter to the connection's user (no `opencara[bot]` identity on Azure DevOps, so the default filter never matches)
+- [ ] **`scm.pull_request_review` never fires on Azure DevOps**, so the review→fix half of `development-lifecycle` (and the standalone `pr-review-fix` flow) is dead there. Azure DevOps service hooks have no reviewer-vote event, and `git.pullrequest.updated` — which does fire on a vote — is indistinguishable from a push, so it maps to `synchronize`. Reviews post; nothing consumes them.
+  - Possible lossy proxy: treat `git.pullrequest.updated` as a review event when a reviewer carries a non-zero vote. Needs dedup first, or it re-fires on every subsequent update to the same PR.
+  - Only once the trigger fires does the next item matter: default its reviewer filter to the connection's user, since there is no `opencara[bot]` identity on Azure DevOps for the current default to match.
 - [ ] Azure DevOps variants of the remaining `gh`-based skill prompts (`projectPm`, `projectDetail`, `flowRunStepChat`)
 
 ## Planned

@@ -106,6 +106,11 @@ Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure Dev
 
 Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
 
+> **The review→fix half of `development-lifecycle` does not run on Azure DevOps.**
+> That stage is keyed on a `scm.pull_request_review` trigger, and nothing in the Azure DevOps path ever produces one: service hooks have no reviewer-vote event, and `git.pullrequest.updated` (which does fire on a vote) is indistinguishable from a push, so it is mapped to `synchronize`. If you assign the built-in `development-lifecycle` flow to an Azure DevOps project, the implement and review stages work and the **review-submitted → fix loop silently never fires**. Reviews still post; nothing consumes them.
+>
+> A lossy proxy is possible — treat `git.pullrequest.updated` as a review event when any reviewer carries a non-zero vote — but it would re-fire on every later update to the same PR, so it needs deduplication work first. Tracked in ROADMAP.md.
+
 A deployment can be Azure-DevOps-only: with `AZDO_ENTRA_*` and `SESSION_ENCRYPTION_KEY` set and no `GITHUB_APP_*`, auth, `/api/*`, `/webhooks/azure-devops` and the flow engine all mount. `/api/installations` and the GitHub sign-in routes are simply absent, and the login page offers Microsoft alone.
 
 ### What agents get on Azure DevOps

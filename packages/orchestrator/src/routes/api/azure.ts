@@ -128,7 +128,22 @@ export function azureRoutes(deps: AzureRoutesDeps) {
       return c.json({ connection: { id: existing.id, orgName, reconnected: true } });
     }
 
-    const claims = await entraClaimsFromSession(deps, session);
+    let claims;
+    try {
+      claims = await entraClaimsFromSession(deps, session);
+    } catch (err) {
+      // Missing identity row — recoverable by re-authenticating, so answer with
+      // the same affordance as a session that never had Microsoft credentials
+      // rather than a bare 500.
+      console.error("[azure] could not resolve Entra identity for connect", err);
+      return c.json(
+        {
+          error: err instanceof Error ? err.message : "could not resolve Microsoft identity",
+          code: "entra_signin_required",
+        },
+        409,
+      );
+    }
     const id = ulid();
     await deps.db.insert(azureDevopsConnections).values({
       id,
@@ -314,10 +329,17 @@ export function azureRoutes(deps: AzureRoutesDeps) {
     const tenantId = session.entraAccessTokenEnc
       ? tenantIdFromAccessToken(d.cipher.decrypt(session.entraAccessTokenEnc))
       : null;
-    return {
-      objectId: identity?.externalId ?? session.userId,
-      tenantId,
-    };
+    if (!identity) {
+      // Unreachable in practice: a session carrying entraAccessTokenEnc got it
+      // from the Entra callback, which writes the identity row first. Falling
+      // back to session.userId would write an internal ULID into
+      // `entra_object_id` — a column whose whole meaning is "Entra oid" — so
+      // fail loudly rather than persist something that isn't what it claims.
+      throw new Error(
+        "entra identity row missing for a session with Microsoft credentials — sign in with Microsoft again",
+      );
+    }
+    return { objectId: identity.externalId, tenantId };
   }
 }
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AzureDevopsClient } from "../../azure/client.js";
+import { AzureDevopsAuthError, type AzureDevopsClient } from "../../azure/client.js";
 import type {
   AddCommentResult,
   AddLabelResult,
@@ -93,6 +93,28 @@ const LabelsSchema = z.object({
   name: z.string().optional(),
 });
 
+/**
+ * Should a failed reviewer-vote call fail the step instead of degrading to
+ * "posted as a comment"?
+ *
+ * The downgrade exists for ONE situation: Azure DevOps refused the vote itself
+ * (branch policy forbids self-approval, we aren't a reviewer on the PR). Those
+ * are 4xx and genuinely unfixable by retrying, so swallowing them preserves the
+ * review the agent already wrote.
+ *
+ * Everything else must surface. In particular a dead connection —
+ * `AzureDevopsAuthError`, raised when the refresh token is gone or rejected —
+ * would otherwise make EVERY subsequent review "succeed" with `downgradedFrom`
+ * set, hiding a state that needs the user to reconnect the organization. A
+ * transient 5xx/429 is likewise a step that should fail and be rerun, not a
+ * verdict silently dropped.
+ */
+function isUnrecoverableVoteError(err: unknown): boolean {
+  if (err instanceof AzureDevopsAuthError) return true;
+  const status = (err as { status?: unknown }).status;
+  return typeof status === "number" && (status >= 500 || status === 429);
+}
+
 export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
   const { client, projectName, repositoryId, repositoryName } = opts;
 
@@ -156,10 +178,15 @@ export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
             { method: "PUT", body: { vote } },
           );
         } catch (err) {
+          // A broken connection or a transient outage must fail the step; only
+          // an actual refusal of the vote degrades. Without this the first
+          // category masquerades as the second forever.
+          if (isUnrecoverableVoteError(err)) throw err;
           // Degrade to "the review was posted as a comment" rather than failing
           // the step — the prose already landed, and losing the run over a vote
-          // the policy refused would discard a completed review. Mirrors the
-          // GitHub provider's self-review downgrade.
+          // the policy refused would discard a completed review. Narrower than
+          // it looks: the GitHub provider downgrades only on its specific
+          // self-review 422, and this is the Azure equivalent of that check.
           downgradedFrom = event;
           console.warn(
             `[post_review] azure vote ${vote} on PR #${pr.number} refused; review posted as a comment:`,
