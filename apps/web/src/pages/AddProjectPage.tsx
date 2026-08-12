@@ -24,6 +24,7 @@ import {
   installationsQuery,
   availableReposQuery,
   useAddProject,
+  authProvidersQuery,
   azureOrganizationsQuery,
   azureRepositoriesQuery,
   useConnectAzureOrg,
@@ -39,6 +40,21 @@ type Source = "github" | "azure";
 
 export function AddProjectPage() {
   const [source, setSource] = useState<Source>("github");
+  // Only offer a platform this deployment actually configured. Its API routes
+  // don't mount otherwise, so an unconditional tab sends the user straight into
+  // a 404 from a route that never existed.
+  const providers = useQuery(authProvidersQuery());
+
+  const available: [Source, string][] = [];
+  // Default both to true while the probe is in flight so the GitHub tab (the
+  // overwhelmingly common case) renders immediately rather than flashing in.
+  if (providers.data?.providers.github ?? true) available.push(["github", "GitHub"]);
+  if (providers.data?.providers.entra ?? false) available.push(["azure", "Azure DevOps"]);
+
+  // Fall back to whatever is available if the current selection isn't offered
+  // (e.g. the probe resolves after mount and Azure DevOps isn't configured).
+  const activeSource: Source =
+    available.some(([value]) => value === source) ? source : (available[0]?.[0] ?? "github");
 
   return (
     <div className="space-y-6">
@@ -49,29 +65,27 @@ export function AddProjectPage() {
         </p>
       </div>
 
-      <div className="inline-flex rounded-md border p-1">
-        {(
-          [
-            ["github", "GitHub"],
-            ["azure", "Azure DevOps"],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setSource(value)}
-            className={`rounded px-3 py-1.5 text-sm transition ${
-              source === value
-                ? "bg-secondary font-medium"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* A one-option switcher is just noise — show it only when there's a choice. */}
+      {available.length > 1 && (
+        <div className="inline-flex rounded-md border p-1">
+          {available.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setSource(value)}
+              className={`rounded px-3 py-1.5 text-sm transition ${
+                activeSource === value
+                  ? "bg-secondary font-medium"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {source === "github" ? <GithubSource /> : <AzureSource />}
+      {activeSource === "github" ? <GithubSource /> : <AzureSource />}
     </div>
   );
 }
@@ -140,10 +154,22 @@ function AzureSource() {
   if (orgs.isError) {
     const needsSignIn =
       orgs.error instanceof ApiError && orgs.error.status === 409;
+    // 404 = the Azure DevOps routes were never mounted, i.e. AZDO_ENTRA_* is
+    // unset on this deployment. Unreachable now that the tab is gated on the
+    // providers probe, but "API 404" told the user nothing, so name the cause.
+    const notConfigured =
+      orgs.error instanceof ApiError && orgs.error.status === 404;
     return (
       <Card>
         <CardContent className="space-y-3 py-8 text-center">
-          {needsSignIn ? (
+          {notConfigured ? (
+            <div className="text-sm text-muted-foreground">
+              Azure DevOps isn't configured on this deployment. Set{" "}
+              <code>AZDO_ENTRA_CLIENT_ID</code> and{" "}
+              <code>AZDO_ENTRA_CLIENT_SECRET</code> on the orchestrator and restart
+              it — see the Azure DevOps section of the README.
+            </div>
+          ) : needsSignIn ? (
             <>
               <div className="text-sm text-muted-foreground">
                 Connecting an Azure DevOps organization needs Microsoft credentials on

@@ -615,6 +615,29 @@ export const availableReposQuery = (installationId: string) => ({
     ),
 });
 
+/** Which sign-in providers this deployment has configured. */
+export interface AuthProviders {
+  github: boolean;
+  entra: boolean;
+}
+
+/**
+ * Drives both the login buttons and the Add-project source tabs.
+ *
+ * Anything gated on a platform must consult this rather than assume both are
+ * available: a deployment configures GitHub, Azure DevOps, or both, and the
+ * corresponding routes only mount for what is configured. Rendering an
+ * Azure DevOps affordance on a GitHub-only deployment produces a 404 from a
+ * route that was never mounted.
+ *
+ * Unauthenticated and cheap; safe to keep fresh for a whole session.
+ */
+export const authProvidersQuery = () => ({
+  queryKey: ["auth", "providers"] as const,
+  queryFn: () => api.get<{ providers: AuthProviders }>("/api/auth/providers"),
+  staleTime: 5 * 60 * 1000,
+});
+
 // --- Azure DevOps ---------------------------------------------------------
 
 export interface AzureOrganization {

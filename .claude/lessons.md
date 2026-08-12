@@ -100,6 +100,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Saves agent costs when an upstream reviewer ran for minutes successfully and a later step failed.
 - Look up the step id: `SELECT id FROM flow_run_steps WHERE flow_run_id='<old-run-id>' AND node_id='<node>';`.
 
+## Multi-platform UI
+
+### [hits: 1] A UI affordance for an optional platform must be gated on `/api/auth/providers`, not rendered unconditionally
+- Shipped in v0.113.0 and broke immediately: `AddProjectPage` rendered a hardcoded `[GitHub | Azure DevOps]` tab strip, but the Azure routes only mount when `AZDO_ENTRA_*` is configured. On the GitHub-only prod deployment the tab was clickable and called `/api/azure/organizations`, which 404'd through the SPA fallback → "Failed to load organizations: API 404".
+- The signal already existed and was already correct — `/api/auth/providers` returned `{github:true, entra:false}`, and `LoginPage` consumed it properly to hide the Microsoft button. The bug was one page ignoring it. **When adding a second consumer of a capability flag, share the query instead of re-deriving; two independent probes drift.** Both pages now use `authProvidersQuery()`.
+- Generalization: the orchestrator mounts routes conditionally on config (GitHub App, Entra, both). Any new UI entry point for a platform needs the same gate, and a one-option switcher should not render at all.
+- The build, 419 unit tests, and the azure-only boot probe ALL passed with this bug present — none of them render the page. The check that would have caught it is "load the actual page against a deployment that lacks the optional platform", which is also why the 404 branch now names the cause instead of surfacing a raw status.
+
 ## Azure DevOps
 
 ### [hits: 1] Widening a GitHub-only ctx: use a discriminated union, not nullable fields
