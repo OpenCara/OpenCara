@@ -132,6 +132,20 @@ Run context uses the **same `OPENCARA_*` variable names** as GitHub, so prompts 
 
 `PUBLIC_BASE_URL` **must be HTTPS.** Azure DevOps refuses to create a service hook subscription with basic-auth credentials against a plaintext endpoint, so every subscription will fail on an `http://` deployment.
 
+### Linking Azure DevOps to an existing account
+
+One OpenCara account can hold several sign-in identities (`user_identities`), so the normal flow is:
+
+1. Sign in with **GitHub** as usual — that stays your OpenCara account.
+2. **Settings → Linked accounts → Azure DevOps → Link.** This runs the Microsoft OAuth flow in *link* mode: it attaches the Entra identity to the account you are already signed in as, and stores the Microsoft tokens on your current session. No second account, no second session.
+3. **Add project → Azure DevOps** now works, and the organizations and repos you add belong to the same account as your GitHub projects.
+
+`/auth/azure/login` (the login-page button) still creates an account when nobody is signed in — that is what makes an Azure-DevOps-only deployment usable. The mode is decided by which state cookie the callback matches, never by a query parameter, so a caller cannot ask for link mode.
+
+**Linking refuses if that Microsoft identity is already attached to a different OpenCara account.** Silently re-pointing an identity would mean whoever controls the Microsoft account inherits whichever OpenCara account linked it last; unlink from the other account first.
+
+**Unlinking** refuses while you still have Azure DevOps connections — removing a connection cascade-deletes its projects, which is too destructive to hide behind an "unlink" button. Remove the Azure projects first. You also cannot unlink your only identity, since nothing would be left to sign in with.
+
 ### Credentials: how this differs from the GitHub App
 
 This is the part worth understanding before you connect a production organization.

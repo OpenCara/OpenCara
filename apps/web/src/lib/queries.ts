@@ -185,9 +185,18 @@ export interface AgentRunRow {
   exitCode: number | null;
 }
 
+export interface LinkedIdentity {
+  provider: "github" | "entra";
+  login: string | null;
+  createdAt: string;
+}
+
 export const meQuery = () => ({
   queryKey: ["me"] as const,
-  queryFn: () => api.get<{ user: User }>("/api/me"),
+  // Also carries the account's linked identities, which drive the settings
+  // page. Kept on this one query rather than a second endpoint: two queries
+  // sharing the ["me"] key with different fetchers would race each other.
+  queryFn: () => api.get<{ user: User; identities: LinkedIdentity[] }>("/api/me"),
   retry: retryOnServerError,
   retryDelay: serverErrorRetryDelay,
 });
@@ -614,6 +623,18 @@ export const availableReposQuery = (installationId: string) => ({
       `/api/installations/${installationId}/available-repos`,
     ),
 });
+
+export function useUnlinkIdentity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: LinkedIdentity["provider"]) =>
+      api.delete<void>(`/api/auth/identities/${provider}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me"] });
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
 
 /** Which sign-in providers this deployment has configured. */
 export interface AuthProviders {

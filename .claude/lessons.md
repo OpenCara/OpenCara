@@ -100,6 +100,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Saves agent costs when an upstream reviewer ran for minutes successfully and a later step failed.
 - Look up the step id: `SELECT id FROM flow_run_steps WHERE flow_run_id='<old-run-id>' AND node_id='<node>';`.
 
+## Shell / process management
+
+### [hits: 2] `pkill -f` / `pgrep -f` match THEIR OWN shell command line — always bracket the pattern
+- The Bash tool runs commands via `zsh -c '<the whole script>'`, so the script text itself is a process whose command line contains your pattern. `pkill -f "npm exec opencara"` therefore kills the shell running it.
+- **Hit twice on 2026-08-12.** First benignly: `pgrep -f "src/index.ts"` reported "STILL RUNNING" while matching itself. Then destructively: a device-refresh script ran `pkill -f "npm exec opencara"` as step 1 of kill -> purge -> relaunch; pkill killed its own shell (exit 144), so the purge and relaunch never ran. Net effect: device killed and left DOWN with a stale cache — the exact 2026-07-16 incident state, self-inflicted.
+- Fix: bracket one character so the pattern cannot match the literal text — `pkill -f "npm exec [o]pencara"`, `pgrep -f "[s]rc/index.ts"`. Or match precisely: `ps -eo pid,args --no-headers | grep -E "[n]pm exec opencara" | awk '{print $1}' | xargs -r kill`.
+- Corollary for ANY kill -> purge -> relaunch sequence: verify each step's effect before assuming the next ran. A non-zero exit from the compound command means later steps silently did not happen. Confirm the process is gone AND the dir is gone AND the new process exists — never infer from "the command returned".
+
 ## Multi-platform UI
 
 ### [hits: 1] A UI affordance for an optional platform must be gated on `/api/auth/providers`, not rendered unconditionally
