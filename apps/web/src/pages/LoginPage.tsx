@@ -1,13 +1,9 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import { Github } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-
-interface AuthProviders {
-  github: boolean;
-  entra: boolean;
-}
+import { authProvidersQuery } from "@/lib/queries";
 
 /** Azure DevOps' logo isn't in lucide; this is the Azure DevOps mark. */
 function AzureDevOpsIcon({ className }: { className?: string }) {
@@ -21,28 +17,12 @@ function AzureDevOpsIcon({ className }: { className?: string }) {
 export function LoginPage() {
   const [params] = useSearchParams();
   const error = params.get("error");
-  // Defaults to GitHub-only so the primary button renders immediately rather
-  // than flashing in after the probe resolves.
-  const [providers, setProviders] = useState<AuthProviders>({
-    github: true,
-    entra: false,
-  });
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/auth/providers")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { providers?: AuthProviders } | null) => {
-        if (!cancelled && data?.providers) setProviders(data.providers);
-      })
-      .catch(() => {
-        // Probe failure just means we keep the GitHub-only default — no need
-        // to block sign-in on it.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Shared with the Add-project source tabs so the two can't disagree about
+  // what this deployment supports. Defaults to GitHub-only while in flight, so
+  // the common button renders immediately instead of flashing in; a failed
+  // probe must never block sign-in.
+  const probe = useQuery(authProvidersQuery());
+  const providers = probe.data?.providers ?? { github: true, entra: false };
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -59,15 +39,17 @@ export function LoginPage() {
                 : "Sign-in failed. Please try again."}
             </div>
           )}
-          <Button
-            className="w-full"
-            onClick={() => {
-              window.location.href = "/auth/github/login";
-            }}
-          >
-            <Github className="size-4" />
-            Sign in with GitHub
-          </Button>
+          {providers.github && (
+            <Button
+              className="w-full"
+              onClick={() => {
+                window.location.href = "/auth/github/login";
+              }}
+            >
+              <Github className="size-4" />
+              Sign in with GitHub
+            </Button>
+          )}
           {providers.entra && (
             <Button
               variant="outline"
