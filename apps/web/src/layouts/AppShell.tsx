@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -71,6 +71,7 @@ export function AppShell() {
   const user = useUser();
   const logout = useLogout();
   const location = useLocation();
+  const navigate = useNavigate();
   const projectsQ = useQuery(projectsQuery());
   const templatesQ = useQuery(flowTemplatesQuery());
   const agentsQ = useQuery(agentsQuery());
@@ -258,6 +259,9 @@ export function AppShell() {
                 )}
               </div>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => navigate("/settings")}>
+                Settings
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
                   logout.mutate(undefined, {

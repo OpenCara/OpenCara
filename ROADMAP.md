@@ -29,6 +29,7 @@
 - [x] Development-lifecycle multi-agent review + dispatch/pooler reliability fixes ([#165](https://github.com/OpenCara/OpenCara/pull/165))
 - [x] fix(cli): accept dot-separated GitHub installation tokens in worktree create ([#198](https://github.com/OpenCara/OpenCara/pull/198))
 - [x] fix(ci): drop --provenance from publish-cli (repo is private) ([#199](https://github.com/OpenCara/OpenCara/pull/199))
+- [x] Link Azure DevOps to an existing GitHub account (settings page, `user_identities` linking) ([#203](https://github.com/OpenCara/OpenCara/pull/203))
 - [x] fix(web): only offer the Azure DevOps source when it is configured ([#201](https://github.com/OpenCara/OpenCara/pull/201))
 - [x] Azure DevOps support: platform-neutral `scm.*` flow node kinds + `ScmProvider` seam, Entra sign-in, organization connect, service hook subscriptions, and PR flows end-to-end ([#200](https://github.com/OpenCara/OpenCara/pull/200))
 
