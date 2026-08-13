@@ -228,12 +228,18 @@ export function azureRoutes(deps: AzureRoutesDeps) {
     };
 
     if (existing) {
-      // Rotating the PAT is the same action as connecting again.
+      // Rotating the PAT is the same action as connecting again. Submitting a
+      // PAT for an org previously connected via Microsoft deliberately switches
+      // it to token auth — a legitimate thing to want — but the response says
+      // so rather than letting the mode change silently.
+      const converted = existing.authMode !== "pat";
       await deps.db
         .update(azureDevopsConnections)
         .set(fields)
         .where(eq(azureDevopsConnections.id, existing.id));
-      return c.json({ connection: { id: existing.id, orgName, reconnected: true } });
+      return c.json({
+        connection: { id: existing.id, orgName, reconnected: true, convertedFromEntra: converted },
+      });
     }
 
     const id = ulid();

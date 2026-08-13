@@ -152,14 +152,23 @@ function AzureSource() {
   const [connectionId, setConnectionId] = useState<string | null>(null);
 
   const existing = connections.data?.connections ?? [];
-  // Microsoft sign-in is unavailable, or this session has no Microsoft
-  // credentials. Either way a PAT is the way in — and for an organization
-  // backed by a personal Microsoft account it is the ONLY way in, since Azure
-  // DevOps is registered in Entra as work/school-only.
+  // /organizations answers 409 for TWO different reasons, and they need
+  // different UI. Discriminate on the body `code`, not the status:
+  //   entra_not_configured  — this deployment has no Entra app at all, so a
+  //                           PAT is the only route and there is nothing to
+  //                           sign into.
+  //   entra_signin_required — Entra IS configured; this session just signed in
+  //                           with GitHub. The right answer is the sign-in
+  //                           button, not the PAT explanation.
+  // Matching on status alone made the sign-in branch unreachable.
+  const errCode =
+    orgs.error instanceof ApiError
+      ? (orgs.error.body as { code?: string } | undefined)?.code
+      : undefined;
   const entraUnavailable =
     orgs.isError &&
     orgs.error instanceof ApiError &&
-    (orgs.error.status === 409 || orgs.error.status === 404);
+    (errCode === "entra_not_configured" || orgs.error.status === 404);
 
   if (orgs.isLoading || connections.isLoading) return <Skeleton className="h-32" />;
 
@@ -238,9 +247,19 @@ function AzureSource() {
 
       {entraUnavailable && existing.length === 0 && (
         <div className="text-xs text-muted-foreground">
-          Microsoft sign-in isn't available for this session. An organization backed by a
-          personal Microsoft account can only be connected with an access token — Azure
-          DevOps does not issue Microsoft sign-in tokens to personal accounts.
+          {errCode === "entra_not_configured"
+            ? "Microsoft sign-in isn't configured on this deployment, so an access token is the way to connect."
+            : "This organization can't be reached with Microsoft sign-in."}{" "}
+          Note that an organization backed by a <em>personal</em> Microsoft account can only
+          ever be connected with an access token — Azure DevOps does not issue Microsoft
+          sign-in tokens to personal accounts.
+        </div>
+      )}
+
+      {!entraUnavailable && organizations.length === 0 && (
+        <div className="text-xs text-muted-foreground">
+          No Azure DevOps organizations found for your Microsoft account. You can still
+          connect one above with an access token.
         </div>
       )}
 
@@ -354,6 +373,10 @@ function AzurePatConnect({ onConnected }: { onConnected: (id: string) => void })
             </p>
           </div>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Submitting an organization you already connected replaces its stored credential —
+          including switching one connected via Microsoft over to token auth.
+        </p>
         <Button disabled={connect.isPending || !orgName.trim() || !pat.trim()} onClick={submit}>
           {connect.isPending ? "Verifying…" : "Connect"}
         </Button>
