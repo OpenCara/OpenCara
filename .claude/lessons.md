@@ -125,6 +125,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Azure DevOps
 
+### [hits: 1] An INNER JOIN through `github_installations` silently hides every Azure DevOps project
+- `projects.installation_id` is NULL for Azure DevOps projects (the connection lives in `azure_devops_connections`). Any query that INNER JOINs `github_installations` therefore drops them with no error — the row exists, the API returns 200, and the project is simply absent.
+- Bit twice on 2026-08-12, both from the same root: `GET /api/projects` (project vanished from the list after being added successfully) and `GET /api/projects/:id` via `loadOwnedProjectWithInstallation` (would have rendered "Project not found." — the same string as the two unrelated causes already in this file).
+- The multi-platform plan explicitly predicted this ("every ownership/ACL path grows a two-branch fork") and contained it in the ownership helpers — but MISSED queries that join inline instead of going through them. Containing a fork in a helper only works if every call site actually uses the helper.
+- When adding a platform, grep for `innerJoin` + `githubInstallations` together and audit each: `auth/ownership.ts`, `routes/api/projects.ts`, `routes/api/chat.ts`, `routes/api/kanban.ts`. Use `loadOwnedProjectWithConnection` (LEFT joins both connection tables) on anything platform-neutral; the GitHub-only helper is correct only where the route is genuinely GitHub-specific.
+- Symptom to recognise: "it says added / it exists in the DB, but it doesn't show up." That is a JOIN dropping the row, not a write failing.
+
+
 ### [hits: 1] Widening a GitHub-only ctx: use a discriminated union, not nullable fields
 - When adding Azure DevOps to `NodeRunCtx` (2026-08-11), replacing `installation: {...}` with a `PlatformRunCtx` discriminated union (`{platform:"github",...} | {platform:"azure_devops",...}`) made `tsc` enumerate every site that had silently assumed GitHub — about 10 across nodeRunners/engine. Adding nullable `azdo*` fields alongside the existing ones would have compiled clean and failed at runtime on the first ADO run.
 - Corollary: `ctx.app` (GithubAppClient) had to become optional, because an ADO-only deployment configures no GitHub App at all. `FlowEngine` is now constructed when EITHER platform is configured; it used to be `githubApp ? new FlowEngine(...) : null`, which would have left an ADO-only install with no engine and no error.

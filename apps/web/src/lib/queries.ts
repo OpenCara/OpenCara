@@ -55,14 +55,19 @@ export interface ProjectListItem {
   id: string;
   owner: string;
   name: string;
+  platform: "github" | "azure_devops";
+  webUrl: string | null;
   defaultBranch: string | null;
   private: boolean;
   addedAt: string;
   removedAt: string | null;
-  installationId: string;
-  installationAccountLogin: string;
-  installationAccountType: "User" | "Organization";
+  // Null on an Azure DevOps project — there is no GitHub installation behind it.
+  installationId: string | null;
+  installationAccountLogin: string | null;
+  installationAccountType: "User" | "Organization" | null;
   installationSuspendedAt: string | null;
+  /** Azure DevOps organization; null on a GitHub project. */
+  azdoOrgName: string | null;
   lastEventAt: string | null;
   recentRunsCount: number;
 }
