@@ -42,6 +42,42 @@ const PullRequestResourceSchema = z.object({
   }),
 });
 
+/**
+ * The PR-comment event's `resource` IS the comment — there is no `comment`
+ * wrapper and no pull request object anywhere in the payload. The only route
+ * back to the PR is `_links`, whose `self.href` has the form:
+ *
+ *   https://dev.azure.com/{org}/_apis/git/repositories/{repoGuid}/pullRequests/{id}/threads/{t}/comments/{c}
+ *
+ * Verified against a live delivery; Microsoft's published sample is truncated
+ * before this point, which is what two earlier guesses got wrong.
+ */
+const CommentEventResourceSchema = z.object({
+  id: z.number().optional(),
+  content: z.string().optional(),
+  commentType: z.string().optional(),
+  author: z
+    .object({ displayName: z.string().optional(), uniqueName: z.string().optional() })
+    .optional(),
+  _links: z
+    .object({
+      self: z.object({ href: z.string() }).optional(),
+      repository: z.object({ href: z.string() }).optional(),
+    })
+    .optional(),
+});
+
+/** Pull the repository GUID and PR number out of a comment's self link. */
+export function idsFromCommentLink(
+  href: string | undefined,
+): { repositoryId: string; pullRequestId: number } | null {
+  if (!href) return null;
+  const m = /\/repositories\/([0-9a-fA-F-]{36})\/pullRequests\/(\d+)\b/.exec(href);
+  if (!m || !m[1] || !m[2]) return null;
+  const n = Number.parseInt(m[2], 10);
+  return Number.isFinite(n) ? { repositoryId: m[1], pullRequestId: n } : null;
+}
+
 const CommentResourceSchema = z.object({
   comment: z.object({
     id: z.number().optional(),
@@ -106,11 +142,37 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
   }
 
   if (eventType === "ms.vss-code.git-pullrequest-comment-event") {
-    // Microsoft's published sample for this event is truncated mid-`comment`,
-    // so the position of the pull request object is not documented. Sibling
-    // events put PR fields directly on `resource`; this one clearly wraps the
-    // comment. Accept BOTH rather than betting on one: nested under
-    // `resource.pullRequest`, or the resource itself carrying pullRequestId.
+    // The live payload puts the comment directly on `resource`, with no pull
+    // request object at all — so the PR is identified from `_links` and its
+    // details are fetched later, exactly as GitHub's `issue_comment` path does.
+    // The older wrapped/flat shapes are still accepted in case Azure DevOps
+    // varies by resourceVersion.
+    const flat = CommentEventResourceSchema.safeParse(resource);
+    const ids = flat.success ? idsFromCommentLink(flat.data._links?.self?.href) : null;
+    if (flat.success && ids) {
+      return {
+        deliveryId,
+        type: "issue_comment",
+        repositoryId: ids.repositoryId,
+        projectId: projectIdFromRepositoryLink(flat.data._links?.repository?.href),
+        payload: {
+          action: "created",
+          // `issue.pull_request` is the marker the trigger checks to confirm a
+          // comment is on a PR rather than a plain issue.
+          issue: { number: ids.pullRequestId, pull_request: { url: null } },
+          comment: {
+            id: flat.data.id ?? null,
+            body: flat.data.content ?? "",
+            user: { login: authorLogin(flat.data.author) },
+            html_url: null,
+          },
+          repository: { id: ids.repositoryId, name: "", full_name: "" },
+          // No pull_request key: the flow engine fetches it (buildAzurePull
+          // RequestContext), because this payload simply does not carry one.
+        },
+      };
+    }
+
     const parsed = CommentResourceSchema.safeParse(resource);
     const prCandidate =
       (resource as { pullRequest?: unknown } | null)?.pullRequest ?? resource;
@@ -199,7 +261,7 @@ function prAction(eventType: string, status: string | undefined): string {
   return "synchronize";
 }
 
-function pullRequestPayload(
+export function pullRequestPayload(
   pr: z.infer<typeof PullRequestResourceSchema>,
 ): Record<string, unknown> {
   const projectName = pr.repository.project?.name ?? "";
@@ -231,6 +293,13 @@ function pullRequestPayload(
       full_name: [projectName, pr.repository.name].filter(Boolean).join("/") || pr.repository.id,
     },
   };
+}
+
+/** Team project GUID from a comment's repository link, when present. */
+function projectIdFromRepositoryLink(href: string | undefined): string | null {
+  if (!href) return null;
+  const m = /dev\.azure\.com\/[^/]+\/([0-9a-fA-F-]{36})\/_apis\/git\//.exec(href);
+  return m?.[1] ?? null;
 }
 
 /** "refs/heads/feature/x" → "feature/x". */
