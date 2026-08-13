@@ -227,7 +227,17 @@ export const projectQuery = (id: string) => ({
          *  (default `AGENTS.md`, empty disables injection). See #130. */
         instructionsFile: string;
       };
-      installation: InstallationSummary;
+      // Null for an Azure DevOps project — there is no GitHub installation.
+      // Declared nullable so the compiler enforces guards at call sites;
+      // api.get<T> is a type ASSERTION, so a wrong shape here fails silently
+      // at runtime rather than at build time.
+      installation: InstallationSummary | null;
+      /** Present for Azure DevOps projects; never includes credentials. */
+      azureConnection: {
+        id: string;
+        orgName: string;
+        authMode: "entra" | "pat";
+      } | null;
     }>(`/api/projects/${id}`),
 });
 

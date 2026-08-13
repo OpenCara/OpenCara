@@ -83,9 +83,11 @@ export function ProjectDetailPage() {
   const repoHost = p.platform === "azure_devops" ? "Azure DevOps" : "GitHub";
   const activeTab = tab && VALID_TABS.has(tab) ? tab : DEFAULT_TAB;
 
+  // `inst` is null for Azure DevOps projects — there is no GitHub App
+  // installation, so there is nothing that can be suspended.
   const status = p.removedAt
     ? "Removed"
-    : inst.suspendedAt
+    : inst?.suspendedAt
       ? "Suspended"
       : "Active";
   // Compact one-line repo summary replacing the old read-only Overview
@@ -93,7 +95,9 @@ export function ProjectDetailPage() {
   const metaParts = [
     p.defaultBranch ?? "—",
     p.private ? "Private" : "Public",
-    `@${inst.accountLogin}`,
+    // GitHub shows the installation account; Azure DevOps has no installation,
+    // so show the organization it was connected from.
+    inst ? `@${inst.accountLogin}` : (project.data.azureConnection?.orgName ?? "—"),
     status,
   ];
 
