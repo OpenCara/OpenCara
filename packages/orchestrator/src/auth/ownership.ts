@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { githubInstallations, projects } from "../db/schema.js";
+import { azureDevopsConnections, githubInstallations, projects } from "../db/schema.js";
 
 // Per-user ACL helpers. Routes use these to gate every read or write
 // that touches a project (or its installation). On miss they return
@@ -56,4 +56,47 @@ export async function loadOwnedInstallation(
       eq(githubInstallations.addedByUserId, userId),
     ),
   });
+}
+
+export type AzureConnectionRow = typeof azureDevopsConnections.$inferSelect;
+
+/**
+ * Load an owned project together with whichever connection backs it.
+ *
+ * The platform-neutral counterpart to `loadOwnedProjectWithInstallation`, which
+ * INNER JOINs `github_installations` and therefore cannot see an Azure DevOps
+ * project (whose `installation_id` is NULL). Using the GitHub-only helper on a
+ * shared route makes Azure projects 404 — the "Project not found." symptom
+ * recorded in .claude/lessons.md, arrived at from a different direction.
+ *
+ * Both joins are LEFT joins, so exactly one side is populated per row, matching
+ * the `projects_platform_connection_ck` CHECK constraint.
+ */
+export async function loadOwnedProjectWithConnection(
+  db: Db,
+  projectId: string,
+  userId: string,
+): Promise<
+  | {
+      project: ProjectRow;
+      installation: InstallationRow | null;
+      azureConnection: AzureConnectionRow | null;
+    }
+  | undefined
+> {
+  const rows = await db
+    .select({
+      project: projects,
+      installation: githubInstallations,
+      azureConnection: azureDevopsConnections,
+    })
+    .from(projects)
+    .leftJoin(githubInstallations, eq(projects.installationId, githubInstallations.id))
+    .leftJoin(
+      azureDevopsConnections,
+      eq(projects.azdoConnectionId, azureDevopsConnections.id),
+    )
+    .where(and(eq(projects.id, projectId), eq(projects.addedByUserId, userId)))
+    .limit(1);
+  return rows[0];
 }

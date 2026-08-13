@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
+  azureDevopsConnections,
   agents,
   flowRuns,
   flowRunSteps,
@@ -18,6 +19,7 @@ import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import {
   loadOwnedProject,
   loadOwnedProjectWithInstallation,
+  loadOwnedProjectWithConnection,
 } from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
 import {
@@ -127,10 +129,15 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         private: projects.private,
         addedAt: projects.addedAt,
         removedAt: projects.removedAt,
+        platform: projects.platform,
+        webUrl: projects.webUrl,
         installationId: projects.installationId,
         installationAccountLogin: githubInstallations.accountLogin,
         installationAccountType: githubInstallations.accountType,
         installationSuspendedAt: githubInstallations.suspendedAt,
+        // Azure DevOps display equivalent. Deliberately only the org name —
+        // this row carries encrypted tokens that must never be serialized.
+        azdoOrgName: azureDevopsConnections.orgName,
         lastEventAt: sql<Date | null>`(
           SELECT MAX(${platformEvents.receivedAt})
           FROM ${platformEvents}
@@ -143,9 +150,15 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         )`,
       })
       .from(projects)
-      .innerJoin(
+      // LEFT, not INNER: an Azure DevOps project has no GitHub installation, and
+      // an inner join silently drops it from the list entirely.
+      .leftJoin(
         githubInstallations,
         eq(projects.installationId, githubInstallations.id),
+      )
+      .leftJoin(
+        azureDevopsConnections,
+        eq(projects.azdoConnectionId, azureDevopsConnections.id),
       )
       .where(and(eq(projects.addedByUserId, user.id), isNull(projects.removedAt)))
       .orderBy(desc(projects.addedAt));
@@ -189,10 +202,19 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.get("/:id", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
-    // Single inner join instead of project lookup + installation lookup.
-    const owned = await loadOwnedProjectWithInstallation(deps.db, id, user.id);
+    // Platform-neutral: the GitHub-only variant inner-joins the installation
+    // and would 404 every Azure DevOps project.
+    const owned = await loadOwnedProjectWithConnection(deps.db, id, user.id);
     if (!owned) return c.json({ error: "not found" }, 404);
-    return c.json({ project: owned.project, installation: owned.installation });
+    return c.json({
+      project: owned.project,
+      installation: owned.installation,
+      // Never serialize the connection row itself — it holds encrypted tokens
+      // and the webhook secret.
+      azureConnection: owned.azureConnection
+        ? { id: owned.azureConnection.id, orgName: owned.azureConnection.orgName, authMode: owned.azureConnection.authMode }
+        : null,
+    });
   });
 
   r.delete("/:id", async (c) => {

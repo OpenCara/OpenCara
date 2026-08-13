@@ -55,14 +55,19 @@ export interface ProjectListItem {
   id: string;
   owner: string;
   name: string;
+  platform: "github" | "azure_devops";
+  webUrl: string | null;
   defaultBranch: string | null;
   private: boolean;
   addedAt: string;
   removedAt: string | null;
-  installationId: string;
-  installationAccountLogin: string;
-  installationAccountType: "User" | "Organization";
+  // Null on an Azure DevOps project — there is no GitHub installation behind it.
+  installationId: string | null;
+  installationAccountLogin: string | null;
+  installationAccountType: "User" | "Organization" | null;
   installationSuspendedAt: string | null;
+  /** Azure DevOps organization; null on a GitHub project. */
+  azdoOrgName: string | null;
   lastEventAt: string | null;
   recentRunsCount: number;
 }
@@ -222,7 +227,17 @@ export const projectQuery = (id: string) => ({
          *  (default `AGENTS.md`, empty disables injection). See #130. */
         instructionsFile: string;
       };
-      installation: InstallationSummary;
+      // Null for an Azure DevOps project — there is no GitHub installation.
+      // Declared nullable so the compiler enforces guards at call sites;
+      // api.get<T> is a type ASSERTION, so a wrong shape here fails silently
+      // at runtime rather than at build time.
+      installation: InstallationSummary | null;
+      /** Present for Azure DevOps projects; never includes credentials. */
+      azureConnection: {
+        id: string;
+        orgName: string;
+        authMode: "entra" | "pat";
+      } | null;
     }>(`/api/projects/${id}`),
 });
 

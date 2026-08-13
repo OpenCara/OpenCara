@@ -94,7 +94,9 @@ function ProjectRow({ project }: { project: ProjectListItem }) {
         )}
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">
-        {project.installationAccountLogin}
+        {/* GitHub shows the installation account; Azure DevOps has no
+            installation, so show the organization instead. */}
+        {project.installationAccountLogin ?? project.azdoOrgName ?? "—"}
       </TableCell>
       <TableCell className="text-sm">
         {project.lastEventAt ? formatRelative(project.lastEventAt) : "—"}
