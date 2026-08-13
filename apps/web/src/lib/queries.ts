@@ -689,6 +689,34 @@ export const azureOrganizationsQuery = () => ({
   retry: false,
 });
 
+export interface AzureConnection {
+  id: string;
+  orgName: string;
+  orgId: string | null;
+  authMode: "entra" | "pat";
+  patExpiresAt: string | null;
+  createdAt: string;
+}
+
+export const azureConnectionsQuery = () => ({
+  queryKey: ["azure", "connections"] as const,
+  queryFn: () => api.get<{ connections: AzureConnection[] }>("/api/azure/connections"),
+});
+
+export function useConnectAzurePat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { orgName: string; pat: string }) =>
+      api.post<{ connection: { id: string; orgName: string } }>(
+        "/api/azure/connections/pat",
+        vars,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
 export const azureRepositoriesQuery = (connectionId: string) => ({
   queryKey: ["azure", "connections", connectionId, "repositories"] as const,
   queryFn: () =>

@@ -102,6 +102,17 @@ The `Issues` and `Projects v2 item` subscriptions drive the Issues tab on the pr
 
 Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure DevOps Server (on-prem) is not.
 
+> ### Which credential can reach your organization
+>
+> Azure DevOps registers itself in Microsoft Entra with `signInAudience = AzureADMultipleOrgs` — **work/school accounts only**. An organization backed by a *personal* Microsoft account (the default when one is created under an @outlook/@msn address and never connected to a directory) can therefore **never** be reached by Entra OAuth, no matter how the app registration is configured. Signing in with a personal account fails with "You can't sign in here with a personal account."
+>
+> | Your organization | Use |
+> |---|---|
+> | Backed by an Entra directory | **Microsoft sign-in** (Settings → Link), or a PAT |
+> | Backed by a personal Microsoft account | **Personal Access Token** — the only option |
+>
+> A PAT connection needs no Entra app at all; `AZDO_ENTRA_*` can be left unset entirely.
+
 **Status.** Sign in with Microsoft, connect an organization, add repositories as projects, and PR flows run end-to-end: a pull request event dispatches the flow, the agent gets a worktree and a token, and reviews post back as a comment thread plus a reviewer vote.
 
 Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
@@ -126,11 +137,33 @@ Run context uses the **same `OPENCARA_*` variable names** as GitHub, so prompts 
 1. Register a **Microsoft Entra ID** application (portal.azure.com → Microsoft Entra ID → App registrations).
    Entra rather than an Azure DevOps OAuth app: Microsoft stopped accepting new Azure DevOps OAuth registrations in April 2025 and is retiring that service.
 2. Add the redirect URI `<PUBLIC_BASE_URL>/auth/azure/callback`.
-3. Grant the app **Azure DevOps** delegated permissions. Request the least you need — `vso.code_write`, `vso.work_write`, `vso.threads_full` cover the built-in flows.
-4. Set `AZDO_ENTRA_CLIENT_ID`, `AZDO_ENTRA_CLIENT_SECRET`, and optionally `AZDO_ENTRA_TENANT` (`common` by default; pin your tenant GUID for a single-tenant deployment).
-5. Restart. The login page grows a "Sign in with Microsoft" button and **Add project** grows an Azure DevOps tab.
+3. Grant the app **Azure DevOps** delegated permissions. Four are needed, and all four are load-bearing:
+
+   | Scope | Why |
+   |---|---|
+   | `vso.code_write` | Repos, pull requests, PR comment threads, reviewer votes, labels |
+   | `vso.work_write` | Work items |
+   | `vso.notification_write` | **Service hook subscriptions.** Adding a repo creates them; without this, adding a project fails |
+   | `vso.profile` | The profile/accounts lookup that lists which organizations you can connect |
+
+   Note `vso.threads_full` does **not** exist as an Entra delegated scope — that name comes from Azure DevOps' separate PAT scope vocabulary. PR threads are covered by `vso.code_write`.
+4. Grant admin consent (`az ad app permission admin-consent --id <appId>`, or the portal button) so users aren't prompted individually.
+5. Set `AZDO_ENTRA_CLIENT_ID`, `AZDO_ENTRA_CLIENT_SECRET`, and optionally `AZDO_ENTRA_TENANT` (`common` by default; pin your tenant GUID for a single-tenant deployment).
+6. Restart. The login page grows a "Sign in with Microsoft" button and **Add project** grows an Azure DevOps tab.
 
 `PUBLIC_BASE_URL` **must be HTTPS.** Azure DevOps refuses to create a service hook subscription with basic-auth credentials against a plaintext endpoint, so every subscription will fail on an `http://` deployment.
+
+### Connecting with a Personal Access Token
+
+For an organization Entra cannot reach (see the box above), or simply to avoid registering an Entra app:
+
+1. In Azure DevOps: **User settings → Personal access tokens → New Token**, scoped to your organization.
+2. Grant **Code (read & write)**, **Work items (read & write)**, and **Service hooks (read & write)**. The last is what lets adding a repository create its subscriptions.
+3. In OpenCara: **Add project → Azure DevOps → Connect with an access token**, enter the organization name (the segment after `dev.azure.com/`) and the token.
+
+The token is verified against the organization before it is stored, so a wrong, expired, or mis-scoped token is reported immediately rather than failing on first use. It is encrypted with `SESSION_ENCRYPTION_KEY`, like every other stored credential. Re-entering a token for an organization you already connected rotates it in place.
+
+Trade-off worth knowing: a PAT is a static secret with no refresh and whatever scopes you granted it. Unlike the Entra path there is no per-run token, so the credential handed to an agent is the PAT itself for as long as it is valid. Scope it to the one organization and set an expiry.
 
 ### Linking Azure DevOps to an existing account
 

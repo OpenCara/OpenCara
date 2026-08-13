@@ -108,6 +108,13 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Fix: bracket one character so the pattern cannot match the literal text — `pkill -f "npm exec [o]pencara"`, `pgrep -f "[s]rc/index.ts"`. Or match precisely: `ps -eo pid,args --no-headers | grep -E "[n]pm exec opencara" | awk '{print $1}' | xargs -r kill`.
 - Corollary for ANY kill -> purge -> relaunch sequence: verify each step's effect before assuming the next ran. A non-zero exit from the compound command means later steps silently did not happen. Confirm the process is gone AND the dir is gone AND the new process exists — never infer from "the command returned".
 
+### [hits: 1] Killing `npm exec opencara` does NOT kill the device — the real process is a grandchild that survives as an orphan
+- The device runs as a 3-process tree: `npm exec opencara@latest` -> `sh -c "opencara"` -> `node ~/.npm/_npx/<hash>/node_modules/.bin/opencara`. Only the LAST one is the device. Killing the `npm exec` wrapper leaves the grandchild running, reparented to init (PPID 1), still executing whatever code it loaded at start.
+- 2026-08-12: after a botched refresh I checked with `ps ... grep "[n]pm exec [o]pencara"` — which only matches the WRAPPER — saw nothing, and concluded "device stopped". The real device (12 days old, PID with PPID 1) was still running. The relaunch then started a SECOND device sharing the same `agentHostId` from `~/.opencara/config.json`.
+- Symptom of the duplicate: the orchestrator log alternates `connected` / `disconnected` with `code=4000 reason="superseded"` every second or so, and the reported version FLIPS between the two builds (0.113.1 / 0.112.3) as each evicts the other. **Any agent run dispatched into that churn fails with `device <id> disconnected`**, which is what killed flow run 01KZTXZJWMDAMXKCDX54EJAMWG.
+- Correct check — match the BIN path, not the wrapper: `ps -eo pid,ppid,etime,args --no-headers | grep -E "_npx/[a-f0-9]+/node_modules/\.bin/opencara"`. An entry with PPID 1 and an etime much older than your relaunch is an orphan; kill it by exact PID.
+- Two devices with one host id is silent apart from the log churn: `agent_hosts` shows a single row, `/health` is green, and the version column just reflects whichever said hello last.
+
 ## Multi-platform UI
 
 ### [hits: 1] A UI affordance for an optional platform must be gated on `/api/auth/providers`, not rendered unconditionally

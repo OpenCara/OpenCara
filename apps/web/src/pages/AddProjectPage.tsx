@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -25,7 +27,9 @@ import {
   availableReposQuery,
   useAddProject,
   authProvidersQuery,
+  azureConnectionsQuery,
   azureOrganizationsQuery,
+  useConnectAzurePat,
   azureRepositoriesQuery,
   useConnectAzureOrg,
   useAddAzureProject,
@@ -143,15 +147,35 @@ function GithubSource() {
  */
 function AzureSource() {
   const orgs = useQuery(azureOrganizationsQuery());
+  const connections = useQuery(azureConnectionsQuery());
   const connect = useConnectAzureOrg();
   const [connectionId, setConnectionId] = useState<string | null>(null);
 
-  if (orgs.isLoading) return <Skeleton className="h-32" />;
+  const existing = connections.data?.connections ?? [];
+  // /organizations answers 409 for TWO different reasons, and they need
+  // different UI. Discriminate on the body `code`, not the status:
+  //   entra_not_configured  — this deployment has no Entra app at all, so a
+  //                           PAT is the only route and there is nothing to
+  //                           sign into.
+  //   entra_signin_required — Entra IS configured; this session just signed in
+  //                           with GitHub. The right answer is the sign-in
+  //                           button, not the PAT explanation.
+  // Matching on status alone made the sign-in branch unreachable.
+  const errCode =
+    orgs.error instanceof ApiError
+      ? (orgs.error.body as { code?: string } | undefined)?.code
+      : undefined;
+  const entraUnavailable =
+    orgs.isError &&
+    orgs.error instanceof ApiError &&
+    (errCode === "entra_not_configured" || orgs.error.status === 404);
+
+  if (orgs.isLoading || connections.isLoading) return <Skeleton className="h-32" />;
 
   // 409 = this session authenticated with GitHub, so it holds no Microsoft
   // credentials. Recoverable by signing in with Microsoft, so say that rather
   // than showing a generic error.
-  if (orgs.isError) {
+  if (orgs.isError && !entraUnavailable) {
     const needsSignIn =
       orgs.error instanceof ApiError && orgs.error.status === 409;
     // 404 = the Azure DevOps routes were never mounted, i.e. AZDO_ENTRA_* is
@@ -195,18 +219,50 @@ function AzureSource() {
   }
 
   const organizations = orgs.data?.organizations ?? [];
-  if (organizations.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-8 text-center text-sm text-muted-foreground">
-          No Azure DevOps organizations found for this account.
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <div className="space-y-6">
+      {existing.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-3">
+          {existing.map((conn) => (
+            <Card
+              key={conn.id}
+              className={`cursor-pointer transition ${
+                connectionId === conn.id ? "ring-2 ring-ring" : ""
+              }`}
+              onClick={() => setConnectionId(conn.id)}
+            >
+              <CardHeader>
+                <CardTitle className="text-base">{conn.orgName}</CardTitle>
+                <CardDescription>
+                  connected via {conn.authMode === "pat" ? "access token" : "Microsoft"}
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <AzurePatConnect onConnected={setConnectionId} />
+
+      {entraUnavailable && existing.length === 0 && (
+        <div className="text-xs text-muted-foreground">
+          {errCode === "entra_not_configured"
+            ? "Microsoft sign-in isn't configured on this deployment, so an access token is the way to connect."
+            : "This organization can't be reached with Microsoft sign-in."}{" "}
+          Note that an organization backed by a <em>personal</em> Microsoft account can only
+          ever be connected with an access token — Azure DevOps does not issue Microsoft
+          sign-in tokens to personal accounts.
+        </div>
+      )}
+
+      {!entraUnavailable && organizations.length === 0 && (
+        <div className="text-xs text-muted-foreground">
+          No Azure DevOps organizations found for your Microsoft account. You can still
+          connect one above with an access token.
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-3">
         {organizations.map((org) => (
           <Card
@@ -243,6 +299,97 @@ function AzureSource() {
 
       {connectionId && <AzureRepoPicker connectionId={connectionId} />}
     </div>
+  );
+}
+
+/**
+ * Connect an Azure DevOps organization with a Personal Access Token.
+ *
+ * Required for organizations backed by a personal Microsoft account, which
+ * Azure DevOps will not issue Microsoft sign-in tokens for. The token is
+ * verified against the organization server-side before it is stored, so a bad
+ * or wrongly-scoped token is reported here rather than failing later.
+ */
+function AzurePatConnect({ onConnected }: { onConnected: (id: string) => void }) {
+  const [orgName, setOrgName] = useState("");
+  const [pat, setPat] = useState("");
+  const connect = useConnectAzurePat();
+
+  const submit = () => {
+    if (!orgName.trim() || !pat.trim()) return;
+    connect.mutate(
+      { orgName: orgName.trim(), pat: pat.trim() },
+      {
+        onSuccess: (res) => {
+          setPat("");
+          onConnected(res.connection.id);
+        },
+      },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-medium">
+          Connect with an access token
+        </CardTitle>
+        <CardDescription>
+          From Azure DevOps: User settings → Personal access tokens. Needs{" "}
+          <span className="font-medium">Code (read &amp; write)</span>,{" "}
+          <span className="font-medium">Work items (read &amp; write)</span> and{" "}
+          <span className="font-medium">Service hooks (read &amp; write)</span>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="azdo-org">Organization</Label>
+            <Input
+              id="azdo-org"
+              placeholder="e.g. ShiningPie"
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The segment after dev.azure.com/
+            </p>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="azdo-pat">Personal access token</Label>
+            <Input
+              id="azdo-pat"
+              type="password"
+              autoComplete="off"
+              placeholder="••••••••"
+              value={pat}
+              onChange={(e) => setPat(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Stored encrypted; never shown again after saving.
+            </p>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Submitting an organization you already connected replaces its stored credential —
+          including switching one connected via Microsoft over to token auth.
+        </p>
+        <Button disabled={connect.isPending || !orgName.trim() || !pat.trim()} onClick={submit}>
+          {connect.isPending ? "Verifying…" : "Connect"}
+        </Button>
+        {connect.isError && (
+          <div className="text-sm text-destructive">
+            {connect.error instanceof ApiError &&
+            typeof (connect.error.body as { error?: string })?.error === "string"
+              ? (connect.error.body as { error: string }).error
+              : "Could not connect."}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

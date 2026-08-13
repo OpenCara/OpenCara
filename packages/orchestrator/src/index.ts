@@ -111,16 +111,20 @@ const githubApp = config.github
 // API routes. Requires SESSION_ENCRYPTION_KEY because connection tokens are
 // stored encrypted with the same cipher as session tokens.
 const azureDeps =
-  config.azureDevops && config.SESSION_ENCRYPTION_KEY
+  config.SESSION_ENCRYPTION_KEY
     ? {
         db,
         cipher: new TokenCipher(config.SESSION_ENCRYPTION_KEY),
-        entra: new EntraOAuth({
-          clientId: config.azureDevops.clientId,
-          clientSecret: config.azureDevops.clientSecret,
-          tenant: config.azureDevops.tenant,
-          publicBaseUrl: config.PUBLIC_BASE_URL,
-        }),
+        // Present only when an Entra app is configured; PAT connections do not
+        // need one.
+        entra: config.azureDevops
+          ? new EntraOAuth({
+              clientId: config.azureDevops.clientId,
+              clientSecret: config.azureDevops.clientSecret,
+              tenant: config.azureDevops.tenant,
+              publicBaseUrl: config.PUBLIC_BASE_URL,
+            })
+          : undefined,
       }
     : null;
 
@@ -269,25 +273,27 @@ if ((config.github || azureDeps) && config.SESSION_ENCRYPTION_KEY) {
       entraOAuth,
     }),
   );
-  if (entraOAuth) {
-    app.route(
-      "/webhooks/azure-devops",
-      azureWebhookRoutes({ db, cipher, flowEngine: flowEngine ?? undefined }),
-    );
-    app.route(
-      "/api/azure",
-      azureRoutes({
-        db,
-        cipher,
-        entra: entraOAuth,
-        publicBaseUrl: config.PUBLIC_BASE_URL,
-        cookieName: config.SESSION_COOKIE_NAME,
-      }),
-    );
-    console.log(
-      "[orchestrator] Azure DevOps routes mounted (webhooks at /webhooks/azure-devops)",
-    );
-  }
+  // Mounted unconditionally: a Personal Access Token connection needs no Entra
+  // app at all, and an organization backed by a personal Microsoft account can
+  // ONLY be reached that way (Azure DevOps is work/school-only in Entra). The
+  // Entra-specific endpoints answer 409 when AZDO_ENTRA_* is unset.
+  app.route(
+    "/webhooks/azure-devops",
+    azureWebhookRoutes({ db, cipher, flowEngine: flowEngine ?? undefined }),
+  );
+  app.route(
+    "/api/azure",
+    azureRoutes({
+      db,
+      cipher,
+      entra: entraOAuth,
+      publicBaseUrl: config.PUBLIC_BASE_URL,
+      cookieName: config.SESSION_COOKIE_NAME,
+    }),
+  );
+  console.log(
+    `[orchestrator] Azure DevOps routes mounted (webhooks at /webhooks/azure-devops; Entra sign-in ${entraOAuth ? "enabled" : "disabled — PAT connections only"})`,
+  );
   app.route(
     "/api/projects",
     projectRoutes({ db, app: githubApp ?? undefined, azure: azureDeps ?? undefined }),
