@@ -117,6 +117,13 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Multi-platform UI
 
+### [hits: 1] `api.get<T>()` in the web app is a type ASSERTION — a client type that disagrees with the server fails at runtime, never at build
+- `apps/web/src/lib/api.ts` casts the parsed JSON to `T`. Nothing validates it. So if the server starts returning `installation: null` and `queries.ts` still declares `installation: InstallationSummary`, `tsc` is perfectly happy and the page throws `Cannot read properties of null` in front of the user.
+- Hit on 2026-08-12 making Azure DevOps projects visible: the backend legitimately returned `installation: null` for them, `ProjectDetailPage` dereferenced `inst.suspendedAt` and `inst.accountLogin`, and the build was clean. The bug was only reachable *because* the same change made the page reachable.
+- **Technique that works**: when a server field becomes nullable, change the client type FIRST and let `tsc` enumerate the call sites. Changing `installation: InstallationSummary` -> `| null` produced two errors at exactly the two broken lines. Fixing only the sites you already know about misses the rest.
+- Corollary: a green `pnpm -r build` says nothing about whether the client and server agree on a response shape. Only rendering the page, or a runtime-validated client, does.
+
+
 ### [hits: 1] A UI affordance for an optional platform must be gated on `/api/auth/providers`, not rendered unconditionally
 - Shipped in v0.113.0 and broke immediately: `AddProjectPage` rendered a hardcoded `[GitHub | Azure DevOps]` tab strip, but the Azure routes only mount when `AZDO_ENTRA_*` is configured. On the GitHub-only prod deployment the tab was clickable and called `/api/azure/organizations`, which 404'd through the SPA fallback → "Failed to load organizations: API 404".
 - The signal already existed and was already correct — `/api/auth/providers` returned `{github:true, entra:false}`, and `LoginPage` consumed it properly to hide the Microsoft button. The bug was one page ignoring it. **When adding a second consumer of a capability flag, share the query instead of re-deriving; two independent probes drift.** Both pages now use `authProvidersQuery()`.
