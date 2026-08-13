@@ -194,8 +194,16 @@ export const azureDevopsConnections = pgTable(
      * goes through the shared EntraOAuth built from AZDO_ENTRA_TENANT.
      */
     entraTenantId: text("entra_tenant_id"),
-    /** `oid` claim of the user who connected the org. */
-    entraObjectId: text("entra_object_id").notNull(),
+    /** `oid` claim of the connecting user. Null for PAT connections (0046). */
+    entraObjectId: text("entra_object_id"),
+    /**
+     * "entra" | "pat". Azure DevOps registers in Entra as work/school-only, so
+     * an organization backed by a personal Microsoft account can ONLY be reached
+     * with a PAT. See migration 0046.
+     */
+    authMode: text("auth_mode").notNull().default("entra"),
+    /** Operator-facing PAT expiry, so a dead connection has a visible reason. */
+    patExpiresAt: timestamp("pat_expires_at", { withTimezone: true }),
     // Encrypted with the same TokenCipher as session tokens.
     refreshTokenEnc: text("refresh_token_enc"),
     accessTokenEnc: text("access_token_enc"),

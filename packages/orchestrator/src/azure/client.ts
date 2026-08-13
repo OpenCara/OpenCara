@@ -29,7 +29,12 @@ export type AzureDevopsConnectionRow = typeof azureDevopsConnections.$inferSelec
 export interface AzureDevopsClientDeps {
   db: Db;
   cipher: TokenCipher;
-  entra: EntraOAuth;
+  /**
+   * Only needed to refresh Entra-mode connections. A deployment that uses PATs
+   * exclusively configures no Entra app at all, so this is optional and its
+   * absence is an error only on the Entra refresh path.
+   */
+  entra?: EntraOAuth;
 }
 
 export class AzureDevopsApiError extends Error {
@@ -83,7 +88,24 @@ export class AzureDevopsClient {
    * installation token this is user-delegated, cannot be scoped to a subset of
    * repositories, and cannot be revoked early.
    */
+  /** How this connection authenticates: an Entra bearer token, or a PAT. */
+  get authMode(): "entra" | "pat" {
+    return this.connection.authMode === "pat" ? "pat" : "entra";
+  }
+
   async accessToken(): Promise<string> {
+    // A PAT is a static secret — there is nothing to refresh and no expiry we
+    // can act on, so return it directly. Attempting the Entra refresh path here
+    // would fail on the (correctly) absent refresh token.
+    if (this.authMode === "pat") {
+      if (!this.connection.accessTokenEnc) {
+        throw new AzureDevopsAuthError(
+          `Azure DevOps connection '${this.connection.orgName}' has no stored token — reconnect the organization`,
+          this.connection.id,
+        );
+      }
+      return this.deps.cipher.decrypt(this.connection.accessTokenEnc);
+    }
     const { accessTokenEnc, accessTokenExpiresAt, refreshTokenEnc } = this.connection;
     const stillFresh =
       accessTokenEnc &&
@@ -98,6 +120,12 @@ export class AzureDevopsClient {
       );
     }
 
+    if (!this.deps.entra) {
+      throw new AzureDevopsAuthError(
+        `Azure DevOps connection '${this.connection.orgName}' needs an Entra token refresh, but AZDO_ENTRA_* is not configured`,
+        this.connection.id,
+      );
+    }
     let tokens;
     try {
       tokens = await this.deps.entra.refresh(this.deps.cipher.decrypt(refreshTokenEnc));
@@ -151,7 +179,12 @@ export class AzureDevopsClient {
     const res = await fetch(target.toString(), {
       method: init.method ?? "GET",
       headers: {
-        authorization: `Bearer ${token}`,
+        // Entra tokens are Bearer; PATs are HTTP Basic with an empty username
+        // (Azure DevOps accepts any username and reads the password).
+        authorization:
+          this.authMode === "pat"
+            ? `Basic ${Buffer.from(`:${token}`).toString("base64")}`
+            : `Bearer ${token}`,
         accept: "application/json",
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
       },

@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -25,7 +27,9 @@ import {
   availableReposQuery,
   useAddProject,
   authProvidersQuery,
+  azureConnectionsQuery,
   azureOrganizationsQuery,
+  useConnectAzurePat,
   azureRepositoriesQuery,
   useConnectAzureOrg,
   useAddAzureProject,
@@ -143,15 +147,26 @@ function GithubSource() {
  */
 function AzureSource() {
   const orgs = useQuery(azureOrganizationsQuery());
+  const connections = useQuery(azureConnectionsQuery());
   const connect = useConnectAzureOrg();
   const [connectionId, setConnectionId] = useState<string | null>(null);
 
-  if (orgs.isLoading) return <Skeleton className="h-32" />;
+  const existing = connections.data?.connections ?? [];
+  // Microsoft sign-in is unavailable, or this session has no Microsoft
+  // credentials. Either way a PAT is the way in — and for an organization
+  // backed by a personal Microsoft account it is the ONLY way in, since Azure
+  // DevOps is registered in Entra as work/school-only.
+  const entraUnavailable =
+    orgs.isError &&
+    orgs.error instanceof ApiError &&
+    (orgs.error.status === 409 || orgs.error.status === 404);
+
+  if (orgs.isLoading || connections.isLoading) return <Skeleton className="h-32" />;
 
   // 409 = this session authenticated with GitHub, so it holds no Microsoft
   // credentials. Recoverable by signing in with Microsoft, so say that rather
   // than showing a generic error.
-  if (orgs.isError) {
+  if (orgs.isError && !entraUnavailable) {
     const needsSignIn =
       orgs.error instanceof ApiError && orgs.error.status === 409;
     // 404 = the Azure DevOps routes were never mounted, i.e. AZDO_ENTRA_* is
@@ -195,18 +210,40 @@ function AzureSource() {
   }
 
   const organizations = orgs.data?.organizations ?? [];
-  if (organizations.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-8 text-center text-sm text-muted-foreground">
-          No Azure DevOps organizations found for this account.
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <div className="space-y-6">
+      {existing.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-3">
+          {existing.map((conn) => (
+            <Card
+              key={conn.id}
+              className={`cursor-pointer transition ${
+                connectionId === conn.id ? "ring-2 ring-ring" : ""
+              }`}
+              onClick={() => setConnectionId(conn.id)}
+            >
+              <CardHeader>
+                <CardTitle className="text-base">{conn.orgName}</CardTitle>
+                <CardDescription>
+                  connected via {conn.authMode === "pat" ? "access token" : "Microsoft"}
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <AzurePatConnect onConnected={setConnectionId} />
+
+      {entraUnavailable && existing.length === 0 && (
+        <div className="text-xs text-muted-foreground">
+          Microsoft sign-in isn't available for this session. An organization backed by a
+          personal Microsoft account can only be connected with an access token — Azure
+          DevOps does not issue Microsoft sign-in tokens to personal accounts.
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-3">
         {organizations.map((org) => (
           <Card
@@ -243,6 +280,93 @@ function AzureSource() {
 
       {connectionId && <AzureRepoPicker connectionId={connectionId} />}
     </div>
+  );
+}
+
+/**
+ * Connect an Azure DevOps organization with a Personal Access Token.
+ *
+ * Required for organizations backed by a personal Microsoft account, which
+ * Azure DevOps will not issue Microsoft sign-in tokens for. The token is
+ * verified against the organization server-side before it is stored, so a bad
+ * or wrongly-scoped token is reported here rather than failing later.
+ */
+function AzurePatConnect({ onConnected }: { onConnected: (id: string) => void }) {
+  const [orgName, setOrgName] = useState("");
+  const [pat, setPat] = useState("");
+  const connect = useConnectAzurePat();
+
+  const submit = () => {
+    if (!orgName.trim() || !pat.trim()) return;
+    connect.mutate(
+      { orgName: orgName.trim(), pat: pat.trim() },
+      {
+        onSuccess: (res) => {
+          setPat("");
+          onConnected(res.connection.id);
+        },
+      },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-medium">
+          Connect with an access token
+        </CardTitle>
+        <CardDescription>
+          From Azure DevOps: User settings → Personal access tokens. Needs{" "}
+          <span className="font-medium">Code (read &amp; write)</span>,{" "}
+          <span className="font-medium">Work items (read &amp; write)</span> and{" "}
+          <span className="font-medium">Service hooks (read &amp; write)</span>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="azdo-org">Organization</Label>
+            <Input
+              id="azdo-org"
+              placeholder="e.g. ShiningPie"
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The segment after dev.azure.com/
+            </p>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="azdo-pat">Personal access token</Label>
+            <Input
+              id="azdo-pat"
+              type="password"
+              autoComplete="off"
+              placeholder="••••••••"
+              value={pat}
+              onChange={(e) => setPat(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Stored encrypted; never shown again after saving.
+            </p>
+          </div>
+        </div>
+        <Button disabled={connect.isPending || !orgName.trim() || !pat.trim()} onClick={submit}>
+          {connect.isPending ? "Verifying…" : "Connect"}
+        </Button>
+        {connect.isError && (
+          <div className="text-sm text-destructive">
+            {connect.error instanceof ApiError &&
+            typeof (connect.error.body as { error?: string })?.error === "string"
+              ? (connect.error.body as { error: string }).error
+              : "Could not connect."}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

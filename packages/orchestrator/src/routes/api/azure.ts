@@ -7,7 +7,7 @@ import { azureDevopsConnections, projects, sessions } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { TokenCipher } from "../../auth/session.js";
 import { tenantIdFromAccessToken, type EntraOAuth } from "../../azure/entra.js";
-import { AzureDevopsClient, clientForConnection } from "../../azure/client.js";
+import { AzureDevopsClient, clientForConnection, AZDO_API_VERSION } from "../../azure/client.js";
 import {
   azureCloneUrl,
   azureOwnerLabel,
@@ -19,7 +19,8 @@ import { createSubscriptions, deleteSubscriptions } from "../../azure/hooks.js";
 interface AzureRoutesDeps {
   db: Db;
   cipher: TokenCipher;
-  entra: EntraOAuth;
+  /** Absent when only PAT connections are supported (no AZDO_ENTRA_*). */
+  entra?: EntraOAuth;
   publicBaseUrl: string;
   cookieName: string;
 }
@@ -40,6 +41,18 @@ export function azureRoutes(deps: AzureRoutesDeps) {
   /** Organizations the signed-in user could connect. */
   r.get("/organizations", async (c) => {
     const user = c.get("user")!;
+    if (!deps.entra) {
+      // Listing organizations is an Entra-only capability; PAT connections name
+      // their organization explicitly instead.
+      return c.json(
+        {
+          error:
+            "Microsoft sign-in is not configured on this deployment — connect an organization with a Personal Access Token instead",
+          code: "entra_not_configured",
+        },
+        409,
+      );
+    }
     const token = await sessionEntraToken(deps, c.req.header("cookie"));
     if (!token) {
       // The Entra token lives on the session, so a GitHub-authenticated user
@@ -80,6 +93,8 @@ export function azureRoutes(deps: AzureRoutesDeps) {
         id: row.id,
         orgName: row.orgName,
         orgId: row.orgId,
+        authMode: row.authMode,
+        patExpiresAt: row.patExpiresAt,
         createdAt: row.createdAt,
       })),
     });
@@ -155,6 +170,79 @@ export function azureRoutes(deps: AzureRoutesDeps) {
       webhookSecretEnc: deps.cipher.encrypt(randomBytes(32).toString("hex")),
       addedByUserId: user.id,
       ...tokenFields,
+    });
+    return c.json({ connection: { id, orgName, reconnected: false } }, 201);
+  });
+
+  /**
+   * Connect an organization with a Personal Access Token.
+   *
+   * The only way to reach an organization backed by a personal Microsoft
+   * account: Azure DevOps is registered in Entra as work/school-only, so those
+   * orgs can never issue an Entra token (see migration 0046).
+   *
+   * The PAT is verified against the organization BEFORE it is stored — a token
+   * that is wrong, expired, or scoped to a different org fails here with a
+   * clear message rather than silently producing a connection that 401s on
+   * every later use.
+   */
+  r.post("/connections/pat", async (c) => {
+    const user = c.get("user")!;
+    const body = await c.req.json().catch(() => ({}));
+    const orgName = typeof body.orgName === "string" ? body.orgName.trim() : "";
+    const pat = typeof body.pat === "string" ? body.pat.trim() : "";
+    if (!orgName || !pat) {
+      return c.json({ error: "orgName and pat (strings) are required" }, 400);
+    }
+    // The org name goes into a URL path; keep it to what Azure DevOps allows.
+    if (!/^[\w][\w.-]{0,62}$/.test(orgName)) {
+      return c.json({ error: "orgName contains unexpected characters" }, 400);
+    }
+
+    const verify = await verifyPat(orgName, pat);
+    if (!verify.ok) return c.json({ error: verify.error }, verify.status);
+
+    const existing = await deps.db.query.azureDevopsConnections.findFirst({
+      where: and(
+        eq(azureDevopsConnections.addedByUserId, user.id),
+        eq(azureDevopsConnections.orgName, orgName),
+      ),
+    });
+
+    const patExpiresAt =
+      typeof body.expiresAt === "string" && !Number.isNaN(Date.parse(body.expiresAt))
+        ? new Date(body.expiresAt)
+        : null;
+
+    const fields = {
+      authMode: "pat" as const,
+      accessTokenEnc: deps.cipher.encrypt(pat),
+      // A PAT has nothing to refresh; leaving these null is what the
+      // auth_mode CHECK constraint enforces.
+      refreshTokenEnc: null,
+      accessTokenExpiresAt: null,
+      entraObjectId: null,
+      entraTenantId: null,
+      patExpiresAt,
+      updatedAt: new Date(),
+    };
+
+    if (existing) {
+      // Rotating the PAT is the same action as connecting again.
+      await deps.db
+        .update(azureDevopsConnections)
+        .set(fields)
+        .where(eq(azureDevopsConnections.id, existing.id));
+      return c.json({ connection: { id: existing.id, orgName, reconnected: true } });
+    }
+
+    const id = ulid();
+    await deps.db.insert(azureDevopsConnections).values({
+      id,
+      orgName,
+      webhookSecretEnc: deps.cipher.encrypt(randomBytes(32).toString("hex")),
+      addedByUserId: user.id,
+      ...fields,
     });
     return c.json({ connection: { id, orgName, reconnected: false } }, 201);
   });
@@ -293,9 +381,11 @@ export function azureRoutes(deps: AzureRoutesDeps) {
     const fresh =
       row.entraTokenExpiresAt && row.entraTokenExpiresAt.getTime() - 60_000 > Date.now();
     if (fresh) return d.cipher.decrypt(row.entraAccessTokenEnc);
-    if (!row.entraRefreshTokenEnc) return null;
+    // No Entra client means no way to refresh; the stale token is unusable.
+    if (!row.entraRefreshTokenEnc || !d.entra) return null;
+    const entra = d.entra;
     try {
-      const tokens = await d.entra.refresh(d.cipher.decrypt(row.entraRefreshTokenEnc));
+      const tokens = await entra.refresh(d.cipher.decrypt(row.entraRefreshTokenEnc));
       await d.db
         .update(sessions)
         .set({
@@ -341,6 +431,60 @@ export function azureRoutes(deps: AzureRoutesDeps) {
     }
     return { objectId: identity.externalId, tenantId };
   }
+}
+
+
+/**
+ * Check a PAT actually works against the organization, before storing it.
+ *
+ * Uses the projects endpoint because it needs only read access and exists on
+ * every organization. Distinguishes the three failures an operator can act on:
+ * wrong/expired token, wrong organization name, and everything else.
+ */
+async function verifyPat(
+  orgName: string,
+  pat: string,
+): Promise<{ ok: true } | { ok: false; error: string; status: 400 | 401 | 404 | 502 }> {
+  const url = `https://dev.azure.com/${encodeURIComponent(orgName)}/_apis/projects?api-version=${AZDO_API_VERSION}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: {
+        authorization: `Basic ${Buffer.from(`:${pat}`).toString("base64")}`,
+        accept: "application/json",
+      },
+      redirect: "manual",
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      status: 502,
+      error: `could not reach Azure DevOps: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (res.ok) return { ok: true };
+  // Azure DevOps answers an unauthenticated request with a 302 to a sign-in
+  // page rather than a 401, so treat a redirect as bad credentials.
+  if (res.status === 401 || res.status === 203 || (res.status >= 300 && res.status < 400)) {
+    return {
+      ok: false,
+      status: 401,
+      error: `Azure DevOps rejected that token for organization '${orgName}'. Check the token is valid, not expired, and issued for this organization.`,
+    };
+  }
+  if (res.status === 404) {
+    return {
+      ok: false,
+      status: 404,
+      error: `organization '${orgName}' not found at dev.azure.com`,
+    };
+  }
+  return {
+    ok: false,
+    status: 502,
+    error: `Azure DevOps returned ${res.status} while verifying the token`,
+  };
 }
 
 async function ownedConnection(db: Db, id: string, userId: string) {

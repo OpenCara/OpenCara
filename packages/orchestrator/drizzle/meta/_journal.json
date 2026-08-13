@@ -323,6 +323,13 @@
       "when": 1777660000000,
       "tag": "0045_azdo_tenant_nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1777670000000,
+      "tag": "0046_azdo_pat_auth",
+      "breakpoints": true
     }
   ]
 }
