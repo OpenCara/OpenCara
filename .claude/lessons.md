@@ -145,6 +145,15 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Corollary: `ctx.app` (GithubAppClient) had to become optional, because an ADO-only deployment configures no GitHub App at all. `FlowEngine` is now constructed when EITHER platform is configured; it used to be `githubApp ? new FlowEngine(...) : null`, which would have left an ADO-only install with no engine and no error.
 - Pattern for GitHub-only extras (auto-merge, PR↔issue link, draft-PR ready): a `skipOnAzure(ctx, feature)` helper that logs and returns true, rather than throwing. These run AFTER a successful agent step, so failing the run would discard completed work over a missing convenience.
 
+### [hits: 1] The PR-comment service hook payload is the COMMENT — no wrapper, no pull request, only `_links`
+- `ms.vss-code.git-pullrequest-comment-event` delivers `resource` = the comment object itself: `{id, parentCommentId, author, content, publishedDate, lastUpdatedDate, lastContentUpdatedDate, commentType, usersLiked, _links}`. There is **no** `resource.comment` wrapper and **no** pull request object anywhere.
+- The only route back to the PR is `_links.self.href`:
+  `https://dev.azure.com/{org}/_apis/git/repositories/{repoGuid}/pullRequests/{id}/threads/{t}/comments/{c}`
+  and `_links.repository.href` carries the team project GUID. Parse both out.
+- Because the PR is absent, its details must be FETCHED — the same shape as GitHub's `issue_comment`, which also carries no PR. Don't synthesise a hollow `pull_request`; fetch it.
+- Cost of getting this wrong: Microsoft's published sample for this event is **truncated mid-`comment`**, so the shape is not documented. I guessed twice (nested under `resource.pullRequest`, then flat on `resource`) and each guess cost a deploy. The thing that actually worked was reading `_links` off a real comment via `GET .../pullRequests/{id}/threads/{tid}` — the same object the webhook sends, obtainable with no deploy at all.
+- **Generalisable**: when a webhook payload shape is undocumented, fetch the equivalent object from the REST API instead of guessing; service hooks send the same resource the API returns.
+
 ### [hits: 1] Service hooks authenticate with HTTP Basic, not an HMAC signature — resolve the project BEFORE checking the secret
 - GitHub signs each delivery (`x-hub-signature-256`) and one secret covers the whole App. Azure DevOps signs nothing: the Basic-auth password registered on the subscription is the entire inbound authentication, and it is stored per connection.
 - Consequence for the handler (`routes/webhooksAzure.ts`): you cannot know which secret to compare against until you know which project the delivery is for. Resolve project → connection from the payload's repository/project GUID FIRST, then compare against exactly that connection's secret. Comparing against "any connection whose secret matches" would let one org's secret authenticate another org's events.

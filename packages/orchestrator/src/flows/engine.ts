@@ -45,6 +45,8 @@ import {
   type PlatformRunCtx,
 } from "./nodeRunners.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
+import { clientForConnection } from "../azure/client.js";
+import { pullRequestPayload } from "../azure/events.js";
 import type { AzureDevopsClientDeps } from "../azure/client.js";
 import { extractAgentResultText } from "../agents/output.js";
 import {
@@ -472,10 +474,25 @@ export class FlowEngine {
                 project,
                 event.payload as never,
               )
-            : // Azure DevOps needs no fetch — normalizeAzureEvent already put a
-              // GitHub-shaped pull_request object on the payload, including on
-              // the comment path where GitHub has to go and get one.
-              buildAzurePullRequestContext(event.payload as never, project);
+            : // PR events carry the pull request inline; the COMMENT event does
+              // not carry one at all, so a fetcher is supplied for that case.
+              await buildAzurePullRequestContext(
+                event.payload as never,
+                project,
+                async (prNumber) => {
+                  if (scm.platform !== "azure_devops" || !this.deps.azure) return undefined;
+                  const client = await clientForConnection(
+                    this.deps.azure,
+                    scm.connectionId,
+                  );
+                  if (!client) return undefined;
+                  const raw = await client.request<Record<string, unknown>>(
+                    `${client.orgUrl}/${encodeURIComponent(scm.projectName)}/_apis/git/repositories/${encodeURIComponent(scm.externalRepoId)}/pullRequests/${prNumber}`,
+                  );
+                  return (pullRequestPayload(raw as never) as { pull_request?: never })
+                    .pull_request;
+                },
+              );
       } catch (err) {
         console.error("[flow-engine] pr context fetch failed", err);
       }

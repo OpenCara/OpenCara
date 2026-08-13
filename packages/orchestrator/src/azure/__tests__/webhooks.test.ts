@@ -477,3 +477,91 @@ describe("normalizeAzureEvent — PR comment payload variants", () => {
     );
   });
 });
+
+// The REAL payload, captured from a live Azure DevOps delivery on 2026-08-13.
+// `resource` IS the comment — no `comment` wrapper, no pull request object,
+// only `_links` back to the PR. Two earlier guesses (nested, then flat) both
+// missed this, and each cost a deploy to discover.
+describe("normalizeAzureEvent — live PR-comment payload", () => {
+  const liveResource = {
+    id: 1,
+    parentCommentId: 0,
+    author: { displayName: "quabug", uniqueName: "quabug@msn.com" },
+    content: "@opencara mreview",
+    publishedDate: "2026-08-13T07:29:41.9Z",
+    commentType: "text",
+    usersLiked: [],
+    _links: {
+      self: {
+        href: "https://dev.azure.com/ShiningPie/_apis/git/repositories/71e0caba-ebd2-49bf-9591-37aaa7835422/pullRequests/8/threads/18/comments/1",
+      },
+      repository: {
+        href: "https://dev.azure.com/ShiningPie/5350e7b4-75b9-4bfc-a2f4-75584cabdc95/_apis/git/repositories/71e0caba-ebd2-49bf-9591-37aaa7835422",
+      },
+    },
+  };
+
+  it("maps the live shape to an issue_comment event", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    assert.ok(ev, "the live payload must map — this is the regression guard");
+    assert.equal(ev.type, "issue_comment");
+  });
+
+  it("recovers the repository GUID from _links, since the payload has no repository object", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    assert.equal(ev!.repositoryId, "71e0caba-ebd2-49bf-9591-37aaa7835422");
+  });
+
+  it("recovers the PR number and marks the comment as being on a PR", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    const issue = (ev!.payload as { issue: { number: number; pull_request: unknown } }).issue;
+    assert.equal(issue.number, 8);
+    assert.ok(issue.pull_request, "trigger drops comments without this marker");
+  });
+
+  it("carries the comment body for phrase matching", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    assert.equal(
+      (ev!.payload as { comment: { body: string } }).comment.body,
+      "@opencara mreview",
+    );
+  });
+
+  // The PR object is genuinely absent; the engine fetches it. Asserting this
+  // stops someone "helpfully" synthesising a hollow pull_request here.
+  it("does NOT invent a pull_request object", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    assert.equal((ev!.payload as { pull_request?: unknown }).pull_request, undefined);
+  });
+
+  it("extracts the team project GUID from the repository link", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    assert.equal(ev!.projectId, "5350e7b4-75b9-4bfc-a2f4-75584cabdc95");
+  });
+
+  it("returns null when _links cannot yield the ids", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: { ...liveResource, _links: { self: { href: "https://example.com/nope" } } },
+    });
+    assert.equal(ev, null);
+  });
+});

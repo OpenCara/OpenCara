@@ -379,6 +379,7 @@ export async function buildIssueStatusContext(
 // ---------------------------------------------------------------------------
 
 interface AzurePrPayload {
+  issue?: { number?: number };
   pull_request?: {
     number: number;
     head: { sha: string; ref?: string };
@@ -414,14 +415,29 @@ interface AzurePrPayload {
  * is both cheaper and more accurate. Inlining a real diff would mean N+1 API
  * calls per review; worth doing only if a diff-less review proves inadequate.
  */
-export function buildAzurePullRequestContext(
+export async function buildAzurePullRequestContext(
   payload: AzurePrPayload,
   project: { owner: string; name: string },
-): PullRequestContext {
-  const pr = payload.pull_request;
+  /**
+   * Required for the comment path. Azure DevOps' PR-comment event carries the
+   * comment and nothing else — no pull request object — so the PR has to be
+   * fetched, exactly as GitHub's `issue_comment` path does.
+   */
+  fetchPr?: (prNumber: number) => Promise<AzurePrPayload["pull_request"]>,
+): Promise<PullRequestContext> {
+  let pr = payload.pull_request;
+  if (!pr) {
+    const number = payload.issue?.number;
+    if (!number || !fetchPr) {
+      throw new Error(
+        "buildAzurePullRequestContext: payload carries no pull_request and no way to fetch one",
+      );
+    }
+    pr = await fetchPr(number);
+  }
   if (!pr) {
     throw new Error(
-      "buildAzurePullRequestContext: normalized payload carries no pull_request",
+      `buildAzurePullRequestContext: could not resolve pull request ${payload.issue?.number ?? "?"}`,
     );
   }
 
