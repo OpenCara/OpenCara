@@ -2,6 +2,9 @@
 
 ## Recent Activity
 
+- **2026-08-12**: Merged [#205](https://github.com/OpenCara/OpenCara/pull/205) - fix(azure-devops): stop INNER JOINs hiding Azure projects
+- **2026-08-12**: Merged [#204](https://github.com/OpenCara/OpenCara/pull/204) - feat(azure-devops): support Personal Access Token connections
+- **2026-08-12**: Merged [#203](https://github.com/OpenCara/OpenCara/pull/203) - feat(auth): link Azure DevOps to an existing account
 - **2026-08-12**: Merged [#201](https://github.com/OpenCara/OpenCara/pull/201) - fix(web): only offer the Azure DevOps source when it is configured
 - **2026-08-12**: Merged [#200](https://github.com/OpenCara/OpenCara/pull/200) - feat: Azure DevOps support (Entra sign-in, service hooks, PR flows)
 - **2026-07-30**: Merged [#199](https://github.com/OpenCara/OpenCara/pull/199) - fix(ci): drop --provenance from publish-cli (repo is private)
@@ -29,6 +32,8 @@
 - [x] Development-lifecycle multi-agent review + dispatch/pooler reliability fixes ([#165](https://github.com/OpenCara/OpenCara/pull/165))
 - [x] fix(cli): accept dot-separated GitHub installation tokens in worktree create ([#198](https://github.com/OpenCara/OpenCara/pull/198))
 - [x] fix(ci): drop --provenance from publish-cli (repo is private) ([#199](https://github.com/OpenCara/OpenCara/pull/199))
+- [x] Azure DevOps Personal Access Token connections, for organizations Entra cannot reach ([#204](https://github.com/OpenCara/OpenCara/pull/204))
+- [x] fix: Azure DevOps projects hidden from the UI by INNER JOINs on github_installations ([#205](https://github.com/OpenCara/OpenCara/pull/205))
 - [x] Link Azure DevOps to an existing GitHub account (settings page, `user_identities` linking) ([#203](https://github.com/OpenCara/OpenCara/pull/203))
 - [x] fix(web): only offer the Azure DevOps source when it is configured ([#201](https://github.com/OpenCara/OpenCara/pull/201))
 - [x] Azure DevOps support: platform-neutral `scm.*` flow node kinds + `ScmProvider` seam, Entra sign-in, organization connect, service hook subscriptions, and PR flows end-to-end ([#200](https://github.com/OpenCara/OpenCara/pull/200))
