@@ -34,8 +34,11 @@ const PullRequestResourceSchema = z.object({
     .optional(),
   repository: z.object({
     id: z.string(),
-    name: z.string(),
-    project: z.object({ id: z.string(), name: z.string() }).optional(),
+    // Only `id` is load-bearing (it resolves the project). Everything else is
+    // display, and a trimmed payload variant must not cause the whole delivery
+    // to be dropped.
+    name: z.string().optional(),
+    project: z.object({ id: z.string(), name: z.string().optional() }).optional(),
   }),
 });
 
@@ -103,9 +106,20 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
   }
 
   if (eventType === "ms.vss-code.git-pullrequest-comment-event") {
+    // Microsoft's published sample for this event is truncated mid-`comment`,
+    // so the position of the pull request object is not documented. Sibling
+    // events put PR fields directly on `resource`; this one clearly wraps the
+    // comment. Accept BOTH rather than betting on one: nested under
+    // `resource.pullRequest`, or the resource itself carrying pullRequestId.
     const parsed = CommentResourceSchema.safeParse(resource);
-    if (!parsed.success) return null;
-    const pr = parsed.data.pullRequest;
+    const prCandidate =
+      (resource as { pullRequest?: unknown } | null)?.pullRequest ?? resource;
+    const prParsed = PullRequestResourceSchema.safeParse(prCandidate);
+    if (!parsed.success && !prParsed.success) return null;
+    const pr = parsed.success ? parsed.data.pullRequest : prParsed.data!;
+    const commentRaw =
+      (resource as { comment?: { id?: number; content?: string; author?: unknown } } | null)
+        ?.comment ?? {};
     return {
       deliveryId,
       type: "issue_comment",
@@ -118,9 +132,15 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
         // event only ever fires for pull requests, so the marker is always set.
         issue: { number: pr.pullRequestId, pull_request: { url: null } },
         comment: {
-          id: parsed.data.comment.id ?? null,
-          body: parsed.data.comment.content ?? "",
-          user: { login: authorLogin(parsed.data.comment.author) },
+          id: commentRaw.id ?? null,
+          body: commentRaw.content ?? "",
+          user: {
+            login: authorLogin(
+              commentRaw.author as
+                | { displayName?: string; uniqueName?: string }
+                | undefined,
+            ),
+          },
           html_url: null,
         },
         ...pullRequestPayload(pr),
@@ -207,8 +227,8 @@ function pullRequestPayload(
     },
     repository: {
       id: pr.repository.id,
-      name: pr.repository.name,
-      full_name: projectName ? `${projectName}/${pr.repository.name}` : pr.repository.name,
+      name: pr.repository.name ?? "",
+      full_name: [projectName, pr.repository.name].filter(Boolean).join("/") || pr.repository.id,
     },
   };
 }
