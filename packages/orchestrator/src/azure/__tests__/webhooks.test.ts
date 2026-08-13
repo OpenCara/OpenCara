@@ -410,3 +410,70 @@ describe("no Azure DevOps event yields pull_request_review (documented gap)", ()
     assert.equal((ev!.payload as { action: string }).action, "synchronize");
   });
 });
+
+// Microsoft's published sample for the PR-comment event is truncated mid-`comment`,
+// so where the pull request object sits is undocumented: sibling events put PR
+// fields directly on `resource`, while this one clearly wraps the comment. The
+// normalizer accepts both rather than betting on one — a wrong bet drops the
+// delivery silently, which is exactly what happened on the first live test.
+describe("normalizeAzureEvent — PR comment payload variants", () => {
+  const prFields = {
+    pullRequestId: 8,
+    status: "active",
+    sourceRefName: "refs/heads/feat/wwise-audio",
+    targetRefName: "refs/heads/main",
+    lastMergeSourceCommit: { commitId: "aaa" },
+    lastMergeTargetCommit: { commitId: "bbb" },
+    repository: {
+      id: "71e0caba-ebd2-49bf-9591-37aaa7835422",
+      name: "ShiningPie",
+      project: { id: "5350e7b4", name: "ShiningPie" },
+    },
+  };
+  const comment = { id: 17, content: "@opencara mreview", author: { uniqueName: "q@x" } };
+
+  it("maps the nested shape (resource.pullRequest)", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: { comment, pullRequest: prFields },
+    });
+    assert.ok(ev, "nested shape must map");
+    assert.equal(ev.type, "issue_comment");
+    assert.equal(ev.repositoryId, prFields.repository.id);
+    assert.equal((ev.payload as { comment: { body: string } }).comment.body, "@opencara mreview");
+  });
+
+  it("maps the flat shape (PR fields directly on resource)", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: { comment, ...prFields },
+    });
+    assert.ok(ev, "flat shape must map");
+    assert.equal(ev.repositoryId, prFields.repository.id);
+    assert.equal((ev.payload as { issue: { number: number } }).issue.number, 8);
+  });
+
+  // Only the repository id resolves a project; a trimmed payload missing the
+  // display name must not cause the whole delivery to be dropped.
+  it("maps when repository.name is absent", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: {
+        comment,
+        pullRequest: { ...prFields, repository: { id: prFields.repository.id } },
+      },
+    });
+    assert.ok(ev, "must not require repository.name");
+    assert.equal(ev.repositoryId, prFields.repository.id);
+  });
+
+  it("still returns null when there is no pull request anywhere", () => {
+    assert.equal(
+      normalizeAzureEvent({
+        eventType: "ms.vss-code.git-pullrequest-comment-event",
+        resource: { comment },
+      }),
+      null,
+    );
+  });
+});

@@ -59,6 +59,21 @@ export function azureWebhookRoutes(deps: AzureWebhookDeps) {
       // 200 rather than 4xx: Azure DevOps disables a subscription after
       // repeated failures, and we do not want an unmapped variant to silently
       // tear down a working hook.
+      //
+      // But answering 200 silently made this branch invisible: Azure DevOps
+      // reported "succeeded" while nothing happened here, and there was no way
+      // to tell an unsubscribed event from a payload our schema rejects. Log
+      // enough shape to fix the schema — event type and key NAMES only, never
+      // values, since this request is not yet authenticated.
+      console.warn("[webhooks-azure] unmapped delivery", {
+        eventType: (payload as { eventType?: unknown })?.eventType,
+        publisherId: (payload as { publisherId?: unknown })?.publisherId,
+        topLevelKeys: describeKeys(payload),
+        resourceKeys: describeKeys((payload as { resource?: unknown })?.resource),
+        pullRequestKeys: describeKeys(
+          (payload as { resource?: { pullRequest?: unknown } })?.resource?.pullRequest,
+        ),
+      });
       return c.json({ ok: true, ignored: true });
     }
 
@@ -67,7 +82,14 @@ export function azureWebhookRoutes(deps: AzureWebhookDeps) {
     const resolved = await resolveProject(deps.db, normalized);
     if (!resolved) {
       // Unknown repo/project. Answer 200 for the same reason as above; there is
-      // nothing an operator can fix by seeing a 404 here.
+      // nothing an operator can fix by seeing a 404 here — but log the ids so
+      // "the webhook fires and nothing happens" is diagnosable without a
+      // deploy. Ids only, no payload contents.
+      console.warn("[webhooks-azure] delivery matched no project", {
+        type: normalized.type,
+        repositoryId: normalized.repositoryId,
+        projectId: normalized.projectId,
+      });
       return c.json({ ok: true, unmatched: true });
     }
 
@@ -93,6 +115,11 @@ export function azureWebhookRoutes(deps: AzureWebhookDeps) {
   });
 
   return app;
+}
+
+/** Key names of an object, for diagnostics. Never returns values. */
+function describeKeys(v: unknown): string[] | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v) : null;
 }
 
 interface ResolvedProject {
