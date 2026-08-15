@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseBasicAuthPassword, secretMatches } from "../webhookAuth.js";
-import { normalizeAzureEvent } from "../events.js";
+import {
+  PR_METADATA_ONLY_ACTION,
+  normalizeAzureEvent,
+  refinePullRequestAction,
+} from "../events.js";
+import { ScmPullRequestTriggerSchema } from "@opencara/flows";
 import { AZDO_EVENT_TYPES, deleteSubscriptions } from "../hooks.js";
 import type { AzureDevopsClient } from "../client.js";
 
@@ -185,6 +190,113 @@ describe("normalizeAzureEvent — pull requests", () => {
       (ev.payload as { pull_request: { head: { sha: string } } }).pull_request.head.sha,
       "",
     );
+  });
+});
+
+// REGRESSION. The first PR opened against an Azure DevOps repo got reviewed
+// twice: Azure fired `git.pullrequest.updated` 26s after `created` because the
+// author was auto-added as a reviewer, that update mapped to `synchronize`, and
+// the single-review stage raced the multi-reviewer fan-out already running from
+// `created`. The two payloads differed in `reviewers` and nothing else — same
+// `lastMergeSourceCommit` — which is the signal this pass reads.
+describe("refinePullRequestAction — metadata-only updates", () => {
+  const update = (resource: Record<string, unknown>) => {
+    const ev = normalizeAzureEvent({ eventType: "git.pullrequest.updated", resource });
+    assert.ok(ev);
+    return ev;
+  };
+  const actionOf = (ev: { payload: Record<string, unknown> }) =>
+    (ev.payload as { action: string }).action;
+
+  /** Lookup that answers `sha` and records the PR numbers it was asked about. */
+  const lookup = (sha: string | null) => {
+    const asked: number[] = [];
+    const fn = async (pullRequestId: number) => {
+      asked.push(pullRequestId);
+      return sha;
+    };
+    return { fn, asked };
+  };
+
+  it("demotes an update whose source commit did not move", async () => {
+    const { fn, asked } = lookup("aaa111");
+    const refined = await refinePullRequestAction(update(prResource), fn);
+    assert.equal(actionOf(refined), PR_METADATA_ONLY_ACTION);
+    assert.deepEqual(asked, [42]);
+  });
+
+  it("does not turn a reviewer being added into a review round", async () => {
+    // The live payload diff, reduced: reviewers appear, the commit does not move.
+    const { fn } = lookup("aaa111");
+    const refined = await refinePullRequestAction(
+      update({ ...prResource, reviewers: [{ id: "rev-1", vote: 0 }] }),
+      fn,
+    );
+    assert.equal(actionOf(refined), PR_METADATA_ONLY_ACTION);
+  });
+
+  it("keeps synchronize when the source commit moved", async () => {
+    const { fn } = lookup("older-sha");
+    const refined = await refinePullRequestAction(update(prResource), fn);
+    assert.equal(actionOf(refined), "synchronize");
+  });
+
+  // Fail-open cases: a review that never runs is a worse failure than one extra.
+  it("keeps synchronize when no earlier delivery is known", async () => {
+    const { fn } = lookup(null);
+    assert.equal(actionOf(await refinePullRequestAction(update(prResource), fn)), "synchronize");
+  });
+
+  it("keeps synchronize when this payload carries no source commit", async () => {
+    const { fn, asked } = lookup("aaa111");
+    const ev = update({ ...prResource, lastMergeSourceCommit: undefined });
+    assert.equal(actionOf(await refinePullRequestAction(ev, fn)), "synchronize");
+    // Nothing to compare — the lookup must not even be attempted.
+    assert.deepEqual(asked, []);
+  });
+
+  it("leaves opened alone without a lookup", async () => {
+    const { fn, asked } = lookup("aaa111");
+    const ev = normalizeAzureEvent({
+      eventType: "git.pullrequest.created",
+      resource: prResource,
+    });
+    assert.equal(actionOf(await refinePullRequestAction(ev!, fn)), "opened");
+    assert.deepEqual(asked, []);
+  });
+
+  it("leaves closed alone without a lookup", async () => {
+    const { fn, asked } = lookup("aaa111");
+    const ev = update({ ...prResource, status: "completed" });
+    assert.equal(actionOf(await refinePullRequestAction(ev, fn)), "closed");
+    assert.deepEqual(asked, []);
+  });
+
+  it("leaves comment events alone", async () => {
+    const { fn, asked } = lookup("aaa111");
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: { comment: { id: 1, content: "@opencara review" }, pullRequest: prResource },
+    });
+    const refined = await refinePullRequestAction(ev!, fn);
+    assert.equal(refined.type, "issue_comment");
+    assert.equal(actionOf(refined), "created");
+    assert.deepEqual(asked, []);
+  });
+
+  it("returns a new event rather than mutating the one it was given", async () => {
+    const { fn } = lookup("aaa111");
+    const original = update(prResource);
+    const refined = await refinePullRequestAction(original, fn);
+    assert.notEqual(refined, original);
+    assert.equal(actionOf(original), "synchronize");
+  });
+
+  // The demoted action must stay outside the trigger vocabulary, or the demotion
+  // silently stops suppressing anything.
+  it("demotes to an action no scm.pull_request trigger can select", () => {
+    const selectable = ScmPullRequestTriggerSchema.shape.config.shape.actions;
+    assert.equal(selectable.safeParse([PR_METADATA_ONLY_ACTION]).success, false);
   });
 });
 
@@ -408,6 +520,18 @@ describe("no Azure DevOps event yields pull_request_review (documented gap)", ()
     });
     assert.equal(ev!.type, "pull_request");
     assert.equal((ev!.payload as { action: string }).action, "synchronize");
+  });
+
+  // …and once the second pass sees the commit standing still, that vote becomes
+  // an `edited` — so a vote today drives NOTHING, rather than the wrong thing.
+  // Closing the gap means giving the vote its own mapping, not un-demoting this.
+  it("demotes a vote-only update to edited once the commit is known unmoved", async () => {
+    const ev = normalizeAzureEvent({
+      eventType: "git.pullrequest.updated",
+      resource: prWithVote,
+    });
+    const refined = await refinePullRequestAction(ev!, async () => "aaa111");
+    assert.equal((refined.payload as { action: string }).action, PR_METADATA_ONLY_ACTION);
   });
 });
 
