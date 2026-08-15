@@ -239,9 +239,13 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
  * Azure DevOps has no distinct "synchronize" (new commits pushed) event — a
  * push to the source branch arrives as `git.pullrequest.updated`, the same
  * event as a title edit. Mapping updates to "synchronize" is the behaviour that
- * matters: it is what re-runs a review when the author pushes a fix. The cost
- * is that a metadata-only edit also re-triggers; flows that care can filter on
- * the commit sha, which the engine dedups on.
+ * matters: it is what re-runs a review when the author pushes a fix.
+ *
+ * This function is the FIRST of two passes, and deliberately optimistic: it
+ * cannot see any delivery but this one, so it claims every update as a push.
+ * `refinePullRequestAction` below is the second pass — it compares the source
+ * commit against the previous delivery for the same PR and demotes the updates
+ * that moved no code.
  *
  * KNOWN GAP — nothing here ever produces `pull_request_review`, so the
  * `scm.pull_request_review` trigger (the review→fix half of
@@ -259,6 +263,70 @@ function prAction(eventType: string, status: string | undefined): string {
   if (eventType === "git.pullrequest.created") return "opened";
   if (status === "completed" || status === "abandoned") return "closed";
   return "synchronize";
+}
+
+/**
+ * The action a `git.pullrequest.updated` becomes when the source branch did not
+ * move — GitHub's own action for a title/body edit.
+ *
+ * Nothing listens for it: `ScmPullRequestTriggerSchema.actions` only admits
+ * opened / synchronize / reopened / ready_for_review / commented, so such an
+ * event lands as a `trigger_skip` run — the same, already-exercised treatment
+ * GitHub's `pull_request.edited` gets. The delivery is still recorded, so the
+ * event stays visible for forensics rather than disappearing.
+ */
+export const PR_METADATA_ONLY_ACTION = "edited";
+
+/**
+ * Second pass over a normalized PR event: demote a `synchronize` that carries
+ * no new commits.
+ *
+ * WHY. Azure DevOps sends `git.pullrequest.updated` for every change to a PR —
+ * a push, a title edit, a reviewer being added, a vote being cast — and the
+ * payload names none of them (`message`/`detailedMessage` come through null on
+ * resourceVersion 1.0). `prAction` therefore claims all of them as a push.
+ *
+ * Live consequence, on the very first PR opened against an Azure DevOps repo:
+ * Azure fired `updated` 26 seconds after `created` purely because the author
+ * was auto-added as a reviewer (the two payloads differed in `reviewers` and
+ * nothing else). That spurious `synchronize` started the SINGLE-review stage
+ * against a brand-new PR, racing — and beating — the multi-reviewer fan-out the
+ * `created` event had already started, so the PR got two reviews. The engine's
+ * dedupe could not collapse them: its key embeds the action, so
+ * `pull_request:12:opened:<sha>` and `pull_request:12:synchronize:<sha>` are
+ * distinct keys.
+ *
+ * The one thing the payload does carry is the source commit, so comparing it to
+ * the previous delivery for the same PR separates the cases: an unchanged sha
+ * means the branch stood still, which no push can do.
+ *
+ * FAILS OPEN. If either sha is unknown — the lookup found nothing, or the PR's
+ * merge commit had not been computed yet when the earlier delivery arrived —
+ * the update keeps `synchronize`. Dropping a real push (a review that never
+ * runs, silently) is a worse failure than one extra review.
+ *
+ * The lookup is a callback so this stays pure and the DB access stays in the
+ * webhook route; it is only invoked for events that could actually be demoted.
+ */
+export async function refinePullRequestAction(
+  ev: NormalizedAzureEvent,
+  lookupPreviousHeadSha: (pullRequestId: number) => Promise<string | null>,
+): Promise<NormalizedAzureEvent> {
+  if (ev.type !== "pull_request") return ev;
+  const payload = ev.payload as {
+    action?: unknown;
+    pull_request?: { number?: unknown; head?: { sha?: unknown } };
+  };
+  if (payload.action !== "synchronize") return ev;
+
+  const number = payload.pull_request?.number;
+  const sha = payload.pull_request?.head?.sha;
+  if (typeof number !== "number" || typeof sha !== "string" || !sha) return ev;
+
+  const previous = await lookupPreviousHeadSha(number);
+  if (!previous || previous !== sha) return ev;
+
+  return { ...ev, payload: { ...ev.payload, action: PR_METADATA_ONLY_ACTION } };
 }
 
 export function pullRequestPayload(

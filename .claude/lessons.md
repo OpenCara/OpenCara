@@ -161,6 +161,13 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Azure DevOps **auto-disables a subscription** after repeated delivery failures, with no notification. Non-2xx from our endpoint is therefore load-bearing: unmapped event types and unknown repos return 200 (`ignored`/`unmatched`) on purpose, so a stray variant can't silently tear down a working hook. `listSubscriptions()` exists to spot ones that got disabled anyway.
 - Subscriptions are per (team project, event type) and need HTTPS when basic auth is set — `PUBLIC_BASE_URL` on http:// makes every subscription creation fail with a 400.
 
+### [hits: 1] Azure fires `git.pullrequest.updated` seconds after `created` for the reviewer auto-add — so every new PR got reviewed twice
+- Symptom (2026-08-15, ShiningPie PR #12): a PR opened on Azure DevOps ran BOTH review stages of `development-lifecycle` — the multi-reviewer fan-out from `created`, and the single reviewer 26s later — and both posted. Looked like a trigger misconfiguration; it is not.
+- Root cause: ADO sends `git.pullrequest.updated` for *every* PR change and names none of them. Diffing the two stored payloads showed exactly one differing key — `reviewers: [] → [{…, vote: 0}]` (the author auto-added) — with the SAME `lastMergeSourceCommit`. `prAction` mapped it to `synchronize`, which is stage 2b's trigger.
+- The engine's duplicate-run dedupe cannot help: `computeEventDedupeKey` embeds the action, so `pull_request:12:opened:<sha>` and `pull_request:12:synchronize:<sha>` are different keys even though it is the same PR at the same commit.
+- `message` / `detailedMessage` come through **null** on resourceVersion 1.0 deliveries, so there is no notification text to classify the update by. The only usable signal is `resource.lastMergeSourceCommit.commitId` vs the PR's previous delivery — unchanged ⇒ metadata-only. That is what `refinePullRequestAction` (`azure/events.ts`) now does, demoting to `edited`; the lookup lives in `webhooksAzure.ts` and must run BEFORE the `platform_events` insert (and excludes the current event id) or every push compares against itself and reviews stop entirely.
+- Generalisable: when one platform event stands in for many, diff two consecutive stored payloads (`jsonb_each` + `full join … where a.value is distinct from b.value`) before theorising. It took one query to go from "why did the wrong stage run" to the exact field.
+
 ## Webhooks
 
 ### [hits: 1] Duplicate reviews/runs come from GitHub at-least-once delivery, NOT a double webhook config

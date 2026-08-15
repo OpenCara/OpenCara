@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { azureDevopsConnections, platformEvents, projects } from "../db/schema.js";
 import type { TokenCipher } from "../auth/session.js";
-import { normalizeAzureEvent } from "../azure/events.js";
+import { normalizeAzureEvent, refinePullRequestAction } from "../azure/events.js";
 import { parseBasicAuthPassword, secretMatches } from "../azure/webhookAuth.js";
 import type { FlowEngine } from "../flows/engine.js";
 
@@ -186,6 +186,17 @@ async function processDelivery(
   // One id for both the platform_events row and the engine's event, so a flow
   // run's trigger_event_id resolves back to the stored delivery.
   const eventId = normalized.deliveryId ?? ulid();
+
+  // Decide whether this `updated` actually moved code BEFORE storing it, since
+  // the comparison is against the PR's previous delivery and this one is about
+  // to become that. `previousPrHeadSha` also excludes `eventId` explicitly, so
+  // a reordering here (or a retry of a delivery already stored) cannot make an
+  // event its own predecessor — which would demote every push and silently
+  // switch reviews off. See refinePullRequestAction for the why.
+  const event = await refinePullRequestAction(normalized, (pullRequestId) =>
+    previousPrHeadSha(deps.db, resolved.project.id, pullRequestId, eventId),
+  );
+
   await deps.db
     .insert(platformEvents)
     .values({
@@ -212,9 +223,65 @@ async function processDelivery(
   // delivery look like one. `platform_events.payload` keeps the raw body for
   // forensics.
   deps.flowEngine.onPlatformEvent({
-    id: normalized.deliveryId ?? eventId,
-    type: normalized.type,
+    id: event.deliveryId ?? eventId,
+    type: event.type,
     projectId: resolved.project.id,
-    payload: normalized.payload,
+    payload: event.payload,
   });
+}
+
+/**
+ * Source commit of the newest earlier `pull_request` delivery for this PR, or
+ * null when there is none to compare against.
+ *
+ * Reads the RAW service hook body (that is what `platform_events.payload`
+ * stores), so the path is Azure's, not the normalized one. Deliveries whose
+ * payload variant omits the merge commit are skipped rather than returned as
+ * null — otherwise one trimmed delivery landing between two real ones would
+ * blind the comparison.
+ *
+ * Cost: served by `platform_events_project_id_received_at_idx`. The 90-day
+ * bound is what keeps this cheap — verified on the live plan, it becomes part
+ * of the index condition, so the scan covers a window of the project's
+ * deliveries rather than its whole history (which only grows). A PR that sits
+ * untouched for longer than that falls back to the fail-open branch, which
+ * costs one extra review on its next push.
+ *
+ * Fails open (null ⇒ the event keeps `synchronize`): a lookup that errors must
+ * not be able to suppress a review.
+ */
+async function previousPrHeadSha(
+  db: Db,
+  projectId: string,
+  pullRequestId: number,
+  excludeEventId: string,
+): Promise<string | null> {
+  const sha = sql<
+    string | null
+  >`${platformEvents.payload}->'resource'->'lastMergeSourceCommit'->>'commitId'`;
+  try {
+    const rows = await db
+      .select({ sha })
+      .from(platformEvents)
+      .where(
+        and(
+          eq(platformEvents.projectId, projectId),
+          eq(platformEvents.type, "pull_request"),
+          ne(platformEvents.id, excludeEventId),
+          sql`${platformEvents.receivedAt} > now() - interval '90 days'`,
+          sql`${platformEvents.payload}->'resource'->>'pullRequestId' = ${String(pullRequestId)}`,
+          sql`${sha} IS NOT NULL`,
+        ),
+      )
+      .orderBy(desc(platformEvents.receivedAt))
+      .limit(1);
+    return rows[0]?.sha ?? null;
+  } catch (err) {
+    console.error("[webhooks-azure] previous head sha lookup failed", {
+      projectId,
+      pullRequestId,
+      err,
+    });
+    return null;
+  }
 }
