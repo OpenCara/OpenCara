@@ -688,4 +688,59 @@ describe("normalizeAzureEvent — live PR-comment payload", () => {
     });
     assert.equal(ev, null);
   });
+
+  // Azure numbers comments within their thread, so this live payload's `id: 1`
+  // is shared by the first comment of EVERY thread. The thread id is what makes
+  // the pair unique, and computeEventDedupeKey depends on it being carried
+  // through — without it one comment burns the key for all the others.
+  it("carries the thread id so the ordinal comment id can be scoped", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: liveResource,
+    });
+    const comment = (ev!.payload as { comment: { id: number; thread_id: number | null } })
+      .comment;
+    assert.equal(comment.id, 1);
+    assert.equal(comment.thread_id, 18);
+  });
+
+  it("still maps, with a null thread id, when the link has no threads segment", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: {
+        ...liveResource,
+        _links: {
+          ...liveResource._links,
+          self: {
+            href: "https://dev.azure.com/ShiningPie/_apis/git/repositories/71e0caba-ebd2-49bf-9591-37aaa7835422/pullRequests/8",
+          },
+        },
+      },
+    });
+    assert.ok(ev, "a missing thread id must not drop the delivery");
+    assert.equal(ev.repositoryId, "71e0caba-ebd2-49bf-9591-37aaa7835422");
+    assert.equal(
+      (ev.payload as { comment: { thread_id: number | null } }).comment.thread_id,
+      null,
+    );
+  });
+
+  // The wrapped/flat variants carry no _links at all. They must still DECLARE
+  // the key as null — its presence is how computeEventDedupeKey recognises an
+  // Azure comment and declines to trust the bare ordinal id.
+  it("declares a null thread id on the legacy wrapped shape", () => {
+    const ev = normalizeAzureEvent({
+      eventType: "ms.vss-code.git-pullrequest-comment-event",
+      resource: {
+        comment: { id: 1, content: "@opencara review" },
+        pullRequest: {
+          pullRequestId: 8,
+          repository: { id: "71e0caba-ebd2-49bf-9591-37aaa7835422" },
+        },
+      },
+    });
+    const comment = (ev!.payload as { comment: Record<string, unknown> }).comment;
+    assert.ok("thread_id" in comment, "the key must be present, not merely undefined");
+    assert.equal(comment.thread_id, null);
+  });
 });
