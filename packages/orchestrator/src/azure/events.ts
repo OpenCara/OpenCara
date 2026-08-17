@@ -67,15 +67,36 @@ const CommentEventResourceSchema = z.object({
     .optional(),
 });
 
-/** Pull the repository GUID and PR number out of a comment's self link. */
+/**
+ * Pull the repository GUID, PR number and thread id out of a comment's self
+ * link.
+ *
+ * The thread id is load-bearing for de-duplication, not decoration. Azure
+ * DevOps numbers comments WITHIN their thread — the first comment of every
+ * thread is `id: 1` — so the comment id alone is not an identity the way
+ * GitHub's globally-unique one is. `(threadId, id)` is; thread ids are
+ * repository-scoped and monotonic. See computeEventDedupeKey for what a
+ * missing thread id costs.
+ *
+ * `threadId` is null when the link doesn't carry one, rather than failing the
+ * whole parse — the repository/PR ids are what route the event, and dropping a
+ * delivery over a missing dedup input would be the worse trade.
+ */
 export function idsFromCommentLink(
   href: string | undefined,
-): { repositoryId: string; pullRequestId: number } | null {
+): { repositoryId: string; pullRequestId: number; threadId: number | null } | null {
   if (!href) return null;
   const m = /\/repositories\/([0-9a-fA-F-]{36})\/pullRequests\/(\d+)\b/.exec(href);
   if (!m || !m[1] || !m[2]) return null;
   const n = Number.parseInt(m[2], 10);
-  return Number.isFinite(n) ? { repositoryId: m[1], pullRequestId: n } : null;
+  if (!Number.isFinite(n)) return null;
+  const t = /\/pullRequests\/\d+\/threads\/(\d+)\b/.exec(href);
+  const threadId = t?.[1] ? Number.parseInt(t[1], 10) : Number.NaN;
+  return {
+    repositoryId: m[1],
+    pullRequestId: n,
+    threadId: Number.isFinite(threadId) ? threadId : null,
+  };
 }
 
 const CommentResourceSchema = z.object({
@@ -165,6 +186,11 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
             body: flat.data.content ?? "",
             user: { login: authorLogin(flat.data.author) },
             html_url: null,
+            // Azure-only, and the reason this key exists at all: `id` is a
+            // per-thread ordinal here, so it takes the pair to identify a
+            // comment. computeEventDedupeKey keys off this; GitHub payloads
+            // never carry it and keep using their unique `id`.
+            thread_id: ids.threadId,
           },
           repository: { id: ids.repositoryId, name: "", full_name: "" },
           // No pull_request key: the flow engine fetches it (buildAzurePull
@@ -204,6 +230,12 @@ export function normalizeAzureEvent(raw: unknown): NormalizedAzureEvent | null {
             ),
           },
           html_url: null,
+          // These legacy/defensive shapes carry no `_links`, so there is no
+          // thread to scope the ordinal `id` by. Declaring the key as null
+          // (rather than omitting it) is what tells computeEventDedupeKey this
+          // is an Azure comment whose identity can't be established — it then
+          // falls back to GUID-only dedup instead of trusting a colliding id.
+          thread_id: null,
         },
         ...pullRequestPayload(pr),
       },

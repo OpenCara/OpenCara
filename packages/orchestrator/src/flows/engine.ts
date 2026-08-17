@@ -46,7 +46,7 @@ import {
 } from "./nodeRunners.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
 import { clientForConnection } from "../azure/client.js";
-import { pullRequestPayload } from "../azure/events.js";
+import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
 import type { AzureDevopsClientDeps } from "../azure/client.js";
 import { extractAgentResultText } from "../agents/output.js";
 import {
@@ -168,7 +168,7 @@ export class FlowEngine {
         id: ev.id,
         type: ev.type,
         projectId: ev.projectId,
-        payload: ev.payload,
+        payload: replayPayload(ev.platform, ev.type, ev.payload),
       };
     } else {
       throw new Error("original run has no trigger event to replay");
@@ -1084,7 +1084,10 @@ interface PreloadedRun {
  *     and only a redelivery collides.
  *   - issue_comment: the comment id + action (covers the `@opencara fix`
  *     review-fix path). A comment is created once; only a redelivery repeats
- *     (id, created).
+ *     (id, created). GitHub comment ids are globally unique; Azure DevOps ones
+ *     are per-thread ordinals, so those are keyed on (thread id, comment id) —
+ *     see the `thread_id` branch below for why getting this wrong is
+ *     unrecoverable rather than merely noisy.
  * Other event types return null and keep today's GUID-only behavior — they're
  * either cheap mirror upkeep (projects_v2_item) or lack a single stable id, and
  * over-deduping legitimately-distinct events there would be worse than the
@@ -1102,7 +1105,7 @@ export function computeEventDedupeKey(event: PlatformEventInput): string | null 
     action?: unknown;
     pull_request?: { number?: unknown; head?: { sha?: unknown } };
     review?: { id?: unknown };
-    comment?: { id?: unknown };
+    comment?: { id?: unknown; thread_id?: unknown };
   };
   const action = typeof payload.action === "string" ? payload.action : "";
 
@@ -1122,13 +1125,73 @@ export function computeEventDedupeKey(event: PlatformEventInput): string | null 
       return `pull_request_review:${id}:${action}`;
     }
     case "issue_comment": {
-      const id = payload.comment?.id;
+      const comment = payload.comment;
+      const id = comment?.id;
       if (typeof id !== "number") return null;
+      // A comment id is only an identity on platforms that number comments
+      // globally. Azure DevOps numbers them WITHIN their thread, so the first
+      // comment of every new thread is id 1 — and because this key feeds a
+      // unique index with no time bound, the first such comment to arrive
+      // claims `issue_comment:1:created` and permanently mutes every later
+      // one. That is exactly what happened: `@opencara review` stopped
+      // starting flows entirely, with no run row to show for it.
+      // `thread_id` is set by normalizeAzureEvent and absent on GitHub, so
+      // its presence — not the platform — selects the scoped key.
+      if (comment && "thread_id" in comment) {
+        const thread = comment.thread_id;
+        // Azure comment whose thread we couldn't determine: no identity, so
+        // fall back to GUID-only dedup. Over-deduping here is unrecoverable
+        // (a burned key never expires); under-deduping costs one extra run.
+        if (typeof thread !== "number") return null;
+        // Thread ids are repository-scoped and dedupe keys are already scoped
+        // per flow, so (thread, id) is unique everywhere this is compared.
+        return `issue_comment:${thread}:${id}:${action}`;
+      }
       return `issue_comment:${id}:${action}`;
     }
     default:
       return null;
   }
+}
+
+/**
+ * The payload a stored delivery must be replayed with.
+ *
+ * `platform_events.payload` is not uniformly the shape the engine consumes.
+ * The GitHub handler inserts and dispatches the same object, so replaying its
+ * row is faithful. The Azure DevOps handler deliberately stores the RAW
+ * service hook body for forensics and dispatches `normalizeAzureEvent`'s
+ * GitHub-shaped translation instead — so replaying an Azure row verbatim hands
+ * the engine a body with no `action`, no `pull_request`, no `comment`. Every
+ * trigger then skips with "action '' not in trigger filter" and Restart Flow
+ * appears to do nothing, on a run that worked the first time.
+ *
+ * Re-normalizing here (rather than storing the normalized payload) keeps the
+ * raw body authoritative on disk and needs no backfill, so runs recorded before
+ * this fix replay correctly too.
+ *
+ * NOT re-applied: `refinePullRequestAction`'s metadata-only demotion. It
+ * compares against the PR's *previous* delivery, and at replay time that
+ * neighbour is no longer the one it was at ingest — re-running it could demote
+ * a legitimate rerun to `edited` and reproduce the very silence this fixes. A
+ * rerun is explicitly user-initiated, so failing open (the review runs) is the
+ * right side to err on.
+ *
+ * Falls back to the stored payload whenever normalization can't produce one;
+ * that is no worse than today's behaviour.
+ */
+export function replayPayload(
+  platform: string,
+  type: string,
+  stored: unknown,
+): unknown {
+  if (platform !== "azure_devops") return stored;
+  const normalized = normalizeAzureEvent(stored);
+  if (!normalized) {
+    console.warn("[flow-engine] azure replay could not be normalized", { type });
+    return stored;
+  }
+  return normalized.payload;
 }
 
 function parseFlowDefinition(row: {
