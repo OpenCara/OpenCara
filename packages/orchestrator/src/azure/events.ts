@@ -310,6 +310,24 @@ function prAction(eventType: string, status: string | undefined): string {
 export const PR_METADATA_ONLY_ACTION = "edited";
 
 /**
+ * The action a `git.pullrequest.updated` becomes when the source branch did not
+ * move but the PR left draft — Azure DevOps' equivalent of clicking "Publish".
+ *
+ * This is the one metadata-only update that must NOT be demoted: it is exactly
+ * GitHub's `pull_request.ready_for_review`, and `ScmPullRequestTriggerSchema`
+ * admits it, so review triggers configured with it fire as operators expect.
+ */
+export const PR_READY_FOR_REVIEW_ACTION = "ready_for_review";
+
+/** What the previous delivery for a PR looked like, for the demotion pass. */
+export interface PreviousPrDelivery {
+  /** `lastMergeSourceCommit.commitId` on that delivery. */
+  sha: string;
+  /** `isDraft` on that delivery; null when the payload omitted it. */
+  isDraft: boolean | null;
+}
+
+/**
  * Second pass over a normalized PR event: demote a `synchronize` that carries
  * no new commits.
  *
@@ -332,6 +350,21 @@ export const PR_METADATA_ONLY_ACTION = "edited";
  * the previous delivery for the same PR separates the cases: an unchanged sha
  * means the branch stood still, which no push can do.
  *
+ * PUBLISHING A DRAFT IS THE EXCEPTION. Azure DevOps has no "published" event
+ * either, so leaving draft arrives as the same `git.pullrequest.updated` — and
+ * it moves no code, so the sha test alone demotes it to `edited`, which matches
+ * no trigger. A PR opened as a draft then published therefore got NO review at
+ * any point: while it was a draft `ignoreDrafts` suppressed reviews (correct),
+ * and the publish that should have started one was demoted (this bug, seen on
+ * ShiningPie PR 27 — `isDraft` true→false across two deliveries sharing sha
+ * d874955). When the previous delivery was a draft and this one is not, the
+ * update becomes `ready_for_review` instead.
+ *
+ * The promotion requires a POSITIVE previous `isDraft === true`. Treating an
+ * unknown previous draft state as "was a draft" would re-fire a review on every
+ * title edit of every non-draft PR — reintroducing the duplicate-review bug
+ * above, which is why unknown falls through to the demotion.
+ *
  * FAILS OPEN. If either sha is unknown — the lookup found nothing, or the PR's
  * merge commit had not been computed yet when the earlier delivery arrived —
  * the update keeps `synchronize`. Dropping a real push (a review that never
@@ -342,12 +375,12 @@ export const PR_METADATA_ONLY_ACTION = "edited";
  */
 export async function refinePullRequestAction(
   ev: NormalizedAzureEvent,
-  lookupPreviousHeadSha: (pullRequestId: number) => Promise<string | null>,
+  lookupPreviousDelivery: (pullRequestId: number) => Promise<PreviousPrDelivery | null>,
 ): Promise<NormalizedAzureEvent> {
   if (ev.type !== "pull_request") return ev;
   const payload = ev.payload as {
     action?: unknown;
-    pull_request?: { number?: unknown; head?: { sha?: unknown } };
+    pull_request?: { number?: unknown; draft?: unknown; head?: { sha?: unknown } };
   };
   if (payload.action !== "synchronize") return ev;
 
@@ -355,10 +388,17 @@ export async function refinePullRequestAction(
   const sha = payload.pull_request?.head?.sha;
   if (typeof number !== "number" || typeof sha !== "string" || !sha) return ev;
 
-  const previous = await lookupPreviousHeadSha(number);
-  if (!previous || previous !== sha) return ev;
+  const previous = await lookupPreviousDelivery(number);
+  if (!previous || previous.sha !== sha) return ev;
 
-  return { ...ev, payload: { ...ev.payload, action: PR_METADATA_ONLY_ACTION } };
+  // Branch stood still. Either this is the draft→published transition (a real
+  // trigger) or it is genuinely metadata-only (title, reviewers, votes).
+  const action =
+    previous.isDraft === true && payload.pull_request?.draft === false
+      ? PR_READY_FOR_REVIEW_ACTION
+      : PR_METADATA_ONLY_ACTION;
+
+  return { ...ev, payload: { ...ev.payload, action } };
 }
 
 export function pullRequestPayload(

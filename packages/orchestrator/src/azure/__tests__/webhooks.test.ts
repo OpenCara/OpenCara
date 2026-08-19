@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { parseBasicAuthPassword, secretMatches } from "../webhookAuth.js";
 import {
   PR_METADATA_ONLY_ACTION,
+  PR_READY_FOR_REVIEW_ACTION,
   normalizeAzureEvent,
   refinePullRequestAction,
 } from "../events.js";
@@ -208,12 +209,16 @@ describe("refinePullRequestAction — metadata-only updates", () => {
   const actionOf = (ev: { payload: Record<string, unknown> }) =>
     (ev.payload as { action: string }).action;
 
-  /** Lookup that answers `sha` and records the PR numbers it was asked about. */
-  const lookup = (sha: string | null) => {
+  /**
+   * Lookup that answers with the previous delivery and records the PR numbers
+   * it was asked about. `isDraft` defaults to false — the overwhelmingly common
+   * case, and the one where a stalled sha really does mean metadata-only.
+   */
+  const lookup = (sha: string | null, isDraft: boolean | null = false) => {
     const asked: number[] = [];
     const fn = async (pullRequestId: number) => {
       asked.push(pullRequestId);
-      return sha;
+      return sha === null ? null : { sha, isDraft };
     };
     return { fn, asked };
   };
@@ -253,6 +258,57 @@ describe("refinePullRequestAction — metadata-only updates", () => {
     assert.equal(actionOf(await refinePullRequestAction(ev, fn)), "synchronize");
     // Nothing to compare — the lookup must not even be attempted.
     assert.deepEqual(asked, []);
+  });
+
+  // REGRESSION (ShiningPie PR 27). Azure DevOps has no "published" event, so
+  // leaving draft arrives as `git.pullrequest.updated` moving no code. The sha
+  // test alone demoted it to `edited`, which matches no trigger — so a PR
+  // opened as a draft and later published got no review at any point: drafts
+  // are suppressed by `ignoreDrafts`, and the publish was demoted.
+  it("promotes leaving draft to ready_for_review even though the commit did not move", async () => {
+    const { fn, asked } = lookup("aaa111", true);
+    const refined = await refinePullRequestAction(
+      update({ ...prResource, isDraft: false }),
+      fn,
+    );
+    assert.equal(actionOf(refined), PR_READY_FOR_REVIEW_ACTION);
+    assert.deepEqual(asked, [42]);
+  });
+
+  it("still demotes a metadata-only update while the PR stays a draft", async () => {
+    const { fn } = lookup("aaa111", true);
+    const refined = await refinePullRequestAction(update({ ...prResource, isDraft: true }), fn);
+    assert.equal(actionOf(refined), PR_METADATA_ONLY_ACTION);
+  });
+
+  // Entering draft is not a review trigger; only leaving it is.
+  it("does not promote a PR that just became a draft", async () => {
+    const { fn } = lookup("aaa111", false);
+    const refined = await refinePullRequestAction(update({ ...prResource, isDraft: true }), fn);
+    assert.equal(actionOf(refined), PR_METADATA_ONLY_ACTION);
+  });
+
+  // An unknown previous draft state must not promote: treating it as "was a
+  // draft" would fire a review on every title edit of every non-draft PR,
+  // reintroducing the duplicate-review bug this pass exists to prevent.
+  it("does not promote when the previous delivery omitted isDraft", async () => {
+    const { fn } = lookup("aaa111", null);
+    const refined = await refinePullRequestAction(
+      update({ ...prResource, isDraft: false }),
+      fn,
+    );
+    assert.equal(actionOf(refined), PR_METADATA_ONLY_ACTION);
+  });
+
+  // A push that also publishes is already a real review trigger as
+  // `synchronize`; the sha moved, so the promotion never gets consulted.
+  it("keeps synchronize when publishing coincides with a push", async () => {
+    const { fn } = lookup("older-sha", true);
+    const refined = await refinePullRequestAction(
+      update({ ...prResource, isDraft: false }),
+      fn,
+    );
+    assert.equal(actionOf(refined), "synchronize");
   });
 
   it("leaves opened alone without a lookup", async () => {
@@ -530,7 +586,10 @@ describe("no Azure DevOps event yields pull_request_review (documented gap)", ()
       eventType: "git.pullrequest.updated",
       resource: prWithVote,
     });
-    const refined = await refinePullRequestAction(ev!, async () => "aaa111");
+    const refined = await refinePullRequestAction(ev!, async () => ({
+      sha: "aaa111",
+      isDraft: false,
+    }));
     assert.equal((refined.payload as { action: string }).action, PR_METADATA_ONLY_ACTION);
   });
 });

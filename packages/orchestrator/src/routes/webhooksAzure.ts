@@ -5,6 +5,7 @@ import type { Db } from "../db/client.js";
 import { azureDevopsConnections, platformEvents, projects } from "../db/schema.js";
 import type { TokenCipher } from "../auth/session.js";
 import { normalizeAzureEvent, refinePullRequestAction } from "../azure/events.js";
+import type { PreviousPrDelivery } from "../azure/events.js";
 import { parseBasicAuthPassword, secretMatches } from "../azure/webhookAuth.js";
 import type { FlowEngine } from "../flows/engine.js";
 
@@ -194,7 +195,7 @@ async function processDelivery(
   // event its own predecessor — which would demote every push and silently
   // switch reviews off. See refinePullRequestAction for the why.
   const event = await refinePullRequestAction(normalized, (pullRequestId) =>
-    previousPrHeadSha(deps.db, resolved.project.id, pullRequestId, eventId),
+    previousPrDelivery(deps.db, resolved.project.id, pullRequestId, eventId),
   );
 
   await deps.db
@@ -250,18 +251,24 @@ async function processDelivery(
  * Fails open (null ⇒ the event keeps `synchronize`): a lookup that errors must
  * not be able to suppress a review.
  */
-async function previousPrHeadSha(
+async function previousPrDelivery(
   db: Db,
   projectId: string,
   pullRequestId: number,
   excludeEventId: string,
-): Promise<string | null> {
+): Promise<PreviousPrDelivery | null> {
   const sha = sql<
     string | null
   >`${platformEvents.payload}->'resource'->'lastMergeSourceCommit'->>'commitId'`;
+  // Read as text and compare, rather than a jsonb boolean cast: a delivery that
+  // omitted `isDraft` must come back null (unknown) so the promotion stays off,
+  // not false — see refinePullRequestAction.
+  const isDraft = sql<
+    string | null
+  >`${platformEvents.payload}->'resource'->>'isDraft'`;
   try {
     const rows = await db
-      .select({ sha })
+      .select({ sha, isDraft })
       .from(platformEvents)
       .where(
         and(
@@ -275,9 +282,14 @@ async function previousPrHeadSha(
       )
       .orderBy(desc(platformEvents.receivedAt))
       .limit(1);
-    return rows[0]?.sha ?? null;
+    const row = rows[0];
+    if (!row?.sha) return null;
+    return {
+      sha: row.sha,
+      isDraft: row.isDraft === null || row.isDraft === undefined ? null : row.isDraft === "true",
+    };
   } catch (err) {
-    console.error("[webhooks-azure] previous head sha lookup failed", {
+    console.error("[webhooks-azure] previous delivery lookup failed", {
       projectId,
       pullRequestId,
       err,
