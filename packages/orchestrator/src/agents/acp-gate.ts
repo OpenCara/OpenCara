@@ -83,8 +83,10 @@ export interface BuildAcpSpecOpts {
     /**
      * Full ACP adapter args override (the `acp_args` column). When set and
      * non-empty, used verbatim as the adapter args — the kind-derived base args
-     * and the per-kind model translation of `args` are bypassed. Null/empty =
-     * derive from kind (the default path).
+     * and the per-kind model translation of `args` are bypassed. It also owns
+     * the model threaded onto `acp.model` (see `effectiveModelArg`), so a
+     * stale `--model` in `args` can't leak back in. Null/empty = derive from
+     * kind (the default path).
      */
     acpArgs?: string[] | null;
   };
@@ -153,7 +155,7 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
   // advertise the model as a session config option (pi-acp). This is additive to
   // the per-kind arg translation below — belt-and-suspenders for codex/claude,
   // and the ONLY working path for pi.
-  const { model } = splitModelArg(opts.agent.args ?? []);
+  const model = effectiveModelArg(opts.agent);
   const acp: AcpSpec = {
     systemPromptMd: opts.systemPromptMd,
     userPromptMd: opts.userPromptMd,
@@ -267,6 +269,33 @@ export function splitModelArg(
     rest.push(a);
   }
   return { model, rest };
+}
+
+/**
+ * The model the run should actually use, resolved from whichever arg list is
+ * the effective one. A non-empty `acpArgs` override is used verbatim as the
+ * adapter line, so it — not `args` — owns the model too.
+ *
+ * Why this matters: `acp.model` is re-applied on the device via ACP
+ * `session/set_config_option`, and adapters append that selection AFTER the
+ * argv extras (claude is last-flag-wins). Reading `args` here let a stale
+ * `--model` left behind in `args` silently beat the override's model on argv:
+ * an agent with `args: --model claude-opus-4-8` and
+ * `acpArgs: --model claude-opus-5` dispatched opus-5 on argv and then ran
+ * opus-4-8 anyway.
+ *
+ * An override that names the model in an adapter-specific form we can't parse
+ * (codex's `-c model="…"`) yields undefined — no ACP selection is attempted,
+ * so the override's own argv stands unopposed. That is the correct outcome:
+ * falling back to `args` would reintroduce exactly the leak above.
+ */
+export function effectiveModelArg(agent: {
+  args?: readonly string[];
+  acpArgs?: readonly string[] | null;
+}): string | undefined {
+  const override = agent.acpArgs ?? [];
+  const source = override.length > 0 ? override : (agent.args ?? []);
+  return splitModelArg(source).model;
 }
 
 /**

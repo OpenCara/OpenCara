@@ -5,6 +5,7 @@ import {
   buildAcpSpec,
   checkAcpEligibility,
   defaultAcpArgsFor,
+  effectiveModelArg,
   resolveAdapterArgs,
   resolveAdapterInvocation,
   splitModelArg,
@@ -187,6 +188,95 @@ describe("buildAcpSpec — model translation end to end", () => {
       agent: { kind: "pi", name: "pi default", cwd: null, args: [] },
     });
     assert.equal(spec.acp?.model, undefined);
+    assert.equal("model" in (spec.acp ?? {}), false);
+  });
+});
+
+describe("effectiveModelArg — acpArgs override owns the model", () => {
+  it("reads the override's model, not the (possibly stale) args model", () => {
+    assert.equal(
+      effectiveModelArg({
+        args: ["--permission-mode", "bypassPermissions", "--model", "claude-opus-4-8"],
+        acpArgs: ["--permission-mode", "bypassPermissions", "--model", "claude-opus-5"],
+      }),
+      "claude-opus-5",
+    );
+  });
+
+  it("falls back to args when the override is null/empty", () => {
+    assert.equal(effectiveModelArg({ args: ["--model", "x"], acpArgs: null }), "x");
+    assert.equal(effectiveModelArg({ args: ["--model", "x"], acpArgs: [] }), "x");
+    assert.equal(effectiveModelArg({ args: ["--model", "x"] }), "x");
+  });
+
+  it("returns undefined when the override names no parseable model (codex -c form)", () => {
+    // Falling back to args here would re-leak the stale model onto acp.model.
+    assert.equal(
+      effectiveModelArg({
+        args: ["--model", "gpt-5.5"],
+        acpArgs: ["--yes", "@x/codex-acp", "-c", 'model="o3"'],
+      }),
+      undefined,
+    );
+  });
+
+  it("returns undefined when neither list names a model", () => {
+    assert.equal(effectiveModelArg({}), undefined);
+    assert.equal(effectiveModelArg({ args: ["--foo"], acpArgs: ["--bar"] }), undefined);
+  });
+});
+
+describe("buildAcpSpec — acp.model tracks the effective args, not the raw `args`", () => {
+  const base = { env: {}, systemPromptMd: "s", userPromptMd: "u" };
+
+  it("claude: acpArgs `--model claude-opus-5` beats a stale args `--model claude-opus-4-8`", () => {
+    // The real bug: argv carried opus-5 (from the override) while acp.model
+    // carried opus-4-8 (from args). The device re-applies acp.model via
+    // session/set_config_option AFTER argv, so claude ran opus-4-8.
+    const spec = buildAcpSpec({
+      ...base,
+      agent: {
+        kind: "claude",
+        name: "Claude Opus",
+        cwd: null,
+        args: ["--permission-mode", "bypassPermissions", "--model", "claude-opus-4-8"],
+        acpArgs: ["--permission-mode", "bypassPermissions", "--model", "claude-opus-5"],
+      },
+    });
+    assert.deepEqual(spec.args, [
+      "--permission-mode",
+      "bypassPermissions",
+      "--model",
+      "claude-opus-5",
+    ]);
+    assert.equal(spec.acp?.model, "claude-opus-5");
+  });
+
+  it("pi: acp.model follows the override (ACP selection is pi's only model path)", () => {
+    const spec = buildAcpSpec({
+      ...base,
+      agent: {
+        kind: "pi",
+        name: "pi glm",
+        cwd: null,
+        args: ["--model", "volcengine-ark/glm-5.2"],
+        acpArgs: ["--yes", "pi-acp@latest", "--model", "volcengine-ark/glm-5.3"],
+      },
+    });
+    assert.equal(spec.acp?.model, "volcengine-ark/glm-5.3");
+  });
+
+  it("codex: an unparseable override model omits acp.model rather than re-leaking args", () => {
+    const spec = buildAcpSpec({
+      ...base,
+      agent: {
+        kind: "codex",
+        name: "Codex GPT",
+        cwd: null,
+        args: ["--model", "gpt-5.5"],
+        acpArgs: ["--yes", "@x/codex-acp", "-c", 'model="o3"'],
+      },
+    });
     assert.equal("model" in (spec.acp ?? {}), false);
   });
 });
