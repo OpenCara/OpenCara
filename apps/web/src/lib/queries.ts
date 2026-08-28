@@ -821,7 +821,14 @@ export interface FlowNodeSetting {
   updatedAt: string;
 }
 
-export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "custom";
+export type AgentKind =
+  | "claude"
+  | "codex"
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "cursor"
+  | "custom";
 
 export interface AgentRow {
   id: string;

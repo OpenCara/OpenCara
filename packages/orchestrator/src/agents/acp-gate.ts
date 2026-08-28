@@ -30,6 +30,14 @@ import type {
  *   official `opencode` CLI's `acp` subcommand.
  * - pi: `npx pi-acp@latest` — community ACP adapter for the pi coding
  *   agent.
+ * - omp: `npx @oh-my-pi/pi-coding-agent@latest acp` — Oh My Pi (the `omp`
+ *   CLI) speaks ACP natively via its `acp` subcommand, so no third-party
+ *   shim. The npm name is the package, not the bin: `npx omp` would fetch
+ *   an unrelated placeholder package called `omp`. The dist is a Bun
+ *   binary, so the device needs `bun` on PATH.
+ * - cursor: `cursor-agent acp` — the Cursor CLI's own ACP server. Not on
+ *   npm (installed by Cursor's own installer), so the command is the local
+ *   binary, same shape as claude-acp.
  */
 const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] }>([
   [
@@ -42,6 +50,11 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
     { command: "npx", args: ["--yes", "opencode-ai@latest", "acp"] },
   ],
   ["pi", { command: "npx", args: ["--yes", "pi-acp@latest"] }],
+  [
+    "omp",
+    { command: "npx", args: ["--yes", "@oh-my-pi/pi-coding-agent@latest", "acp"] },
+  ],
+  ["cursor", { command: "cursor-agent", args: ["acp"] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */
@@ -304,8 +317,10 @@ export function effectiveModelArg(agent: {
  *   - codex    → `-c model="<v>"` (codex-acp config override; it has no --model)
  *   - opencode → `OPENCODE_MODEL` env (its `acp` subcommand has no model flag;
  *                model resolves through opencode config's `{env:OPENCODE_MODEL}`)
+ *   - cursor   → dropped from argv; selected over ACP only (its argv model
+ *                names and its ACP model ids are different namespaces)
  *   - claude   → `--model <v>` on argv (claude-acp accepts it) — pass-through
- *   - other (e.g. pi, unverified) → unchanged pass-through
+ *   - other (e.g. omp, pi) → unchanged pass-through
  * Non-model args are always preserved.
  */
 export function resolveAdapterInvocation(
@@ -325,7 +340,22 @@ export function resolveAdapterInvocation(
     const env = model ? { ...baseEnv, OPENCODE_MODEL: model } : baseEnv;
     return { args: [...adapterArgs, ...rest], env };
   }
-  // claude accepts --model on argv; pi is unverified — preserve prior behaviour.
+  if (k === "cursor") {
+    // cursor-agent has a `--model` flag, but its argv namespace and its ACP
+    // namespace are DIFFERENT: argv wants `cursor-grok-4.6-high`, while the
+    // ACP model option only accepts the parameterized ids it advertises
+    // (`grok-4.6[effort=high,fast=true]`) and hard-rejects anything else with
+    // "Invalid model value". Operators configure the ACP form (that's what
+    // `acp.model` selects over `session/set_config_option`), so passing the
+    // same string on argv would either be rejected by a future stricter parse
+    // or silently mean a different model. Strip it — ACP owns model selection
+    // for this kind.
+    const { rest } = splitModelArg(agentArgs);
+    return { args: [...adapterArgs, ...rest], env: baseEnv };
+  }
+  // claude accepts --model on argv; omp tolerates it (`omp acp --model X`
+  // starts fine) and applies the ACP selection anyway; pi is unverified —
+  // preserve prior behaviour.
   return { args: [...adapterArgs, ...agentArgs], env: baseEnv };
 }
 

@@ -10,9 +10,16 @@
 // inside the per-kind ACP adapter binaries (claude-acp, codex-acp,
 // opencode acp, pi-acp).
 
-export type AgentKind = "claude" | "codex" | "opencode" | "pi";
+export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "omp" | "cursor";
 
-export const AGENT_KINDS: AgentKind[] = ["claude", "codex", "opencode", "pi"];
+export const AGENT_KINDS: AgentKind[] = [
+  "claude",
+  "codex",
+  "opencode",
+  "pi",
+  "omp",
+  "cursor",
+];
 
 export function isAgentKind(s: unknown): s is AgentKind {
   return typeof s === "string" && (AGENT_KINDS as string[]).includes(s);
@@ -62,6 +69,33 @@ export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: st
       description:
         "Whichever provider you select via `--provider X --model Y` in args. " +
         "Run `pi --list-models` once on the device to see options.",
+    },
+  ],
+  omp: [
+    {
+      name: "(device-side ~/.omp credentials) / ANTHROPIC_API_KEY / OPENAI_API_KEY / …",
+      description:
+        "Oh My Pi resolves credentials on the device, not from this env block: " +
+        "per-provider `apiKey` entries in `~/.omp/agent/models.yml` (what `omp` " +
+        "writes for a custom provider) or accounts added with `/login` inside " +
+        "the omp TUI. `omp usage` reporting \"No credentials found\" only means " +
+        "no subscription account is linked — a models.yml apiKey still works. " +
+        "Provider env vars set here are honoured as a fallback. The adapter is " +
+        "a Bun binary, so the device needs `bun` >= 1.3.14 on PATH. Model ids " +
+        "are provider-qualified: run `omp models` on the device and put the " +
+        "full id (e.g. `volcengine-ark/kimi-k3`) in args.",
+    },
+  ],
+  cursor: [
+    {
+      name: "(Cursor login on the device) / CURSOR_API_KEY",
+      description:
+        "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY " +
+        "here. The `cursor-agent` binary must be installed on the device — " +
+        "it is not fetchable via npx. Model ids come from the ACP session " +
+        "option and are parameterized, e.g. " +
+        "`grok-4.6[effort=high,fast=true]` — see the list in the run log if " +
+        "a name is rejected.",
     },
   ],
 };

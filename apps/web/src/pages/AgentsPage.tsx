@@ -98,6 +98,24 @@ const KIND_HINTS: Record<
     argsHint:
       "Pass --provider X --model Y here. Adapter passes --mode json / --offline / --no-context-files.",
   },
+  omp: {
+    label: "omp (Oh My Pi)",
+    defaultCommand: "npx @oh-my-pi/pi-coding-agent@latest acp",
+    envHint:
+      "Authenticates from ~/.omp on the device (`omp auth`); provider keys set here are the fallback. The device also needs `bun` on PATH.",
+    argsPlaceholder: "--model volcengine-ark/kimi-k3",
+    argsHint:
+      "Model ids are provider-qualified — run `omp models` on the device for the list. Adapter passes the `acp` subcommand.",
+  },
+  cursor: {
+    label: "Cursor CLI",
+    defaultCommand: "cursor-agent acp",
+    envHint:
+      "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY here. The binary must already be installed on the device.",
+    argsPlaceholder: "--model grok-4.6[effort=high,fast=true]",
+    argsHint:
+      "Cursor's ACP model ids are parameterized and strictly validated; a rejected name is logged with the accepted list and the run falls back to Cursor's default.",
+  },
   custom: {
     label: "Custom (no resume)",
     defaultCommand: null,
@@ -110,7 +128,15 @@ const KIND_HINTS: Record<
 const COMMAND_OVERRIDE_HINT =
   "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
 
-const KIND_ORDER: AgentKind[] = ["claude", "codex", "opencode", "pi", "custom"];
+const KIND_ORDER: AgentKind[] = [
+  "claude",
+  "codex",
+  "opencode",
+  "pi",
+  "omp",
+  "cursor",
+  "custom",
+];
 
 interface KindPickerProps {
   value: AgentKind;
