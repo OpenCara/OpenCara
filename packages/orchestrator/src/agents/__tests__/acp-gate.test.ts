@@ -366,3 +366,102 @@ describe("checkAcpEligibility", () => {
     assert.match(r.refuseReason ?? "", /not supported/);
   });
 });
+
+// ─── omp (Oh My Pi) and cursor (Cursor CLI) ─────────────────────────
+// Both CLIs speak ACP natively. Verified against the real binaries on
+// 2026-08-27: `omp acp` advertises a `model` config option whose values are
+// provider-qualified (`volcengine-ark/kimi-k3`), and `cursor-agent acp`
+// advertises parameterized ids (`grok-4.6[effort=high,fast=true]`) that it
+// validates strictly — `set_config_option` with a bare `grok-4.6` is rejected
+// with "Invalid model value".
+describe("omp / cursor adapters", () => {
+  const ompAdapter = ["--yes", "@oh-my-pi/pi-coding-agent@latest", "acp"];
+
+  it("routes both kinds through ACP", () => {
+    assert.equal(checkAcpEligibility("omp").useAcp, true);
+    assert.equal(checkAcpEligibility("cursor").useAcp, true);
+    assert.equal(checkAcpEligibility("CURSOR").useAcp, true); // case-insensitive
+  });
+
+  it("exposes the kind-fixed command + default args to the UI", () => {
+    assert.equal(acpCommandFor("omp"), "npx");
+    assert.equal(acpCommandFor("cursor"), "cursor-agent");
+    assert.deepEqual(defaultAcpArgsFor("omp", []), ompAdapter);
+    assert.deepEqual(defaultAcpArgsFor("cursor", []), ["acp"]);
+  });
+
+  it("omp: --model stays on argv (it tolerates the flag) and reaches acp.model", () => {
+    const spec = buildAcpSpec({
+      env: {},
+      systemPromptMd: "system",
+      userPromptMd: "user",
+      agent: {
+        kind: "omp",
+        name: "omp kimi-k3",
+        cwd: null,
+        args: ["--model", "volcengine-ark/kimi-k3"],
+      },
+    });
+    assert.equal(spec.command, "npx");
+    assert.deepEqual(spec.args, [...ompAdapter, "--model", "volcengine-ark/kimi-k3"]);
+    assert.equal(spec.acp?.model, "volcengine-ark/kimi-k3");
+  });
+
+  it("cursor: --model is dropped from argv but still selected over ACP", () => {
+    const spec = buildAcpSpec({
+      env: {},
+      systemPromptMd: "system",
+      userPromptMd: "user",
+      agent: {
+        kind: "cursor",
+        name: "cursor grok-4.6",
+        cwd: null,
+        args: ["--model", "grok-4.6[effort=high,fast=true]", "--force"],
+      },
+    });
+    assert.equal(spec.command, "cursor-agent");
+    // argv keeps non-model extras, never the model: cursor's argv model names
+    // (`cursor-grok-4.6-high`) are a different namespace from its ACP ids.
+    assert.deepEqual(spec.args, ["acp", "--force"]);
+    assert.equal(spec.acp?.model, "grok-4.6[effort=high,fast=true]");
+  });
+
+  it("cursor with no model configured is left untouched", () => {
+    const { args, env } = resolveAdapterInvocation("cursor", ["acp"], [], {});
+    assert.deepEqual(args, ["acp"]);
+    assert.deepEqual(env, {});
+  });
+
+  // The acpArgs override is otherwise verbatim, but for cursor a `--model`
+  // left on that line would reach `cursor-agent`'s own flag in the wrong
+  // namespace. effectiveModelArg already routes the override's model to
+  // acp.model, so the flag has to come off argv on this path too — otherwise
+  // an operator who touches the field has no correct answer.
+  it("cursor: the acpArgs override keeps its extras but loses --model", () => {
+    const spec = buildAcpSpec({
+      env: {},
+      systemPromptMd: "system",
+      userPromptMd: "user",
+      agent: {
+        kind: "cursor",
+        name: "cursor override",
+        cwd: null,
+        args: ["--model", "grok-4.6[effort=low,fast=true]"],
+        acpArgs: ["acp", "--model", "claude-opus-5[thinking=true]", "--force"],
+      },
+    });
+    assert.deepEqual(spec.args, ["acp", "--force"]);
+    // The override owns the model, not the stale one in `args` (see #212).
+    assert.equal(spec.acp?.model, "claude-opus-5[thinking=true]");
+  });
+
+  it("non-cursor overrides stay verbatim", () => {
+    const { args } = resolveAdapterArgs(
+      "omp",
+      { command: "npx", args: ompAdapter },
+      { args: [], acpArgs: ["--yes", "omp@1.2.3", "acp", "--model", "moonshot/kimi-k3"] },
+      {},
+    );
+    assert.deepEqual(args, ["--yes", "omp@1.2.3", "acp", "--model", "moonshot/kimi-k3"]);
+  });
+});

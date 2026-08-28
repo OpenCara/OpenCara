@@ -58,6 +58,8 @@ export const agentKindEnum = pgEnum("agent_kind", [
   "opencode",
   "pi",
   "custom",
+  "omp",
+  "cursor",
 ]);
 
 export const users = pgTable(

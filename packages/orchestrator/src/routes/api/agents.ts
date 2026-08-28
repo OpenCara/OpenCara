@@ -6,7 +6,7 @@ import type { Db } from "../../db/client.js";
 import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
-import { isAgentKind, type AgentKind } from "../../agents/kinds.js";
+import { AGENT_KINDS, isAgentKind, type AgentKind } from "../../agents/kinds.js";
 import {
   acpCommandFor,
   buildAcpSpec,
@@ -47,8 +47,10 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     if (!isAgentKind(body.kind)) {
       return c.json(
         {
+          // Derived from AGENT_KINDS so the message can't drift behind the
+          // validator when a kind is added.
           error:
-            'kind required and must be one of "claude", "codex", "opencode", "pi". ' +
+            `kind required and must be one of ${AGENT_KINDS.map((k) => `"${k}"`).join(", ")}. ` +
             'The "custom" kind was removed in the v0.30 cutover.',
         },
         400,

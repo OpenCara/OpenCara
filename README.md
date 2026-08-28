@@ -34,7 +34,7 @@ Each incoming webhook activates only the matching stage's subgraph, so a single 
    ```
 
    First start prints a pairing code and opens `/devices/pair` in your browser; confirm there, and the daemon stays connected waiting for jobs. Keep it running (tmux, systemd, …). Pair as many devices as you like.
-5. **Create an agent** (`/agents`): pick a kind (`claude`, `codex`, `opencode`, or `pi` — see [Agent kinds](#agent-kinds-acp)) and set the provider API key in the agent's env. The device must have the underlying tool available (e.g. the `claude` CLI for kind `claude`; the `npx`-based adapters fetch themselves).
+5. **Create an agent** (`/agents`): pick a kind (`claude`, `codex`, `opencode`, `pi`, `omp`, or `cursor` — see [Agent kinds](#agent-kinds-acp)) and set the provider API key in the agent's env. The device must have the underlying tool available (e.g. the `claude` CLI for kind `claude`; the `npx`-based adapters fetch themselves).
 6. **Bind the agent to the flow**: open the project's flow, and assign your agent (and optionally a custom prompt) to the implement and reviewer nodes.
 7. **Use it from GitHub**: move an issue to `Ready` on the linked Projects v2 board to get an implementation PR; open a PR to get a synthesized multi-agent review; submit a review or comment `@opencara fix` to send the agent back for fixes. Watch progress live on the project's flow-run pages.
 
@@ -239,10 +239,12 @@ Every agent runs as an [Agent Client Protocol](https://agentclientprotocol.com) 
 | `codex` | `npx --yes @zed-industries/codex-acp` |
 | `opencode` | `npx --yes opencode-ai@latest acp` |
 | `pi` | `npx --yes pi-acp@latest` |
+| `omp` | `npx --yes @oh-my-pi/pi-coding-agent@latest acp` — Oh My Pi's native ACP server. The npm *package* name is not the `omp` bin name; the device also needs `bun` on PATH. Credentials come from the device's `~/.omp/agent/models.yml` (per-provider `apiKey`) or an account added with `/login`, so the agent's env can usually stay empty. |
+| `cursor` | `cursor-agent acp` — the Cursor CLI's native ACP server. Install it on the device (`cursor-agent login` once); it is not fetchable via npx. |
 
 (`custom` survives in the Postgres enum for pre-cutover rows but is no longer dispatchable — re-save those agents with a registered kind.)
 
-Pick the kind in the agents view (`/agents`) and set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). Model selection: put `--model <id>` in the agent's args and the orchestrator translates it per adapter (codex takes a `-c model="…"` config override; adapters that advertise a model option — claude-acp, opencode — get it over ACP `session/set_config_option`). The "ACP args" field replaces the adapter's args verbatim when set; the adapter *command* is always fixed by kind.
+Pick the kind in the agents view (`/agents`) and set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). Model selection: put `--model <id>` in the agent's args and the orchestrator translates it per adapter (codex takes a `-c model="…"` config override; adapters that advertise a model option — claude-acp, opencode, omp, cursor — get it over ACP `session/set_config_option`). Two kinds have quirky model ids: `omp` wants the provider-qualified form (`volcengine-ark/kimi-k3`, from `omp models`), and `cursor` only accepts the parameterized ids it advertises over ACP (`grok-4.6[effort=high,fast=true]`) — its argv `--model` names are a different namespace, so the orchestrator drops `--model` from cursor's argv and selects the model over ACP alone. The "ACP args" field replaces the adapter's args verbatim when set (for `cursor` a `--model` there is still routed over ACP rather than onto argv, for the namespace reason above); the adapter *command* is always fixed by kind.
 
 **Resume:** the session id an agent ends a run with is persisted (`agent_runs.spec.acp.priorSessionId`, plus `agent-session.json` next to the worktree on the device). The next run on the same (repo, branch) is pinned to the same device and resumes that conversation where the adapter supports it — so a fix iteration wakes up with the implementer's prior context intact.
 

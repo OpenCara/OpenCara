@@ -37,7 +37,7 @@ import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
 import { providerFor } from "../scm/registry.js";
-import type { AgentKind } from "../agents/kinds.js";
+import { AGENT_KINDS, type AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -518,6 +518,24 @@ async function projectsV2ItemTrigger(
   };
 }
 
+/**
+ * Validate the `{kind, id}` the device reports from `agent-session.json` so a
+ * run can resume the previous conversation on the same (repo, branch).
+ *
+ * The kind allowlist is derived from AGENT_KINDS rather than written out: a
+ * hardcoded literal still type-checks after a new kind is added (it stays
+ * assignable to the widened union), and the failure is silent — priorSession
+ * comes back null, `acp.priorSessionId` is never set, and every iteration for
+ * that kind starts a cold `session/new` with no error and no log line.
+ */
+export function parsePriorSession(value: unknown): { kind: AgentKind; id: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const ps = value as { kind?: unknown; id?: unknown };
+  if (typeof ps.kind !== "string" || typeof ps.id !== "string") return null;
+  if (!(AGENT_KINDS as string[]).includes(ps.kind)) return null;
+  return { kind: ps.kind as AgentKind, id: ps.id };
+}
+
 // Non-greedy capture preserves filenames with spaces (`a/my file.ts b/my file.ts`).
 function parseChangedFiles(diff: string): string[] {
   if (!diff) return [];
@@ -841,18 +859,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     }
 
     const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
-    let priorSession: { kind: AgentKind; id: string } | null = null;
-    if (parsed.priorSession && typeof parsed.priorSession === "object") {
-      const ps = parsed.priorSession as { kind?: unknown; id?: unknown };
-      const knownKinds: AgentKind[] = ["claude", "codex", "opencode", "pi"];
-      if (
-        typeof ps.kind === "string" &&
-        typeof ps.id === "string" &&
-        (knownKinds as string[]).includes(ps.kind)
-      ) {
-        priorSession = { kind: ps.kind as AgentKind, id: ps.id };
-      }
-    }
+    const priorSession = parsePriorSession(parsed.priorSession);
 
     // Upsert the pin so the next iteration on this branch hits the
     // same device. lastRunAt drives the reaper's pruning later.
