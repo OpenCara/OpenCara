@@ -21,10 +21,10 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - The orchestrator doesn't persist which device handled an agent_run — the column exists but isn't written.
 - To trace routing of a specific failure: check the current orchestrator log around the `started_at` timestamp for `[device-ws] hello / connected / disconnected` lines, or `worktree_pins` (gets set on successful worktree-allocate).
 
-### [hits: 1] Orchestrator log: /tmp/opencara-orchestrator.log (NOT /tmp/orchestrator.log)
-- Current orchestrator (`node --import tsx --env-file=.env src/index.ts`) redirects stdout+stderr to `/tmp/opencara-orchestrator.log`.
-- `/tmp/orchestrator.log` is from a prior run and stale (mtime weeks old). Don't trust lines from there as current state.
-- Definitive lookup: `ls -l /proc/$(pgrep -f 'src/index.ts')/fd/{1,2}`.
+### [hits: 1] Orchestrator logs come from `docker logs opencara_server` — BOTH /tmp log paths are dead
+- Prod is containerized (since 2026-07-06). Read it with `sg docker -c 'docker logs opencara_server --since 5m --timestamps'`; `--since` + `--timestamps` are what make "is it still happening *now*" answerable, which matters for flap/loop symptoms.
+- `/tmp/opencara-orchestrator.log` AND `/tmp/orchestrator.log` are both from the pre-container era. Verified 2026-08-17: the former no longer exists at all and no bare `src/index.ts` process runs. Don't reach for either, and don't trust a stale copy if one reappears.
+- Confirm which shape is actually running before trusting any of this: `pgrep -af 'src/index.ts'` (bare node) vs `sg docker -c 'docker ps'` (container). Docker on this box needs the `sg docker` wrapper.
 
 ### [hits: 1] agent_hosts.version is last-hello, not live
 - The `version` column gets bumped each time a device sends `hello` on WS connect. Between reconnects it's stale and may reflect an older incarnation.
@@ -64,17 +64,22 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Releases
 
+### [hits: 3] Devices on this box live in npx cache 35cf602f65bb4257 — NEVER purge it while the device is running
+- Cache path: `~/.npm/_npx/35cf602f65bb4257/node_modules/opencara/dist/bin.js` (hash is for spec `opencara@latest`; a pinned spec like `opencara@0.112.1` gets a DIFFERENT hash dir).
+- After publish, force a refresh: `rm -rf ~/.npm/_npx/35cf602f65bb4257 && npm exec opencara@latest`. The cache won't re-download otherwise (see user-wide lesson on `npm exec @latest` caching).
+- 2026-07-16 incident: the cache dir backing the LIVE device process was deleted (~04:53 UTC) while the device kept running from memory. Every claude-acp job after that failed in ~3s with `[device] acp connection closed: child error: spawn claude-acp ENOENT` — `resolveLocalAcpAdapter` (`packages/cli/src/runner/acpRunner.ts`) does `existsSync` on `dist/claude-acp.js` *next to the (deleted) bundle* at job time, misses, and falls back to bare `claude-acp` on PATH, which doesn't exist. Non-claude ACP jobs (`npx pi-acp …`) and internal jobs kept succeeding, so the device looked healthy.
+- **Read "Killing `npm exec opencara` does NOT kill the device" under Shell / process management BEFORE step 2 below** — the device survives a kill that looks successful, and that entry has the correct process match. Recurred 2026-08-17 purely from skipping it.
+- Full restart sequence, in this order (purging before the kill is what caused the 2026-07-16 ENOENT): **(1)** check nothing is in flight — `select count(*) from agent_runs where status in ('running','queued','assigned')` and `flow_runs` in `('pending','running')`; **(2)** kill every device PID (match the `.bin/opencara` path, NOT the `npm exec` wrapper) and verify empty; **(3)** `rm -rf ~/.npm/_npx/35cf602f65bb4257`; **(4)** `cd ~ && setsid bash -c 'exec npm exec --yes opencara@latest' >> ~/opencara-device.log 2>&1 < /dev/null &`; **(5)** verify `dist/claude-acp.js` exists next to the new bundle and the log shows ONE stable hello at the expected version. It re-acks under the same host id (token in `~/.opencara`). Then rerun failed flows from the failed step via the rerun API.
+- Rule: any `rm -rf ~/.npm/_npx/<hash>` MUST be immediately followed by a device restart on that box. Device log lives at `~/opencara-device.log`.
+- The cache can be **many** releases stale, not just one — it was on 0.114.0 when 0.115.5 shipped. Don't assume "the device is one version behind"; read the version out of `~/.npm/_npx/<hash>/node_modules/opencara/package.json`.
+
 ### [hits: 1] CLI publish is tag-driven; package.json stays at 0.0.0
 - Trigger: pushing a tag matching `v*.*.*` (literally `vX.Y.Z`, NOT `cli-v*`) → `.github/workflows/publish-cli.yml` runs.
 - `packages/cli/package.json` `"version": "0.0.0"` is intentional. CI runs `npm version <from-tag> --no-git-tag-version --allow-same-version` before build so esbuild's `define` bakes the real version into `dist/bin.js`. Bumping the file on main is unnecessary (and would just get clobbered next release).
 - One-line release for a fix already on main: `git tag -a vX.Y.Z -m "..." <sha> && git push origin vX.Y.Z`.
-
-### [hits: 2] Devices on this box live in npx cache 35cf602f65bb4257 — NEVER purge it while the device is running
-- Cache path: `~/.npm/_npx/35cf602f65bb4257/node_modules/opencara/dist/bin.js` (hash is for spec `opencara@latest`; a pinned spec like `opencara@0.112.1` gets a DIFFERENT hash dir).
-- After publish, force a refresh: `rm -rf ~/.npm/_npx/35cf602f65bb4257 && npm exec opencara@latest`. The cache won't re-download otherwise (see user-wide lesson on `npm exec @latest` caching).
-- 2026-07-16 incident: the cache dir backing the LIVE device process was deleted (~04:53 UTC) while the device kept running from memory. Every claude-acp job after that failed in ~3s with `[device] acp connection closed: child error: spawn claude-acp ENOENT` — `resolveLocalAcpAdapter` (`packages/cli/src/runner/acpRunner.ts`) does `existsSync` on `dist/claude-acp.js` *next to the (deleted) bundle* at job time, misses, and falls back to bare `claude-acp` on PATH, which doesn't exist. Non-claude ACP jobs (`npx pi-acp …`) and internal jobs kept succeeding, so the device looked healthy.
-- Fix: kill the stale device (`pgrep -af 'npm exec opencara'` lineage) and relaunch detached: `cd ~ && setsid bash -c 'exec npm exec --yes opencara@latest' >> ~/opencara-device.log 2>&1 < /dev/null &`. It re-acks under the same host id (token in ~/.opencara). Then rerun failed flows from the failed step via the rerun API.
-- Rule: any `rm -rf ~/.npm/_npx/<hash>` MUST be immediately followed by a device restart on that box. Device log lives at `~/opencara-device.log`.
+- A `v*.*.*` tag fires **publish-cli.yml AND deploy.yml together** — npm CLI + the opencara.com server rollout (GHCR image → SSH, gated on the container reporting healthy). One tag is the whole deploy; there is no separate server step to run.
+- Verify the server rollout landed on the box itself, not just from the workflow's green tick: `sg docker -c 'docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}"'` should show `ghcr.io/opencara/opencara/server:vX.Y.Z … (healthy)`. To prove a specific fix is in the running image rather than merely tagged, grep the built bundle inside the container (`docker exec opencara_server grep -c <symbol> /app/packages/orchestrator/dist/…`). Note the orchestrator now logs to `docker logs opencara_server`, NOT `/tmp/opencara-orchestrator.log`.
+- Publishing the CLI does **not** update this box's device — that needs the cache purge + restart in the entry above, as a separate deliberate step.
 
 ## ACP runner
 
@@ -108,12 +113,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Fix: bracket one character so the pattern cannot match the literal text — `pkill -f "npm exec [o]pencara"`, `pgrep -f "[s]rc/index.ts"`. Or match precisely: `ps -eo pid,args --no-headers | grep -E "[n]pm exec opencara" | awk '{print $1}' | xargs -r kill`.
 - Corollary for ANY kill -> purge -> relaunch sequence: verify each step's effect before assuming the next ran. A non-zero exit from the compound command means later steps silently did not happen. Confirm the process is gone AND the dir is gone AND the new process exists — never infer from "the command returned".
 
-### [hits: 1] Killing `npm exec opencara` does NOT kill the device — the real process is a grandchild that survives as an orphan
+### [hits: 2] Killing `npm exec opencara` does NOT kill the device — the real process is a grandchild that survives as an orphan
 - The device runs as a 3-process tree: `npm exec opencara@latest` -> `sh -c "opencara"` -> `node ~/.npm/_npx/<hash>/node_modules/.bin/opencara`. Only the LAST one is the device. Killing the `npm exec` wrapper leaves the grandchild running, reparented to init (PPID 1), still executing whatever code it loaded at start.
 - 2026-08-12: after a botched refresh I checked with `ps ... grep "[n]pm exec [o]pencara"` — which only matches the WRAPPER — saw nothing, and concluded "device stopped". The real device (12 days old, PID with PPID 1) was still running. The relaunch then started a SECOND device sharing the same `agentHostId` from `~/.opencara/config.json`.
 - Symptom of the duplicate: the orchestrator log alternates `connected` / `disconnected` with `code=4000 reason="superseded"` every second or so, and the reported version FLIPS between the two builds (0.113.1 / 0.112.3) as each evicts the other. **Any agent run dispatched into that churn fails with `device <id> disconnected`**, which is what killed flow run 01KZTXZJWMDAMXKCDX54EJAMWG.
 - Correct check — match the BIN path, not the wrapper: `ps -eo pid,ppid,etime,args --no-headers | grep -E "_npx/[a-f0-9]+/node_modules/\.bin/opencara"`. An entry with PPID 1 and an etime much older than your relaunch is an orphan; kill it by exact PID.
 - Two devices with one host id is silent apart from the log churn: `agent_hosts` shows a single row, `/health` is green, and the version column just reflects whichever said hello last.
+- **Recurred 2026-08-17, exactly as written above** — orphan from Aug 12 (PPID 1) survived `kill <launcher>` + `pkill -P <launcher>`, then flapped against the new 0.115.5 device for ~90s with the version alternating 0.114.0/0.115.5. Nothing was in flight so no run died this time. The failure was NOT the technique — it was not reading this file before starting. **Review this file BEFORE any device restart / deploy / kill sequence, not after it goes wrong**; the whole procedure was already here, including the correct check and the exact symptom.
+- Confirm it settled afterwards: `sg docker -c 'docker logs opencara_server --since 30s' | grep device-ws` should be SILENT. Any hello in a quiet window means two processes are still fighting.
 
 ## Multi-platform UI
 
@@ -253,3 +260,33 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Consequence worth internalizing: a `v*` tag fans out to TWO workflows (`deploy` → GHCR + SSH rollout, `publish-cli` → npm). They fail independently. A green `deploy` does NOT mean the CLI shipped — always check `npm view opencara version` after tagging, because **devices only ever get fixes through npm**.
 - The old comment in publish-cli.yml claimed `--provenance` "activates npm's trusted-publishing OIDC exchange". That is WRONG and made the flag look load-bearing for auth. The OIDC exchange comes from `id-token: write` + npm >= 11.5.1 detecting the Actions OIDC env; `--provenance` only adds the sigstore attestation. Dropping it (PR #199) keeps trusted publishing working with no NPM_TOKEN.
 - A failed publish leaves an orphan tag: `v0.112.2` exists as a git tag and a GHCR image with no matching npm version. Don't retry by moving/force-pushing the tag — cut the next patch (`v0.112.3`).
+
+## Agent kinds / ACP adapters
+
+### [hits: 1] The adapter COMMAND is fixed by kind — a new CLI can't be added from the dashboard alone
+- `agents.command` is retained for diagnostics only; dispatch takes the command from `ACP_ADAPTERS` in `packages/orchestrator/src/agents/acp-gate.ts`, keyed by `agents.kind`. The `acp_args` override replaces only the ARGS.
+- So a new agent CLI whose binary is `npx` (e.g. `npx --yes @oh-my-pi/pi-coding-agent@latest acp`) can be shoehorned into an existing npx-based kind via `acp_args`, but one with its own binary (e.g. `cursor-agent acp`) needs a real new kind: `agent_kind` enum value + migration + `AGENT_KINDS`/`AUTH_HINTS` (kinds.ts) + `ACP_ADAPTERS` (acp-gate.ts) + `AgentKind` union in `apps/web/src/lib/queries.ts` + `KIND_HINTS`/`KIND_ORDER` in `AgentsPage.tsx`. Five files, plus README's kind table.
+
+### [hits: 1] cursor-agent's argv model names and its ACP model ids are DIFFERENT namespaces
+- `cursor-agent models` prints argv-style names (`cursor-grok-4.6-high`, `cursor-grok-4.6-xhigh-fast`). The ACP `model` config option advertises parameterized ids instead (`grok-4.6[effort=high,fast=true]`, `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`).
+- `session/set_config_option` validates strictly: `grok-4.6` and `cursor-grok-4.6-high` both fail with `Invalid params / Invalid model value`. Only an exactly-advertised id is accepted, so the agent's `--model` arg must carry the bracketed form verbatim (jsonb args, so no shell quoting worries).
+- Consequence for the orchestrator: `resolveAdapterInvocation` strips `--model` from cursor's argv and lets `acp.model` do the selection — passing the ACP-form id to the CLI's own `--model` would mean a different (or invalid) model.
+
+### [hits: 1] `npx omp` is NOT Oh My Pi — the npm name is @oh-my-pi/pi-coding-agent
+- The `omp` package on npm is an unrelated placeholder (`1.0.0`, description "new "). The real CLI is `@oh-my-pi/pi-coding-agent` (bin `omp`), and `npx --yes @oh-my-pi/pi-coding-agent@latest acp` is the correct fetch-and-run form.
+- Its dist is a Bun build (`#!/usr/bin/env bun`, `engines.bun >= 1.3.14`) — the device needs `bun` on PATH, node alone won't run it.
+- Its ACP model ids are provider-qualified (`volcengine-ark/kimi-k3`, `moonshot/kimi-k3`); a bare `kimi-k3` only resolves through `matchModelValue`'s suffix match, which picks whichever provider comes first in the advertised list. Configure the full id.
+
+### [hits: 1] omp reads credentials from ~/.omp/agent/models.yml — `omp usage` lies about it
+- `omp usage` printing "No credentials found. Run `omp` and use /login to add accounts." only means no *subscription account* is linked. Custom providers configured with an inline `apiKey` in `~/.omp/agent/models.yml` work fine regardless — on this box `volcengine-ark` has a key and `~/.omp/agent/config.yml` already sets `modelRoles.default: volcengine-ark/kimi-k3`.
+- So don't put provider env vars on an omp agent row by reflex: check `~/.omp/agent/models.yml` on the device first. Config lives under `~/.omp/agent/`, not `~/.omp/` (that level only holds `logs`, `run`, `gpu_cache.json`).
+
+### [hits: 1] Orchestrator tests need `--import tsx` — bare `node --test --experimental-strip-types` fails
+- Sources import each other with `.js` specifiers (`../acp-gate.js`) that only exist after a build, so type-stripping alone dies with `ERR_MODULE_NOT_FOUND: .../acp-gate.js` — which reads like a missing file, not a runner misconfiguration.
+- Run `npm run test` (or `pnpm --filter @opencara/orchestrator test`) from `packages/orchestrator`; it uses `node --import tsx --test`, whose resolver maps `.js` → `.ts`. To run one file: `node --import tsx --test src/agents/__tests__/acp-gate.test.ts`.
+
+### [hits: 1] Probe an ACP adapter before wiring it: initialize + session/new over stdio tells you everything
+- 30-line node script: spawn the adapter, write `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}` then `session/new` with `{cwd, mcpServers: []}`, and print `configOptions`. That surfaces the exact model-id strings, whether `loadSession` is supported (resume), and whether the CLI tolerates `--model` on argv — all the facts the adapter entry encodes.
+
+### [hits: 1] The only paired device is racknerd-03aefac — which IS this box
+- `agent_hosts` has one row; its device CLI runs here as `npm exec opencara@latest`. Its PATH includes `~/.npm-global/bin` (bun, omp, pi) and `~/.local/bin` (cursor-agent), so adapters installed for the interactive user are reachable from dispatched runs.
