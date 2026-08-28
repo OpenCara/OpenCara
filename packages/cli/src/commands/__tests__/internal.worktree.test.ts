@@ -16,7 +16,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -381,6 +388,237 @@ describe("internal worktree create — concurrent cache-prep", () => {
             .map((f) => `  - ${f.branch} (exit ${f.status}): ${f.stderr.trim()}`)
             .join("\n"),
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression: a single flow run fans sibling agent nodes out in parallel
+// (on 2026-08-28: "Correctness reviewer" and "Reviewer 2", started in the
+// same millisecond), and both resolve the same worktree branch template —
+// so two `worktree create` processes open on ONE checkout directory at
+// once. Nothing serialized them, and they destroyed each other two ways:
+//
+//   1. Both took the repair path and both `rm -rf`'d the tree; the loser
+//      of the walk race died on `ENOTEMPTY: rmdir …/checkout/.git`, which
+//      escaped as an unhandled exception (flow run
+//      01M13SNHM4Y4JGTY4HPKVXW32X).
+//   2. One re-created the dir and started `git clone` in it while the
+//      other's `rm -rf` deleted that dir underneath, so the clone's own
+//      cwd vanished mid-flight: "sh: 0: getcwd() failed", "could not lock
+//      config file …/.git/config" (flow run 01M13SNSCY6YTFANP1SPEC7TM0).
+//
+// Allocation now holds a per-key lock across the whole
+// reuse-or-repair-or-clone section, so the second process waits and then
+// simply reuses what the first produced.
+describe("internal worktree create — concurrent same-key allocation", () => {
+  // The cases below need the re-clone path to work offline. The CLI
+  // builds `https://github.com/<repo>.git` itself, so point that exact
+  // URL at a local bare origin with git's `insteadOf` rewrite — these
+  // tests already own HOME, so a global gitconfig there is picked up.
+  function seedOrigin(root: string, home: string, repo: string): string {
+    const origin = join(root, "origin.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+      stdio: "ignore",
+    });
+
+    const seed = join(root, "seed");
+    mkdirSync(seed);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "t@example.com"]);
+    git(seed, ["config", "user.name", "t"]);
+    writeFileSync(join(seed, "README"), "hi\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "init"]);
+    git(seed, ["remote", "add", "origin", origin]);
+    git(seed, ["push", "origin", "main"]);
+
+    writeFileSync(
+      join(home, ".gitconfig"),
+      `[url "${origin}"]\n\tinsteadOf = https://github.com/${repo}.git\n`,
+    );
+    return origin;
+  }
+
+  const BRANCH = "opencara/pr-57";
+  const KEY = "octo/repo/branch-opencara_pr-57";
+  const REPO = "octo/repo";
+
+  function allocate(home: string, extra: string[] = []) {
+    return runInternalAsync(
+      { ...process.env, HOME: home, GH_TOKEN: "ghs_test123" },
+      [
+        "worktree", "create",
+        "--repo", REPO,
+        "--branch", BRANCH,
+        "--from-branch", "main",
+        "--key", KEY,
+        ...extra,
+      ],
+    );
+  }
+
+  /** Wraps a pending allocation so the test can ask whether it is still running. */
+  function watch(pending: ReturnType<typeof allocate>) {
+    const state = { done: false, result: null as Awaited<typeof pending> | null };
+    const settled = pending.then((r) => {
+      state.done = true;
+      state.result = r;
+      return r;
+    });
+    return { state, settled };
+  }
+
+  const wait = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("waits for an allocation already in flight on the same key", async () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-lockwait-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const origin = seedOrigin(root, home, REPO);
+
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      // Stand in for a sibling agent node mid-allocation: take the lock
+      // and name a process that is definitely alive (this test runner) as
+      // its owner, so the staleness probe can't decide it's abandoned.
+      const lock = `${checkout}.lock`;
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(join(lock, "owner"), `${process.pid}\n`);
+
+      const { state, settled } = watch(allocate(home));
+      // Comfortably longer than an uncontended allocation against a local
+      // origin (~1.5s, most of it tsx boot). Pre-fix this walked straight
+      // into the held checkout and finished here.
+      await wait(4000);
+      assert.equal(
+        state.done,
+        false,
+        "expected the second allocation to block while the key was locked",
+      );
+
+      rmSync(lock, { recursive: true, force: true });
+      const r = await settled;
+      assert.equal(r.status, 0, `expected exit 0 once released, got ${r.status}\n${r.stderr}`);
+      assert.equal(existsSync(lock), false, "allocation lock leaked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("breaks a lock whose owner is gone", async () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-lockstale-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const origin = seedOrigin(root, home, REPO);
+
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      // A lock left behind by an allocator that was killed outright —
+      // mkdir(2) locks can't be released by the kernel, so without a
+      // staleness path this key would be poisoned forever.
+      const dead = spawnSync("node", ["-e", ""]);
+      const lock = `${checkout}.lock`;
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(join(lock, "owner"), `${dead.pid}\n`);
+      // Backdate past the grace window that protects a just-taken lock,
+      // so the test doesn't have to sit through it.
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(lock, old, old);
+
+      const r = await allocate(home);
+      assert.equal(r.status, 0, `expected the stale lock to be broken, got ${r.status}\n${r.stderr}`);
+      assert.equal(existsSync(lock), false, "allocation lock leaked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-clones a half-built checkout (.git without HEAD) instead of repairing it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-halfclone-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "cache"), { recursive: true });
+      seedOrigin(root, home, REPO);
+
+      // The production precondition: a crashed earlier clone left `.git/`
+      // populated enough to look like a repo but with no HEAD, so every
+      // git command against it fails. Pre-fix, `existsSync('.git')` sent
+      // this down the repair path — which cannot possibly work — and only
+      // the failure handler got it back to a clone.
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(join(checkout, ".git", "objects"), { recursive: true });
+      mkdirSync(join(checkout, ".git", "refs"), { recursive: true });
+      writeFileSync(
+        join(checkout, ".git", "config"),
+        "[core]\n\trepositoryformatversion = 0\n",
+      );
+
+      const r = await allocate(home, ["--cache-repo"]);
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\n${r.stderr}`);
+      assert.ok(
+        !r.stderr.includes("[worktree] reuse of"),
+        `expected the half-built checkout to be recognised as unusable up ` +
+          `front, not sent through repair-then-recover:\n${r.stderr}`,
+      );
+
+      const head = execFileSync("git", ["-C", checkout, "branch", "--show-current"], {
+        encoding: "utf8",
+      }).trim();
+      assert.equal(head, BRANCH);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("survives a real fan-out of allocations against one checkout", async () => {
+    // End-to-end cover for the shape that produced the outage: sibling
+    // agent nodes of one flow run, same branch template, same key, all
+    // launched together. Timing-dependent by nature (whether they overlap
+    // depends on process startup), so it backstops the deterministic
+    // cases above rather than replacing them — what it does prove is that
+    // the lock neither deadlocks nor leaves a corrupt tree.
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-fanout-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const origin = seedOrigin(root, home, REPO);
+
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      const N = 4;
+      const results = await Promise.all(
+        Array.from({ length: N }, () => allocate(home)),
+      );
+
+      const failures = results.filter((r) => r.status !== 0);
+      assert.equal(
+        failures.length,
+        0,
+        `expected all ${N} same-key allocations to succeed; failures:\n` +
+          failures.map((f) => `  - exit ${f.status}: ${f.stderr.trim()}`).join("\n"),
+      );
+
+      const head = execFileSync("git", ["-C", checkout, "branch", "--show-current"], {
+        encoding: "utf8",
+      }).trim();
+      assert.equal(head, BRANCH);
+      assert.equal(existsSync(`${checkout}.lock`), false, "allocation lock leaked");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

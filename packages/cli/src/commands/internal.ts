@@ -12,6 +12,7 @@ import {
   rmSync,
   existsSync,
   realpathSync,
+  statSync,
   writeFileSync,
   renameSync,
   symlinkSync,
@@ -273,8 +274,20 @@ function worktreeCreate(args: string[]): void {
   // removes stale debris. If even those fail (broken HEAD or partial
   // objects/), the outer catch nukes the dir and falls through to
   // the fresh-clone path.
+  // Everything from here to the end of the clone below mutates one
+  // shared directory, so it runs under the per-key allocation lock.
+  const releaseCheckoutLock = acquireCheckoutLock(`${checkoutDir}.lock`);
+
   let reused = false;
-  if (existsSync(join(checkoutDir, ".git"))) {
+  // Probe `.git/HEAD`, not `.git/`: `git clone` creates `.git/` early and
+  // fills it in incrementally, with HEAD landing near the end — so a
+  // crashed clone leaves behind a `.git/` that no amount of in-place
+  // repair can salvage. Every command against it dies with "ambiguous
+  // argument 'HEAD'", which is exactly the state that opened flow run
+  // 01M13SNSCY6YTFANP1SPEC7TM0. Treating that as "no checkout" sends it
+  // straight down the wipe-and-clone path instead of running the repair
+  // sequence on rubble. Same probe the cache TOCTOU guard above uses.
+  if (existsSync(join(checkoutDir, ".git", "HEAD"))) {
     try {
       git(checkoutDir, ["reset", "--hard", "HEAD"], gitEnv);
       git(checkoutDir, ["clean", "-fdx"], gitEnv);
@@ -312,13 +325,26 @@ function worktreeCreate(args: string[]): void {
           (err as Error).message
         }); re-cloning`,
       );
-      rmSync(checkoutDir, { recursive: true, force: true });
+      // The whole point of this catch is that a bad iteration can't
+      // permanently poison the key — so a throwing rm defeats it
+      // entirely. Unguarded, it escaped as an unhandled exception and
+      // took the allocation down with a message about the cleanup
+      // rather than the actual problem (flow run
+      // 01M13SNHM4Y4JGTY4HPKVXW32X: "ENOTEMPTY: rmdir …/checkout/.git").
+      try {
+        rmDir(checkoutDir);
+      } catch (rmErr) {
+        fail(
+          `worktree create: could not clear ${checkoutDir} for re-clone ` +
+            `(${(rmErr as Error).message})`,
+        );
+      }
     }
   } else if (existsSync(checkoutDir)) {
-    // `.git/` is missing but the dir exists (a half-built clone from
+    // No usable `.git/HEAD` but the dir exists (a half-built clone from
     // a crashed prior run) — wipe so the clone below doesn't trip
     // on stale files.
-    rmSync(checkoutDir, { recursive: true, force: true });
+    rmDir(checkoutDir);
   }
   if (!reused) {
     mkdirSync(checkoutDir, { recursive: true });
@@ -362,13 +388,15 @@ function worktreeCreate(args: string[]): void {
     } catch (err) {
       // Best-effort cleanup of the half-built dir before bubbling.
       try {
-        rmSync(checkoutDir, { recursive: true, force: true });
+        rmDir(checkoutDir);
       } catch {
         /* ignore */
       }
       throw err;
     }
   }
+
+  releaseCheckoutLock();
 
   let priorSession: { kind: string; id: string } | null = null;
   const sessionFile = join(sessionDir, "agent-session.json");
@@ -466,6 +494,166 @@ function worktreeRemove(args: string[]): void {
     }
     rmSync(resolved, { recursive: true, force: true });
   }
+}
+
+// How long a contender waits for the per-key allocation lock before
+// giving up. Generous on purpose: the holder may be doing a cold clone
+// of a large repo, and waiting is always cheaper than the corruption
+// that racing produces.
+const LOCK_TIMEOUT_MS = 15 * 60_000;
+// Last-resort escape hatch: a lock this old is broken even if its owner
+// still looks alive, so a wedged allocator — or a dead one whose pid the
+// OS has since handed to an unrelated process — can't poison a key
+// forever. Deliberately well beyond both LOCK_TIMEOUT_MS and any
+// plausible clone, because breaking a lock someone is genuinely holding
+// re-creates the very race this lock exists to prevent.
+const LOCK_STALE_MS = 60 * 60_000;
+const LOCK_POLL_MS = 100;
+// Covers the window between mkdir'ing the lock and writing the owner pid
+// into it, so a lock taken microseconds ago is never mistaken for one
+// whose holder died before it could identify itself.
+const LOCK_GRACE_MS = 5_000;
+
+/**
+ * `rm -rf` that tolerates a racing writer inside the tree.
+ *
+ * Node only retries ENOTEMPTY/EBUSY/EPERM when `maxRetries` is set; at
+ * the default of 0, a single file appearing while `rm` walks the
+ * directory is enough to make removal throw.
+ */
+function rmDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
+/**
+ * Block the thread for `ms`. The allocation path is `execFileSync` from
+ * end to end, so a lock wait has to block too — `Atomics.wait` is the
+ * only synchronous sleep Node offers.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** True while the process that took `lockPath` is still running. */
+function lockOwnerAlive(lockPath: string): boolean {
+  let pid: number;
+  try {
+    pid = Number.parseInt(readFileSync(join(lockPath, "owner"), "utf8").trim(), 10);
+  } catch {
+    // No owner file: a lock from an older CLI, or one whose holder died
+    // between the mkdir and the write. The grace window below is what
+    // keeps this from stealing a lock taken microseconds ago.
+    return false;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means it exists but belongs to another user — still alive.
+    // Only ESRCH is proof the holder is gone.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function lockIsStale(lockPath: string): boolean {
+  let ageMs: number;
+  try {
+    ageMs = Date.now() - statSync(lockPath).mtimeMs;
+  } catch {
+    return false; // Vanished — the next acquire attempt just takes it.
+  }
+  if (ageMs < LOCK_GRACE_MS) return false;
+  return !lockOwnerAlive(lockPath) || ageMs > LOCK_STALE_MS;
+}
+
+/**
+ * Take the exclusive allocation lock for one per-key checkout, returning
+ * the release callback.
+ *
+ * A single flow run fans sibling agent nodes out in parallel (two
+ * reviewers on the same PR, say), and they share one worktree key — so
+ * two `worktree create` processes routinely open on the same checkout
+ * directory in the same millisecond. Unserialized they destroy each
+ * other, both ways seen in production on 2026-08-28:
+ *
+ *   1. Both take the repair path and both `rm -rf` the tree; whichever
+ *      loses the walk race dies on `ENOTEMPTY: rmdir …/checkout/.git`
+ *      (flow run 01M13SNHM4Y4JGTY4HPKVXW32X).
+ *   2. One re-creates the directory and starts `git clone` in it while
+ *      the other's `rm -rf` deletes that directory underneath — the
+ *      clone's own cwd disappears mid-flight ("sh: 0: getcwd() failed",
+ *      "could not lock config file …/.git/config") (flow run
+ *      01M13SNSCY6YTFANP1SPEC7TM0).
+ *
+ * Cache-prep next door serializes with flock(1), but that binary ships
+ * with util-linux and is absent from a stock macOS — tolerable there
+ * because `--cache-repo` is opt-in, and not tolerable here because every
+ * allocation on every host takes this path. So the lock is built on the
+ * one primitive every platform makes atomic: mkdir(2). The cost is that
+ * the kernel won't drop it for us, hence the staleness probe above and
+ * the exit hook below.
+ */
+function acquireCheckoutLock(lockPath: string): () => void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      // Deliberately non-recursive: `mkdir` of an existing path is the
+      // atomic test-and-set this whole lock rests on.
+      mkdirSync(lockPath);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (Date.now() > deadline) {
+      fail(
+        `worktree create: gave up after ${Math.round(LOCK_TIMEOUT_MS / 60_000)}m ` +
+          `waiting for the allocation lock at ${lockPath} — if no other ` +
+          `'opencara internal worktree create' is running on this host, ` +
+          `remove that directory`,
+      );
+    }
+    if (lockIsStale(lockPath)) {
+      try {
+        rmDir(lockPath);
+      } catch {
+        // A live contender may have re-taken it in the meantime; the
+        // next iteration re-evaluates rather than forcing the issue.
+      }
+    }
+    sleepSync(LOCK_POLL_MS);
+  }
+
+  // Advisory: identifies us to the staleness probe. Best-effort — a lock
+  // with no readable owner is treated as dead once past the grace window,
+  // which is the safe direction to fail.
+  try {
+    writeFileSync(join(lockPath, "owner"), `${process.pid}\n`);
+  } catch {
+    /* ignore */
+  }
+
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    try {
+      rmDir(lockPath);
+    } catch {
+      // Leave it to the staleness probe rather than failing an
+      // allocation that has otherwise succeeded.
+    }
+  };
+  // `fail()` calls process.exit, which skips `finally` blocks, and a
+  // thrown error exits too — the exit hook is what makes sure neither
+  // path strands the lock. A SIGKILL still can, which is precisely what
+  // the staleness probe is for.
+  process.once("exit", release);
+  return () => {
+    process.removeListener("exit", release);
+    release();
+  };
 }
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): void {
