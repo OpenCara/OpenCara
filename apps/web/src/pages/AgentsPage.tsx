@@ -100,7 +100,7 @@ const KIND_HINTS: Record<
   },
   omp: {
     label: "omp (Oh My Pi)",
-    defaultCommand: "npx @oh-my-pi/pi-coding-agent@latest acp",
+    defaultCommand: "omp",
     envHint:
       "Authenticates from ~/.omp on the device (`omp auth`); provider keys set here are the fallback. The device also needs `bun` on PATH.",
     argsPlaceholder: "--model volcengine-ark/kimi-k3",
@@ -109,7 +109,7 @@ const KIND_HINTS: Record<
   },
   cursor: {
     label: "Cursor CLI",
-    defaultCommand: "cursor-agent acp",
+    defaultCommand: "cursor-agent",
     envHint:
       "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY here. The binary must already be installed on the device.",
     argsPlaceholder: "--model grok-4.6[effort=high,fast=true]",
@@ -645,7 +645,10 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                   adapter-specific quirks — e.g. codex needs{" "}
                   <code>-c model=&quot;…&quot;</code> (not <code>--model</code>),
                   and opencode&apos;s <code>acp</code> takes no model flag. Matches
-                  the default ⇒ no override (auto-handling stays on).
+                  the default ⇒ no override (auto-handling stays on). A{" "}
+                  <code>--model</code> here always wins over the one in Extra
+                  args; for cursor it is selected over ACP only and never
+                  reaches <code>cursor-agent</code>&apos;s own flag.
                 </p>
               </div>
             )}

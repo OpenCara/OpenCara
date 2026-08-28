@@ -263,9 +263,17 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Agent kinds / ACP adapters
 
-### [hits: 1] The adapter COMMAND is fixed by kind — a new CLI can't be added from the dashboard alone
+### [hits: 2] The adapter COMMAND is fixed by kind — a new CLI can't be added from the dashboard alone
 - `agents.command` is retained for diagnostics only; dispatch takes the command from `ACP_ADAPTERS` in `packages/orchestrator/src/agents/acp-gate.ts`, keyed by `agents.kind`. The `acp_args` override replaces only the ARGS.
-- So a new agent CLI whose binary is `npx` (e.g. `npx --yes @oh-my-pi/pi-coding-agent@latest acp`) can be shoehorned into an existing npx-based kind via `acp_args`, but one with its own binary (e.g. `cursor-agent acp`) needs a real new kind: `agent_kind` enum value + migration + `AGENT_KINDS`/`AUTH_HINTS` (kinds.ts) + `ACP_ADAPTERS` (acp-gate.ts) + `AgentKind` union in `apps/web/src/lib/queries.ts` + `KIND_HINTS`/`KIND_ORDER` in `AgentsPage.tsx`. Five files, plus README's kind table.
+- So a new agent CLI whose binary is `npx` (e.g. `npx --yes @oh-my-pi/pi-coding-agent@latest acp`) can be shoehorned into an existing npx-based kind via `acp_args`, but one with its own binary (e.g. `cursor-agent acp`) needs a real new kind: `agent_kind` enum value + migration + `AGENT_KINDS`/`AUTH_HINTS` (kinds.ts) + `ACP_ADAPTERS` (acp-gate.ts) + `AgentKind` union in `apps/web/src/lib/queries.ts` + `KIND_HINTS`/`KIND_ORDER` in `AgentsPage.tsx`, plus README's kind table.
+- **That list was WRONG when first written (PR #213 review caught it): don't trust it, grep instead.** Two more sites hardcoded the kind list, and neither is type-checked — a stale literal stays assignable to the widened `AgentKind` union, so `pnpm -r typecheck` is green while the feature is broken:
+  - `nodeRunners.ts` `knownKinds` gated resume. A new kind's `priorSession` was dropped, `acp.priorSessionId` never set, and every iteration silently started a cold `session/new` — no error, no log line. Both new adapters advertise `loadSession: true`, so this was a live regression, not latent. Now `parsePriorSession()`, derived from `AGENT_KINDS` and unit-tested against it.
+  - `routes/api/agents.ts` — the 400 message listed valid kinds as a string literal while `isAgentKind` already accepted the new ones.
+- Rule for the next kind: `/usr/bin/grep -arn '"claude", "codex"' packages apps` before claiming the change is complete. Anywhere the four original kinds appear as a literal sequence is a site the type checker will not defend.
+
+### [hits: 1] `grep` on nodeRunners.ts silently returns nothing — the file has literal NUL bytes
+- `globToRegex` uses `"\x00ANYPATH\x00"` sentinels, so `file` reports the source as `data` and any binary-skipping grep drops it. The Claude Code `grep` wrapper passes `-I` (ignore binary), so a search for a symbol that is definitely there comes back empty — which reads like "the code doesn't exist" and invites the wrong conclusion.
+- Use `/usr/bin/grep -a` (or `-an`) on this file. Same trap for any future file using NUL sentinels.
 
 ### [hits: 1] cursor-agent's argv model names and its ACP model ids are DIFFERENT namespaces
 - `cursor-agent models` prints argv-style names (`cursor-grok-4.6-high`, `cursor-grok-4.6-xhigh-fast`). The ACP `model` config option advertises parameterized ids instead (`grok-4.6[effort=high,fast=true]`, `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`).
@@ -285,8 +293,9 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Sources import each other with `.js` specifiers (`../acp-gate.js`) that only exist after a build, so type-stripping alone dies with `ERR_MODULE_NOT_FOUND: .../acp-gate.js` — which reads like a missing file, not a runner misconfiguration.
 - Run `npm run test` (or `pnpm --filter @opencara/orchestrator test`) from `packages/orchestrator`; it uses `node --import tsx --test`, whose resolver maps `.js` → `.ts`. To run one file: `node --import tsx --test src/agents/__tests__/acp-gate.test.ts`.
 
-### [hits: 1] Probe an ACP adapter before wiring it: initialize + session/new over stdio tells you everything
+### [hits: 2] Probe an ACP adapter before wiring it: initialize + session/new over stdio tells you everything
 - 30-line node script: spawn the adapter, write `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}` then `session/new` with `{cwd, mcpServers: []}`, and print `configOptions`. That surfaces the exact model-id strings, whether `loadSession` is supported (resume), and whether the CLI tolerates `--model` on argv — all the facts the adapter entry encodes.
+- **Record the `agentCapabilities` answer in the PR, not just the model ids** — "does this kind resume?" decides whether a missing kind in the resume allowlist is a live bug or a latent one. Measured 2026-08-28: `cursor-agent acp` and `omp acp` BOTH report `loadSession: true` (omp also advertises `sessionCapabilities.fork/resume/close`).
 
 ### [hits: 1] The only paired device is racknerd-03aefac — which IS this box
 - `agent_hosts` has one row; its device CLI runs here as `npm exec opencara@latest`. Its PATH includes `~/.npm-global/bin` (bun, omp, pi) and `~/.local/bin` (cursor-agent), so adapters installed for the interactive user are reachable from dispatched runs.

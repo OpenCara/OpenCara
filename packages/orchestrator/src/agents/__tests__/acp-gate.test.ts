@@ -431,4 +431,37 @@ describe("omp / cursor adapters", () => {
     assert.deepEqual(args, ["acp"]);
     assert.deepEqual(env, {});
   });
+
+  // The acpArgs override is otherwise verbatim, but for cursor a `--model`
+  // left on that line would reach `cursor-agent`'s own flag in the wrong
+  // namespace. effectiveModelArg already routes the override's model to
+  // acp.model, so the flag has to come off argv on this path too — otherwise
+  // an operator who touches the field has no correct answer.
+  it("cursor: the acpArgs override keeps its extras but loses --model", () => {
+    const spec = buildAcpSpec({
+      env: {},
+      systemPromptMd: "system",
+      userPromptMd: "user",
+      agent: {
+        kind: "cursor",
+        name: "cursor override",
+        cwd: null,
+        args: ["--model", "grok-4.6[effort=low,fast=true]"],
+        acpArgs: ["acp", "--model", "claude-opus-5[thinking=true]", "--force"],
+      },
+    });
+    assert.deepEqual(spec.args, ["acp", "--force"]);
+    // The override owns the model, not the stale one in `args` (see #212).
+    assert.equal(spec.acp?.model, "claude-opus-5[thinking=true]");
+  });
+
+  it("non-cursor overrides stay verbatim", () => {
+    const { args } = resolveAdapterArgs(
+      "omp",
+      { command: "npx", args: ompAdapter },
+      { args: [], acpArgs: ["--yes", "omp@1.2.3", "acp", "--model", "moonshot/kimi-k3"] },
+      {},
+    );
+    assert.deepEqual(args, ["--yes", "omp@1.2.3", "acp", "--model", "moonshot/kimi-k3"]);
+  });
 });

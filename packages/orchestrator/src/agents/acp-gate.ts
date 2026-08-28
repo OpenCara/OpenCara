@@ -235,8 +235,9 @@ export function defaultAcpArgsFor(
 /**
  * Resolve the adapter (args, env) for dispatch, honouring a full `acpArgs`
  * override. A non-empty override is used verbatim (no kind base args, no model
- * translation) — the operator owns the line. Otherwise fall back to the
- * kind-derived default via resolveAdapterInvocation.
+ * translation) — the operator owns the line — except for cursor, where the
+ * model flag is stripped because its argv and ACP model namespaces differ.
+ * Otherwise fall back to the kind-derived default via resolveAdapterInvocation.
  */
 export function resolveAdapterArgs(
   kind: string,
@@ -245,6 +246,17 @@ export function resolveAdapterArgs(
   baseEnv: Record<string, string>,
 ): { args: string[]; env: Record<string, string> } {
   if (agent.acpArgs && agent.acpArgs.length > 0) {
+    if (kind.toLowerCase() === "cursor") {
+      // One exception to "verbatim": cursor's argv and ACP model namespaces
+      // are different (see resolveAdapterInvocation), so a `--model` left on
+      // the override line would hand an ACP-form id to `cursor-agent`'s own
+      // flag. `effectiveModelArg` already routes the override's model to
+      // `acp.model`, so dropping it here keeps "ACP owns model selection for
+      // cursor" true on the override path too — otherwise an operator who
+      // touches this field has no correct answer: omitting the model silently
+      // falls back to cursor's default, and including it corrupts argv.
+      return { args: splitModelArg(agent.acpArgs).rest, env: baseEnv };
+    }
     return { args: [...agent.acpArgs], env: baseEnv };
   }
   return resolveAdapterInvocation(kind, adapter.args, agent.args ?? [], baseEnv);
