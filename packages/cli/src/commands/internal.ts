@@ -535,17 +535,25 @@ function sleepSync(ms: number): void {
 }
 
 /** True while the process that took `lockPath` is still running. */
-function lockOwnerAlive(lockPath: string): boolean {
+/**
+ * The pid recorded inside `lockPath`, or null when there isn't a usable
+ * one — a lock from an older CLI, or one whose holder died between the
+ * mkdir and the write. The grace window in `lockIsStale` is what keeps
+ * that "null" from stealing a lock taken microseconds ago.
+ */
+function readLockOwner(lockPath: string): number | null {
   let pid: number;
   try {
     pid = Number.parseInt(readFileSync(join(lockPath, "owner"), "utf8").trim(), 10);
   } catch {
-    // No owner file: a lock from an older CLI, or one whose holder died
-    // between the mkdir and the write. The grace window below is what
-    // keeps this from stealing a lock taken microseconds ago.
-    return false;
+    return null;
   }
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function lockOwnerAlive(lockPath: string): boolean {
+  const pid = readLockOwner(lockPath);
+  if (pid === null) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -615,11 +623,21 @@ function acquireCheckoutLock(lockPath: string): () => void {
       );
     }
     if (lockIsStale(lockPath)) {
+      // Claim the break with a rename rather than removing in place:
+      // `statSync`-then-`rmDir` is not atomic, so two waiters that both
+      // judged the lock stale could each remove and mkdir, and both
+      // proceed. Only one rename can win — the loser gets ENOENT and
+      // re-loops — so the break itself is single-winner.
       try {
-        rmDir(lockPath);
+        renameSync(lockPath, `${lockPath}.stale.${process.pid}`);
       } catch {
-        // A live contender may have re-taken it in the meantime; the
-        // next iteration re-evaluates rather than forcing the issue.
+        // Another waiter won the break, or the holder released on its
+        // own. Either way the next iteration re-evaluates.
+      }
+      try {
+        rmDir(`${lockPath}.stale.${process.pid}`);
+      } catch {
+        /* ignore */
       }
     }
     sleepSync(LOCK_POLL_MS);
@@ -638,6 +656,13 @@ function acquireCheckoutLock(lockPath: string): () => void {
   const release = (): void => {
     if (released) return;
     released = true;
+    // Only remove a lock that is still OURS. If a waiter judged us stale
+    // and broke the lock, the directory now under `lockPath` belongs to
+    // that waiter — deleting it would hand a third process a free
+    // acquire and put two allocators back in one checkout, which is the
+    // exact failure this lock exists to prevent, just one step further
+    // out. A lock we can't prove is ours is left to the staleness probe.
+    if (readLockOwner(lockPath) !== process.pid) return;
     try {
       rmDir(lockPath);
     } catch {

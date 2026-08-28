@@ -492,15 +492,30 @@ describe("internal worktree create — concurrent same-key allocation", () => {
       mkdirSync(lock, { recursive: true });
       writeFileSync(join(lock, "owner"), `${process.pid}\n`);
 
+      // Stands in for work the lock holder's agent has already put in the
+      // tree. `clean -fdx` on the reuse path deletes untracked files, so
+      // this surviving is direct evidence the blocked allocation has not
+      // touched the checkout — a state assertion rather than a purely
+      // timing-based one, which keeps the test meaningful on a loaded
+      // runner where the elapsed-time margin below is less comfortable.
+      const sentinel = join(checkout, "holder-was-here.txt");
+      writeFileSync(sentinel, "in use\n");
+
       const { state, settled } = watch(allocate(home));
       // Comfortably longer than an uncontended allocation against a local
       // origin (~1.5s, most of it tsx boot). Pre-fix this walked straight
-      // into the held checkout and finished here.
+      // into the held checkout and finished well inside the window; on a
+      // slower box the pre-fix run is slower too, so the flake direction
+      // is the benign one — and the sentinel catches it either way.
       await wait(4000);
       assert.equal(
         state.done,
         false,
         "expected the second allocation to block while the key was locked",
+      );
+      assert.ok(
+        existsSync(sentinel),
+        "blocked allocation reached `clean -fdx` on a checkout it had not locked",
       );
 
       rmSync(lock, { recursive: true, force: true });
@@ -550,9 +565,14 @@ describe("internal worktree create — concurrent same-key allocation", () => {
       const home = join(root, "home");
       mkdirSync(join(home, ".opencara", "work"), { recursive: true });
       mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
-      mkdirSync(join(home, ".opencara", "cache"), { recursive: true });
       seedOrigin(root, home, REPO);
 
+      // Deliberately no `--cache-repo`: nothing about the `.git/HEAD`
+      // probe needs the shared cache, and cache-prep routes through
+      // `flock(1)` — the util-linux binary this lock exists precisely to
+      // avoid depending on. Without it this case also runs on a stock
+      // macOS, the platform the mkdir lock is written to protect.
+      //
       // The production precondition: a crashed earlier clone left `.git/`
       // populated enough to look like a repo but with no HEAD, so every
       // git command against it fails. Pre-fix, `existsSync('.git')` sent
@@ -566,7 +586,7 @@ describe("internal worktree create — concurrent same-key allocation", () => {
         "[core]\n\trepositoryformatversion = 0\n",
       );
 
-      const r = await allocate(home, ["--cache-repo"]);
+      const r = await allocate(home);
       assert.equal(r.status, 0, `expected exit 0, got ${r.status}\n${r.stderr}`);
       assert.ok(
         !r.stderr.includes("[worktree] reuse of"),
