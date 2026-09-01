@@ -5,9 +5,11 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { stripAcpMarkers } from "@opencara/shared";
 import {
   buildPromptContent,
   createUpdateTranslator,
+  flattenToolTitle,
   matchModelValue,
   selectAcpModel,
 } from "../acpRunner.js";
@@ -495,6 +497,97 @@ describe("createUpdateTranslator", () => {
       // case where there is genuinely no name to print.
       const out = runSeq([upd("ghost", "completed")]);
       assert.deepEqual(out.map((o) => o.chunk), ["\n[tool] (tool) → completed\n"]);
+    });
+  });
+
+
+  describe("multi-line tool titles (the review-body leak)", () => {
+    // Verbatim from agent_run 01M1EVEK6HT2J80KJ262DATJDK: cursor titles a
+    // shell call with the whole command, newlines and all.
+    const MULTILINE_TITLE = [
+      "`gh api graphql -f query='",
+      "query {",
+      '  repository(owner: "quabug", name: "ShiningPie") {',
+      "    pullRequest(number: 63) {",
+      "      reviews(first: 50) { nodes { author { login } state body } }",
+      "    }",
+      "  }",
+      "}'`",
+    ].join("\n");
+
+    it("flattens newlines so a marker never spans lines", () => {
+      const flat = flattenToolTitle(MULTILINE_TITLE);
+      assert.equal(flat.includes("\n"), false);
+      assert.match(flat, /^`gh api graphql/);
+    });
+
+    it("caps a runaway title instead of emitting 2KB on one line", () => {
+      const flat = flattenToolTitle("x".repeat(5000));
+      assert.equal(flat.length, 200);
+      assert.equal(flat.endsWith("…"), true);
+    });
+
+    it("keeps a short title untouched and never returns an empty marker", () => {
+      assert.equal(flattenToolTitle("Read File"), "Read File");
+      assert.equal(flattenToolTitle("   \n  "), "(tool)");
+    });
+
+    it("emits every [tool] marker on exactly one line", () => {
+      const out = runSeq([
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "tc1",
+          title: MULTILINE_TITLE,
+          status: "pending",
+        } satisfies ToolCallStartUpdate,
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tc1",
+          status: "completed",
+        } satisfies ToolCallProgressUpdate,
+      ]);
+      for (const { chunk } of out) {
+        if (!chunk.includes("[tool]")) continue;
+        // chunk is "\n[tool] …\n" — exactly one line of content.
+        assert.deepEqual(
+          chunk.split("\n").filter((l) => l.length > 0).length,
+          1,
+          `marker spans lines: ${JSON.stringify(chunk)}`,
+        );
+      }
+    });
+
+    it("leaves nothing behind once the orchestrator strips the markers", () => {
+      // The end-to-end property that actually failed in production: emit,
+      // concatenate as the device does, strip as the orchestrator does, and
+      // no fragment of the command may survive into the review body.
+      const out = runSeq([
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Checking the PR.\n" },
+        } satisfies MessageChunkUpdate,
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "tc1",
+          title: MULTILINE_TITLE,
+          status: "pending",
+        } satisfies ToolCallStartUpdate,
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tc1",
+          status: "completed",
+        } satisfies ToolCallProgressUpdate,
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "\nverdict: comment" },
+        } satisfies MessageChunkUpdate,
+      ]);
+      const stdout = out.filter((o) => o.stream === "stdout").map((o) => o.chunk).join("");
+      const body = stripAcpMarkers(stdout);
+      assert.equal(body, "Checking the PR.\n\nverdict: comment");
+      for (const fragment of ["gh api graphql", "repository(owner", "pullRequest(number"]) {
+        assert.equal(body.includes(fragment), false, `leaked: ${fragment}`);
+      }
     });
   });
 
