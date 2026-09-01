@@ -337,6 +337,13 @@
       "when": 1787670000000,
       "tag": "0047_agent_kind_omp_cursor",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1787670010000,
+      "tag": "0048_agent_capture_thinking",
+      "breakpoints": true
     }
   ]
 }

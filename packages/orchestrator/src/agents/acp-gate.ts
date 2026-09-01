@@ -102,6 +102,14 @@ export interface BuildAcpSpecOpts {
      * kind (the default path).
      */
     acpArgs?: string[] | null;
+    /**
+     * Per-agent switch for capturing the reasoning stream (the
+     * `capture_thinking` column). False → the device drops
+     * `agent_thought_chunk` updates instead of fencing them into the log.
+     * Undefined = capture, so callers that don't select the column (and
+     * pre-column rows) keep today's behaviour.
+     */
+    captureThinking?: boolean;
   };
   env: Record<string, string>;
   systemPromptMd: string;
@@ -181,6 +189,10 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     ...(opts.instructionsFile ? { instructionsFile: opts.instructionsFile } : {}),
     ...(model ? { model } : {}),
+    // Only sent when OFF. Omitting the default keeps the wire shape clean
+    // and means an older device (which ignores the field) behaves the same
+    // as a new one for every agent that hasn't opted out.
+    ...(opts.agent.captureThinking === false ? { captureThinking: false } : {}),
   };
   // Per-adapter model handling. The operator configures model selection in the
   // agent's DB `args` (e.g. `--model gpt-5.5`), but adapters disagree on how a

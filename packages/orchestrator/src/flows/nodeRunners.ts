@@ -1095,6 +1095,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       cwd: worktree?.workdir ?? agent.cwd ?? null,
       args: agent.args,
       acpArgs: agent.acpArgs,
+      captureThinking: agent.captureThinking,
     },
     env,
     systemPromptMd,

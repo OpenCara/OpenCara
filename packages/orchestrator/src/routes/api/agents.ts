@@ -75,6 +75,8 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           )
         : {};
     const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : null;
+    // Absent → the column default (capture). Only an explicit `false` opts out.
+    const captureThinking = body.captureThinking !== false;
 
     const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
     if (!hostIdRes.ok) return c.json({ error: hostIdRes.error }, hostIdRes.status);
@@ -91,6 +93,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         acpArgs,
         env,
         cwd,
+        captureThinking,
         hostId: hostIdRes.hostId,
       });
     } catch (err) {
@@ -112,6 +115,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           acpArgs,
           env,
           cwd,
+          captureThinking,
           hostId: hostIdRes.hostId,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -170,6 +174,11 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       updates.cwd = body.cwd.trim() || null;
     } else if (body.cwd === null) {
       updates.cwd = null;
+    }
+    // Absent → unchanged. Only a real boolean moves it, so a body that omits
+    // the field (every pre-existing client) can't silently flip the switch.
+    if (typeof body.captureThinking === "boolean") {
+      updates.captureThinking = body.captureThinking;
     }
     if (body.hostId !== undefined) {
       const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
