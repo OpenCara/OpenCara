@@ -30,6 +30,8 @@
 // Why this is in `agents/` and not `flows/`: it's an agent-output concern,
 // not a flow-execution concern. Flow runners delegate to it.
 
+import { stripAcpMarkers } from "@opencara/shared";
+
 export function extractAgentResultText(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return "";
@@ -84,7 +86,16 @@ export function extractAgentResultText(raw: string): string {
     // an empty string.
   }
 
-  return raw;
+  // ACP agents emit plain markdown, so neither branch above claims them —
+  // but the device runner fences their reasoning and tool calls into
+  // `[think]`/`[tool]` markers on the way to the chat panel. Those are
+  // transport, not content, and every caller of this function wants the
+  // content: the review body posted to GitHub, and the upstream text a
+  // fan-in node pastes into the next agent's prompt. Without this the
+  // markers went to GitHub verbatim (`[tool] Read File → completed` above
+  // the verdict line) and burned downstream context describing tool calls
+  // the next agent can't act on.
+  return stripAcpMarkers(raw);
 }
 
 const CODEX_JSONL_TYPE_HINTS = new Set([

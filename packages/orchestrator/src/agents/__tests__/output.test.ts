@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { extractAgentResultText } from "../output.js";
+import { stripAcpMarkers } from "@opencara/shared";
 
 describe("extractAgentResultText", () => {
   it("extracts .result from claude --output-format json envelope", () => {
@@ -146,5 +147,81 @@ describe("extractAgentResultText", () => {
     const clean = "## Verdict\n\nCOMMENT\n\nLooks good.";
     assert.equal(extractAgentResultText(clean), clean);
     assert.equal(extractAgentResultText(extractAgentResultText(clean)), clean);
+  });
+});
+
+describe("stripAcpMarkers", () => {
+  it("removes a [think] block including both fences", () => {
+    const raw = "Before.\n[think]\nreasoning the user must not see\n[/think]\nAfter.";
+    assert.equal(stripAcpMarkers(raw), "Before.\nAfter.");
+  });
+
+  it("removes both [tool] line shapes the runner emits", () => {
+    const raw = [
+      "verdict: comment",
+      "[tool] Read File",
+      "[tool] Read /abs/path.md \u2192 completed",
+      "[tool] grep \u2192 failed",
+      "The diff looks fine.",
+    ].join("\n");
+    assert.equal(stripAcpMarkers(raw), "verdict: comment\nThe diff looks fine.");
+  });
+
+  it("leaves a bracketed word mid-line alone (only whole marker lines go)", () => {
+    const raw = "We should log [tool] usage counts per run.";
+    assert.equal(stripAcpMarkers(raw), raw);
+  });
+
+  it("leaves an unterminated [think] alone rather than eating the answer", () => {
+    // A cancelled run can emit an opener with no closer. Dropping to
+    // end-of-string there would delete a real reply.
+    const raw = "[think]\nhalf a thought";
+    assert.equal(stripAcpMarkers(raw), raw.trim());
+  });
+
+  it("collapses the blank-line craters the stripping leaves behind", () => {
+    const raw = "A\n\n[tool] Read File\n\n[tool] Read File \u2192 completed\n\nB";
+    assert.equal(stripAcpMarkers(raw), "A\n\nB");
+  });
+
+  it("is a no-op on output that carries no markers", () => {
+    const raw = "verdict: approve\n\nNothing to flag.";
+    assert.equal(stripAcpMarkers(raw), raw);
+  });
+});
+
+describe("extractAgentResultText — ACP marker stripping", () => {
+  it("strips the markers a real posted review carried to GitHub", () => {
+    // Shape taken verbatim from flow_run_step 01M1EJVTTSPJDS1FMGA9C4Z5A6,
+    // whose review body reached GitHub with these lines above the verdict.
+    const raw = [
+      "I'll inspect the PR diff and the changed files first.",
+      "",
+      "[tool] Read File",
+      "",
+      "[tool] Read File \u2192 completed",
+      "",
+      "[tool] Read /home/quabug/.cursor/skills/autopilot/SKILL.md \u2192 completed",
+      "",
+      "verdict: comment",
+      "",
+      "The change looks correct.",
+    ].join("\n");
+    const out = extractAgentResultText(raw);
+    assert.equal(out.includes("[tool]"), false);
+    assert.equal(
+      out,
+      "I'll inspect the PR diff and the changed files first.\n\nverdict: comment\n\nThe change looks correct.",
+    );
+  });
+
+  it("still unwraps a claude JSON envelope (stripping does not disturb it)", () => {
+    const raw = JSON.stringify({ result: "## Verdict\nAPPROVE", is_error: false });
+    assert.equal(extractAgentResultText(raw), "## Verdict\nAPPROVE");
+  });
+
+  it("keeps an is_error envelope verbatim so a failure is not laundered", () => {
+    const raw = JSON.stringify({ result: "partial", is_error: true });
+    assert.equal(extractAgentResultText(raw), raw);
   });
 });
