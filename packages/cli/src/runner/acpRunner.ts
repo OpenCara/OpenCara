@@ -484,6 +484,30 @@ export interface UpdateTranslator {
  * Unknown variants still flow to stderr so operators can find them
  * without polluting the chat.
  */
+/**
+ * Flatten a tool title to exactly one line.
+ *
+ * Titles are agent-supplied and routinely contain newlines: cursor titles a
+ * shell tool call with the FULL command, so `gh api graphql -f query='…'`
+ * arrives as thirty lines of GraphQL. Emitting that verbatim makes `[tool]` a
+ * multi-line marker, and a marker that spans lines cannot be removed by any
+ * line-based consumer — the orchestrator's stripper took out the `[tool] `
+ * line and left the remaining twenty-nine sitting in the PR review body it
+ * posted to Azure DevOps.
+ *
+ * So the invariant is the emitter's to hold, not the reader's to guess:
+ * one marker, one line. Whitespace runs collapse to a single space, and the
+ * result is capped — these lines exist to identify a call, not to archive it,
+ * and a 2 KB single-line GraphQL query is no more readable than the thirty.
+ */
+const TOOL_TITLE_MAX = 200;
+
+export function flattenToolTitle(title: string): string {
+  const flat = title.replace(/\s+/g, " ").trim();
+  if (flat.length === 0) return "(tool)";
+  return flat.length > TOOL_TITLE_MAX ? `${flat.slice(0, TOOL_TITLE_MAX - 1)}…` : flat;
+}
+
 export function createUpdateTranslator(
   onLog: LogSink,
   opts: { captureThinking?: boolean } = {},
@@ -543,10 +567,11 @@ export function createUpdateTranslator(
       }
       if (isToolCallStart(update)) {
         leaveThought();
-        toolTitles.set(update.toolCallId, update.title);
+        const startTitle = flattenToolTitle(update.title);
+        toolTitles.set(update.toolCallId, startTitle);
         // No status here: a start is always pending/in_progress, so printing
         // it added a column that never varied.
-        onLog("stdout", `\n[tool] ${update.title}\n`);
+        onLog("stdout", `\n[tool] ${startTitle}\n`);
         return;
       }
       if (isToolCallProgress(update)) {
@@ -554,11 +579,13 @@ export function createUpdateTranslator(
         // A title on an update REFINES the start's ("Read File" becomes
         // "Read /abs/path.md" once the agent resolves the argument), so keep
         // the newest one for the closing line.
-        if (update.title) toolTitles.set(update.toolCallId, update.title);
+        if (update.title) toolTitles.set(update.toolCallId, flattenToolTitle(update.title));
         // Only terminal transitions are news. pending → in_progress says
         // nothing the start line didn't, and agents emit it repeatedly.
         if (update.status !== "completed" && update.status !== "failed") return;
-        const title = toolTitles.get(update.toolCallId) ?? update.title ?? "(tool)";
+        const title =
+          toolTitles.get(update.toolCallId) ??
+          (update.title ? flattenToolTitle(update.title) : "(tool)");
         // Bounded: one entry per in-flight call, dropped as each finishes.
         toolTitles.delete(update.toolCallId);
         onLog("stdout", `\n[tool] ${title} → ${update.status}\n`);
