@@ -492,6 +492,15 @@ export function createUpdateTranslator(
   // keeps today's behaviour rather than silently going quiet.
   const captureThinking = opts.captureThinking !== false;
   let inThought = false;
+  // toolCallId → best title seen so far. ACP sends the title once, on the
+  // `tool_call` start; every `tool_call_update` afterwards carries ONLY the
+  // fields that changed, so `title` is absent on nearly all of them. The
+  // earlier code read `update.title` directly and fell back to the literal
+  // "(tool)", which is how a real cursor run ended up with 64 lines of
+  // `[tool] (tool) → in_progress` and 64 more of `→ completed` — 128 of its
+  // 244 tool lines naming nothing at all. Resolving through the id restores
+  // the name; see the emit rule below for why most updates now print nothing.
+  const toolTitles = new Map<string, string>();
 
   const enterThought = () => {
     if (!inThought) {
@@ -534,15 +543,25 @@ export function createUpdateTranslator(
       }
       if (isToolCallStart(update)) {
         leaveThought();
-        const status = update.status ?? "?";
-        onLog("stdout", `\n[tool] ${update.title} (${status})\n`);
+        toolTitles.set(update.toolCallId, update.title);
+        // No status here: a start is always pending/in_progress, so printing
+        // it added a column that never varied.
+        onLog("stdout", `\n[tool] ${update.title}\n`);
         return;
       }
       if (isToolCallProgress(update)) {
         leaveThought();
-        const status = update.status ?? "?";
-        const title = update.title ?? "(tool)";
-        onLog("stdout", `\n[tool] ${title} → ${status}\n`);
+        // A title on an update REFINES the start's ("Read File" becomes
+        // "Read /abs/path.md" once the agent resolves the argument), so keep
+        // the newest one for the closing line.
+        if (update.title) toolTitles.set(update.toolCallId, update.title);
+        // Only terminal transitions are news. pending → in_progress says
+        // nothing the start line didn't, and agents emit it repeatedly.
+        if (update.status !== "completed" && update.status !== "failed") return;
+        const title = toolTitles.get(update.toolCallId) ?? update.title ?? "(tool)";
+        // Bounded: one entry per in-flight call, dropped as each finishes.
+        toolTitles.delete(update.toolCallId);
+        onLog("stdout", `\n[tool] ${title} → ${update.status}\n`);
         return;
       }
       // Unknown variant — log to stderr so it shows up in the device

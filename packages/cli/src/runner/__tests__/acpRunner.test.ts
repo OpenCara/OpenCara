@@ -291,7 +291,10 @@ describe("createUpdateTranslator", () => {
       { stream: "stdout", chunk: "\n[/think]\n" },
     ]);
     assert.equal(out[3]!.stream, "stdout");
-    assert.match(out[3]!.chunk, /\[tool\] opencara_issue_body_set \(in_progress\)/);
+    // The start line names the tool and stops there — status at start is
+    // always pending/in_progress, so it never carried information.
+    assert.match(out[3]!.chunk, /\[tool\] opencara_issue_body_set/);
+    assert.equal(out[3]!.chunk.includes("in_progress"), false);
   });
 
   it("user_message_chunk is dropped and doesn't disturb fence state", () => {
@@ -409,6 +412,89 @@ describe("createUpdateTranslator", () => {
           { stream: "stdout", chunk: "\n[/think]\n" },
         ]);
       }
+    });
+  });
+
+
+  describe("tool call lines", () => {
+    const start = (id: string, title: string): ToolCallStartUpdate => ({
+      sessionUpdate: "tool_call",
+      toolCallId: id,
+      title,
+      status: "pending",
+    });
+    const upd = (
+      id: string,
+      status: ToolCallProgressUpdate["status"],
+      title?: string,
+    ): ToolCallProgressUpdate => ({
+      sessionUpdate: "tool_call_update",
+      toolCallId: id,
+      status,
+      ...(title === undefined ? {} : { title }),
+    });
+
+    it("resolves the title by toolCallId when the update omits it", () => {
+      // The regression: ACP updates carry only changed fields, so `title` is
+      // absent on nearly all of them. Reading update.title directly printed
+      // the literal "(tool)".
+      const out = runSeq([start("tc1", "Read File"), upd("tc1", "completed")]);
+      assert.deepEqual(out.map((o) => o.chunk), [
+        "\n[tool] Read File\n",
+        "\n[tool] Read File → completed\n",
+      ]);
+      assert.equal(
+        out.some((o) => o.chunk.includes("(tool)")),
+        false,
+      );
+    });
+
+    it("says nothing on non-terminal transitions", () => {
+      // 64 `→ in_progress` lines in one real run, none of them news.
+      const out = runSeq([
+        start("tc1", "Find"),
+        upd("tc1", "pending"),
+        upd("tc1", "in_progress"),
+        upd("tc1", "in_progress"),
+      ]);
+      assert.deepEqual(out.map((o) => o.chunk), ["\n[tool] Find\n"]);
+    });
+
+    it("a later title refines the one used on the closing line", () => {
+      const out = runSeq([
+        start("tc1", "Read File"),
+        upd("tc1", "in_progress", "Read /abs/path.md"),
+        upd("tc1", "completed"),
+      ]);
+      assert.deepEqual(out.map((o) => o.chunk), [
+        "\n[tool] Read File\n",
+        "\n[tool] Read /abs/path.md → completed\n",
+      ]);
+    });
+
+    it("reports a failure rather than swallowing it", () => {
+      const out = runSeq([start("tc1", "grep"), upd("tc1", "failed")]);
+      assert.equal(out.at(-1)!.chunk, "\n[tool] grep → failed\n");
+    });
+
+    it("keeps concurrent calls' titles apart", () => {
+      const out = runSeq([
+        start("a", "Web Search"),
+        start("b", "Read File"),
+        upd("b", "completed"),
+        upd("a", "completed"),
+      ]);
+      assert.deepEqual(out.map((o) => o.chunk).slice(2), [
+        "\n[tool] Read File → completed\n",
+        "\n[tool] Web Search → completed\n",
+      ]);
+    });
+
+    it("falls back to (tool) only when the id was never introduced", () => {
+      // An update for a call whose `tool_call` start we never saw — the one
+      // case where there is genuinely no name to print.
+      const out = runSeq([upd("ghost", "completed")]);
+      assert.deepEqual(out.map((o) => o.chunk), ["\n[tool] (tool) → completed\n"]);
     });
   });
 
