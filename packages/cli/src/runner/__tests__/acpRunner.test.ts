@@ -189,11 +189,12 @@ describe("buildPromptContent", () => {
 describe("createUpdateTranslator", () => {
   function runSeq(
     updates: SessionUpdate[],
-    opts: { flush?: boolean } = {},
+    opts: { flush?: boolean; captureThinking?: boolean } = {},
   ): Array<{ stream: string; chunk: string }> {
     const out: Array<{ stream: string; chunk: string }> = [];
-    const t = createUpdateTranslator((stream, chunk) =>
-      out.push({ stream, chunk }),
+    const t = createUpdateTranslator(
+      (stream, chunk) => out.push({ stream, chunk }),
+      { captureThinking: opts.captureThinking },
     );
     for (const u of updates) t.handle(u);
     if (opts.flush) t.flush();
@@ -359,4 +360,56 @@ describe("createUpdateTranslator", () => {
   it("flush() on a stream that never entered a fence is a no-op", () => {
     assert.deepEqual(runSeq([], { flush: true }), []);
   });
+
+  describe("captureThinking: false", () => {
+    const thought = (text: string): MessageChunkUpdate => ({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text },
+    });
+
+    it("drops thought chunks entirely — no text and no empty fence", () => {
+      // An empty [think]/[/think] pair would still render as a thinking
+      // block in the chat panel, so the fence must not open either.
+      assert.deepEqual(
+        runSeq([thought("secret reasoning")], {
+          flush: true,
+          captureThinking: false,
+        }),
+        [],
+      );
+    });
+
+    it("leaves real output untouched between dropped thoughts", () => {
+      const updates: SessionUpdate[] = [
+        thought("first"),
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } },
+        thought("second"),
+      ];
+      assert.deepEqual(runSeq(updates, { flush: true, captureThinking: false }), [
+        { stream: "stdout", chunk: "Answer" },
+      ]);
+    });
+
+    it("flush after a dropped thought emits no stray [/think]", () => {
+      // The fence state machine is never entered, so there is nothing to
+      // close — a stray closer would corrupt the chat panel's parse.
+      const out = runSeq([thought("x")], { flush: true, captureThinking: false });
+      assert.equal(
+        out.some((o) => o.chunk.includes("[/think]")),
+        false,
+      );
+    });
+
+    it("captures by default and when explicitly true (absent field = capture)", () => {
+      for (const captureThinking of [undefined, true]) {
+        const out = runSeq([thought("visible")], { flush: true, captureThinking });
+        assert.deepEqual(out, [
+          { stream: "stdout", chunk: "\n[think]\n" },
+          { stream: "stdout", chunk: "visible" },
+          { stream: "stdout", chunk: "\n[/think]\n" },
+        ]);
+      }
+    });
+  });
+
 });

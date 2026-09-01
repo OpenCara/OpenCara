@@ -281,6 +281,31 @@ describe("buildAcpSpec — acp.model tracks the effective args, not the raw `arg
   });
 });
 
+describe("buildAcpSpec — captureThinking", () => {
+  const base = { env: {}, systemPromptMd: "s", userPromptMd: "u" };
+  const agent = (captureThinking?: boolean) => ({
+    kind: "pi",
+    name: "pi glm",
+    cwd: null,
+    args: [],
+    ...(captureThinking === undefined ? {} : { captureThinking }),
+  });
+
+  it("sends captureThinking:false so the device drops thought chunks", () => {
+    const spec = buildAcpSpec({ ...base, agent: agent(false) });
+    assert.equal(spec.acp?.captureThinking, false);
+  });
+
+  it("omits the field when capturing — a default-shaped spec stays clean", () => {
+    // An older device ignores the field entirely, so omitting it on the
+    // default keeps new-orchestrator/old-device behaviour identical.
+    for (const a of [agent(true), agent(undefined)]) {
+      const spec = buildAcpSpec({ ...base, agent: a });
+      assert.equal("captureThinking" in (spec.acp ?? {}), false);
+    }
+  });
+});
+
 describe("acpCommandFor / defaultAcpArgsFor (UI-facing)", () => {
   it("acpCommandFor returns the kind-fixed executable", () => {
     assert.equal(acpCommandFor("codex"), "npx");

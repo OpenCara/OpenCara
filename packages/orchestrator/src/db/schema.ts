@@ -572,6 +572,17 @@ export const agents = pgTable(
     acpArgs: jsonb("acp_args").$type<string[] | null>(),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
     cwd: text("cwd"),
+    // Whether this agent's reasoning stream reaches the logs at all. The
+    // device drops `agent_thought_chunk` updates when false, so nothing is
+    // written to agent_run_logs and there is no `[think]` block to render.
+    //
+    // Per-agent rather than per-kind because "is the reasoning worth the
+    // noise" is a property of how you use an agent, not of the adapter.
+    // Defaults true: claude/codex emit no thought chunks anyway, so the
+    // default only matters for the reasoners (omp, pi, cursor), and the
+    // safe default is "capture" — a run's thinking can't be recovered
+    // after the fact, but it can always be hidden.
+    captureThinking: boolean("capture_thinking").notNull().default(true),
     // Optional pin to a specific agent host. NULL = "any idle device".
     // ON DELETE SET NULL so revoking a device doesn't break the agent —
     // it just falls back to "any device" until the user picks a new one.

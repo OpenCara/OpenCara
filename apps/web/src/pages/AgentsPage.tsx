@@ -125,6 +125,13 @@ const KIND_HINTS: Record<
   },
 };
 
+// Adapters that actually stream a reasoning channel (`agent_thought_chunk`).
+// Advisory only — "Capture agent thinking" is stored per agent whatever the
+// kind, so switching a quiet agent to a reasoning kind later needs no
+// migration. claude-acp and codex-acp emit no thoughts, so the switch is a
+// no-op for them.
+const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor"]);
+
 const COMMAND_OVERRIDE_HINT =
   "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
 
@@ -450,6 +457,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
   const [hostId, setHostId] = useState<string>(agent.hostId ?? ANY_DEVICE);
+  const [captureThinking, setCaptureThinking] = useState(agent.captureThinking);
   const devicesQ = useQuery(devicesQuery());
   const update = useUpdateAgent();
   const remove = useDeleteAgent();
@@ -469,6 +477,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
     );
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
+    setCaptureThinking(agent.captureThinking);
   };
 
   return (
@@ -533,6 +542,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                             ? { command: command.trim() }
                             : { acpArgs }),
                           env: parseEnv(envText),
+                          captureThinking,
                           hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
                       },
@@ -660,6 +670,34 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 className="min-h-20 font-mono text-xs"
               />
               <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].envHint}</p>
+            </div>
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={captureThinking}
+                  onChange={(e) => setCaptureThinking(e.target.checked)}
+                  className="size-4 rounded border-input"
+                />
+                <span>Capture agent thinking</span>
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {THINKING_KINDS.has(kind) ? (
+                  <>
+                    Off means the device discards this agent&apos;s reasoning as it
+                    streams — nothing is stored, so there is no{" "}
+                    <code>[think]</code> block in the run logs and no way to get it
+                    back for a past run. Useful when the reasoning dwarfs the
+                    output.
+                  </>
+                ) : (
+                  <>
+                    No effect for <code>{kind}</code> — its adapter emits no
+                    reasoning stream. Applies to{" "}
+                    {[...THINKING_KINDS].join(", ")}.
+                  </>
+                )}
+              </p>
             </div>
           </>
         ) : (

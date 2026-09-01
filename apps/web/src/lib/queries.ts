@@ -851,6 +851,11 @@ export interface AgentRow {
   defaultAcpArgs: string[];
   env: Record<string, string>;
   cwd: string | null;
+  /** Whether the agent's reasoning stream is captured into the run logs.
+   *  false = the device drops thought chunks at the source, so there is no
+   *  `[think]` block to show and nothing stored to turn back on later.
+   *  Only the reasoning adapters (omp, pi, cursor) emit thoughts at all. */
+  captureThinking: boolean;
   /** Pin to a specific agent_host (device). null = "any idle device". */
   hostId: string | null;
   createdAt: string;
@@ -879,6 +884,8 @@ export function useCreateAgent() {
       /** Full ACP adapter args override as a shell string (server tokenizes).
        *  Omit or null to use the kind default. */
       acpArgs?: string | null;
+      /** Omit to capture the agent's reasoning (the default). */
+      captureThinking?: boolean;
       env?: Record<string, string>;
       cwd?: string | null;
       /** Specific device id; null/undefined = "any idle device". */

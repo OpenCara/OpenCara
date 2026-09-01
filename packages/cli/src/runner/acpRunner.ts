@@ -12,6 +12,7 @@
 //   4. Stream `session/update` events through `createUpdateTranslator`
 //      so they land on the existing log-frame pipeline. The translator
 //      is stateful — it fences runs of `agent_thought_chunk` deltas
+//      (or drops them, when the agent has captureThinking off)
 //      between `[think]` / `[/think]` markers (see the function doc
 //      for the opencode-stream-of-deltas motivation). The chat panel
 //      SSE tail is unchanged.
@@ -152,7 +153,9 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   // (see createUpdateTranslator). Lives for the run; flushed in the
   // finally below so any trailing [/think] reaches the chat panel
   // even when the prompt resolves with `cancelled` or throws.
-  const translator = createUpdateTranslator(handlers.onLog);
+  const translator = createUpdateTranslator(handlers.onLog, {
+    captureThinking: spec.acp?.captureThinking,
+  });
   client.onSessionUpdate((p) => translator.handle(p.update));
   client.onStderr((chunk) => handlers.onLog("stderr", chunk));
 
@@ -481,7 +484,13 @@ export interface UpdateTranslator {
  * Unknown variants still flow to stderr so operators can find them
  * without polluting the chat.
  */
-export function createUpdateTranslator(onLog: LogSink): UpdateTranslator {
+export function createUpdateTranslator(
+  onLog: LogSink,
+  opts: { captureThinking?: boolean } = {},
+): UpdateTranslator {
+  // Absent = capture, so a spec from an older orchestrator (no such field)
+  // keeps today's behaviour rather than silently going quiet.
+  const captureThinking = opts.captureThinking !== false;
   let inThought = false;
 
   const enterThought = () => {
@@ -509,6 +518,11 @@ export function createUpdateTranslator(onLog: LogSink): UpdateTranslator {
         const text = textOfContent(update.content);
         if (!text) return;
         if (update.sessionUpdate === "agent_thought_chunk") {
+          // Dropped entirely when the agent opts out — no fence either, or
+          // an empty `[think]`/`[/think]` pair would render as a thinking
+          // block with nothing in it. Fence state is untouched, so this
+          // can't strand an open fence.
+          if (!captureThinking) return;
           enterThought();
           onLog("stdout", text);
           return;
