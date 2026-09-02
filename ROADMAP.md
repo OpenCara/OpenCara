@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#235](https://github.com/OpenCara/OpenCara/pull/235) - fix(flows): make PR diff fetch optional and non-fatal; path filters use pulls/files
 - **2026-09-02**: Merged [#234](https://github.com/OpenCara/OpenCara/pull/234) - perf(activity): two-phase feed query, partial indexes, prune stale rows
 - **2026-09-02**: Merged [#231](https://github.com/OpenCara/OpenCara/pull/231) - fix(activity): link Azure DevOps PRs / work items from the Activity timeline
 - **2026-09-02**: Merged [#233](https://github.com/OpenCara/OpenCara/pull/233) - feat(activity): list flow runs on the Activity timeline
@@ -59,6 +60,7 @@
 - [x] feat(activity): list flow runs on the Activity timeline ([#233](https://github.com/OpenCara/OpenCara/pull/233))
 - [x] fix(activity): link Azure DevOps PRs / work items from the Activity timeline ([#231](https://github.com/OpenCara/OpenCara/pull/231))
 - [x] perf(activity): two-phase feed query, partial indexes, prune stale rows ([#234](https://github.com/OpenCara/OpenCara/pull/234))
+- [x] fix(flows): make PR diff fetch optional and non-fatal; path filters use pulls/files ([#235](https://github.com/OpenCara/OpenCara/pull/235))
 
 ## In Progress
 
@@ -73,7 +75,7 @@ Shipped in [#200](https://github.com/OpenCara/OpenCara/pull/200) with these gaps
 - [ ] Validate end-to-end against a real Azure DevOps organization (sign-in, connect, add repo, PR event → flow, worktree push, review thread + vote, vote cleared by a later comment-only review). The REST shapes most likely to need adjustment are the service hook subscription payload and the `connectionData` identity call.
 - [ ] Boards / kanban parity: work item mirroring, `scm.board_item` trigger from `workitem.updated`. Work item events are received and recorded but drive nothing.
   - Blocker to resolve first: a work item event carries only the team project, so `resolveProject` in `webhooksAzure.ts` matches every OpenCara project under that team project and `.limit(1)` picks an arbitrary one. Harmless while these events drive nothing; board mirroring must key on the work item's linked repository or an explicit board↔project link.
-- [ ] Inline PR diffs for Azure DevOps agents. There is no single unified-diff endpoint, so `stdin.diff` is empty and `OPENCARA_PR_DIFF_INLINE=0`; agents must `git diff` in the worktree. Reviewer flows *without* a worktree get no diff at all.
+- [ ] Inline PR diffs for Azure DevOps agents. There is no single unified-diff endpoint, so `stdin.diff` is empty and `OPENCARA_PR_DIFF_INLINE=0`; agents must `git diff` in the worktree. Reviewer flows *without* a worktree get no diff at all. (GitHub worktree agents also run with `OPENCARA_PR_DIFF_INLINE=0` by design; only diff-less GitHub nodes get the inline diff, and not when GitHub's 20k-line cap refuses it.)
 - [ ] Azure DevOps equivalents for the features currently skipped-with-a-log: auto-merge (`autoCompleteSetBy` + branch policies), PR↔work-item linking, draft-PR ready-for-review
 - [ ] Device capability gating (`scm.azure_devops`). `pickIdle` ignores capabilities entirely — a pre-existing bug. Today a device on an older CLI fails an Azure DevOps worktree allocation with an "unknown argument" error, which is visible but not routed around.
 - [ ] **`scm.pull_request_review` never fires on Azure DevOps**, so the review→fix half of `development-lifecycle` (and the standalone `pr-review-fix` flow) is dead there. Azure DevOps service hooks have no reviewer-vote event, and `git.pullrequest.updated` — which does fire on a vote — carries no marker saying what changed. Reviews post; nothing consumes them.

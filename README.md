@@ -134,6 +134,8 @@ Run context uses the **same `OPENCARA_*` variable names** as GitHub, so prompts 
 - The token arrives as `OPENCARA_SCM_TOKEN` and `AZURE_DEVOPS_EXT_PAT` (what `az repos` reads) — **not** as `GH_TOKEN`, so `gh` cannot pick up an Azure DevOps token and fail confusingly against github.com.
 - `OPENCARA_PR_DIFF_INLINE=0` and an empty `stdin.diff`. Azure DevOps has no single endpoint returning a unified diff for a PR, so rather than inline a partial one, agents are expected to `git diff` in the worktree. Reviewer flows without a worktree will see no diff.
 
+The same flag applies on GitHub. An agent node **with a worktree** never receives the inline diff (`OPENCARA_PR_DIFF_INLINE=0`, `git diff` the checkout); a node without one gets the unified diff inline (`=1`) unless GitHub refused it (over 20,000 lines / 300 files) or the fetch failed, in which case it is `=0` with an empty diff. Prompts that assume "the diff is in your context" should check the flag.
+
 ### Setup
 
 1. Register a **Microsoft Entra ID** application (portal.azure.com → Microsoft Entra ID → App registrations).

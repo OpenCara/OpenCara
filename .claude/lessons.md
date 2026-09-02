@@ -216,6 +216,10 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Fix direction: rerun must replay what the engine originally consumed — either normalize again on replay (`normalizeAzureEvent(ev.payload)` when `platform='azure_devops'`) or store the normalized payload alongside the raw one. Note the raw body also makes `computeEventDedupeKey` return null on replay, so reruns aren't deduped — don't "fix" that by keying off the raw shape.
 - Generalisable: if a pipeline normalizes at the edge, whatever it persists for replay must be the post-normalization value, or every replay path silently runs against a shape nothing downstream understands.
 
+### [hits: 1] GitHub's PR diff endpoint 406s (`too_large`) above 20k lines / 300 files — never let an inline-diff fetch gate a run that already has head ref from the webhook
+- 2026-09-02: flow run 01M1HK7AMN6DZTFR59MF02QNBY failed all 4 pool attempts with "PR head ref is unavailable" although the `pull_request.synchronize` payload carried `head.ref`. `buildPullRequestContext` threw on the diff fetch, the engine dropped the whole context, and the worktree branch guard refused to run. Since PR #235 the diff / files fetches are best-effort and only made when a node needs them (`prContextNeeds`); `OPENCARA_PR_DIFF_INLINE` tells prompts which case they're in.
+- Path filters need the file list, not the diff: `pulls/{n}/files` (paginated, 3k cap) is the right source.
+
 ## Webhooks
 
 ### [hits: 1] Duplicate reviews/runs come from GitHub at-least-once delivery, NOT a double webhook config
